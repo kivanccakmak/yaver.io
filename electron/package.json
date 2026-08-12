@@ -44,8 +44,10 @@
     },
     "linux": {
       "icon": "assets/icon.png",
-      "target": ["AppImage"],
-      "category": "Development"
+      "category": "Development",
+      "target": ["AppImage", "deb", "rpm", "tar.gz"],
+      "maintainer": "Kivanç Çakmak <kivanc.cakmak@simkab.com>",
+      "synopsis": "Yaver desktop GUI — sign in and vibe tasks from your computer"
     },
     "nsis": {
       "oneClick": false,

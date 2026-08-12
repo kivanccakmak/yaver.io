@@ -29,7 +29,10 @@ const repoRoot = join(__dirname, "..", "..");
 const versions = JSON.parse(readFileSync(join(repoRoot, "versions.json"), "utf8"));
 const version = process.env.YAVER_AGENT_VERSION || versions.cli;
 const DEFAULT_REPO = process.env.YAVER_AGENT_REPO || "yaver-io/yaver.io";
-const WINDOWS_REPO = process.env.YAVER_WINDOWS_AGENT_REPO || "kivanccakmak/yaver-cli";
+// Windows agent assets live in the MAIN repo at the same version as darwin/
+// linux (verified v1.99.411 → yaver-windows-amd64.exe). The CLI's historical
+// fallback repo (kivanccakmak/yaver-cli) is stale (v1.37.0) — never use it.
+const WINDOWS_REPO = process.env.YAVER_WINDOWS_AGENT_REPO || DEFAULT_REPO;
 
 function binaryName() {
   return process.platform === "win32" ? "yaver.exe" : "yaver";

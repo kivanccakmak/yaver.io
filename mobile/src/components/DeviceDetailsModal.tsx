@@ -1597,11 +1597,18 @@ export function CodingAgentsSection({ device }: { device: Device }) {
           // instead of promising something only an operation can establish.
           const proven = row?.authVerified === true;
           const present = row?.authPresent === true;
+          // ACP layer (agent 1.99.412+): the auth verdict was produced by the
+          // runner's ACP server AND the subscription method is advertised —
+          // e.g. "claude.ai · max · via ACP", "ChatGPT · via ACP". The
+          // subscription method id is machine-y (claude-ai-login / chat-gpt /
+          // opencode-login); authSource already carries the pretty name, so we
+          // only append the "via ACP" qualifier.
+          const viaACP = row?.authMethod === "acp" && !!row?.acpSubscriptionMethod;
           if (!proven && present) {
-            subtitle = `${versionPrefix}signed in (not yet used)`;
+            subtitle = `${versionPrefix}signed in (not yet used)${viaACP ? " · via ACP" : ""}`;
             tone = "#eab308";
           } else {
-            subtitle = `${versionPrefix}✓ signed in`;
+            subtitle = `${versionPrefix}✓ signed in${viaACP ? " · via ACP" : ""}`;
             tone = "#22c55e";
           }
         } else {
@@ -1612,6 +1619,14 @@ export function CodingAgentsSection({ device }: { device: Device }) {
         // Missing runner → the Install button takes this spot instead.
         const showSignIn = installed && (!authed || notReady);
         const showInstall = !installed && !loading && inst?.kind !== "installing";
+        // ACP subscription login available for this runner? opencode's
+        // headless ChatGPT flow (auth login -p openai -m "ChatGPT Pro/Plus
+        // (headless)", RFC 8628 device code) rides /runner-auth/browser/start
+        // exactly like codex — so when the ACP server advertises
+        // opencode-login we route through the subscription device-flow modal
+        // instead of the API-key config sheet.
+        const hasACPLogin = row?.authMethod === "acp" && !!row?.acpSubscriptionMethod;
+        const useSubscriptionLogin = String(id).toLowerCase() === "opencode" ? hasACPLogin : true;
         return (
           <View
             key={id}
@@ -1638,9 +1653,12 @@ export function CodingAgentsSection({ device }: { device: Device }) {
               <Pressable
                 onPress={() => {
                   const nid = String(id).toLowerCase();
-                  // opencode authenticates through provider config, not
-                  // browser OAuth — send it to the config sheet.
-                  if (nid === "opencode") {
+                  // opencode: when the ACP server advertises the subscription
+                  // login (opencode-login), drive the headless ChatGPT device
+                  // flow via RunnerAuthModal. Only fall back to the API-key
+                  // config sheet when ACP is unavailable (older agent / no
+                  // subscription method advertised).
+                  if (nid === "opencode" && !useSubscriptionLogin) {
                     setShowOpenCodeConfig(true);
                   } else {
                     setAuthModalRunner(id);
@@ -1652,7 +1670,7 @@ export function CodingAgentsSection({ device }: { device: Device }) {
                 }}
               >
                 <Text style={{ color: "#f59e0b", fontSize: 12, fontWeight: "700" }}>
-                  {String(id).toLowerCase() === "opencode" ? "Set up →" : "Sign in →"}
+                  {String(id).toLowerCase() === "opencode" && !useSubscriptionLogin ? "Set up →" : "Sign in →"}
                 </Text>
               </Pressable>
             ) : null}

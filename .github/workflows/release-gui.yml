@@ -97,15 +97,21 @@ jobs:
       - name: Package
         working-directory: electron
         env:
-          # electron-builder signs the mac app with these when present
-          # (hardened runtime + notarization via notarytool), exactly like the
-          # CLI release path. Without them the DMG still builds but is
-          # unsigned — Gatekeeper would block it on first run.
+          # macOS signing (hardened runtime) via the Developer ID cert.
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Notarization via notarytool — electron-builder reads the
+          # APP_STORE_CONNECT_* secrets (existing, same ones release-cli.yml
+          # uses for `yaver` notarization) as APPLE_API_KEY / ID / ISSUER.
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          # Windows signing: only present when the owner configures
+          # WIN_CSC_LINK (base64 .pfx) + WIN_CSC_KEY_PASSWORD. Without them
+          # electron-builder ships an unsigned exe (SmartScreen warning).
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: npx electron-builder --${{ matrix.platform }} --publish never
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

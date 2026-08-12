@@ -1212,6 +1212,22 @@ export interface RunnerAuthStatusRow {
    *  0.122.0", "1.4.0"). Empty if probe failed or agent is older
    *  than 1.99.147. */
   version?: string;
+  /** Mechanism that produced this row's auth verdict (agent 1.99.412+):
+   *  "acp" when the runner's ACP server (opencode native / claude-agent-acp /
+   *  codex-acp) was reachable and reported auth methods; "probe" for the
+   *  classic CLI/file probes. Absent on older agents — treat missing as
+   *  "probe-era row". */
+  authMethod?: string;
+  /** Whether the runner's ACP server initialized. Deliberately separate from
+   *  authConfigured: reachable does NOT imply signed in, unreachable does NOT
+   *  imply signed out — it only means "the ACP path is (not) available". */
+  acpReachable?: boolean;
+  /** The ACP auth-method id that represents the SUBSCRIPTION login for this
+   *  runner (claude-ai-login / chat-gpt / opencode-login). Surfaces use it to
+   *  render the "· via ACP" label and to route the sign-in button through the
+   *  subscription device flow (/runner-auth/browser/start) instead of the
+   *  API-key sheet. Empty when the ACP server hid it or ACP is unavailable. */
+  acpSubscriptionMethod?: string;
 }
 
 export interface RunnerAuthSetupParams {
