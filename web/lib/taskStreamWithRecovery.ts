@@ -62,6 +62,13 @@ export interface TaskStreamRecoveryOptions {
    *  every (re)subscribe; 0/absent starts the raw replay from the retained
    *  tail head. */
   rawSince?: number;
+  /** Receives RAW runner stdout (ANSI + TUI, ungroomed) — the opencode
+   *  console lane, the same bytes mobile's LiveConsoleSection renders.
+   *  `{type:"raw_replay", text}` is the reattach snapshot; `{type:"raw",
+   *  text}` is live. Threaded to AgentClient.streamTaskOutput; absent on web
+   *  chat was the parity gap of docs/audits/webui-chat-vibing-gui-2026-08-12.md
+   *  §2 (web had no consumer for a lane mobile ships). */
+  onRaw?: (event: { type: "raw" | "raw_replay"; text?: string; offset?: number }) => void;
 }
 
 /**
@@ -121,6 +128,17 @@ export function streamTaskOutputWithRecovery(
         // re-subscribe never requests a since that's past the retained tail.
         if ((ev.type === "raw_replay" || ev.type === "raw") && typeof ev.offset === "number") {
           rawReceived = ev.offset;
+        }
+        // Raw stdout (ANSI + TUI) goes to the dedicated consumer, not onEvent:
+        // the event bus is for protocol frames, and a raw lane riding it would
+        // make every consumer re-classify bytes. Mirrors mobile's onRaw.
+        if ((ev.type === "raw" || ev.type === "raw_replay") && options?.onRaw) {
+          options.onRaw({
+            type: ev.type,
+            text: typeof ev.text === "string" ? ev.text : undefined,
+            offset: typeof ev.offset === "number" ? ev.offset : undefined,
+          });
+          return; // raw frames are consumed here; don't also hit onEvent
         }
         onEvent?.(ev);
       },

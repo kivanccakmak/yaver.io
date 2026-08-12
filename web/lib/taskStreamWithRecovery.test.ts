@@ -170,3 +170,42 @@ test("the recovery banner is rendered from one component", () => {
     assert.match(src, /<StreamHealthNotice/, `${rel} wires the ladder but renders nothing — a reattach the user cannot see is a different silence`);
   }
 });
+
+/** The raw opencode console lane (audit 2026-08-12 §2): mobile renders RAW
+ *  runner stdout; web chat had no consumer — the transport accepted rawSince
+ *  but dropped raw/re raw_replay bytes into the event bus. Three guards:
+ *  1. agent-client dispatches raw frames to a dedicated onRaw (never onLine —
+ *     groomed vs raw would double-render with different text).
+ *  2. the recovery wrapper threads onRaw through, and consumes raw frames
+ *     there rather than double-passing them to onEvent.
+ *  3. the chat subscribes with rawSince + onRaw and renders a console panel.
+ *  Deleting any one of the three reopens the "raw bytes arrive, nothing shows"
+ *  freeze this lane exists to prevent.
+ */
+test("the raw opencode console lane is dispatched and consumed on web", () => {
+  const client = readFileSync(join(WEB, "lib/agent-client.ts"), "utf8");
+  assert.ok(
+    /onRaw\?: \(event: \{ type: "raw" \| "raw_replay"/.test(client) || client.includes("onRaw?"),
+    "agent-client does not expose an onRaw callback — raw frames cannot reach a consumer",
+  );
+  assert.ok(
+    client.includes('event?.type === "raw"') && client.includes("opts?.onRaw"),
+    "agent-client does not route raw/raw_replay frames to onRaw — they fall into the event bus and vanish",
+  );
+
+  const recovery = readFileSync(join(WEB, "lib/taskStreamWithRecovery.ts"), "utf8");
+  assert.ok(
+    recovery.includes("onRaw?:") && recovery.includes("options?.onRaw"),
+    "streamTaskOutputWithRecovery does not thread onRaw through to the transport",
+  );
+
+  const chat = readFileSync(join(WEB, "app/dashboard/page.tsx"), "utf8");
+  assert.ok(
+    chat.includes("onRaw:") && chat.includes("rawSince") && chat.includes("rawOutput"),
+    "web chat does not subscribe with rawSince+onRaw into a raw buffer",
+  );
+  assert.ok(
+    chat.includes("Live console") && chat.includes("AnsiConsoleText text={rawOutput"),
+    "web chat has no foldable raw console panel rendering the raw bytes",
+  );
+});

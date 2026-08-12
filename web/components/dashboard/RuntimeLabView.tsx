@@ -788,12 +788,6 @@ function taskStartedAtMs(task: Pick<Task, "createdAt" | "updatedAt">): number | 
   return ts;
 }
 
-function taskOutputSuggestsRender(lines: string[], status: TaskStatus): boolean {
-  if (status === "completed" || status === "review") return true;
-  const recent = lines.slice(-30).join("\n").toLowerCase();
-  return /\b(web bundle re-exported|web ui ready|hot reload|fast refresh|reload sent|run-guest|launch-app|yaver_web_preview_start|files? changed|saved|patched|updated)\b/.test(recent);
-}
-
 function taskStatusAllowsRender(status: TaskStatus): boolean {
   return status === "completed" || status === "review";
 }

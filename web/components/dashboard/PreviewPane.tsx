@@ -21,6 +21,7 @@ import {
   type CapabilityGap,
 } from "@/lib/capabilityGap";
 import { ReclaimPanel } from "./ReclaimPanel";
+import { DomInspectChip } from "./DomInspectChip";
 import pkg from "../../package.json";
 import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskStreamWithRecovery";
 import { CommandCard } from "./CommandCard";
@@ -297,6 +298,30 @@ export default function PreviewPane({
   useEffect(() => {
     return () => stopActiveTaskStream();
   }, [stopActiveTaskStream]);
+
+  // The AGENTS.md cross-surface render contract: render EXACTLY ONCE when a
+  // task reaches a renderable terminal state (completed/review), never while
+  // the runner is coding. Before this effect, PreviewPane reloaded only on the
+  // agent's raw /dev/events `reload|ready` frames — a compile signal, not a
+  // task-completion signal — so a finished turn left the last pre-completion
+  // frame on screen (audit docs/audits/webui-chat-vibing-gui-2026-08-12.md §3:
+  // "three web surfaces disagree on whether a finished task refreshes").
+  // Track the last task whose terminal render we already fired so the effect
+  // is idempotent per task.
+  const lastRenderedTaskRef = useRef<string | null>(null);
+  useEffect(() => {
+    const st = activeTaskStream;
+    if (!st) return;
+    const terminal = st.status === "completed" || st.status === "review";
+    if (!terminal) return;
+    if (lastRenderedTaskRef.current === st.id) return;
+    lastRenderedTaskRef.current = st.id;
+    // Render once: bump the iframe so the fresh bundle paints. The dev server
+    // may already have pushed the compile via /dev/events; this guarantees the
+    // terminal frame even when that event raced or never arrived.
+    setIframeKey((k) => k + 1);
+    setReloadNonce((n) => n + 1);
+  }, [activeTaskStream]);
 
   // Poll dev server + worker-session status.
   useEffect(() => {
@@ -1594,6 +1619,13 @@ export default function PreviewPane({
               )}
             </button>
           </>
+        ) : null}
+        {devStatus?.running && previewFrameUrl ? (
+          <DomInspectChip
+            agentClient={agentClient}
+            workDir={devStatus?.workDir}
+            iframeRef={iframeRef}
+          />
         ) : null}
       </div>
 

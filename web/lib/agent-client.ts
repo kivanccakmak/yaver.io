@@ -3628,16 +3628,28 @@ export class AgentClient {
        * arrived while we were away. Omit on a first subscribe.
        */
       since?: number;
-      /**
-       * Byte offset into the task's RAW stdout tail (ANSI + TUI, ungroomed)
-       * this caller already rendered (`?rawSince=`). The agent answers with a
-       * `raw_replay` frame (full snapshot when 0/absent) followed by live
-       * `raw` frames, so the opencode terminal view reattaches without
-       * re-rendering bytes it already drew. Omit for byte-for-byte old
-       * behaviour (no raw frames at all on this stream).
-       */
-      rawSince?: number;
-      /**
+  /**
+   * Byte offset into the task's RAW stdout tail (ANSI + TUI, ungroomed)
+   * this caller already rendered (`?rawSince=`). The agent answers with a
+   * `raw_replay` frame (full snapshot when 0/absent) followed by live
+   * `raw` frames, so the opencode terminal view reattaches without
+   * re-rendering bytes it already drew. Omit for byte-for-byte old
+   * behaviour (no raw frames at all on this stream).
+   */
+  rawSince?: number;
+  /**
+   * Receives RAW runner stdout (ANSI + TUI, ungroomed — the opencode
+   * console lane) as it arrives: `{type:"raw_replay", text}` for the
+   * snapshot, then `{type:"raw", text}` per chunk. Distinct from onLine
+   * (the groomed transcript). Without a consumer the transport still
+   * accepts rawSince but nothing surfaces the raw bytes — the web-chat
+   * parity gap that mobile's LiveConsoleSection fills (audit
+   * docs/audits/webui-chat-vibing-gui-2026-08-12.md §2). When absent,
+   * raw frames are still passed to onEvent for callers that want the
+   * terminal frame but render raw bytes themselves.
+   */
+  onRaw?: (event: { type: "raw" | "raw_replay"; text?: string; offset?: number }) => void;
+  /**
        * How the stream ENDED. This used to be a bare `catch {}` commented
        * "Silent best-effort stream; callers usually poll task status too" —
        * but the poll goes over the SAME dead transport, so a relay bounce
@@ -3706,6 +3718,17 @@ export class AgentClient {
                 // `?since=` is sliced in bytes. See
                 // desktop/agent/stream_cursor.go.
                 onLine(String(event.text), typeof event.offset === "number" ? event.offset : undefined);
+              } else if ((event?.type === "raw" || event?.type === "raw_replay") && opts?.onRaw) {
+                // The RAW runner stdout lane (opencode console, ANSI + TUI).
+                // Deliberately routed to a dedicated callback, never to onLine:
+                // onLine feeds the groomed transcript bubble, and raw bytes
+                // would double-render with different text (groomed vs not).
+                // raw_replay is the reattach snapshot; raw is live chunks.
+                opts.onRaw({
+                  type: event.type,
+                  text: typeof event.text === "string" ? event.text : undefined,
+                  offset: typeof event.offset === "number" ? event.offset : undefined,
+                });
               } else {
                 // Record the terminal frame even when the caller passed no
                 // onEvent — it is what separates "the task finished" from

@@ -999,9 +999,14 @@ export default function DashboardPage() {
   // `raw`/`raw_replay` SSE frames (agent 1.99.406+, commit d671b7c02).
   // The Chat|Terminal toggle is GONE (2026-08-09, user call — same as
   // mobile): the dashboard task view is chat-only, and the raw console
-  // look renders inside the chat bubbles via AnsiConsoleText. The
-  // transport still supports rawSince/onRaw for other surfaces; nothing
-  // on this page consumes it.
+  // look renders inside the chat bubbles via AnsiConsoleText. The raw
+  // lane is consumed below into a foldable console panel — the web twin
+  // of mobile's LiveConsoleSection (audit 2026-08-12 §2: web had no
+  // consumer for a lane mobile ships). rawSince resume keeps a reattach
+  // from re-rendering the scrollback.
+  const [rawOutput, setRawOutput] = useState<string[]>([]);
+  const [rawSince, setRawSince] = useState(0);
+  const [rawOpen, setRawOpen] = useState(false);
   // Pending agent_question pulled from the SSE stream. When non-null
   // the dashboard renders an inline answer card above the composer;
   // submitting POSTs to /tasks/{id}/answer (via answerTaskQuestion),
@@ -1762,6 +1767,23 @@ export default function DashboardPage() {
       },
       {
         onHealth: setTaskStreamHealth,
+        // The raw opencode console lane (ANSI + TUI, ungroomed). Append into
+        // a bounded buffer (mobile uses 512 KB; here we cap lines at 2000 so
+        // a long turn cannot balloon the DOM). raw_replay is the reattach
+        // snapshot — replace, not append. The byte cursor rides rawSince so a
+        // stream reattach resumes where the console left off.
+        rawSince,
+        onRaw: (ev) => {
+          if (ev.type === "raw_replay") {
+            setRawOutput(ev.text ? [ev.text] : []);
+          } else if (ev.text) {
+            setRawOutput((p) => {
+              const next = [...p, ev.text!];
+              return next.length > 2000 ? next.slice(next.length - 2000) : next;
+            });
+          }
+          if (typeof ev.offset === "number") setRawSince(ev.offset);
+        },
       },
     );
     // Late-join replay: if the agent already asked while no client
@@ -4591,6 +4613,32 @@ export default function DashboardPage() {
                         {taskProofVisible(activeTask) ? (
                           <div className="mx-auto mt-3 max-w-3xl">
                             <TaskProofCard task={activeTask} agentClient={agentClient} />
+                          </div>
+                        ) : null}
+                        {/* Raw opencode console (the LiveConsoleSection twin —
+                            audit 2026-08-12 §2: mobile renders the RAW runner
+                            stdout lane, web chat had no consumer). Foldable:
+                            the groomed transcript stays the default; the
+                            console is one tap away. Reset the fold when the
+                            task changes. */}
+                        {rawOutput.length > 0 ? (
+                          <div className="mx-auto mt-3 max-w-3xl">
+                            <button
+                              type="button"
+                              onClick={() => setRawOpen((v) => !v)}
+                              className="flex w-full items-center gap-2 rounded-xl border border-surface-700 bg-surface-900 px-3 py-2 text-left text-[11px] font-semibold text-surface-300 hover:border-surface-500"
+                            >
+                              <span className={`text-surface-500 transition-transform ${rawOpen ? "rotate-90" : ""}`}>▸</span>
+                              Live console
+                              <span className="ml-auto font-mono text-surface-600">
+                                {rawSince.toLocaleString()} bytes · {rawOutput.length} lines
+                              </span>
+                            </button>
+                            {rawOpen ? (
+                              <div className="mt-1 max-h-72 overflow-y-auto rounded-xl border border-surface-800 bg-black/40 p-3 font-mono text-[11px] leading-5 text-surface-200">
+                                <AnsiConsoleText text={rawOutput.join("\n")} />
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
