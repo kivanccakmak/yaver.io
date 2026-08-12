@@ -51,6 +51,11 @@ var tvClientEndpoints = []struct {
 	{http.MethodPost, "/vibing/preview/start"},
 	{http.MethodPost, "/vibing/preview/stop"},
 	{http.MethodPost, "/vibing/preview/snapshot"},
+	// tvOS "kumanda" DOM selection + DOM-mode toggle — the cursor→element lane
+	// (AgentClient.selectPreviewElement / setPreviewDomMode / movePreviewCursor).
+	{http.MethodPost, "/vibing/preview/select"},
+	{http.MethodPost, "/vibing/preview/dom-mode"},
+	{http.MethodPost, "/vibing/preview/cursor"},
 	{http.MethodGet, "/vibing/preview/status"},
 	{http.MethodGet, "/vibing/preview/frames/abc123"},
 	{http.MethodGet, "/vibing/preview/summaries"},
@@ -68,6 +73,8 @@ var tvClientEndpoints = []struct {
 	{http.MethodPost, "/install/flutter"},
 	{http.MethodGet, "/streams/install:flutter"},
 	{http.MethodPost, "/feedback"},
+	// MCP-server picker (VibeTurnPanel) — read-only names for the run's MCP set.
+	{http.MethodGet, "/mcp/servers"},
 }
 
 // companionDeniedEndpoints must stay closed for tv/vision/spatial: the blast

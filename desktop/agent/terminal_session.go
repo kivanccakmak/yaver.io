@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -25,7 +24,7 @@ const (
 type terminalSession struct {
 	id      string
 	cmd     *exec.Cmd
-	ptmx    *os.File
+	ptmx    ptyMaster
 	srv     *HTTPServer
 	onTouch func(force bool)
 	// onClose runs once, after the PTY and process are torn down, for cleanup
@@ -59,7 +58,7 @@ type terminalSession struct {
 }
 
 func (s *HTTPServer) newTerminalSession(cmd *exec.Cmd, onTouch func(bool), hostShareID, guestUserID, workspaceDir string) (*terminalSession, error) {
-	ptmx, err := pty.Start(cmd)
+	ptmx, err := ptyStart(cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +91,7 @@ func (s *HTTPServer) newTerminalSessionFromPTY(ptmx *os.File, onTouch func(bool)
 	ts := &terminalSession{
 		id:           uuid.New().String(),
 		cmd:          nil, // helper-owned process; no local Wait
-		ptmx:         ptmx,
+		ptmx:         newUnixPTYMaster(ptmx),
 		srv:          s,
 		onTouch:      onTouch,
 		hostShareID:  hostShareID,
@@ -251,7 +250,7 @@ func (ts *terminalSession) close(remove bool) {
 }
 
 func (ts *terminalSession) resize(cols, rows uint16) error {
-	return pty.Setsize(ts.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+	return ts.ptmx.Resize(cols, rows)
 }
 
 func (ts *terminalSession) writeInput(data []byte) error {

@@ -112,11 +112,35 @@ func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
 
 	var cmd *exec.Cmd
 	tmuxSession := ""
-	if tmuxAvailable() {
-		tmuxSession = sanitizeTmuxSessionName(q.Get("name"))
-		if tmuxSession == "" {
-			tmuxSession = "yaver-" + runnerID
+	// On native Windows there is no tmux server; the in-process seat layer
+	// (windows_seat.go) gives runner seats the same persistence contract —
+	// a fresh WebSocket with the same name resumes the live ConPTY session
+	// instead of spawning a second runner (tmux `new-session -A` semantics).
+	// This mirrors the tmux branch below: same name rules, same intent.
+	seatName := sanitizeTmuxSessionName(q.Get("name"))
+	if seatName == "" {
+		seatName = "yaver-" + runnerID
+	}
+	if windowsSeatsEnabled(s) && !tmuxAvailable() {
+		if sid := windowsSeatResume(s, seatName); sid != "" {
+			if existing, ok := s.terminalSessionByID(sid); ok {
+				// The runner already lives in a ConPTY seat under this name —
+				// reattach to it. Same shape as the session_id resume above.
+				s.pumpRunnerPTY(conn, existing, true, map[string]any{
+					"type":        "runner_pty",
+					"runner":      runnerID,
+					"tmuxSession": seatName, // surfaces keep naming it this
+					"cwd":         cwd,
+				})
+				return
+			}
+			// Session id in the index but no live terminal session: the seat
+			// died (process exit) — drop the stale claim and spawn fresh.
+			windowsSeatRelease(s, sid)
 		}
+	}
+	if tmuxAvailable() {
+		tmuxSession = seatName
 		// Persistence is the point of tmux here, but it also means a session
 		// left sitting on the runner's own login screen outlives the auth
 		// repair that fixed it — `new-session -A` would reattach the dead
@@ -166,6 +190,29 @@ func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
 	}
 	ts.runnerID = runnerID
 
+	// Claim the Windows seat so a later reconnect with the same name resumes
+	// this live ConPTY session instead of spawning a second runner. Release on
+	// close (the onClose hook below). Only the Windows seat layer uses this;
+	// on Unix the tmux branch above owns persistence.
+	seatClaimed := false
+	if windowsSeatsEnabled(s) && !tmuxAvailable() {
+		if prev := windowsSeatClaim(s, seatName, ts.id); prev != "" && prev != ts.id {
+			// A previous session was claiming this name; if it is still live
+			// it has been superseded — its own onClose release is idempotent.
+		}
+		seatClaimed = true
+		// Chain a release into the session's close path. terminalSession runs
+		// onClose exactly once after teardown, so this is the single correct
+		// place to drop the seat claim.
+		prevOnClose := ts.onClose
+		ts.onClose = func() {
+			windowsSeatRelease(s, ts.id)
+			if prevOnClose != nil {
+				prevOnClose()
+			}
+		}
+	}
+
 	if tmuxSession != "" {
 		// Zero-chrome default: hide the tmux status bar so the wrap is
 		// invisible; ?chrome=1 keeps it as a thin session indicator. Set it
@@ -188,6 +235,7 @@ func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
 		}(tmuxSession, status)
 	}
 
+	_ = seatClaimed // kept for clarity; the claim happened above
 	meta := map[string]any{
 		"type":        "runner_pty",
 		"runner":      runnerID,
