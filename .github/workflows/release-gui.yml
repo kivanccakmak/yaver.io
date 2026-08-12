@@ -78,7 +78,7 @@ jobs:
             artifact_glob: "dist/*.exe"
           - os: ubuntu-latest
             platform: linux
-            artifact_glob: "dist/*.AppImage"
+            artifact_glob: "dist/*.{AppImage,deb,rpm,tar.gz}"
     steps:
       - uses: actions/checkout@v4
       - name: Setup Node
