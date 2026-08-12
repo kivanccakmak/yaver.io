@@ -3688,6 +3688,23 @@ func mergeLiveWorkspaceReposIntoProjects(projects []projectInfo) []projectInfo {
 			add(repo.Path, repo.Branch)
 		}
 	}
+	// Manifest-declared apps that are NOT their own git repos (tvos/, watch/,
+	// visionos/, wear/ inside the yaver.io monorepo) must still appear as
+	// pickable projects — the webui chat project picker + Load Targets feed
+	// from this list, and without them the TV/watch/vision WebRTC targets
+	// were unreachable from the chat (2026-08-12: "no tvos at all too").
+	// A manifest app is a declared, deployable surface even when it shares
+	// the repo root's .git. Best-effort: a malformed manifest is skipped.
+	// Walk up from CWD to find the manifest (the agent may serve from a
+	// subdirectory); its apps resolve against the manifest's own root.
+	if root, m := loadNearestWorkspaceManifest("."); m != nil {
+		for _, app := range m.Apps {
+			appPath := filepath.Clean(filepath.Join(root, app.Path))
+			if _, err := os.Stat(appPath); err == nil {
+				add(appPath, "")
+			}
+		}
+	}
 	return out
 }
 

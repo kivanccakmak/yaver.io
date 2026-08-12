@@ -431,6 +431,13 @@ export function summarizeRawConsole(raw: string, running: boolean, opts?: Summar
   const budgetLines = opts?.budgetLines ?? (running ? 40 : 200);
   const budgetChars = opts?.budgetChars ?? (running ? 6 * 1024 : 24 * 1024);
   const lines = raw.split("\n");
+  // KEEP THE TAIL, NOT THE HEAD (2026-08-13, web chat live-console bug):
+  // the old loop dropped NEW lines once the budget was reached, so a
+  // running task past ~150 lines froze its console at the START of the
+  // run — the header said "N LINES · LIVE" while every line after the
+  // budget never rendered, and auto-scroll had nothing to follow. A live
+  // console shows the newest output; evict the OLDEST kept line instead
+  // of rejecting the newest.
   const kept: string[] = [];
   let keptChars = 0;
   let dropped = 0;
@@ -447,7 +454,14 @@ export function summarizeRawConsole(raw: string, running: boolean, opts?: Summar
       prevKey = plain;
       runLen = 1;
     }
-    if (kept.length >= budgetLines || keptChars >= budgetChars) { dropped += 1; continue; }
+    if (kept.length >= budgetLines || keptChars >= budgetChars) {
+      // Budget full: make room for the newest line by evicting the oldest
+      // kept line (tracking its char weight so the char budget stays
+      // accurate). This is what makes a streaming console follow the tail.
+      dropped += 1;
+      const evicted = kept.shift();
+      if (evicted) keptChars -= evicted.length + 1;
+    }
     kept.push(rawLine);
     keptChars += rawLine.length + 1;
   }

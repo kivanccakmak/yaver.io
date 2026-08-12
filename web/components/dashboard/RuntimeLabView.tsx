@@ -4052,11 +4052,12 @@ export default function RuntimeLabView({
               </div>
             </div>
             <div className="mt-3">
-              {/* One combined status row: runner, model, and machine routing —
-                  two silent sources are two unfalsifiable states, so the
-                  machines segment always NAMES which box the chat streams from
-                  and which box builds/serves the preview. */}
-              <div className="grid min-h-11 min-w-0 grid-cols-[minmax(0,0.8fr)_minmax(0,0.7fr)_minmax(0,1.1fr)_auto] items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
+              {/* Runner + model only — machine routing is shown by the
+                  AI/Render pickers on the Load Targets row above, so the
+                  chat header does not restate it (LESS IS MORE: a second
+                  rendering of the same state was a chip grid nobody read;
+                  2026-08-12). */}
+              <div className="grid min-h-11 min-w-0 grid-cols-[minmax(0,0.8fr)_minmax(0,0.7fr)_auto] items-center gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] px-2 py-1.5 dark:border-[#2a3039] dark:bg-[#101318]">
                 <span className="min-w-0 truncate text-[11px] leading-5 text-[#667085] dark:text-[#9aa3af]">
                   <span className="font-semibold uppercase tracking-wide">Runner</span>
                   <span className="mx-1.5 text-[#98a2b3]">/</span>
@@ -4066,19 +4067,6 @@ export default function RuntimeLabView({
                   <span className="font-semibold uppercase tracking-wide">Model</span>
                   <span className="mx-1.5 text-[#98a2b3]">/</span>
                   <span className="font-medium text-[#344054] dark:text-[#d7dce3]">{effectiveChatModel || selectedModel || "runner default"}</span>
-                </span>
-                <span className="min-w-0 truncate text-[11px] leading-5 text-[#667085] dark:text-[#9aa3af]">
-                  <span className="font-semibold uppercase tracking-wide">Machines</span>
-                  <span className="mx-1.5 text-[#98a2b3]">/</span>
-                  {machineSplitActive ? (
-                    <span className="font-medium text-indigo-700 dark:text-indigo-300">
-                      AI: {runnerBoxName} · Render: {renderBoxName}
-                    </span>
-                  ) : (
-                    <span className="font-medium text-[#344054] dark:text-[#d7dce3]">
-                      {runnerBoxName || connectedDevice?.name || "This machine"} runs and renders
-                    </span>
-                  )}
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <button

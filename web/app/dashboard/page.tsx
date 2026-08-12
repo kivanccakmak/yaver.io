@@ -75,6 +75,7 @@ import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import RawFailureBanner, { announceRawFailure } from "@/components/dashboard/RawFailureBanner";
 import { AnsiConsoleText, hasConsoleMarkup } from "@/components/dashboard/AnsiConsoleText";
 import { summarizeRawConsole } from "@/lib/_core/ansi";
+import { interleaveConsolePrompts } from "@/lib/consoleInterleave";
 import { SessionDeathError } from "@/lib/rawFailure";
 import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
 import { usableTunnelUrls } from "@/lib/endpoints";
@@ -4666,8 +4667,15 @@ export default function DashboardPage() {
                           const rawJoined = rawOutput.join("\n");
                           const isRunning = activeTask.status === "running" || activeTask.status === "queued";
                           const consoleText = summarizeRawConsole(rawJoined, isRunning, {
-                            budgetLines: isRunning ? 150 : 800,
-                            budgetChars: isRunning ? 48 * 1024 : 256 * 1024,
+                            // Running budget sized so the FIRST `> build`
+                            // banner survives summarization: interleaveConsole-
+                            // Prompts pairs prompt[i] with the i-th banner-led
+                            // response segment, so evicting banner 1 would put
+                            // "helo" AFTER its own reply. 300 lines ≈ 3-4
+                            // screens of 12px mono on a desktop panel — still
+                            // bounded, but normal tasks never evict the head.
+                            budgetLines: isRunning ? 300 : 800,
+                            budgetChars: isRunning ? 64 * 1024 : 256 * 1024,
                           });
                           const rawLines = rawJoined.split("\n").length;
                           const rawKb = (rawJoined.length / 1024).toFixed(1);
@@ -4686,23 +4694,33 @@ export default function DashboardPage() {
                                   </span>
                                 ) : null}
                               </div>
-                              {/* User prompts — ALWAYS visible in console mode
-                                  (2026-08-12 user report: a follow-up sent while
-                                  the task was streaming vanished completely —
-                                  this block was gated on rawOutput.length === 0,
-                                  so the instant the first raw byte arrived the
-                                  submitted text stopped rendering anywhere; not
-                                  as a `$` line, not as a blue bubble). Rendered
-                                  as opencode-style `$` lines at the TOP of the
-                                  stream, like the runner's own echo. */}
-                              {chatMsgs
-                                .filter((m) => m.role === "user")
-                                .map((m, i) => (
+                              {/* User prompts interleaved with the response
+                                  segment each one triggered (2026-08-13 user
+                                  call: every prompt used to render at the TOP
+                                  of the console, so a two-turn task read
+                                  "all my messages, then all replies" instead
+                                  of a conversation). The console is split at
+                                  the `> build · <model>` banner lines and
+                                  each prompt sits directly above the
+                                  response that follows it — chat order, same
+                                  flow as the runner's own console. Prompts
+                                  stay ALWAYS visible (2026-08-12 report: a
+                                  follow-up sent while the task was streaming
+                                  vanished completely); a queued follow-up
+                                  with no response yet renders after the last
+                                  segment, never dropped. */}
+                              {interleaveConsolePrompts(
+                                consoleText,
+                                chatMsgs.filter((m) => m.role === "user").map((m) => m.text),
+                              ).map((block, i) =>
+                                block.kind === "prompt" ? (
                                   <div key={`prompt-${i}`} className="whitespace-pre-wrap break-words py-0.5 font-mono text-[12px] leading-5 text-emerald-700 dark:text-emerald-300">
-                                    <span className="select-none text-surface-600">$ </span>{m.text}
+                                    <span className="select-none text-surface-600">$ </span>{block.text}
                                   </div>
-                                ))}
-                              <AnsiConsoleText text={consoleText} />
+                                ) : (
+                                  <AnsiConsoleText key={`console-${i}`} text={block.text} />
+                                ),
+                              )}
                               {isRunning ? (
                                 // opencode-style working indicator — the purple
                                 // gradient orb opencode shows bottom-left while

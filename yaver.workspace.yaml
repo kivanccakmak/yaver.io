@@ -50,6 +50,41 @@ apps:
     stack: bun
     depends: [mobile]
 
+  # Standalone Apple/Android surfaces — declared as apps so the webui chat
+  # composer + Load Targets can pick them and probe their WebRTC sim targets
+  # (TV, watch, vision). Before 2026-08-12 these were missing from the
+  # manifest, so /projects never offered them and "vibe the TV / watch /
+  # AR-VR from the webui" was impossible: the project catalog feeds from the
+  # manifest, and a non-repo dir like tvos/ was invisible. Stack swift keeps
+  # them in the native-webrtc family (executionModeForFramework).
+  - name: tvos
+    path: ./tvos
+    stack: swift
+    provider:
+      ios: appstoreconnect
+    depends: [backend]
+
+  - name: watchos
+    path: ./watch
+    stack: swift
+    provider:
+      ios: appstoreconnect
+    depends: [backend]
+
+  - name: visionos
+    path: ./visionos
+    stack: swift
+    provider:
+      ios: appstoreconnect
+    depends: [backend]
+
+  - name: wear-os
+    path: ./wear
+    stack: kotlin
+    provider:
+      android: playstore
+    depends: [backend]
+
   - name: desktop-agent
     path: ./desktop/agent
     stack: go

@@ -22,10 +22,12 @@ package main
 // guest agent loop.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 func dnsMCPTools() []map[string]interface{} {
@@ -75,10 +77,37 @@ func dnsMCPTools() []map[string]interface{} {
 				},
 			},
 		},
+		{
+			"name": "dns_localname_status",
+			"description": "Report this machine's mDNS .local LAN name (macOS LocalHostName / Linux hostname) and — the fact that matters — whether <name>.local ACTUALLY resolves on a LAN interface right now (loopback-only is a false green: set but invisible to other devices). Also reports ComputerName, the yaver-managed name if one was set, avahi state on Linux, and a named note when the LAN cannot see the name. Read-only, no root needed.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name": "dns_localname_set",
+			"description": "Give this machine a stable mDNS LAN name <name>.local so the web dashboard / agent are reachable by name (yaver.local:18080) from every device on the LAN instead of a raw IP — the same trick as a home router or a Raspberry Pi with avahi. macOS: scutil --set LocalHostName + ComputerName (root via YAVER_LOGIN_PASSWORD in ~/.yaver/local-secrets.env). Linux: hostnamectl set-hostname; warns when avahi-daemon is not running (name set but not advertised). Verifies by resolving <name>.local on a LAN interface before returning, and persists the previous name for dns_localname_restore. Owner-only.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"name"},
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{"type": "string", "description": "Desired .local name — a single token, no spaces or dots (e.g. \"yaver\"). The .local suffix is implied."},
+				},
+			},
+		},
+		{
+			"name": "dns_localname_restore",
+			"description": "Revert a yaver-set mDNS local name back to the LocalHostName/ComputerName recorded before dns_localname_set ran. No-op with a clear message when yaver never set a name. Owner-only.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"properties": map[string]interface{}{},
+			},
+		},
 	}
 }
 
-func dispatchDnsMCP(_ *HTTPServer, name string, arguments json.RawMessage) (bool, interface{}) {
+func dispatchDnsMCP(s *HTTPServer, name string, arguments json.RawMessage) (bool, interface{}) {
 	switch name {
 	case "dns_add":
 		return true, dnsMCPAdd(arguments)
@@ -86,8 +115,47 @@ func dispatchDnsMCP(_ *HTTPServer, name string, arguments json.RawMessage) (bool
 		return true, dnsMCPRemove(arguments)
 	case "ssl_provision":
 		return true, sslMCPProvision(arguments)
+	case "dns_localname_status":
+		return true, dnsMCPLocalNameStatus()
+	case "dns_localname_set":
+		return true, dnsMCPLocalNameSet(arguments)
+	case "dns_localname_restore":
+		return true, dnsMCPLocalNameRestore()
 	}
 	return false, nil
+}
+
+func dnsMCPLocalNameStatus() interface{} {
+	return mcpToolJSON(NewLocalNameManager().Status())
+}
+
+func dnsMCPLocalNameSet(raw json.RawMessage) interface{} {
+	var args struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return mcpToolError("invalid args: " + err.Error())
+	}
+	if strings.TrimSpace(args.Name) == "" {
+		return mcpToolError("name is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	msg, err := NewLocalNameManager().Set(ctx, args.Name)
+	if err != nil {
+		return mcpToolError("set local name: " + err.Error())
+	}
+	return mcpToolJSON(map[string]interface{}{"ok": true, "message": msg})
+}
+
+func dnsMCPLocalNameRestore() interface{} {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	msg, err := NewLocalNameManager().Restore(ctx)
+	if err != nil {
+		return mcpToolError("restore local name: " + err.Error())
+	}
+	return mcpToolJSON(map[string]interface{}{"ok": true, "message": msg})
 }
 
 func dnsMCPAdd(raw json.RawMessage) interface{} {

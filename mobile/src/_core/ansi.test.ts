@@ -231,6 +231,17 @@ if (failures > 0) {
   const running = summarizeRawConsole(big, true).split("\n").length;
   const finished = summarizeRawConsole(big, false).split("\n").length;
   ok(running < finished, "running budget tighter than finished budget");
+  // KEEP THE TAIL (2026-08-13): the summarizer evicts the OLDEST kept line
+  // when the budget is full, so a live console follows the newest output —
+  // never drops it. The old head-keeping bug froze the web task console at
+  // the START of a long run while the header claimed it was live.
+  const tail = summarizeRawConsole(big, true).split("\n");
+  ok(tail.some((l) => l.startsWith("line 199")), "newest output survives the budget (tail kept)");
+  ok(!tail.some((l) => l.startsWith("line 0")), "oldest output evicted to make room");
+  // The tail must still be recognizably the END of the stream, and the
+  // collapse marker must not masquerade as a kept line.
+  const noMarker = tail.filter((l) => !l.startsWith("… "));
+  ok(noMarker[0].startsWith("line 160"), "first kept line is the oldest evicted window start (budget 40 of 200)");
   // ANSI on kept lines survives (so AnsiConsoleText can still paint them).
   const ansiLine = "\x1b[31mred text\x1b[0m";
   ok(summarizeRawConsole(ansiLine, false).includes("\x1b[31m"), "kept lines keep their escapes");

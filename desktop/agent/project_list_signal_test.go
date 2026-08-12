@@ -68,3 +68,41 @@ func TestMergeLiveWorkspaceReposIntoProjectsAddsWorkspaceRepoRoots(t *testing.T)
 	}
 	t.Fatalf("expected workspace repo root %q to be merged into /projects, got %+v", repo, got)
 }
+
+// TestMergeLiveWorkspaceReposAddsManifestApps — the 2026-08-12 blocker:
+// tvos/, watch/, visionos/ inside the yaver.io monorepo are declared apps in
+// yaver.workspace.yaml but are NOT their own git repos, so scanDirForRepos
+// never found them and the webui chat could never pick the TV/watch/vision
+// projects ("no tvos at all too"). The manifest merge must surface every
+// declared app whose path exists.
+func TestMergeLiveWorkspaceReposAddsManifestApps(t *testing.T) {
+	root := t.TempDir()
+	for _, app := range []string{"tvos", "watch", "visionos", "wear"} {
+		if err := os.MkdirAll(filepath.Join(root, app), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := "version: 1\nname: test\nworkspace:\n  root: .\napps:\n" +
+		"  - name: tvos\n    path: ./tvos\n    stack: swift\n" +
+		"  - name: watchos\n    path: ./watch\n    stack: swift\n" +
+		"  - name: visionos\n    path: ./visionos\n    stack: swift\n" +
+		"  - name: wear-os\n    path: ./wear\n    stack: kotlin\n"
+	if err := os.WriteFile(filepath.Join(root, "yaver.workspace.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldOverride := WorkspaceManifestPathOverride
+	WorkspaceManifestPathOverride = filepath.Join(root, "yaver.workspace.yaml")
+	defer func() { WorkspaceManifestPathOverride = oldOverride }()
+
+	got := mergeLiveWorkspaceReposIntoProjects(nil)
+	found := map[string]bool{}
+	for _, project := range got {
+		found[filepath.Base(project.Path)] = true
+	}
+	for _, want := range []string{"tvos", "watch", "visionos", "wear"} {
+		if !found[want] {
+			t.Errorf("manifest app %q not merged into /projects (got %v)", want, found)
+		}
+	}
+}
