@@ -1,7 +1,7 @@
 {
   "name": "yaver-gui",
   "productName": "Yaver",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Desktop GUI for the Yaver web dashboard — chat, vibing, devices, and previews in a native shell.",
   "main": "src/main.js",
   "author": "Kivanç Çakmak <kivanc.cakmak@simkab.com>",
@@ -25,32 +25,52 @@
   "build": {
     "appId": "io.yaver.gui",
     "productName": "Yaver",
-    "files": ["src/**/*", "assets/**/*", "package.json"],
-    "directories": { "output": "dist", "buildResources": "assets" },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
     "artifactName": "yaver-gui-${version}-${os}.${ext}",
     "extraResources": [
       {
         "from": "resources/bin",
         "to": "bin",
-        "filter": ["yaver", "yaver.exe"]
+        "filter": [
+          "yaver",
+          "yaver.exe"
+        ]
       }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.icns",
-      "target": ["dmg", "zip"],
-      "dmg": {
-        "title": "yaver.io"
-      }
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "dmg": {
+      "title": "yaver.io"
     },
     "win": {
       "icon": "assets/icon.ico",
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "linux": {
       "icon": "assets/icon.png",
       "category": "Development",
-      "target": ["AppImage", "deb", "rpm", "tar.gz"],
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm",
+        "tar.gz"
+      ],
       "maintainer": "Kivanç Çakmak <kivanc.cakmak@simkab.com>",
       "synopsis": "Yaver desktop GUI — sign in and vibe tasks from your computer"
     },
