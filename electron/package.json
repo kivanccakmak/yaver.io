@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "description": "Desktop GUI for the Yaver web dashboard — chat, vibing, devices, and previews in a native shell.",
   "main": "src/main.js",
+  "author": "Kivanç Çakmak <kivanc.cakmak@simkab.com>",
+  "homepage": "https://yaver.io/download",
   "license": "FSL-1.1-Apache-2.0",
   "private": true,
   "scripts": {

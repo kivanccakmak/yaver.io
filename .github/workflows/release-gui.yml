@@ -94,17 +94,31 @@ jobs:
         if: ${{ !inputs.skip_agent_bundle }}
         working-directory: electron
         run: node scripts/fetch-agent-binary.mjs
+      - name: Write notarization key to file
+        # @electron/notarize's APPLE_API_KEY env is a PATH to the .p8 file,
+        # but the stored secret APP_STORE_CONNECT_API_KEY holds the p8
+        # CONTENT (release-cli.yml writes it to a file too). Passing PEM
+        # content as a path makes notarytool fail with "Invalid option".
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/notarize"
+          printf '%s' "$APP_STORE_CONNECT_API_KEY" > "$RUNNER_TEMP/notarize/api_key.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/notarize/api_key.p8" >> "$GITHUB_ENV"
+        env:
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+
       - name: Package
         working-directory: electron
         env:
           # macOS signing (hardened runtime) via the Developer ID cert.
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # Notarization via notarytool — electron-builder reads the
-          # APP_STORE_CONNECT_* secrets (existing, same ones release-cli.yml
-          # uses for `yaver` notarization) as APPLE_API_KEY / ID / ISSUER.
+          # Notarization via notarytool — APPLE_API_KEY is the .p8 file path
+          # (written above); ID/ISSUER come from the existing
+          # APP_STORE_CONNECT_* secrets (same ones release-cli.yml uses).
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
           APPLE_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           # Windows signing: only present when the owner configures
