@@ -36,6 +36,7 @@ import { previewBundlePath } from "../lib/previewBundlePath";
 import { browserLaneProbeLine, doctorBrowserLane, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
 import { handlePreviewScreenMessage } from "../lib/screenContextBridge";
+import { handlePreviewDomMessage, subscribeDomInspectMode } from "../lib/domInspectBridge";
 import {
   capabilityGapFromDevEvent,
   capabilityGapFromStatus,
@@ -246,6 +247,23 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
   const previewLogScrollRef = useRef<ScrollView>(null);
   const reportedBundlePath = previewBundlePath(status as any);
   const bundleUrl = reportedBundlePath ? quicClient.getDevServerBundleUrl(reportedBundlePath) : "";
+
+  // DOM mode: when the user flips Inspect on (in the Tasks-tab chip), inject
+  // the enable command into THIS WebView — the probe is loaded from the
+  // agent-proxied bundle, so it is present and listening on this window. The
+  // probe auto-offs after a selection, which is the right one-tap mobile UX.
+  useEffect(() => {
+    return subscribeDomInspectMode((on) => {
+      if (!on) return;
+      try {
+        webViewRef.current?.injectJavaScript(
+          'window.postMessage({source:"yaver-dom",t:"yaver-dom-mode",enabled:true},"*");true;',
+        );
+      } catch {
+        /* webview not mounted — the toggle just stays local until it is */
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!showPreview || logLines.length === 0) return;
@@ -1178,6 +1196,10 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
                     // probe and got none of the feature. Forwarded over the
                     // authed quicClient, never straight from the page.
                     if (handlePreviewScreenMessage(m, status?.workDir)) return;
+                    // DOM mode SECOND: the clicked element (and the
+                    // interactive-items inventory) from the dom probe, over the
+                    // same authed channel.
+                    if (handlePreviewDomMessage(m, status?.workDir)) return;
                     // THE PROBE CANNOT RUN — stop waiting for it.
                     //
                     // On RN-web the preview is an <iframe>, and the app and the

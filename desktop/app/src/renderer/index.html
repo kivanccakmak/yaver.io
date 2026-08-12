@@ -231,15 +231,20 @@
           <div class="pane-right">
             <div class="preview-bar">
               <span class="preview-url" id="preview-url">No preview</span>
+              <span class="dom-toggle no-drag" id="dom-toggle" style="display:none;align-items:center;gap:2px;font-size:10px;border:1px solid var(--border,#333);border-radius:6px;overflow:hidden">
+                <button class="no-drag" id="dom-browse-btn" onclick="toggleDomMode(false)" style="border:none;background:var(--accent,#7c5cff);color:#fff;padding:2px 8px;cursor:pointer;font-weight:600">Browse</button>
+                <button class="no-drag" id="dom-inspect-btn" onclick="toggleDomMode(true)" style="border:none;background:transparent;color:var(--text-muted);padding:2px 8px;cursor:pointer">Inspect</button>
+              </span>
               <button class="btn-icon no-drag" onclick="handleReload()" title="Reload" style="width:24px;height:24px;font-size:12px">&#x21BB;</button>
               <button class="btn-icon no-drag" onclick="stopDevServer()" title="Stop dev server" style="width:24px;height:24px;font-size:10px;color:var(--red)">&#x25A0;</button>
             </div>
+            <div id="dom-chip" class="dom-chip" style="display:none"></div>
             <div id="preview-empty" class="preview-empty">
               <div style="font-size:48px;opacity:0.15">&#x1F3A8;</div>
               <div>App preview appears here</div>
               <div style="font-size:11px;max-width:250px;text-align:center;line-height:1.6">Ask the AI to build something and start a dev server</div>
             </div>
-            <webview id="preview-webview" class="hidden" allowpopups></webview>
+            <webview id="preview-webview" class="hidden" preload="./webview-preload.js" allowpopups></webview>
           </div>
         </div>
 
@@ -864,9 +869,128 @@ async function showPreview() {
   const url = await window.yaver.getPreviewUrl(); if (!url) return;
   const wv = document.getElementById('preview-webview');
   if (wv.classList.contains('hidden')) { wv.src = url; wv.classList.remove('hidden'); document.getElementById('preview-empty').classList.add('hidden'); document.getElementById('preview-url').textContent = url; }
+  showDomToggle(true);
+  wireDomMode();
 }
 
 function handleReload() { const wv = document.getElementById('preview-webview'); if (!wv.classList.contains('hidden')) wv.reload(); window.yaver.devServerReload(); }
+
+// ════════════════════════════════════════════════════════
+// DOM MODE (element inspect)
+// ════════════════════════════════════════════════════════
+// The probe injected into the preview page posts to ITS OWN window (webview
+// guests run top-level), where webview-preload.js relays it here via
+// ipc-message "yaver-dom". We forward to the agent over the authenticated
+// agentRequest channel — /dev/ is unauthenticated by design, so the page
+// must never talk to the agent directly (prompt-injection channel).
+let domInspectMode = false;
+let domElement = null;
+
+function showDomToggle(show) { document.getElementById('dom-toggle').style.display = show ? 'flex' : 'none'; }
+
+async function toggleDomMode(on) {
+  domInspectMode = on;
+  document.getElementById('dom-inspect-btn').style.background = on ? 'var(--accent,#7c5cff)' : 'transparent';
+  document.getElementById('dom-inspect-btn').style.color = on ? '#fff' : 'var(--text-muted)';
+  document.getElementById('dom-browse-btn').style.background = on ? 'transparent' : 'var(--accent,#7c5cff)';
+  document.getElementById('dom-browse-btn').style.color = on ? 'var(--text-muted)' : '#fff';
+  const wv = document.getElementById('preview-webview');
+  if (wv && !wv.classList.contains('hidden')) wv.send('yaver-dom-mode', on);
+  if (!on) {
+    // Off means the agent is not holding the element — delete what was
+    // reported (same delete-semantics as the web/mobile chips).
+    domElement = null;
+    document.getElementById('dom-chip').style.display = 'none';
+    const s = await window.yaver.devServerStatus();
+    if (s && s.workDir) window.yaver.agentRequest('DELETE', '/dom-inspect?workDir=' + encodeURIComponent(s.workDir));
+  }
+}
+
+function renderDomChip(el) {
+  const chip = document.getElementById('dom-chip');
+  const shot = el.shot
+    ? `<img src="${el.shot}" style="max-height:64px;border-radius:4px;margin-top:4px;border:1px solid var(--border,#333)"/>`
+    : '';
+  const summary = (el.selector || el.tag || el.id || 'element') + (el.text ? ' — ' + el.text.slice(0, 48) : '');
+  chip.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">
+        <span style="opacity:0.7">element: </span>${esc(summary)}
+      </span>
+      <button class="no-drag" onclick="toggleDomMode(false)" style="border:1px solid var(--border,#333);background:transparent;color:var(--text-muted);border-radius:4px;padding:1px 8px;font-size:10px;cursor:pointer;font-weight:600">OFF</button>
+    </div>
+    <details style="margin-top:4px;font-size:10px;color:var(--text-muted)">
+      <summary style="cursor:pointer">what is sent</summary>
+      <div style="font-family:monospace;margin-top:4px;line-height:1.5">
+        ${el.selector ? '<div>selector: ' + esc(el.selector) + '</div>' : ''}
+        ${el.tag ? '<div>tag: ' + esc(el.tag) + '</div>' : ''}
+        ${el.rect ? '<div>rect: ' + esc(el.rect) + '</div>' : ''}
+        ${el.text ? '<div>text: ' + esc(el.text) + '</div>' : ''}
+        ${el.html ? '<div>html: ' + esc(String(el.html.length)) + ' chars</div>' : ''}
+        ${el.css ? '<div>css: ' + esc(String(el.css.length)) + ' chars</div>' : ''}
+        ${el.shot ? '<div>screenshot: attached</div>' : ''}
+      </div>
+    </details>`;
+  chip.style.display = 'block';
+}
+
+let domModeWired = false;
+function wireDomMode() {
+  const wv = document.getElementById('preview-webview');
+  if (!wv || domModeWired) return;
+  domModeWired = true;
+  // The probe relays element/inventory messages here as ipc-message "yaver-dom".
+  wv.addEventListener('ipc-message', (e) => {
+    if (e.channel !== 'yaver-dom') return;
+    const data = e.args && e.args[0];
+    if (!data || data.source !== 'yaver-dom') return;
+    if (data.t === 'yaver-dom-element') {
+      const el = data.el || {};
+      domElement = el;
+      renderDomChip(el);
+      // The probe auto-offs after a selection — mirror that in the toggle.
+      domInspectMode = false;
+      document.getElementById('dom-inspect-btn').style.background = 'transparent';
+      document.getElementById('dom-inspect-btn').style.color = 'var(--text-muted)';
+      document.getElementById('dom-browse-btn').style.background = 'var(--accent,#7c5cff)';
+      document.getElementById('dom-browse-btn').style.color = '#fff';
+      (async () => {
+        const s = await window.yaver.devServerStatus();
+        if (s && s.workDir) window.yaver.agentRequest('POST', '/dom-inspect', { ...el, workDir: s.workDir });
+      })();
+    } else if (data.t === 'yaver-dom-items-list') {
+      const items = data.items || [];
+      if (items.length && domElement === null) {
+        // Lightweight picker: list the inventory as clickable rows; picking
+        // reports the item's fields (the rich hover capture stays the primary
+        // path — items carry no shot/html/css).
+        const chip = document.getElementById('dom-chip');
+        chip.innerHTML = `<div style="font-size:10px;opacity:0.8;margin-bottom:4px">Interactive elements — click to audit:</div>` +
+          items.map((it) =>
+            `<button class="no-drag" onclick="window.__yaverPickDomItem && window.__yaverPickDomItem(${it.selector ? JSON.stringify(it.selector) : '""'},${it.tag ? JSON.stringify(it.tag) : '""'},${it.id ? JSON.stringify(it.id) : '""'},${it.text ? JSON.stringify(it.text) : '""'})" style="display:block;width:100%;text-align:left;border:none;background:transparent;color:var(--text);cursor:pointer;font-size:11px;padding:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.selector || it.tag || 'element')}${it.text ? ' — ' + esc(it.text) : ''}</button>`
+          ).join('');
+        chip.style.display = 'block';
+      }
+    }
+  });
+}
+
+window.__yaverPickDomItem = (selector, tag, id, text) => {
+  const el = { selector, tag, id, text, lane: 'browser' };
+  domElement = el;
+  renderDomChip(el);
+  (async () => {
+    const s = await window.yaver.devServerStatus();
+    if (s && s.workDir) window.yaver.agentRequest('POST', '/dom-inspect', { ...el, workDir: s.workDir });
+  })();
+};
+
+// Items picker request — the probe answers with yaver-dom-items-list.
+function requestDomItems() {
+  const wv = document.getElementById('preview-webview');
+  if (!wv || wv.classList.contains('hidden')) return;
+  wv.send('yaver-dom-items', 40);
+}
 
 // ════════════════════════════════════════════════════════
 // PANELS

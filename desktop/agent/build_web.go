@@ -803,6 +803,10 @@ func (s *HTTPServer) serveWebBundleHTML(w http.ResponseWriter, htmlPath string) 
 	// could have it, it would be this one. Both have it — see
 	// screen_context_inject.go.
 	patched = []byte(injectScreenContextProbe(string(patched)))
+	// DOM-mode probe: click any element in the preview and its HTML + CSS +
+	// cropped screenshot reach the agent. Injected in both HTML lanes — see
+	// dom_inspect_inject.go.
+	patched = []byte(injectDomInspectProbe(string(patched)))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	info := s.devServerMgr.GetWebBundleInfo()

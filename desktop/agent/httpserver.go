@@ -1010,6 +1010,19 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// unauthenticated write here would be a prompt-injection channel.
 	mux.HandleFunc("/screen-context", s.auth(s.handleScreenContext))
 
+	// DOM mode (dom_inspect_http.go): the surface reports WHICH ELEMENT the
+	// user clicked in the live preview, so a prompt like "deep audit this
+	// element" reaches the runner with the element's HTML/CSS/screenshot
+	// attached. Owner-authenticated for the same reason as /screen-context —
+	// an unauthenticated write here would be a prompt-injection channel.
+	mux.HandleFunc("/dom-inspect", s.auth(s.handleDomInspect))
+
+	// The pickable interactive-items inventory for DOM mode — any surface can
+	// fetch the same element list the hover path captures, and the phone (where
+	// hovering is hard) can let the user pick an item to audit. Same auth
+	// boundary as /dom-inspect itself.
+	mux.HandleFunc("/dom-inspect/items", s.auth(s.handleDomInspectItems))
+
 	// Co-vibe (vibe_sessions_http.go): one report + four verbs. Readable by any
 	// authenticated participant — seeing who else is driving is what stops two
 	// people fighting over one simulator.

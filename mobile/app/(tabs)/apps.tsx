@@ -51,6 +51,7 @@ import { previewBundlePath } from "../../src/lib/previewBundlePath";
 import { browserLaneProbeLine, doctorBrowserLane, shouldRunBrowserLaneDoctor, type BrowserLaneProbeResult } from "../../src/lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
 import { handlePreviewScreenMessage } from "../../src/lib/screenContextBridge";
+import { handlePreviewDomMessage, subscribeDomInspectMode } from "../../src/lib/domInspectBridge";
 import {
   capabilityGapFromDevEvent,
   capabilityGapFromError,
@@ -754,6 +755,22 @@ export default function AppsScreen() {
   const [projectsDiscovering, setProjectsDiscovering] = useState(false);
   const [mobileDiscovery, setMobileDiscovery] = useState<MobileDiscoveryState | null>(null);
   const webViewRef = useRef<WebView>(null);
+  // DOM mode: when the user flips Inspect on (in the Tasks-tab chip), inject
+  // the enable command into THIS WebView — the probe is loaded from the
+  // agent-proxied bundle, so it is present and listening on this window. The
+  // probe auto-offs after a selection, which is the right one-tap mobile UX.
+  useEffect(() => {
+    return subscribeDomInspectMode((on) => {
+      if (!on) return;
+      try {
+        webViewRef.current?.injectJavaScript(
+          'window.postMessage({source:"yaver-dom",t:"yaver-dom-mode",enabled:true},"*");true;',
+        );
+      } catch {
+        /* webview not mounted — the toggle just stays local until it is */
+      }
+    });
+  }, []);
   // Browser-preview cold-start retry budget (see the WebView onError/onHttpError
   // below). A web dev server can take up to a minute to compile on first open.
   const webPreviewRetryRef = useRef(0);
@@ -3627,6 +3644,10 @@ export default function AppsScreen() {
                   // the authed quicClient, never straight from the page (/dev/
                   // is unauthenticated by design).
                   if (handlePreviewScreenMessage(m, devStatus?.workDir)) return;
+                  // DOM mode SECOND: the clicked element (and the
+                  // interactive-items inventory) from the dom probe, over the
+                  // same authed channel.
+                  if (handlePreviewDomMessage(m, devStatus?.workDir)) return;
                   // THE PROBE CANNOT RUN — stop waiting for it. Same fix as
                   // DevPreview.tsx: on RN-web the preview is a cross-origin
                   // <iframe>, so the browser forbids injecting the ready-probe

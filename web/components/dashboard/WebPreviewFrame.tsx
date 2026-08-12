@@ -6,7 +6,10 @@
 // React Native. Viewport presets resize the iframe *inside* the box
 // so the user can sanity-check responsive breakpoints.
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+
+import type { AgentClient } from "@/lib/agent-client";
+import { DomInspectChip } from "./DomInspectChip";
 
 export type ViewportId = "desktop" | "laptop" | "tablet" | "mobile" | "fluid";
 
@@ -81,9 +84,15 @@ interface Props {
    *  local state. */
   viewport?: ViewportId;
   onViewportChange?: (v: ViewportId) => void;
+  /** Forwarding half of DOM mode: the parent's authed agent client and the
+   *  project the preview belongs to. When provided, a Browse|Inspect chip
+   *  renders in the URL bar and clicks in the iframe can be attached to
+   *  prompts. */
+  agentClient?: AgentClient | null;
+  workDir?: string | null;
 }
 
-export function WebPreviewFrame({ url, running, onHardReload, onOpenInNewTab, connectionLabel, notRenderableNotice, notRenderableAction, bundlingState, buildFailure, previewFailure, onIframeLoad, hideViewportSelector, viewport: controlledViewport, onViewportChange }: Props) {
+export function WebPreviewFrame({ url, running, onHardReload, onOpenInNewTab, connectionLabel, notRenderableNotice, notRenderableAction, bundlingState, buildFailure, previewFailure, onIframeLoad, hideViewportSelector, viewport: controlledViewport, onViewportChange, agentClient, workDir }: Props) {
   const [internalViewport, setInternalViewport] = useState<ViewportId>("fluid");
   const viewport = controlledViewport ?? internalViewport;
   const setViewport = (v: ViewportId) => {
@@ -94,6 +103,7 @@ export function WebPreviewFrame({ url, running, onHardReload, onOpenInNewTab, co
     }
   };
   const [reloadNonce, setReloadNonce] = useState(0);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   // Append a reload nonce so the iframe re-fetches cleanly when the
   // user hits the reload button, even if the URL itself hasn't changed.
@@ -182,6 +192,9 @@ export function WebPreviewFrame({ url, running, onHardReload, onOpenInNewTab, co
             <div className="flex-1 truncate rounded bg-surface-950/80 px-2 py-1 text-[11px] text-surface-400">
               {frameUrl ?? (running ? "…starting" : "no dev server")}
             </div>
+            {agentClient && workDir ? (
+              <DomInspectChip agentClient={agentClient} workDir={workDir} iframeRef={iframeRef} />
+            ) : null}
             {connectionLabel && (
               <span className="rounded bg-surface-800 px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-surface-400">
                 {connectionLabel}
@@ -344,6 +357,7 @@ export function WebPreviewFrame({ url, running, onHardReload, onOpenInNewTab, co
           ) : frameUrl && running ? (
             <iframe
               key={frameUrl}
+              ref={iframeRef}
               src={frameUrl}
               className="w-full border-none bg-white"
               style={{ height: `calc(100% - 41px)` }}

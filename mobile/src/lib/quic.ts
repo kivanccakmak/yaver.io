@@ -482,6 +482,29 @@ export interface ScreenContextReport {
   lane?: string;
 }
 
+/** Wire shape of POST /dom-inspect (desktop/agent/dom_inspect.go). Mirrors
+ *  web/lib/agent-client.ts::DomElementReport. The probe never sends workDir —
+ *  this surface adds it — and the agent re-clamps every field on receipt. */
+export interface DomElementReport {
+  workDir: string;
+  selector?: string;
+  tag?: string;
+  id?: string;
+  classes?: string;
+  text?: string;
+  html?: string;
+  css?: string;
+  rect?: string;
+  shot?: string;
+  lane?: string;
+}
+
+/** Wire shape of POST /dom-inspect/items (desktop/agent/dom_inspect.go). */
+export interface DomItemsReport {
+  workDir: string;
+  items?: { selector?: string; tag?: string; id?: string; classes?: string; text?: string; rect?: string }[];
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -4118,6 +4141,81 @@ export class QuicClient {
       });
     } catch {
       /* advisory only */
+    }
+  }
+
+  // ── DOM mode ────────────────────────────────────────────────────────
+  //
+  // Forwarding half of "the element the user clicked in the preview". The
+  // probe the agent injects into a preview posts the selected element to this
+  // app (window.ReactNativeWebView.postMessage) because it CANNOT call the
+  // agent itself — the /dev/ preview route is unauthenticated by design, so a
+  // direct post would be an unkeyed prompt-injection channel. We relay it over
+  // this client's own authenticated channel, exactly like screen context.
+  //
+  // See src/lib/domInspectBridge.ts, desktop/agent/dom_inspect_http.go.
+
+  /** Report the element the user clicked in the preview for `workDir`. */
+  async reportDomInspect(el: DomElementReport): Promise<void> {
+    if (!this.isConnected || !el.workDir) return;
+    // Deliberately swallow failures — same advisory discipline as screen
+    // context: a failed element report must not block the prompt.
+    try {
+      await this.fetchWithTimeout(`${this.baseUrl}/dom-inspect`, {
+        method: 'POST',
+        headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(el),
+      });
+    } catch {
+      /* advisory only */
+    }
+  }
+
+  /** Drop the element we already reported. Called when DOM mode is switched
+   *  off, so "off" means the agent is not holding the element — not that it
+   *  holds it and promises not to look. */
+  async clearDomInspect(workDir: string): Promise<void> {
+    if (!this.isConnected || !workDir) return;
+    try {
+      await this.fetchWithTimeout(`${this.baseUrl}/dom-inspect?workDir=${encodeURIComponent(workDir)}`, {
+        method: 'DELETE',
+        headers: this.authHeaders,
+      });
+    } catch {
+      /* advisory only */
+    }
+  }
+
+  /** Report the interactive-items inventory for `workDir` (from the probe's
+   *  `yaver-dom-items-list` answer). */
+  async reportDomItems(items: DomItemsReport): Promise<void> {
+    if (!this.isConnected || !items.workDir) return;
+    try {
+      await this.fetchWithTimeout(`${this.baseUrl}/dom-inspect/items`, {
+        method: 'POST',
+        headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(items),
+      });
+    } catch {
+      /* advisory only */
+    }
+  }
+
+  /** Fetch the pickable interactive-items inventory for `workDir`, or null
+   *  when none is fresh. */
+  async domItems(workDir: string): Promise<{ items: NonNullable<DomItemsReport['items']>; capturedAt?: number } | null> {
+    if (!this.isConnected || !workDir) return null;
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/dom-inspect/items?workDir=${encodeURIComponent(workDir)}`, {
+        method: 'GET',
+        headers: this.authHeaders,
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data?.present || !Array.isArray(data.items)) return null;
+      return { items: data.items, capturedAt: data.capturedAt };
+    } catch {
+      return null;
     }
   }
 

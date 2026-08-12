@@ -232,6 +232,11 @@ func rewriteDevIndexBaseHref(resp *http.Response) error {
 	// Injected last (it goes before </body>) and no-ops on anything that is not
 	// an HTML document. See screen_context_inject.go.
 	rewritten = injectScreenContextProbe(rewritten)
+	// DOM-mode probe: lets the user click any element in the preview and send
+	// its HTML + CSS + cropped screenshot into the agent (Orca-Design-Mode
+	// style). Off until the surface posts a mode command, so it adds no
+	// behaviour on its own. See dom_inspect_inject.go.
+	rewritten = injectDomInspectProbe(rewritten)
 	// Carry the page's auth query onto its sub-resources. Over the public relay
 	// every proxied request is authenticated, and a browser cannot add ?token/
 	// &__rp to the requests the HTML parser or a dynamic loader issues — so the

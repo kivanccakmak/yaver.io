@@ -52,6 +52,7 @@ import { detectProjectMachineMismatch } from "@/lib/projectMachineMismatch";
 import { collapseTopLevelProjects } from "@/lib/projectTopLevel";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
+import { DomInspectChip } from "./DomInspectChip";
 // Read-aloud must never recite Yaver's own prompt header — see lib/promptFraming.ts.
 import { containsYaverFraming, sliceAfterFrameBoundary } from "@/lib/promptFraming";
 
@@ -1120,6 +1121,11 @@ export default function RuntimeLabView({
   const runnerSelectRef = useRef<HTMLSelectElement | null>(null);
   const modelSelectRef = useRef<HTMLSelectElement | null>(null);
   const mobilePreviewFrameRef = useRef<HTMLIFrameElement | null>(null);
+  // DOM-mode targeting: the web preview renders as one of TWO iframes
+  // (phone-shaped mockup vs plain web pane) depending on the panel skin, never
+  // both. This ref is set by a callback on EACH iframe, so the mounted one
+  // wins and the Browse|Inspect chip always posts into the live frame.
+  const domInspectFrameRef = useRef<HTMLIFrameElement | null>(null);
   const [runtimeConsolePinned, setRuntimeConsolePinned] = useState(true);
   const [taskConsolePinned, setTaskConsolePinned] = useState(true);
   // The runner bubble shows the TAIL of the stream by default — that is where
@@ -3752,7 +3758,10 @@ export default function RuntimeLabView({
                             >
                               <iframe
                                 key={`mobile-preview-${webPreviewNonce}`}
-                                ref={mobilePreviewFrameRef}
+                                ref={(n) => {
+                                  mobilePreviewFrameRef.current = n;
+                                  domInspectFrameRef.current = n;
+                                }}
                                 src={webPreviewUrl}
                                 width={mobilePreviewDevice.width}
                                 height={mobilePreviewDevice.height}
@@ -3777,6 +3786,9 @@ export default function RuntimeLabView({
                         <div className="relative h-[520px] w-full overflow-hidden rounded-md border border-[#d7dce3] bg-[#0b0d11]">
                           <iframe
                             key={`web-preview-${webPreviewNonce}`}
+                            ref={(n) => {
+                              domInspectFrameRef.current = n;
+                            }}
                             src={webPreviewUrl}
                             className="h-full w-full border-none bg-white"
                             title="Project Web UI preview"
@@ -4378,6 +4390,16 @@ export default function RuntimeLabView({
               <ScreenContextChip
                 agentClient={agentClient}
                 workDir={selectedProject?.path}
+                className="mb-2"
+              />
+              {/* DOM mode: the element the user clicked in the preview, attached
+                  to the next prompt. Browse|Inspect radio + attached-element
+                  chip; off DELETES what was reported. Same visibility rule as
+                  the screen chip above. */}
+              <DomInspectChip
+                agentClient={agentClient}
+                workDir={selectedProject?.path}
+                iframeRef={domInspectFrameRef}
                 className="mb-2"
               />
               {/* MCP doorway + external servers — parity with the Chat tab

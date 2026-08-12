@@ -113,6 +113,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { DevPreview } from "../../src/components/DevPreview";
 import { Badge } from "../../src/components/Badge";
 import { ScreenContextChip } from "../../src/components/ScreenContextChip";
+import { DomInspectChip } from "../../src/components/DomInspectChip";
 import RunnerAuthModal from "../../src/components/RunnerAuthModal";
 import { ParkedTurnError, parkedTurnNotice } from "../../src/lib/parkedTurn";
 import { OpenCodeConfigModal } from "../../src/components/OpenCodeConfigModal";
@@ -6470,6 +6471,11 @@ export default function TasksScreen() {
                   off (which deletes what was already reported). Silent prompt
                   mutation is a defect; this is the disclosure. */}
               <ScreenContextChip workDir={projectDir} style={{ marginBottom: 8 }} />
+              {/* DOM mode — the element the user clicked in the preview is
+                  prepended to the prompt. Browse|Inspect radio + attached
+                  element, same disclosure rule as the screen chip: switching
+                  back to Browse deletes what was already reported. */}
+              <DomInspectChip workDir={projectDir} style={{ marginBottom: 8 }} />
               <View style={s.composerScopeRow}>
                 <Pressable
                   style={({ pressed }) => [
@@ -7706,6 +7712,10 @@ export default function TasksScreen() {
                         attaches on every turn — so the disclosure has to be
                         here too, not only on the first message. */}
                     <ScreenContextChip workDir={projectDir} style={{ marginBottom: 8 }} />
+                    {/* DOM mode on the follow-up composer too — follow-ups
+                        are exactly the turn where "audit THIS element" gets
+                        said. */}
+                    <DomInspectChip workDir={projectDir} style={{ marginBottom: 8 }} />
                     {/* Project/MCP scope chip — SAME affordance as the New
                         Task composer. No chat/console discrimination
                         (2026-08-09): a follow-up is a task, and the user

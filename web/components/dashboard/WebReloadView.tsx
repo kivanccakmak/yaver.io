@@ -1634,6 +1634,8 @@ export function WebReloadView({
             hideViewportSelector
             viewport={viewport}
             onViewportChange={setViewport}
+            agentClient={agentClient}
+            workDir={selectedProject?.path || activeProject?.path || devStatus?.workDir}
             // URL priority: built static bundle (most stable, doesn't
             // depend on a long-running sibling process) → live Expo Web
             // sibling → primary dev server preview proxy.
