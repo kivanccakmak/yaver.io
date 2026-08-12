@@ -24,13 +24,39 @@ let remoteRuntimeRenderInFlight = false;
 type PreviewLane = "browser" | "webrtc" | null;
 let activePreviewLane: PreviewLane = null;
 const browserShakeListeners = new Set<() => void>();
+// Lane-change listeners: DOM mode (DomInspectChip) and any future consumer
+// that must react to "a DOM-capable preview became (un)available" instead of
+// reading a stale module global. Same shape as the shake/render registries.
+type PreviewLaneListener = (lane: PreviewLane) => void;
+const previewLaneListeners = new Set<PreviewLaneListener>();
 
 export function setActivePreviewLane(lane: PreviewLane): void {
   activePreviewLane = lane;
+  previewLaneListeners.forEach((cb) => {
+    try {
+      cb(lane);
+    } catch {
+      /* one bad listener mustn't block the others */
+    }
+  });
 }
 
 export function getActivePreviewLane(): PreviewLane {
   return activePreviewLane;
+}
+
+/** Subscribe to active-preview-lane changes. Replays the current lane once on
+ *  subscribe so a late consumer never sees a stale null. */
+export function subscribeActivePreviewLane(cb: PreviewLaneListener): () => void {
+  previewLaneListeners.add(cb);
+  try {
+    cb(activePreviewLane);
+  } catch {
+    /* replay must not kill the subscription */
+  }
+  return () => {
+    previewLaneListeners.delete(cb);
+  };
 }
 
 /**

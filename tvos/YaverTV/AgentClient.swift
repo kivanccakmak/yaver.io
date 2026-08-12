@@ -332,11 +332,13 @@ actor AgentClient {
 
     /// Start capturing a project's web preview at the given viewport. Returns
     /// when the vibe session is up (first frame may lag a beat).
-    func startWebPreview(project: String, targetUrl: String, width: Int, height: Int) async throws {
-        _ = try await postJSON("/vibing/preview/start", [
+    func startWebPreview(project: String, targetUrl: String, width: Int, height: Int, workDir: String? = nil) async throws {
+        var body: [String: Any] = [
             "project": project, "targetUrl": targetUrl,
             "mode": "live", "width": width, "height": height,
-        ])
+        ]
+        if let workDir, !workDir.isEmpty { body["workDir"] = workDir }
+        _ = try await postJSON("/vibing/preview/start", body)
     }
 
     /// Boot the box's static web-preview server; returns its URL to capture.
@@ -367,6 +369,88 @@ actor AgentClient {
     func previewFrame(hash: String, project: String) async throws -> Data {
         let escaped = project.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? project
         return try await request("GET", path: "/vibing/preview/frames/\(hash)?project=\(escaped)", failure: "frame unavailable")
+    }
+
+    /// DOM-select the element at viewport (x, y) in the project's preview
+    /// (POST /vibing/preview/select — the tvOS "kumanda" path).
+    ///
+    /// The TV draws a cursor over the captured frame and sends the cursor's
+    /// viewport coordinate; the box dispatches a REAL click at that point in
+    /// the headless Chrome that produced the frame, captures the element
+    /// (html/css/rect/screenshot — the same payload the in-page DOM probe
+    /// builds), and registers it in the shared domInspect store so the
+    /// per-turn hook attaches it to the next prompt. "Deep audit this element"
+    /// from the couch works because the runner receives the element, not a
+    /// grep request.
+    ///
+    /// Coordinates are in the CAPTURED frame's viewport space. The TV scales
+    /// its cursor position by frameSize/viewportSize before sending (the box
+    /// captured at the profile's requested width/height; the Image view may
+    /// letterbox). Returns the stored element summary so the UI can render the
+    /// chip without re-reading anything.
+    struct PreviewSelectResult: Decodable {
+        let ok: Bool?
+        let summary: String?
+        let element: DomElementPayload?
+        /// Surface-side metadata: the box's requested viewport and the REAL
+        /// captured frame size, so the TV can verify its cursor mapping
+        /// instead of assuming the frame filled the requested profile.
+        let meta: PreviewSelectMeta?
+    }
+
+    /// Viewport vs actual-frame metadata for a selection (see
+    /// PreviewSelectMeta in vibe_preview.go).
+    struct PreviewSelectMeta: Decodable {
+        let project: String?
+        let viewportW: Int?
+        let viewportH: Int?
+        let frameW: Int?
+        let frameH: Int?
+    }
+
+    /// The normalized stored element, as the agent returns it.
+    struct DomElementPayload: Decodable {
+        let selector: String?
+        let tag: String?
+        let id: String?
+        let text: String?
+        let rect: String?
+        let workDir: String?
+        let capturedAt: Int?
+    }
+
+    func selectPreviewElement(project: String, x: Int, y: Int, workDir: String? = nil) async throws -> PreviewSelectResult {
+        var body: [String: Any] = ["project": project, "x": x, "y": y]
+        if let workDir, !workDir.isEmpty { body["workDir"] = workDir }
+        let data = try await postJSON("/vibing/preview/select", body)
+        return (try? JSONDecoder().decode(PreviewSelectResult.self, from: data)) ?? PreviewSelectResult(ok: false, summary: nil, element: nil, meta: nil)
+    }
+
+    /// Enable or disable DOM mode in the CAPTURED page (POST
+    /// /vibing/preview/dom-mode). tvOS has no WebKit, so the probe lives in the
+    /// box's headless Chrome and this is the tvOS equivalent of the web/mobile
+    /// Browse|Inspect radio: while ON the hover highlight tracks the cursor in
+    /// the frame stream; turning OFF clears the stored element ("off means the
+    /// agent holds nothing"). Returns the workDir the mode was scoped to.
+    struct DomModeResult: Decodable {
+        let ok: Bool?
+        let enabled: Bool?
+        let workDir: String?
+    }
+
+    func setPreviewDomMode(project: String, enabled: Bool, workDir: String? = nil) async throws -> DomModeResult {
+        var body: [String: Any] = ["project": project, "enabled": enabled]
+        if let workDir, !workDir.isEmpty { body["workDir"] = workDir }
+        let data = try await postJSON("/vibing/preview/dom-mode", body)
+        return (try? JSONDecoder().decode(DomModeResult.self, from: data)) ?? DomModeResult(ok: false, enabled: nil, workDir: nil)
+    }
+
+    /// Move the box's mouse to a viewport coordinate WITHOUT clicking and
+    /// WITHOUT storing (POST /vibing/preview/cursor) — the live hover half of
+    /// the cursor. Each Siri Remote swipe makes the next captured frame show
+    /// the probe's highlight tracking the cursor. The tap is the select call.
+    func movePreviewCursor(project: String, x: Int, y: Int) async throws {
+        _ = try? await postJSON("/vibing/preview/cursor", ["project": project, "x": x, "y": y])
     }
 
     func stopWebPreview(project: String) async {

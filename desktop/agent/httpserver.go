@@ -1142,6 +1142,15 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/vibing/preview/start", s.auth(s.handleVibePreviewStart))
 	mux.HandleFunc("/vibing/preview/stop", s.auth(s.handleVibePreviewStop))
 	mux.HandleFunc("/vibing/preview/status", s.authSDKOrGuest(s.handleVibePreviewStatus))
+	// tvOS "kumanda" DOM selection: cursor coordinate → real click in the
+	// headless preview browser → element registered for the next prompt turn.
+	// Owner-authenticated: it dispatches a real browser interaction on the box.
+	mux.HandleFunc("/vibing/preview/select", s.auth(s.handleVibePreviewSelect))
+	// tvOS DOM-mode on/off: flips the probe in the captured page (Browse|Inspect
+	// parity for a WebKit-less surface) and clears the stored element on off.
+	mux.HandleFunc("/vibing/preview/dom-mode", s.auth(s.handleVibePreviewDomMode))
+	// tvOS live hover: mouse move only, never stored — the tap is /select.
+	mux.HandleFunc("/vibing/preview/cursor", s.auth(s.handleVibePreviewCursor))
 	mux.HandleFunc("/vibing/preview/snapshot", s.authSDKOrGuest(s.handleVibePreviewSnapshot))
 	mux.HandleFunc("/vibing/preview/events", s.authSDKOrGuest(s.handleVibePreviewEvents))
 	mux.HandleFunc("/vibing/preview/frames/", s.authSDKOrGuest(s.handleVibePreviewFrame))
@@ -1912,6 +1921,8 @@ func spatialSDKRequestAllowed(method, path string) bool {
 		return true
 	case method == http.MethodPost && path == "/vibing/preview/snapshot":
 		return true
+	case method == http.MethodPost && (path == "/vibing/preview/select" || path == "/vibing/preview/dom-mode" || path == "/vibing/preview/cursor"):
+		return true
 	case method == http.MethodGet && strings.HasPrefix(path, "/vibing/preview/frames/"):
 		return true
 	case method == http.MethodGet && path == "/ws/terminal":
@@ -1973,7 +1984,7 @@ func companionSessionAllowed(method, path, scope string) bool {
 		}
 	case "tv", "vision", "spatial":
 		switch {
-		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/tmux/sessions"):
+		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/tmux/sessions" || path == "/mcp/servers"):
 			return true
 		case method == http.MethodGet && strings.HasPrefix(path, "/tasks/"):
 			return true
@@ -1998,7 +2009,7 @@ func companionSessionAllowed(method, path, scope string) bool {
 			return true
 		case method == http.MethodGet && (strings.HasPrefix(path, "/vibing/preview/frames/") || strings.HasPrefix(path, "/vibing/preview/clip/") || strings.HasPrefix(path, "/streams/")):
 			return true
-		case method == http.MethodPost && (path == "/vibing/preview/start" || path == "/vibing/preview/stop" || path == "/vibing/preview/snapshot"):
+		case method == http.MethodPost && (path == "/vibing/preview/start" || path == "/vibing/preview/stop" || path == "/vibing/preview/snapshot" || path == "/vibing/preview/select" || path == "/vibing/preview/dom-mode" || path == "/vibing/preview/cursor"):
 			return true
 		case method == http.MethodPost && (path == "/dev/start" || path == "/dev/web-preview/start" || path == "/feedback"):
 			return true

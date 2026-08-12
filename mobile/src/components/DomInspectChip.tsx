@@ -38,6 +38,7 @@ import {
   subscribeDomInspect,
 } from "../lib/domInspectBridge";
 import { domInspectDetail, domInspectSummary, isDomInspectEnabled } from "../lib/domInspect";
+import { getActivePreviewLane, subscribeActivePreviewLane } from "../lib/feedbackTrigger";
 import { monoFamily } from "../theme/tokens";
 
 export function DomInspectChip({
@@ -55,6 +56,14 @@ export function DomInspectChip({
   const [el, setEl] = useState<ObservedDomElement | null>(() => getObservedDomElement());
   const [inspect, setInspect] = useState(() => isDomInspectEnabled());
   const [expanded, setExpanded] = useState(false);
+  /** True while a DOM-capable (browser/WebView/iframe) preview is active. The
+   *  Hermes/native preview lane has NO DOM — the probe lives in pages the
+   *  agent serves, and a native RN/Expo preview is views, not HTML. Offering
+   *  the Inspect toggle there would be a false green: the user flips it, the
+   *  probe never exists, and "click an element in the preview" is a lie. */
+  const [domAvailable, setDomAvailable] = useState(
+    () => getActivePreviewLane() === "browser",
+  );
 
   useEffect(() => {
     let alive = true;
@@ -65,14 +74,32 @@ export function DomInspectChip({
     void domInspectPrefReady.then(() => {
       if (alive) setInspect(isDomInspectEnabled());
     });
+    // React to the preview lane: the Inspect toggle is only honest while a
+    // DOM-capable preview exists. If the lane becomes unavailable while Inspect
+    // is on, drop the mode so the chip does not claim an attachment channel
+    // that no longer exists (the attached element itself stays — it was
+    // captured from a preview that existed). isDomInspectEnabled() is the
+    // module-level truth, so the closure is never stale on the mode.
+    const unsubLane = subscribeActivePreviewLane((lane) => {
+      if (!alive) return;
+      const avail = lane === "browser";
+      setDomAvailable(avail);
+      if (!avail && isDomInspectEnabled()) {
+        setInspect(false);
+        setDomModeEnabled(false, workDir);
+      }
+    });
     return () => {
       alive = false;
       unsub();
+      unsubLane();
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workDir]);
 
   const selectInspect = useCallback(
     (on: boolean) => {
+      if (on && !domAvailable) return; // gate: no DOM-capable preview to click
       setInspect(on);
       setDomModeEnabled(on, on ? undefined : workDir);
       // The probe itself lives in the PREVIEW WebView, which this component
@@ -80,7 +107,7 @@ export function DomInspectChip({
       // mode via domInspectBridge and inject the enable command into the page
       // when it flips on — see the wiring in apps.tsx / DevPreview.tsx.
     },
-    [workDir],
+    [workDir, domAvailable],
   );
 
   // Nothing observed yet: render just the Browse|Inspect radio. A chip
@@ -135,14 +162,16 @@ export function DomInspectChip({
         </Pressable>
         <Pressable
           onPress={() => selectInspect(true)}
+          disabled={!domAvailable}
           hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           accessibilityRole="radio"
-          accessibilityState={{ checked: inspect }}
+          accessibilityState={{ checked: inspect, disabled: !domAvailable }}
           style={{
             borderRadius: 6,
             paddingHorizontal: 10,
             paddingVertical: 3,
             backgroundColor: inspect ? c.brandPrimarySoft : "transparent",
+            opacity: domAvailable ? 1 : 0.45,
           }}
         >
           <Text style={{ color: inspect ? c.brandPrimary : c.textMuted, fontSize: 10, fontWeight: "700", letterSpacing: 0.6 }}>
@@ -152,6 +181,10 @@ export function DomInspectChip({
         {inspect ? (
           <Text style={{ color: c.brandPrimary, fontSize: 10, flexShrink: 1 }} numberOfLines={1}>
             click an element in the preview · Esc cancels
+          </Text>
+        ) : !domAvailable ? (
+          <Text style={{ color: c.textMuted, fontSize: 10, flexShrink: 1 }} numberOfLines={2}>
+            element inspect needs the web preview (not the native app preview)
           </Text>
         ) : null}
       </View>

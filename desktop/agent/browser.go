@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/chromedp"
 )
 
@@ -741,6 +742,45 @@ func (bm *BrowserManager) Scroll(id string, deltaX, deltaY int) (*BrowserActionR
 	}
 
 	return bm.captureState(s)
+}
+
+// DispatchMouse moves the mouse to viewport coordinates and — when click is
+// true — presses and releases the primary button there. This is how a
+// mouse-less surface (tvOS cursor, remote runtime) turns a screen coordinate
+// into a REAL browser interaction: the hover paints CSS :hover and the click
+// fires the page's handlers, so the element the probe highlights next frame is
+// the element a human would have clicked.
+func (bm *BrowserManager) DispatchMouse(id string, x, y int, click bool) error {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return err
+	}
+	bm.touch(s)
+	if err := chromedp.Run(s.browserCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := input.DispatchMouseEvent(input.MouseMoved, float64(x), float64(y)).
+			WithButton(input.None).
+			Do(ctx); err != nil {
+			return err
+		}
+		if click {
+			if err := input.DispatchMouseEvent(input.MousePressed, float64(x), float64(y)).
+				WithButton(input.Left).
+				WithClickCount(1).
+				Do(ctx); err != nil {
+				return err
+			}
+			if err := input.DispatchMouseEvent(input.MouseReleased, float64(x), float64(y)).
+				WithButton(input.Left).
+				WithClickCount(1).
+				Do(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})); err != nil {
+		return fmt.Errorf("dispatch mouse: %w", err)
+	}
+	return nil
 }
 
 // Evaluate runs JavaScript and returns the result.

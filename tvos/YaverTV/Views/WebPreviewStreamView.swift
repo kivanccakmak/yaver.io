@@ -23,6 +23,32 @@ struct WebPreviewStreamView: View {
     @State private var logLines: [String] = []
     @State private var rebuilding = false
 
+    // ── DOM mode ("kumanda" element select) ─────────────────────────────
+    // The TV has no pointer; the remote is a touch surface. When the user
+    // turns DOM mode ON, a cursor renders over the captured frame, the remote
+    // touch surface moves it (DragGesture on the frame), and Play/Pause sends
+    // the viewport coordinate to /vibing/preview/select — the box dispatches a
+    // real click in the headless Chrome, captures the element, and the
+    // per-turn hook attaches it to the next prompt. See
+    // VibePreviewManager.SelectElement.
+    @State private var domMode = false
+    /// Cursor position in DISPLAY space (points within the image view).
+    @State private var cursor = CGPoint(x: 0.5, y: 0.5) // normalized 0-1
+    @State private var selectSummary: String?
+    @State private var selecting = false
+    @State private var selectError: String?
+    /// The last select's surface metadata (frame size vs viewport). Used to
+    /// convert the cursor's normalized position into viewport coordinates the
+    /// box understands; the agent reports the REAL captured frame size, which
+    /// can differ from the requested profile (letterbox / DPR / pre-viewport
+    /// frame).
+    @State private var selectMeta: AgentClient.PreviewSelectMeta?
+    /// Coalesces hover moves: each remote step cancels the in-flight cursor
+    /// move to the box, so a fast swipe sends the LAST position, not a burst.
+    @State private var hoverTask: Task<Void, Never>?
+    /// Seeded into VibeTurnPanel by the "Deep audit this element" button.
+    @State private var auditPrefill = ""
+
     // The named capability gap, and the state of the fix we are running for it.
     @State private var gap: CapabilityGap?
     @State private var fixing = false
@@ -45,7 +71,7 @@ struct WebPreviewStreamView: View {
             Color.black.ignoresSafeArea()
 
             if let frame {
-                Image(uiImage: frame).resizable().aspectRatio(contentMode: .fit).padding(24)
+                frameView(frame)
             } else if let gap {
                 // A NAMED gap outranks the raw error string: it says which tool
                 // is missing and, when the box can install it, carries the
@@ -103,6 +129,34 @@ struct WebPreviewStreamView: View {
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .background(.ultraThinMaterial, in: Capsule())
                     Spacer()
+                    // DOM mode: pick an element in the preview with the remote.
+                    // The button is focusable (hasTVPreferredFocus is on the
+                    // project label); while domMode is on, the Play/Pause
+                    // button on the remote (or a second press here) sends the
+                    // cursor coordinate to the box.
+                    Button {
+                        domMode.toggle()
+                        if !domMode { selectSummary = nil; selectError = nil }
+                    } label: {
+                        Label(domMode ? "Element: ON" : "Element", systemImage: domMode ? "scope" : "viewfinder")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(domMode ? .accentColor : .secondary)
+                    if domMode {
+                        Button {
+                            Task {
+                                guard let client = fellBackToRunner ? store.runnerClient() : store.renderClient(),
+                                      let img = frame else { return }
+                                await sendSelection(client, imageSize: img.size)
+                            }
+                        } label: {
+                            Label(selecting ? "Selecting…" : "Select", systemImage: "circle.circle")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(selecting || frame == nil)
+                    }
                     Button { Task { await rebuild() } } label: {
                         Label(rebuilding ? "Rebuilding…" : "Rebuild", systemImage: "arrow.triangle.2.circlepath")
                             .font(.system(size: 16, weight: .semibold))
@@ -110,12 +164,27 @@ struct WebPreviewStreamView: View {
                     .disabled(rebuilding)
                 }
                 .padding(32)
+                if domMode {
+                    HStack(spacing: 10) {
+                        Image(systemName: "hand.draw.fill")
+                        Text("Move the cursor with the remote (D-pad / touch surface), then press Play/Pause or Select to send the element to the next prompt.")
+                        if let selectError {
+                            Text(selectError).foregroundStyle(.orange)
+                        } else if let selectSummary {
+                            Text("Attached: \(selectSummary)").foregroundStyle(.green)
+                        }
+                    }
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.bottom, 8)
+                }
                 Spacer()
                 // The vibe loop lives ON the preview: prompt → runner turn →
                 // HMR lands in the frame stream that never stopped polling.
                 // The full project travels so the panel can seed the workDir
                 // picker + remember the choice to Convex (2026-08-10).
-                VibeTurnPanel(project: project)
+                VibeTurnPanel(project: project, prefill: $auditPrefill)
                     .padding(.horizontal, 32)
                     .padding(.bottom, logLines.isEmpty ? 30 : 8)
                 if !logLines.isEmpty {
@@ -127,10 +196,55 @@ struct WebPreviewStreamView: View {
         }
         .onAppear { if !started { restart() } }
         .onReceive(ticker) { now in if fixing { fixTicker = now } }
+        // The Browse|Inspect contract, tvOS-style: flipping DOM mode ON arms
+        // the probe in the captured page (hover highlight tracks in the frame
+        // stream); flipping it OFF disarms it AND clears the stored element
+        // ("off means the agent holds nothing" — the same rule the web/mobile
+        // radio enforces with DELETE /dom-inspect).
+        .onChange(of: domMode) { _, on in
+            guard let client = fellBackToRunner ? store.runnerClient() : store.renderClient() else { return }
+            Task {
+                _ = try? await client.setPreviewDomMode(project: project.name, enabled: on, workDir: project.path)
+            }
+        }
+        // The Siri Remote's Play/Pause is the natural "OK" for a cursor you
+        // are moving with the touch surface. Only intercept it while DOM mode
+        // is on; otherwise leave it to any existing transport handling.
+        // tvOS-only input (MoveCommandDirection / onPlayPauseCommand /
+        // onMoveCommand are unavailable on visionOS, which shares this file —
+        // the headset selects via the on-screen Select button until spatial
+        // gestures land).
+        #if os(tvOS)
+        .onPlayPauseCommand {
+            guard domMode, !selecting, let img = frame else { return }
+            let client = fellBackToRunner ? store.runnerClient() : store.renderClient()
+            guard let client else { return }
+            Task { @MainActor in
+                await sendSelection(client, imageSize: img.size)
+            }
+        }
+        // D-pad / touch-surface moves steer the cursor while DOM mode is on.
+        // Applied unconditionally but gated inside: when domMode is off the
+        // moves are ignored so focus navigation keeps working normally.
+        .onMoveCommand { dir in
+            guard domMode else { return }
+            moveCursor(dir)
+        }
+        #endif
         .onDisappear {
             pollTask?.cancel()
             logTask?.cancel()
             fixTask?.cancel()
+            hoverTask?.cancel()
+            // Leaving the preview must clear any held element — the agent is
+            // not allowed to keep a selection for a screen nobody is looking
+            // at (same rule as turning DOM mode off).
+            if domMode {
+                let client = fellBackToRunner ? store.runnerClient() : store.renderClient()
+                Task {
+                    _ = try? await client?.setPreviewDomMode(project: project.name, enabled: false, workDir: project.path)
+                }
+            }
             // Role parity: stop the preview on the SAME box that served it —
             // the render box normally, the runner box when the preflight fell
             // back. Stop-on-a-different-box orphans a dev server.
@@ -140,6 +254,194 @@ struct WebPreviewStreamView: View {
                 await client?.stopWebPreview(project: project.name)
             }
         }
+    }
+
+    /// The captured frame, plus the DOM-mode cursor overlay when enabled.
+    ///
+    /// The cursor lives in NORMALIZED space (0-1) so it survives any
+    /// letterboxing: `aspectRatio(.fit)` scales the image to fit while keeping
+    /// its aspect, so display points are not viewport points unless the frame
+    /// fills the view exactly. We render the cursor at a normalized offset of
+    /// the IMAGE (not the view) and convert back to viewport coordinates by
+    /// multiplying by the captured frame's pixel dimensions — the agent's
+    /// /vibing/preview/select expects viewport-space coordinates in the
+    /// captured frame's own resolution.
+    ///
+    /// tvOS INPUT: SwiftUI has no DragGesture on tvOS (verified against the
+    /// tvOS 26.2 SDK — DragGesture is iOS/macOS only). The Siri Remote's touch
+    /// surface is exposed as directional moves, so the cursor is moved with
+    /// `onMoveCommand` (D-pad arrows; the touch surface swipe maps to arrows)
+    /// and the selection fires on `onSelectGesture` (tap/click on the surface)
+    /// or Play/Pause. This is the standard 10-foot "mouse" idiom.
+    @ViewBuilder
+    private func frameView(_ img: UIImage) -> some View {
+        let size = img.size
+        GeometryReader { geo in
+            let fit = aspectFitRect(imageSize: size, in: geo.size)
+            ZStack {
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: fit.width, height: fit.height)
+                    .position(x: fit.midX, y: fit.midY)
+                if domMode {
+                    cursorOverlay(imageSize: size, fit: fit)
+                }
+            }
+            .contentShape(Rectangle())
+            // The chip lives OUTSIDE the crosshair's allowsHitTesting(false)
+            // subtree — SwiftUI cannot re-enable hits under a disabled parent.
+            .overlay(alignment: .topLeading) {
+                if domMode, let selectSummary {
+                    selectionChip(summary: selectSummary)
+                        .padding(12)
+                }
+            }
+        }
+        .padding(24)
+    }
+
+    /// The crosshair + optional selected-element chip, drawn over the image.
+    @ViewBuilder
+    private func cursorOverlay(imageSize: CGSize, fit: CGRect) -> some View {
+        let px = fit.minX + cursor.x * fit.width
+        let py = fit.minY + cursor.y * fit.height
+        ZStack {
+            Circle()
+                .stroke(Color.accentColor, lineWidth: 3)
+                .frame(width: 44, height: 44)
+                .position(x: px, y: py)
+            Image(systemName: "plus")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(Color.accentColor)
+                .position(x: px, y: py)
+            // A short horizontal rule so the user can aim at a precise line
+            // (10-foot accuracy is coarse; the crosshair plus rule reads
+            // better than a dot alone).
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: 18, height: 2)
+                .position(x: px, y: py)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// The named-selection chip: what the runner will receive, plus the two
+    /// next taps — "Deep audit this element" (seeds the vibe panel, which
+    /// sends with the element already attached by the per-turn hook) and
+    /// "Done" (back to Browse, clearing the selection).
+    @ViewBuilder
+    private func selectionChip(summary: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("element: \(summary)")
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+            HStack(spacing: 8) {
+                Button {
+                    auditPrefill = "Deep audit this element"
+                } label: {
+                    Label("Deep audit this element", systemImage: "scope")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                Button {
+                    selectSummary = nil
+                    selectError = nil
+                    domMode = false
+                } label: {
+                    Label("Done", systemImage: "checkmark")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    #if os(tvOS)
+    /// Step the cursor with a D-pad direction (the remote touch surface swipes
+    /// arrive as MoveCommandDirections). Step size is a fraction of the frame
+    /// so a coarse flick can cross the whole screen in a few moves.
+    @MainActor
+    private func moveCursor(_ dir: MoveCommandDirection) {
+        guard domMode else { return }
+        let step: CGFloat = 0.04
+        switch dir {
+        case .up: cursor = CGPoint(x: cursor.x, y: clamp01(cursor.y - step))
+        case .down: cursor = CGPoint(x: cursor.x, y: clamp01(cursor.y + step))
+        case .left: cursor = CGPoint(x: clamp01(cursor.x - step), y: cursor.y)
+        case .right: cursor = CGPoint(x: clamp01(cursor.x + step), y: cursor.y)
+        @unknown default: break
+        }
+        sendHover()
+    }
+
+    /// Send the cursor position to the box as a pure MOUSE MOVE (no click, no
+    /// store) so the probe's hover highlight tracks the remote in the next
+    /// captured frame. Coalesced: every step cancels the previous send, so a
+    /// swipe ships only its final position.
+    @MainActor
+    private func sendHover() {
+        guard domMode, let img = frame else { return }
+        hoverTask?.cancel()
+        hoverTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 90_000_000)
+            guard !Task.isCancelled, domMode,
+                  let client = fellBackToRunner ? store.runnerClient() : store.renderClient() else { return }
+            let x = Int((cursor.x * img.size.width).rounded())
+            let y = Int((cursor.y * img.size.height).rounded())
+            try? await client.movePreviewCursor(project: project.name, x: x, y: y)
+        }
+    }
+    #endif
+
+    /// Send the cursor's viewport coordinate to the box: real click →
+    /// element capture → shared domInspect store → next-prompt attachment.
+    ///
+    /// The coordinate is computed from the AGENT-REPORTED frame size (selectMeta
+    /// carries the real captured pixels, which can differ from the image the
+    /// UIImage holds after decoding — e.g. a PNG whose header size differs from
+    /// the UIImage's scale) — falling back to the UIImage's own size when the
+    /// box predates the metadata field.
+    @MainActor
+    private func sendSelection(_ client: AgentClient, imageSize: CGSize) async {
+        guard domMode, !selecting else { return }
+        selecting = true
+        selectError = nil
+        defer { selecting = false }
+        let frameW = CGFloat(selectMeta?.frameW ?? Int(imageSize.width))
+        let frameH = CGFloat(selectMeta?.frameH ?? Int(imageSize.height))
+        let viewportX = Int((cursor.x * frameW).rounded())
+        let viewportY = Int((cursor.y * frameH).rounded())
+        do {
+            let result = try await client.selectPreviewElement(project: project.name, x: viewportX, y: viewportY, workDir: project.path)
+            selectMeta = result.meta
+            if result.ok == true {
+                selectSummary = result.summary
+            } else {
+                selectError = "No element at that spot — try again."
+            }
+        } catch {
+            selectError = error.localizedDescription
+        }
+    }
+
+    private func clamp01(_ v: CGFloat) -> CGFloat { min(max(v, 0), 1) }
+
+    /// The rect `aspectRatio(.fit)` actually paints for an image of `imageSize`
+    /// inside a view of `viewSize` — mirror of the layout math, used to convert
+    /// cursor display positions into viewport coordinates.
+    private func aspectFitRect(imageSize: CGSize, in viewSize: CGSize) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0, viewSize.width > 0, viewSize.height > 0 else {
+            return CGRect(x: 0, y: 0, width: viewSize.width, height: viewSize.height)
+        }
+        let scale = min(viewSize.width / imageSize.width, viewSize.height / imageSize.height)
+        let w = imageSize.width * scale
+        let h = imageSize.height * scale
+        return CGRect(x: (viewSize.width - w) / 2, y: (viewSize.height - h) / 2, width: w, height: h)
     }
 
     /// The capability gap, rendered as what it is: a named missing tool, and

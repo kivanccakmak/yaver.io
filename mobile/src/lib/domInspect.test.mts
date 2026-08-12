@@ -354,3 +354,25 @@ test("the chip shows what is attached and DELETES it when switched off", () => {
   assert.ok(chip.includes("setDomModeEnabled"), "chip has no mode control");
   assert.ok(chip.includes("Browse") && chip.includes("Inspect"), "chip has no Browse|Inspect radio");
 });
+
+test("DOM mode is gated on a DOM-capable preview lane (Hermes/native honesty)", () => {
+  const chip = readFileSync(join(repoRoot, "mobile/src/components/DomInspectChip.tsx"), "utf8");
+  // The Hermes/native preview has NO DOM — the probe lives in pages the agent
+  // serves. The chip must gate the Inspect toggle on the browser lane, or the
+  // user flips Inspect over a native preview and "click an element in the
+  // preview" is a lie. Two guards, both required:
+  assert.ok(
+    chip.includes("subscribeActivePreviewLane") && chip.includes("getActivePreviewLane"),
+    "chip does not observe the active preview lane",
+  );
+  assert.ok(
+    chip.includes("disabled={!domAvailable}") && chip.includes("needs the web preview"),
+    "chip does not disable Inspect (or state the reason) when no DOM-capable preview is active",
+  );
+  // The lane signal itself must notify on change (not just be a stale global):
+  const trigger = readFileSync(join(repoRoot, "mobile/src/lib/feedbackTrigger.ts"), "utf8");
+  assert.ok(
+    trigger.includes("subscribeActivePreviewLane") && trigger.includes("previewLaneListeners"),
+    "feedbackTrigger does not broadcast preview-lane changes",
+  );
+});

@@ -14,11 +14,14 @@ package main
 // integration tests can verify the loop without parsing SSE.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"image"
 	"log"
 	"net"
 	"net/url"
@@ -98,6 +101,7 @@ type VibePreviewSession struct {
 	Surface    string             `json:"surface,omitempty"`
 	TargetURL  string             `json:"targetUrl"`
 	BrowserID  string             `json:"browserId"`
+	WorkDir    string             `json:"workDir,omitempty"` // the project this preview belongs to; used by /vibing/preview/select to key the selected element
 	Mode       VibePreviewMode    `json:"mode"`
 	Profile    VibePreviewProfile `json:"profile"`
 	StartedAt  time.Time          `json:"startedAt"`
@@ -449,6 +453,7 @@ func (m *VibePreviewManager) Start(opts VibePreviewStartOpts) (*VibePreviewSessi
 		Surface:   opts.Surface,
 		TargetURL: opts.TargetURL,
 		BrowserID: browserID,
+		WorkDir:   opts.WorkDir,
 		Mode:      opts.Mode,
 		Profile:   profile,
 		StartedAt: now,
@@ -653,6 +658,52 @@ func (m *VibePreviewManager) LatestFrame(project string) *vibeFrameRecord {
 	return ring[len(ring)-1]
 }
 
+// PreviewSelectMeta is the surface-side metadata the agent returns alongside a
+// DOM selection so the client (tvOS cursor, remote runtime, web overlay) can
+// map display coordinates to viewport coordinates WITHOUT guessing:
+//
+//	Viewport  — the box's requested capture size (the session profile).
+//	FrameSize — the ACTUAL pixel size of the latest captured frame, decoded
+//	            from the PNG once per select. The two differ whenever the
+//	            browser rendered at a real size that diverged from the
+//	            requested profile (letterboxing, device-pixel-ratio, a frame
+//	            captured before the viewport applied). The client scales its
+//	            cursor by frameSize, not by the viewport it happens to know.
+type PreviewSelectMeta struct {
+	Project   string `json:"project"`
+	ViewportW int    `json:"viewportW"`
+	ViewportH int    `json:"viewportH"`
+	FrameW    int    `json:"frameW,omitempty"`
+	FrameH    int    `json:"frameH,omitempty"`
+}
+
+// SelectMeta assembles the metadata for a selection on a project. Bounded: one
+// PNG header decode (image.DecodeConfig reads only the header, not the pixels),
+// so the cost is one header parse per select — not per frame, and never on the
+// capture hot path.
+func (m *VibePreviewManager) SelectMeta(project string) PreviewSelectMeta {
+	m.mu.Lock()
+	sess, ok := m.sessions[project]
+	var vw, vh int
+	if ok {
+		vw, vh = sess.Profile.Width, sess.Profile.Height
+	}
+	m.mu.Unlock()
+
+	meta := PreviewSelectMeta{Project: project, ViewportW: vw, ViewportH: vh}
+	if !ok {
+		return meta
+	}
+	rec := m.LatestFrame(project)
+	if rec == nil || len(rec.Bytes) == 0 {
+		return meta
+	}
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(rec.Bytes)); err == nil {
+		meta.FrameW, meta.FrameH = cfg.Width, cfg.Height
+	}
+	return meta
+}
+
 // FrameByHash returns a frame matching the given hash prefix, or nil.
 // O(N) over the ringbuffer; fine for ring caps in the hundreds.
 func (m *VibePreviewManager) FrameByHash(project, hash string) *vibeFrameRecord {
@@ -683,6 +734,300 @@ func (m *VibePreviewManager) StopAll() {
 	for _, p := range projects {
 		_ = m.Stop(p)
 	}
+}
+
+// vibePreviewInputBrowser is the slice of BrowserManager a select needs on top
+// of the capture getter: dispatch a REAL mouse move/click at viewport
+// coordinates and evaluate JS in the page. Optional — a manager whose browser
+// cannot do input (a fake, an old browser layer) reports the gap by name
+// instead of pretending to select.
+type vibePreviewInputBrowser interface {
+	Evaluate(id, js string) (interface{}, error)
+	DispatchMouse(id string, x, y int, click bool) error
+}
+
+// SelectElement is the tvOS "mouse-like" DOM selection: the TV draws a cursor
+// over the captured frame and sends a viewport coordinate; the box turns that
+// coordinate into a real click in the headless Chrome that produced the frame,
+// captures the clicked element (html/css/rect/screenshot — the same payload the
+// in-page DOM probe builds), and registers it in the shared domInspectStore so
+// the per-turn hook attaches it to the next prompt. "Deep audit this element"
+// from the couch works because the runner receives the element, not a grep
+// request.
+//
+// workDir fallback order: explicit argument, then the session's own WorkDir
+// (set from /vibing/preview/start). Empty after both means "no project" — the
+// selection cannot be keyed, so it is refused, because an element stored under
+// the wrong (or no) project would leak into every prompt.
+func (m *VibePreviewManager) SelectElement(project string, x, y int, workDir string, now time.Time) (DomElement, error) {
+	if m == nil {
+		return DomElement{}, fmt.Errorf("vibe-preview manager not initialised")
+	}
+	if x < 0 || y < 0 {
+		return DomElement{}, fmt.Errorf("coordinates must be non-negative")
+	}
+	m.mu.Lock()
+	sess, ok := m.sessions[project]
+	m.mu.Unlock()
+	if !ok {
+		return DomElement{}, fmt.Errorf("no preview session for project %q", project)
+	}
+	if workDir == "" {
+		workDir = sess.WorkDir
+	}
+	if strings.TrimSpace(workDir) == "" {
+		return DomElement{}, fmt.Errorf("select needs a workDir — pass it or start the preview with one")
+	}
+
+	in, ok := m.browser.(vibePreviewInputBrowser)
+	if !ok {
+		return DomElement{}, fmt.Errorf("this browser cannot dispatch input (no Evaluate/DispatchMouse)")
+	}
+
+	// The click is the OPERATION, the capture is the measurement. A click that
+	// fails (browser went away mid-preview) means the selection is a lie — fail
+	// rather than report an element nobody actually clicked. But the click is
+	// dispatched with no wait between press/release; the page reacts in its own
+	// time and elementFromPoint does not need the click to have landed.
+	if err := in.DispatchMouse(sess.BrowserID, x, y, true); err != nil {
+		return DomElement{}, fmt.Errorf("dispatch click at %d,%d: %w", x, y, err)
+	}
+
+	// Capture the element at the clicked point — the server-side twin of the
+	// probe's capture(); same caps, same selector path, same CSS subset. The
+	// script is self-contained (no page-global state), so it works even on a
+	// page where the probe was never injected.
+	raw, err := in.Evaluate(sess.BrowserID, domCaptureScript(x, y))
+	if err != nil {
+		return DomElement{}, fmt.Errorf("capture element at %d,%d: %w", x, y, err)
+	}
+	var capRes struct {
+		OK  bool   `json:"ok"`
+		Err string `json:"error"`
+		El  struct {
+			Selector string `json:"selector"`
+			Tag      string `json:"tag"`
+			ID       string `json:"id"`
+			Classes  string `json:"classes"`
+			Text     string `json:"text"`
+			HTML     string `json:"html"`
+			CSS      string `json:"css"`
+			Rect     string `json:"rect"`
+		} `json:"el"`
+	}
+	if err := remarshalJSON(raw, &capRes); err != nil {
+		return DomElement{}, fmt.Errorf("decode element capture: %w", err)
+	}
+	if !capRes.OK {
+		return DomElement{}, fmt.Errorf("capture reported: %s", capRes.Err)
+	}
+
+	// The screenshot is best-effort garnish, exactly as on every other
+	// surface: an async canvas render that cannot complete inside the
+	// Evaluate budget must not fail the selection. The HTML + CSS is the
+	// payload.
+	shot, _ := in.Evaluate(sess.BrowserID, domShotScript(x, y))
+	shotStr, _ := shot.(string)
+
+	d := NormalizeDomElement(DomElement{
+		WorkDir:  workDir,
+		Selector: capRes.El.Selector,
+		Tag:      capRes.El.Tag,
+		ID:       capRes.El.ID,
+		Classes:  capRes.El.Classes,
+		Text:     capRes.El.Text,
+		HTML:     capRes.El.HTML,
+		CSS:      capRes.El.CSS,
+		Rect:     capRes.El.Rect,
+		Shot:     shotStr,
+		Lane:     "browser",
+	})
+	if d.IsEmpty() {
+		return DomElement{}, fmt.Errorf("captured element is empty at %d,%d", x, y)
+	}
+	stored := globalDomElements.Put(d, now)
+	return stored, nil
+}
+
+// MoveCursor dispatches a mouse-MOVE (no click) at viewport coordinates —
+// the live hover half of the tvOS cursor. While DOM mode is on, the probe
+// paints its highlight on whatever the box's mouse is over, so each swipe of
+// the Siri Remote touchpad makes the NEXT captured frame show the highlight
+// tracking the cursor. Deliberately stores NOTHING: a hover is not a
+// selection, and a hovered-but-never-clicked element must never ride a prompt.
+// The tap is what calls SelectElement.
+func (m *VibePreviewManager) MoveCursor(project string, x, y int) error {
+	if m == nil {
+		return fmt.Errorf("vibe-preview manager not initialised")
+	}
+	if x < 0 || y < 0 {
+		return fmt.Errorf("coordinates must be non-negative")
+	}
+	m.mu.Lock()
+	sess, ok := m.sessions[project]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no preview session for project %q", project)
+	}
+	in, ok := m.browser.(vibePreviewInputBrowser)
+	if !ok {
+		return fmt.Errorf("this browser cannot dispatch input")
+	}
+	if err := in.DispatchMouse(sess.BrowserID, x, y, false); err != nil {
+		return fmt.Errorf("dispatch mouse move at %d,%d: %w", x, y, err)
+	}
+	return nil
+}
+
+// SetDomMode enables or disables DOM mode IN THE CAPTURED PAGE.// tvOS has no WebKit: the probe lives in the box's headless Chrome, so
+// "toggle DOM mode" means posting the same {source:"yaver-dom",
+// t:"yaver-dom-mode"} command the web/mobile surfaces post into their
+// iframes/WebViews. While enabled, the probe's hover overlay paints on
+// whatever the box's mouse passes over — so the TV's next captured frame shows
+// the highlight tracking the Siri Remote cursor. Disabling also clears the
+// stored element for the project's workDir — the "off means the agent holds
+// nothing" contract every surface shares (the web surface deletes via
+// DELETE /dom-inspect on Browse; this is the tvOS equivalent).
+//
+// Returns the workDir the mode was scoped to (explicit argument, else the
+// session's own) so the surface can clear its local "Inspect" state in sync.
+func (m *VibePreviewManager) SetDomMode(project string, enabled bool, workDir string) (string, error) {
+	if m == nil {
+		return "", fmt.Errorf("vibe-preview manager not initialised")
+	}
+	m.mu.Lock()
+	sess, ok := m.sessions[project]
+	m.mu.Unlock()
+	if !ok {
+		return "", fmt.Errorf("no preview session for project %q", project)
+	}
+	if workDir == "" {
+		workDir = sess.WorkDir
+	}
+	in, ok := m.browser.(vibePreviewInputBrowser)
+	if !ok {
+		return "", fmt.Errorf("this browser cannot dispatch input")
+	}
+	js := fmt.Sprintf(`window.postMessage({source:"yaver-dom", t:"yaver-dom-mode", enabled:%t}, "*"); true`, enabled)
+	if _, err := in.Evaluate(sess.BrowserID, js); err != nil {
+		return "", fmt.Errorf("set dom mode %t: %w", enabled, err)
+	}
+	if !enabled && strings.TrimSpace(workDir) != "" {
+		globalDomElements.Clear(workDir)
+		globalDomItems.Clear(workDir)
+	}
+	return workDir, nil
+}
+
+// remarshalJSON round-trips an Evaluate result through JSON so the typed
+// struct decode is the ONLY interpretation of the page's answer. The capture
+// scripts JSON.stringify their payload, so chromedp delivers a Go string whose
+// VALUE is the JSON — that case must be decoded directly, not re-marshalled
+// (which would wrap it in quotes and fail the struct decode).
+func remarshalJSON(raw interface{}, out interface{}) error {
+	if s, ok := raw.(string); ok {
+		return json.Unmarshal([]byte(s), out)
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
+}
+
+// domCaptureScript returns a self-contained, never-throwing, synchronous
+// script that captures the element at viewport (x,y) — elementFromPoint →
+// selector path / text / outerHTML / computed-CSS subset / rect, all clamped
+// to the same caps the in-page probe enforces (dom_inspect_probe.js). Returns
+// a JSON string the agent decodes. No input.value is ever read.
+func domCaptureScript(x, y int) string {
+	return fmt.Sprintf(`(function(){
+  function clamp(s,n){ s = String(s==null?"":s); return s.length>n ? s.slice(0,n) : s; }
+  function txt(el){ try { var t=(el.innerText||el.textContent||""); return clamp(t.replace(/\s+/g," ").replace(/^ | $/g,""), 400); } catch(e){ return ""; } }
+  function sel(el){ try {
+    var parts=[], node=el, guard=0;
+    while(node && node.nodeType===1 && guard<6){
+      var step=String(node.tagName||"").toLowerCase(); if(!step) break;
+      if(node.id) step+="#"+node.id;
+      else if(node.className && typeof node.className==="string"){ var f=node.className.split(/\s+/)[0]; if(f) step+="."+f; }
+      parts.unshift(step); if(node.id) break; node=node.parentNode; guard++;
+    }
+    return clamp(parts.join(" > "), 200);
+  } catch(e){ return ""; } }
+  var PROPS=("display,position,float,top,right,bottom,left,zIndex,width,minWidth,maxWidth,height,minHeight,maxHeight,"+
+    "marginTop,marginRight,marginBottom,marginLeft,paddingTop,paddingRight,paddingBottom,paddingLeft,"+
+    "flex,flexDirection,flexWrap,alignItems,alignContent,justifyContent,gap,rowGap,columnGap,order,flexGrow,flexShrink,"+
+    "backgroundColor,backgroundImage,backgroundSize,backgroundPosition,backgroundRepeat,color,opacity,"+
+    "borderTopWidth,borderRightWidth,borderBottomWidth,borderLeftWidth,borderTopStyle,borderTopColor,borderRadius,"+
+    "boxShadow,outline,outlineOffset,fontFamily,fontSize,fontWeight,fontStyle,lineHeight,letterSpacing,textAlign,"+
+    "textDecoration,textTransform,whiteSpace,wordBreak,overflow,overflowX,overflowY,visibility,transform,"+
+    "transition,animation,boxSizing,cursor,pointerEvents,userSelect,aspectRatio,objectFit").split(",");
+  function css(el){ try {
+    var cs=window.getComputedStyle(el); if(!cs) return "";
+    var out=[], len=0;
+    for(var i=0;i<PROPS.length;i++){ try {
+      var v=cs.getPropertyValue(PROPS[i]);
+      if(v && v!=="auto" && v!=="none" && v!=="0px" && v!=="normal" && v!=="0"){ var bit=PROPS[i]+": "+v; len+=bit.length+2; if(len>16000) break; out.push(bit); }
+    } catch(e){} }
+    return clamp(out.join("; "), 16000);
+  } catch(e){ return ""; } }
+  try {
+    var el = document.elementFromPoint(%[1]d, %[2]d);
+    if(!el) return JSON.stringify({ok:false, error:"no element at %[1]d,%[2]d"});
+    if(el.getAttribute && el.getAttribute("data-yaver-dom-overlay")==="1") return JSON.stringify({ok:false, error:"overlay"});
+    var r = el.getBoundingClientRect();
+    return JSON.stringify({ok:true, el:{
+      selector: sel(el),
+      tag: String(el.tagName||"").toLowerCase(),
+      id: clamp(el.id||"",120),
+      classes: clamp(typeof el.className==="string"?el.className:"",240),
+      text: txt(el),
+      html: clamp(el.outerHTML||"",24000),
+      css: css(el),
+      rect: "x:"+Math.round(r.x||r.left)+" y:"+Math.round(r.y||r.top)+" w:"+Math.round(r.width)+" h:"+Math.round(r.height)
+    }});
+  } catch(e){ return JSON.stringify({ok:false, error:String(e&&e.message||e)}); }
+})()`, x, y)
+}
+
+// domShotScript returns a promise-resolving, best-effort cropped-JPEG capture
+// of the element at (x,y) — the foreignObject-clone twin of the probe's
+// captureShot. Bounded by a hard 800 ms timeout so an unloadable image can
+// never hang the CDP Evaluate. Returns "" (resolves empty string) on any
+// failure; the caller treats it as garnish, never a gate.
+func domShotScript(x, y int) string {
+	return fmt.Sprintf(`(function(){
+  return new Promise(function(resolve){
+    var done=false;
+    function finish(v){ if(done) return; done=true; resolve(v||""); }
+    try {
+      var el = document.elementFromPoint(%[1]d, %[2]d);
+      if(!el || (el.getAttribute && el.getAttribute("data-yaver-dom-overlay")==="1")) return finish("");
+      var r = el.getBoundingClientRect();
+      var w=Math.max(1,Math.round(r.width)), h=Math.max(1,Math.round(r.height));
+      var scale=1; if(w>240||h>240) scale=240/Math.max(w,h);
+      var cw=Math.max(1,Math.round(w*scale)), ch=Math.max(1,Math.round(h*scale));
+      var clone=el.cloneNode(true);
+      var live=[el], nodes=clone.getElementsByTagName("*"), all=[];
+      for(var i=0;i<nodes.length&&i<400;i++) all.push(nodes[i]);
+      var guard=0;
+      while(live.length&&guard<all.length){ var src=live.shift(), dst=all[guard]; guard++;
+        try { var cs=window.getComputedStyle(src); for(var p=0;p<cs.length&&p<300;p++){ var prop=cs[p], val=cs.getPropertyValue(prop); if(val) dst.style.setProperty(prop,val); } } catch(e){}
+      }
+      var xhtml="http://www.w3.org/1999/xhtml", svgNS="http://www.w3.org/2000/svg";
+      var wrap=document.createElementNS(xhtml,"div"); wrap.appendChild(clone);
+      var xml=new XMLSerializer().serializeToString(wrap);
+      var svg='<svg xmlns="'+svgNS+'" width="'+cw+'" height="'+ch+'"><foreignObject width="100%%" height="100%%">'+xml+"</foreignObject></svg>";
+      var canvas=document.createElement("canvas"); canvas.width=cw; canvas.height=ch;
+      var ctx=canvas.getContext("2d"); if(!ctx) return finish("");
+      var img=new Image();
+      var t=setTimeout(function(){ finish(""); }, 800);
+      img.onload=function(){ try { clearTimeout(t); ctx.clearRect(0,0,cw,ch); ctx.drawImage(img,0,0,cw,ch); var u=canvas.toDataURL("image/jpeg",0.8); finish(u.length>16000?"":u); } catch(e){ finish(""); } };
+      img.onerror=function(){ clearTimeout(t); finish(""); };
+      img.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svg);
+    } catch(e){ finish(""); }
+  });
+})()`, x, y)
 }
 
 // ─── Internal: capture loop ──────────────────────────────────────────────────

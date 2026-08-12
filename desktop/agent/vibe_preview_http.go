@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // handleVibePreviewStart — POST /vibing/preview/start
@@ -230,4 +231,178 @@ func (s *HTTPServer) handleVibePreviewSnapshot(w http.ResponseWriter, r *http.Re
 		"size":       len(rec.Bytes),
 		"capturedAt": rec.CapturedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 	})
+}
+
+// handleVibePreviewSelect — POST /vibing/preview/select
+//
+// Body: {project, x, y, workDir?}
+//
+// The tvOS DOM-selection route (the "kumanda" path): the TV draws a cursor
+// over the captured frame and sends a viewport coordinate; the box dispatches
+// a REAL click at that point in the headless Chrome that produced the frame,
+// captures the clicked element (html/css/rect/screenshot — the same payload
+// the in-page DOM probe builds), and registers it in the shared domInspect
+// store so the per-turn hook attaches it to the next prompt. See
+// VibePreviewManager.SelectElement for the full contract.
+//
+// Coordinates are viewport-relative to the CAPTURED frame. The TV scales its
+// cursor position by frameSize/viewportSize before sending, exactly like the
+// web cursor lane does.
+//
+// Returns the normalized stored element (the chip payload surfaces render:
+// selector / summary / capturedAt). 404 when no preview session is active for
+// the project; 400 on negative coordinates or an unkeyable (workDir-less)
+// selection; 503 when the browser backing this session cannot dispatch input.
+func (s *HTTPServer) handleVibePreviewSelect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.vibePreviewMgr == nil {
+		jsonError(w, http.StatusServiceUnavailable, "vibe preview not initialised")
+		return
+	}
+	var req struct {
+		Project string `json:"project"`
+		X       int    `json:"x"`
+		Y       int    `json:"y"`
+		WorkDir string `json:"workDir,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Project) == "" {
+		jsonError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	el, err := s.vibePreviewMgr.SelectElement(req.Project, req.X, req.Y, req.WorkDir, time.Now())
+	if err != nil {
+		// The three named failures map to honest statuses so surfaces never
+		// regex a sentence: no session → 404, no workDir → 400, browser can't
+		// input → 503 (capability gap, not a bad request).
+		switch {
+		case strings.Contains(err.Error(), "no preview session"):
+			jsonError(w, http.StatusNotFound, err.Error())
+		case strings.Contains(err.Error(), "workDir"), strings.Contains(err.Error(), "coordinates"):
+			jsonError(w, http.StatusBadRequest, err.Error())
+		case strings.Contains(err.Error(), "cannot dispatch input"):
+			jsonError(w, http.StatusServiceUnavailable, err.Error())
+		default:
+			jsonError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":         true,
+		"element":    el,
+		"summary":    el.Summary(),
+		"capturedAt": el.CapturedAt,
+		// Surface-side metadata: the captured frame's real pixel size vs the
+		// requested viewport, so the client (tvOS cursor / remote runtime)
+		// maps display coordinates to viewport coordinates without guessing.
+		"meta": s.vibePreviewMgr.SelectMeta(req.Project),
+	})
+}
+
+// handleVibePreviewDomMode — POST /vibing/preview/dom-mode
+//
+// Body: {project, enabled, workDir?}
+//
+// Enables or disables DOM mode IN THE CAPTURED PAGE of an active preview
+// session — the tvOS equivalent of the web/mobile Browse|Inspect radio. tvOS
+// has no WebKit, so the probe runs in the box's headless Chrome and this route
+// is what flips it on/off there: while enabled, the probe's hover overlay
+// paints on whatever the box's mouse passes over, so the next captured frame
+// shows the highlight tracking the TV cursor. Disabling clears the stored
+// element (and the items inventory) for the workDir — "off means the agent
+// holds nothing", the contract every surface shares.
+//
+// Returns {ok, workDir} where workDir is the scope the mode was applied to
+// (explicit argument, else the session's own) so the surface can keep its
+// local state in sync. 404 when no preview session is active; 400 when the
+// mode cannot be keyed.
+func (s *HTTPServer) handleVibePreviewDomMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.vibePreviewMgr == nil {
+		jsonError(w, http.StatusServiceUnavailable, "vibe preview not initialised")
+		return
+	}
+	var req struct {
+		Project string `json:"project"`
+		Enabled bool   `json:"enabled"`
+		WorkDir string `json:"workDir,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Project) == "" {
+		jsonError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	workDir, err := s.vibePreviewMgr.SetDomMode(req.Project, req.Enabled, req.WorkDir)
+	if err != nil {
+		switch {
+		case strings.Contains(err.Error(), "no preview session"):
+			jsonError(w, http.StatusNotFound, err.Error())
+		case strings.Contains(err.Error(), "cannot dispatch input"):
+			jsonError(w, http.StatusServiceUnavailable, err.Error())
+		default:
+			jsonError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"enabled": req.Enabled,
+		"workDir": workDir,
+	})
+}
+
+// handleVibePreviewCursor — POST /vibing/preview/cursor
+//
+// Body: {project, x, y}
+//
+// The live hover half of the tvOS "kumanda" cursor: moves the box's mouse to
+// a viewport coordinate WITHOUT clicking and WITHOUT storing anything, so the
+// probe's highlight tracks the Siri Remote swipe in the captured frames. The
+// tap that follows is /vibing/preview/select.
+func (s *HTTPServer) handleVibePreviewCursor(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.vibePreviewMgr == nil {
+		jsonError(w, http.StatusServiceUnavailable, "vibe preview not initialised")
+		return
+	}
+	var req struct {
+		Project string `json:"project"`
+		X       int    `json:"x"`
+		Y       int    `json:"y"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Project) == "" {
+		jsonError(w, http.StatusBadRequest, "project is required")
+		return
+	}
+	if err := s.vibePreviewMgr.MoveCursor(req.Project, req.X, req.Y); err != nil {
+		switch {
+		case strings.Contains(err.Error(), "no preview session"):
+			jsonError(w, http.StatusNotFound, err.Error())
+		case strings.Contains(err.Error(), "cannot dispatch input"):
+			jsonError(w, http.StatusServiceUnavailable, err.Error())
+		default:
+			jsonError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "x": req.X, "y": req.Y})
 }

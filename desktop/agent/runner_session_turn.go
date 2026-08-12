@@ -31,6 +31,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -59,6 +60,14 @@ type runnerSessionTurnRequest struct {
 	// sees the path and reads it through the yaver-vision plugin. Mutually
 	// exclusive with Choice (a menu answer cannot carry attachments).
 	Images []ImageAttachment `json:"images,omitempty"`
+	// WorkDir is the project a prompt is ABOUT. The tvOS/car/watch surfaces
+	// send it already (AgentClient.sendText); until now it was parsed and
+	// discarded. It scopes the per-turn DOM-element attachment: when a fresh
+	// element was selected in that project's preview, the block rides the typed
+	// prompt, so "deep audit this element" from the couch reaches the runner
+	// with the element, not a grep request. Raw runner commands never see it —
+	// this file types into a live session, which is not a task turn.
+	WorkDir string `json:"workDir,omitempty"`
 }
 
 type runnerSessionTurnResponse struct {
@@ -298,6 +307,17 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		// cheap capture, not a new wait.
 		paneBeforePrompt = capturePaneTail(sessionName, runnerTurnPaneLines)
 		sentPrompt = true
+		// The per-turn DOM element rides the prompt, sentinel-wrapped, when a
+		// fresh selection exists for the requested workDir (the tvOS "deep
+		// audit this element" path). The block is advisory context, the same
+		// block task turns get; it never replaces the user's text.
+		typedText := text
+		if d, ok := globalDomElements.Get(req.WorkDir, time.Now()); ok {
+			if block := FormatDomElementBlock(d); block != "" {
+				typedText = block + "\n" + typedText
+				log.Printf("[runner-turn %s] DOM element context attached: %s", sessionName, d.Summary())
+			}
+		}
 		// Images ride the prompt as paths, not pixels: the live session is a
 		// tmux terminal. Save each attachment, then prefix the typed text with
 		// the same Read-tool hint the task path uses — so opencode/DeepSeek
@@ -306,7 +326,6 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		// NEW background task with the image, invisible to the live Vibe
 		// session — the screenshot never passed through the session the user
 		// was actually watching.
-		typedText := text
 		if len(req.Images) > 0 {
 			imgPaths := saveImages(newPendingCloudTaskID(), req.Images)
 			if len(imgPaths) > 0 {
