@@ -13,7 +13,7 @@ work that was there before this task; leave those untouched).
 | Web dashboard: lib + chip + agent-client + both mounts | ✅ DONE (this session) | `web/lib/domInspect.ts`, `domInspect.test.ts` 14/14, `tsc --noEmit` clean |
 | Mobile app: lib + bridge + quic + chip + both preview lanes | ✅ DONE (this session) | `mobile/src/lib/domInspect.test.mts` 19/19, twins byte-identical |
 | Desktop `desktop/app/`: webview preload + Browse\|Inspect | ✅ DONE (this session) | `webview-preload.js` + `index.html` control, syntax-checked |
-| e2e assertion (vibe preview → chip → POST) | ❌ OPEN | nothing in `e2e/` yet — see §6 |
+| e2e closed-loop assertion (vibe preview → chip → POST) | ✅ DONE (this session) | `e2e/tests/dom-inspect-loop.spec.ts` registers in Playwright; static break-it guard proven locally (see §6) |
 
 ## The feature
 
@@ -133,15 +133,47 @@ webui-chat-vibing-gui audit 2026-08-12) — it wraps the WEB DASHBOARD in a Brow
 so it inherits DOM mode automatically from the web implementation; it is NOT the
 `desktop/app/` webview host this section targets. Do not conflate the two.
 
+## COMPLETED — e2e closed-loop assertion (this session)
+
+**`e2e/tests/dom-inspect-loop.spec.ts`** — a live-box arc in the repo's closed-loop
+discipline (same conventions as `webui-lane-matrix.spec.ts` / `vibe-color-loop.spec.ts`):
+
+```
+npx --prefix e2e playwright test dom-inspect-loop.spec.ts
+Requires: YAVER_TEST_TOKEN + E2E_LIVE_DEVICE (skips, named, without them —
+a mocked agent would let this pass on a UI no live agent ever pairs with).
+Optional: E2E_BASE_URL (default local web dev server), E2E_DOM_PROJECT (default "todo-web").
+```
+
+The arc: sign in → land on the connected dashboard → Vibing tab → select the project →
+open the **"Web UI in browser"** lane (explicitly not WebRTC — different transport) →
+then four guards:
+
+1. **Probe injected** — `[data-yaver-dom-probe="1"]` present inside the cross-origin
+   preview iframe (polled via `contentFrame()`). This is the e2e break-it guard: delete
+   the `injectDomInspectProbe(` call from either HTML lane and the marker vanishes → fail.
+2. **Surface forwards over its own authed channel** — a `page.on("request")` watch for
+   `POST …/dom-inspect`. The probe cannot fetch (no-network, Go probe-contract test), so a
+   POST is by construction the surface's relay, never a page→agent write.
+3. **Chip NAMES the element** — the `element: <summary>` disclosure renders (the
+   SILENT-PROMPT-MUTATION rule; a chip that showed no name would be the defect).
+4. **POST observed on the wire** — the request from guard 2 actually fired.
+
+Plus: switching back to **Browse** (the off toggle) is exercised for the visible half.
+
+Snowball break-it proof (run locally, no box needed): temporarily replacing
+`injectDomInspectProbe(string(patched))` in `build_web.go` makes
+`TestDomProbe_BothPreviewLanesInjectIt` FAIL ("build_web.go never calls
+injectDomInspectProbe — static Expo/RN web bundle would have no DOM mode…");
+restoring it passes again. The same break-it property holds for the e2e's marker guard.
+
+Note: the live arc itself needs a box + credentials and is skipped in a bare checkout,
+exactly like every other live spec in the suite — the skip is named, and the static
+guards (Go inject test, lib wire-literal test) still pin the injection in CI-less runs.
+
 ## REMAINING
 
-### 1. e2e closed-loop assertion (the repo's Snowball rule)
-No e2e guard yet. The closed-loop discipline would add an assertion to `e2e/` (e.g.
-select an element in the vibe preview iframe and assert the chip + a `POST /dom-inspect`),
-and prove the guard by breaking it (delete the probe injection → test fails). This is
-the only section of the original handoff still open.
-
-### 2. Optional: one-tap "Audit" CTA
+### 1. Optional: one-tap "Audit" CTA
 No dedicated "Audit" button exists, and none is needed: the per-turn hook attaches the
 element to any next prompt ("deep audit this element" just works, and the block tells
 the runner to locate the source). If a one-tap audit is wanted later, it is a
@@ -163,5 +195,7 @@ returns it as `block`).
 - `cd web && npx tsc --noEmit` ✅ · `npx tsx lib/domInspect.test.ts` ✅ (14/14) · `npx tsx lib/screenContext.test.ts` ✅ (13/13)
 - `cd mobile && node --experimental-strip-types --test src/lib/domInspect.test.mts` ✅ (19/19) · `src/lib/screenContext.test.mts` ✅ (22/22) · `npx tsc --noEmit` (only pre-existing errors outside DOM-mode files)
 - `cd desktop/app && node --check src/renderer/webview-preload.js` ✅ · inline renderer script `node --check` ✅
+- `cd e2e && npx tsc --noEmit -p .` ✅ (spec typechecks) · `npx playwright test dom-inspect-loop.spec.ts --list` ✅ (registers)
+- Snowball break-it proof ✅: removing the probe injection from `build_web.go` fails `TestDomProbe_BothPreviewLanesInjectIt`; restoring passes
 - Manual (not yet run): `cd desktop/app && npm start` — connect → start dev server → Browse|Inspect toggle → hover → click → chip appears → prompt "audit this element" → block in task.
-- e2e (open): add + prove the vibe-preview assertion (see REMAINING §1).
+- Live e2e (needs a box + creds): `YAVER_TEST_TOKEN=… E2E_LIVE_DEVICE=… npx --prefix e2e playwright test dom-inspect-loop.spec.ts`.
