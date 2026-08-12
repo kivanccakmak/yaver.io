@@ -574,8 +574,50 @@ func runnerBrowserAuthCommand(runner string, tr tenantRuntime) (method string, c
 			)
 		}
 		return "oauth", cmd, nil
+	case "opencode":
+		// opencode's ChatGPT subscription login, driven headlessly (audit
+		// 2026-08-12, verified against opencode 1.18.15 with a real paid
+		// account):
+		//
+		//   OPENCODE_CONFIG_CONTENT='{"enabled_providers":["openai"]}' \
+		//     opencode auth login -p openai -m "ChatGPT Pro/Plus (headless)"
+		//
+		// Two facts make this work where the naive `opencode auth login`
+		// hangs in a TUI provider picker:
+		//
+		//   1. `auth login` FILTERS providers by config.enabled_providers.
+		//      The user's real config lists ["zai-coding-plan","deepseek"],
+		//      so `openai` (the OAuth credential) silently vanished and every
+		//      -p <provider> returned "Unknown provider". OPENCODE_CONFIG_CONTENT
+		//      (a JSON config string merged with local priority, verified in
+		//      sst/opencode config.ts) injects an enabled set that includes
+		//      openai WITHOUT touching the user's on-disk config. It only
+		//      affects this login process.
+		//
+		//   2. The "headless" method is a plain RFC 8628 device-code flow
+		//      (clack log.info → process.stdout, no TTY needed):
+		//        Go to: https://auth.openai.com/codex/device
+		//        Enter code: MWJI-A4WH0
+		//      The URL matches urlPattern and the XXXX-XXXX code matches
+		//      codexCodePattern, so the shared scanner captures both into
+		//      OpenURL + Code with zero new parsing — opencode rides the
+		//      exact machine codex/kimi already ride on.
+		//
+		// Method label match is case-insensitive (providers.ts compares
+		// lowercased labels). The "browser" variant opens a browser on the
+		// box instead — wrong for headless/remote boxes, hence headless.
+		bin := resolveRunnerBinary("opencode")
+		if bin == "" {
+			return "", nil, fmt.Errorf("opencode CLI not found on this machine (looked in PATH, ~/.npm-global/bin, ~/.local/bin, ~/.bun/bin, /opt/homebrew/bin, /usr/local/bin, and the user login shell). Run `npm i -g opencode-ai` and try again.")
+		}
+		cmd = exec.Command(bin, "auth", "login", "-p", "openai", "-m", "ChatGPT Pro/Plus (headless)")
+		cmd.Env = append(cmd.Environ(),
+			"CI=1", "NO_COLOR=1", "TERM=dumb",
+			`OPENCODE_CONFIG_CONTENT={"enabled_providers":["openai"]}`,
+		)
+		return "device-auth", cmd, nil
 	default:
-		return "", nil, fmt.Errorf("unsupported runner %q (want claude or codex)", runner)
+		return "", nil, fmt.Errorf("unsupported runner %q (want claude, codex, opencode, or kimi)", runner)
 	}
 }
 
@@ -608,10 +650,13 @@ func scanRunnerBrowserAuthOutput(sess *runnerBrowserAuthSessionState, reader io.
 					log.Printf("[runner-auth-browser] %s captured openUrl=%s", state.Runner, state.OpenURL)
 				}
 			}
-			// Codex and Kimi both emit an RFC 8628 style XXXX-XXXX user code.
-			// Kimi's looks like "IY0N-NC7Z" — the same shape, so one pattern
-			// serves both rather than two that can drift apart.
-			if (state.Runner == "codex" || state.Runner == "kimi") && state.Code == "" {
+			// Codex, Kimi and opencode all emit an RFC 8628 style XXXX-XXXX
+			// user code. Kimi's looks like "IY0N-NC7Z", opencode's "MWJI-A4WH0"
+			// — the same shape, so one pattern serves all three rather than
+			// two that can drift apart. opencode's headless ChatGPT login
+			// prints "Enter code: MWJI-A4WH0" right after the device URL
+			// (verified 2026-08-12), so it must ride the same capture gate.
+			if (state.Runner == "codex" || state.Runner == "kimi" || state.Runner == "opencode") && state.Code == "" {
 				if code := codexCodePattern.FindString(line); code != "" {
 					state.Code = code
 					state.Status = "awaiting_browser"

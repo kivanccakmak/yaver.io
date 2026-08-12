@@ -58,7 +58,11 @@ const (
 
 func runnerSupportsBrowserAuth(id string) bool {
 	switch normalizeRunnerID(id) {
-	case "claude", "codex":
+	case "claude", "codex", "opencode":
+		// opencode added 2026-08-12 (ACP audit): the headless ChatGPT login
+		// (`auth login -p openai -m "ChatGPT Pro/Plus (headless)"`) is an
+		// RFC 8628 device flow the shared scanner captures, so the "sign in"
+		// button must render for it like claude/codex.
 		return true
 	}
 	return false

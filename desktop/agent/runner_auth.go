@@ -967,6 +967,12 @@ func preflightClaudeMacKeychainForHeadlessLaunch() error {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
+	// Same gate as the status probe: when keychain access is disabled (the
+	// desktop GUI's embedded agent), never touch `security` — the GUI is not
+	// a headless Claude launcher and must not prompt.
+	if keychainAccessDisabled() {
+		return nil
+	}
 	kc := claudeLoginKeychainPath()
 	if err := probeClaudeMacKeychainPassword(kc); err == nil {
 		return nil
@@ -1006,10 +1012,16 @@ func preflightClaudeMacKeychainForHeadlessLaunch() error {
 }
 
 func probeClaudeMacKeychainPassword(keychain string) error {
+	if keychainAccessDisabled() {
+		return fmt.Errorf("keychain access disabled (YAVER_VAULT_SKIP_KEYCHAIN=1 / non-interactive)")
+	}
 	return runSecurityQuiet(5*time.Second, "find-generic-password", "-s", claudeMacKeychainService, "-w", keychain)
 }
 
 func probeClaudeMacKeychainItem(keychain string) error {
+	if keychainAccessDisabled() {
+		return fmt.Errorf("keychain access disabled (YAVER_VAULT_SKIP_KEYCHAIN=1 / non-interactive)")
+	}
 	return runSecurityQuiet(5*time.Second, "find-generic-password", "-s", claudeMacKeychainService, keychain)
 }
 
@@ -1207,6 +1219,17 @@ var (
 // time the calling process accesses the entry, but subsequent reads
 // from the same daemon are silent.
 func claudeMacKeychainHasCreds() bool {
+	// keychainAccessDisabled(): the desktop GUI spawns the agent with
+	// YAVER_VAULT_SKIP_KEYCHAIN=1 so `yaver serve` never triggers a macOS
+	// "security wants to use your confidential information" prompt. This probe
+	// is exactly the prompt source — a fresh `security find-generic-password`
+	// process asks the OS for access on its first read (runner_auth.go:1217).
+	// When keychain access is disabled, report "no keychain creds" WITHOUT
+	// shelling out; runner status degrades to the file/env heuristics, which
+	// is the correct answer for an embedded agent the GUI supervises.
+	if keychainAccessDisabled() {
+		return false
+	}
 	claudeMacKeychainCache.Lock()
 	defer claudeMacKeychainCache.Unlock()
 	if !claudeMacKeychainCache.at.IsZero() && time.Since(claudeMacKeychainCache.at) < claudeMacKeychainTTL {

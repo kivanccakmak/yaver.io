@@ -4006,6 +4006,16 @@ type runnerInfoRow struct {
 	// 2.1.126" / "codex-cli 0.122.0" / "1.4.0"). Surfaced in the CLI
 	// `yaver primary status` runners table and the mobile UI.
 	Version string `json:"version,omitempty"`
+	// ACP layer fields — same semantics as runnerAuthStatusRow (see
+	// acpAuthStateForRunner): authMethod "acp" when the ACP server
+	// initialized, ACPReachable whether it did, ACPSubscriptionMethod the
+	// advertised subscription login id. Filled via acpAuthStateForRunner so
+	// /agent/runners and /runner-auth/status cannot drift. Absent on agents
+	// older than the ACP layer (1.99.412) — surfaces must treat missing as
+	// "probe-era row".
+	AuthMethod            string `json:"authMethod,omitempty"`
+	ACPReachable          bool   `json:"acpReachable,omitempty"`
+	ACPSubscriptionMethod string `json:"acpSubscriptionMethod,omitempty"`
 }
 
 func fallbackRunnerModels(runnerID string) []runnerModelInfo {
@@ -4138,6 +4148,7 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 				version = ver
 			}
 		}
+		authMethod, acpReachable, acpSubMethod, _ := acpAuthStateForRunner(r.RunnerID, err == nil)
 		runners = append(runners, runnerInfoRow{
 			ID:                     r.RunnerID,
 			Name:                   r.Name,
@@ -4149,11 +4160,14 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 			Warning:                status.Warning,
 			Error:                  status.Error,
 			IsDefault:              r.RunnerID == defaultID,
-			SupportsBrowserAuth:    normalizeRunnerID(r.RunnerID) == "claude" || normalizeRunnerID(r.RunnerID) == "codex",
+			SupportsBrowserAuth:    runnerSupportsBrowserAuth(r.RunnerID),
 			SupportsModelSelection: len(models) > 0,
 			ModelSource:            modelSourceByRunner[r.RunnerID],
 			Models:                 models,
 			Version:                version,
+			AuthMethod:             authMethod,
+			ACPReachable:           acpReachable,
+			ACPSubscriptionMethod:  acpSubMethod,
 		})
 		seenIDs[r.RunnerID] = true
 	}
@@ -4176,6 +4190,7 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 	// Include the active runner if it's custom (not in builtinRunners)
 	if !seenIDs[s.taskMgr.runner.RunnerID] && (!filterGuestRunners || allowedRunnerSet[normalizeRunnerID(s.taskMgr.runner.RunnerID)]) {
 		models := modelsByRunner[s.taskMgr.runner.RunnerID]
+		authMethod, acpReachable, acpSubMethod, _ := acpAuthStateForRunner(s.taskMgr.runner.RunnerID, true)
 		runners = append(runners, runnerInfoRow{
 			ID:                     s.taskMgr.runner.RunnerID,
 			Name:                   s.taskMgr.runner.Name,
@@ -4183,10 +4198,13 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 			Installed:              true,
 			Ready:                  true,
 			IsDefault:              true,
-			SupportsBrowserAuth:    normalizeRunnerID(s.taskMgr.runner.RunnerID) == "claude" || normalizeRunnerID(s.taskMgr.runner.RunnerID) == "codex",
+			SupportsBrowserAuth:    runnerSupportsBrowserAuth(s.taskMgr.runner.RunnerID),
 			SupportsModelSelection: len(models) > 0,
 			ModelSource:            modelSourceByRunner[s.taskMgr.runner.RunnerID],
 			Models:                 models,
+			AuthMethod:             authMethod,
+			ACPReachable:           acpReachable,
+			ACPSubscriptionMethod:  acpSubMethod,
 		})
 	}
 

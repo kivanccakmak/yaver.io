@@ -181,10 +181,24 @@ func keychainAccount(userID string) string {
 	return userID
 }
 
-func vaultKeychainDisabled() bool {
+// keychainAccessDisabled reports whether this process must NOT touch the
+// macOS Keychain at all. It is the single gate for every `security` shell-out
+// in the agent — the vault mirror (vault_keychain.go) AND the runner-auth
+// probe (runner_auth.go::claudeMacKeychainHasCreds).
+//
+// The desktop GUI spawns the embedded agent with YAVER_VAULT_SKIP_KEYCHAIN=1
+// so `yaver serve` never triggers a macOS "security wants to use your
+// confidential information" prompt at boot or when the dashboard polls runner
+// status. YAVER_NONINTERACTIVE and CI cover the same promise for headless
+// boxes and pipelines, where a keychain prompt would hang the process.
+func keychainAccessDisabled() bool {
 	return os.Getenv("YAVER_VAULT_SKIP_KEYCHAIN") == "1" ||
 		envTruthy(os.Getenv("YAVER_NONINTERACTIVE")) ||
 		envTruthy(os.Getenv("CI"))
+}
+
+func vaultKeychainDisabled() bool {
+	return keychainAccessDisabled()
 }
 
 // readMasterKeyFromKeychain attempts to read the master key from the

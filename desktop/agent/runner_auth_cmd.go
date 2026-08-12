@@ -203,6 +203,24 @@ type runnerAuthStatusRow struct {
 	Error        string `json:"error,omitempty"`
 	Path         string `json:"path,omitempty"`
 	Detail       string `json:"detail,omitempty"`
+	// AuthMethod names the mechanism that produced this row's auth verdict:
+	// "acp" when the runner's ACP server (opencode native / claude-agent-acp /
+	// codex-acp) was reachable and reported auth methods; "probe" when the
+	// classic CLI/file probes produced it; "apikey" for API-key providers.
+	// Absent on agents older than the ACP layer (1.99.412). A missing value
+	// means "probe-era row" — surfaces must treat it as probe.
+	AuthMethod string `json:"authMethod,omitempty"`
+	// ACPSubscriptionMethod is the advertised ACP auth method id that
+	// represents the SUBSCRIPTION login for this runner (claude-ai-login /
+	// chat-gpt / opencode-login), "" when the ACP server did not advertise
+	// one or the ACP layer is unavailable. Surfaces use it to render the
+	// "subscription login" button and the "· via ACP" label.
+	ACPSubscriptionMethod string `json:"acpSubscriptionMethod,omitempty"`
+	// ACPReachable tells whether the runner's ACP server initialized. It is
+	// deliberately separate from AuthConfigured: reachable does NOT imply
+	// signed in, and unreachable does NOT imply signed out — it only means
+	// "the ACP path is (not) available" (fall back to probe).
+	ACPReachable bool `json:"acpReachable,omitempty"`
 	// Version is the first line of `<bin> --version` output (capped at
 	// 80 chars). Surfaced in the mobile Coding Agents pane so the user
 	// can see "Claude Code 2.1.126" / "codex-cli 0.122" / "opencode 1.4.0"
@@ -290,11 +308,78 @@ func collectRunnerAuthStatusRows() ([]runnerAuthStatusRow, error) {
 		}
 		row.Version = version
 		_, row.Detail = runnerDoctorDetail(cfg, wd, path, version)
+		// ACP layer (additive — never removes probe facts, only layers the
+		// ACP view on top). opencode/claude/codex each get a cached ACP
+		// probe: if the ACP server initializes we report authMethod=acp +
+		// the advertised subscription method; if not, the row keeps its
+		// probe verdict and surfaces fall back to the classic path.
+		enrichRowWithACPAuthState(&row)
 		rows = append(rows, row)
 	}
 	rows = append(rows, ollamaRunnerStatusRow())
 	rows = append(rows, opencodeProviderStatusRows(rows)...)
 	return rows, nil
+}
+
+// enrichRowWithACPAuthState layers the cached ACP auth state onto a runner
+// status row. Additive by contract:
+//   - AuthMethod is set to "acp" ONLY when the ACP server initialized
+//     (Reachable) and advertised at least one auth method. Otherwise it is
+//     left unset ("" = probe-era row; surfaces fall back to the probe).
+//   - ACPReachable / ACPSubscriptionMethod are reported as observed; they
+//     never flip AuthConfigured/AuthVerified, which stay owned by the probe.
+//   - Unreachable ACP is logged once per cache period via logACPFallback so
+//     the fallback story is visible in serve logs without spamming.
+//
+// Only opencode/claude/codex have ACP servers today; other rows are
+// untouched.
+func enrichRowWithACPAuthState(row *runnerAuthStatusRow) {
+	authMethod, reachable, subMethod, subName := acpAuthStateForRunner(row.ID, row.Installed)
+	row.AuthMethod = authMethod
+	row.ACPReachable = reachable
+	row.ACPSubscriptionMethod = subMethod
+	if !reachable {
+		// Fallback note handled by logACPFallback inside the helper for
+		// the /runner-auth/status path; rows keep probe facts intact.
+		return
+	}
+	if subMethod != "" && strings.TrimSpace(row.Detail) == "" {
+		row.Detail = "ACP · " + firstNonEmpty(subName, subMethod)
+	}
+}
+
+// acpAuthStateForRunner is the single source of the ACP view for one runner:
+// authMethod ("acp" when the ACP server initialized and advertised a method,
+// "" otherwise), whether the ACP server is reachable, the advertised
+// SUBSCRIPTION method id (claude-ai-login / chat-gpt / opencode-login), and
+// the method's display name for surfaces ("ChatGPT", "Claude Subscription").
+// Shared by /runner-auth/status rows (runnerAuthStatusRow) and the remote
+// /agent/runners rows (runnerInfoRow) so the two surfaces cannot drift.
+// Additive by contract: reachable does NOT imply signed in, unreachable does
+// NOT imply signed out — callers keep their probe verdicts and layer this on.
+func acpAuthStateForRunner(runnerID string, installed bool) (authMethod string, reachable bool, subMethod string, subName string) {
+	switch normalizeRunnerID(runnerID) {
+	case "opencode", "claude", "codex":
+	default:
+		return "", false, "", ""
+	}
+	if !installed {
+		return "", false, "", ""
+	}
+	st := probeACPAuthState(runnerID, false)
+	if !st.Reachable {
+		if strings.TrimSpace(st.Error) != "" {
+			logACPFallback(runnerID, st.Error)
+		}
+		return "", false, "", ""
+	}
+	if m := findACPSubscriptionMethod(runnerID, st.AuthMethods); m != nil {
+		// A subscription method advertised over ACP is itself meaningful
+		// signal about the auth surface, but NEVER proof of a working
+		// credential — that stays AuthVerified's job (probe/proof ledger).
+		return "acp", true, m.ID, m.Name
+	}
+	return "acp", true, "", ""
 }
 
 func collectInstalledRunnerIDsFresh() []string {

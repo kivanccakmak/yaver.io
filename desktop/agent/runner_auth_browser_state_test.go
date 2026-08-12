@@ -196,3 +196,42 @@ func TestAppendRunnerAuthRecentOutputCaps(t *testing.T) {
 		t.Fatalf("must keep the TAIL, got %q", lines[len(lines)-1])
 	}
 }
+
+// ACP audit 2026-08-12 §4: the opencode browser-auth command must be the
+// headless RFC 8628 device flow, not the bare `opencode auth login` that
+// hangs in a TUI provider picker. Two facts verified live against opencode
+// 1.18.15 + a real paid account:
+//   - `auth login` FILTERS providers by config.enabled_providers, so the
+//     user's ["zai-coding-plan","deepseek"] silently hid `openai` and every
+//     -p <provider> returned "Unknown provider". OPENCODE_CONFIG_CONTENT
+//     injects an enabled set including openai without touching on-disk config.
+//   - The "headless" method prints "Go to: <device URL>" + "Enter code:
+//     XXXX-XXXX" to stdout (clack log.info), caught by the shared scanner.
+func TestRunnerBrowserAuthCommandOpenCodeHeadless(t *testing.T) {
+	bin := resolveRunnerBinary("opencode")
+	if bin == "" {
+		t.Skip("opencode not on PATH")
+	}
+	method, cmd, err := runnerBrowserAuthCommand("opencode", tenantRuntime{})
+	if err != nil {
+		t.Fatalf("runnerBrowserAuthCommand: %v", err)
+	}
+	if method != "device-auth" {
+		t.Fatalf("method = %q, want device-auth (RFC 8628 flow)", method)
+	}
+	args := strings.Join(cmd.Args[1:], " ")
+	for _, want := range []string{"auth", "login", "-p", "openai", "-m", "ChatGPT Pro/Plus (headless)"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("argv %q missing %q", args, want)
+		}
+	}
+	found := false
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "OPENCODE_CONFIG_CONTENT=") && strings.Contains(e, "openai") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("OPENCODE_CONFIG_CONTENT env missing — openai provider stays hidden by the enabled_providers filter")
+	}
+}
