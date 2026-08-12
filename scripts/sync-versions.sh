@@ -120,6 +120,13 @@ update_pkg_version "$REPO_ROOT/mobile/package.json" "$MOBILE_VERSION" "mobile pa
 # --- Desktop GUI: electron/package.json ---
 update_pkg_version "$REPO_ROOT/electron/package.json" "$GUI_VERSION" "electron/package.json"
 
+# --- Web: lib/versions.ts (web tsconfig cannot import JSON outside web/) ---
+WEB_VERSIONS_TS="$REPO_ROOT/web/lib/versions.ts"
+if [ -f "$WEB_VERSIONS_TS" ]; then
+  sed "s/export const GUI_VERSION = \"[0-9]*\.[0-9]*\.[0-9]*\"/export const GUI_VERSION = \"$GUI_VERSION\"/" "$WEB_VERSIONS_TS" > "$WEB_VERSIONS_TS.tmp"
+  update_file "$WEB_VERSIONS_TS" "web/lib/versions.ts GUI_VERSION"
+fi
+
 echo ""
 if [ "$changed" -eq 0 ]; then
   echo "All files already in sync."

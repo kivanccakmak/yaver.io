@@ -4,22 +4,24 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/use-auth";
+import { GUI_DOWNLOADS } from "@/lib/versions";
 
 // Canonical definitional one-liner — picked up by AI search
 // (ChatGPT, Claude) and SEO as the answer to "what is Yaver?". Framed
-// around the remote-AI-runtime wedge: run your coding agent on your
-// own machine or in a Yaver Cloud Workspace, and drive it from your
-// phone, tablet, watch, or the web. No comparative claims against
-// named competitors, per LEGAL_SAFETY.md §2 (trademark) and §3.
+// around the product, not the MCP protocol: Yaver is a real-device app
+// development loop. Run your coding agent on your own machine — or in a
+// Yaver Cloud Workspace — and drive it from a native desktop app, your
+// phone, tablet, watch, or the web. No comparative claims against named
+// competitors, per LEGAL_SAFETY.md §2 (trademark) and §3.
 const LANDING_TAGLINE =
-  "Yaver is an open-source remote AI runtime. It runs Claude Code, Codex, and OpenCode on your own machine — or in a Yaver Cloud Workspace — and lets you drive the agent, watch it work, and hot-reload the real app on your iPhone or Android from anywhere. Self-host it with npm install, or use Yaver's managed cloud.";
+  "Yaver is an open-source, self-hostable real-device app development loop. It runs Claude Code, Codex, and OpenCode on your own machine — or in a Yaver Cloud Workspace — and hot-reloads the real app on your iPhone or Android seconds after the agent edits it. Drive it from the Yaver desktop app for macOS, Windows, and Linux, from your phone, or from the web.";
 
 const SUPPORTED_SURFACES = ["iOS", "Android", "Web", "watchOS", "tvOS", "Wear OS", "CarPlay", "Android Auto"];
 
 const LANDING_FAQ: ReadonlyArray<{ q: string; a: string }> = [
   {
     q: "What is Yaver?",
-    a: "Yaver is an open-source remote AI runtime. You install it on the machine that does the work — your laptop, a home server, or a Yaver Cloud Workspace — and then drive your coding agent from your phone, tablet, watch, car, or the web. The agent edits code, runs builds, and the result hot-reloads on your real devices.",
+    a: "Yaver is an open-source real-device app development loop. Your coding agent — Claude Code, Codex, or OpenCode — runs on the machine that does the work: your laptop, a home server, or a Yaver Cloud Workspace. Yaver compiles your React Native or Expo app to Hermes bytecode and hot-reloads it on your real iPhone or Android in seconds. Drive it from the desktop app, your phone, or the web.",
   },
   {
     q: "Where does the agent run?",
@@ -49,8 +51,8 @@ const LANDING_FAQ: ReadonlyArray<{ q: string; a: string }> = [
 
 const LANDING_HOWTO_STEPS: ReadonlyArray<{ name: string; text: string; url?: string }> = [
   {
-    name: "Install the Yaver CLI",
-    text: "Run npm install -g yaver-cli, then yaver auth. That machine becomes your runtime.",
+    name: "Install Yaver",
+    text: "Install the desktop app for macOS, Windows, or Linux, or run npm install -g yaver-cli, then yaver auth. That machine becomes your runtime.",
     url: "https://yaver.io/download",
   },
   {
@@ -121,7 +123,7 @@ export default function HomePage() {
     totalTime: "PT5M",
     supply: [{ "@type": "HowToSupply", name: "A Mac, Linux, or Windows machine" }],
     tool: [
-      { "@type": "HowToTool", name: "Node.js (optional, for npm install)" },
+      { "@type": "HowToTool", name: "The Yaver desktop app (macOS / Windows / Linux) or npm CLI" },
       { "@type": "HowToTool", name: "The Yaver mobile app" },
     ],
     step: LANDING_HOWTO_STEPS.map((s, i) => ({
@@ -188,22 +190,30 @@ export default function HomePage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(pricingLd) }}
       />
-      {/* ── Section 1: Hero — remote AI runtime wedge ── */}
+      {/* ── Section 1: Hero — product-first, real-device loop ── */}
       <section className="px-6 pb-10 pt-20 md:pt-28">
         <div className="mx-auto max-w-5xl text-center">
           <p className="mb-3 text-xs font-semibold uppercase tracking-[0.25em] text-surface-400">
-            Open-source remote AI runtime
+            Vibe it, see it. Instantly on your real phone.
           </p>
-          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            Own machine · Cloud workspace · Self-hostable
+          <div className="mb-5 inline-flex flex-wrap items-center justify-center gap-2">
+            <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-4 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              Open source
+            </span>
+            <span className="inline-flex items-center gap-2 rounded-full border border-surface-700 bg-surface-900/70 px-4 py-1.5 text-xs font-medium text-surface-300">
+              Self-hostable
+            </span>
+            <span className="inline-flex items-center gap-2 rounded-full border border-surface-700 bg-surface-900/70 px-4 py-1.5 text-xs font-medium text-surface-300">
+              Runs on your machine
+            </span>
           </div>
 
           <h1 className="mb-5 text-4xl font-bold leading-[1.02] tracking-tight text-surface-50 sm:text-5xl md:text-6xl">
-            Your coding agent,
+            Yaver is an open-source
             <br className="hidden sm:block" />
             <span className="bg-gradient-to-r from-indigo-400 to-emerald-400 bg-clip-text text-transparent">
-              running anywhere you are.
+              real-device app loop.
             </span>
           </h1>
 
@@ -212,17 +222,17 @@ export default function HomePage() {
           <p className="sr-only">{LANDING_TAGLINE}</p>
 
           <p className="mx-auto max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
-            Yaver runs Claude Code, Codex, and OpenCode on your own machine —
-            or in a persistent Cloud Workspace — and gives you a cockpit on
-            your phone, tablet, watch, car, and the web. Start a task from the
-            couch, watch it build, and preview the real app on your real
-            device in seconds.
+            Your coding agent builds on your own machine — or a Cloud
+            Workspace — and the app hot-reloads on your real iPhone or
+            Android seconds later. Gestures, sensors, real network, real
+            performance. Hermes bytecode through a native bridge, never a
+            WebView.
           </p>
 
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-surface-300 sm:text-base md:text-[17px]">
-            Self-host with <code className="rounded bg-surface-900 px-1.5 py-0.5 text-surface-300">npm install -g yaver-cli</code>,
-            or spin up a Cloud Workspace when you want it remote. Bring your
-            own AI account either way.
+            Drive it from the native desktop app for macOS, Windows, and
+            Linux, from your phone, or from the web. Bring your own AI
+            account — Claude Code, Codex, or OpenCode.
           </p>
 
           <div className="mx-auto mt-6 flex max-w-2xl flex-wrap items-center justify-center gap-2">
@@ -236,13 +246,13 @@ export default function HomePage() {
             ))}
           </div>
 
-          {/* Two-path CTA: self-host (free) vs Cloud Workspace (monetized) */}
+          {/* Two-path CTA: desktop app / self-host vs Cloud Workspace */}
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link
               href="/download"
               className="btn-primary px-6 py-3 text-sm"
             >
-              Install Yaver — free
+              Download Yaver — free
             </Link>
             <Link
               href="/pricing"
@@ -262,9 +272,9 @@ export default function HomePage() {
                 $ <span className="select-all break-all text-surface-200">npm install -g yaver-cli && yaver auth</span>
               </div>
               <div className="my-1.5 h-px bg-surface-800/60" />
-              <div className="text-surface-500"># from your phone:</div>
+              <div className="text-surface-500"># from your phone, or the desktop app:</div>
               <div className="text-surface-600">
-                $ <span className="select-all break-all text-emerald-300">open the Yaver app — pick a machine, pick a project, ask for a change</span>
+                $ <span className="select-all break-all text-emerald-300">open Yaver — pick a machine, pick a project, ask for a change</span>
               </div>
             </div>
             <p className="mt-2 text-center text-[11px] text-surface-600">
@@ -295,11 +305,85 @@ export default function HomePage() {
             preload="metadata"
           />
           <p className="mx-auto mt-4 max-w-2xl text-center text-sm text-surface-300">
-            Open Yaver, pick a project from your machine or Cloud Workspace,
-            preview it on your phone, shake to vibe-code — fix a bug, ship a
-            small feature, or tweak a style — and a fresh bundle lands in
-            seconds. One screen, real device, no extra hardware.
+            Open Yaver on your desktop or phone, pick a project from your
+            machine or Cloud Workspace, preview it on your phone, shake to
+            vibe-code — fix a bug, ship a small feature, or tweak a style —
+            and a fresh bundle lands in seconds. One screen, real device, no
+            extra hardware.
           </p>
+        </div>
+      </section>
+
+      {/* ── Section 2.5: Downloads — desktop app + mobile ── */}
+      <section id="download" className="border-t border-surface-800/60 px-6 py-16">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="mb-3 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Download Yaver
+          </h2>
+          <p className="mx-auto mb-10 max-w-2xl text-center text-sm text-surface-400">
+            The native desktop app embeds the Yaver agent, so a fresh machine
+            becomes a full Yaver node — vibe it directly, or from any other
+            device. The CLI turns any machine into a remote AI runtime.
+          </p>
+
+          {/* Desktop app — the product shell */}
+          <div className="mb-8 rounded-2xl border border-surface-800 bg-surface-900/50 p-6">
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-base font-semibold text-surface-50">Yaver Desktop</p>
+                <p className="mt-0.5 text-xs text-surface-500">
+                  macOS · Windows · Linux — signed, self-contained, embeds the agent
+                </p>
+              </div>
+              <Link
+                href="/download"
+                className="rounded-lg border border-surface-700 bg-surface-900 px-4 py-2 text-xs font-medium text-surface-200 transition-colors hover:border-surface-600 hover:text-surface-50"
+              >
+                All releases &rarr;
+              </Link>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {[
+                { name: "macOS", href: GUI_DOWNLOADS.mac, note: "DMG · Apple Silicon & Intel" },
+                { name: "Windows", href: GUI_DOWNLOADS.win, note: "Installer · x64" },
+                { name: "Linux", href: GUI_DOWNLOADS.linux, note: "AppImage · deb · rpm" },
+              ].map((d) => (
+                <a
+                  key={d.name}
+                  href={d.href}
+                  className="group flex items-center justify-between gap-3 rounded-xl border border-surface-800 bg-surface-950 px-4 py-3.5 transition-colors hover:border-emerald-500/40"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-surface-100">{d.name}</p>
+                    <p className="mt-0.5 text-[11px] text-surface-500">{d.note}</p>
+                  </div>
+                  <span className="text-lg text-emerald-500 transition-transform group-hover:translate-y-0.5">{"\u2193"}</span>
+                </a>
+              ))}
+            </div>
+            <p className="mt-4 text-[11px] text-surface-600">
+              Linux also ships <code className="text-surface-400">.deb</code> (apt-get), <code className="text-surface-400">.rpm</code>, and <code className="text-surface-400">.tar.gz</code>. The desktop app works standalone on a fresh install — no npm or Node needed; runners provision on demand.
+            </p>
+          </div>
+
+          {/* Mobile + CLI */}
+          <div className="grid gap-4 md:grid-cols-3">
+            <a href="https://apps.apple.com/us/app/yaver-io/id6760467669" target="_blank" rel="noopener noreferrer"
+              className="rounded-xl border border-surface-800 bg-surface-900/50 p-4 transition-colors hover:border-surface-600">
+              <p className="text-sm font-semibold text-surface-100">iPhone / iPad</p>
+              <p className="mt-1 text-[11px] text-surface-500">App Store</p>
+            </a>
+            <a href="https://play.google.com/store/apps/details?id=io.yaver.mobile" target="_blank" rel="noopener noreferrer"
+              className="rounded-xl border border-surface-800 bg-surface-900/50 p-4 transition-colors hover:border-surface-600">
+              <p className="text-sm font-semibold text-surface-100">Android</p>
+              <p className="mt-1 text-[11px] text-surface-500">Google Play</p>
+            </a>
+            <a href="/download"
+              className="rounded-xl border border-surface-800 bg-surface-900/50 p-4 transition-colors hover:border-surface-600">
+              <p className="text-sm font-semibold text-surface-100">CLI (npm)</p>
+              <p className="mt-1 font-mono text-[11px] text-surface-500">npm install -g yaver-cli</p>
+            </a>
+          </div>
         </div>
       </section>
 
@@ -332,7 +416,8 @@ export default function HomePage() {
                 </div>
               </div>
               <p className="mt-3 text-[11px] text-surface-500">
-                Your laptop, home server, or Pi becomes a runtime. Builds,
+                Your laptop, home server, or Pi becomes a runtime — driven
+                from the Yaver desktop app, your phone, or the web. Builds,
                 files, git state, prompts, and runner output stay on your
                 hardware. Connect over LAN, your own relay, or Tailscale.{" "}
                 <Link href="/download" className="underline hover:text-surface-300">
@@ -421,6 +506,38 @@ export default function HomePage() {
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* ── Section 3.5: Use from your coding agent (MCP) ── */}
+      <section id="mcp" className="border-t border-surface-800/60 px-6 py-16">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="mb-3 text-center text-2xl font-bold text-surface-50 md:text-3xl">
+            Or use it from your coding agent
+          </h2>
+          <p className="mx-auto mb-8 max-w-2xl text-center text-sm text-surface-400">
+            Yaver also exposes itself as an MCP server, so Claude Code, Codex,
+            and OpenCode can drive the same real-device loop directly from the
+            agent chat — build on your machine, hot-reload on your phone,
+            shake to send repro context back.
+          </p>
+          <div className="mx-auto max-w-xl space-y-2 rounded-xl border border-surface-800 bg-surface-950 p-5 font-mono text-[12px] leading-relaxed">
+            <div className="text-surface-500"># Claude Code:</div>
+            <div><span className="text-surface-400">$</span> <span className="select-all text-surface-200">claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp</span></div>
+            <div className="mt-2 text-surface-500"># Codex:</div>
+            <div><span className="text-surface-400">$</span> <span className="select-all text-surface-200">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</span></div>
+            <div className="mt-2 text-surface-500"># OpenCode:</div>
+            <div><span className="text-surface-400">$</span> <span className="select-all text-surface-200">npx -y -p yaver-cli yaver mcp setup opencode</span></div>
+            <div className="mt-3 h-px bg-surface-800/60" />
+            <div className="text-surface-500"># then, in the agent chat:</div>
+            <div><span className="select-all text-emerald-300">call yaver_lazy_setup</span></div>
+          </div>
+          <p className="mt-3 text-center text-xs text-surface-600">
+            <code>yaver_lazy_setup</code> surfaces the sign-in link and pairs your phone in-chat.{" "}
+            <Link href="/docs/mcp" className="underline hover:text-surface-300">
+              full MCP guide &rarr;
+            </Link>
+          </p>
         </div>
       </section>
 

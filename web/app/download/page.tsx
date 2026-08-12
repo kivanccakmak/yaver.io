@@ -1,19 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import versions from "../../versions.json";
-
-// Desktop GUI release artifacts are named deterministically by
-// electron/package.json's artifactName pattern; the version comes from the
-// repo's single source of truth (versions.json → electron/package.json via
-// scripts/sync-versions.sh). GitHub's /releases/latest/download/ URL shape
-// resolves each artifact by its exact asset name.
-const GUI_VERSION = versions.gui || "0.1.0";
-const GUI_BASE = "https://github.com/yaver-io/yaver.io/releases/latest/download";
-const GUI_DOWNLOADS = {
-  mac: `${GUI_BASE}/yaver-gui-${GUI_VERSION}-mac.dmg`,
-  win: `${GUI_BASE}/yaver-gui-${GUI_VERSION}-win-setup.exe`,
-  linux: `${GUI_BASE}/yaver-gui-${GUI_VERSION}-linux.AppImage`,
-};
+import { GUI_DOWNLOADS, GUI_VERSION } from "@/lib/versions";
 
 function DownloadButton({
   href,
