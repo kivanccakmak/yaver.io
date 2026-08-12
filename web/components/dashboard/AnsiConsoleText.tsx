@@ -69,9 +69,16 @@ function TokenRuns({ tokens }: { tokens: AnsiToken[] }) {
       {tokens.map((t, i) => {
         const style = tokenStyle(t);
         const inner = t.text;
-        if (t.href) {
+        // Defense in depth: the tokenizer already drops non-http(s)/mailto
+        // OSC-8 links (web/lib/_core/ansi.ts sanitizeOscLink), but this
+        // renderer is the sink — a future token source that forgets to
+        // sanitize must not turn a prompt-injected `javascript:` href into
+        // execution in the dashboard origin. Never render an href that is
+        // not an explicit http(s):// or mailto:// URL.
+        const safeHref = t.href && /^(https?:\/\/|mailto:)/i.test(t.href) ? t.href : undefined;
+        if (safeHref) {
           return (
-            <a key={i} href={t.href} target="_blank" rel="noreferrer" style={{ ...style, textDecoration: "underline" }} className="break-all">
+            <a key={i} href={safeHref} target="_blank" rel="noreferrer" style={{ ...style, textDecoration: "underline" }} className="break-all">
               {inner}
             </a>
           );

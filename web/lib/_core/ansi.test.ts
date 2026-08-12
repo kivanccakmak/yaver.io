@@ -133,6 +133,30 @@ const ok = (c: unknown, label: string) => eq(Boolean(c), true, label);
   eq(t[1]?.text, " rest", "text after link kept unstyled");
 }
 
+// ── OSC-8 scheme allowlist (the audit XSS finding, §6.1) ───────────────
+// A prompt-injected \x1b]8;;javascript:…\x07 link used to reach the renderer
+// verbatim and become an <a href> in the dashboard origin. The tokenizer now
+// drops every scheme except http(s):// and mailto:// — the link becomes plain
+// text, never a clickable/executable URL.
+{
+  const evil = "\x1b]8;;javascript:alert(1)\x07click\x1b]8;;\x07";
+  const t = tokenizeAnsi(evil);
+  eq(t[0]?.href, undefined, "javascript: OSC-8 link is not carried as href");
+  eq(t[0]?.text, "click", "the inner text survives as plain text");
+
+  const data = tokenizeAnsi("\x1b]8;;data:text/html,<script>1</script>\x07x\x1b]8;;\x07");
+  eq(data[0]?.href, undefined, "data: OSC-8 link is dropped");
+
+  const proto = tokenizeAnsi("\x1b]8;;//evil.example/path\x07x\x1b]8;;\x07");
+  eq(proto[0]?.href, undefined, "protocol-relative OSC-8 link is dropped");
+
+  const bare = tokenizeAnsi("\x1b]8;;alert(1)\x07x\x1b]8;;\x07");
+  eq(bare[0]?.href, undefined, "scheme-less OSC-8 string is dropped");
+
+  const mail = tokenizeAnsi("\x1b]8;;mailto:a@b.co\x07mail\x1b]8;;\x07");
+  eq(mail[0]?.href, "mailto:a@b.co", "mailto: OSC-8 link is allowed");
+}
+
 // ── cursor/erase sequences become line breaks (TUI repaint) ─────────────
 {
   const t = tokenizeAnsi("line1\x1b[2Kline2");

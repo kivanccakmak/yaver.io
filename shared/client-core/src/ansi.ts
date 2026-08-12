@@ -94,6 +94,30 @@ export function paletteRgb(index: number): [number, number, number] {
  *  can't map the palette exactly). */
 const OSC_LINK_OPEN = /\x1b\]8;;([^\x07]*)\x07/;
 
+/** Schemes an OSC-8 hyperlink may carry. Anything else — `javascript:`,
+ *  `data:`, `vbscript:`, a bare protocol-relative `//`, or a scheme-less
+ *  string that React would still accept as a URL — is dropped so a
+ *  prompt-injected link can never execute in the dashboard origin. This is
+ *  the web-side half of the audit finding "OSC-8 `javascript:` href XSS"
+ *  (docs/audits/webui-chat-vibing-gui-2026-08-12.md §6.1): the tokenizer is
+ *  the single choke point every renderer (AnsiConsoleText, terminal views)
+ *  shares, so sanitising here protects all of them.
+ */
+// http(s):// and mailto: (mailto has no "//"). Everything else fails.
+const OSC_LINK_SAFE = /^(https?:\/\/|mailto:)/i;
+
+/** Returns the href to carry on the token, or "" when the URL is unsafe. */
+function sanitizeOscLink(url: string): string {
+  const trimmed = (url || "").trim();
+  if (!trimmed) return "";
+  // `javascript:alert(1)` fails the allowlist; `//evil.com` is
+  // protocol-relative and must not become a same-origin jump; a bare
+  // `alert(1)` without a scheme is not a URL at all. Only explicit
+  // http(s):// or mailto: links pass.
+  if (!OSC_LINK_SAFE.test(trimmed)) return "";
+  return trimmed;
+}
+
 export interface TokenizeOptions {
   /** Keep cursor/erase sequences as line breaks instead of dropping them
    *  silently (default true: a TUI repaint becomes a blank line). */
@@ -219,11 +243,11 @@ export function tokenizeAnsi(input: string, opts?: TokenizeOptions): AnsiToken[]
     if (osc) {
       // OSC-8 hyperlink shell: \x1b]8;;<url>\x07<text>\x1b]8;;\x07
       const open = osc.match(OSC_LINK_OPEN);
-      const url = open ? open[1] : "";
+      const url = sanitizeOscLink(open ? open[1] : "");
       // Strip the shell, keep only the inner text.
       const inner = osc.replace(/\x1b\]8;;[^\x07]*\x07/, "").replace(/\x1b\]8;;\x07$/, "");
       buf += inner;
-      pushBuf(url);
+      pushBuf(url || undefined);
       linkUrl = undefined;
     } else if (esc) {
       const params = esc.slice(2, -1);
