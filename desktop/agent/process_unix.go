@@ -781,6 +781,35 @@ func isDarwinLaunchDaemonInstalled() bool {
 	return err == nil
 }
 
+// removeStaleDarwinLaunchAgent removes the login-gated LaunchAgent plist
+// (~/Library/LaunchAgents/io.yaver.agent.plist) so a daemon-installed box
+// cannot later load a SECOND agent into the GUI domain on the same port.
+// The daemon and the agent share the label io.yaver.agent but live in
+// different launchd domains; after the 2026-08-12 Mac incident both were
+// installed, and the next GUI login booted a second agent that fought the
+// daemon for :18080. Removing the agent plist is part of installing the
+// daemon, not optional cleanup. Best-effort: the plist is per-user and the
+// daemon install already knows the home dir.
+func removeStaleDarwinLaunchAgent() {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	plistPath := filepath.Join(home, darwinLaunchAgentPath)
+	if _, err := os.Stat(plistPath); err != nil {
+		return // no stale agent plist — nothing to do
+	}
+	// Unload first so launchd doesn't keep a dying process alive across the
+	// file removal. gui/<uid>/ is the right domain for a LaunchAgent.
+	if uid := os.Getuid(); uid >= 0 {
+		_ = osexec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, darwinLaunchdLabel)).Run()
+	}
+	_ = os.Remove(plistPath)
+}
+
 func installLaunchdDaemonService() {
 	if runtime.GOOS != "darwin" {
 		fmt.Println("macOS LaunchDaemon install is only available on macOS.")
@@ -805,6 +834,13 @@ func installLaunchdDaemonService() {
 	logDir := filepath.Join(home, ".yaver")
 	_ = os.MkdirAll(logDir, 0o700)
 	plist := buildDarwinLaunchdPlist(exePath, workDir, logDir, userName, home)
+	// The daemon and the login-gated LaunchAgent share the label io.yaver.agent
+	// but live in different domains. Leaving the stale agent plist in place
+	// means the next GUI login loads a SECOND agent on the same port — the
+	// split-brain that followed the 2026-08-12 Mac incident (daemon installed,
+	// agent plist left behind, both fighting for :18080). Removing it is part
+	// of installing the daemon, not an optional cleanup.
+	removeStaleDarwinLaunchAgent()
 	if os.Geteuid() != 0 {
 		stagingPath := filepath.Join(logDir, "io.yaver.agent.launchdaemon.plist")
 		if err := os.WriteFile(stagingPath, []byte(plist), 0o644); err != nil {

@@ -23,9 +23,13 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -225,6 +229,35 @@ func storeID() string {
 
 // ---- deploy leases (the race fix) --------------------------------------
 
+// holderAliveOnThisHost reports whether a lease holder described as
+// "<host>/pid<N>" is still running — but ONLY when <host> is this machine.
+// A holder on a different host is presumed alive (we can't see its pid);
+// a malformed holder string is presumed alive (don't guess). This is the
+// crash-reclaim: a deploy that died (SIGKILL, power loss, errSecInternal-
+// Component bail) leaves its lease holding the target hostage for the whole
+// TTL, and before 2026-08-12 the ONLY recovery was `deploy-lease abort` by
+// hand — every later deploy failed with "another autorun holds the lease".
+// Acquire now reclaims a same-host lease whose pid is gone. Same rationale
+// as the Snowball "inventory says yes, operation says no" rule: a lease is
+// bookkeeping, and the process is the operation.
+func holderAliveOnThisHost(holder string) bool {
+	host, _ := os.Hostname()
+	slash := strings.LastIndexByte(holder, '/')
+	if slash <= 0 || slash == len(holder)-1 {
+		return true // not host/pid shape → don't guess
+	}
+	if holder[:slash] != host {
+		return true // other machine → can't verify, presume alive
+	}
+	pid, err := strconv.Atoi(holder[slash+1:])
+	if err != nil || pid <= 0 {
+		return true
+	}
+	// kill(pid, 0) probes existence without signalling.
+	err = syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
 // AcquireDeployLease takes the single per-target deploy lease. Returns:
 //   - nil on success (lease held by autorunID),
 //   - *LeaseHeld if a live holder owns it (and it isn't autorunID — same
@@ -264,11 +297,14 @@ func (s *AutorunStore) AcquireDeployLease(target, autorunID, holder, workdir, br
 	switch err := row.Scan(&existingAutorun, &held.Holder, &held.Workdir, &held.Branch, &held.Build, &held.Stage, &held.StartedAt, &held.ExpiresAt, &endedAt); err {
 	case nil:
 		live := !endedAt.Valid && held.ExpiresAt > now
-		if live && existingAutorun != autorunID {
+		// Crash-reclaim (2026-08-12): a same-host holder whose pid is gone
+		// is dead — its lease must not hold the target hostage until TTL
+		// expiry. Dead/expired/ours all fall through to overwrite below.
+		if live && holderAliveOnThisHost(held.Holder) && existingAutorun != autorunID {
 			held.Target = target
 			return &held
 		}
-		// Ours, or dead/expired → overwrite.
+		// Ours, dead (pid gone on this host), or expired → overwrite.
 		if _, err := tx.Exec(`UPDATE deploy_leases SET autorun_id=?, holder=?, workdir=?, branch=?, build_number=?, stage='archiving', started_at=?, updated_at=?, expires_at=?, ended_at=NULL, outcome=NULL WHERE target=?`,
 			autorunID, holder, workdir, nullStr(branch), nullStr(build), now, now, now+int64(ttl.Seconds()), target); err != nil {
 			return err

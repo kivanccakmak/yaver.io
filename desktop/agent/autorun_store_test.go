@@ -6,6 +6,7 @@ package main
 // expiry, heartbeat, release→history, and the 7-day sweep.
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -111,6 +112,77 @@ func TestDeployQuota(t *testing.T) {
 	err := s.AcquireDeployLease("testflight", "next", "seat", "/w", "main", "460", time.Hour)
 	if _, ok := err.(*QuotaExceeded); !ok {
 		t.Fatalf("want *QuotaExceeded at cap, got %v", err)
+	}
+}
+
+// TestHolderAliveOnThisHost pins the crash-reclaim liveness helper. The
+// whole point (2026-08-12): a deploy that dies leaves "host/pidNNNN" in the
+// lease row, and acquire must treat a same-host dead pid as absent instead
+// of blocking every later deploy until TTL expiry.
+func TestHolderAliveOnThisHost(t *testing.T) {
+	host, _ := os.Hostname()
+
+	// Same host, this test process's own pid → alive.
+	if !holderAliveOnThisHost(host + "/" + itoa(os.Getpid())) {
+		t.Error("own pid should be alive")
+	}
+	// Same host, an impossible pid → dead → reclaimable.
+	if holderAliveOnThisHost(host + "/999999999") {
+		t.Error("a pid that cannot exist should read as dead")
+	}
+	// Different host → presume alive (can't verify remotely).
+	if !holderAliveOnThisHost("other-host/999999999") {
+		t.Error("remote holder must be presumed alive")
+	}
+	// Malformed holder → presume alive (don't guess).
+	if !holderAliveOnThisHost("not-a-holder") {
+		t.Error("malformed holder must be presumed alive")
+	}
+	if !holderAliveOnThisHost(host + "/abc") {
+		t.Error("non-numeric pid must be presumed alive")
+	}
+}
+
+// TestDeployLeaseCrashReclaim: a holder on THIS host whose pid is gone must
+// not block a new acquire — the lease is reclaimed immediately instead of
+// holding the target hostage until the 60-min TTL. This is the exact shape
+// of the 2026-08-12 incident: the first TestFlight run died at codesign but
+// its lease kept every retry at "Another autorun holds the TestFlight deploy
+// lease" until someone found `deploy-lease abort` by reading source.
+func TestDeployLeaseCrashReclaim(t *testing.T) {
+	s := testStore(t)
+	host, _ := os.Hostname()
+	// Dead holder: pid 999999999 on this host, live (unexpired) lease.
+	if err := s.AcquireDeployLease("testflight", "dead-autorun", host+"/999999999", "/w", "main", "450", time.Hour); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	// A live, unexpired lease from a dead pid must NOT block a fresh acquire.
+	if err := s.AcquireDeployLease("testflight", "fresh", host+"/"+itoa(os.Getpid()), "/w2", "main", "451", time.Hour); err != nil {
+		t.Fatalf("acquire after dead-holder should reclaim the lease, got: %v", err)
+	}
+	// The new holder now owns it.
+	cur, err := s.CurrentDeployLease("testflight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur == nil || cur.Holder != host+"/"+itoa(os.Getpid()) {
+		t.Fatalf("expected the fresh holder to own the lease, got %+v", cur)
+	}
+}
+
+// TestDeployLeaseLiveHolderStillBlocks: a holder on THIS host whose pid is
+// ALIVE must still block — the crash-reclaim must not break the mutual
+// exclusion that is the store's whole reason to exist.
+func TestDeployLeaseLiveHolderStillBlocks(t *testing.T) {
+	s := testStore(t)
+	host, _ := os.Hostname()
+	// Our own (alive) process holds the lease under a different autorun id.
+	if err := s.AcquireDeployLease("testflight", "live-autorun", host+"/"+itoa(os.Getpid()), "/w", "main", "450", time.Hour); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	err := s.AcquireDeployLease("testflight", "other", host+"/"+itoa(os.Getpid()), "/w2", "main", "451", time.Hour)
+	if _, ok := err.(*LeaseHeld); !ok {
+		t.Fatalf("a live holder must still block (want *LeaseHeld), got %v", err)
 	}
 }
 

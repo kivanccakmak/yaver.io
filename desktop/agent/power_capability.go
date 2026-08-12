@@ -88,6 +88,14 @@ type PowerFacts struct {
 	// ServiceManager is who supervises the agent: "launchd", "systemd-user",
 	// "systemd-system", or "" when the agent was hand-started.
 	ServiceManager string `json:"serviceManager,omitempty"`
+	// LaunchdDaemon is true when the macOS boot-before-login LaunchDaemon
+	// (/Library/LaunchDaemons/io.yaver.agent.plist) is installed, as opposed to
+	// the login-gated LaunchAgent (~/Library/LaunchAgents/...). The kickstart
+	// target differs: system/io.yaver.agent for the daemon (needs root),
+	// gui/<uid>/io.yaver.agent for the agent. A gui kickstart against a box
+	// sitting at the login screen targets a domain that does not exist — the
+	// exact shape that left this Mac dark for an hour after a reboot (2026-08-12).
+	LaunchdDaemon bool `json:"launchdDaemon,omitempty"`
 	// AgentUser is the login name the agent runs as — named in every remedy so
 	// the sudoers rule the user has to write is copy-pasteable.
 	AgentUser string `json:"agentUser,omitempty"`
@@ -277,8 +285,30 @@ func agentRestartAction(f PowerFacts) PowerAction {
 	switch f.ServiceManager {
 	case "launchd":
 		a.Available = true
-		a.Command = fmt.Sprintf("launchctl kickstart -k gui/%d/io.yaver.agent", f.UID)
-		a.Means = "Restarts the Yaver agent through launchd. The machine stays up; everything the agent was running dies and the agent comes straight back."
+		if f.LaunchdDaemon {
+			// The boot-before-login daemon lives in the SYSTEM domain and
+			// needs root to kickstart. `launchctl kickstart -k gui/<uid>/…`
+			// would target a domain that may not exist (login screen) — and
+			// for a daemon it is the wrong domain entirely. The 2026-08-12
+			// Mac incident: gui-only kickstart left the box dark for an hour.
+			cmd := "launchctl kickstart -k system/io.yaver.agent"
+			if !f.IsRoot {
+				if !f.PasswordlessSudo {
+					a.Available = false
+					a.Means = "Cannot restart the agent: the boot-before-login LaunchDaemon lives in the system domain and this agent has no passwordless sudo to kickstart it."
+					a.Reason = "system-domain kickstart requires root or passwordless sudo, and neither is available."
+					a.Remedy = "Run `sudo launchctl kickstart -k system/io.yaver.agent` once on the box (or grant passwordless sudo), then this becomes available."
+					a.ETASeconds = 0
+					break
+				}
+				cmd = "sudo -n launchctl kickstart -k system/io.yaver.agent"
+			}
+			a.Command = cmd
+			a.Means = "Restarts the Yaver agent through launchd (boot-before-login daemon). The machine stays up; everything the agent was running dies and the agent comes straight back."
+		} else {
+			a.Command = fmt.Sprintf("launchctl kickstart -k gui/%d/io.yaver.agent", f.UID)
+			a.Means = "Restarts the Yaver agent through launchd. The machine stays up; everything the agent was running dies and the agent comes straight back."
+		}
 	case "systemd-user":
 		a.Available = true
 		a.Command = "systemctl --user restart yaver"
@@ -343,6 +373,7 @@ func powerFactsNow() PowerFacts {
 		}
 	}
 	f.ServiceManager = detectAgentServiceManager()
+	f.LaunchdDaemon = runtime.GOOS == "darwin" && isDarwinLaunchDaemonInstalled()
 	return f
 }
 
@@ -415,13 +446,18 @@ func detectAgentServiceManagerUncached() string {
 	home, homeErr := os.UserHomeDir()
 
 	if runtime.GOOS == "darwin" {
+		// Daemon first: /Library/LaunchDaemons is the boot-before-login unit
+		// and takes precedence over the login-gated LaunchAgent. When both
+		// exist (a daemon install that never removed the stale agent plist —
+		// the 2026-08-12 Mac incident), the daemon is the one that actually
+		// runs at the login screen, so it is the supervisor to restart.
+		if _, err := os.Stat("/Library/LaunchDaemons/io.yaver.agent.plist"); err == nil {
+			return "launchd"
+		}
 		if homeErr == nil {
 			if _, err := os.Stat(home + "/Library/LaunchAgents/io.yaver.agent.plist"); err == nil {
 				return "launchd"
 			}
-		}
-		if _, err := os.Stat("/Library/LaunchDaemons/io.yaver.agent.plist"); err == nil {
-			return "launchd"
 		}
 		return ""
 	}
