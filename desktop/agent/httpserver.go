@@ -1219,6 +1219,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/git/status", s.auth(s.handleGitStatus))
 	mux.HandleFunc("/git/log", s.auth(s.handleGitLog))
 	mux.HandleFunc("/git/diff", s.auth(s.handleGitDiff))
+	mux.HandleFunc("/git/tree", s.auth(s.handleGitTree))
+	mux.HandleFunc("/git/show", s.auth(s.handleGitShow))
 	mux.HandleFunc("/git/branches", s.auth(s.handleGitBranches))
 	mux.HandleFunc("/git/stash", s.auth(s.handleGitStash))
 	mux.HandleFunc("/git/stash-pop", s.auth(s.handleGitStashPop))

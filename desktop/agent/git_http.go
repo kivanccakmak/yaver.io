@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	osexec "os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -493,4 +495,235 @@ func (s *HTTPServer) handleGitRevert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonReply(w, http.StatusOK, map[string]string{"ok": "true", "message": out})
+}
+
+// GitTreeEntry is one file/dir entry returned by GET /git/tree.
+type GitTreeEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	IsDir bool   `json:"isDir"`
+	Size  int64  `json:"size"`
+}
+
+// handleGitTree handles GET /git/tree — list the files under a path
+// inside a repo. Reads from the working tree (git ls-files) when a
+// `ref` is not supplied, or from a commit tree (`ref`) when it is.
+// Used by the mobile git viewer's code browser.
+func (s *HTTPServer) handleGitTree(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET"})
+		return
+	}
+	workDir := getGitWorkDir(r, s.taskMgr)
+	if workDir == "" {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
+		return
+	}
+	sub := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
+	ref := r.URL.Query().Get("ref")
+
+	var entries []GitTreeEntry
+
+	if ref != "" {
+		// Tree view at a commit — git ls-tree <ref>:<sub>
+		args := []string{"ls-tree", "--name-only", ref, "--", sub}
+		if sub == "" {
+			args = []string{"ls-tree", "--name-only", ref}
+		}
+		out, err := runGit(workDir, args...)
+		if err != nil {
+			jsonReply(w, http.StatusInternalServerError, map[string]string{"error": "git ls-tree failed: " + out})
+			return
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if line == "" {
+				continue
+			}
+			name := strings.TrimPrefix(line, sub+"/")
+			// git ls-tree only lists files (blobs) — a path we asked
+			// about may itself be a tree that needs recursing. We can't
+			// cheaply distinguish dirs from ls-tree --name-only, so fetch
+			// types once.
+			entries = append(entries, GitTreeEntry{Name: name, Path: joinTreePath(sub, name), IsDir: false})
+		}
+		// Re-classify dirs: entries that are also a prefix of another
+		// entry's path are directories.
+		dirSet := map[string]bool{}
+		for _, e := range entries {
+			for _, other := range entries {
+				if other.Path != e.Path && strings.HasPrefix(other.Path, e.Path+"/") {
+					dirSet[e.Path] = true
+				}
+			}
+		}
+		clean := entries[:0]
+		for _, e := range entries {
+			if dirSet[e.Path] {
+				e.IsDir = true
+				e.Size = 0
+			}
+			clean = append(clean, e)
+		}
+		entries = clean
+	} else {
+		// Working-tree view — list the directory on disk, keeping only
+		// files that git tracks (plus directories that contain them).
+		abs := filepath.Join(workDir, filepath.Clean("/"+sub))
+		infos, err := os.ReadDir(abs)
+		if err != nil {
+			jsonReply(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		type candidate struct {
+			name string
+			path string
+			dir  bool
+			size int64
+		}
+		var cands []candidate
+		for _, fi := range infos {
+			name := fi.Name()
+			// Hidden entries are usually build caches / secrets; skip
+			// them so the browser doesn't surface node_modules noise.
+			if strings.HasPrefix(name, ".") && name != ".gitignore" && name != ".env.example" {
+				continue
+			}
+			p := filepath.Join(sub, name)
+			c := candidate{name: name, path: p, dir: fi.IsDir()}
+			if !fi.IsDir() {
+				if info, err := fi.Info(); err == nil {
+					c.size = info.Size()
+				}
+			}
+			cands = append(cands, c)
+		}
+		// Tracked file set for filtering.
+		tracked := map[string]bool{}
+		if out, err := runGit(workDir, "ls-files"); err == nil {
+			for _, line := range strings.Split(out, "\n") {
+				tracked[line] = true
+			}
+		}
+		// A dir stays visible if it has any tracked file beneath it.
+		for _, c := range cands {
+			if c.dir {
+				hasTracked := false
+				for tp := range tracked {
+					if strings.HasPrefix(tp, c.path+"/") {
+						hasTracked = true
+						break
+					}
+				}
+				if !hasTracked {
+					continue
+				}
+			} else if !tracked[c.path] && sub == "" {
+				// At the root, only show untracked files if they are
+				// clearly not build output (tiny, source-looking).
+				continue
+			}
+			entries = append(entries, GitTreeEntry{Name: c.name, Path: filepath.ToSlash(c.path), IsDir: c.dir, Size: c.size})
+		}
+	}
+
+	// Sort dirs first, then names.
+	sortTreeEntries(entries)
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":      true,
+		"entries": entries,
+	})
+}
+
+// handleGitShow handles GET /git/show — read a file's contents.
+// Reads the working-tree copy by default, or `git show <ref>:<path>`
+// when a ref is supplied. Binary files are reported without content.
+func (s *HTTPServer) handleGitShow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET"})
+		return
+	}
+	workDir := getGitWorkDir(r, s.taskMgr)
+	if workDir == "" {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
+		return
+	}
+	sub := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
+	if sub == "" {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing path"})
+		return
+	}
+	ref := r.URL.Query().Get("ref")
+
+	const maxRead = 2 * 1024 * 1024
+
+	if ref != "" {
+		// Content at a commit.
+		out, err := runGit(workDir, "show", ref+":"+sub)
+		if err != nil {
+			jsonReply(w, http.StatusNotFound, map[string]string{"error": "not found at " + ref + ": " + out})
+			return
+		}
+		truncated := false
+		body := out
+		if int64(len(body)) > maxRead {
+			body = body[:maxRead]
+			truncated = true
+		}
+		if looksBinary([]byte(body)) {
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "binary": true, "size": len(out)})
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "content": body, "truncated": truncated, "size": len(out)})
+		return
+	}
+
+	abs := filepath.Join(workDir, filepath.Clean("/"+sub))
+	info, err := os.Stat(abs)
+	if err != nil || info.IsDir() {
+		jsonReply(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	truncated := false
+	readSize := info.Size()
+	if readSize > maxRead {
+		readSize = maxRead
+		truncated = true
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		jsonReply(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	defer f.Close()
+	buf := make([]byte, readSize)
+	n, _ := f.Read(buf)
+	buf = buf[:n]
+	if looksBinary(buf) {
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "binary": true, "size": info.Size()})
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "content": string(buf), "truncated": truncated, "size": info.Size()})
+}
+
+func joinTreePath(parent, name string) string {
+	if parent == "" {
+		return name
+	}
+	return parent + "/" + name
+}
+
+func sortTreeEntries(entries []GitTreeEntry) {
+	// Bubble is fine — directory listings are small (< a few hundred).
+	for i := 1; i < len(entries); i++ {
+		for j := i; j > 0; j-- {
+			a, b := entries[j-1], entries[j]
+			if b.IsDir && !a.IsDir {
+				entries[j-1], entries[j] = entries[j], entries[j-1]
+				continue
+			}
+			if a.IsDir == b.IsDir && a.Name > b.Name {
+				entries[j-1], entries[j] = entries[j], entries[j-1]
+			}
+		}
+	}
 }
