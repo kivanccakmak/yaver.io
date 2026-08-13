@@ -144,3 +144,32 @@ swiftc -O -parse-as-library \
 that whole directory into the shipping app, and a second `main` there is a link
 error. Everything the app renders about a failure goes through `FailureSignals`,
 so a wording or classification change is caught here rather than on a TV.
+
+## Fast iteration loops (learned 2026-08-13 — don't wait for TestFlight)
+
+TestFlight's processing + manual install is an hour per iteration. Two faster
+loops live in `scripts/deploy-tvos.sh`:
+
+```bash
+scripts/deploy-tvos.sh --simulator        # ~1-2 min: build → install → launch
+                                          # on the booted Apple TV simulator
+                                          # (xcrun simctl). Same app, same agent
+                                          # connection — everything except Siri
+                                          # Remote dictation + hardware decode.
+
+scripts/deploy-tvos.sh --device [UDID]    # minutes: automatic DEV signing +
+                                          # devicectl install + launch on a
+                                          # network-paired Apple TV. No
+                                          # TestFlight processing wait.
+```
+
+`--simulator` needs only a booted Apple TV simulator (`xcrun simctl list
+devices available`). `--device` needs the Apple TV paired with Xcode once —
+on the TV itself, confirm the pairing prompt / enable Xcode connectivity
+(Settings → AirPlay and Handoff), then `xcrun devicectl list devices` shows it.
+Prereq for both: `brew install xcodegen` (the `.xcodeproj` is regenerated from
+`project.yml` on every run — a stale project silently drops new Swift files).
+
+This is the loop every third-party app developer should reach for: iterate the
+SwiftUI in minutes on the simulator, verify hardware-only bits on the real TV,
+and use TestFlight only for the final distribution build.

@@ -18,6 +18,14 @@ struct TaskComposerView: View {
     @EnvironmentObject var store: YaverStore
     @Environment(\.dismiss) private var dismiss
 
+    /// Optional project to preselect (e.g. "Start a vibe" from a project's
+    /// dead-end preview screen). Matched by name against /projects.
+    private let initialProjectName: String?
+
+    init(initialProjectName: String? = nil) {
+        self.initialProjectName = initialProjectName
+    }
+
     @State private var prompt = ""
     @State private var creating = false
     @State private var createdTask: TaskSummary?
@@ -93,6 +101,10 @@ struct TaskComposerView: View {
         .frame(maxWidth: 900)
         .task { await loadPickerState() }
         .onAppear { promptFocused = true }
+        // tvOS 17 default-focus: the prompt is the first thing focus lands on,
+        // so the Siri Remote mic button dictates immediately (the only STT a
+        // TV has) — YouTube-style, no navigation first (2026-08-13).
+        .defaultFocus($promptFocused, true)
     }
 
     private var header: some View {
@@ -248,6 +260,14 @@ struct TaskComposerView: View {
             // Remembered project may name a path the /projects list matches.
             if pickedProjectPath == nil, let prefs = store.lastProjectByDevice[boxId] {
                 pickedProjectPath = availableProjects.first(where: { $0.name == prefs.projectName })?.path
+            }
+            // Explicit "start a vibe in THIS project" wins over the remembered
+            // one (2026-08-13) — comes from a project's preview dead-end.
+            if pickedProjectPath == nil, let name = initialProjectName {
+                pickedProjectPath = availableProjects.first(where: { $0.name == name })?.path
+                if let path = pickedProjectPath, let proj = availableProjects.first(where: { $0.path == path }) {
+                    store.rememberProject(proj, for: boxId)
+                }
             }
         }
         if let servers = try? await client.listMCPServers() {

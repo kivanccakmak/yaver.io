@@ -474,6 +474,12 @@ func appendDeclaredSpecialRuntimeTargets(
 ) []RemoteRuntimeTarget {
 	allSurfaces := strings.EqualFold(strings.TrimSpace(os.Getenv("YAVER_REMOTE_RUNTIME_ALL_SURFACES")), "1") ||
 		strings.EqualFold(strings.TrimSpace(os.Getenv("YAVER_REMOTE_RUNTIME_ALL_SURFACES")), "true")
+	// Manifest-derived Android surface markers (leanback/XR/Automotive in
+	// AndroidManifest.xml) gate the emulator lanes the same way the directory
+	// path markers do — a repo is not "an Android TV app" because a folder is
+	// named android-tv any more than because it isn't. One scan for all three
+	// gates, not three scans.
+	androidMarkers := androidManifestMarkers(workDir)
 	if surfaces[SurfaceWatchOS] {
 		targets = append(targets, probeWatchOSSimulatorTarget(families, familiesKnown))
 	}
@@ -483,16 +489,16 @@ func appendDeclaredSpecialRuntimeTargets(
 	if surfaces[SurfaceTVOS] {
 		targets = append(targets, probeTVOSSimulatorTarget(families, familiesKnown))
 	}
-	if allSurfaces || projectHasAnyPathMarker(workDir, "android-tv", "androidtv", "tv/android", "tv/android-tv") {
+	if allSurfaces || projectHasAnyPathMarker(workDir, "android-tv", "androidtv", "tv/android", "tv/android-tv") || androidMarkers["tv"] {
 		targets = append(targets, probeAndroidTVTarget())
 	}
 	if surfaces[SurfaceVisionOS] {
 		targets = append(targets, probeVisionOSSimulatorTarget(families, familiesKnown))
 	}
-	if allSurfaces || projectHasAnyPathMarker(workDir, "android-xr", "xr/android", "vision/android") {
+	if allSurfaces || projectHasAnyPathMarker(workDir, "android-xr", "xr/android", "vision/android") || androidMarkers["xr"] {
 		targets = append(targets, probeAndroidXRTarget())
 	}
-	if allSurfaces || projectHasAnyPathMarker(workDir, "android-auto", "automotive", "car/android", "car/android-auto") {
+	if allSurfaces || projectHasAnyPathMarker(workDir, "android-auto", "automotive", "car/android", "car/android-auto") || androidMarkers["auto"] {
 		targets = append(targets, probeAndroidAutoTarget())
 	}
 	if allSurfaces {
@@ -637,6 +643,16 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 			caps.Targets = []RemoteRuntimeTarget{
 				probeBrowserWindowTarget(),
 			}
+			// Manifest-declared sibling surfaces (TV/watch/vision/wear
+			// apps in yaver.workspace.yaml) come AFTER the browser tab:
+			// a web-first monorepo is still a monorepo, and probing it
+			// with framework=browser used to return ONLY browser-window
+			// while the host had tvOS/watchOS/visionOS runtimes
+			// installed (2026-08-13: "targets: 1 primary, 0
+			// advanced/unavailable" in the Vibing console with a Mac
+			// render box). Each entry is surface/path-marker gated, so
+			// a pure web project gains nothing extra.
+			caps.Targets = appendDeclaredSpecialRuntimeTargets(caps.Targets, workDir, projectSurfaces, appleFams, appleFamsKnown)
 		case "desktop":
 			// The host's own screen, not a project runtime — this is the
 			// "drive my actual PC from a phone/headset" path. Unlike every

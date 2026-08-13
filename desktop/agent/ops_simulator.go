@@ -42,7 +42,8 @@ type SimDevice struct {
 	Name     string `json:"name"`
 	State    string `json:"state"` // Booted | Shutdown | ...
 	Runtime  string `json:"runtime,omitempty"`
-	Platform string `json:"platform"` // ios | android
+	Platform string `json:"platform"` // ios | tvos | watchos | visionos | android
+	Booted   bool   `json:"booted,omitempty"`
 }
 
 func init() {
@@ -53,7 +54,7 @@ func init() {
 			"type": "object",
 			"properties": map[string]interface{}{
 				"action":     map[string]interface{}{"type": "string", "enum": []string{"list", "boot", "shutdown", "create", "delete"}, "default": "list"},
-				"platform":   map[string]interface{}{"type": "string", "enum": []string{"ios", "android"}, "default": "ios"},
+				"platform":   map[string]interface{}{"type": "string", "enum": []string{"ios", "tvos", "watchos", "visionos", "android"}, "default": "ios"},
 				"udid":       map[string]interface{}{"type": "string"},
 				"deviceType": map[string]interface{}{"type": "string"},
 				"runtime":    map[string]interface{}{"type": "string"},
@@ -82,8 +83,8 @@ func opsSimulatorHandler(c OpsContext, payload json.RawMessage) OpsResult {
 	if platform == "" {
 		platform = "ios"
 	}
-	if platform != "ios" && platform != "android" {
-		return OpsResult{OK: false, Code: "bad_payload", Error: fmt.Sprintf("unknown platform %q (use ios or android)", platform)}
+	if platform != "ios" && platform != "android" && platform != "tvos" && platform != "watchos" && platform != "visionos" {
+		return OpsResult{OK: false, Code: "bad_payload", Error: fmt.Sprintf("unknown platform %q (use ios/tvos/watchos/visionos or android)", platform)}
 	}
 
 	// A bounded deadline so a wedged simctl/adb never hangs the ops call.
@@ -102,7 +103,30 @@ func opsSimulatorHandler(c OpsContext, payload json.RawMessage) OpsResult {
 		if err != nil {
 			return fail(err)
 		}
-		return OpsResult{OK: true, Initial: map[string]interface{}{"platform": platform, "devices": devices, "count": len(devices)}}
+		// Per-OS capability summary (2026-08-13): surfaces (web UI, TV, the
+		// WebRTC streaming path) ask "which simulator exists and what's
+		// booted" — answer it here instead of forcing them to parse the
+		// device list. `platform` still filters by the requested family;
+		// `summary` covers every family present on the box.
+		summary := map[string]map[string]int{}
+		var booted []string
+		for _, d := range devices {
+			if summary[d.Platform] == nil {
+				summary[d.Platform] = map[string]int{"count": 0, "booted": 0}
+			}
+			summary[d.Platform]["count"]++
+			if d.Booted {
+				summary[d.Platform]["booted"]++
+				booted = append(booted, d.Name)
+			}
+		}
+		return OpsResult{OK: true, Initial: map[string]interface{}{
+			"platform": platform,
+			"devices":  devices,
+			"count":    len(devices),
+			"summary":  summary,
+			"booted":   booted,
+		}}
 	case "boot":
 		if strings.TrimSpace(p.UDID) == "" {
 			return OpsResult{OK: false, Code: "bad_payload", Error: "boot requires a udid"}
@@ -140,25 +164,66 @@ func opsSimulatorHandler(c OpsContext, payload json.RawMessage) OpsResult {
 // ---- iOS (simctl) + Android (adb/avdmanager) implementations ----
 
 func simulatorList(ctx context.Context, platform string) ([]SimDevice, error) {
-	if platform == "ios" {
-		if runtime.GOOS != "darwin" {
-			return nil, fmt.Errorf("iOS simulators need macOS")
-		}
-		out, err := exec.CommandContext(ctx, "xcrun", "simctl", "list", "devices", "available", "--json").Output()
+	if platform == "android" {
+		// Android: adb-attached emulators/devices.
+		out, err := exec.CommandContext(ctx, "adb", "devices").Output()
 		if err != nil {
-			return nil, fmt.Errorf("simctl list: %w", err)
+			return nil, fmt.Errorf("adb devices: %w", err)
 		}
-		return parseSimctlDevices(out), nil
+		return parseAdbDevices(string(out)), nil
 	}
-	// Android: adb-attached emulators/devices.
-	out, err := exec.CommandContext(ctx, "adb", "devices").Output()
+	// Every Apple family (ios/tvos/watchos/visionos) comes from simctl; the
+	// list is tagged per-device with its real family (parseSimctlDevices →
+	// simOSFamily), so a "tvos" query is answered by filtering the same parse.
+	if runtime.GOOS != "darwin" {
+		return nil, fmt.Errorf("Apple simulators need macOS")
+	}
+	out, err := exec.CommandContext(ctx, "xcrun", "simctl", "list", "devices", "available", "--json").Output()
 	if err != nil {
-		return nil, fmt.Errorf("adb devices: %w", err)
+		return nil, fmt.Errorf("simctl list: %w", err)
 	}
-	return parseAdbDevices(string(out)), nil
+	devices := parseSimctlDevices(out)
+	if platform == "ios" {
+		return devices, nil
+	}
+	filtered := devices[:0]
+	for _, d := range devices {
+		if d.Platform == platform {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered, nil
 }
 
-// parseSimctlDevices reads `simctl list devices --json` into a flat list.
+// simOSFamily derives the device family from the simctl runtime identifier —
+// "com.apple.CoreSimulator.SimRuntime.tvOS-26-2" → "tvos". This was the bug
+// (2026-08-13): parseSimctlDevices stamped EVERY device "ios", so an Apple TV
+// simulator answered "is there a tvOS sim?" as "ios" — no surface (web UI,
+// TV, WebRTC streaming) could tell an iPhone sim from an Apple TV sim.
+func simOSFamily(runtimeName string) string {
+	short := runtimeName
+	if i := strings.LastIndex(runtimeName, "SimRuntime."); i >= 0 {
+		short = runtimeName[i+len("SimRuntime."):]
+	}
+	lower := strings.ToLower(short)
+	switch {
+	case strings.Contains(lower, "tvos"):
+		return "tvos"
+	case strings.Contains(lower, "watchos"):
+		return "watchos"
+	case strings.Contains(lower, "visionos"):
+		return "visionos"
+	case strings.Contains(lower, "ios"):
+		return "ios"
+	default:
+		return "ios" // unknown runtime name — iOS is the safest default
+	}
+}
+
+// parseSimctlDevices reads `simctl list devices --json` into a flat list,
+// tagging each device with its real OS family (ios/tvos/watchos/visionos) and
+// booted state, so callers can answer "which simulator exists, what's booted"
+// without re-parsing Apple's JSON.
 func parseSimctlDevices(jsonOut []byte) []SimDevice {
 	var doc struct {
 		Devices map[string][]struct {
@@ -172,14 +237,19 @@ func parseSimctlDevices(jsonOut []byte) []SimDevice {
 	}
 	devices := []SimDevice{}
 	for runtimeName, list := range doc.Devices {
-		// runtimeName looks like "com.apple.CoreSimulator.SimRuntime.iOS-18-0".
 		short := runtimeName
 		if i := strings.LastIndex(runtimeName, "SimRuntime."); i >= 0 {
 			short = runtimeName[i+len("SimRuntime."):]
 		}
+		family := simOSFamily(runtimeName)
 		for _, d := range list {
 			devices = append(devices, SimDevice{
-				UDID: d.UDID, Name: d.Name, State: d.State, Runtime: short, Platform: "ios",
+				UDID:     d.UDID,
+				Name:     d.Name,
+				State:    d.State,
+				Runtime:  short,
+				Platform: family,
+				Booted:   strings.Contains(strings.ToLower(d.State), "boot"),
 			})
 		}
 	}

@@ -51,12 +51,49 @@ struct TasksView: View {
                             Button("Try again") { Task { await load() } }
                         }
                     }
-                } else if filtered.isEmpty {
-                    center { Text("No \(filter.rawValue.lowercased()) tasks.").foregroundStyle(.secondary) }
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            ForEach(filtered) { t in row(t) }
+                            // The big, dashed, FIRST card (2026-08-13): "New
+                            // vibe" is the action the couch reaches for — a
+                            // styled card (like the active task cards, but
+                            // dashed + wand) that opens the blank composer
+                            // with the prompt focused so the Siri Remote mic
+                            // dictates immediately (the one STT path a TV has).
+                            Button {
+                                showComposer = true
+                            } label: {
+                                HStack(spacing: 18) {
+                                    Image(systemName: "wand.and.stars")
+                                        .font(.system(size: 30, weight: .semibold))
+                                        .foregroundStyle(.blue)
+                                        .frame(width: 52, height: 52)
+                                        .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("New vibe").font(.system(size: 26, weight: .bold))
+                                        Text("Press the mic button on the Siri Remote to dictate — the composer opens mic-ready.")
+                                            .font(.system(size: 15)).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.system(size: 30)).foregroundStyle(.blue)
+                                }
+                                .padding(.horizontal, 24).padding(.vertical, 18)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                                        .foregroundStyle(Color.blue.opacity(0.5))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("New vibe — dictate with the Siri Remote mic")
+
+                            if filtered.isEmpty {
+                                Text("No \(filter.rawValue.lowercased()) tasks.")
+                                    .foregroundStyle(.secondary).padding(.top, 32)
+                            } else {
+                                ForEach(filtered) { t in row(t) }
+                            }
                         }
                         .padding(48)
                     }

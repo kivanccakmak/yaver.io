@@ -181,6 +181,61 @@ func TestCapabilitiesEnumeratesAllAppleSurfacesAndBadgesSurface(t *testing.T) {
 	}
 }
 
+// TestBrowserFrameworkCapabilitiesIncludeDeclaredSiblingSurfaces is the
+// regression guard for the 2026-08-13 fix: a web-first monorepo (yaver.io
+// resolves to framework="browser") used to get ONLY browser-window from
+// /remote-runtime/capabilities, so Vibing on a Mac render box never offered
+// the tvOS/watchOS/visionOS simulator lanes even though the runtimes were
+// installed. The manifest-declared sibling apps must be appended after the
+// browser tab.
+func TestBrowserFrameworkCapabilitiesIncludeDeclaredSiblingSurfaces(t *testing.T) {
+	cleanup := setAppleRuntimeFamiliesForTest(map[string]bool{
+		"iOS": true, "tvOS": true, "watchOS": true, "visionOS": true,
+	})
+	defer cleanup()
+	cleanupDevices := setAppleSimulatorDevicesForTest(map[string]bool{
+		"iPhone": true, "iPad": true, "Apple TV": true, "Apple Watch": true, "Apple Vision": true,
+	})
+	defer cleanupDevices()
+
+	root, mobile := appleSiblingSurfaceProject(t)
+	// watch/ are the other two standalone Apple surfaces in the yaver.io
+	// layout; add them so the sibling scan sees the full set.
+	for _, dir := range []string{filepath.Join(root, "watch"), filepath.Join(root, "visionos")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "watch", "project.yml"), []byte("targets:\n  YaverWatch:\n    platform: watchOS\n"), 0o600); err != nil {
+		t.Fatalf("write watch project.yml: %v", err)
+	}
+
+	// Probe with the framework the webui actually sends for a web-first
+	// monorepo — "browser", not "swift".
+	caps := remoteRuntimeCapabilitiesForProject(mobile, "browser")
+	got := map[string]RemoteRuntimeTarget{}
+	for _, tg := range caps.Targets {
+		got[tg.ID] = tg
+	}
+	// The browser tab itself must still lead.
+	if _, ok := got["browser-window"]; !ok {
+		t.Fatalf("browser framework caps must include browser-window; got %+v", caps.Targets)
+	}
+	for id, wantSurface := range map[string]string{
+		"tvos-simulator":     "tv",
+		"watchos-simulator":  "watch",
+		"visionos-simulator": "vision",
+	} {
+		tg, ok := got[id]
+		if !ok {
+			t.Fatalf("browser-framework caps missing %s from sibling Apple surface layout; got %+v", id, caps.Targets)
+		}
+		if tg.Surface != wantSurface {
+			t.Fatalf("%s Surface=%q, want %q", id, tg.Surface, wantSurface)
+		}
+	}
+}
+
 func TestCapabilitiesFromMobileDirIncludeSiblingAppleSurfaceProjects(t *testing.T) {
 	// Yaver's dogfood app is scoped to mobile/, while the TV and Vision app
 	// packages live beside it as tvos/ and visionos/. A capability probe from

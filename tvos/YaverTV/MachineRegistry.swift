@@ -101,6 +101,43 @@ enum MachineRegistry {
     struct DeviceList: Decodable { let devices: [RegisteredDevice] }
     struct GuestList: Decodable { let guests: [HostGuest] }
     struct UserSettingsEnvelope: Decodable { let settings: UserSettings? }
+
+    // ── Relay resolution (2026-08-13) ─────────────────────────────────────
+    // The TV used settings.relayUrl as its ONLY relay source. For most
+    // accounts that field is empty — it is a user override, not the default —
+    // so a TV could only reach LAN boxes, and a remote box (Hetzner etc.)
+    // that every other surface reaches over the free relay was unreachable.
+    // The authoritative relay list is GET /config (the SAME source the web
+    // dashboard's refreshRelayTopology reads); settings only ever supplies
+    // the per-user relay password (and an optional URL override).
+    struct RelayServer: Decodable { let url: String? }
+    struct RelayConfigEnvelope: Decodable { let relayServers: [RelayServer]? }
+
+    /// Relay server URLs from GET /config (relayServers[].url). Empty on any
+    /// failure — the caller then has no relay leg and stays LAN-only, exactly
+    /// as before this source existed.
+    static func fetchRelayServers(token: String) async -> [String] {
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("config"))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard
+            let (data, resp) = try? await URLSession.shared.data(for: req),
+            let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let env = try? JSONDecoder().decode(RelayConfigEnvelope.self, from: data)
+        else { return [] }
+        return (env.relayServers ?? []).compactMap { $0.url?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    /// The relay leg a BoxTarget should use: settings.relayUrl when the user
+    /// overrode it, else the first /config relay server. The password ONLY
+    /// ever comes from /settings.
+    static func resolvedRelay(token: String, settings: UserSettings?) async -> (url: String?, password: String?) {
+        if let url = settings?.relayUrl, !url.isEmpty {
+            return (url, settings?.relayPassword)
+        }
+        let servers = await fetchRelayServers(token: token)
+        return (servers.first, settings?.relayPassword)
+    }
+
     struct UserSettings: Decodable {
         let relayUrl: String?
         let relayPassword: String?

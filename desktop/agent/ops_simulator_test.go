@@ -38,10 +38,20 @@ func TestParseSimctlDevices(t *testing.T) {
 	if byUDID["CCCC-3333"].Runtime != "tvOS-18-0" {
 		t.Errorf("tvOS runtime short name wrong: %q", byUDID["CCCC-3333"].Runtime)
 	}
-	for _, d := range devices {
-		if d.Platform != "ios" {
-			t.Errorf("simctl devices must be platform ios, got %q", d.Platform)
-		}
+	// Family tagging (2026-08-13): the old code stamped EVERYTHING "ios", so
+	// no surface could tell an iPhone sim from an Apple TV sim. This is the
+	// guard that used to pin the bug — it MUST now assert the fix.
+	if byUDID["AAAA-1111"].Platform != "ios" {
+		t.Errorf("iPhone platform = %q, want ios", byUDID["AAAA-1111"].Platform)
+	}
+	if byUDID["BBBB-2222"].Booted != true {
+		t.Errorf("iPad must be Booted=true, got %+v", byUDID["BBBB-2222"])
+	}
+	if byUDID["CCCC-3333"].Platform != "tvos" {
+		t.Errorf("Apple TV platform = %q, want tvos — the exact bug surfaces need to answer 'is there a tvOS sim?'", byUDID["CCCC-3333"].Platform)
+	}
+	if byUDID["CCCC-3333"].Booted != false {
+		t.Errorf("Apple TV must be Booted=false, got %+v", byUDID["CCCC-3333"])
 	}
 }
 
@@ -80,7 +90,12 @@ func TestSimulatorListIOSRealShellPath(t *testing.T) {
 		t.Skip("no simulators installed on this host")
 	}
 	for _, d := range devices {
-		if d.UDID == "" || d.Platform != "ios" {
+		// Family tagging fix (2026-08-13): a real Mac with Xcode returns
+		// tvOS/watchOS/visionOS sims alongside iOS — each tagged with its own
+		// family. This assertion used to demand everything be "ios", pinning
+		// the bug that hid the Apple TV simulator from every surface.
+		known := d.Platform == "ios" || d.Platform == "tvos" || d.Platform == "watchos" || d.Platform == "visionos"
+		if d.UDID == "" || !known {
 			t.Errorf("malformed device from real simctl: %+v", d)
 		}
 	}

@@ -293,11 +293,57 @@ function appSurfaceChips(app: WorkspaceAppView): string[] {
   const fw = String(app.framework || app.stack || "").trim().toLowerCase();
   const kind = String(app.kind || "").trim().toLowerCase();
   const out = new Set<string>();
+  // The agent's per-app surfaces (workspace_http.go) are the AUTHORITATIVE
+  // answer — they come from the workspace manifest + the app's own config
+  // files, so tvos/watchos/visionos/wear-os (swift/kotlin stacks a framework
+  // string cannot express) surface as TV/Watch/Vision/Watch. Map through the
+  // same PLATFORM_CHIP_LABELS the project row uses; "webrtc"/"simulator"
+  // transport words have no label and are skipped.
+  for (const surface of [...(app.surfaces ?? []), ...(app.testSurfaces ?? [])]) {
+    const label = PLATFORM_CHIP_LABELS[String(surface).toLowerCase()];
+    if (label) out.add(label);
+  }
   if (["nextjs", "next", "next.js", "vite", "react", "remix", "astro", "svelte", "nuxt", "vue"].includes(fw) || kind === "web") out.add("Web");
   if (["expo", "react-native"].includes(fw)) { out.add("Mobile"); out.add("Web"); }
   if (fw === "flutter") { out.add("Mobile"); if (kind === "web") out.add("Web"); }
   if (kind === "hybrid") { out.add("Mobile"); out.add("Web"); }
   return sortPlatformChips(out);
+}
+
+// runtimeTargetForAppSurface maps an app's detected surfaces to the remote
+// runtime simulator target that streams that surface over WebRTC. One app row
+// (tvos) → one Open button (Apple TV Simulator); the agent's target probe
+// still gates on host OS + installed runtimes, so the button is honest about
+// availability when it opens.
+function runtimeTargetForAppSurface(surfaces: string[]): string | null {
+  for (const raw of surfaces) {
+    switch (String(raw).toLowerCase()) {
+      case "tvos-simulator":
+      case "tv":
+      case "tvos":
+        return "tvos-simulator";
+      case "watchos-simulator":
+      case "watch":
+      case "watchos":
+        return "watchos-simulator";
+      case "visionos-simulator":
+      case "vision":
+      case "visionos":
+        return "visionos-simulator";
+      case "android-wear":
+      case "wear":
+      case "wearos":
+        return "android-wear";
+      case "ios-simulator":
+      case "mobile":
+      case "ios":
+        return "ios-simulator";
+      case "android-emulator":
+      case "android":
+        return "android-emulator";
+    }
+  }
+  return null;
 }
 
 function isFrontendApp(app: WorkspaceAppView): boolean {
@@ -557,7 +603,9 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     setMessage(null);
     setSession(null);
     try {
-      const next = await agentClient.getRemoteRuntimeCapabilities(directory, runtimeFrameworkForProject(project));
+      // refresh=1: an explicit "Load simulator targets" click probes the box
+      // fresh instead of replaying the agent's 2-minute caps cache.
+      const next = await agentClient.getRemoteRuntimeCapabilities(directory, runtimeFrameworkForProject(project), true);
       setCaps({ ...next, targets: [...(next.targets || [])] });
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not load render targets.");
@@ -571,6 +619,29 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     setMessage(null);
     try {
       const next = await agentClient.startRemoteRuntimeSession(directory, runtimeFrameworkForProject(project), target.id, "direct-webrtc");
+      setSession(next);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not open runtime target.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // One-click simulator lane from an app row: tvos → Apple TV Simulator over
+  // WebRTC, watchos → Watch, visionos → Vision, wear-os → Wear emulator.
+  // The target probe gates on host OS + installed runtimes, so this opens the
+  // session if the box can stream it and says why not when it can't.
+  async function openAppRuntimeTarget(app: WorkspaceAppView) {
+    setBusy(`app:${app.name}`);
+    setMessage(null);
+    const targetId = runtimeTargetForAppSurface([...(app.surfaces ?? []), ...(app.testSurfaces ?? [])]);
+    if (!targetId) {
+      setMessage(`${app.name} has no streamable simulator surface — use Load simulator targets to see every lane for this machine.`);
+      setBusy(null);
+      return;
+    }
+    try {
+      const next = await agentClient.startRemoteRuntimeSession(directory, runtimeFrameworkForProject(project), targetId, "direct-webrtc");
       setSession(next);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not open runtime target.");
@@ -698,6 +769,16 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
                                   className="rounded-md bg-[#1f2933] px-2.5 py-1 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-35 dark:bg-[#e6e8ec] dark:text-[#101318]"
                                 >
                                   Vibe
+                                </button>
+                              ) : null}
+                              {runtimeTargetForAppSurface([...(app.surfaces ?? []), ...(app.testSurfaces ?? [])]) ? (
+                                <button
+                                  onClick={() => void openAppRuntimeTarget(app)}
+                                  disabled={busy !== null}
+                                  title={`Stream ${app.name} in a simulator over WebRTC`}
+                                  className="rounded-md border border-[#d7dce3] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#475467] hover:bg-[#f8fafc] disabled:cursor-not-allowed disabled:opacity-35 dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#d7dce3]"
+                                >
+                                  {busy === `app:${app.name}` ? "Opening…" : "Open"}
                                 </button>
                               ) : null}
                             </div>

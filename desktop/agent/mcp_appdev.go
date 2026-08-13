@@ -136,13 +136,34 @@ func mcpXcodeTest(dir, scheme, destination string) interface{} {
 }
 
 func mcpSimulators() interface{} {
-	out, err := runCmd("xcrun", "simctl", "list", "devices", "--json")
+	out, err := runCmd("xcrun", "simctl", "list", "devices", "available", "--json")
 	if err != nil {
 		return map[string]interface{}{"error": err.Error()}
 	}
-	var result interface{}
-	json.Unmarshal([]byte(out), &result)
-	return result
+	// Normalized, family-tagged list (2026-08-13) — the raw simctl blob
+	// previously forced every consumer to re-parse Apple's shape AND couldn't
+	// distinguish an iPhone sim from an Apple TV sim (everything said "ios").
+	devices := parseSimctlDevices([]byte(out))
+	summary := map[string]map[string]int{}
+	var booted []string
+	for _, d := range devices {
+		if summary[d.Platform] == nil {
+			summary[d.Platform] = map[string]int{"count": 0, "booted": 0}
+		}
+		summary[d.Platform]["count"]++
+		if d.Booted {
+			summary[d.Platform]["booted"]++
+			booted = append(booted, d.Name)
+		}
+	}
+	return map[string]interface{}{
+		"ok":          true,
+		"devices":     devices,
+		"count":       len(devices),
+		"summary":     summary,
+		"booted":      booted,
+		"tvosSimAvailable": summary["tvos"] != nil && summary["tvos"]["count"] > 0,
+	}
 }
 
 func mcpSimulatorBoot(deviceName string) interface{} {

@@ -298,10 +298,14 @@ final class YaverStore: ObservableObject {
         guard box.relayBaseUrl?.isEmpty != false || box.relayPassword?.isEmpty != false else { return }
         guard let settings = try? await MachineRegistry.fetchSettings(token: token) else { return }
         adoptSettings(settings)
-        guard settings.relayUrl?.isEmpty == false || settings.relayPassword?.isEmpty == false else { return }
+        // settings.relayUrl is only a user override — merge the authoritative
+        // GET /config relay list (2026-08-13) so a remote box gets a relay leg
+        // even for accounts that never set a relayUrl override.
+        let resolved = await MachineRegistry.resolvedRelay(token: token, settings: settings)
+        guard let url = resolved.url, !url.isEmpty else { return }
         let updated = BoxTarget(id: box.id, name: box.name, host: box.host, port: box.port,
                                 managed: box.managed, machineId: box.machineId,
-                                relayBaseUrl: settings.relayUrl, relayPassword: settings.relayPassword)
+                                relayBaseUrl: url, relayPassword: resolved.password)
         addBox(updated)
         select(updated)
     }

@@ -51,6 +51,9 @@ struct ProjectsView: View {
     /// already the identity this route is expressed in.
     @State private var routedProjectName: String?
     @State private var didRoute = false
+    /// "Start a vibe" from a project's preview dead-end — presents the
+    /// composer with that project preselected (2026-08-13).
+    @State private var composerProjectName: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -158,17 +161,51 @@ struct ProjectsView: View {
         case .web:
             WebPreviewStreamView(project: p, form: form)
         case .flutter:
-            unsupported("Flutter previews aren't streamable to the TV yet — run it on a device or the web.")
+            unsupported("Flutter previews aren't streamable to the TV yet — run it on a device or the web.",
+                        project: p)
         case .unknown:
-            unsupported("No preview known for \(p.frameworkLabel). Open it in Session to run it.")
+            // Dead-end audit fix (2026-08-13): the old text said "Open it in
+            // Session to run it" with NO button — a route with no tap. A
+            // monorepo/unknown-framework project can't stream a preview, but
+            // it can absolutely run: drive its session or start a vibe in it.
+            unsupported("No preview known for \(p.frameworkLabel). Run it instead:",
+                        project: p)
         }
     }
 
-    private func unsupported(_ msg: String) -> some View {
-        VStack(spacing: 16) {
+    private func unsupported(_ msg: String, project: ProjectSummary? = nil) -> some View {
+        VStack(spacing: 18) {
             Image(systemName: "questionmark.square.dashed").font(.system(size: 56)).foregroundStyle(.secondary)
             Text(msg).multilineTextAlignment(.center).frame(maxWidth: 640).foregroundStyle(.secondary)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black)
+            if let project {
+                HStack(spacing: 18) {
+                    NavigationLink(destination: SessionView(preselect: nil)) {
+                        Label("Open in Session", systemImage: "terminal.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button {
+                        composerProjectName = project.name
+                    } label: {
+                        Label("Start a vibe", systemImage: "wand.and.stars")
+                            .font(.system(size: 18, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .sheet(isPresented: Binding(
+            get: { composerProjectName != nil },
+            set: { if !$0 { composerProjectName = nil } }
+        )) {
+            if let name = composerProjectName {
+                TaskComposerView(initialProjectName: name)
+                    .environmentObject(store)
+            }
+        }
     }
 
     private func center<C: View>(@ViewBuilder _ content: () -> C) -> some View {

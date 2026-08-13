@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TVOS_DIR="$ROOT/tvos"
 UPLOAD=0
+DEVICE_MODE=0
+SIM_MODE=0
 CONFIGURATION="${CONFIGURATION:-Release}"
 SCHEME="${SCHEME:-YaverTV}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-/tmp/YaverTV.xcarchive}"
@@ -14,11 +16,19 @@ BUILD_NUMBER="${TVOS_BUILD_NUMBER:-}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/deploy-tvos.sh [--upload]
+Usage: scripts/deploy-tvos.sh [--upload] [--device [UDID]]
 
-Build the standalone Yaver tvOS app. With --upload, archive and upload to App
-Store Connect using the same APP_STORE_KEY_* / APPLE_TEAM_ID environment as the
-iOS TestFlight script.
+Build the standalone Yaver tvOS app.
+  --upload            archive + upload to App Store Connect (TestFlight).
+  --device [UDID]     build with automatic DEV signing + install straight to a
+                      network-paired Apple TV via devicectl (no TestFlight).
+                      UDID optional: uses the first paired Apple TV when omitted.
+                      This is the fast iterate loop — minutes, not an hour.
+  --simulator         build for the booted Apple TV simulator + install + launch
+                      (xcrun simctl). THE hot-reload-grade loop: same app, same
+                      agent connection, ~1-2 min per iteration, no TestFlight,
+                      no device pairing. Hardware-only bits (Siri Remote
+                      dictation) still need a real TV.
 
 Environment:
   TVOS_MARKETING_VERSION  Override MARKETING_VERSION for the archive.
@@ -35,10 +45,11 @@ EOF
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --upload) UPLOAD=1 ;;
+    --device) DEVICE_MODE=1; DEVICE_UDID=""; shift; [ $# -gt 0 ] && case "$1" in --*) ;; *) DEVICE_UDID="$1"; shift ;; esac ;;
+    --simulator) SIM_MODE=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
-  shift
 done
 
 if ! command -v xcodebuild >/dev/null 2>&1; then
@@ -77,6 +88,81 @@ if [ -n "$MARKETING_VERSION" ]; then
 fi
 if [ -n "$BUILD_NUMBER" ]; then
   EXTRA_SETTINGS+=(CURRENT_PROJECT_VERSION="$BUILD_NUMBER")
+fi
+
+if [ "$SIM_MODE" = "1" ]; then
+  # Hot-reload-grade loop (2026-08-13): build for the Apple TV simulator and
+  # install + launch on the booted sim. Same app, same agent connection
+  # (localhost/relay) as the real TV — everything except Siri-Remote dictation
+  # and hardware video decode is testable here, in ~1-2 min per iteration.
+  SIM_TARGET="${TVOS_SIM_UDID:-booted}"
+  xcodebuild -project "$TVOS_DIR/YaverTV.xcodeproj" \
+    -scheme "$SCHEME" \
+    -configuration "Debug" \
+    -sdk appletvsimulator \
+    -destination "platform=tvOS Simulator,id=$SIM_TARGET" \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
+    CODE_SIGNING_ALLOWED=NO \
+    ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
+    build
+
+  APP_PATH="$(find "$DERIVED_DATA_PATH/Build/Products" -maxdepth 2 -name "*.app" -type d | head -1)"
+  if [ -z "$APP_PATH" ]; then
+    echo "ERROR: built .app not found under $DERIVED_DATA_PATH/Build/Products" >&2
+    exit 1
+  fi
+  echo "Installing to Apple TV simulator ($SIM_TARGET) …"
+  xcrun simctl install "$SIM_TARGET" "$APP_PATH"
+  xcrun simctl launch "$SIM_TARGET" io.yaver.mobile
+  echo "Installed + launched on the simulator from $APP_PATH"
+  exit 0
+fi
+
+if [ "$DEVICE_MODE" = "1" ]; then
+  # Fast iterate loop (2026-08-13): build with AUTOMATIC development signing
+  # and install straight to a network-paired Apple TV via devicectl — no
+  # TestFlight processing wait. Prereq: pair the Apple TV once in Xcode
+  # (Window > Devices and Simulators > "+" > pick the Apple TV on the LAN);
+  # Xcode registers its UDID and provisions the dev profile automatically
+  # (-allowProvisioningUpdates). ~2-4 min per iteration vs an hour for
+  # TestFlight.
+  if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
+    set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
+  fi
+  APPLE_TEAM_ID="${APPLE_TEAM_ID:-5SJZ4KA39A}"
+
+  xcodebuild -project "$TVOS_DIR/YaverTV.xcodeproj" \
+    -scheme "$SCHEME" \
+    -configuration "Debug" \
+    -sdk appletvos \
+    -destination "generic/platform=tvOS" \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
+    CODE_SIGN_STYLE=Automatic \
+    DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+    -allowProvisioningUpdates \
+    ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
+    build
+
+  APP_PATH="$(find "$DERIVED_DATA_PATH/Build/Products" -maxdepth 2 -name "*.app" -type d | head -1)"
+  if [ -z "$APP_PATH" ]; then
+    echo "ERROR: built .app not found under $DERIVED_DATA_PATH/Build/Products" >&2
+    exit 1
+  fi
+
+  # Resolve the target Apple TV: explicit UDID, else the first network Apple TV.
+  TARGET_UDID="$DEVICE_UDID"
+  if [ -z "$TARGET_UDID" ]; then
+    TARGET_UDID="$(xcrun devicectl list devices 2>/dev/null | awk -F'   +' '$2 ~ /\.coredevice\.local/ { print $3; exit }')"
+  fi
+  if [ -z "$TARGET_UDID" ]; then
+    echo "ERROR: no network Apple TV found. Pair it in Xcode (Window > Devices and Simulators > +), then retry." >&2
+    exit 1
+  fi
+  echo "Installing to Apple TV $TARGET_UDID …"
+  xcrun devicectl device install app --device "$TARGET_UDID" "$APP_PATH"
+  xcrun devicectl device process launch --device "$TARGET_UDID" io.yaver.mobile
+  echo "Installed + launched on $TARGET_UDID from $APP_PATH"
+  exit 0
 fi
 
 if [ "$UPLOAD" != "1" ]; then

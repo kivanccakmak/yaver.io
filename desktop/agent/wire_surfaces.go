@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -546,7 +548,24 @@ func DetectProjectSurfaces(root, stack string) []WireSurface {
 		}
 	}
 
-	if androidDeclaresWatch(root) {
+	// Info.plist is the app's own statement of what it is: DTPlatformName /
+	// UIDeviceFamily say "Apple TV", "Watch", "Vision" without needing an
+	// .xcodeproj or XcodeGen spec in a conventional spot. (2026-08-13: this
+	// and the Android manifest scan below are what let the runtime-capabilities
+	// probe answer "what can be WebRTC-streamed at all" from the project's own
+	// config files instead of the framework string a client happened to send.)
+	for _, plist := range findInfoPlistFiles(root) {
+		data, err := readWireJSONBounded(plist, 4<<20)
+		if err != nil {
+			continue
+		}
+		for _, s := range surfacesFromInfoPlist(data) {
+			add(s)
+		}
+	}
+
+	androidMarkers := androidManifestMarkers(root)
+	if androidDeclaresWatch(root) || androidMarkers["watch"] {
 		add(SurfaceWearOS)
 	}
 	return found
@@ -630,6 +649,235 @@ func androidDeclaresWatch(root string) bool {
 		}
 	}
 	return false
+}
+
+// findInfoPlistFiles locates Info.plist files in the same bounded, conventional
+// Apple-surface locations the pbxproj and XcodeGen scans use. Built products
+// (DerivedData, Pods) are never consulted — this reads the project's OWN
+// manifest, which is what declares what the app IS. The runtime-capabilities
+// probe uses these to know a repo builds tvOS/watchOS/visionOS even when the
+// XcodeGen spec or .xcodeproj lives somewhere unconventional (2026-08-13:
+// surface detection trusted only the client-supplied framework string, so a
+// web-first monorepo never offered its Apple sim lanes).
+func findInfoPlistFiles(root string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		p = filepath.Clean(p)
+		if seen[p] {
+			return
+		}
+		seen[p] = true
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			out = append(out, p)
+		}
+	}
+	for _, dir := range []string{
+		root,
+		filepath.Join(root, "ios"), filepath.Join(root, "apple"), filepath.Join(root, "app"),
+		filepath.Join(root, "tvos"), filepath.Join(root, "tv"), filepath.Join(root, "appletv"), filepath.Join(root, "apple-tv"),
+		filepath.Join(root, "watchos"), filepath.Join(root, "watch"),
+		filepath.Join(root, "visionos"), filepath.Join(root, "vision"), filepath.Join(root, "xros"),
+	} {
+		add(filepath.Join(dir, "Info.plist"))
+	}
+	// Sibling-app layout: tvos/ visionos/ watch/ beside the probed root
+	// (the yaver.io dogfood layout).
+	if parent := filepath.Dir(filepath.Clean(root)); parent != "." && parent != root {
+		for _, dir := range []string{
+			filepath.Join(parent, "tvos"), filepath.Join(parent, "tv"), filepath.Join(parent, "appletv"),
+			filepath.Join(parent, "watchos"), filepath.Join(parent, "watch"),
+			filepath.Join(parent, "visionos"), filepath.Join(parent, "vision"), filepath.Join(parent, "xros"),
+		} {
+			add(filepath.Join(dir, "Info.plist"))
+		}
+	}
+	return out
+}
+
+// surfacesFromInfoPlist reads the Apple platform markers out of an
+// Info.plist. Source plists are XML (built products carry binary plists, and
+// DerivedData is never scanned — see findInfoPlistFiles), so a bounded text
+// walk over <key>/<string>/<integer> pairs is enough; JSON plists are handled
+// too. Recognized markers:
+//
+//	DTPlatformName  appletvos|tvos → TV, watchos → Watch, xros|visionos → Vision
+//	UIDeviceFamily  3 → TV, 4 → Watch, 9 → Vision, 1/2 → iPhone/iPad
+//	WKWatchOnly     true → Watch
+func surfacesFromInfoPlist(data []byte) []WireSurface {
+	var out []WireSurface
+	add := func(s WireSurface) {
+		if s != "" && !containsSurface(out, s) {
+			out = append(out, s)
+		}
+	}
+	lower := strings.ToLower(string(data))
+	if strings.HasPrefix(strings.TrimSpace(lower), "{") {
+		// JSON plist: {"DTPlatformName":"appletvos","UIDeviceFamily":[3]}.
+		// JSON keys are case-sensitive, so fold every key to lowercase before
+		// looking ours up — plist tooling emits mixed case freely.
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(data, &raw); err == nil {
+			doc := make(map[string]json.RawMessage, len(raw))
+			for k, v := range raw {
+				doc[strings.ToLower(k)] = v
+			}
+			if value, ok := doc["dtplatformname"]; ok {
+				var name string
+				if json.Unmarshal(value, &name) == nil {
+					add(surfaceFromPlatformName(name))
+				}
+			}
+			if value, ok := doc["uidevicefamily"]; ok {
+				for _, n := range deviceFamilyNumbers(value) {
+					add(surfaceFromDeviceFamily(n))
+				}
+			}
+			if value, ok := doc["wkwatchonly"]; ok {
+				var b bool
+				if json.Unmarshal(value, &b) == nil && b {
+					add(SurfaceWatchOS)
+				}
+			}
+		}
+		return out
+	}
+	re := regexp.MustCompile(`<key>([^<]+)</key>\s*(<array>.*?</array>|<string>[^<]*</string>|<integer>[^<]*</integer>|<true\s*/>|<false\s*/>)`)
+	for _, m := range re.FindAllStringSubmatch(lower, -1) {
+		key := strings.ToLower(strings.TrimSpace(m[1]))
+		value := strings.TrimSpace(m[2])
+		switch key {
+		case "dtplatformname":
+			if name := betweenXMLTags(value, "string"); name != "" {
+				add(surfaceFromPlatformName(name))
+			}
+		case "uidevicefamily":
+			for _, n := range xmlIntegerValues(value) {
+				add(surfaceFromDeviceFamily(n))
+			}
+		case "wkwatchonly":
+			if strings.Contains(value, "<true") {
+				add(SurfaceWatchOS)
+			}
+		}
+	}
+	return out
+}
+
+func surfaceFromPlatformName(name string) WireSurface {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "appletvos", "tvos":
+		return SurfaceTVOS
+	case "watchos":
+		return SurfaceWatchOS
+	case "xros", "visionos":
+		return SurfaceVisionOS
+	case "iphoneos", "ipados", "ios":
+		return SurfaceIOS
+	}
+	return ""
+}
+
+func surfaceFromDeviceFamily(n int) WireSurface {
+	switch n {
+	case 3:
+		return SurfaceTVOS
+	case 4:
+		return SurfaceWatchOS
+	case 9:
+		return SurfaceVisionOS
+	case 1, 2:
+		return SurfaceIOS
+	}
+	return ""
+}
+
+func betweenXMLTags(value, tag string) string {
+	start := strings.Index(value, "<"+tag+">")
+	if start < 0 {
+		return ""
+	}
+	start += len(tag) + 2
+	end := strings.Index(value[start:], "</"+tag+">")
+	if end < 0 {
+		return ""
+	}
+	return value[start : start+end]
+}
+
+func xmlIntegerValues(value string) []int {
+	var out []int
+	for _, m := range regexp.MustCompile(`<integer>(\d+)</integer>`).FindAllStringSubmatch(value, -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func deviceFamilyNumbers(raw json.RawMessage) []int {
+	var n int
+	if json.Unmarshal(raw, &n) == nil {
+		return []int{n}
+	}
+	var arr []int
+	if json.Unmarshal(raw, &arr) == nil {
+		return arr
+	}
+	return nil
+}
+
+// androidManifestLocations returns the conventional AndroidManifest.xml
+// locations a monorepo might keep an Android app in, covering every surface
+// directory the runtime-target gating cares about (tv/xr/auto/wear).
+func androidManifestLocations(root string) []string {
+	dirs := []string{
+		"wear", "wearos", "tv", "tvos", "android-tv", "androidtv",
+		"xr", "android-xr", "vision", "car", "automotive", "android-auto",
+		"android", "app", "mobile",
+	}
+	var out []string
+	for _, d := range dirs {
+		out = append(out,
+			filepath.Join(root, d, "src", "main", "AndroidManifest.xml"),
+			filepath.Join(root, d, "app", "src", "main", "AndroidManifest.xml"),
+		)
+	}
+	out = append(out,
+		filepath.Join(root, "src", "main", "AndroidManifest.xml"),
+		filepath.Join(root, "app", "src", "main", "AndroidManifest.xml"),
+		filepath.Join(root, "android", "app", "src", "main", "AndroidManifest.xml"),
+	)
+	return out
+}
+
+// androidManifestMarkers reports which Android surface markers a project's
+// AndroidManifest.xml files declare — the Android half of "read the project's
+// own manifests, don't trust the framework string or directory names". Keys:
+// "tv" (leanback / television feature), "xr" (Oculus / XR / type.xr), "auto"
+// (Android Automotive / car app), "watch" (type.watch).
+func androidManifestMarkers(root string) map[string]bool {
+	markers := map[string]bool{}
+	for _, p := range androidManifestLocations(root) {
+		data, err := readWireJSONBounded(p, 1<<20)
+		if err != nil {
+			continue
+		}
+		s := strings.ToLower(string(data))
+		if strings.Contains(s, "android.hardware.type.television") || strings.Contains(s, "android.software.leanback") || strings.Contains(s, "com.google.android.tv") {
+			markers["tv"] = true
+		}
+		if strings.Contains(s, "oculus") || strings.Contains(s, "com.samsung.android.vr") || strings.Contains(s, "android.hardware.type.xr") {
+			markers["xr"] = true
+		}
+		if strings.Contains(s, "androidx.car.app") || strings.Contains(s, "com.google.android.gms.car.application") || strings.Contains(s, "android.hardware.type.automotive") {
+			markers["auto"] = true
+		}
+		if strings.Contains(s, "android.hardware.type.watch") {
+			markers["watch"] = true
+		}
+	}
+	return markers
 }
 
 // ─── CLI integration ────────────────────────────────────────────────────────

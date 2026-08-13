@@ -57,9 +57,15 @@ apps:
   # AR-VR from the webui" was impossible: the project catalog feeds from the
   # manifest, and a non-repo dir like tvos/ was invisible. Stack swift keeps
   # them in the native-webrtc family (executionModeForFramework).
+  # surfaces/test_surfaces (2026-08-13) let /workspace/apps and the webui
+  # classify each app's WebRTC-streamable lane directly — the tvos app row is
+  # TV, not "backend/tooling" — and pair with the agent's own Info.plist /
+  # AndroidManifest.xml surface detection as the explicit declaration.
   - name: tvos
     path: ./tvos
     stack: swift
+    surfaces: [tv]
+    test_surfaces: [tvos-simulator]
     provider:
       ios: appstoreconnect
     depends: [backend]
@@ -67,6 +73,8 @@ apps:
   - name: watchos
     path: ./watch
     stack: swift
+    surfaces: [watch]
+    test_surfaces: [watchos-simulator]
     provider:
       ios: appstoreconnect
     depends: [backend]
@@ -74,6 +82,8 @@ apps:
   - name: visionos
     path: ./visionos
     stack: swift
+    surfaces: [vision]
+    test_surfaces: [visionos-simulator]
     provider:
       ios: appstoreconnect
     depends: [backend]
@@ -81,6 +91,8 @@ apps:
   - name: wear-os
     path: ./wear
     stack: kotlin
+    surfaces: [wear]
+    test_surfaces: [android-wear]
     provider:
       android: playstore
     depends: [backend]

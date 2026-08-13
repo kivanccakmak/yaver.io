@@ -23,6 +23,11 @@ struct MachinePickerView: View {
     @State private var leaveTarget: RegisteredDevice?   // non-nil ⇒ confirming
     @StateObject private var lifecycle = BoxLifecycle()
     @State private var relaySettings: MachineRegistry.UserSettings?
+    /// Resolved relay leg (2026-08-13): settings.relayUrl is a user OVERRIDE,
+    /// usually empty — the authoritative relay list is GET /config. Without
+    /// this a remote box (Hetzner etc.) had no relay leg at all on the TV.
+    @State private var resolvedRelayUrl: String?
+    @State private var resolvedRelayPassword: String?
 
     // Captured once per load so liveness is a pure comparison (no Date.now in the model).
     @State private var nowMs: Double = 0
@@ -183,6 +188,14 @@ struct MachinePickerView: View {
         do {
             let list = try await MachineRegistry.fetch(token: store.token)
             relaySettings = try? await MachineRegistry.fetchSettings(token: store.token)
+            // Merge /config relay servers into the picker's relay settings so a
+            // box added here gets a working relay leg even when the user never
+            // set a relayUrl override (the Hetzner/remote-box case).
+            if let settings = relaySettings {
+                let resolved = await MachineRegistry.resolvedRelay(token: store.token, settings: settings)
+                resolvedRelayUrl = resolved.url
+                resolvedRelayPassword = resolved.password
+            }
             nowMs = Date().timeIntervalSince1970 * 1000
             devices = list
         } catch {
@@ -249,8 +262,8 @@ struct MachinePickerView: View {
     private func boxTarget(for d: RegisteredDevice, host: String) -> BoxTarget {
         BoxTarget(id: d.deviceId, name: d.displayName, host: host, port: d.port,
                   managed: d.managed, machineId: d.machineId,
-                  relayBaseUrl: relaySettings?.relayUrl,
-                  relayPassword: relaySettings?.relayPassword)
+                  relayBaseUrl: resolvedRelayUrl ?? relaySettings?.relayUrl,
+                  relayPassword: resolvedRelayPassword ?? relaySettings?.relayPassword)
     }
 }
 

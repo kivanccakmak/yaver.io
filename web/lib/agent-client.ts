@@ -638,6 +638,14 @@ export interface WorkspaceAppView {
   stack?: string;
   kind?: DevServerKind;
   framework?: string;
+  // The agent's own surface answer (workspace_http.go) — derived from the
+  // workspace manifest + stack + project config files (Info.plist /
+  // AndroidManifest.xml), not from what a framework string can express. The
+  // web MUST consume these instead of re-deriving from framework names,
+  // otherwise tvos/watchos/visionos/wear-os apps collapse into
+  // "Backend & tooling" with no vibe surface (2026-08-13).
+  surfaces?: string[];
+  testSurfaces?: string[];
   depends?: string[];
   env?: string[];
   envMissing?: string[];
@@ -5331,7 +5339,7 @@ export class AgentClient {
     return res.json();
   }
 
-  async getRemoteRuntimeCapabilities(workDir: string, framework: string): Promise<RemoteRuntimeCapabilities> {
+  async getRemoteRuntimeCapabilities(workDir: string, framework: string, refresh = false): Promise<RemoteRuntimeCapabilities> {
     this.assertConnected();
     // devBaseUrl is a RELATIVE same-origin path (`/d/<deviceId>`) when the
     // dashboard is served from yaver.io, so `new URL(...)` here threw
@@ -5340,7 +5348,14 @@ export class AgentClient {
     // green connection check: inventory says OK, operation never happened).
     // fetch() resolves relative paths against the page origin — the same
     // pattern every sibling remote-runtime method below already uses.
+    //
+    // refresh=1 bypasses the agent's 2-minute caps cache. An EXPLICIT user
+    // click on Load Targets must probe the box, not replay inventory —
+    // otherwise a freshly-landed target (e.g. a just-installed tvOS runtime,
+    // or this session's browser-framework specials) stays invisible for the
+    // whole TTL (2026-08-13).
     const params = new URLSearchParams({ workDir, framework });
+    if (refresh) params.set("refresh", "1");
     const res = await this.fetchWithTimeout(
       `${this.devBaseUrl}/remote-runtime/capabilities?${params.toString()}`,
       { headers: this.authHeaders },

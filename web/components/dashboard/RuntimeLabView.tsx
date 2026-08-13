@@ -1219,6 +1219,10 @@ export default function RuntimeLabView({
   // "Fix with <runner>" dispatch state — one fix task in flight per box, ever.
   const [fixTaskBusy, setFixTaskBusy] = useState(false);
   const [fixTaskId, setFixTaskId] = useState<string | null>(null);
+  // "Sync" dispatch state — git pull origin; a conflict hands the repo to the
+  // runner (same createTask+attachTaskSession path as fix, so the resolution
+  // streams into this chat pane).
+  const [syncBusy, setSyncBusy] = useState(false);
   // Bumped by Fast/Full Reload to re-mount the preview iframe even when
   // the (signed) bundle URL is unchanged — e.g. a fast reload that
   // re-served the existing fresh bundle.
@@ -2627,6 +2631,59 @@ export default function RuntimeLabView({
     }
   }, [appendLog, attachTaskSession, availableModels, fixTaskBusy, includeYaverMcp, selectedMcpServers, selectedModel, selectedProject, selectedRunner, selectedRunnerRow, startSelectedRunnerSignIn, splitTaskFields]);
 
+  // "Sync" — git pull origin for the selected project; when the pull fails
+  // (merge conflicts, or local changes blocking the fast-forward), hand the
+  // repo to the AI runner through the EXACT task path the chat composer and
+  // Fix-with-runner use, so the resolution streams into the same chat pane.
+  // No new endpoint: /git/pull already exists and returns the raw git
+  // output; conflict text is the trigger, not a parse of exit codes.
+  const dispatchSync = useCallback(async () => {
+    if (syncBusy || !selectedProject) return;
+    setSyncBusy(true);
+    appendLog(`syncing ${selectedProject.name}: git pull origin…`);
+    try {
+      const res = await agentClient.gitPull(selectedProject.path);
+      const out = String(res?.message || res?.error || "").trim();
+      const conflictLike = /conflict|both modified|local changes would be overwritten|not up to date|failed/i.test(out);
+      if (res?.error && !conflictLike) {
+        appendLog(`sync failed: ${out.slice(0, 400) || res.error}`);
+        return;
+      }
+      if (!res?.error || !conflictLike) {
+        appendLog(`sync ok: ${out.slice(0, 400) || "up to date"}`);
+        return;
+      }
+      // Pull refused — conflicts or local changes in the way. The runner
+      // resolves them in place; it must never push.
+      const bounded = out.slice(-4000) || "git pull origin failed";
+      const prompt = `The repository at ${selectedProject.path} failed to sync with its remote (git pull origin). ` +
+        `Resolve the state so the working tree is up to date with the remote branch and the project still builds. ` +
+        `What git said:\n\n${bounded}\n\n` +
+        `How to proceed: if there are merge conflicts, resolve each one to the correct merged content and ` +
+        `git add the resolved files; if local uncommitted changes blocked the pull, commit or stash them first, ` +
+        `then pull and re-apply; if the branch has diverged, prefer rebase onto origin/<branch>. Never push, ` +
+        `never force anything. When done, report which files you changed and how.`;
+      const effectiveModel = safeModelForRunner(selectedRunner, selectedModel, availableModels);
+      const task = await agentClient.createTask({
+        title: `Sync ${selectedProject.name} (resolve git conflicts)`,
+        description: prompt,
+        runner: selectedRunner || undefined,
+        model: effectiveModel,
+        projectName: selectedProject?.name,
+        workDir: selectedProject?.path,
+        mcpServers: selectedMcpServers,
+        includeYaverMcp,
+        ...splitTaskFields,
+      });
+      attachTaskSession(task);
+      appendLog(`sync conflict — ${selectedRunnerName} task ${task.id} is resolving`);
+    } catch (err) {
+      appendLog(`sync failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [appendLog, attachTaskSession, availableModels, includeYaverMcp, selectedMcpServers, selectedModel, selectedProject, selectedRunner, selectedRunnerName, splitTaskFields, syncBusy]);
+
   const runnerNotReadyForFix = !!(selectedRunnerRow && selectedRunnerRow.ready === false);
   const fixWithRunnerLabel = fixTaskBusy
     ? "Dispatching fix…"
@@ -2725,7 +2782,10 @@ export default function RuntimeLabView({
     appendLog(`probing render targets for ${project.name} ${runtimeFramework || "unknown"}`);
     try {
       if (!(await ensureMachineRolesReady("targets"))) return;
-      const next = await agentClient.getRemoteRuntimeCapabilities(project.path, runtimeFramework);
+      // refresh=1: an explicit Load Targets click probes the box fresh — a
+      // 2-minute stale caps cache must not hide a just-installed runtime or a
+      // newly-landed lane (2026-08-13).
+      const next = await agentClient.getRemoteRuntimeCapabilities(project.path, runtimeFramework, true);
       next.targets = [...(next.targets || [])].sort(targetSort);
       setCaps(next);
       const primaryCount = next.targets.filter(isPrimaryRuntimeTarget).length;
@@ -3939,6 +3999,15 @@ export default function RuntimeLabView({
                           className="inline-flex h-10 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-3 text-xs font-semibold text-[#475467] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
                         >
                           {runtimeProjectSaving ? "Saving..." : selectedProjectIsSavedDefault ? "Default" : "Save default"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!selectedProject || syncBusy}
+                          onClick={() => void dispatchSync()}
+                          title="git pull origin; if the pull conflicts, the AI runner resolves it here in the chat stream"
+                          className="inline-flex h-10 shrink-0 items-center rounded-md border border-[#d7dce3] bg-white px-3 text-xs font-semibold text-[#475467] disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                        >
+                          {syncBusy ? "Syncing…" : "Sync"}
                         </button>
                       </div>
                       {runtimeProjectNote ? (
