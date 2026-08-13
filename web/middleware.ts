@@ -26,6 +26,14 @@ export function middleware(request: NextRequest) {
   // is already https and passes through untouched.
   const proto = request.headers.get("x-forwarded-proto") ?? "https";
   if (proto === "http") {
+    // Local dev: `next dev` sets x-forwarded-proto: http with no TLS
+    // listener behind it, so an https redirect here would bounce every
+    // localhost request to a dead https://localhost:3000. Only the
+    // public worker (yaver.io / www.yaver.io) is force-HTTPS.
+    const host = request.nextUrl.hostname;
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return NextResponse.next();
+    }
     const url = new URL(request.url);
     url.protocol = "https:";
     url.host = url.host.replace(/^www\./, ""); // www → apex canonical
@@ -42,6 +50,6 @@ export const config = {
   // before any script executes — static files are redirected by the
   // browser itself once the HTML is https.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|apple-touch-icon.png|icon-192.png|icon-512.png|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt|mp4|wasm|json)).*)",
+    "/((?!_next/static|_next/image|_next/webpack-hmr|favicon.ico|apple-touch-icon.png|icon-192.png|icon-512.png|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt|mp4|wasm|json)).*)",
   ],
 };
