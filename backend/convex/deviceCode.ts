@@ -70,6 +70,13 @@ export const createDeviceCode = mutation({
     const deviceCode = randomHex(20); // 40-char hex
     const now = Date.now();
 
+    // LAN-approval material (2026-08-13): a random nonce (lookup key for the
+    // same-network approve flow — never the userCode, so a LAN eavesdropper
+    // cannot hijack the code) + a 3-digit match code the TV displays and the
+    // approver surface shows for WhatsApp-style number matching.
+    const approveNonce = randomHex(16); // 32-hex
+    const matchCode = String(100 + Math.floor(Math.random() * 900)); // 100..999
+
     // Validate the owner hint against a real users row; anything else is
     // silently dropped (an unauthenticated caller must not learn whether an
     // id exists, and a bogus hint must not create dangling references).
@@ -95,6 +102,8 @@ export const createDeviceCode = mutation({
       preferredProvider: args.preferredProvider,
       isWsl: args.isWsl,
       deviceId: args.deviceId,
+      approveNonce,
+      matchCode,
       expiresAt: now + DEVICE_CODE_TTL_MS,
       createdAt: now,
     });
@@ -102,8 +111,114 @@ export const createDeviceCode = mutation({
     return {
       userCode,
       deviceCode,
+      approveNonce,
+      matchCode,
       expiresAt: now + DEVICE_CODE_TTL_MS,
     };
+  },
+});
+
+/**
+ * LAN approval, phase 1 — an AUTHENTICATED surface that saw the waiting
+ * device's local beacon requests approval by nonce. The nonce comes from the
+ * beacon (never the userCode), and the request must carry a real session; the
+ * binding between this surface and the waiting device is confirmed by the
+ * matchCode the user compares on both screens. INTERNAL — the HTTP route
+ * derives userId from the bearer session, never from a client arg.
+ */
+export const lanApproveDeviceCode = internalMutation({
+  args: {
+    approveNonce: v.string(),
+    userId: v.id("users"),
+    email: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const code = await ctx.db
+      .query("deviceCodes")
+      .withIndex("by_approveNonce", (q) => q.eq("approveNonce", args.approveNonce))
+      .unique();
+
+    if (!code) throw new Error("INVALID_NONCE");
+    if (code.status !== "pending") throw new Error("CODE_ALREADY_USED");
+    if (code.expiresAt < Date.now()) {
+      await ctx.db.patch(code._id, { status: "expired" });
+      throw new Error("CODE_EXPIRED");
+    }
+    // Rate limit: same 8-attempt budget the QR authorize path uses.
+    const attempts = (code.authorizeAttempts ?? 0) + 1;
+    if (attempts > 8) {
+      await ctx.db.patch(code._id, { authorizeAttempts: attempts });
+      throw new Error("TOO_MANY_ATTEMPTS");
+    }
+    // Set the pending approver with a short window; the TV's poll sees the
+    // approver's identity and the user presses Allow/Deny on the TV itself.
+    // Replacing the approver (a second surface tapping Approve) is allowed —
+    // the LAST one wins, exactly like the QR path's last-authorize-wins.
+    await ctx.db.patch(code._id, {
+      lanApproverUserId: args.userId,
+      ...(args.email ? { lanApproverEmail: args.email } : {}),
+      lanPendingExpiresAt: Date.now() + 60_000,
+      authorizeAttempts: attempts,
+    });
+    return {
+      ok: true,
+      machineName: code.machineName ?? null,
+      matchCode: code.matchCode ?? null,
+      expiresAt: code.expiresAt,
+    };
+  },
+});
+
+/**
+ * LAN approval, phase 2 — the WAITING DEVICE confirms (or denies) after the
+ * user sees "Approve sign-in from <email>?" on the TV. Trusted by possession
+ * of the deviceCode (the 40-hex secret only the waiting device holds — same
+ * trust anchor as claimDeviceCode). Allow → authorize as the pending
+ * approver; Deny → clear the pending window (the code stays usable).
+ */
+export const lanConfirmDeviceCode = mutation({
+  args: {
+    deviceCode: v.string(),
+    allow: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const code = await ctx.db
+      .query("deviceCodes")
+      .withIndex("by_deviceCode", (q) => q.eq("deviceCode", args.deviceCode))
+      .unique();
+    if (!code || code.status !== "pending") return { ok: false as const };
+    if (code.expiresAt < Date.now()) {
+      await ctx.db.patch(code._id, { status: "expired" });
+      return { ok: false as const };
+    }
+    if (!args.allow) {
+      await ctx.db.patch(code._id, {
+        lanApproverUserId: undefined,
+        lanApproverEmail: undefined,
+        lanPendingExpiresAt: undefined,
+      });
+      return { ok: true as const, denied: true };
+    }
+    const approverId = code.lanApproverUserId;
+    const pendingExpires = code.lanPendingExpiresAt ?? 0;
+    if (!approverId || pendingExpires < Date.now()) {
+      // Nothing pending (or the 60s window lapsed) — the QR path is still
+      // open, but the LAN confirm cannot bind without an approver.
+      return { ok: false as const, reason: "no_pending_approver" as const };
+    }
+    // Authorize exactly like authorizeDeviceCode (fresh claimHandle so the TV
+    // claims with the same flow as a QR approval).
+    const claimHandle = randomHex(16);
+    await ctx.db.patch(code._id, {
+      status: "authorized",
+      approvedUserId: approverId,
+      approvedAt: Date.now(),
+      claimHandle,
+      lanApproverUserId: undefined,
+      lanApproverEmail: undefined,
+      lanPendingExpiresAt: undefined,
+    });
+    return { ok: true as const, claimHandle };
   },
 });
 
@@ -186,7 +301,24 @@ export const getDeviceCodeEvent = query({
         expiresAt: code.expiresAt,
       };
     }
-    return { status: code.status as "pending" | "expired", expiresAt: code.expiresAt };
+    // LAN approval pending (2026-08-13): an authenticated surface requested
+    // approval over the LAN beacon. Carry the approver's identity + matchCode
+    // so the TV can render "Approve sign-in from <email>?" with Allow/Deny —
+    // and the single-use window, so a stale prompt can't approve later.
+    const now = Date.now();
+    const lanPending =
+      code.lanApproverUserId !== undefined && (code.lanPendingExpiresAt ?? 0) > now
+        ? {
+            approverEmail: code.lanApproverEmail ?? null,
+            matchCode: code.matchCode ?? null,
+            expiresAt: code.lanPendingExpiresAt ?? 0,
+          }
+        : null;
+    return {
+      status: code.status as "pending" | "expired",
+      expiresAt: code.expiresAt,
+      lanPending,
+    };
   },
 });
 
@@ -289,7 +421,18 @@ export const pollDeviceCode = mutation({
       return await mintTokenForAuthorizedCode(ctx, code);
     }
 
-    return { status: "pending" as const };
+    // LAN approval pending — carry the approver's identity so the TV can
+    // render Allow/Deny (same field the SSE events channel carries).
+    const lanPending =
+      code.lanApproverUserId !== undefined && (code.lanPendingExpiresAt ?? 0) > Date.now()
+        ? {
+            approverEmail: code.lanApproverEmail ?? null,
+            matchCode: code.matchCode ?? null,
+            expiresAt: code.lanPendingExpiresAt ?? 0,
+          }
+        : null;
+
+    return { status: "pending" as const, lanPending };
   },
 });
 

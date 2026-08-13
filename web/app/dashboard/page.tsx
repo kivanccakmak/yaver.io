@@ -88,6 +88,10 @@ import {
   saveLastProjectToConvex,
   loadMCPServersFromConvex,
   saveMCPServersToConvex,
+  loadSurfaceCatalogsFromConvex,
+  runtimeProjectDisplayName,
+  type MCPCatalogServer,
+  type RuntimeProjectSeed,
 } from "@/lib/runtimeProjectSettings";
 import { decideComposerKey, insertNewline, newlineIsNative } from "@/lib/composerKeys";
 import { runnerChipState } from "@/lib/runnerChipState";
@@ -1052,6 +1056,15 @@ export default function DashboardPage() {
     name: string; path: string; branch?: string; framework?: string; gitRemote?: string;
   }>>([]);
   const [chatProjectPickerOpen, setChatProjectPickerOpen] = useState(false);
+  // Cross-machine surface catalogs (2026-08-13): which MCP servers / which
+  // git projects live on which machine, seeded by each agent's heartbeat
+  // into userSettings.mcpCatalogByDevice / runtimeProjectCatalogByDevice.
+  // This is what lets the chat composer offer ANOTHER machine's MCP servers
+  // as selectable chips and browse other machines' projects, without fanning
+  // out to every box. Advisory: empty maps on failure, never blocks.
+  const [mcpCatalogByDevice, setMcpCatalogByDevice] = useState<Record<string, MCPCatalogServer[]>>({});
+  const [projectCatalogByDevice, setProjectCatalogByDevice] = useState<Record<string, RuntimeProjectSeed[]>>({});
+  const [switchNotice, setSwitchNotice] = useState<string | null>(null); // "Switched to <machine>" inline notice
   const [selectedRunner, setSelectedRunner] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [selectedOpenCodeMode, setSelectedOpenCodeMode] = useState<string>("");
@@ -1430,6 +1443,29 @@ export default function DashboardPage() {
     // every list refresh would overwrite an in-session pick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, token, connectedDevice?.id]);
+
+  // Cross-machine surface catalogs (2026-08-13): one /settings fetch that
+  // answers "which MCP server / which git project lives on which machine"
+  // for the chat composer's other-machine chips. Reloads when the fleet
+  // changes (a box that comes online mid-session should appear). Advisory:
+  // a failed read keeps the previous maps, and empty maps just mean the
+  // "other machines" groups don't render.
+  const fleetSignature = useMemo(
+    () => devices.map((d) => d.id).sort().join(","),
+    [devices],
+  );
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    const pull = async () => {
+      const catalogs = await loadSurfaceCatalogsFromConvex(CONVEX_URL, token);
+      if (cancelled) return;
+      setMcpCatalogByDevice(catalogs.mcpByDevice);
+      setProjectCatalogByDevice(catalogs.projectsByDevice);
+    };
+    void pull();
+    return () => { cancelled = true; };
+  }, [token, fleetSignature]);
 
   // Sidebar tmux list: refresh on connect and every 20s after. Errors degrade to
   // an empty list (the section hides) — a stale roster that outlives the box is
@@ -2381,6 +2417,57 @@ export default function DashboardPage() {
         detail: failureSummary.detail,
       });
     }
+  };
+
+  // Cross-machine capability switch (2026-08-13): an MCP server or a git
+  // project lives on ONE machine — the task machine attaches MCPs by name
+  // from its own local registry (runner_mcp_scope.go) and runs in the
+  // project's directory. So picking a REMOTE machine's MCP chip or project
+  // row means: switch the chat to that machine (connectToDevice), refresh
+  // its runners/MCPs/projects, and only then set the selection — never
+  // report a selection the machine we're about to run on cannot honour.
+  // Falls back to a connect-error surface when the box is unreachable.
+  const switchChatDevice = async (
+    target: Device,
+    opts?: { selectMcp?: string; selectProjectName?: string },
+  ) => {
+    if (!token || !target?.id) return;
+    if (target.id === connectedDevice?.id) {
+      // Already here — just apply the selection (e.g. a chip on the
+      // connected device itself).
+      if (opts?.selectMcp) {
+        setSelectedMcpServers((prev) => (prev.includes(opts.selectMcp!) ? prev : [...prev, opts.selectMcp!]));
+      }
+      return;
+    }
+    try {
+      await connectToDevice(target);
+    } catch {
+      return; // connectToDevice already surfaced the error + diagnostics
+    }
+    await refreshConnectedRunners();
+    if (opts?.selectMcp) {
+      // Only keep selections that still exist on the new machine's list,
+      // then add the one we switched for.
+      setSelectedMcpServers((prev) => [
+        ...new Set([...prev.filter((n) => mcpServers.some((s) => s.name === n)), opts.selectMcp!]),
+      ]);
+      void saveMCPServersToConvex(CONVEX_URL, token, {
+        deviceId: target.id,
+        mcpServers: [...new Set([...selectedMcpServers.filter((n) => mcpServers.some((s) => s.name === n)), opts.selectMcp!])],
+        includeYaverMcp,
+        updatedAt: Date.now(),
+      }).catch(() => {});
+    }
+    if (opts?.selectProjectName) {
+      const match = chatProjects.find(
+        (p) => p.name === opts.selectProjectName || p.gitRemote === opts.selectProjectName,
+      );
+      if (match) setPreferredSurfaceProjectPath(match.path);
+    }
+    const label = target.name || target.id || "the other machine";
+    setSwitchNotice(`Switched to ${label}. The ${opts?.selectMcp ? `MCP server "${opts.selectMcp}"` : "project"} lives there — run the task from this machine.`);
+    setTimeout(() => setSwitchNotice((n) => (n?.startsWith(`Switched to ${label}`) ? null : n)), 6000);
   };
 
   useEffect(() => {
@@ -5416,6 +5503,30 @@ export default function DashboardPage() {
                     {(() => {
                       const taskRunning = activeTask?.status === "running" || activeTask?.status === "queued";
                       const queuedCount = pendingFollowUps.length;
+                      // Cross-machine rows for the composer (2026-08-13):
+                      // every OTHER owned device's MCP servers + repos from
+                      // the Convex surface catalogs, with the machine label
+                      // each chip/row carries. Selecting one switches the
+                      // chat to that machine — an MCP attaches by name on
+                      // the task machine, and repo paths are machine-local.
+                      const remoteMcpRows = devices
+                        .filter((d) => d.id !== connectedDevice?.id && !d.isGuest)
+                        .flatMap((d) => (mcpCatalogByDevice[d.id] || []).map((server) => ({
+                          device: d,
+                          deviceId: d.id,
+                          deviceLabel: d.name || d.id || "other machine",
+                          server,
+                        })))
+                        .sort((a, b) => (a.deviceLabel + a.server.name).localeCompare(b.deviceLabel + b.server.name));
+                      const remoteProjectRows = devices
+                        .filter((d) => d.id !== connectedDevice?.id && !d.isGuest)
+                        .flatMap((d) => (projectCatalogByDevice[d.id] || []).map((proj) => ({
+                          device: d,
+                          deviceId: d.id,
+                          deviceLabel: d.name || d.id || "other machine",
+                          name: runtimeProjectDisplayName(proj),
+                        })))
+                        .sort((a, b) => (a.deviceLabel + a.name).localeCompare(b.deviceLabel + b.name));
                       const placeholder = activeRunnerAuthIssue
                         ? `Sign in to ${runnerLabel(activeRunnerId)} to continue on ${connectedDevice?.name || "this machine"}...`
                         : taskRunning
@@ -5480,26 +5591,39 @@ export default function DashboardPage() {
 	                          </button>
                           {!taskRunning ? (
                             <div className="flex flex-wrap items-center gap-2 text-[11px] text-surface-500 md:col-span-2">
-                              {/* Project picker — web twin of mobile's project
-                                  sheet. Feeds task workDir via
-                                  preferredSurfaceProjectPath; the chosen repo is
-                                  persisted to Convex (defaultRuntimeProjectByDevice)
-                                  on task start so the phone remembers it too. */}
-                              {chatProjects.length > 0 ? (
-                                chatProjectPickerOpen ? (
-                                  <div className="flex w-full flex-col gap-1.5 rounded-xl border border-surface-700 bg-surface-950/80 p-2">
-                                    <div className="flex items-center justify-between px-1">
-                                      <span className="font-semibold uppercase tracking-[0.14em]">Project</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => setChatProjectPickerOpen(false)}
-                                        className="text-[11px] font-semibold text-surface-400 hover:text-surface-200"
-                                      >
-                                        Done
-                                      </button>
-                                    </div>
-                                    <div className="grid gap-1">
-                                      {chatProjects.map((proj) => {
+                              {/* Project picker — ALWAYS visible (2026-08-13).
+                                  The old `chatProjects.length > 0` gate hid the
+                                  entire picker when the connected box reported
+                                  no projects — exactly the case where you need
+                                  it. Panel = the connected machine's repos
+                                  (real paths from /projects) + a per-machine
+                                  browse of the OTHER machines' repos from the
+                                  Convex catalog (names only — privacy: no
+                                  absolute paths off-machine). Picking a remote
+                                  repo switches the chat to that machine, where
+                                  the real paths live. Feeds task workDir via
+                                  preferredSurfaceProjectPath; persisted to
+                                  Convex (defaultRuntimeProjectByDevice) on task
+                                  start so the phone remembers it too. */}
+                              {chatProjectPickerOpen ? (
+                                <div className="flex w-full flex-col gap-1.5 rounded-xl border border-surface-700 bg-surface-950/80 p-2">
+                                  <div className="flex items-center justify-between px-1">
+                                    <span className="font-semibold uppercase tracking-[0.14em]">Project</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setChatProjectPickerOpen(false)}
+                                      className="text-[11px] font-semibold text-surface-400 hover:text-surface-200"
+                                    >
+                                      Done
+                                    </button>
+                                  </div>
+                                  <div className="grid gap-1">
+                                    {chatProjects.length === 0 ? (
+                                      <div className="rounded-lg border border-surface-800 bg-surface-950 px-2.5 py-2 text-surface-400">
+                                        No repos reported on {connectedDevice?.name || "this machine"} yet. Pick one from another machine below, or run without a project.
+                                      </div>
+                                    ) : (
+                                      chatProjects.map((proj) => {
                                         const active = proj.path === preferredSurfaceProjectPath;
                                         return (
                                           <button
@@ -5521,27 +5645,49 @@ export default function DashboardPage() {
                                             {active ? <span className="text-fuchsia-300">✓</span> : null}
                                           </button>
                                         );
-                                      })}
-                                    </div>
+                                      })
+                                    )}
+                                    {remoteProjectRows.length > 0 ? (
+                                      <>
+                                        <div className="mt-1 px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-surface-500">
+                                          Other machines
+                                        </div>
+                                        {remoteProjectRows.map((row) => (
+                                          <button
+                                            key={`${row.deviceId}:${row.name}`}
+                                            type="button"
+                                            onClick={() => {
+                                              setChatProjectPickerOpen(false);
+                                              void switchChatDevice(row.device, { selectProjectName: row.name });
+                                            }}
+                                            className="flex items-center gap-2 rounded-lg border border-surface-800 bg-surface-950 px-2.5 py-1.5 text-left text-surface-300 hover:border-surface-600"
+                                            title={`${row.name} on ${row.deviceLabel} — switches the chat to that machine`}
+                                          >
+                                            <span className="min-w-0 flex-1 truncate font-semibold">{row.name}</span>
+                                            <span className="shrink-0 truncate font-mono text-[10px] text-surface-500">↗ {row.deviceLabel}</span>
+                                          </button>
+                                        ))}
+                                      </>
+                                    ) : null}
                                   </div>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => setChatProjectPickerOpen(true)}
-                                    className={`rounded-full border px-2.5 py-1 font-semibold ${
-                                      preferredSurfaceProjectPath
-                                        ? "border-fuchsia-400/50 bg-fuchsia-400/10 text-fuchsia-100"
-                                        : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
-                                    }`}
-                                    title="Pick the repo this task runs in (task workDir)"
-                                  >
-                                    {preferredSurfaceProjectPath
-                                      ? (chatProjects.find((p) => p.path === preferredSurfaceProjectPath)?.name
-                                         || preferredSurfaceProjectPath.split(/[\\/]/).filter(Boolean).pop())
-                                      : "Project ▾"}
-                                  </button>
-                                )
-                              ) : null}
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setChatProjectPickerOpen(true)}
+                                  className={`rounded-full border px-2.5 py-1 font-semibold ${
+                                    preferredSurfaceProjectPath
+                                      ? "border-fuchsia-400/50 bg-fuchsia-400/10 text-fuchsia-100"
+                                      : "border-surface-800 bg-surface-950 text-surface-400 hover:border-surface-700"
+                                  }`}
+                                  title="Pick the repo this task runs in (task workDir)"
+                                >
+                                  {preferredSurfaceProjectPath
+                                    ? (chatProjects.find((p) => p.path === preferredSurfaceProjectPath)?.name
+                                       || preferredSurfaceProjectPath.split(/[\\/]/).filter(Boolean).pop())
+                                    : "Project ▾"}
+                                </button>
+                              )}
                               {/* Yaver's own MCP doorway — default ON, same as
                                   mobile. Off means the runner gets only the
                                   external MCPs the user selected below. */}
@@ -5584,6 +5730,42 @@ export default function DashboardPage() {
                                   </button>
                                 );
                               })}
+                              {/* MCPs on the user's OTHER machines — the
+                                  cross-machine catalog (2026-08-13). An MCP
+                                  server lives on exactly one machine and the
+                                  task machine attaches it by name from its own
+                                  local registry, so picking a remote chip
+                                  SWITCHES the chat to that machine (never a
+                                  silent no-op). Label carries the machine. */}
+                              {remoteMcpRows.length > 0 ? (
+                                <>
+                                  <span className="font-semibold uppercase tracking-[0.14em]">Other machines</span>
+                                  {remoteMcpRows.map((row) => {
+                                    const active = selectedMcpServers.includes(row.server.name);
+                                    return (
+                                      <button
+                                        key={`${row.deviceId}:${row.server.name}`}
+                                        type="button"
+                                        onClick={() => void switchChatDevice(row.device, { selectMcp: row.server.name })}
+                                        className={`rounded-full border px-2.5 py-1 font-semibold ${
+                                          active
+                                            ? "border-amber-400/50 bg-amber-400/10 text-amber-100"
+                                            : "border-surface-800 bg-surface-950 text-surface-400 hover:border-amber-600/60 hover:text-amber-100"
+                                        }`}
+                                        title={`${row.server.url} · ${row.server.toolCount ?? 0} tools · on ${row.deviceLabel} — switches the chat to that machine`}
+                                      >
+                                        {row.server.name}
+                                        <span className="ml-1 opacity-60">· {row.deviceLabel}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </>
+                              ) : null}
+                              {switchNotice ? (
+                                <span className="w-full rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-amber-200/90">
+                                  {switchNotice}
+                                </span>
+                              ) : null}
                             </div>
                           ) : null}
                         </>

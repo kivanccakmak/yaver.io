@@ -1346,12 +1346,28 @@ export default defineSchema({
     // authenticated session; a wrong/forged hint only produces a prompt
     // the user declines.
     ownerHintUserId: v.optional(v.id("users")),
+    // LAN approval (2026-08-13): same-network sign-in for surfaces that can
+    // see a local beacon (phone app, Electron GUI). The waiting device
+    // broadcasts {approveNonce, matchCode, expiresAtMs} — NEVER the userCode —
+    // so a LAN eavesdropper cannot hijack the code into their own account.
+    // approveNonce: random 32-hex; lookup key for POST /auth/device-code/lan-approve.
+    // matchCode: 3-digit number the TV shows and the approver displays for
+    //   visual confirmation (WhatsApp-style number matching).
+    // lanApproverUserId/Email + lanPendingExpiresAt: set when an authenticated
+    //   surface requests approval; the TV's poll sees the approver's identity
+    //   and the user presses Allow/Deny on the TV itself (single-use window).
+    approveNonce: v.optional(v.string()),
+    matchCode: v.optional(v.string()),
+    lanApproverUserId: v.optional(v.id("users")),
+    lanApproverEmail: v.optional(v.string()),
+    lanPendingExpiresAt: v.optional(v.number()),
     expiresAt: v.number(),
     createdAt: v.number(),
   })
     .index("by_userCode", ["userCode"])
     .index("by_deviceCode", ["deviceCode"])
     .index("by_ownerHint", ["ownerHintUserId", "status"])
+    .index("by_approveNonce", ["approveNonce"])
     // Lazy cleanup scanned this table with an unindexed .filter(), so a flood
     // of live (non-expired) rows made every subsequent insert O(table) — a
     // self-amplifying cost bomb. This index makes expiry pruning O(matches).

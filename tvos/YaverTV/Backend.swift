@@ -30,6 +30,13 @@ struct DeviceCodeStart: Decodable {
     let userCode: String
     let deviceCode: String
     let expiresAt: Double
+    /// LAN-approval material (2026-08-13): random nonce + 3-digit match code
+    /// minted server-side and returned with the code. The TV broadcasts them
+    /// on UDP 19837 (LanApprovalBeacon) so same-network surfaces can approve
+    /// without scanning the QR. Both may be absent for very old backends —
+    /// the QR path never depends on them.
+    let approveNonce: String?
+    let matchCode: String?
     /// QR target that routes a scan into the phone approver.
     var verifyURL: URL {
         var comps = URLComponents(url: Backend.webBaseURL.appendingPathComponent("auth/device"),
@@ -48,6 +55,12 @@ struct DevicePollResult: Decodable {
     let token: String?
     let claimHandle: String?
     let claimRequired: Bool?
+    /// LAN approval, phase 1 (2026-08-13): an authenticated same-network
+    /// surface requested approval (they saw this TV's UDP beacon). Non-nil
+    /// while the 60s server-side window is open — the TV renders
+    /// "Approve sign-in from <email>?" with Allow/Deny, then calls
+    /// DeviceCodeAuth.lanConfirm(deviceCode:allow:).
+    let lanPending: LanPendingInfo?
     /// Set when the poll never got an answer (offline, DNS, 5xx, bad JSON).
     ///
     /// Without this, a transport failure was reported as `.pending` — which the
@@ -56,6 +69,12 @@ struct DevicePollResult: Decodable {
     /// same screen as a TV waiting on the user, for as long as the user cared to
     /// stare at it. Keep polling (it usually IS transient), but say so.
     var unreachableReason: String? = nil
+}
+
+struct LanPendingInfo: Decodable {
+    let approverEmail: String?
+    let matchCode: String?
+    let expiresAt: Double?
 }
 
 enum DeviceCodeError: Error, LocalizedError {
@@ -101,9 +120,16 @@ enum DeviceCodeAuth {
             throw DeviceCodeError.createFailed((resp as? HTTPURLResponse)?.statusCode ?? -1)
         }
         // Decode the raw fields, then synthesize the struct (verifyURL is computed).
-        struct Raw: Decodable { let userCode: String; let deviceCode: String; let expiresAt: Double }
+        struct Raw: Decodable {
+            let userCode: String
+            let deviceCode: String
+            let expiresAt: Double
+            let approveNonce: String?
+            let matchCode: String?
+        }
         let raw = try JSONDecoder().decode(Raw.self, from: data)
-        return DeviceCodeStart(userCode: raw.userCode, deviceCode: raw.deviceCode, expiresAt: raw.expiresAt)
+        return DeviceCodeStart(userCode: raw.userCode, deviceCode: raw.deviceCode, expiresAt: raw.expiresAt,
+                               approveNonce: raw.approveNonce, matchCode: raw.matchCode)
     }
 
     static func poll(deviceCode: String) async -> DevicePollResult {
@@ -111,19 +137,19 @@ enum DeviceCodeAuth {
                                   resolvingAgainstBaseURL: false)!
         comps.queryItems = [URLQueryItem(name: "device_code", value: deviceCode)]
         guard let url = comps.url else {
-            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil,
                                     unreachableReason: "bad poll URL")
         }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
-                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
-                                        unreachableReason: "server returned HTTP \(code)")
+                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil,
+                                    unreachableReason: "server returned HTTP \(code)")
             }
             return try JSONDecoder().decode(DevicePollResult.self, from: data)
         } catch {
-            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil,
                                     unreachableReason: error.localizedDescription)
         }
     }
@@ -135,14 +161,14 @@ enum DeviceCodeAuth {
                                   resolvingAgainstBaseURL: false)!
         comps.queryItems = [URLQueryItem(name: "device_code", value: deviceCode)]
         guard let url = comps.url else {
-            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, unreachableReason: "bad events URL")
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil, unreachableReason: "bad events URL")
         }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
-                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
-                                        unreachableReason: "server returned HTTP \(code)")
+                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil,
+                                    unreachableReason: "server returned HTTP \(code)")
             }
             let text = String(data: data, encoding: .utf8) ?? ""
             let payload = text
@@ -151,11 +177,11 @@ enum DeviceCodeAuth {
                 .map { String($0.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces) }
                 .last
             guard let payload, let body = payload.data(using: .utf8) else {
-                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil)
+                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil)
             }
             return try JSONDecoder().decode(DevicePollResult.self, from: body)
         } catch {
-            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil,
                                     unreachableReason: error.localizedDescription)
         }
     }
@@ -171,13 +197,45 @@ enum DeviceCodeAuth {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
-                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
-                                        unreachableReason: "server returned HTTP \(code)")
+                return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil,
+                                    unreachableReason: "server returned HTTP \(code)")
             }
             return try JSONDecoder().decode(DevicePollResult.self, from: data)
         } catch {
-            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil,
+            return DevicePollResult(status: .pending, token: nil, claimHandle: nil, claimRequired: nil, lanPending: nil,
                                     unreachableReason: error.localizedDescription)
+        }
+    }
+
+    /// LAN approval, phase 2 (2026-08-13): the TV shows "Approve sign-in from
+    /// <email>?" and the user presses Allow/Deny. The deviceCode is the TV's
+    /// secret (same trust anchor as /claim); Allow binds the pending LAN
+    /// approver's account, Deny clears the pending window and the code stays
+    /// usable for the QR path.
+    struct LanConfirmResult: Decodable {
+        let ok: Bool?
+        let denied: Bool?
+        let claimHandle: String?
+        let reason: String?
+    }
+
+    static func lanConfirm(deviceCode: String, allow: Bool) async -> LanConfirmResult {
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("auth/device-code/lan-confirm"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "deviceCode": deviceCode,
+            "allow": allow,
+        ])
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return LanConfirmResult(ok: false, denied: nil, claimHandle: nil, reason: "HTTP \((resp as? HTTPURLResponse)?.statusCode ?? -1)")
+            }
+            return (try? JSONDecoder().decode(LanConfirmResult.self, from: data))
+                ?? LanConfirmResult(ok: false, denied: nil, claimHandle: nil, reason: "bad response")
+        } catch {
+            return LanConfirmResult(ok: false, denied: nil, claimHandle: nil, reason: error.localizedDescription)
         }
     }
 
@@ -221,5 +279,64 @@ enum DeviceCodeAuth {
     static var lastOwnerUserId: String? {
         let v = UserDefaults.standard.string(forKey: lastOwnerUserIdKey)
         return (v?.isEmpty == false) ? v : nil
+    }
+}
+
+// Email/password sign-in for the TV (2026-08-13). The TV already holds an
+// Apple ID, but not every Yaver account is an Apple account — and even an
+// Apple account with 2FA can't finish natively on a TV. So the sign-in
+// screen offers email+password typed with the remote, hitting the SAME
+// POST /auth/login the web + CLI use. Rate-limited server-side (429), and
+// gated by the deployment's email-password allowlist (403 carries the
+// server's message verbatim — the TV must not invent its own story).
+enum EmailAuthError: Error, LocalizedError {
+    case invalidCredentials
+    case lockedOut
+    case requiresTwoFactor
+    case server(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidCredentials:
+            return "Invalid email or password."
+        case .lockedOut:
+            return "Too many failed attempts. Wait a bit, then try again."
+        case .requiresTwoFactor:
+            return "Two-factor authentication is on. Approve with the QR code above from your phone, or in a browser."
+        case .server(let message):
+            return message
+        }
+    }
+}
+
+enum EmailAuth {
+    /// POST /auth/login {email, password} → {token} | {requires2fa} | error.
+    static func signIn(email: String, password: String) async throws -> String {
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("auth/login"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
+            "password": password,
+        ])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw EmailAuthError.server("No response from Yaver.")
+        }
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        if http.statusCode == 429 { throw EmailAuthError.lockedOut }
+        if http.statusCode == 401 { throw EmailAuthError.invalidCredentials }
+        guard (200..<300).contains(http.statusCode) else {
+            // 403 = email-password disabled / email not allowlisted — say
+            // exactly what the server said, never a generic failure.
+            throw EmailAuthError.server((obj?["error"] as? String) ?? "Email sign-in failed (\(http.statusCode)).")
+        }
+        if obj?["requires2fa"] as? Bool == true {
+            throw EmailAuthError.requiresTwoFactor
+        }
+        guard let token = obj?["token"] as? String, !token.isEmpty else {
+            throw EmailAuthError.server("Yaver didn't return a session token.")
+        }
+        return token
     }
 }

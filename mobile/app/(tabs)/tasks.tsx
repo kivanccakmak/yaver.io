@@ -33,7 +33,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
-import { useDevice } from "../../src/context/DeviceContext";
+import { useDevice, type Device } from "../../src/context/DeviceContext";
 import RemoteBoxBanner from "../../src/components/RemoteBoxBanner";
 // Pure output-buffer derivations live in a plain module so they can be
 // unit-tested in Node (see taskPreview.test.mts — it enforces that these
@@ -1939,6 +1939,17 @@ export default function TasksScreen() {
   const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [keepLastProject, setKeepLastProject] = useState(true);
+  // Cross-machine surface catalogs (2026-08-13): which MCP servers / which
+  // git projects live on which machine, from Convex userSettings
+  // (mcpCatalogByDevice / runtimeProjectCatalogByDevice, seeded by each
+  // agent's heartbeat). Lets the composer offer ANOTHER machine's MCPs as
+  // selectable rows and browse other machines' repos — the mobile twin of
+  // the web chat composer's cross-machine groups.
+  const [mcpCatalogByDevice, setMcpCatalogByDevice] = useState<Record<string, Array<{ name: string; url: string; toolCount?: number }>>>({});
+  const [projectCatalogByDevice, setProjectCatalogByDevice] = useState<Record<string, Array<{ projectName?: string | null; repoName?: string | null; gitRemote?: string | null; branch?: string | null }>>>({});
+  // While a cross-machine pick is in flight, the MCP restore effect must not
+  // overwrite the just-made selection with the previous device's Convex row.
+  const suppressMcpRestoreRef = useRef(false);
   // Opt-in text correction for task inputs. Off by default: commands and paths
   // are not prose, and autocorrect silently mangling either is worse than none.
   // Persisted per-device in AsyncStorage like keepLastProject.
@@ -1959,6 +1970,39 @@ export default function TasksScreen() {
   // (same class as the Logs sheet, 2026-08-08, and the Modal-handoff notes
   // in this file). Overlays inside the hosting Modal are the only form that
   // actually appears. (2026-08-09)
+  // Cross-machine rows for the composer sheet (2026-08-13): every OTHER
+  // owned device's MCP servers + repos from the Convex surface catalogs,
+  // with the machine label each row carries. Picking one switches the task
+  // to that machine via selectDevice — an MCP attaches by name on the task
+  // machine, and repo paths are machine-local, so a selection on a machine
+  // we are not about to run on would be a silent no-op.
+  const remoteMcpRows = useMemo(() => {
+    const rows: Array<{ device: Device; label: string; server: { name: string; url: string; toolCount?: number } }> = [];
+    for (const d of devices || []) {
+      if (d.id === activeDevice?.id || d.isGuest) continue;
+      for (const s of mcpCatalogByDevice[d.id] || []) {
+        rows.push({ device: d, label: (d.name || d.id || "other machine").trim(), server: s });
+      }
+    }
+    return rows.sort((a, b) => (a.label + a.server.name).localeCompare(b.label + b.server.name));
+  }, [devices, activeDevice?.id, mcpCatalogByDevice]);
+
+  const remoteProjectRows = useMemo(() => {
+    const rows: Array<{ device: Device; label: string; name: string; gitRemote?: string }> = [];
+    for (const d of devices || []) {
+      if (d.id === activeDevice?.id || d.isGuest) continue;
+      for (const p of projectCatalogByDevice[d.id] || []) {
+        rows.push({
+          device: d,
+          label: (d.name || d.id || "other machine").trim(),
+          name: String(p.projectName || p.repoName || "Unnamed project"),
+          gitRemote: p.gitRemote || undefined,
+        });
+      }
+    }
+    return rows.sort((a, b) => (a.label + a.name).localeCompare(b.label + b.name));
+  }, [devices, activeDevice?.id, projectCatalogByDevice]);
+
   const renderProjectPickerSheet = () => (
     <>
       <Pressable style={[s.modalOverlay, { justifyContent: "flex-start" }]} onPress={() => setShowProjectPicker(false)} />
@@ -1983,13 +2027,13 @@ export default function TasksScreen() {
               }}
             />
           </View>
-          {composerProjects.length === 0 ? (
-            <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
-              No projects reported by the runner machine yet.
-            </Text>
-          ) : (
-            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
-              {composerProjects.map((project) => {
+          <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+            {composerProjects.length === 0 ? (
+              <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
+                No projects reported by the runner machine yet.
+              </Text>
+            ) : (
+              composerProjects.map((project) => {
                 const active = project.path === selectedProjectPath;
                 return (
                   <Pressable
@@ -2024,9 +2068,46 @@ export default function TasksScreen() {
                     {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
                   </Pressable>
                 );
-              })}
-            </ScrollView>
-          )}
+              })
+            )}
+            {remoteProjectRows.length > 0 ? (
+              <>
+                <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 16 }]}>
+                  ON OTHER MACHINES
+                </Text>
+                <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 10 }}>
+                  These repos live on another machine — picking one switches the task to that machine.
+                </Text>
+                {remoteProjectRows.map((row) => (
+                  <Pressable
+                    key={`${row.device.id}:${row.name}`}
+                    onPress={() => {
+                      void (async () => {
+                        try {
+                          if (row.device.id !== activeDevice?.id) {
+                            await selectDevice(row.device);
+                          }
+                          // The switch effect refetches the new machine's
+                          // projects; the sheet stays open so the user taps
+                          // the exact repo with its real path there.
+                        } catch {}
+                      })();
+                    }}
+                    style={[s.projectPickerRow, { borderColor: c.border, backgroundColor: c.bg }]}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{row.name}</Text>
+                      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>
+                        {row.gitRemote || "no remote"}
+                      </Text>
+                    </View>
+                    <Ionicons name="arrow-forward" size={16} color={c.textMuted} />
+                    <Text style={{ color: c.accent, fontSize: 11, fontWeight: "600", marginLeft: 4 }} numberOfLines={1}>{row.label}</Text>
+                  </Pressable>
+                ))}
+              </>
+            ) : null}
+          </ScrollView>
           <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>MCP SERVERS</Text>
           <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
             Yaver tools are on by default — toggle them off to run with only external MCPs.
@@ -2084,6 +2165,54 @@ export default function TasksScreen() {
               );
             })
           )}
+          {remoteMcpRows.length > 0 ? (
+            <>
+              <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>
+                ON OTHER MACHINES
+              </Text>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 10 }}>
+                These MCPs live on another machine — picking one switches the task to that machine.
+              </Text>
+              {remoteMcpRows.map((row) => {
+                const active = selectedMcpServers.includes(row.server.name);
+                return (
+                  <Pressable
+                    key={`${row.device.id}:${row.server.name}`}
+                    onPress={() => {
+                      suppressMcpRestoreRef.current = true;
+                      setTimeout(() => { suppressMcpRestoreRef.current = false; }, 5000);
+                      void (async () => {
+                        try {
+                          if (row.device.id !== activeDevice?.id) {
+                            await selectDevice(row.device);
+                          }
+                          const deviceId = row.device.id || "default";
+                          const next = [...new Set([...mcpStateRef.current.mcpServers, row.server.name])];
+                          mcpStateRef.current = { mcpServers: next, includeYaverMcp };
+                          setSelectedMcpServers(next);
+                          if (token) {
+                            void saveMCPServersToConvex(token, { deviceId, mcpServers: next, includeYaverMcp });
+                          }
+                        } catch {}
+                      })();
+                    }}
+                    style={[
+                      s.projectPickerRow,
+                      { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg },
+                    ]}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{row.server.name}</Text>
+                      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }} numberOfLines={1}>
+                        {row.server.toolCount ?? 0} tools · {row.label}
+                      </Text>
+                    </View>
+                    {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : <Ionicons name="ellipse-outline" size={20} color={c.textMuted} />}
+                  </Pressable>
+                );
+              })}
+            </>
+          ) : null}
           <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>TEXT CORRECTION</Text>
           <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
             Autocorrect/autocap for task inputs — off by default so commands and paths are never silently rewritten.
@@ -5235,6 +5364,33 @@ export default function TasksScreen() {
       const catalogForDevice = (settings as any)?.runtimeProjectCatalogByDevice as
         | Array<{ deviceId: string; projects?: Array<{ projectName?: string | null; repoName?: string | null; gitRemote?: string | null; branch?: string | null; framework?: string | null }> }>
         | undefined;
+      // Cross-machine catalogs (2026-08-13): the SAME rows the web chat
+      // composer reads, so a box with MCP servers shows up on the phone as
+      // selectable "on other machines" rows in the composer sheet.
+      const mcpCatalogForDevice = (settings as any)?.mcpCatalogByDevice as
+        | Array<{ deviceId: string; servers?: Array<{ name?: string; url?: string; enabled?: boolean; toolCount?: number }> }>
+        | undefined;
+      const mcpCatalogMap: Record<string, Array<{ name: string; url: string; toolCount?: number }>> = {};
+      for (const row of mcpCatalogForDevice || []) {
+        if (!row?.deviceId) continue;
+        const servers = (Array.isArray(row.servers) ? row.servers : [])
+          .filter((s) => s && s.name && s.enabled !== false)
+          .map((s) => ({
+            name: String(s.name).trim(),
+            url: String(s.url || "").trim(),
+            ...(typeof s.toolCount === "number" && s.toolCount >= 0 ? { toolCount: s.toolCount } : {}),
+          }));
+        if (servers.length > 0) mcpCatalogMap[row.deviceId] = servers;
+      }
+      const projectCatalogMap: Record<string, Array<{ projectName?: string | null; repoName?: string | null; gitRemote?: string | null; branch?: string | null }>> = {};
+      for (const row of catalogForDevice || []) {
+        if (!row?.deviceId || !Array.isArray(row.projects) || row.projects.length === 0) continue;
+        projectCatalogMap[row.deviceId] = row.projects;
+      }
+      if (!cancelled) {
+        setMcpCatalogByDevice(mcpCatalogMap);
+        setProjectCatalogByDevice(projectCatalogMap);
+      }
       const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
       const catalogRow = (catalogForDevice || []).find((row) => row?.deviceId === runnerDeviceId);
       let normalizedProjects: ComposerProject[] = (projectRows || [])
@@ -5261,7 +5417,7 @@ export default function TasksScreen() {
       // no local fallback (MCP names are agent-scoped, not path-scoped).
       if (token) {
         const mcpPref = await loadMCPServersFromConvex(token, runnerDeviceId).catch(() => null);
-        if (mcpPref && !cancelled) {
+        if (mcpPref && !cancelled && !suppressMcpRestoreRef.current) {
           const known = new Set((mcpRows || []).filter((s) => s.enabled).map((s) => s.name));
           if (Array.isArray(mcpPref.mcpServers)) {
             setSelectedMcpServers(mcpPref.mcpServers.filter((name) => known.has(name)));

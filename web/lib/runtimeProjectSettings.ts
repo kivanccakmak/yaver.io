@@ -229,3 +229,81 @@ export async function saveMCPServersToConvex(
   }
 }
 
+// ── Cross-machine surface catalogs (2026-08-13) ─────────────────────────
+// userSettings.mcpCatalogByDevice / runtimeProjectCatalogByDevice, seeded by
+// each agent's Convex heartbeat (convex_state_sync.go buildMCPCatalog +
+// buildRuntimeProjectCatalog). These answer "which MCP server / which git
+// project lives on which machine" WITHOUT fanning out to every box — the web
+// chat composer and mobile composer render another machine's MCPs as
+// selectable chips and browse other machines' projects.
+// Privacy contract: names/URLs/remotes/branches/frameworks only — NEVER
+// absolute paths or MCP auth tokens.
+
+export type MCPCatalogServer = {
+  name: string;
+  url: string;
+  enabled: boolean;
+  toolCount?: number;
+};
+
+/** Map mcpCatalogByDevice rows → deviceId → enabled servers. Rows the agent
+ *  never synced (still-empty catalog) degrade to absent keys. */
+export function mcpCatalogMap(
+  rows?: Array<{ deviceId: string; servers?: Array<{ name?: string; url?: string; enabled?: boolean; toolCount?: number }> }>,
+): Record<string, MCPCatalogServer[]> {
+  const out: Record<string, MCPCatalogServer[]> = {};
+  for (const row of rows || []) {
+    if (!row?.deviceId) continue;
+    const servers: MCPCatalogServer[] = [];
+    for (const s of Array.isArray(row.servers) ? row.servers : []) {
+      if (!s || !s.name || s.enabled === false) continue;
+      servers.push({
+        name: String(s.name).trim(),
+        url: String(s.url || "").trim(),
+        enabled: true,
+        ...(typeof s.toolCount === "number" && s.toolCount >= 0 ? { toolCount: s.toolCount } : {}),
+      });
+    }
+    if (servers.length > 0) out[row.deviceId] = servers;
+  }
+  return out;
+}
+
+export type SurfaceCatalogs = {
+  mcpByDevice: Record<string, MCPCatalogServer[]>;
+  projectsByDevice: Record<string, RuntimeProjectSeed[]>;
+};
+
+/** One /settings fetch returning BOTH cross-machine catalogs. Reads the
+ *  account's settings row (auth'd via bearer). Degrades to empty maps on any
+ *  failure — catalogs are advisory, never block. */
+export async function loadSurfaceCatalogsFromConvex(
+  convexUrl: string,
+  token: string | null | undefined,
+): Promise<SurfaceCatalogs> {
+  const empty: SurfaceCatalogs = { mcpByDevice: {}, projectsByDevice: {} };
+  if (!token) return empty;
+  try {
+    const res = await fetch(`${convexUrl}/settings`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return empty;
+    const data = await res.json().catch(() => null);
+    const settings = data?.settings;
+    if (!settings) return empty;
+    const projectsByDevice: Record<string, RuntimeProjectSeed[]> = {};
+    for (const row of Object.values(runtimeProjectCatalogMap(settings.runtimeProjectCatalogByDevice))) {
+      if (row?.deviceId && Array.isArray(row.projects) && row.projects.length > 0) {
+        projectsByDevice[row.deviceId] = row.projects;
+      }
+    }
+    return {
+      mcpByDevice: mcpCatalogMap(settings.mcpCatalogByDevice),
+      projectsByDevice,
+    };
+  } catch {
+    return empty;
+  }
+}
+

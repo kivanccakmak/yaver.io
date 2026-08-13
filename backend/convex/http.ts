@@ -132,6 +132,8 @@ const CODE_ENTRY_SENTINELS = [
   "TOO_MANY_ATTEMPTS",
   "INVALID_PENDING",
   "PENDING_EXPIRED",
+  // LAN approval (2026-08-13): the beacon nonce looked up nothing live.
+  "INVALID_NONCE",
   // Account linking / merge threw the same way and drifted the same way: a bad
   // link token answered 400 with a decorated stack instead of 410.
   "INVALID_LINK_TOKEN",
@@ -5668,6 +5670,81 @@ http.route({
     const result = await ctx.runMutation(api.deviceCode.claimDeviceCode, {
       deviceCode,
       claimHandle,
+    });
+    return jsonResponse(result);
+  }),
+});
+
+/** POST /auth/device-code/lan-approve — LAN approval, phase 1 (authenticated).
+ *  An authenticated surface that discovered the waiting device's local beacon
+ *  (which carries the approveNonce — never the userCode) requests approval.
+ *  The waiting device's poll then shows the approver's identity and the user
+ *  confirms on the TV itself (phase 2, /auth/device-code/lan-confirm). */
+http.route({
+  path: "/auth/device-code/lan-approve",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const user = await authenticateRequest(ctx, request);
+    if (!user) return errorResponse("Unauthorized", 401);
+
+    const authHeader = request.headers.get("Authorization")!;
+    const token = authHeader.slice(7);
+    const tokenHash = await sha256Hex(token);
+    const session = await ctx.runQuery(api.auth.validateSession, { tokenHash });
+    if (!session) return errorResponse("Unauthorized", 401);
+    const userDoc = await ctx.runQuery(api.auth.getUserDocId, { tokenHash });
+    if (!userDoc) return errorResponse("User not found", 404);
+
+    const body = await request.json().catch(() => ({}));
+    const approveNonce = typeof body?.approveNonce === "string" ? body.approveNonce : "";
+    if (!approveNonce) {
+      return errorResponse("approveNonce required", 400);
+    }
+    const email = typeof body?.email === "string" ? body.email : undefined;
+    try {
+      const result = await ctx.runMutation(internal.deviceCode.lanApproveDeviceCode, {
+        approveNonce,
+        userId: userDoc,
+        ...(email ? { email } : {}),
+      });
+      return jsonResponse(result);
+    } catch (e: any) {
+      const s = thrownSentinel(e);
+      if (s === "INVALID_NONCE") {
+        return errorResponse("That approval link is not valid — the TV may have generated a fresh code.", 404, sentinelCode(s));
+      }
+      if (s === "CODE_ALREADY_USED") {
+        return errorResponse("That device was already approved.", 409, sentinelCode(s));
+      }
+      if (s === "CODE_EXPIRED") {
+        return errorResponse("That code expired — the TV is generating a fresh one.", 410, sentinelCode(s));
+      }
+      if (s === "TOO_MANY_ATTEMPTS") {
+        return errorResponse("Too many attempts on that code. Get a fresh one and try again.", 429, sentinelCode(s));
+      }
+      throw e;
+    }
+  }),
+});
+
+/** POST /auth/device-code/lan-confirm — LAN approval, phase 2 (waiting device).
+ *  The TV shows "Approve sign-in from <email>?" and the user presses Allow/Deny.
+ *  Trusted by possession of the deviceCode (the secret only the waiting device
+ *  holds — same trust anchor as /claim). Allow authorizes as the pending
+ *  approver; Deny clears the pending window and the code stays usable. */
+http.route({
+  path: "/auth/device-code/lan-confirm",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json().catch(() => ({}));
+    const deviceCode = typeof body?.deviceCode === "string" ? body.deviceCode : "";
+    const allow = body?.allow === true;
+    if (!deviceCode) {
+      return errorResponse("deviceCode required", 400);
+    }
+    const result = await ctx.runMutation(api.deviceCode.lanConfirmDeviceCode, {
+      deviceCode,
+      allow,
     });
     return jsonResponse(result);
   }),
