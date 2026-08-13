@@ -78,7 +78,7 @@ jobs:
 
       - name: Check size constraint
         run: |
-          SIZE=$(du -sm web/ --exclude='node_modules' --exclude='.next' 2>/dev/null | cut -f1 || \
+          SIZE=$(du -sm web/ --exclude='node_modules' --exclude='.next' --exclude='.open-next' --exclude='.wrangler' 2>/dev/null | cut -f1 || \
                  du -sm web/ | cut -f1)
           echo "web/ size: ${SIZE}MB"
           if [ "$SIZE" -gt 15 ]; then

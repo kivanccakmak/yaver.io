@@ -85,13 +85,14 @@ SIZE_KB=$(find "$DEPLOY_DIR" \
   -not -path '*/node_modules/*' \
   -not -path '*/.next/*' \
   -not -path '*/.open-next/*' \
+  -not -path '*/.wrangler/*' \
   -type f -print0 \
   | xargs -0 "${STAT_SIZE[@]}" 2>/dev/null \
   | awk '{s+=$1} END {printf "%.0f", s/1024}')
 
 # Fallback for Linux
 if [ -z "$SIZE_KB" ] || [ "$SIZE_KB" = "0" ]; then
-  SIZE_KB=$(du -sk --exclude='node_modules' --exclude='.next' --exclude='.open-next' "$DEPLOY_DIR" 2>/dev/null | awk '{print $1}')
+  SIZE_KB=$(du -sk --exclude='node_modules' --exclude='.next' --exclude='.open-next' --exclude='.wrangler' "$DEPLOY_DIR" 2>/dev/null | awk '{print $1}')
 fi
 
 SIZE_MB=$(awk "BEGIN {printf \"%.2f\", $SIZE_KB / 1024}")
