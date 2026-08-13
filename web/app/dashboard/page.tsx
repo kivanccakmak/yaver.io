@@ -1385,23 +1385,11 @@ export default function DashboardPage() {
     return agentClientPool.subscribe(sync);
   }, []);
 
-  // Initial landing (user directive 2026-07-27): a box already connected means
-  // the user came to work — open Vibing. No box connected → stay on Devices,
-  // which is where connecting happens. Runs once, never over an explicit
-  // ?tab= deep link, and never after the user has navigated (activeTab is
-  // read through a ref so a manual click before connect wins).
-  const autoLandedRef = useRef(false);
-  const activeTabRef = useRef(activeTab);
-  activeTabRef.current = activeTab;
-  useEffect(() => {
-    if (autoLandedRef.current || !isConnected) return;
-    autoLandedRef.current = true;
-    if (typeof window !== "undefined") {
-      const urlTab = new URLSearchParams(window.location.search).get("tab");
-      if (isDashboardTab(urlTab) && isLaunchEnabledDashboardTab(urlTab)) return; // deep link wins
-    }
-    if (activeTabRef.current === "devices") setActiveTab("runtime");
-  }, [isConnected]);
+  // Stay-in-chat rule (2026-08-13, owner directive): a connected box used to
+  // auto-open the Vibing tab on landing ("came to work → open Vibing"). The
+  // dashboard NEVER navigates itself to a different tab now — a user stays on
+  // the tab they opened (Devices/chat), and Vibing is reached by tapping the
+  // tab, not by connection state. Explicit ?tab= deep links still work.
 
   // Restore the last chat-composer choices from Convex on connect — the SAME
   // defaultRuntimeProjectByDevice / mcpServersByDevice rows mobile writes, so
@@ -2842,7 +2830,12 @@ export default function DashboardPage() {
     let fallbackPendingCloudTask: PendingCloudDispatch | null = null;
     try {
       if (continuing) {
-        await agentClient.continueTask(activeTask!.id, text);
+        // The chat Build|Plan control applies to the whole thread, not just
+        // the first prompt — a mid-conversation switch from plan to build is
+        // exactly a follow-up (2026-08-13). The agent's /continue endpoint
+        // accepts mode; the surface must send it.
+        const mode = selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined;
+        await agentClient.continueTask(activeTask!.id, text, mode);
       } else {
         let placementPreview: TaskPlacementDecision | null = null;
         const placementKind = inferTaskPlacementKind(text);
@@ -3177,7 +3170,10 @@ export default function DashboardPage() {
     setSending(true);
     void (async () => {
       try {
-        await agentClient.continueTask(activeTask.id, next);
+        // Queued follow-ups carry the same Build|Plan mode as the composer —
+        // the drain is just handleSend arriving late (2026-08-13).
+        const mode = selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined;
+        await agentClient.continueTask(activeTask.id, next, mode);
       } catch (err: any) {
         setConnectError(err?.message || "Failed to send queued follow-up");
         // Drop the empty assistant placeholder we pushed; keep the

@@ -2287,6 +2287,12 @@ export default function TasksScreen() {
   const [submittingAgentAnswer, setSubmittingAgentAnswer] = useState(false);
   const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
   const [followUpImages, setFollowUpImages] = useState<ImageAttachment[]>([]);
+  // OpenCode Build|Plan for the FOLLOW-UP composer (the in-chat mode switch,
+  // 2026-08-13). Empty = agent default: no mode is sent until the user taps a
+  // segment, so a conversation that never touches this keeps its behavior.
+  // Selecting one sends mode on the next continue/fork, which is how a
+  // plan-mode chat switches to build (and back) without leaving the thread.
+  const [followUpOpenCodeMode, setFollowUpOpenCodeMode] = useState<string>("");
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [recoveringDeviceId, setRecoveringDeviceId] = useState<string | null>(null);
   const [quicState, setQuicState] = useState<ConnectionState>(quicClient.connectionState);
@@ -3605,17 +3611,13 @@ export default function TasksScreen() {
 
   useEffect(() => {
     const unsub = quicClient.on("output", (taskId, line) => {
-      // Check for Yaver control signals (auto-route)
-      if (line.includes('"yaver_control"')) {
-        try {
-          const ctrl = JSON.parse(line);
-          if (ctrl.yaver_control === "dev_server_ready") {
-            // Dev server is ready — auto-route to Apps tab
-            setSelectedTask(null);
-            taskRouter.navigate("/(tabs)/apps");
-          }
-        } catch {}
-      }
+      // Stay-in-chat rule (2026-08-13, owner directive): a control signal like
+      // dev_server_ready used to auto-close the chat thread and dump the user
+      // onto the Apps/vibing tab mid-conversation. That is exactly the
+      // "enter goes to vibing" behavior being removed — the task chat NEVER
+      // navigates itself away. Preview refresh is a separate, non-navigating
+      // lane (runtime_render_requested → queued render intent below); the
+      // user stays in the thread they opened.
 
       if (!outputBufferRef.current[taskId]) {
         outputBufferRef.current[taskId] = [];
@@ -4937,6 +4939,10 @@ export default function TasksScreen() {
           const result = await connectionManager.runnerClient().forkTask(selectedTask.id, {
             runner: forkRunner,
             input: optimisticText,
+            // The in-chat Build|Plan toggle rides the fork — switching modes
+            // on a finished/other-runner parent starts the child in that
+            // mode (2026-08-13). Empty = child keeps the agent default.
+            mode: followUpOpenCodeMode || undefined,
             // A fork continues a conversation the user is ALREADY having with
             // this machine — placement must not bounce it to a Cloud Workspace
             // that is waking. allowLocalFallback keeps the fork here even when
@@ -4975,7 +4981,14 @@ export default function TasksScreen() {
           // Same runner: regular continue. The agent now accepts
           // follow-ups while a task is still streaming and queues them
           // onto the same session instead of requiring a stop first.
-          await connectionManager.runnerClient().continueTask(selectedTask.id, optimisticText, optimisticImages.length > 0 ? optimisticImages : undefined);
+          // The in-chat Build|Plan toggle rides the continue too — a
+          // plan→build switch mid-run is this path (2026-08-13).
+          await connectionManager.runnerClient().continueTask(
+            selectedTask.id,
+            optimisticText,
+            optimisticImages.length > 0 ? optimisticImages : undefined,
+            followUpOpenCodeMode || undefined,
+          );
         }
       }
       // Input already cleared optimistically above — just refresh.
@@ -7953,6 +7966,43 @@ export default function TasksScreen() {
                         <Text style={{ color: c.textMuted, fontSize: 10 }}>▾</Text>
                       </Pressable>
                     </View>
+                    {/* OpenCode Build|Plan — the in-chat mode switch. Mirrors
+                        the New Task composer's segmented control, but scoped to
+                        THIS conversation's next turn: an empty selection sends
+                        no mode (agent default); tapping Plan then Send forks or
+                        continues that turn in plan mode. Gated on the parent
+                        task's runner — mode only means something for opencode. */}
+                    {normalizeTaskRunnerId((selectedTask?.runnerId || "").trim()) === "opencode" && (
+                      <View style={[s.composerModeRow, { borderColor: withAlpha(c.border, "cc") }]}>
+                        <Text style={[s.composerModeLabel, { color: c.textMuted }]}>Mode</Text>
+                        <View style={s.composerModeSegmented}>
+                          {(["build", "plan"] as const).map((mode) => {
+                            const active = followUpOpenCodeMode === mode;
+                            return (
+                              <Pressable
+                                key={mode}
+                                onPress={() => {
+                                  taskHaptics.send();
+                                  setFollowUpOpenCodeMode(mode);
+                                }}
+                                accessibilityRole="radio"
+                                accessibilityState={{ selected: active }}
+                                accessibilityLabel={`Run this follow-up in ${mode} mode`}
+                                style={[
+                                  s.composerModeButton,
+                                  { borderColor: active ? c.accent : c.border },
+                                  active && { backgroundColor: c.accent + "20" },
+                                ]}
+                              >
+                                <Text style={[s.composerModeText, { color: active ? c.accent : c.textSecondary }]}>
+                                  {mode === "build" ? "Build" : "Plan"}
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    )}
                     <TextInput
                       // testIDs on the composer exist so the follow-up loop can
                       // be driven by maestro (mobile/maestro/followup-visible.yaml).

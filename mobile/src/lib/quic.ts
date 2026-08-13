@@ -2852,8 +2852,10 @@ export class QuicClient {
     if (!res.ok) throw new Error(`Failed to exit task: ${res.status}`);
   }
 
-  /** Resume a task with a follow-up prompt. */
-  async continueTask(taskId: string, input: string, images?: ImageAttachment[]): Promise<void> {
+  /** Resume a task with a follow-up prompt. `mode` is the opencode agent
+   *  selector (build/plan/custom) forwarded to the agent's /continue endpoint,
+   *  which accepts it — so a follow-up in the chat can switch plan↔build. */
+  async continueTask(taskId: string, input: string, images?: ImageAttachment[], mode?: string): Promise<void> {
     this.assertConnected();
     // Guarantee headroom under the iOS ~6-connections-per-host ceiling AND give
     // this POST a hard timeout — without BOTH, a SECOND follow-up starves behind
@@ -2868,7 +2870,7 @@ export class QuicClient {
       res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}/continue`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ input, ...(images?.length ? { images } : {}) }),
+        body: JSON.stringify({ input, ...(images?.length ? { images } : {}), ...(mode ? { mode } : {}) }),
       }, 30000);
     } catch (e) {
       if (e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message))) {

@@ -2560,14 +2560,14 @@ export class AgentClient {
     if (!res.ok) throw new Error(`Failed to stop task: ${res.status}`);
   }
 
-  async continueTask(taskId: string, input: string): Promise<void> {
+  async continueTask(taskId: string, input: string, mode?: string): Promise<void> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(
       `${this.taskBaseUrl}/tasks/${taskId}/continue`,
       {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ input }),
+        body: JSON.stringify({ input, ...(mode ? { mode } : {}) }),
       },
       30_000,
     ).catch((err: any) => {
