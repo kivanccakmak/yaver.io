@@ -26,6 +26,7 @@ import { clearCache } from "../../src/lib/storage";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { quicClient, type AgentStatus, type RelayServer } from "../../src/lib/quic";
+import { createGitRepository, getCodingMode, setCodingMode, getLocalProvider, setLocalProvider, getLocalModel, setLocalModel, getLocalApiKey, setLocalApiKey, getGitToken, setGitToken, type CodingMode, type GitProvider, type LlmProvider } from "../../src/lib/coding-runtime";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
 const BUILD_NUMBER =
@@ -62,6 +63,15 @@ export default function SettingsScreen() {
   const [events, setEvents] = useState<DeviceEvent[]>([]);
   const [showMetrics, setShowMetrics] = useState(false);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+  const [codingMode, setCodingModeState] = useState<CodingMode>("remote-preferred");
+  const [localProvider, setLocalProviderState] = useState<LlmProvider>("deepseek");
+  const [localModel, setLocalModelState] = useState("deepseek-chat");
+  const [localApiKey, setLocalApiKeyState] = useState("");
+  const [githubToken, setGithubToken] = useState("");
+  const [gitlabToken, setGitlabToken] = useState("");
+  const [newRepoName, setNewRepoName] = useState("");
+  const [newRepoProvider, setNewRepoProvider] = useState<GitProvider>("github");
+  const [isCreatingRepo, setIsCreatingRepo] = useState(false);
 
   // Relay servers
   const [customRelays, setCustomRelays] = useState<RelayServer[]>([]);
@@ -74,6 +84,12 @@ export default function SettingsScreen() {
   const [relaySyncEnabled, setRelaySyncEnabled] = useState(false);
 
   // Load custom relay servers and sync preference from AsyncStorage
+  useEffect(() => {
+    Promise.all([getCodingMode(), getLocalProvider(), getLocalModel(), getLocalApiKey("deepseek"), getGitToken("github"), getGitToken("gitlab")]).then(([mode, provider, model, deepseekKey, github, gitlab]) => {
+      setCodingModeState(mode); setLocalProviderState(provider); setLocalModelState(model); setLocalApiKeyState(deepseekKey); setGithubToken(github); setGitlabToken(gitlab);
+    });
+  }, []);
+
   useEffect(() => {
     AsyncStorage.getItem(CUSTOM_RELAYS_KEY).then((raw) => {
       if (raw) {
@@ -158,6 +174,33 @@ export default function SettingsScreen() {
     setNewRelayPassword("");
     setNewRelayLabel("");
     setShowAddRelay(false);
+  };
+
+  const handleCreateRepo = async () => {
+    if (!newRepoName.trim()) return;
+    setIsCreatingRepo(true);
+    try {
+      const url = await createGitRepository(newRepoProvider, newRepoName.trim());
+      setNewRepoName("");
+      Alert.alert("Repository created", url);
+    } catch (error) {
+      Alert.alert("Repository creation failed", error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsCreatingRepo(false);
+    }
+  };
+
+  const handleSyncRemoteSecret = async (name: string, value: string) => {
+    if (connectionStatus !== "connected") {
+      Alert.alert("Remote unavailable", "Connect the Ubuntu/remote device first, then sync the credential.");
+      return;
+    }
+    try {
+      await quicClient.setRemoteSecret(name, value);
+      Alert.alert("Synced", `${name} is now stored on ${activeDevice?.name || "the remote agent"}.`);
+    } catch (error) {
+      Alert.alert("Sync failed", error instanceof Error ? error.message : String(error));
+    }
   };
 
   const handleRemoveRelay = (relayId: string) => {
@@ -691,6 +734,51 @@ export default function SettingsScreen() {
             </View>
           </View>
         )}
+
+        {/* Coding runtime */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Coding Runtime</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <Text style={[styles.runnerDesc, { color: c.textMuted, marginBottom: 10 }]}>Choose how Tasks behaves when a dev machine is unavailable. Local mode supports files, search, diffs, Git, and LLM chat; builds and shell work stay remote or in CI.</Text>
+            {([
+              ["remote-preferred", "Remote preferred", "Use the connected Yaver agent."],
+              ["auto-fallback", "Automatic fallback", "Use local mode when remote connection fails."],
+              ["local-only", "Phone only", "Always use the local workspace and provider."],
+            ] as const).map(([value, label, description]) => (
+              <Pressable key={value} style={[styles.runnerOption, { borderBottomColor: c.borderSubtle }]} onPress={() => { setCodingModeState(value); setCodingMode(value); if (token) saveUserSettings(token, { codingMode: value }); }}>
+                <View style={[styles.radioOuter, { borderColor: codingMode === value ? c.accent : c.border }]}>{codingMode === value && <View style={[styles.radioInner, { backgroundColor: c.accent }]} />}</View>
+                <View style={{ flex: 1 }}><Text style={[styles.runnerName, { color: c.textPrimary }]}>{label}</Text><Text style={[styles.runnerDesc, { color: c.textMuted }]}>{description}</Text></View>
+              </Pressable>
+            ))}
+            <Text style={[styles.detailLabel, { color: c.textMuted, marginTop: 14 }]}>LOCAL LLM PROVIDER</Text>
+            <View style={styles.providerRow}>
+              {(["deepseek", "openai-compatible", "ollama"] as LlmProvider[]).map((provider) => (
+                <Pressable key={provider} style={[styles.providerChip, { borderColor: localProvider === provider ? c.accent : c.border, backgroundColor: localProvider === provider ? c.accent + "22" : c.bgCardElevated }]} onPress={async () => { setLocalProviderState(provider); await setLocalProvider(provider); setLocalApiKeyState(await getLocalApiKey(provider)); }}><Text style={{ color: localProvider === provider ? c.accent : c.textMuted, fontSize: 12 }}>{provider === "openai-compatible" ? "OpenAI" : provider[0].toUpperCase() + provider.slice(1)}</Text></Pressable>
+              ))}
+            </View>
+            <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={localModel} onChangeText={(text) => { setLocalModelState(text); setLocalModel(text); }} placeholder="Model (deepseek-chat)" placeholderTextColor={c.textMuted} autoCapitalize="none" />
+            {localProvider !== "ollama" && <>
+              <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={localApiKey} onChangeText={(text) => { setLocalApiKeyState(text); setLocalApiKey(localProvider, text); }} placeholder={`${localProvider === "deepseek" ? "DeepSeek" : "OpenAI-compatible"} API key (stored on this phone)`} placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
+              <Pressable style={[styles.remoteSyncButton, { borderColor: c.border, opacity: connectionStatus === "connected" && localApiKey ? 1 : 0.5 }]} disabled={connectionStatus !== "connected" || !localApiKey} onPress={() => handleSyncRemoteSecret(`${localProvider.toUpperCase()}_API_KEY`, localApiKey)}><Text style={{ color: c.accent, fontSize: 12 }}>Sync provider key to remote</Text></Pressable>
+            </>}
+            <Text style={[styles.detailLabel, { color: c.textMuted, marginTop: 14 }]}>GIT HOST TOKENS</Text>
+            <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={githubToken} onChangeText={(text) => { setGithubToken(text); setGitToken("github", text); }} placeholder="GitHub token (repo scope)" placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
+            <Pressable style={[styles.remoteSyncButton, { borderColor: c.border, opacity: connectionStatus === "connected" && githubToken ? 1 : 0.5 }]} disabled={connectionStatus !== "connected" || !githubToken} onPress={() => handleSyncRemoteSecret("GITHUB_TOKEN", githubToken)}><Text style={{ color: c.accent, fontSize: 12 }}>Sync GitHub token to remote</Text></Pressable>
+            <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={gitlabToken} onChangeText={(text) => { setGitlabToken(text); setGitToken("gitlab", text); }} placeholder="GitLab token (api scope)" placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
+            <Pressable style={[styles.remoteSyncButton, { borderColor: c.border, opacity: connectionStatus === "connected" && gitlabToken ? 1 : 0.5 }]} disabled={connectionStatus !== "connected" || !gitlabToken} onPress={() => handleSyncRemoteSecret("GITLAB_TOKEN", gitlabToken)}><Text style={{ color: c.accent, fontSize: 12 }}>Sync GitLab token to remote</Text></Pressable>
+            <Text style={[styles.detailLabel, { color: c.textMuted, marginTop: 14 }]}>CREATE A REPOSITORY</Text>
+            <View style={styles.providerRow}>
+              {(["github", "gitlab"] as GitProvider[]).map((provider) => (
+                <Pressable key={provider} style={[styles.providerChip, { borderColor: newRepoProvider === provider ? c.accent : c.border }]} onPress={() => setNewRepoProvider(provider)}><Text style={{ color: newRepoProvider === provider ? c.accent : c.textMuted, fontSize: 12 }}>{provider === "github" ? "GitHub" : "GitLab"}</Text></Pressable>
+              ))}
+            </View>
+            <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+              <TextInput style={[styles.customRunnerInput, { flex: 1, backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={newRepoName} onChangeText={setNewRepoName} placeholder="new-monorepo" placeholderTextColor={c.textMuted} autoCapitalize="none" />
+              <Pressable style={[styles.editNameButton, { backgroundColor: c.accent, opacity: isCreatingRepo ? 0.6 : 1 }]} onPress={handleCreateRepo} disabled={isCreatingRepo || !newRepoName.trim()}><Text style={styles.editNameButtonText}>{isCreatingRepo ? "..." : "Create"}</Text></Pressable>
+            </View>
+            <Text style={[styles.runnerDesc, { color: c.textMuted, marginTop: 8 }]}>Tokens stay in the phone keychain and are never synced to Yaver servers. Use an explicit Sync button to provision one to the currently connected Ubuntu/remote agent; values are write-only from the mobile API.</Text>
+          </View>
+        </View>
 
         {/* AI Runner */}
         <View style={styles.section}>
@@ -1306,6 +1394,9 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginLeft: 32,
   },
+  providerRow: { flexDirection: "row", gap: 8, marginBottom: 4 },
+  providerChip: { borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10 },
+  remoteSyncButton: { alignSelf: "flex-start", borderWidth: 1, borderRadius: 8, paddingVertical: 7, paddingHorizontal: 10, marginTop: 6 },
 
   deleteAccountButton: {
     borderRadius: 12,

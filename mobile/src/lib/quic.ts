@@ -125,6 +125,10 @@ export class QuicClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _reconnectAttempt = 0;
   private _reconnectStopped = false;
+  // Invalidates in-flight probes when the user, or a network change, starts a
+  // newer connection attempt. Without this, a timed-out connect can finish
+  // later and resurrect a connection after disconnect()/fullReconnect().
+  private connectionGeneration = 0;
   private readonly baseBackoffMs = 1000;
   private readonly _maxReconnectAttempts = 15;
 
@@ -263,6 +267,7 @@ export class QuicClient {
    * Tries direct connection first, then relay servers in priority order.
    */
   async connect(host: string, port: number, token: string, deviceId: string): Promise<void> {
+    this.connectionGeneration++;
     this.host = host;
     this.port = port;
     this.token = token;
@@ -277,6 +282,7 @@ export class QuicClient {
 
   /** Close the connection and stop all timers. */
   disconnect(): void {
+    this.connectionGeneration++;
     this.clearTimers();
     this.setConnectionState("disconnected");
     this.setConnectionMode(null);
@@ -474,6 +480,35 @@ export class QuicClient {
     } catch {
       return null;
     }
+  }
+
+  /** List remote credential names only; values are never returned. */
+  async listRemoteSecrets(): Promise<string[]> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/agent/secrets`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to list remote secrets: ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data.secrets) ? data.secrets : [];
+  }
+
+  /** Provision a provider token directly to the authenticated agent. */
+  async setRemoteSecret(name: string, value: string): Promise<void> {
+    this.assertConnected();
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) throw new Error("Invalid remote secret name");
+    if (!value.trim()) throw new Error("Secret value cannot be empty");
+    const res = await fetch(`${this.baseUrl}/agent/secrets/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ value: value.trim() }),
+    });
+    if (!res.ok) throw new Error(`Failed to sync remote secret: ${res.status}`);
+  }
+
+  /** Revoke a provider token on the remote agent. */
+  async deleteRemoteSecret(name: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/agent/secrets/${encodeURIComponent(name)}`, { method: "DELETE", headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to revoke remote secret: ${res.status}`);
   }
 
   /** Get detailed agent status (runner health, processes, system info). */
@@ -728,6 +763,7 @@ export class QuicClient {
   fullReconnect(): void {
     if (!this.host || !this.port || !this.token) return;
     console.log("[QUIC] Full reconnect — clearing stale relay and re-probing all paths");
+    this.connectionGeneration++;
     this.clearTimers();
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
@@ -751,6 +787,8 @@ export class QuicClient {
   }
 
   private async attemptConnect(): Promise<void> {
+    const generation = this.connectionGeneration;
+    if (!this.host || !this.port || !this.token || !this.deviceId) return;
     this.setConnectionState("connecting");
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
@@ -761,6 +799,7 @@ export class QuicClient {
 
       // Check if we're on WiFi (direct connection possible) or cellular (relay only)
       const netState = await NetInfo.fetch();
+      if (generation !== this.connectionGeneration) return;
       const isWifi = netState.type === "wifi" || netState.type === "ethernet";
       this._networkType = netState.type;
 
@@ -843,13 +882,16 @@ export class QuicClient {
       if (!connected) {
         throw new Error("Could not reach agent (direct or via relay)");
       }
+      if (generation !== this.connectionGeneration) return;
 
       this.setReconnectAttempt(0);
       this.setConnectionState("connected");
       this.startPolling();
-    } catch {
+    } catch (error) {
+      if (generation !== this.connectionGeneration) return;
       this.setConnectionState("error");
       this.scheduleReconnect();
+      throw error;
     }
   }
 
@@ -864,6 +906,7 @@ export class QuicClient {
       // Still worth re-probing: the current path may be dead after a network switch.
       // Clear polling so attemptConnect can restart it on the new path.
       this.clearTimers();
+      this.connectionGeneration++;
       this._reconnectStopped = false;
       this.setReconnectAttempt(1);
       this.attemptConnect().catch(() => {});
@@ -875,6 +918,7 @@ export class QuicClient {
       this.reconnectTimer = null;
     }
     this._reconnectStopped = false;
+    this.connectionGeneration++;
     this.setReconnectAttempt(1);
     this.attemptConnect().catch(() => {});
   }

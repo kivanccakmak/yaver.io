@@ -203,8 +203,9 @@ func runSetPassword(args []string) {
 	}
 	newPassword := remaining[0]
 
-	// Write to /etc/yaver-relay/password if possible, otherwise ./relay-password.txt
-	passwordFile := "/etc/yaver-relay/password"
+	// Keep this in the systemd StateDirectory so ProtectSystem=strict does not
+	// make runtime password rotation appear successful but fail to persist.
+	passwordFile := "/var/lib/yaver-relay/.relay-password"
 	dir := filepath.Dir(passwordFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		passwordFile = "./relay-password.txt"

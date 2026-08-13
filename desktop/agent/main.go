@@ -958,6 +958,8 @@ func runServe(args []string) {
 		log.Fatalf("failed to create task store: %v", err)
 	}
 	taskMgr := NewTaskManager(*workDir, taskStore, runner)
+	secretStore, secretErr := NewSecretStore()
+	if secretErr != nil { log.Printf("Warning: remote credential store unavailable: %v", secretErr) } else { taskMgr.SetSecretStore(secretStore) }
 	taskMgr.WaitForSlot = *waitForSession
 	taskMgr.DummyMode = *dummy
 	if *dummy {
@@ -1015,6 +1017,7 @@ func runServe(args []string) {
 
 	// Start HTTP server (V1 — primary, also serves MCP)
 	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, ownerUserID, cfg.ConvexSiteURL, hostname, taskMgr)
+	if secretStore != nil { httpServer.secretStore = secretStore }
 	httpServer.aclMgr = aclMgr
 	httpServer.emailMgr = emailMgr
 	httpServer.onShutdown = func() {
@@ -2482,6 +2485,7 @@ func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token, 
 		}
 
 		log.Printf("[RELAY] Connecting to relay %s...", relayAddr)
+		connectedAt := time.Now()
 		err := relayConnectAndServe(ctx, relayAddr, agentAddr, deviceID, token, password)
 		if err != nil {
 			log.Printf("[RELAY] Connection lost: %v", err)
@@ -2491,6 +2495,9 @@ func runRelayTunnel(ctx context.Context, relayAddr, agentAddr, deviceID, token, 
 			return
 		}
 
+		if time.Since(connectedAt) >= 10*time.Second {
+			backoff = time.Second
+		}
 		log.Printf("[RELAY] Reconnecting in %s...", backoff)
 		select {
 		case <-ctx.Done():
@@ -2564,7 +2571,7 @@ func relayConnectAndServe(ctx context.Context, relayAddr, agentAddr, deviceID, t
 func relayHandleProxiedRequest(stream quic.Stream, agentAddr string, client *http.Client) {
 	defer stream.Close()
 
-	data, err := io.ReadAll(io.LimitReader(stream, 10<<20))
+	data, err := readRelayBody(stream, 10<<20)
 	if err != nil {
 		log.Printf("[RELAY] read request: %v", err)
 		return
@@ -2598,6 +2605,9 @@ func relayHandleProxiedRequest(stream quic.Stream, agentAddr string, client *htt
 
 	if isSSE {
 		sseClient := &http.Client{Timeout: 10 * time.Minute}
+		requestCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		httpReq = httpReq.WithContext(requestCtx)
 		resp, err := sseClient.Do(httpReq)
 		if err != nil {
 			relaySendError(stream, req.ID, 502, fmt.Sprintf("agent error: %v", err))
@@ -2619,6 +2629,9 @@ func relayHandleProxiedRequest(stream quic.Stream, agentAddr string, client *htt
 	}
 
 	// Regular request
+	requestCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	httpReq = httpReq.WithContext(requestCtx)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		relaySendError(stream, req.ID, 502, fmt.Sprintf("agent error: %v", err))
@@ -2644,6 +2657,17 @@ func relayHandleProxiedRequest(stream quic.Stream, agentAddr string, client *htt
 
 	respJSON, _ := json.Marshal(tunnelResp)
 	stream.Write(respJSON)
+}
+
+func readRelayBody(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("request body exceeds %d bytes", limit)
+	}
+	return b, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -2674,6 +2698,7 @@ func runMCP(args []string) {
 		runner = r
 	}
 	taskMgr := NewTaskManager(*workDir, taskStore, runner)
+	if secretStore, err := NewSecretStore(); err == nil { taskMgr.SetSecretStore(secretStore) }
 	if cfg.Sandbox != nil {
 		taskMgr.Sandbox = *cfg.Sandbox
 	} else {

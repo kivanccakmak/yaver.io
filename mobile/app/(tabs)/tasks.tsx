@@ -20,9 +20,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import { useDevice } from "../../src/context/DeviceContext";
+import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
+import { getUserSettings } from "../../src/lib/auth";
 import {
   AgentStatus,
   ConnectionMode,
@@ -34,6 +36,7 @@ import {
   TaskStatus,
 } from "../../src/lib/quic";
 import { markTaskDeleted } from "../../src/lib/storage";
+import { cloneWorkspace, createLocalWorkspace, getCodingMode, listLocalWorkspaces, pushWorkspace, runLocalPrompt, type CodingMode, type GitProvider, type LocalWorkspace } from "../../src/lib/coding-runtime";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -295,6 +298,7 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
 
 export default function TasksScreen() {
   const c = useColors();
+  const { token } = useAuth();
   const { connectionStatus, activeDevice, devices, userDisconnected, lastError, selectDevice, isLoadingDevices, refreshDevices } = useDevice();
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
@@ -330,6 +334,24 @@ export default function TasksScreen() {
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const chatScrollRef = useRef<ScrollView>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
+  const [codingMode, setCodingMode] = useState<CodingMode>("remote-preferred");
+  const [localWorkspace, setLocalWorkspace] = useState<LocalWorkspace | undefined>();
+  const [repoUrl, setRepoUrl] = useState("");
+  const [repoProvider, setRepoProvider] = useState<GitProvider>("github");
+
+  useEffect(() => {
+    getCodingMode().then(setCodingMode);
+    listLocalWorkspaces().then((items) => setLocalWorkspace(items[0]));
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    // Keep the local preference in sync with account settings when available;
+    // the API key itself is intentionally never sent to the backend.
+    getUserSettings(token).then((settings) => {
+      if (settings.codingMode) setCodingMode(settings.codingMode);
+    }).catch(() => {});
+  }, [token]);
 
   // Track QUIC connection state and mode
   useEffect(() => {
@@ -443,6 +465,7 @@ export default function TasksScreen() {
 
   // Fetch tasks
   const fetchTasks = useCallback(async () => {
+    if (codingMode === "local-only" || (codingMode === "auto-fallback" && connectionStatus !== "connected")) return;
     try {
       const list = await quicClient.listTasks();
       setTasks(list);
@@ -452,7 +475,7 @@ export default function TasksScreen() {
         return list.find((t) => t.id === prev.id) || prev;
       });
     } catch {}
-  }, []);
+  }, [codingMode, connectionStatus]);
 
   const hasRunningTask = tasks.some(t => t.status === "running" || t.status === "queued");
   useEffect(() => {
@@ -534,12 +557,42 @@ export default function TasksScreen() {
     Keyboard.dismiss();
     setIsSubmitting(true);
     try {
-      const task = await quicClient.sendTask(
-        newTaskText.trim(), "",
-        selectedRunner === "custom" ? undefined : (selectedModel || undefined),
-        selectedRunner === "custom" ? "custom" : (selectedRunner || undefined),
-        selectedRunner === "custom" ? customCommand.trim() || undefined : undefined,
-      );
+      const shouldUseLocal = codingMode === "local-only" ||
+        (codingMode === "auto-fallback" && !isEffectivelyConnected);
+      let task: Task;
+      if (shouldUseLocal) {
+        let workspace = localWorkspace;
+        if (!workspace) {
+          workspace = await createLocalWorkspace({ name: newTaskText.trim().slice(0, 40) || "yaver-workspace", repoUrl, provider: repoUrl ? repoProvider : undefined });
+          if (repoUrl) workspace = await cloneWorkspace(workspace);
+          setLocalWorkspace(workspace);
+        }
+        const result = await runLocalPrompt(newTaskText.trim(), workspace);
+        const now = Date.now();
+        task = {
+          id: `local-task-${now}`,
+          title: newTaskText.trim(),
+          description: "Phone-only local coding task",
+          status: "completed",
+          output: [],
+          resultText: result.text,
+          runnerId: `local:${result.provider}`,
+          turns: [
+            { role: "user", content: newTaskText.trim(), timestamp: new Date(now).toISOString() },
+            { role: "assistant", content: result.text, timestamp: new Date().toISOString() },
+          ],
+          createdAt: now,
+          updatedAt: now,
+          deviceName: "This phone",
+        };
+      } else {
+        task = await quicClient.sendTask(
+          newTaskText.trim(), "",
+          selectedRunner === "custom" ? undefined : (selectedModel || undefined),
+          selectedRunner === "custom" ? "custom" : (selectedRunner || undefined),
+          selectedRunner === "custom" ? customCommand.trim() || undefined : undefined,
+        );
+      }
       setNewTaskText("");
       // Add task to list immediately
       setTasks((prev) => [task, ...prev]);
@@ -553,6 +606,21 @@ export default function TasksScreen() {
       Alert.alert("Task failed", msg);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handlePushLocalWorkspace = async () => {
+    if (!localWorkspace?.repoUrl) {
+      Alert.alert("Repository required", "Add a GitHub or GitLab repository URL when creating a local task, then try again.");
+      return;
+    }
+    try {
+      const parts = localWorkspace.repoUrl.replace(/\.git$/, "").split("/").filter(Boolean);
+      const owner = parts.slice(-2, -1)[0];
+      await pushWorkspace(localWorkspace.provider === "gitlab" ? "gitlab" : "github", owner, localWorkspace, `Yaver: ${selectedTask?.title || "update workspace"}`);
+      Alert.alert("Pushed", "The phone workspace was committed and pushed.");
+    } catch (error) {
+      Alert.alert("Push failed", error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -644,6 +712,7 @@ export default function TasksScreen() {
     connectionStatus === "connected" ? quicState : connectionStatus;
   const banner = BANNER_CONFIG[effectiveState];
   const isEffectivelyConnected = effectiveState === "connected";
+  const isLocalMode = codingMode === "local-only" || (codingMode === "auto-fallback" && !isEffectivelyConnected);
   const modeLabel = connMode === "relay" ? " via Relay" : connMode === "direct" ? " Direct" : "";
   // Show the attempt counter while we're actively retrying (attempt > 0 and
   // not yet connected). Clamp to max so the display never exceeds N/15.
@@ -662,7 +731,7 @@ export default function TasksScreen() {
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
             <View style={[s.dot, { backgroundColor: banner.dot }]} />
             <Text style={[s.bannerText, { color: banner.text, flexShrink: 1 }]} numberOfLines={1}>
-              {banner.label}{modeLabel}{activeDevice ? ` \u00b7 ${activeDevice.name}` : ""}
+              {isLocalMode ? "Phone-only local" : `${banner.label}${modeLabel}`}{activeDevice && !isLocalMode ? ` \u00b7 ${activeDevice.name}` : ""}
               {showReconnectProgress ? ` \u00b7 ${displayedAttempt}/${quicClient.maxReconnectAttempts}` : ""}
             </Text>
             {showReconnectProgress && (
@@ -988,6 +1057,24 @@ export default function TasksScreen() {
                 onChangeText={setNewTaskText}
                 multiline numberOfLines={4} textAlignVertical="top" autoFocus
               />
+              {isLocalMode && (
+                <>
+                  <TextInput
+                    style={[s.input, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary, marginTop: 8 }]}
+                    placeholder="Optional GitHub/GitLab repo URL for commit & push"
+                    placeholderTextColor={c.textMuted}
+                    value={repoUrl}
+                    onChangeText={setRepoUrl}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                    {(["github", "gitlab"] as GitProvider[]).map((provider) => (
+                      <Pressable key={provider} style={[s.modelChip, { borderColor: repoProvider === provider ? c.accent : c.border, backgroundColor: repoProvider === provider ? c.accent + "20" : c.bg }]} onPress={() => setRepoProvider(provider)}><Text style={{ color: repoProvider === provider ? c.accent : c.textMuted, fontSize: 12 }}>{provider === "github" ? "GitHub" : "GitLab"}</Text></Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
               <View style={s.modalButtons}>
                 <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }}>
                   <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
@@ -1171,6 +1258,11 @@ export default function TasksScreen() {
 
                   {/* Debug info (foldable) */}
                   <DebugSection task={selectedTask} connMode={connMode} c={c} />
+                  {selectedTask.runnerId?.startsWith("local:") && (
+                    <Pressable style={[s.inlineConnectBtn, { backgroundColor: c.accent, alignSelf: "flex-start", marginTop: 12 }]} onPress={handlePushLocalWorkspace}>
+                      <Text style={s.inlineConnectText}>Commit & push workspace</Text>
+                    </Pressable>
+                  )}
                 </ScrollView>
 
                 {/* Input bar */}

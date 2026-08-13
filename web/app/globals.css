@@ -56,6 +56,14 @@
   .card {
     @apply rounded-xl border border-surface-800 bg-surface-900 p-6 transition-colors duration-150 hover:border-surface-700;
   }
+
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wider text-surface-500;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-sm text-surface-100 outline-none transition focus:border-surface-400;
+  }
 }
 
 /* Terminal mockup */

@@ -29,6 +29,9 @@ export const set = mutation({
   args: {
     userId: v.id("users"),
     forceRelay: v.optional(v.boolean()),
+    codingMode: v.optional(v.union(v.literal("remote-preferred"), v.literal("local-only"), v.literal("auto-fallback"))),
+    localProvider: v.optional(v.string()),
+    localModel: v.optional(v.string()),
     runnerId: v.optional(v.string()),
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),
@@ -41,6 +44,9 @@ export const set = mutation({
       .first();
     const patch = {
       forceRelay: args.forceRelay,
+      codingMode: args.codingMode,
+      localProvider: args.localProvider,
+      localModel: args.localModel,
       runnerId: args.runnerId,
       customRunnerCommand: args.customRunnerCommand,
       relayUrl: args.relayUrl,
@@ -62,6 +68,9 @@ export const setByToken = mutation({
   args: {
     tokenHash: v.string(),
     forceRelay: v.optional(v.boolean()),
+    codingMode: v.optional(v.union(v.literal("remote-preferred"), v.literal("local-only"), v.literal("auto-fallback"))),
+    localProvider: v.optional(v.string()),
+    localModel: v.optional(v.string()),
     runnerId: v.optional(v.string()),
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),
@@ -77,6 +86,9 @@ export const setByToken = mutation({
       .first();
     const patch = {
       forceRelay: args.forceRelay,
+      codingMode: args.codingMode,
+      localProvider: args.localProvider,
+      localModel: args.localModel,
       runnerId: args.runnerId,
       customRunnerCommand: args.customRunnerCommand,
       relayUrl: args.relayUrl,

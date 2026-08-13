@@ -34,6 +34,8 @@ type RelayServer struct {
 	password string // shared password for relay authentication (empty = no auth)
 
 	startedAt time.Time // server start time for uptime tracking
+	passwordFile string
+	requestSlots chan struct{}
 
 	// deviceID -> active agent tunnel
 	mu      sync.RWMutex
@@ -54,6 +56,8 @@ func NewRelayServer(quicPort, httpPort int, password string) *RelayServer {
 		password:  password,
 		startedAt: time.Now(),
 		tunnels:   make(map[string]*agentTunnel),
+		passwordFile: envOrDefault("RELAY_PASSWORD_FILE", ".relay-password"),
+		requestSlots: make(chan struct{}, 256),
 	}
 }
 
@@ -107,6 +111,7 @@ func (s *RelayServer) runQUICListener(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
+	defer conn.Close()
 
 	tr := &quic.Transport{Conn: conn}
 	listener, err := tr.Listen(tlsCfg, &quic.Config{
@@ -143,14 +148,16 @@ func (s *RelayServer) handleAgentConnection(ctx context.Context, conn quic.Conne
 	log.Printf("[RELAY] Agent connected from %s", remoteAddr)
 
 	// Wait for registration stream
-	stream, err := conn.AcceptStream(ctx)
+	registrationCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	stream, err := conn.AcceptStream(registrationCtx)
 	if err != nil {
 		log.Printf("[RELAY] accept registration stream from %s: %v", remoteAddr, err)
 		conn.CloseWithError(1, "no registration")
 		return
 	}
 
-	data, err := io.ReadAll(io.LimitReader(stream, 1<<16)) // 64KB limit
+	data, err := readLimitedBody(stream, 1<<16)
 	if err != nil {
 		log.Printf("[RELAY] read registration from %s: %v", remoteAddr, err)
 		conn.CloseWithError(1, "read error")
@@ -200,7 +207,7 @@ func (s *RelayServer) handleAgentConnection(ctx context.Context, conn quic.Conne
 	s.mu.Unlock()
 
 	if exists {
-		log.Printf("[RELAY] Replacing existing tunnel for device %s (was %s)", reg.DeviceID[:8], old.peerAddr)
+		log.Printf("[RELAY] Replacing existing tunnel for device %s (was %s)", shortID(reg.DeviceID), old.peerAddr)
 		old.conn.CloseWithError(0, "replaced")
 	}
 
@@ -209,7 +216,7 @@ func (s *RelayServer) handleAgentConnection(ctx context.Context, conn quic.Conne
 	stream.Write(resp)
 	stream.Close()
 
-	log.Printf("[RELAY] Device %s registered from %s", reg.DeviceID[:8], remoteAddr)
+	log.Printf("[RELAY] Device %s registered from %s", shortID(reg.DeviceID), remoteAddr)
 
 	// Keep connection alive — block until it dies
 	<-conn.Context().Done()
@@ -220,7 +227,7 @@ func (s *RelayServer) handleAgentConnection(ctx context.Context, conn quic.Conne
 	}
 	s.mu.Unlock()
 
-	log.Printf("[RELAY] Device %s disconnected (%s)", reg.DeviceID[:8], remoteAddr)
+	log.Printf("[RELAY] Device %s disconnected (%s)", shortID(reg.DeviceID), remoteAddr)
 }
 
 // --- HTTP Proxy (mobile clients connect here) ---
@@ -236,6 +243,11 @@ func (s *RelayServer) runHTTPProxy(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", s.httpPort),
 		Handler: withRelayCORS(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      15 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
 	}
 
 	go func() {
@@ -335,8 +347,8 @@ func (s *RelayServer) handleSetPassword(w http.ResponseWriter, r *http.Request) 
 	s.setPassword(req.Password)
 
 	// Persist to .relay-password file
-	if err := os.WriteFile(".relay-password", []byte(req.Password), 0600); err != nil {
-		log.Printf("[RELAY] Warning: could not write .relay-password file: %v", err)
+	if err := os.WriteFile(s.passwordFile, []byte(req.Password), 0600); err != nil {
+		log.Printf("[RELAY] Warning: could not write %s: %v", s.passwordFile, err)
 	}
 
 	log.Printf("[RELAY] Password updated via API")
@@ -366,6 +378,13 @@ func (s *RelayServer) handleAdminStatus(w http.ResponseWriter, r *http.Request) 
 // handleProxy proxies HTTP requests to agents via QUIC tunnel.
 // URL format: /d/{deviceId}/... -> forwarded as /... to the agent
 func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
+	select {
+	case s.requestSlots <- struct{}{}:
+		defer func() { <-s.requestSlots }()
+	default:
+		http.Error(w, `{"ok":false,"error":"relay busy"}`, http.StatusServiceUnavailable)
+		return
+	}
 	// Parse: /d/{deviceId}/rest/of/path
 	path := strings.TrimPrefix(r.URL.Path, "/d/")
 	parts := strings.SplitN(path, "/", 2)
@@ -423,7 +442,11 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Read request body
 	var body []byte
 	if r.Body != nil {
-		body, _ = io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10MB limit
+		body, err = readLimitedBody(r.Body, 10<<20)
+		if err != nil {
+			http.Error(w, `{"ok":false,"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
 	}
 
 	// Build tunnel request
@@ -449,7 +472,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	stream, err := tunnel.conn.OpenStreamSync(streamCtx)
 	if err != nil {
-		log.Printf("[RELAY] open stream to %s failed: %v", tunnel.deviceID[:8], err)
+		log.Printf("[RELAY] open stream to %s failed: %v", shortID(tunnel.deviceID), err)
 
 		// Clean up dead tunnel
 		s.mu.Lock()
@@ -466,11 +489,26 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	defer stream.Close()
+	// A disconnected mobile client must release the QUIC stream and the agent
+	// handler promptly. Without this, abandoned SSE/request streams accumulate.
+	lifetimeCtx, cancelLifetime := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancelLifetime()
+	requestDone := make(chan struct{})
+	defer close(requestDone)
+	go func() {
+		select {
+		case <-lifetimeCtx.Done():
+			stream.CancelRead(0)
+			stream.CancelWrite(0)
+		case <-requestDone:
+		}
+	}()
 
 	// Send request
 	reqData, _ := json.Marshal(tunnelReq)
 	if _, err := stream.Write(reqData); err != nil {
-		log.Printf("[RELAY] write to %s failed: %v", tunnel.deviceID[:8], err)
+		log.Printf("[RELAY] write to %s failed: %v", shortID(tunnel.deviceID), err)
 		stream.Close()
 		http.Error(w, "tunnel write error", http.StatusBadGateway)
 		return
@@ -486,14 +524,14 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Read response
 	respData, err := io.ReadAll(io.LimitReader(stream, 10<<20))
 	if err != nil {
-		log.Printf("[RELAY] read from %s failed: %v", tunnel.deviceID[:8], err)
+		log.Printf("[RELAY] read from %s failed: %v", shortID(tunnel.deviceID), err)
 		http.Error(w, "tunnel read error", http.StatusBadGateway)
 		return
 	}
 
 	var tunnelResp TunnelResponse
 	if err := json.Unmarshal(respData, &tunnelResp); err != nil {
-		log.Printf("[RELAY] parse response from %s failed: %v", tunnel.deviceID[:8], err)
+		log.Printf("[RELAY] parse response from %s failed: %v", shortID(tunnel.deviceID), err)
 		http.Error(w, "tunnel response parse error", http.StatusBadGateway)
 		return
 	}
@@ -531,6 +569,31 @@ func (s *RelayServer) proxySSE(w http.ResponseWriter, r *http.Request, stream qu
 			return
 		}
 	}
+}
+
+func readLimitedBody(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("body exceeds %d bytes", limit)
+	}
+	return b, nil
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 func (s *RelayServer) logTunnels(ctx context.Context) {
@@ -576,6 +639,20 @@ func withRelayCORS(next http.Handler) http.Handler {
 // --- TLS ---
 
 func generateRelayTLS() (*tls.Config, error) {
+	certPath := os.Getenv("RELAY_TLS_CERT")
+	keyPath := os.Getenv("RELAY_TLS_KEY")
+	if (certPath == "") != (keyPath == "") {
+		return nil, fmt.Errorf("RELAY_TLS_CERT and RELAY_TLS_KEY must be set together")
+	}
+	if certPath != "" {
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load relay TLS certificate: %w", err)
+		}
+		return &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"yaver-relay"}}, nil
+	}
+
+	log.Printf("[RELAY] WARNING: using an ephemeral TLS certificate; set RELAY_TLS_CERT and RELAY_TLS_KEY for stable relay identity")
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err

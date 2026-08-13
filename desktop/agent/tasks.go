@@ -404,6 +404,7 @@ type TaskManager struct {
 	Sandbox      SandboxConfig // Command sandbox configuration
 	WaitForSlot  bool // If true, wait for other Claude Code sessions to finish before starting
 	DummyMode    bool // If true, use fake responses instead of launching a real runner
+	SecretStore  *SecretStore // optional device-provisioned provider credentials
 
 	// Convex reporting (set after construction)
 	ConvexURL  string
@@ -415,6 +416,26 @@ type TaskManager struct {
 	warmSessionID  string     // Claude session ID from warmup
 	warmPID        int        // PID of the warmup process (0 if not running)
 	warmReady      bool       // true once warmup completed successfully
+}
+
+// SetSecretStore attaches the device-local credential store. Values are only
+// injected into child runner environments; they are never persisted in tasks
+// or returned through the task API.
+func (tm *TaskManager) SetSecretStore(store *SecretStore) { tm.SecretStore = store }
+
+func (tm *TaskManager) runnerEnv(base []string) []string {
+	if tm.SecretStore == nil { return base }
+	envNames := map[string]string{
+		"DEEPSEEK_API_KEY": "DEEPSEEK_API_KEY",
+		"OPENAI_API_KEY": "OPENAI_API_KEY",
+		"GITHUB_TOKEN": "GITHUB_TOKEN",
+		"GITLAB_TOKEN": "GITLAB_TOKEN",
+		"OPENCODE_API_KEY": "OPENCODE_API_KEY",
+	}
+	for secretName, envName := range envNames {
+		if value, ok := tm.SecretStore.Get(secretName); ok { base = append(base, envName+"="+value) }
+	}
+	return base
 }
 
 // NewTaskManager creates a new TaskManager. If store is non-nil, previously
@@ -471,6 +492,7 @@ func (tm *TaskManager) WarmUp() {
 			"/opt/homebrew/bin" + ":" +
 			"/usr/local/bin"
 		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
+		cmd.Env = tm.runnerEnv(cmd.Env)
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -581,6 +603,7 @@ func (tm *TaskManager) CheckRunner() error {
 			"/opt/homebrew/bin" + ":" +
 			"/usr/local/bin"
 		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
+		cmd.Env = tm.runnerEnv(cmd.Env)
 	}
 
 	out, err := cmd.CombinedOutput()
@@ -699,6 +722,7 @@ func CheckRunnerBinary(command string) error {
 			"/opt/homebrew/bin" + ":" +
 			"/usr/local/bin"
 		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
+		cmd.Env = tm.runnerEnv(cmd.Env)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -901,6 +925,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			"/opt/homebrew/bin" + ":" +
 			"/usr/local/bin"
 		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
+		cmd.Env = tm.runnerEnv(cmd.Env)
 	}
 
 	log.Printf("[task %s] Launching: %s %v (dir=%s)", task.ID, runner.Command, args[:2], tm.workDir)

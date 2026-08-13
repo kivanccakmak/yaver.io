@@ -266,6 +266,9 @@ export async function getSurveyStatus(
 
 export interface UserSettings {
   forceRelay?: boolean;
+  codingMode?: "remote-preferred" | "local-only" | "auto-fallback";
+  localProvider?: "deepseek" | "openai-compatible" | "ollama";
+  localModel?: string;
   runnerId?: string;
   customRunnerCommand?: string;
   relayUrl?: string;

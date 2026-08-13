@@ -423,7 +423,14 @@
 
         <p style="margin-bottom:8px">The agent is running in the background. Use the Yaver app on your phone to send tasks.</p>
 
+        <div class="status-card" style="margin-top:12px">
+          <div class="status-row"><span class="status-label">Runtime</span><span class="status-value"><span class="status-dot green"></span><span class="text-green">Remote full capability</span></span></div>
+          <div class="status-row"><span class="status-label">Sandbox</span><span class="status-value">Enabled</span></div>
+          <div class="status-row"><span class="status-label">Local fallback</span><span class="status-value">Files · Git · review</span></div>
+        </div>
+
         <div class="btn-group" style="gap:8px">
+          <button class="btn btn-outline btn-sm" onclick="window.yaver.openCodingSurface()">Open Coding Surface</button>
           <button class="btn btn-outline btn-sm" onclick="restartAgent()">Restart Agent</button>
           <button class="btn btn-danger btn-sm" onclick="doSignOut()">Sign Out</button>
         </div>

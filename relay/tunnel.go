@@ -56,6 +56,7 @@ func (t *TunnelClient) Run(ctx context.Context) error {
 		}
 
 		log.Printf("[TUNNEL] Connecting to relay %s...", t.relayAddr)
+		connectedAt := time.Now()
 		err := t.connectAndServe(ctx)
 		if err != nil {
 			log.Printf("[TUNNEL] Connection lost: %v", err)
@@ -65,6 +66,11 @@ func (t *TunnelClient) Run(ctx context.Context) error {
 			return nil
 		}
 
+		// A session that stayed up is evidence that the path and credentials are
+		// healthy. Do not let an earlier outage permanently poison reconnect time.
+		if time.Since(connectedAt) >= 10*time.Second {
+			backoff = time.Second
+		}
 		log.Printf("[TUNNEL] Reconnecting in %s...", backoff)
 		select {
 		case <-ctx.Done():

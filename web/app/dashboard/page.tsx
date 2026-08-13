@@ -6,6 +6,7 @@ import DevicesView from "@/components/dashboard/DevicesView";
 import RelayServerView from "@/components/dashboard/RelayServerView";
 import SettingsView from "@/components/dashboard/SettingsView";
 import TwoFactorView from "@/components/dashboard/TwoFactorView";
+import Link from "next/link";
 
 export default function DashboardPage() {
   const { user, token, isLoading, isAuthenticated, logout } = useAuth();
@@ -62,6 +63,23 @@ export default function DashboardPage() {
 
         {/* Devices */}
         <DevicesView devices={devices} onRefresh={refreshDevices} />
+
+        {/* Coding surface */}
+        <div className="card mb-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-surface-50">Coding workspace</h2>
+              <p className="mt-1 text-sm text-surface-400">Use browser-local files, DeepSeek/OpenAI-compatible tools, Git review, and remote handoff.</p>
+            </div>
+            <Link href="/coding" className="btn-primary px-4 py-2 text-sm">Open workspace</Link>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-surface-400 sm:grid-cols-4">
+            <span className="rounded-lg bg-surface-800 px-3 py-2">Files & search</span>
+            <span className="rounded-lg bg-surface-800 px-3 py-2">Git commit/push</span>
+            <span className="rounded-lg bg-surface-800 px-3 py-2">Remote handoff</span>
+            <span className="rounded-lg bg-surface-800 px-3 py-2">CI-ready</span>
+          </div>
+        </div>
 
         {/* Relay Server */}
         <RelayServerView token={token} />

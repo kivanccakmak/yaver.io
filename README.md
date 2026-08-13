@@ -74,6 +74,19 @@ Connect from any MCP client at `http://your-machine:18090/mcp`.
 
 See [MCP Integration Guide](https://yaver.io/docs/mcp) for full documentation.
 
+## Remote provider credentials
+
+Mobile can explicitly provision provider credentials to a connected Yaver agent
+such as an Ubuntu 4 GB machine from Settings. The credential travels only over
+the authenticated Yaver device connection and is stored on the agent in
+`~/.yaver/secrets.json` with owner-only permissions. Secret values are never
+returned by the API, included in task payloads, written to Convex, or logged.
+
+Provisioned names include `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
+`GITHUB_TOKEN`, `GITLAB_TOKEN`, and `OPENCODE_API_KEY`. They are injected only
+into child runner processes. Revoke or rotate them by using the mobile UI or
+removing the corresponding entry from the agent's local secret store.
+
 ## Security Sandbox
 
 The command sandbox is enabled by default and blocks dangerous operations:

@@ -25,6 +25,7 @@ type HTTPServer struct {
 	taskMgr     *TaskManager
 	aclMgr      *ACLManager
 	emailMgr    *EmailManager
+	secretStore *SecretStore
 	server      *http.Server
 	onShutdown  func() // called when mobile requests agent shutdown
 
@@ -33,7 +34,10 @@ type HTTPServer struct {
 }
 
 // NewHTTPServer creates a new HTTP server bound to the given port.
+
 func NewHTTPServer(port int, token, ownerUserID, convexURL, hostname string, taskMgr *TaskManager) *HTTPServer {
+	secretStore, err := NewSecretStore()
+	if err != nil { log.Printf("secret store unavailable: %v", err) }
 	return &HTTPServer{
 		port:        port,
 		token:       token,
@@ -41,6 +45,7 @@ func NewHTTPServer(port int, token, ownerUserID, convexURL, hostname string, tas
 		convexURL:   convexURL,
 		hostname:    hostname,
 		taskMgr:     taskMgr,
+		secretStore: secretStore,
 	}
 }
 
@@ -60,6 +65,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/runner/restart", s.auth(s.handleRunnerRestart))
 	mux.HandleFunc("/agent/runner/switch", s.auth(s.handleRunnerSwitch))
 	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
+	mux.HandleFunc("/agent/secrets", s.auth(s.handleSecrets))
+	mux.HandleFunc("/agent/secrets/", s.auth(s.handleSecretByName))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
 	mux.HandleFunc("/mcp", s.handleMCP)
@@ -168,6 +175,52 @@ func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"version":  version,
 		"workDir":  s.taskMgr.workDir,
 	})
+}
+
+// handleSecrets returns metadata only. Values are write-only over this API.
+func (s *HTTPServer) handleSecrets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	if s.secretStore == nil {
+		jsonError(w, http.StatusServiceUnavailable, "secret store unavailable")
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "secrets": s.secretStore.Names()})
+}
+
+func (s *HTTPServer) handleSecretByName(w http.ResponseWriter, r *http.Request) {
+	if s.secretStore == nil {
+		jsonError(w, http.StatusServiceUnavailable, "secret store unavailable")
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/agent/secrets/")
+	if name == "" || !validSecretName(name) {
+		jsonError(w, http.StatusBadRequest, "invalid secret name")
+		return
+	}
+	switch r.Method {
+	case http.MethodPut, http.MethodPost:
+		var body struct{ Value string `json:"value"` }
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil || body.Value == "" {
+			jsonError(w, http.StatusBadRequest, "a non-empty secret value is required")
+			return
+		}
+		if err := s.secretStore.Set(name, body.Value); err != nil {
+			jsonError(w, http.StatusInternalServerError, "could not store secret")
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "name": name})
+	case http.MethodDelete:
+		if err := s.secretStore.Delete(name); err != nil {
+			jsonError(w, http.StatusInternalServerError, "could not revoke secret")
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "name": name, "revoked": true})
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "use PUT or DELETE")
+	}
 }
 
 // handleAgentStatus returns detailed agent and runner health status.

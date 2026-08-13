@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('yaver', {
   getStatus: () => ipcRenderer.invoke('get-status'),
   signOut: () => ipcRenderer.invoke('sign-out'),
   validateToken: () => ipcRenderer.invoke('validate-token'),
+  openCodingSurface: () => ipcRenderer.invoke('open-coding-surface'),
 
   // Listen for auth state changes from main process
   onAuthStateChanged: (callback) => {

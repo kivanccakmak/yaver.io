@@ -113,6 +113,9 @@ export default defineSchema({
   userSettings: defineTable({
     userId: v.id("users"),
     forceRelay: v.optional(v.boolean()),
+    codingMode: v.optional(v.union(v.literal("remote-preferred"), v.literal("local-only"), v.literal("auto-fallback"))),
+    localProvider: v.optional(v.string()),
+    localModel: v.optional(v.string()),
     runnerId: v.optional(v.string()),
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),

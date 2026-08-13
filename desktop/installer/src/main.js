@@ -363,6 +363,14 @@ ipcMain.handle('validate-token', async () => {
   }
 });
 
+// Open the shared browser coding surface from the desktop GUI. The desktop
+// agent remains the full local shell runtime; the web surface is useful for
+// review, constrained local coding, Git, and handoff.
+ipcMain.handle('open-coding-surface', async () => {
+  shell.openExternal(process.env.YAVER_CODING_URL || 'https://yaver.io/coding');
+  return { ok: true };
+});
+
 // ---------------------------------------------------------------------------
 // Token validation
 // ---------------------------------------------------------------------------
