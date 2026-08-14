@@ -9,7 +9,7 @@ import { useColors } from "../../src/context/ThemeContext";
 import { quicClient } from "../../src/lib/quic";
 import { getUserSettings } from "../../src/lib/auth";
 import { takePendingVibingProject } from "../../src/lib/vibingStore";
-import { getCodingMode, type CodingMode } from "../../src/lib/coding-runtime";
+import { getCodingMode, listLocalWorkspaces, validateLocalWorkspace, type CodingMode, type LocalWorkspace, type StaticValidationReport } from "../../src/lib/coding-runtime";
 
 type Project = { name: string; path: string; framework?: string };
 type DevStatus = {
@@ -56,6 +56,9 @@ export default function VibingScreen() {
   const { token } = useAuth();
   const { activeDevice, connectionStatus, disconnect } = useDevice();
   const [codingMode, setCodingMode] = useState<CodingMode>("remote-preferred");
+  const [localWorkspace, setLocalWorkspace] = useState<LocalWorkspace | null>(null);
+  const [validation, setValidation] = useState<StaticValidationReport | null>(null);
+  const [validating, setValidating] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [projectSelected, setProjectSelected] = useState(false);
@@ -110,11 +113,19 @@ export default function VibingScreen() {
 
   useEffect(() => {
     getCodingMode().then(setCodingMode).catch(() => {});
+    listLocalWorkspaces().then((workspaces) => setLocalWorkspace(workspaces[0] ?? null)).catch(() => {});
     if (!token) return;
     getUserSettings(token).then((settings) => {
       if (settings.codingMode) setCodingMode(settings.codingMode);
     }).catch(() => {});
   }, [token]);
+
+  const runStaticValidation = async () => {
+    if (!localWorkspace) return;
+    setValidating(true);
+    try { setValidation(await validateLocalWorkspace(localWorkspace)); }
+    finally { setValidating(false); }
+  };
 
   // Dev/test: optional local frame-source override (e.g. http://localhost:8787)
   useEffect(() => {
@@ -292,6 +303,17 @@ export default function VibingScreen() {
             <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Device-local coding</Text>
             <Text style={[styles.hint, { color: c.textSecondary }]}>Chat, file edits, Git status/diff, explicit commits, and review-branch pushes run on {localDeviceName}. Your model API key and Git token stay in this device's secure storage.</Text>
             <Text style={[styles.hint, { color: c.warn, marginTop: 12 }]}>Live preview is unavailable locally: this runtime has no shell, package manager, simulator, Docker, or dev server. It will never claim a preview, build, or test ran.</Text>
+          </View>
+
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Local static preflight</Text>
+            <Text style={[styles.hint, { color: c.textSecondary }]}>Scans {localWorkspace ? localWorkspace.name : "your local workspace"} for merge-conflict markers, malformed JSON configuration, and changed files. This is validation only—not compilation or tests.</Text>
+            <Pressable disabled={!localWorkspace || validating} onPress={runStaticValidation} style={({ focused }) => [styles.btnGhost, { borderColor: c.border, marginTop: 14 }, focused && styles.focused, (!localWorkspace || validating) && { opacity: 0.5 }]}><Text style={[styles.btnGhostText, { color: c.accent }]}>{validating ? "Checking…" : "Run static preflight"}</Text></Pressable>
+            {validation && <View style={styles.validationResult}>
+              <Text style={[styles.hint, { color: validation.issues.some((issue) => issue.severity === "error") ? c.error : c.success }]}>{validation.issues.some((issue) => issue.severity === "error") ? "Static preflight found issues" : "Static preflight passed"} · {validation.checkedFiles} files · {validation.changedFiles.length} changed</Text>
+              {validation.issues.slice(0, 5).map((issue, index) => <Text key={`${issue.path}-${index}`} style={[styles.hint, { color: issue.severity === "error" ? c.error : c.warn }]}>{issue.path}: {issue.message}</Text>)}
+              <Text style={[styles.hint, { color: c.textMuted }]}>Compile: not run · Tests: not run</Text>
+            </View>}
           </View>
 
           <View style={styles.controls}>
@@ -533,6 +555,7 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 28 },
   remoteActions: { flexDirection: "row", gap: 8, alignItems: "center", marginBottom: 16 },
   headerAction: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  validationResult: { marginTop: 12, gap: 3 },
   titleBlock: {},
   title: { fontSize: 48, fontWeight: "800" },
   subtitle: { fontSize: 20, marginTop: 4 },

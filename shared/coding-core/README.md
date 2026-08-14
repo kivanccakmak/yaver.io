@@ -41,3 +41,13 @@ configure a task by sending the chosen non-secret fields to that credential-owni
 endpoint, never by receiving or relaying a secret through Convex. Apple TV
 does not receive iCloud Keychain secrets from an iPhone: it either uses its
 own device-local credential or routes an approved operation to a paired phone.
+
+## Validation truthfulness
+
+All surfaces use `validation.ts` terminology. Phone and Apple TV local mode can
+run a deterministic **static preflight** (merge-conflict scan, JSON config
+parsing, and Git change summary), but must show `compiled: false` and
+`tested: false`. Desktop/CI can report compile or test results only after they
+actually execute those commands. Web, watch, car, and XR show the selected
+executor or `not-available`; they must not turn an inspection result into a
+green build.

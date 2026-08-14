@@ -51,6 +51,23 @@ export interface LocalTaskResult {
   changedFiles: string[];
 }
 
+export interface StaticValidationIssue {
+  severity: "error" | "warning";
+  path: string;
+  message: string;
+}
+
+/** A deterministic, on-device preflight result. This is deliberately not a
+ * compiler/test result: phone and TV local mode have no shell or native SDK. */
+export interface StaticValidationReport {
+  kind: "static-preflight";
+  checkedFiles: number;
+  changedFiles: string[];
+  issues: StaticValidationIssue[];
+  compiled: false;
+  tested: false;
+}
+
 const MODE_KEY = "@yaver/coding_mode";
 const PROVIDER_KEY = "@yaver/local_provider";
 const MODEL_KEY = "@yaver/local_model";
@@ -186,6 +203,47 @@ export async function searchWorkspace(workspace: LocalWorkspace, query: string):
   return result;
 }
 
+async function workspaceFiles(workspace: LocalWorkspace, limit = 1_000): Promise<string[]> {
+  const files: string[] = [];
+  async function walk(dir: string, relative: string): Promise<void> {
+    if (files.length >= limit) return;
+    for (const name of await fs.readdir(dir)) {
+      if (files.length >= limit || name === ".git" || name === "node_modules") continue;
+      const path = `${dir}${name}`, rel = `${relative}${name}`;
+      const stat = await fs.stat(path);
+      if (stat.isDirectory()) await walk(`${path}/`, `${rel}/`);
+      else files.push(rel);
+    }
+  }
+  await walk(workspace.root, "");
+  return files;
+}
+
+/**
+ * Pure React Native preflight: it catches merge markers and malformed JSON
+ * configuration without claiming a TypeScript/native build was run.
+ */
+export async function validateLocalWorkspace(workspace: LocalWorkspace): Promise<StaticValidationReport> {
+  const files = await workspaceFiles(workspace);
+  const issues: StaticValidationIssue[] = [];
+  const jsonConfigs = new Set(["package.json", "app.json", "tsconfig.json", "tsconfig.base.json"]);
+  for (const path of files) {
+    let content: string;
+    try { content = await readWorkspaceFile(workspace, path); } catch { continue; }
+    if (/<<<<<<< |=======|>>>>>>> /.test(content)) {
+      issues.push({ severity: "error", path, message: "Unresolved Git merge-conflict marker." });
+    }
+    if (jsonConfigs.has(path) || path.endsWith(".json") && /(^|\/)\w[\w.-]*\.json$/.test(path)) {
+      try { JSON.parse(content); } catch { issues.push({ severity: "error", path, message: "Invalid JSON." }); }
+    }
+    if (/\bTODO\s*:\s*(remove|fix before release)/i.test(content)) {
+      issues.push({ severity: "warning", path, message: "Release-blocking TODO marker." });
+    }
+  }
+  const status = await gitStatus(workspace);
+  return { kind: "static-preflight", checkedFiles: files.length, changedFiles: status.changes, issues, compiled: false, tested: false };
+}
+
 export async function gitStatus(workspace: LocalWorkspace): Promise<{ branch: string; current: string; changes: string[] }> {
   const current = await git.currentBranch({ fs, dir: workspace.root, fullname: false }) || workspace.branch;
   const matrix = await git.statusMatrix({ fs, dir: workspace.root });
@@ -239,6 +297,7 @@ const tools = [
   { type: "function", function: { name: "fs_search", description: "Search workspace files", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } } },
   { type: "function", function: { name: "git_status", description: "Show Git status", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "git_diff", description: "Show changed files", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "workspace_validate", description: "Run deterministic on-device static preflight: merge conflict scan, JSON config parsing, and Git changed-file summary. This does not compile or test.", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "git_commit", description: "Commit current changes; never push without a separate user action", parameters: { type: "object", properties: { message: { type: "string" } }, required: ["message"] } } },
 ];
 
@@ -256,7 +315,7 @@ export async function runLocalPrompt(prompt: string, workspace: LocalWorkspace):
   const model = await getLocalModel();
   const messages: any[] = [{ role: "system", content: `You are Yaver Local, a device-local coding assistant. Work only through the tools provided.
 
-You CAN: read/search/write files in this workspace; inspect Git status and changed files; create a local Git commit when explicitly asked.
+You CAN: read/search/write files in this workspace; inspect Git status and changed files; run the deterministic static preflight; create a local Git commit when explicitly asked.
 
 You CANNOT: run shell commands; run npm, npx, yarn, pnpm, bun, pip, ruby, gradle, xcodebuild, pod, fastlane, or any package manager; start servers; install dependencies; use Docker; access a simulator/emulator/device; compile, test, lint, typecheck, build iOS/Android/web/native apps; browse; deploy; push Git; create pull requests; or execute OpenCode/Codex.
 
@@ -275,6 +334,7 @@ For an iOS, Android, TV, or dependency/test/build request, make safe source edit
         else if (call.function.name === "fs_search") result = await searchWorkspace(workspace, args.query);
         else if (call.function.name === "git_status") result = await gitStatus(workspace);
         else if (call.function.name === "git_diff") result = await gitDiff(workspace);
+        else if (call.function.name === "workspace_validate") result = await validateLocalWorkspace(workspace);
         else if (call.function.name === "git_commit") result = { sha: await gitCommit(workspace, args.message) };
         else result = { error: "Unknown tool" };
       } catch (error) { result = { error: error instanceof Error ? error.message : String(error) }; }
