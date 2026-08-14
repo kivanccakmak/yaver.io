@@ -11,7 +11,7 @@ import {
   sessionExpiresAtMs,
 } from "@/lib/session";
 
-const VALID_PROVIDERS = new Set<OAuthProvider>(["google", "microsoft", "apple"]);
+const VALID_PROVIDERS = new Set<OAuthProvider>(["google", "microsoft", "apple", "github", "gitlab"]);
 
 function getBaseUrl(): string {
   if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL;

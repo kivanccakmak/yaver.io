@@ -1,6 +1,6 @@
 import crypto from "crypto";
 
-export type OAuthProvider = "google" | "microsoft" | "apple";
+export type OAuthProvider = "google" | "microsoft" | "apple" | "github" | "gitlab";
 
 type ProviderConfig = {
   authUrl: string;
@@ -49,6 +49,24 @@ function getProviderConfig(provider: OAuthProvider): ProviderConfig {
         clientId: process.env.OAUTH_APPLE_CLIENT_ID || "",
         clientSecret: process.env.OAUTH_APPLE_CLIENT_SECRET || "",
         scope: "name email",
+      };
+    case "github":
+      return {
+        authUrl: "https://github.com/login/oauth/authorize",
+        tokenUrl: "https://github.com/login/oauth/access_token",
+        userInfoUrl: "https://api.github.com/user",
+        clientId: process.env.OAUTH_GITHUB_CLIENT_ID || "",
+        clientSecret: process.env.OAUTH_GITHUB_CLIENT_SECRET || "",
+        scope: "read:user user:email",
+      };
+    case "gitlab":
+      return {
+        authUrl: "https://gitlab.com/oauth/authorize",
+        tokenUrl: "https://gitlab.com/oauth/token",
+        userInfoUrl: "https://gitlab.com/api/v4/user",
+        clientId: process.env.OAUTH_GITLAB_CLIENT_ID || "",
+        clientSecret: process.env.OAUTH_GITLAB_CLIENT_SECRET || "",
+        scope: "read_user",
       };
     default:
       throw new Error(`Unknown OAuth provider: ${provider}`);
@@ -120,7 +138,10 @@ export async function exchangeCodeForTokens(
 
   const res = await fetch(config.tokenUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
     body: body.toString(),
   });
 
@@ -172,7 +193,11 @@ export async function getUserInfo(
   const config = getProviderConfig(provider);
 
   const res = await fetch(config.userInfoUrl, {
-    headers: { Authorization: `Bearer ${tokens.access_token}` },
+    headers: {
+      Authorization: `Bearer ${tokens.access_token}`,
+      Accept: "application/json",
+      "User-Agent": "Yaver",
+    },
   });
 
   if (!res.ok) {
@@ -187,6 +212,43 @@ export async function getUserInfo(
       name: data.name,
       providerId: data.id,
       avatarUrl: data.picture,
+    };
+  }
+
+  if (provider === "github") {
+    // /user may return email:null when the address is not public.
+    // /user/emails (scope user:email) always returns addresses; pick primary.
+    let email: string = data.email;
+    if (!email) {
+      const emailsRes = await fetch(`${config.userInfoUrl}/emails`, {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+          Accept: "application/json",
+          "User-Agent": "Yaver",
+        },
+      });
+      if (emailsRes.ok) {
+        const emails = await emailsRes.json();
+        const primary = (emails as Array<{ email: string; primary: boolean }>).find(
+          (e) => e.primary
+        );
+        email = primary?.email || (emails[0] as { email: string } | undefined)?.email || "";
+      }
+    }
+    return {
+      email,
+      name: data.name || data.login,
+      providerId: String(data.id),
+      avatarUrl: data.avatar_url,
+    };
+  }
+
+  if (provider === "gitlab") {
+    return {
+      email: data.email,
+      name: data.name || data.username,
+      providerId: String(data.id),
+      avatarUrl: data.avatar_url,
     };
   }
 

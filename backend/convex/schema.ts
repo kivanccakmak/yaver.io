@@ -6,7 +6,7 @@ export default defineSchema({
     userId: v.string(),
     email: v.string(),
     fullName: v.string(),
-    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple"), v.literal("email")),
+    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple"), v.literal("email"), v.literal("github"), v.literal("gitlab")),
     passwordHash: v.optional(v.string()),
     surveyCompleted: v.optional(v.boolean()),
     providerId: v.string(),
@@ -155,6 +155,7 @@ export default defineSchema({
     cpuPercent: v.number(),     // 0-100
     memoryUsedMb: v.number(),
     memoryTotalMb: v.number(),
+    diskPercent: v.optional(v.number()),
   })
     .index("by_deviceId", ["deviceId", "timestamp"]),
 
@@ -216,6 +217,11 @@ export default defineSchema({
     pendingToken: v.optional(v.string()),
     expiresAt: v.number(),
     createdAt: v.number(),
+    approveNonce: v.optional(v.string()),
+    environment: v.optional(v.string()),
+    machineName: v.optional(v.string()),
+    matchCode: v.optional(v.string()),
+    platform: v.optional(v.string()),
   })
     .index("by_userCode", ["userCode"])
     .index("by_deviceCode", ["deviceCode"]),

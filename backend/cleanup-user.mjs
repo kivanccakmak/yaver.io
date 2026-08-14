@@ -24,7 +24,7 @@ const EMAILS = [
 
 const CONVEX_URL =
   process.env.CONVEX_URL ||
-  "https://shocking-echidna-394.eu-west-1.convex.cloud";
+  "https://perceptive-minnow-557.eu-west-1.convex.cloud";
 
 const args = process.argv.slice(2);
 const dryRun = !args.includes("--confirm");

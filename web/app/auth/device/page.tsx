@@ -148,7 +148,7 @@ function DeviceCodeContent() {
           </div>
           <h2 className="text-xl font-bold text-surface-50">Device authorized</h2>
           <p className="mt-3 text-sm text-surface-400">
-            Your terminal should sign in automatically. You can close this page.
+            Your device should sign in automatically. You can close this page.
           </p>
         </div>
       </div>
@@ -163,7 +163,7 @@ function DeviceCodeContent() {
             yaver<span className="font-normal text-surface-500">.io</span>
           </span>
           <p className="mt-3 text-sm text-surface-500">
-            Enter the code shown in your terminal
+            Enter the code shown on your device
           </p>
         </div>
 
@@ -197,7 +197,7 @@ function DeviceCodeContent() {
         </form>
 
         <p className="mt-6 text-center text-xs text-surface-600">
-          Run <code className="rounded bg-surface-800 px-1.5 py-0.5 text-surface-400">yaver auth --headless</code> to get a code
+          Run <code className="rounded bg-surface-800 px-1.5 py-0.5 text-surface-400">yaver auth --headless</code> or use your Apple TV to get a code
         </p>
       </div>
     </div>

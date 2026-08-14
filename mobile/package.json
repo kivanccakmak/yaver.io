@@ -27,6 +27,7 @@
     "expo-status-bar": "~2.0.0",
     "expo-web-browser": "~14.0.0",
     "isomorphic-git": "^1.41.4",
+    "qrcode-generator": "^1.4.4",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-native": "npm:react-native-tvos@0.76.9-0",

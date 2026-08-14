@@ -1,10 +1,16 @@
 import { Ionicons, FontAwesome } from "@expo/vector-icons";
-import * as AppleAuthentication from "expo-apple-authentication";
 import Constants from "expo-constants";
 import * as Linking from "expo-linking";
-import * as WebBrowser from "expo-web-browser";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
+import TvPairing from "../src/components/TvPairing";
+
+// expo-apple-authentication and expo-web-browser are not linked into the tvOS
+// build; require them defensively so login still works on tvOS (pairing/email).
+let AppleAuthentication: any = null;
+let WebBrowser: any = null;
+try { AppleAuthentication = require("expo-apple-authentication"); } catch {}
+try { WebBrowser = require("expo-web-browser"); } catch {}
 import {
   ActivityIndicator,
   Alert,
@@ -28,12 +34,14 @@ import {
   loginWithEmail,
 } from "../src/lib/auth";
 
-WebBrowser.maybeCompleteAuthSession();
+try { WebBrowser?.maybeCompleteAuthSession?.(); } catch {}
 
 export default function LoginScreen() {
   const { login, surveyCompleted } = useAuth();
   const { isDark } = useTheme();
   const c = useColors();
+  const isTV = (Platform as any).isTV === true;
+  const [showTvPairing, setShowTvPairing] = useState(isTV);
   const [isLoading, setIsLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
@@ -66,13 +74,22 @@ export default function LoginScreen() {
 
   const handleOAuth = async (provider: OAuthProvider) => {
     const url = getOAuthUrl(provider);
-    await WebBrowser.openBrowserAsync(url, {
-      showInRecents: true,
-    });
+    if (WebBrowser?.openBrowserAsync) {
+      await WebBrowser.openBrowserAsync(url, {
+        showInRecents: true,
+      });
+    } else {
+      await Linking.openURL(url);
+    }
   };
 
   const handleAppleSignIn = async () => {
     // Check if native Apple auth is available (requires Apple ID on simulator)
+    if (!AppleAuthentication?.isAvailableAsync) {
+      // tvOS / missing module — fall back to web OAuth
+      await handleOAuth("apple");
+      return;
+    }
     const isAvailable = await AppleAuthentication.isAvailableAsync();
     if (!isAvailable) {
       // Fall back to web OAuth for Apple (works on simulator without Apple ID)
@@ -165,6 +182,17 @@ export default function LoginScreen() {
     }
   };
 
+  if (isTV && showTvPairing) {
+    return (
+      <View style={{ flex: 1, backgroundColor: c.bg }}>
+        <TvPairing
+          onDone={() => router.replace("/")}
+          onBack={() => setShowTvPairing(false)}
+        />
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]}>
       <KeyboardAvoidingView
@@ -183,6 +211,22 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.buttons}>
+          {isTV ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.button,
+                { backgroundColor: c.bgCard, borderColor: c.border },
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => setShowTvPairing(true)}
+            >
+              <View style={styles.buttonContent}>
+                <Ionicons name="qr-code-outline" size={18} color={c.textPrimary} style={styles.buttonIcon} />
+                <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Sign in with pairing code</Text>
+              </View>
+            </Pressable>
+          ) : (
+            <>
           <Pressable
             style={({ pressed }) => [
               styles.button,
@@ -224,6 +268,36 @@ export default function LoginScreen() {
               <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with Microsoft</Text>
             </View>
           </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.button,
+              { backgroundColor: c.bgCard, borderColor: c.border },
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={() => handleOAuth("github")}
+          >
+            <View style={styles.buttonContent}>
+              <Ionicons name="logo-github" size={17} color={c.textPrimary} style={styles.buttonIcon} />
+              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with GitHub</Text>
+            </View>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.button,
+              { backgroundColor: c.bgCard, borderColor: c.border },
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={() => handleOAuth("gitlab")}
+          >
+            <View style={styles.buttonContent}>
+              <Ionicons name="logo-gitlab" size={17} color={c.textPrimary} style={styles.buttonIcon} />
+              <Text style={[styles.buttonTextCentered, { color: c.textPrimary }]}>Continue with GitLab</Text>
+            </View>
+          </Pressable>
+            </>
+          )}
 
           {/* Continue with Email — collapsed button or expanded form */}
           {!showEmailForm ? (

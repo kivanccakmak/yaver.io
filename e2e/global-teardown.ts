@@ -4,7 +4,7 @@ import type { TestUser } from "./global-setup";
 
 const CONVEX_URL =
   process.env.E2E_CONVEX_URL ||
-  "https://shocking-echidna-394.eu-west-1.convex.site";
+  "https://perceptive-minnow-557.eu-west-1.convex.site";
 
 const STATE_FILE = join(__dirname, ".playwright", "test-user.json");
 

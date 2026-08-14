@@ -22,7 +22,7 @@ import Markdown from "react-native-markdown-display";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
-import * as ExpoClipboard from "expo-clipboard";
+import { copyToClipboard } from "../../src/lib/safeClipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { getUserSettings } from "../../src/lib/auth";
 import {
@@ -1305,7 +1305,7 @@ export default function TasksScreen() {
                 <View style={s.logsHeaderActions}>
                   <Pressable onPress={() => {
                     const text = logs.map(l => `${new Date(l.timestamp).toLocaleTimeString()} [${l.level}] ${l.message}`).join("\n");
-                    ExpoClipboard.setStringAsync(text);
+                    copyToClipboard(text);
                     Alert.alert("Copied", "Logs copied to clipboard.");
                   }}>
                     <Text style={[s.logsActionText, { color: c.accent }]}>Copy</Text>

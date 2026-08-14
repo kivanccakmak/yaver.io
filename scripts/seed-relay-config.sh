@@ -3,7 +3,7 @@
 # Usage: ./scripts/seed-relay-config.sh <auth-token>
 
 TOKEN="${1:?Usage: $0 <auth-token>}"
-CONVEX_URL="${CONVEX_SITE_URL:-https://shocking-echidna-394.eu-west-1.convex.site}"
+CONVEX_URL="${CONVEX_SITE_URL:-https://perceptive-minnow-557.eu-west-1.convex.site}"
 
 echo "Seeding relay config to $CONVEX_URL ..."
 

@@ -32,7 +32,7 @@ export async function validateSessionInternal(
     userId: string;
     email: string;
     fullName: string;
-    provider: "google" | "microsoft" | "apple" | "email";
+    provider: "google" | "microsoft" | "apple" | "email" | "github" | "gitlab";
     providerId: string;
     passwordHash?: string;
     avatarUrl?: string;
@@ -68,7 +68,7 @@ export const createOrUpdateUser = mutation({
   args: {
     email: v.string(),
     fullName: v.string(),
-    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple"), v.literal("email")),
+    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple"), v.literal("email"), v.literal("github"), v.literal("gitlab")),
     providerId: v.string(),
     avatarUrl: v.optional(v.string()),
   },
@@ -243,7 +243,10 @@ export const lookupEmailUser = query({
       .withIndex("by_email", (q) => q.eq("email", args.email))
       .unique();
 
-    if (!user || user.provider !== "email") return null;
+    // A user can be linked to an OAuth identity by email while retaining an
+    // existing password. The provider field identifies the first/primary
+    // identity and must not prevent password login when a password hash exists.
+    if (!user || !user.passwordHash) return null;
 
     return {
       _id: user._id,

@@ -23,7 +23,7 @@ import { CUSTOM_RELAYS_KEY } from "../../src/context/DeviceContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi, updateProfile, getUserSettings, saveUserSettings, getAiRunners, type AiRunner, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary } from "../../src/lib/auth";
 import { clearCache } from "../../src/lib/storage";
-import * as ExpoClipboard from "expo-clipboard";
+import { copyToClipboard } from "../../src/lib/safeClipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { quicClient, type AgentStatus, type RelayServer } from "../../src/lib/quic";
 import { createGitRepository, getCodingMode, setCodingMode, getLocalProvider, setLocalProvider, getLocalModel, setLocalModel, getLocalApiKey, setLocalApiKey, getGitToken, setGitToken, type CodingMode, type GitProvider, type LlmProvider } from "../../src/lib/coding-runtime";
@@ -1062,7 +1062,7 @@ export default function SettingsScreen() {
                   const text = logs.map(l =>
                     `${new Date(l.timestamp).toLocaleTimeString()} [${l.level}] ${l.message}`
                   ).join("\n");
-                  ExpoClipboard.setStringAsync(text);
+                  copyToClipboard(text);
                   Alert.alert("Copied", "Logs copied to clipboard.");
                 }}>
                   <Text style={[styles.logsActionBtn, { color: c.accent }]}>Copy All</Text>

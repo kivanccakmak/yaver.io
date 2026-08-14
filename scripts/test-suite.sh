@@ -74,7 +74,7 @@ load_credentials() {
     fi
 
     # Defaults
-    CONVEX_SITE_URL="${CONVEX_SITE_URL:-https://shocking-echidna-394.eu-west-1.convex.site}"
+    CONVEX_SITE_URL="${CONVEX_SITE_URL:-https://perceptive-minnow-557.eu-west-1.convex.site}"
     REMOTE_SERVER_USER="${REMOTE_SERVER_USER:-root}"
     REMOTE_SERVER_SSH_KEY="${REMOTE_SERVER_SSH_KEY:-$HOME/.ssh/id_rsa}"
 }

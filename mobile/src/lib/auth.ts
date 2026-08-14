@@ -5,6 +5,37 @@ const TOKEN_KEY = "yaver_auth_token";
 const USER_KEY = "yaver_user";
 const INSTALLED_FLAG = "yaver_installed";
 
+// tvOS Keychain can fail (missing entitlement / sandbox). Keep an in-memory
+// fallback so a storage failure never blocks sign-in; the token survives for
+// the session and SecureStore still works where Keychain is available.
+const memoryFallback: Record<string, string> = {};
+
+async function secureGet(key: string): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch {
+    return memoryFallback[key] ?? null;
+  }
+}
+
+async function secureSet(key: string, value: string): Promise<void> {
+  memoryFallback[key] = value;
+  try {
+    await SecureStore.setItemAsync(key, value);
+  } catch {
+    // In-memory fallback keeps the session alive
+  }
+}
+
+async function secureDelete(key: string): Promise<void> {
+  delete memoryFallback[key];
+  try {
+    await SecureStore.deleteItemAsync(key);
+  } catch {
+    // Ignore
+  }
+}
+
 /**
  * On iOS, Keychain data survives app uninstall/reinstall.
  * AsyncStorage (backed by NSUserDefaults/files) does NOT survive uninstall.
@@ -15,8 +46,8 @@ export async function clearKeychainIfFreshInstall(): Promise<void> {
     const installed = await AsyncStorage.getItem(INSTALLED_FLAG);
     if (!installed) {
       // Fresh install — wipe any leftover Keychain data
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
-      await SecureStore.deleteItemAsync(USER_KEY);
+      await secureDelete(TOKEN_KEY);
+      await secureDelete(USER_KEY);
       await AsyncStorage.setItem(INSTALLED_FLAG, "1");
     }
   } catch {
@@ -24,7 +55,7 @@ export async function clearKeychainIfFreshInstall(): Promise<void> {
   }
 }
 
-export type OAuthProvider = "google" | "microsoft" | "apple";
+export type OAuthProvider = "google" | "microsoft" | "apple" | "github" | "gitlab";
 
 export interface User {
   id: string;
@@ -35,25 +66,21 @@ export interface User {
 }
 
 export async function getToken(): Promise<string | null> {
-  try {
-    return await SecureStore.getItemAsync(TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return await secureGet(TOKEN_KEY);
 }
 
 export async function saveToken(token: string): Promise<void> {
-  await SecureStore.setItemAsync(TOKEN_KEY, token);
+  await secureSet(TOKEN_KEY, token);
 }
 
 export async function clearToken(): Promise<void> {
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
-  await SecureStore.deleteItemAsync(USER_KEY);
+  await secureDelete(TOKEN_KEY);
+  await secureDelete(USER_KEY);
 }
 
 export async function getUser(): Promise<User | null> {
   try {
-    const raw = await SecureStore.getItemAsync(USER_KEY);
+    const raw = await secureGet(USER_KEY);
     if (!raw) return null;
     return JSON.parse(raw) as User;
   } catch {
@@ -62,7 +89,7 @@ export async function getUser(): Promise<User | null> {
 }
 
 export async function saveUser(user: User): Promise<void> {
-  await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user));
+  await secureSet(USER_KEY, JSON.stringify(user));
 }
 
 export async function validateToken(token: string): Promise<User | null> {

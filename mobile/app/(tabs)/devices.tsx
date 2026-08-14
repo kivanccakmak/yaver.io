@@ -9,9 +9,9 @@ import {
   Text,
   View,
 } from "react-native";
-import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Alert } from "react-native";
+import { copyToClipboard } from "../../src/lib/safeClipboard";
 import { Device, RunnerInfo, useDevice } from "../../src/context/DeviceContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
@@ -258,7 +258,7 @@ function CopyableCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
-    await Clipboard.setStringAsync(command);
+    await copyToClipboard(command);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [command]);

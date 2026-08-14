@@ -38,6 +38,8 @@ export interface RelayServer {
   httpUrl: string;
   region: string;
   priority: number;
+  /** Shared secret required by password-protected self-hosted relays. */
+  password?: string;
 }
 
 export type OutputCallback = (taskId: string, line: string) => void;
@@ -59,6 +61,7 @@ class AgentClient {
   private deviceId: string | null = null;
   private relayServers: RelayServer[] = [];
   private activeRelayUrl: string | null = null;
+  private activeRelayPassword: string | null = null;
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -103,6 +106,7 @@ class AgentClient {
     this.token = token;
     this.deviceId = deviceId ?? null;
     this.activeRelayUrl = null;
+    this.activeRelayPassword = null;
     this.reconnectAttempt = 0;
 
     this.setupNetworkListeners();
@@ -118,6 +122,7 @@ class AgentClient {
     this.token = null;
     this.deviceId = null;
     this.activeRelayUrl = null;
+    this.activeRelayPassword = null;
   }
 
   /**
@@ -307,7 +312,11 @@ class AgentClient {
   }
 
   private get authHeaders(): Record<string, string> {
-    return { Authorization: `Bearer ${this.token}` };
+    const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
+    if (this.activeRelayUrl && this.activeRelayPassword) {
+      headers["X-Relay-Password"] = this.activeRelayPassword;
+    }
+    return headers;
   }
 
   private assertConnected(): void {
@@ -400,6 +409,7 @@ class AgentClient {
   private async attemptConnect(): Promise<void> {
     this.setConnectionState("connecting");
     this.activeRelayUrl = null;
+    this.activeRelayPassword = null;
     try {
       let connected = false;
 
@@ -411,11 +421,16 @@ class AgentClient {
         for (const relay of this.relayServers) {
           try {
             const relayDeviceUrl = `${relay.httpUrl}/d/${this.deviceId}`;
+            const probeHeaders: Record<string, string> = { ...this.authHeaders };
+            if (relay.password) {
+              probeHeaders["X-Relay-Password"] = relay.password;
+            }
             const res = await this.fetchWithTimeout(`${relayDeviceUrl}/health`, {
-              headers: this.authHeaders,
+              headers: probeHeaders,
             }, 8000);
             if (res.ok) {
               this.activeRelayUrl = relay.httpUrl;
+              this.activeRelayPassword = relay.password || null;
               connected = true;
               console.log("[AgentClient] Relay connection succeeded via", relay.id);
               break;

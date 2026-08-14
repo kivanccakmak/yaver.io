@@ -61,7 +61,8 @@
           "isTV": false,
           "tvosDeploymentTarget": "15.1"
         }
-      ]
+      ],
+      "./plugins/with-tv-keychain"
     ]
   }
 }

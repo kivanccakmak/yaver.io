@@ -15,7 +15,7 @@ const CONFIG_DIR = process.platform === 'win32'
   ? path.join(process.env.APPDATA || '', 'Yaver')
   : path.join(os.homedir(), '.yaver');
 // Default hosted Convex instance (public endpoint). Override via CONVEX_SITE_URL env var.
-const CONVEX_SITE_URL = process.env.CONVEX_SITE_URL || 'https://shocking-echidna-394.eu-west-1.convex.site';
+const CONVEX_SITE_URL = process.env.CONVEX_SITE_URL || 'https://perceptive-minnow-557.eu-west-1.convex.site';
 
 let mainWindow;
 let tray = null;

@@ -6,7 +6,7 @@ import {
   buildAuthorizationUrl,
 } from "@/lib/oauth";
 
-const VALID_PROVIDERS = new Set<OAuthProvider>(["google", "microsoft", "apple"]);
+const VALID_PROVIDERS = new Set<OAuthProvider>(["google", "microsoft", "apple", "github", "gitlab"]);
 
 export async function GET(
   request: Request,

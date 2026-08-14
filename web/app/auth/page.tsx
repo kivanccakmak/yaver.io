@@ -19,7 +19,7 @@ function AuthContent() {
   const [formError, setFormError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const handleOAuth = (provider: "google" | "microsoft" | "apple") => {
+  const handleOAuth = (provider: "google" | "microsoft" | "apple" | "github" | "gitlab") => {
     window.location.href = `/api/auth/oauth/${provider}?client=${client}`;
   };
 
@@ -154,6 +154,26 @@ function AuthContent() {
               <path fill="#FFB900" d="M13 13h10v10H13z" />
             </svg>
             Continue with Microsoft
+          </button>
+
+          <button
+            onClick={() => handleOAuth("github")}
+            className="flex w-full items-center justify-center gap-3 rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm font-medium text-surface-200 transition-colors hover:border-surface-600 hover:text-surface-50"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+              <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+            </svg>
+            Continue with GitHub
+          </button>
+
+          <button
+            onClick={() => handleOAuth("gitlab")}
+            className="flex w-full items-center justify-center gap-3 rounded-lg border border-surface-700 bg-surface-900 px-4 py-3 text-sm font-medium text-surface-200 transition-colors hover:border-surface-600 hover:text-surface-50"
+          >
+            <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M21.97 13.09L20.4 8.66a.71.71 0 0 0-.04-.1L18.17 2.4a.83.83 0 0 0-1.57-.05l-2.32 6.24H9.72L7.4 2.35a.83.83 0 0 0-1.57.05L3.64 8.56a.71.71 0 0 0-.04.1L2.03 13.09a1.68 1.68 0 0 0 .56 1.87l9.03 6.53a.83.83 0 0 0 .98 0l9.03-6.53a1.68 1.68 0 0 0 .34-1.87z" />
+            </svg>
+            Continue with GitLab
           </button>
         </div>
 
