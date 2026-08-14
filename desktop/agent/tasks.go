@@ -663,7 +663,7 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 
 	// Pre-flight: verify the runner binary is available (skip in dummy mode).
 	if !tm.DummyMode {
-		if err := CheckRunnerBinary(taskRunner.Command); err != nil {
+		if err := tm.CheckRunnerBinary(taskRunner.Command); err != nil {
 			return nil, fmt.Errorf("runner not ready: %w", err)
 		}
 	}
@@ -719,7 +719,7 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 }
 
 // CheckRunnerBinary checks if a runner binary is available in PATH.
-func CheckRunnerBinary(command string) error {
+func (tm *TaskManager) CheckRunnerBinary(command string) error {
 	path, err := exec.LookPath(command)
 	if err != nil {
 		return fmt.Errorf("%s not found in PATH", command)
@@ -804,10 +804,14 @@ func applyModeArgs(runner RunnerConfig, mode string, args []string) []string {
 	}
 	switch runner.RunnerID {
 	case "opencode":
-		// `opencode run --agent <mode> <prompt>` — insert right after the "run" subcommand.
-		pos := 1
-		if pos > len(args) {
-			pos = len(args)
+		// `opencode run --agent <mode> <prompt>` — insert right after the "run"
+		// subcommand when present, otherwise prepend to the args.
+		pos := 0
+		for i, a := range args {
+			if a == "run" {
+				pos = i + 1
+				break
+			}
 		}
 		out := make([]string, 0, len(args)+2)
 		out = append(out, args[:pos]...)

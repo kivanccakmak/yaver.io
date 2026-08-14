@@ -36,6 +36,7 @@ export interface Task {
   resultText?: string;    // Extracted clean result from Claude
   costUsd?: number;       // Total API cost in USD
   runnerId?: string;      // Which runner executed this task (claude, codex, opencode, aider)
+  mode?: string;          // Agent mode (opencode build/plan or custom agent)
   turns?: ConversationTurn[];  // Full conversation history
   createdAt: number;
   updatedAt: number;
@@ -309,7 +310,7 @@ export class QuicClient {
   // ── Task API ───────────────────────────────────────────────────────
 
   /** Send a new task to the desktop agent. */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, mode?: string): Promise<Task> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -320,6 +321,7 @@ export class QuicClient {
         ...(model ? { model } : {}),
         ...(runner ? { runner } : {}),
         ...(customCommand ? { customCommand } : {}),
+        ...(mode ? { mode } : {}),
       }),
     });
     if (!res.ok) {
@@ -331,13 +333,14 @@ export class QuicClient {
       throw new Error(msg);
     }
     const data = await res.json();
-    // Agent returns { ok, taskId, status, runnerId }
+    // Agent returns { ok, taskId, status, runnerId, mode? }
     return {
       id: data.taskId,
       title,
       description,
       status: data.status,
       runnerId: data.runnerId,
+      mode: data.mode || mode || undefined,
       output: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -385,6 +388,7 @@ export class QuicClient {
         description: t.description,
         status: t.status,
         runnerId: t.runnerId || undefined,
+        mode: t.mode || undefined,
         output: typeof t.output === "string" && t.output
           ? t.output.split("\n")
           : Array.isArray(t.output) ? t.output : [],
@@ -425,6 +429,8 @@ export class QuicClient {
       title: t.title,
       description: t.description,
       status: t.status,
+      runnerId: t.runnerId || undefined,
+      mode: t.mode || undefined,
       output: typeof t.output === "string" && t.output
         ? t.output.split("\n").filter((l: string) => l)
         : Array.isArray(t.output) ? t.output : [],
@@ -462,12 +468,12 @@ export class QuicClient {
   }
 
   /** Resume a task with a follow-up prompt. */
-  async continueTask(taskId: string, input: string): Promise<void> {
+  async continueTask(taskId: string, input: string, mode?: string): Promise<void> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks/${taskId}/continue`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ input }),
+      body: JSON.stringify({ input, ...(mode ? { mode } : {}) }),
     });
     if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
   }

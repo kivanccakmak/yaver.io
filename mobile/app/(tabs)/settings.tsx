@@ -848,6 +848,25 @@ export default function SettingsScreen() {
                     <Text style={[styles.runnerName, { color: c.textPrimary }]}>{runner.name}</Text>
                     <Text style={[styles.runnerDesc, { color: c.textMuted }]}>{runner.description}</Text>
                   </View>
+                  {connectionStatus === "connected" && (
+                    <Pressable
+                      style={[styles.remoteSyncButton, { borderColor: c.border, marginLeft: 8 }]}
+                      onPress={async () => {
+                        try {
+                          const res = await quicClient.switchRunner(runner.runnerId);
+                          if (res.ok) {
+                            Alert.alert("Runner switched", `Active runner on ${activeDevice?.name || "the device"} is now ${res.runner || runner.name}.`);
+                          } else {
+                            Alert.alert("Switch failed", res.error || "Unknown error");
+                          }
+                        } catch (e) {
+                          Alert.alert("Switch failed", e instanceof Error ? e.message : String(e));
+                        }
+                      }}
+                    >
+                      <Text style={{ color: c.accent, fontSize: 12 }}>Switch on device</Text>
+                    </Pressable>
+                  )}
                 </Pressable>
               );
             })}

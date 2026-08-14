@@ -177,6 +177,8 @@ function DebugSection({
         <View style={[s.debugContent, { backgroundColor: c.bgCard, borderColor: c.border }]}>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Task ID: {task.id}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Status: {task.status}</Text>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Runner: {task.runnerId || "default"}</Text>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Agent Mode: {task.mode || "default"}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Output lines: {task.output.length}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Output chars: {task.output.join("").length}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Mode: {connMode || "null"}</Text>
@@ -244,6 +246,11 @@ function TaskCard({
         {item.runnerId && item.runnerId !== "claude" && (
           <View style={[s.statusBadge, { backgroundColor: "#f59e0b22" }]}>
             <Text style={[s.statusText, { color: "#f59e0b" }]}>{item.runnerId}</Text>
+          </View>
+        )}
+        {item.mode && (
+          <View style={[s.statusBadge, { backgroundColor: "#22c55e22" }]}>
+            <Text style={[s.statusText, { color: "#22c55e" }]}>{item.mode}</Text>
           </View>
         )}
         {item.status === "running" && <ActivityIndicator size="small" color="#6366f1" />}
@@ -340,6 +347,10 @@ export default function TasksScreen() {
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [customCommand, setCustomCommand] = useState("");
   const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [selectedMode, setSelectedMode] = useState<string>(""); // "" = default, "build", "plan", or "custom"
+  const [customMode, setCustomMode] = useState(""); // custom agent name when selectedMode === "custom"
+  const [followUpMode, setFollowUpMode] = useState<string>(""); // mode override for the next continuation
+  const [targetDeviceId, setTargetDeviceId] = useState<string>(""); // device id to run on ("" = active)
   const chatScrollRef = useRef<ScrollView>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
   const [codingMode, setCodingMode] = useState<CodingMode>("remote-preferred");
@@ -594,11 +605,21 @@ export default function TasksScreen() {
           deviceName: "This phone",
         };
       } else {
+        // If a different target device was chosen, connect to it first so the
+        // task runs there — the session then follows that device.
+        const target = targetDeviceId ? devices.find((d) => d.id === targetDeviceId) : undefined;
+        if (target && activeDevice?.id !== target.id) {
+          await selectDevice(target);
+        }
+        const effectiveMode = selectedRunner === "opencode"
+          ? (selectedMode === "custom" ? (customMode.trim() || undefined) : (selectedMode || undefined))
+          : undefined;
         task = await quicClient.sendTask(
           newTaskText.trim(), "",
           selectedRunner === "custom" ? undefined : (selectedModel || undefined),
           selectedRunner === "custom" ? "custom" : (selectedRunner || undefined),
           selectedRunner === "custom" ? customCommand.trim() || undefined : undefined,
+          effectiveMode,
         );
       }
       setNewTaskText("");
@@ -728,7 +749,7 @@ export default function TasksScreen() {
         // Wait briefly for task to fully stop
         await new Promise((r) => setTimeout(r, 500));
       }
-      await quicClient.continueTask(selectedTask.id, followUpText.trim());
+      await quicClient.continueTask(selectedTask.id, followUpText.trim(), followUpMode || undefined);
       const text = followUpText.trim();
       setFollowUpText("");
       // Optimistically show the user's follow-up immediately (blue bubble)
@@ -736,6 +757,7 @@ export default function TasksScreen() {
         if (!prev) return prev;
         return {
           ...prev,
+          mode: followUpMode || prev.mode,
           turns: [
             ...(prev.turns || []),
             { role: "user" as const, content: text, timestamp: new Date().toISOString() },
@@ -904,6 +926,29 @@ export default function TasksScreen() {
       </ScrollView>
 
       {/* Input bar */}
+      {selectedTask?.runnerId === "opencode" && (
+        <View style={[s.followUpModeRow, { borderTopColor: c.border, backgroundColor: c.bgCard }]}>
+          <Text style={[s.followUpModeLabel, { color: c.textMuted }]}>Mode:</Text>
+          {[
+            { id: "", label: "Default" },
+            { id: "build", label: "Build" },
+            { id: "plan", label: "Plan" },
+          ].map((m) => (
+            <Pressable
+              key={m.id || "default"}
+              style={[
+                s.modelChip,
+                { borderColor: followUpMode === m.id ? c.accent : c.border, backgroundColor: followUpMode === m.id ? c.accent + "20" : c.bg },
+              ]}
+              onPress={() => setFollowUpMode(m.id)}
+            >
+              <Text style={[s.modelChipText, { color: followUpMode === m.id ? c.accent : c.textMuted, fontSize: 11 }]}>
+                {m.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       <View style={[s.chatInputBar, { borderTopColor: c.border, backgroundColor: c.bgCard }]}>
         <TextInput
           style={[s.chatInput, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
@@ -1286,7 +1331,13 @@ export default function TasksScreen() {
                         const model = availableModels.find(m => m.id === selectedModel);
                         const runnerLabel = selectedRunner === "custom" ? "Custom" : (runner?.name || "Claude");
                         const modelLabel = model?.name || selectedModel || "";
-                        return modelLabel ? `${runnerLabel} · ${modelLabel}` : runnerLabel;
+                        const modeLabel = selectedRunner === "opencode"
+                          ? (selectedMode === "custom" ? (customMode.trim() || "") : (selectedMode || ""))
+                          : "";
+                        let label = runnerLabel;
+                        if (modelLabel) label += ` \u00b7 ${modelLabel}`;
+                        if (modeLabel) label += ` \u00b7 ${modeLabel}`;
+                        return label;
                       })()}
                     </Text>
                     <Text style={{ color: c.textMuted, fontSize: 10, marginLeft: 4 }}>▾</Text>
@@ -1334,6 +1385,32 @@ export default function TasksScreen() {
                   <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
                     {(["github", "gitlab"] as GitProvider[]).map((provider) => (
                       <Pressable key={provider} style={[s.modelChip, { borderColor: repoProvider === provider ? c.accent : c.border, backgroundColor: repoProvider === provider ? c.accent + "20" : c.bg }]} onPress={() => setRepoProvider(provider)}><Text style={{ color: repoProvider === provider ? c.accent : c.textMuted, fontSize: 12 }}>{provider === "github" ? "GitHub" : "GitLab"}</Text></Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
+              {!isLocalMode && devices.length > 1 && (
+                <>
+                  <Text style={[s.agentPickerSection, { color: c.textMuted }]}>RUN ON DEVICE</Text>
+                  <View style={s.agentPickerChips}>
+                    <Pressable
+                      style={[s.modelChip, { borderColor: !targetDeviceId ? c.accent : c.border, backgroundColor: !targetDeviceId ? c.accent + "20" : c.bg }]}
+                      onPress={() => setTargetDeviceId("")}
+                    >
+                      <Text style={[s.modelChipText, { color: !targetDeviceId ? c.accent : c.textMuted }]}>
+                        {activeDevice ? activeDevice.name : "Active device"}
+                      </Text>
+                    </Pressable>
+                    {devices.filter((d) => d.id !== activeDevice?.id).map((d) => (
+                      <Pressable
+                        key={d.id}
+                        style={[s.modelChip, { borderColor: targetDeviceId === d.id ? c.accent : c.border, backgroundColor: targetDeviceId === d.id ? c.accent + "20" : c.bg }]}
+                        onPress={() => setTargetDeviceId(d.id)}
+                      >
+                        <Text style={[s.modelChipText, { color: targetDeviceId === d.id ? c.accent : c.textMuted }]}>
+                          {d.name}
+                        </Text>
+                      </Pressable>
                     ))}
                   </View>
                 </>
@@ -1430,6 +1507,44 @@ export default function TasksScreen() {
                     </Pressable>
                   ))}
                 </View>
+              </>
+            )}
+            {selectedRunner === "opencode" && (
+              <>
+                <Text style={[s.agentPickerSection, { color: c.textMuted }]}>MODE</Text>
+                <View style={s.agentPickerChips}>
+                  {[
+                    { id: "", label: "Default" },
+                    { id: "build", label: "Build" },
+                    { id: "plan", label: "Plan" },
+                    { id: "custom", label: "Custom..." },
+                  ].map((m) => (
+                    <Pressable
+                      key={m.id || "default"}
+                      style={[
+                        s.modelChip,
+                        { borderColor: selectedMode === m.id ? "#f59e0b" : c.border },
+                        selectedMode === m.id && { backgroundColor: "#f59e0b20" },
+                      ]}
+                      onPress={() => setSelectedMode(m.id)}
+                    >
+                      <Text style={[s.modelChipText, { color: selectedMode === m.id ? "#f59e0b" : c.textMuted }]}>
+                        {m.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {selectedMode === "custom" && (
+                  <TextInput
+                    style={[s.input, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary, marginHorizontal: 16, marginBottom: 8, fontSize: 13, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}
+                    placeholder="Custom agent name, e.g. my-agent"
+                    placeholderTextColor={c.textMuted}
+                    value={customMode}
+                    onChangeText={setCustomMode}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                )}
               </>
             )}
           </View>
@@ -1691,6 +1806,8 @@ const s = StyleSheet.create({
 
   // Chat input bar
   chatInputBar: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 12, paddingVertical: 8, paddingBottom: Platform.OS === "ios" ? 24 : 8, borderTopWidth: 1, gap: 8 },
+  followUpModeRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderTopWidth: 1 },
+  followUpModeLabel: { fontSize: 11, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.3, marginRight: 2 },
   chatInputBarRunning: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 8 },
   chatRunningText: { fontSize: 14 },
   chatInput: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 12, fontSize: 15, maxHeight: 200, minHeight: 190 },
