@@ -107,6 +107,10 @@ export default function TvPairing({ onDone, onBack }: { onDone: () => void; onBa
     }
   }, [login, onDone, stopPolling]);
 
+  useEffect(() => {
+    startPairing();
+  }, [startPairing]);
+
   const minutesLeft =
     pair.status === "waiting" ? Math.max(1, Math.round((pair.expiresAt - Date.now()) / 60000)) : null;
 
