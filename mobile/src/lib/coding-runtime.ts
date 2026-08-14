@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as SecureStore from "expo-secure-store";
+import * as SecureStore from "./secure-storage";
 import * as FileSystem from "expo-file-system";
 import git from "isomorphic-git/index.js";
 import http from "isomorphic-git/http/web";

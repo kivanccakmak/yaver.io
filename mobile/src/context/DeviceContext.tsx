@@ -13,12 +13,13 @@ import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { quicClient, RelayServer } from "../lib/quic";
 import { useAuth } from "./AuthContext";
-import { getUserSettings } from "../lib/auth";
+import { getUserSettings, type UserSettings } from "../lib/auth";
 import { appLog } from "../lib/logger";
 import { beaconListener } from "../lib/beacon";
 import { CONVEX_SITE_URL } from "../lib/constants";
 
 export const CUSTOM_RELAYS_KEY = "@yaver/custom_relays";
+const PRIMARY_DEVICE_NAME = "ubuntu-4gb-hel1-1";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
 const BUILD_NUMBER =
@@ -146,7 +147,14 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           const existing = seen.get(d.name);
           if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.name, d);
         }
-        setDevices([...seen.values()]);
+        const ordered = [...seen.values()].sort((a, b) => {
+          const aPrimary = a.name === PRIMARY_DEVICE_NAME ? 0 : 1;
+          const bPrimary = b.name === PRIMARY_DEVICE_NAME ? 0 : 1;
+          if (aPrimary !== bPrimary) return aPrimary - bPrimary;
+          if (a.online !== b.online) return a.online ? -1 : 1;
+          return b.lastSeen - a.lastSeen;
+        });
+        setDevices(ordered);
       } else {
         appLog("warn", `/devices/list failed: ${devicesRes.status}`);
       }
@@ -300,8 +308,21 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         if (res.ok) {
           const data = await res.json();
           const servers: RelayServer[] = data.relayServers || [];
+          // Password-protected free relays need the account relay password.
+          // Attach it to matching platform relays so relay-only devices connect.
+          const settings = token
+            ? await getUserSettings(token).catch(() => ({} as UserSettings))
+            : ({} as UserSettings);
+          if (settings.relayPassword) {
+            for (const s of servers) {
+              if (s.password) continue;
+              if (!settings.relayUrl || s.httpUrl === settings.relayUrl) {
+                s.password = settings.relayPassword;
+              }
+            }
+          }
           quicClient.setRelayServers(servers);
-          console.log("[DeviceContext] Loaded", servers.length, "relay server(s) from Convex");
+          console.log("[DeviceContext] Loaded", servers.length, "relay server(s) from Convex", JSON.stringify(servers.map(s => ({ id: s.id, hasPw: !!s.password }))));
           sendTelemetry(token, "relays-loaded", `Loaded ${servers.length} relay(s) from Convex`, JSON.stringify(servers.map(s => s.id)));
         }
       } catch {
@@ -394,15 +415,17 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     if (!token || !relaysReady || activeDevice || connectionStatus === "connecting" || userDisconnected) return;
 
     const recentDevices = devices.filter((d) => d.online);
+    const primary = recentDevices.find((device) => device.name === PRIMARY_DEVICE_NAME);
+    const target = primary || (recentDevices.length === 1 ? recentDevices[0] : null);
 
-    if (recentDevices.length === 1) {
-      console.log("[DeviceContext] Auto-connecting to single online device:", recentDevices[0].name);
-      sendTelemetry(token, "auto-connect", `Single device: ${recentDevices[0].name}`, JSON.stringify({
-        relayCount: quicClient.relayServerCount, deviceId: recentDevices[0].id.slice(0, 8),
+    if (target) {
+      console.log("[DeviceContext] Auto-connecting to preferred device:", target.name);
+      sendTelemetry(token, "auto-connect", `Preferred device: ${target.name}`, JSON.stringify({
+        relayCount: quicClient.relayServerCount, deviceId: target.id.slice(0, 8),
       }));
-      selectDevice(recentDevices[0]);
+      selectDevice(target);
     }
-    // Multiple devices → don't auto-connect, let UI prompt user
+    // Multiple devices without the primary → don't auto-connect, let UI prompt user.
   }, [devices, token, relaysReady, activeDevice, connectionStatus, userDisconnected, selectDevice]);
 
   // Trigger immediate reconnection on network change (WiFi↔cellular roaming)

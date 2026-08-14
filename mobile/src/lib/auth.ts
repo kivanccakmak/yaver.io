@@ -1,5 +1,5 @@
-import * as SecureStore from "expo-secure-store";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "./secure-storage";
 
 const TOKEN_KEY = "yaver_auth_token";
 const USER_KEY = "yaver_user";
