@@ -142,6 +142,14 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 				"properties": map[string]interface{}{},
 			},
 		},
+		{
+			"name":        "refresh_projects",
+			"description": "Rescan the machine for git projects and return the current project list.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
 		// --- Relay Management ---
 		{
 			"name":        "get_relay_config",

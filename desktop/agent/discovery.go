@@ -75,6 +75,48 @@ func getProjectContext() string {
 	return string(data)
 }
 
+// readRemoteProjects returns the compact project list used by the Web UI.
+// The detailed PROJECTS.md remains local context for runners; only repository
+// names, paths, and branches are exposed through the authenticated agent API.
+func readRemoteProjects() ([]remoteProject, error) {
+	fp, err := projectsFilePath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []remoteProject{}, nil
+		}
+		return nil, err
+	}
+
+	var projects []remoteProject
+	var current *remoteProject
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "### ") {
+			if current != nil {
+				projects = append(projects, *current)
+			}
+			path := strings.TrimSpace(strings.TrimPrefix(line, "### "))
+			name := filepath.Base(path)
+			current = &remoteProject{Name: name, Path: path}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		if strings.HasPrefix(line, "- Branch: ") {
+			current.Branch = strings.TrimSpace(strings.TrimPrefix(line, "- Branch: "))
+		}
+	}
+	if current != nil {
+		projects = append(projects, *current)
+	}
+	return projects, nil
+}
+
 // discoverProjects scans the user's home directory for git repos,
 // collects system info and available tools, and writes ~/.yaver/PROJECTS.md.
 func discoverProjects() {
@@ -274,11 +316,19 @@ func writeProjects(sb *strings.Builder) {
 		return
 	}
 
-	// Run find with 10s timeout
+	// Run find with 10s timeout. Server machines commonly keep checkouts in
+	// /workspace, /workspaces, /opt, or /srv rather than under $HOME.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "find", home, "-name", ".git", "-maxdepth", "4", "-type", "d")
+	roots := []string{home}
+	for _, candidate := range []string{"/workspace", "/workspaces", "/opt", "/srv"} {
+		if _, err := os.Stat(candidate); err == nil {
+			roots = append(roots, candidate)
+		}
+	}
+	findArgs := append(append([]string{}, roots...), "-maxdepth", "5", "-type", "d", "-name", ".git")
+	cmd := exec.CommandContext(ctx, "find", findArgs...)
 	out, err := cmd.Output()
 	if err != nil {
 		// find may return non-zero if some dirs are inaccessible — that's OK
@@ -291,6 +341,7 @@ func writeProjects(sb *strings.Builder) {
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var projects []projectInfo
+	seen := make(map[string]bool)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -298,6 +349,10 @@ func writeProjects(sb *strings.Builder) {
 		}
 		// line is /path/to/project/.git — get parent
 		repoDir := filepath.Dir(line)
+		if seen[repoDir] {
+			continue
+		}
+		seen[repoDir] = true
 		info := gatherProjectInfo(repoDir)
 		projects = append(projects, info)
 	}

@@ -30,6 +30,12 @@ export interface Task {
   deviceName?: string;
 }
 
+export interface RemoteProject {
+  name: string;
+  path: string;
+  branch?: string;
+}
+
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
 export interface RelayServer {
@@ -283,6 +289,32 @@ class AgentClient {
     if (!res.ok) throw new Error(`Failed to delete all: ${res.status}`);
     const data = await res.json();
     return data.deleted || 0;
+  }
+
+  async listProjects(refresh = false): Promise<RemoteProject[]> {
+    this.assertConnected();
+    const suffix = refresh ? "?refresh=1" : "";
+    const res = await fetch(`${this.baseUrl}/projects${suffix}`, {
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to list projects: ${res.status}`);
+    const data = await res.json() as { projects?: RemoteProject[] };
+    return Array.isArray(data.projects) ? data.projects : [];
+  }
+
+  async setWorkDir(path: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/work-dir`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      throw new Error(data.error || `Failed to select project: ${res.status}`);
+    }
+    const data = await res.json() as { workDir?: string };
+    return data.workDir || path;
   }
 
   // ── EventEmitter ───────────────────────────────────────────────────

@@ -60,6 +60,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/tasks", s.auth(s.handleTasks))
 	mux.HandleFunc("/tasks/", s.auth(s.handleTaskByID))
 	mux.HandleFunc("/info", s.auth(s.handleInfo))
+	mux.HandleFunc("/projects", s.auth(s.handleProjects))
+	mux.HandleFunc("/work-dir", s.auth(s.handleWorkDir))
 	mux.HandleFunc("/agent/status", s.auth(s.handleAgentStatus))
 	mux.HandleFunc("/agent/runners", s.auth(s.handleRunners))
 	mux.HandleFunc("/agent/runner/restart", s.auth(s.handleRunnerRestart))
@@ -175,6 +177,58 @@ func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"version":  version,
 		"workDir":  s.taskMgr.workDir,
 	})
+}
+
+type remoteProject struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Branch string `json:"branch,omitempty"`
+}
+
+// handleProjects returns discovered repositories for the authenticated owner.
+// ?refresh=1 forces a synchronous scan so a newly connected machine does not
+// appear empty while the background startup scan is still running.
+func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	if r.URL.Query().Get("refresh") == "1" {
+		discoverProjects()
+	}
+	projects, err := readRemoteProjects()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("read projects: %v", err))
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "projects": projects})
+}
+
+// handleWorkDir changes the directory used by subsequently created tasks.
+func (s *HTTPServer) handleWorkDir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var body struct{ Path string `json:"path"` }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&body); err != nil || strings.TrimSpace(body.Path) == "" {
+		jsonError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	path := filepath.Clean(body.Path)
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		jsonError(w, http.StatusBadRequest, "path is not an accessible directory")
+		return
+	}
+	if err := ValidateWorkDir(path, s.taskMgr.Sandbox); err != nil {
+		jsonError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.taskMgr.mu.Lock()
+	s.taskMgr.workDir = path
+	s.taskMgr.mu.Unlock()
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "workDir": path})
 }
 
 // handleSecrets returns metadata only. Values are write-only over this API.
@@ -1112,22 +1166,10 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		return mcpToolResult(fmt.Sprintf("Working directory changed to: %s", args.Path))
 
 	case "list_projects":
-		fp, err := projectsFilePath()
-		if err != nil {
-			return mcpToolError(fmt.Sprintf("projects file: %v", err))
-		}
-		data, err := os.ReadFile(fp)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return mcpToolResult("No projects discovered yet. Run 'yaver discover' to scan.")
-			}
-			return mcpToolError(fmt.Sprintf("read projects: %v", err))
-		}
-		content := string(data)
-		if len(content) > 5000 {
-			content = content[:5000] + "\n... (truncated)"
-		}
-		return mcpToolResult(content)
+		return s.projectDocument(false)
+
+	case "refresh_projects":
+		return s.projectDocument(true)
 
 	// --- Relay Management ---
 	case "get_relay_config":
@@ -1560,6 +1602,28 @@ func (s *HTTPServer) resolveFilePath(path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Join(s.taskMgr.workDir, path)
+}
+
+func (s *HTTPServer) projectDocument(refresh bool) interface{} {
+	if refresh {
+		discoverProjects()
+	}
+	fp, err := projectsFilePath()
+	if err != nil {
+		return mcpToolError(fmt.Sprintf("projects file: %v", err))
+	}
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return mcpToolResult("No projects discovered yet. Run 'yaver discover' to scan.")
+		}
+		return mcpToolError(fmt.Sprintf("read projects: %v", err))
+	}
+	content := string(data)
+	if len(content) > 5000 {
+		content = content[:5000] + "\n... (truncated)"
+	}
+	return mcpToolResult(content)
 }
 
 func mcpToolResult(text string) interface{} {
