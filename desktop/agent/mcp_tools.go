@@ -91,14 +91,14 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "switch_runner",
-			"description": "Switch the active AI runner. Available: claude, codex, aider.",
+			"description": "Switch the active AI runner. Available: claude, codex, opencode, aider.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"runner_id"},
 				"properties": map[string]interface{}{
 					"runner_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Runner ID (claude, codex, aider)",
+						"description": "Runner ID (claude, codex, opencode, aider)",
 					},
 				},
 			},

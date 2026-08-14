@@ -98,9 +98,10 @@ func discoverProjects() {
 
 	if !hasAgent {
 		sb.WriteString("## Warning\n")
-		sb.WriteString("No supported AI agent found (claude, codex, aider). Install one to run tasks.\n")
+		sb.WriteString("No supported AI agent found (claude, codex, opencode, aider). Install one to run tasks.\n")
 		sb.WriteString("- Claude Code: https://docs.anthropic.com/en/docs/claude-code\n")
 		sb.WriteString("- OpenAI Codex: https://github.com/openai/codex\n")
+		sb.WriteString("- OpenCode: https://opencode.ai\n")
 		sb.WriteString("- Aider: https://aider.chat\n\n")
 	}
 
@@ -191,9 +192,9 @@ func getRAM() string {
 }
 
 // writeAvailableTools checks for known binaries and writes their paths/versions.
-// Returns true if at least one AI agent (claude, codex, aider) was found.
+// Returns true if at least one AI agent (claude, codex, opencode, aider) was found.
 func writeAvailableTools(sb *strings.Builder) bool {
-	aiAgents := map[string]bool{"claude": false, "codex": false, "aider": false}
+	aiAgents := map[string]bool{"claude": false, "codex": false, "opencode": false, "aider": false}
 	tools := []struct {
 		name       string
 		versionCmd []string // command to get version, empty = no version check
@@ -201,6 +202,7 @@ func writeAvailableTools(sb *strings.Builder) bool {
 		{"claude", []string{"claude", "--version"}},
 		{"codex", nil},
 		{"aider", []string{"aider", "--version"}},
+		{"opencode", []string{"opencode", "--version"}},
 		{"git", []string{"git", "--version"}},
 		{"node", []string{"node", "--version"}},
 		{"python", []string{"python3", "--version"}},

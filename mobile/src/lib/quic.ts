@@ -34,7 +34,7 @@ export interface Task {
   output: string[];
   resultText?: string;    // Extracted clean result from Claude
   costUsd?: number;       // Total API cost in USD
-  runnerId?: string;      // Which runner executed this task (claude, codex, aider)
+  runnerId?: string;      // Which runner executed this task (claude, codex, opencode, aider)
   turns?: ConversationTurn[];  // Full conversation history
   createdAt: number;
   updatedAt: number;

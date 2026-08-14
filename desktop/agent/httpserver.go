@@ -298,7 +298,7 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 		addRunner(r)
 	}
 	// Then rest in stable order
-	for _, id := range []string{"claude", "codex", "aider"} {
+	for _, id := range []string{"claude", "codex", "opencode", "aider"} {
 		if r, ok := builtinRunners[id]; ok {
 			addRunner(r)
 		}
@@ -375,14 +375,15 @@ func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) 
 
 	// Map runner IDs to commands
 	runnerCommands := map[string]string{
-		"claude": "claude",
-		"codex":  "codex",
-		"aider":  "aider",
+		"claude":   "claude",
+		"codex":    "codex",
+		"opencode": "opencode",
+		"aider":    "aider",
 	}
 
 	cmd, known := runnerCommands[body.RunnerID]
 	if !known {
-		jsonError(w, http.StatusBadRequest, fmt.Sprintf("unknown runner: %s (available: claude, codex, aider)", body.RunnerID))
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("unknown runner: %s (available: claude, codex, opencode, aider)", body.RunnerID))
 		return
 	}
 
@@ -406,6 +407,15 @@ func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) 
 			Command:  "codex",
 			Args:     []string{"--quiet", "--full-auto", "{prompt}"},
 			OutputMode: "raw",
+		}
+	case "opencode":
+		newRunner = RunnerConfig{
+			RunnerID:    "opencode",
+			Name:        "OpenCode",
+			Command:     "opencode",
+			Args:        []string{"run", "{prompt}"},
+			OutputMode:  "raw",
+			ExitCommand: "exit",
 		}
 	case "aider":
 		newRunner = RunnerConfig{

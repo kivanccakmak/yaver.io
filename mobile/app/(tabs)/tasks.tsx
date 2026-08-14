@@ -1051,7 +1051,7 @@ export default function TasksScreen() {
               </View>
               <TextInput
                 style={[s.input, s.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
-                placeholder={`What would you like ${selectedRunner === "codex" ? "Codex" : selectedRunner === "aider" ? "Aider" : "Claude"} to do?`}
+                placeholder={`What would you like ${selectedRunner === "codex" ? "Codex" : selectedRunner === "opencode" ? "OpenCode" : selectedRunner === "aider" ? "Aider" : "Claude"} to do?`}
                 placeholderTextColor={c.textMuted}
                 value={newTaskText}
                 onChangeText={setNewTaskText}

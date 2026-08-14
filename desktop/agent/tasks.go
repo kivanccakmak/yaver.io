@@ -63,9 +63,10 @@ var defaultRunner = RunnerConfig{
 
 // exitCommands maps runner IDs to their graceful exit commands.
 var exitCommands = map[string]string{
-	"claude": "/exit",
-	"codex":  "exit",
-	"aider":  "/quit",
+	"claude":   "/exit",
+	"codex":    "exit",
+	"opencode": "exit",
+	"aider":    "/quit",
 }
 
 // builtinRunners defines all known runner configurations.
@@ -84,6 +85,14 @@ var builtinRunners = map[string]RunnerConfig{
 		Command:    "codex",
 		Args:       []string{"--quiet", "--full-auto", "{prompt}"},
 		OutputMode: "raw",
+	},
+	"opencode": {
+		RunnerID:    "opencode",
+		Name:        "OpenCode",
+		Command:     "opencode",
+		Args:        []string{"run", "{prompt}"},
+		OutputMode:  "raw",
+		ExitCommand: "exit",
 	},
 	"aider": {
 		RunnerID:    "aider",

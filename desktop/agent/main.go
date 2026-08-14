@@ -154,6 +154,7 @@ Flags for connect:
 Examples:
   yaver set-runner claude           Use Claude Code (default)
   yaver set-runner codex            Use OpenAI Codex
+  yaver set-runner opencode        Use OpenCode (including ChatGPT Plus/Pro OAuth)
   yaver set-runner aider            Use Aider
   yaver set-runner custom "my-ai --auto {prompt}"   Use a custom command
   yaver set-runner                  List available runners
@@ -922,10 +923,15 @@ func runServe(args []string) {
 	if runner.AutoDetected {
 		// Check if the resolved runner's binary actually exists
 		if _, err := osexec.LookPath(runner.Command); err != nil {
-			// Claude not found — try codex, then aider
+			// Claude not found — try Codex, then OpenCode, then Aider.
 			if codexPath, err := osexec.LookPath("codex"); err == nil {
 				log.Printf("Runner: claude not found, detected codex at %s", codexPath)
 				if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, "codex"); err == nil {
+					runner = r
+				}
+			} else if opencodePath, err := osexec.LookPath("opencode"); err == nil {
+				log.Printf("Runner: claude/codex not found, detected opencode at %s", opencodePath)
+				if r, err := fetchRunner(&http.Client{Timeout: 5 * time.Second}, cfg.ConvexSiteURL, "opencode"); err == nil {
 					runner = r
 				}
 			} else if aiderPath, err := osexec.LookPath("aider"); err == nil {
@@ -934,9 +940,10 @@ func runServe(args []string) {
 					runner = r
 				}
 			} else {
-				log.Printf("WARNING: No AI agent found (claude, codex, aider). Install one to run tasks.")
+				log.Printf("WARNING: No AI agent found (claude, codex, opencode, aider). Install one to run tasks.")
 				log.Printf("  Claude Code: https://docs.anthropic.com/en/docs/claude-code")
 				log.Printf("  OpenAI Codex: https://github.com/openai/codex")
+				log.Printf("  OpenCode: https://opencode.ai")
 				log.Printf("  Aider: https://aider.chat")
 				log.Printf("  Or set a custom command: yaver set-runner custom \"your-command {prompt}\"")
 				log.Printf("Agent will start but tasks will fail until an AI agent is available.")
@@ -1713,6 +1720,7 @@ func runSetRunner(args []string) {
 		fmt.Println("Usage:")
 		fmt.Println("  yaver set-runner claude           Use Claude Code (default)")
 		fmt.Println("  yaver set-runner codex            Use OpenAI Codex")
+		fmt.Println("  yaver set-runner opencode        Use OpenCode (including ChatGPT Plus/Pro OAuth)")
 		fmt.Println("  yaver set-runner aider            Use Aider")
 		fmt.Printf("  yaver set-runner custom \"cmd\"      Use a custom command\n")
 		fmt.Println()

@@ -26,6 +26,17 @@ export const PREDEFINED_RUNNERS = [
     sortOrder: 2,
   },
   {
+    runnerId: "opencode",
+    name: "OpenCode",
+    command: "opencode",
+    args: JSON.stringify(["run", "{prompt}"]),
+    outputMode: "raw" as const,
+    resumeSupported: false,
+    exitCommand: "exit",
+    description: "OpenCode headless CLI; supports ChatGPT Plus/Pro OAuth and local providers",
+    sortOrder: 3,
+  },
+  {
     runnerId: "aider",
     name: "Aider",
     command: "aider",
@@ -34,7 +45,7 @@ export const PREDEFINED_RUNNERS = [
     resumeSupported: false,
     exitCommand: "/quit",
     description: "AI pair programming in terminal",
-    sortOrder: 3,
+    sortOrder: 4,
   },
   {
     runnerId: "custom",

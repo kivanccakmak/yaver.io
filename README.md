@@ -87,6 +87,31 @@ Provisioned names include `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`,
 into child runner processes. Revoke or rotate them by using the mobile UI or
 removing the corresponding entry from the agent's local secret store.
 
+### Subscription authentication (no OpenAI API key required)
+
+For ChatGPT-plan usage, authenticate on the Ubuntu/macOS machine that runs the
+agent, then let Yaver launch the already-authenticated local CLI:
+
+```bash
+codex --login       # choose “Sign in with ChatGPT”
+opencode            # run /connect and choose ChatGPT Plus/Pro
+yaver set-runner codex
+# or:
+yaver set-runner opencode
+```
+
+Yaver does not copy or expose Codex/OpenCode OAuth tokens to the phone, web
+client, Convex, logs, or Git remotes. The Go agent starts the CLI with the same
+local user profile, so subscription credentials remain on the remote machine.
+`opencode run "..."` is used for headless task execution; OpenCode can select a
+GPT Codex model after its ChatGPT connection is configured. API-key secrets in
+the previous section are only for providers that require API-key billing.
+
+Yaver's own device-code authorization expires after 15 minutes, and a created
+Yaver session token expires after 30 days. These are separate from provider
+credentials: Codex/OpenCode manage their own OAuth refresh lifecycle, while an
+API key remains usable until its provider revokes or rotates it.
+
 ## Security Sandbox
 
 The command sandbox is enabled by default and blocks dangerous operations:
@@ -202,7 +227,7 @@ yaver email         Email connector (setup, test, sync, status)
 yaver acl           Agent Communication Layer (add, list, remove, tools, health)
 yaver connect       Connect to a remote agent
 yaver attach        Interactive terminal
-yaver set-runner    Set default AI agent (claude/codex/aider/custom)
+yaver set-runner    Set default AI agent (claude/codex/opencode/aider/custom)
 yaver relay         Manage relay servers
 yaver config        Get/set configuration
 yaver status        Show auth and connection status
