@@ -15,6 +15,11 @@ set -euo pipefail
 
 SERVER="${1:?Usage: $0 <server-ip> [--docker|--build-only]}"
 MODE="${2:---binary}"
+SSH_KEY="${YAVER_SSH_KEY:-}"
+SSH_OPTS=()
+if [[ -n "$SSH_KEY" ]]; then
+  SSH_OPTS=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RELAY_DIR="$(dirname "$SCRIPT_DIR")"
@@ -26,7 +31,7 @@ case "$MODE" in
     echo ""
     echo "  Cloning relay/ directory only (sparse checkout)..."
 
-    ssh "root@${SERVER}" bash -s <<REMOTE
+    ssh "${SSH_OPTS[@]}" "root@${SERVER}" bash -s <<REMOTE
 set -euo pipefail
 
 # Install Docker if missing
@@ -94,14 +99,14 @@ REMOTE
     echo "  Built: $(du -h yaver-relay-linux-amd64 | cut -f1)"
 
     echo "  Copying binary..."
-    scp yaver-relay-linux-amd64 "root@${SERVER}:/usr/local/bin/yaver-relay"
+    scp "${SSH_OPTS[@]}" yaver-relay-linux-amd64 "root@${SERVER}:/usr/local/bin/yaver-relay"
 
     echo "  Copying systemd unit..."
-    scp deploy/yaver-relay.service "root@${SERVER}:/etc/systemd/system/yaver-relay.service"
-    scp deploy/yaver-relay-timecheck "root@${SERVER}:/tmp/yaver-relay-timecheck"
+    scp "${SSH_OPTS[@]}" deploy/yaver-relay.service "root@${SERVER}:/etc/systemd/system/yaver-relay.service"
+    scp "${SSH_OPTS[@]}" deploy/yaver-relay-timecheck "root@${SERVER}:/tmp/yaver-relay-timecheck"
 
     echo "  Starting service..."
-    ssh "root@${SERVER}" bash -s <<'REMOTE'
+    ssh "${SSH_OPTS[@]}" "root@${SERVER}" bash -s <<'REMOTE'
 chmod +x /usr/local/bin/yaver-relay
 install -D -m 0755 /tmp/yaver-relay-timecheck /usr/local/libexec/yaver-relay-timecheck
 systemctl daemon-reload
