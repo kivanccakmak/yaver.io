@@ -708,7 +708,19 @@ export default function TasksScreen() {
         await new Promise((r) => setTimeout(r, 500));
       }
       await quicClient.continueTask(selectedTask.id, followUpText.trim());
+      const text = followUpText.trim();
       setFollowUpText("");
+      // Optimistically show the user's follow-up immediately (blue bubble)
+      setSelectedTask((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          turns: [
+            ...(prev.turns || []),
+            { role: "user" as const, content: text, timestamp: new Date().toISOString() },
+          ],
+        };
+      });
       await fetchTasks();
     } catch {
     } finally {
@@ -1236,7 +1248,7 @@ export default function TasksScreen() {
         )}
 
         {/* New Task Modal */}
-        <Modal visible={showNewTask} animationType="slide" transparent onDismiss={handleNewTaskModalDismiss}>
+        <Modal visible={showNewTask} animationType="slide" transparent onDismiss={handleNewTaskModalDismiss} onRequestClose={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }}>
           <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
             <Pressable style={s.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); }} />
             <View style={[s.modalContent, { backgroundColor: c.bgCard }]}>
@@ -1554,7 +1566,7 @@ const s = StyleSheet.create({
   tvConsoleLine: {
     fontSize: 14,
     lineHeight: 20,
-    fontFamily: "Menlo",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
   taskCardPressed: { opacity: 0.7 },
   taskHeader: { flexDirection: "row", alignItems: "center", marginBottom: 8, gap: 8 },
