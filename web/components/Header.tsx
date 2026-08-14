@@ -100,6 +100,9 @@ export default function Header() {
               <Link href="/dashboard" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
                 Account
               </Link>
+              <Link href="/vibing" className="text-sm text-surface-400 transition-colors hover:text-surface-50">
+                Vibing
+              </Link>
               <button
                 onClick={toggle}
                 className="rounded-lg p-2 text-surface-400 transition-colors hover:bg-surface-900 hover:text-surface-50"
