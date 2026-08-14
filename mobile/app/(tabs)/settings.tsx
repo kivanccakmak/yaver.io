@@ -59,6 +59,7 @@ export default function SettingsScreen() {
   const [pingRtt, setPingRtt] = useState<number | null>(null);
   const [isPinging, setIsPinging] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
+  const [isDogfooding, setIsDogfooding] = useState(false);
   const [metrics, setMetrics] = useState<DeviceMetric[]>([]);
   const [events, setEvents] = useState<DeviceEvent[]>([]);
   const [showMetrics, setShowMetrics] = useState(false);
@@ -322,6 +323,19 @@ export default function SettingsScreen() {
         },
       ]
     );
+  };
+
+  const handleDogfood = async () => {
+    if (connectionStatus !== "connected" || isDogfooding) return;
+    setIsDogfooding(true);
+    try {
+      const workDir = await quicClient.startDogfood();
+      Alert.alert("Dogfood mode started", `React Native dev server relaunched on the remote box in:\n${workDir}`);
+    } catch (error) {
+      Alert.alert("Dogfood mode unavailable", error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsDogfooding(false);
+    }
   };
 
   // Fetch device metrics every 60s when connected
@@ -740,6 +754,13 @@ export default function SettingsScreen() {
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Coding Runtime</Text>
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <Text style={[styles.runnerDesc, { color: c.textMuted, marginBottom: 10 }]}>Choose how Tasks behaves when a dev machine is unavailable. Local mode supports files, search, diffs, Git, and LLM chat; builds and shell work stay remote or in CI.</Text>
+            <Pressable
+              style={[styles.remoteSyncButton, { borderColor: c.border, opacity: connectionStatus === "connected" && !isDogfooding ? 1 : 0.5, marginBottom: 12 }]}
+              disabled={connectionStatus !== "connected" || isDogfooding}
+              onPress={handleDogfood}
+            >
+              <Text style={{ color: c.accent, fontSize: 12 }}>{isDogfooding ? "Launching remote React Native…" : "Launch remote React Native (dogfood)"}</Text>
+            </Pressable>
             {([
               ["remote-preferred", "Remote preferred", "Use the connected Yaver agent."],
               ["auto-fallback", "Automatic fallback", "Use local mode when remote connection fails."],
@@ -973,12 +994,6 @@ export default function SettingsScreen() {
               <View style={{ marginTop: 8 }}>
                 <Text style={{ fontSize: 12, color: c.textMuted }}>
                   Using default relay servers. Add your own to use a self-hosted relay.
-                </Text>
-                <Text
-                  style={{ fontSize: 12, color: c.accent, marginTop: 4 }}
-                  onPress={() => Linking.openURL("https://yaver.io/docs/self-hosting")}
-                >
-                  Learn more about self-hosting a relay
                 </Text>
               </View>
             )}

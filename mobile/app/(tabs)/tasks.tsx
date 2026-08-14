@@ -728,9 +728,9 @@ export default function TasksScreen() {
       <View style={s.container}>
         {/* Connection banner */}
         <View style={[s.banner, { backgroundColor: banner.bg, borderBottomColor: banner.border, flexDirection: "column", alignItems: "flex-start", paddingVertical: 12 }]}>
-          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
+          <View style={{ width: "100%", flexDirection: "row", alignItems: "center" }}>
             <View style={[s.dot, { backgroundColor: banner.dot }]} />
-            <Text style={[s.bannerText, { color: banner.text, flexShrink: 1 }]} numberOfLines={1}>
+            <Text style={[s.bannerText, { color: banner.text, flex: 1, minWidth: 0 }]} numberOfLines={1} ellipsizeMode="tail">
               {isLocalMode ? "Phone-only local" : `${banner.label}${modeLabel}`}{activeDevice && !isLocalMode ? ` \u00b7 ${activeDevice.name}` : ""}
               {showReconnectProgress ? ` \u00b7 ${displayedAttempt}/${quicClient.maxReconnectAttempts}` : ""}
             </Text>
@@ -752,11 +752,11 @@ export default function TasksScreen() {
             )}
           </View>
           {isEffectivelyConnected && (
-            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4, marginLeft: 18 }}>
+            <View style={{ width: "100%", flexDirection: "row", alignItems: "center", flexWrap: "wrap", marginTop: 4, marginLeft: 18, paddingRight: 18 }}>
               {agentStatus && (
                 <>
                   <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: agentStatus.runner.installed ? "#22c55e" : "#ef4444" }} />
-                  <Text style={{ color: agentStatus.runner.installed ? "#4ade80" : "#f87171", fontSize: 11, marginLeft: 6 }}>
+                  <Text style={{ color: agentStatus.runner.installed ? "#4ade80" : "#f87171", fontSize: 11, marginLeft: 6, flexShrink: 1 }} numberOfLines={1} ellipsizeMode="tail">
                     {agentStatus.runner.name} {agentStatus.runner.installed ? "ready" : "not found"}
                     {agentStatus.runningTasks > 0 ? ` \u00b7 ${agentStatus.runningTasks} running` : ""}
                   </Text>
@@ -1181,7 +1181,7 @@ export default function TasksScreen() {
             {/* Tap outside to dismiss */}
             <Pressable style={s.chatModalDismissArea} onPress={() => setSelectedTask(null)} />
             {selectedTask && (
-              <View style={[s.chatModal, { backgroundColor: c.bg }]}>
+              <View style={[s.chatModal, { backgroundColor: c.bg }, !(Platform as any).isTV && { height: "88%" }]}>
                 {/* Header */}
                 <View style={[s.chatHeader, { borderBottomColor: c.border }]}>
                   {/* Left: device info + connection status */}
@@ -1211,7 +1211,7 @@ export default function TasksScreen() {
 
                   {/* Right: Close / Exit */}
                   <View style={s.chatHeaderRight}>
-                    {isRunning ? (
+                    {isRunning && (
                       <Pressable
                         onPress={() => handleExitTask(selectedTask.id)}
                         onLongPress={() => {
@@ -1223,11 +1223,10 @@ export default function TasksScreen() {
                       >
                         <Text style={s.chatStopText}>Exit</Text>
                       </Pressable>
-                    ) : (
-                      <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }}>
-                        <Text style={[s.chatBackText, { color: c.accent }]}>Close</Text>
-                      </Pressable>
                     )}
+                    <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }}>
+                      <Text style={[s.chatBackText, { color: c.accent }]}>Close</Text>
+                    </Pressable>
                   </View>
                 </View>
 
@@ -1463,8 +1462,8 @@ const s = StyleSheet.create({
 
   // ── Chat modal ─────────────────────────────────────────────────────
   chatModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)" },
-  chatModalDismissArea: { height: 50 },
-  chatModal: { flex: 1, borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: "hidden" },
+  chatModalDismissArea: { flex: 1, minHeight: 24 },
+  chatModal: { borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: "hidden" },
 
   // Chat header
   chatHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1 },
@@ -1475,7 +1474,7 @@ const s = StyleSheet.create({
   chatHeaderCenter: { flex: 1, alignItems: "center" },
   chatHeaderTitle: { fontSize: 14, fontWeight: "600" },
   chatHeaderMeta: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 },
-  chatHeaderRight: { width: 50, alignItems: "flex-end" },
+  chatHeaderRight: { minWidth: 92, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 12 },
   statusDotSmall: { width: 6, height: 6, borderRadius: 3 },
   chatHeaderStatus: { fontSize: 11, fontWeight: "500", textTransform: "uppercase" },
   chatHeaderCost: { fontSize: 11, marginLeft: 6 },

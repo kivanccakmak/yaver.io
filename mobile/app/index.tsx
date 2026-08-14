@@ -1,8 +1,10 @@
 import { Redirect } from "expo-router";
 import React from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
 import { useAuth } from "../src/context/AuthContext";
 import { useColors } from "../src/context/ThemeContext";
+
+const isTV = (Platform as any).isTV === true;
 
 export default function IndexScreen() {
   const { isAuthenticated, isLoading, surveyCompleted } = useAuth();
@@ -17,6 +19,9 @@ export default function IndexScreen() {
   }
 
   if (isAuthenticated) {
+    if (isTV) {
+      return <Redirect href="/(tabs)/home" />;
+    }
     if (!surveyCompleted) {
       return <Redirect href="/survey" />;
     }

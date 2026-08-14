@@ -7,11 +7,10 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Alert, Linking, Platform } from "react-native";
+import { Platform } from "react-native";
 import Constants from "expo-constants";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { router } from "expo-router";
 import { quicClient, RelayServer } from "../lib/quic";
 import { useAuth } from "./AuthContext";
 import { getUserSettings } from "../lib/auth";
@@ -20,7 +19,6 @@ import { beaconListener } from "../lib/beacon";
 import { CONVEX_SITE_URL } from "../lib/constants";
 
 export const CUSTOM_RELAYS_KEY = "@yaver/custom_relays";
-const RELAY_ONBOARDING_KEY = "@yaver/relay_onboarding_done";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
 const BUILD_NUMBER =
@@ -326,57 +324,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       }
     });
   }, [token]);
-
-  // One-time relay onboarding alert after first login
-  const onboardingChecked = useRef(false);
-  useEffect(() => {
-    if (!token || !relaysReady || onboardingChecked.current) return;
-    onboardingChecked.current = true;
-    (async () => {
-      try {
-        const done = await AsyncStorage.getItem(RELAY_ONBOARDING_KEY);
-        if (done) return;
-        const customRaw = await AsyncStorage.getItem(CUSTOM_RELAYS_KEY);
-        if (customRaw) {
-          const parsed = JSON.parse(customRaw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // Already has custom relays, skip onboarding
-            await AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
-            return;
-          }
-        }
-        Alert.alert(
-          "Relay Server Setup",
-          "A relay server lets you connect to your dev machine from anywhere. " +
-          "If you're always on the same WiFi or use Tailscale, you can skip this.",
-          [
-            {
-              text: "Set Up Relay",
-              onPress: () => {
-                AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
-                router.push("/(tabs)/settings");
-              },
-            },
-            {
-              text: "Learn More",
-              onPress: () => {
-                Linking.openURL("https://yaver.io/docs/self-hosting");
-              },
-            },
-            {
-              text: "Skip",
-              style: "cancel",
-              onPress: () => {
-                AsyncStorage.setItem(RELAY_ONBOARDING_KEY, "1");
-              },
-            },
-          ]
-        );
-      } catch {
-        // Best-effort
-      }
-    })();
-  }, [token, relaysReady]);
 
   // Start/stop LAN beacon listener based on auth state
   useEffect(() => {

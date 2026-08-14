@@ -42,6 +42,12 @@ export interface Task {
   deviceName?: string;
 }
 
+export interface RemoteProject {
+  name: string;
+  path: string;
+  branch?: string;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -334,6 +340,27 @@ export class QuicClient {
     };
   }
 
+  async listProjects(refresh = false): Promise<RemoteProject[]> {
+    this.assertConnected();
+    const suffix = refresh ? "?refresh=1" : "";
+    const res = await fetch(`${this.baseUrl}/projects${suffix}`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to list projects: ${res.status}`);
+    const data = await res.json() as { projects?: RemoteProject[] };
+    return Array.isArray(data.projects) ? data.projects : [];
+  }
+
+  async setWorkDir(path: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/work-dir`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const data = await res.json().catch(() => ({})) as { workDir?: string; error?: string };
+    if (!res.ok) throw new Error(data.error || `Failed to select project: ${res.status}`);
+    return data.workDir || path;
+  }
+
   /** List all tasks from the desktop agent, falling back to cache on failure. */
   async listTasks(): Promise<Task[]> {
     if (!this.isConnected) {
@@ -597,6 +624,19 @@ export class QuicClient {
     } catch {
       return false;
     }
+  }
+
+  /** Restart the remote React Native dev server in the agent's current project. */
+  async startDogfood(path?: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/agent/dogfood`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify(path ? { path } : {}),
+    });
+    const data = await res.json().catch(() => ({})) as { workDir?: string; error?: string };
+    if (!res.ok) throw new Error(data.error || `Failed to start dogfood mode: ${res.status}`);
+    return data.workDir || path || "remote project";
   }
 
   /** Switch the runner on the desktop agent. Returns error message if runner not found. */

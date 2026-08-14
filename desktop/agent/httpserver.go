@@ -28,6 +28,8 @@ type HTTPServer struct {
 	secretStore *SecretStore
 	server      *http.Server
 	onShutdown  func() // called when mobile requests agent shutdown
+	dogfoodMu   sync.Mutex
+	dogfoodCmd  *osexec.Cmd
 
 	// Cache validated tokens (token -> userId) to avoid repeated Convex calls
 	tokenCache sync.Map
@@ -69,6 +71,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
 	mux.HandleFunc("/agent/secrets", s.auth(s.handleSecrets))
 	mux.HandleFunc("/agent/secrets/", s.auth(s.handleSecretByName))
+	mux.HandleFunc("/agent/dogfood", s.auth(s.handleDogfood))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
 	mux.HandleFunc("/mcp", s.handleMCP)
@@ -229,6 +232,66 @@ func (s *HTTPServer) handleWorkDir(w http.ResponseWriter, r *http.Request) {
 	s.taskMgr.workDir = path
 	s.taskMgr.mu.Unlock()
 	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "workDir": path})
+}
+
+// handleDogfood restarts the React Native dev server in the agent's current
+// project. This keeps dogfood mode on the remote box instead of requiring a
+// separate SSH/terminal workflow.
+func (s *HTTPServer) handleDogfood(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var body struct{ Path string `json:"path"` }
+	if r.Body != nil {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&body)
+	}
+	workDir := strings.TrimSpace(body.Path)
+	if workDir == "" {
+		workDir = s.taskMgr.workDir
+	}
+	workDir = filepath.Clean(workDir)
+	if err := ValidateWorkDir(workDir, s.taskMgr.Sandbox); err != nil {
+		jsonError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if info, err := os.Stat(workDir); err != nil || !info.IsDir() {
+		jsonError(w, http.StatusBadRequest, "dogfood directory is not accessible")
+		return
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "package.json")); err != nil {
+		mobileDir := filepath.Join(workDir, "mobile")
+		if _, mobileErr := os.Stat(filepath.Join(mobileDir, "package.json")); mobileErr != nil {
+			jsonError(w, http.StatusBadRequest, "selected directory is not a React Native project")
+			return
+		}
+		workDir = mobileDir
+	}
+
+	s.dogfoodMu.Lock()
+	if s.dogfoodCmd != nil && s.dogfoodCmd.Process != nil {
+		_ = s.dogfoodCmd.Process.Kill()
+	}
+	cmd := osexec.Command("npm", "run", "start", "--", "--dev-client")
+	cmd.Dir = workDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		s.dogfoodMu.Unlock()
+		jsonError(w, http.StatusBadGateway, fmt.Sprintf("start React Native: %v", err))
+		return
+	}
+	s.dogfoodCmd = cmd
+	s.dogfoodMu.Unlock()
+	go func() {
+		_ = cmd.Wait()
+		s.dogfoodMu.Lock()
+		if s.dogfoodCmd == cmd {
+			s.dogfoodCmd = nil
+		}
+		s.dogfoodMu.Unlock()
+	}()
+	jsonReply(w, http.StatusAccepted, map[string]interface{}{"ok": true, "started": true, "workDir": workDir, "command": "npm run start -- --dev-client"})
 }
 
 // handleSecrets returns metadata only. Values are write-only over this API.
