@@ -15,6 +15,18 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 						"type":        "string",
 						"description": "The task prompt describing what the AI should do",
 					},
+					"model": map[string]interface{}{
+						"type":        "string",
+						"description": "Model override for the runner (e.g. sonnet, opus)",
+					},
+					"runner": map[string]interface{}{
+						"type":        "string",
+						"description": "Runner ID (claude, codex, opencode, aider) — empty uses default",
+					},
+					"mode": map[string]interface{}{
+						"type":        "string",
+						"description": "Agent mode for the runner (opencode: build, plan, or any custom agent from opencode.json)",
+					},
 				},
 			},
 		},
@@ -68,6 +80,10 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 					"input": map[string]interface{}{
 						"type":        "string",
 						"description": "Follow-up instructions for the task",
+					},
+					"mode": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional agent-mode override for this continuation (opencode: build, plan, custom)",
 					},
 				},
 			},

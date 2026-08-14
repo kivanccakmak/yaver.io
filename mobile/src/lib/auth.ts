@@ -300,6 +300,7 @@ export interface UserSettings {
   customRunnerCommand?: string;
   relayUrl?: string;
   relayPassword?: string;
+  vibingTransport?: "auto" | "sse" | "webrtc";
 }
 
 export interface AiRunner {

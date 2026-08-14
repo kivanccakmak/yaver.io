@@ -738,7 +738,7 @@ http.route({
     const settings = await ctx.runQuery(api.userSettings.getByToken, { tokenHash });
     return jsonResponse({
       ok: true,
-      settings: settings || { forceRelay: true, runnerId: undefined, customRunnerCommand: undefined, relayUrl: undefined, relayPassword: undefined },
+      settings: settings || { forceRelay: true, runnerId: undefined, customRunnerCommand: undefined, relayUrl: undefined, relayPassword: undefined, vibingTransport: undefined },
     });
   }),
 });
@@ -758,6 +758,7 @@ http.route({
       customRunnerCommand: body.customRunnerCommand,
       relayUrl: body.relayUrl,
       relayPassword: body.relayPassword,
+      vibingTransport: body.vibingTransport,
     });
     return jsonResponse({ ok: true });
   }),

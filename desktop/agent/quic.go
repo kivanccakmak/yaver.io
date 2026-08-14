@@ -31,6 +31,7 @@ type IncomingMessage struct {
 	Description string `json:"description,omitempty"`
 	TaskID      string `json:"taskId,omitempty"`
 	Input       string `json:"input,omitempty"`
+	Mode        string `json:"mode,omitempty"` // agent mode: "build", "plan", or custom agent
 	Source      string `json:"source,omitempty"` // "mobile" or "cli"
 }
 
@@ -184,7 +185,7 @@ func (s *QUICServer) handleTaskCreate(stream quic.Stream, msg IncomingMessage) {
 	if source == "" {
 		source = "mobile"
 	}
-	task, err := s.taskManager.CreateTask(msg.Title, msg.Description, "", source, "", "")
+	task, err := s.taskManager.CreateTask(msg.Title, msg.Description, "", source, "", msg.Mode)
 	if err != nil {
 		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
 		return
@@ -222,7 +223,7 @@ func (s *QUICServer) handleTaskList(stream quic.Stream) {
 }
 
 func (s *QUICServer) handleTaskContinue(stream quic.Stream, msg IncomingMessage) {
-	task, err := s.taskManager.ResumeTask(msg.TaskID, msg.Input)
+	task, err := s.taskManager.ResumeTask(msg.TaskID, msg.Input, msg.Mode)
 	if err != nil {
 		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
 		return

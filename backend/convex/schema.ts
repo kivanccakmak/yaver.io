@@ -120,6 +120,7 @@ export default defineSchema({
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
+    vibingTransport: v.optional(v.union(v.literal("auto"), v.literal("sse"), v.literal("webrtc"))),
   }).index("by_userId", ["userId"]),
 
   aiRunners: defineTable({

@@ -368,6 +368,7 @@ type Task struct {
 	Source      string     `json:"source,omitempty"` // "mobile", "mcp", "cli"
 	Model       string     `json:"model,omitempty"`
 	RunnerID    string     `json:"runnerId,omitempty"` // which runner is executing this task
+	Mode        string     `json:"mode,omitempty"`     // agent mode: "build", "plan", or any custom agent (opencode --agent)
 	SessionID   string     `json:"session_id,omitempty"`
 	Output      string     `json:"output"`
 	ResultText   string  // Extracted clean result text from Claude
@@ -393,6 +394,7 @@ type TaskInfo struct {
 	Description string             `json:"description"`
 	Status      TaskStatus         `json:"status"`
 	RunnerID    string             `json:"runnerId,omitempty"`
+	Mode        string             `json:"mode,omitempty"` // agent mode: "build", "plan", or custom agent
 	SessionID   string             `json:"sessionId,omitempty"`
 	Output      string             `json:"output,omitempty"`
 	ResultText  string             `json:"resultText,omitempty"`
@@ -628,7 +630,8 @@ func (tm *TaskManager) CheckRunner() error {
 // model overrides the default model (e.g. "opus", "sonnet", "haiku") — empty uses runner default.
 // source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
 // customCommand, if non-empty, runs an arbitrary command via sh -c (ignores runnerID).
-func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand string) (*Task, error) {
+// mode selects the runner's agent mode (e.g. opencode "build"/"plan" via --agent) — empty uses runner default.
+func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand, mode string) (*Task, error) {
 	var taskRunner RunnerConfig
 
 	if customCommand != "" {
@@ -679,6 +682,7 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 		Source:      source,
 		Model:       model,
 		RunnerID:    taskRunner.RunnerID,
+		Mode:        mode,
 		runner:      taskRunner,
 		CreatedAt:   now,
 		outputCh:    make(chan string, 512),
@@ -791,6 +795,30 @@ func buildRunnerArgs(runner RunnerConfig, prompt string) []string {
 	return args
 }
 
+// applyModeArgs inserts runner-specific agent-mode flags into the args.
+// Currently opencode maps mode to `--agent <mode>` (e.g. "build"/"plan" or any
+// custom agent defined in opencode.json). Other runners ignore mode.
+func applyModeArgs(runner RunnerConfig, mode string, args []string) []string {
+	if mode == "" {
+		return args
+	}
+	switch runner.RunnerID {
+	case "opencode":
+		// `opencode run --agent <mode> <prompt>` — insert right after the "run" subcommand.
+		pos := 1
+		if pos > len(args) {
+			pos = len(args)
+		}
+		out := make([]string, 0, len(args)+2)
+		out = append(out, args[:pos]...)
+		out = append(out, "--agent", mode)
+		out = append(out, args[pos:]...)
+		return out
+	default:
+		return args
+	}
+}
+
 // buildArgs is a convenience wrapper using the task manager's default runner.
 func (tm *TaskManager) buildArgs(prompt string) []string {
 	return buildRunnerArgs(tm.runner, prompt)
@@ -891,6 +919,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 
 	runner := task.runner
 	args := buildRunnerArgs(runner, prompt)
+	args = applyModeArgs(runner, task.Mode, args)
 
 	// Use warm session if available (resume = same rate-limit bucket)
 	tm.mu.RLock()
@@ -1515,7 +1544,9 @@ func (tm *TaskManager) DeleteAllTasks() int {
 
 // ResumeTask resumes an existing task in-place with a follow-up prompt.
 // Output is concatenated, same task ID is kept, and Claude session is resumed.
-func (tm *TaskManager) ResumeTask(id, input string) (*Task, error) {
+// mode, when non-empty, overrides the task's agent mode for this continuation
+// (e.g. opencode "build"/"plan"); when empty the previous mode is kept.
+func (tm *TaskManager) ResumeTask(id, input, mode string) (*Task, error) {
 	tm.mu.Lock()
 	task, ok := tm.tasks[id]
 	if !ok {
@@ -1534,6 +1565,10 @@ func (tm *TaskManager) ResumeTask(id, input string) (*Task, error) {
 		Timestamp: time.Now(),
 	}
 	task.Turns = append(task.Turns, turn)
+
+	if mode != "" {
+		task.Mode = mode
+	}
 
 	// Clear output for the new run — turns track conversation history
 	task.Output = ""
@@ -1573,6 +1608,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	}
 
 	args := buildRunnerArgs(runner, prompt)
+	args = applyModeArgs(runner, task.Mode, args)
 
 	// Resume with session ID if available (follow-up conversation)
 	if task.SessionID != "" && runner.RunnerID == "claude" {

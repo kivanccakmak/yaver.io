@@ -86,10 +86,28 @@ export default function SettingsScreen() {
   const [relaySyncEnabled, setRelaySyncEnabled] = useState(false);
   const [aiCfg, setAiCfg] = useState<AiProvidersConfig | null>(null);
   const [aiSaving, setAiSaving] = useState(false);
+  const [vibingTransport, setVibingTransport] = useState<"auto" | "sse" | "webrtc">("auto");
 
   useEffect(() => {
     loadAiProviders().then(setAiCfg).catch(() => setAiCfg(null));
   }, []);
+
+  useEffect(() => {
+    AsyncStorage.getItem("@yaver/vibing_transport").then((v) => {
+      if (v === "sse" || v === "webrtc") setVibingTransport(v);
+    });
+    if (token) {
+      getUserSettings(token).then((s) => {
+        if (s.vibingTransport) setVibingTransport(s.vibingTransport);
+      }).catch(() => {});
+    }
+  }, [token]);
+
+  const saveVibingTransport = async (value: "auto" | "sse" | "webrtc") => {
+    setVibingTransport(value);
+    await AsyncStorage.setItem("@yaver/vibing_transport", value).catch(() => {});
+    if (token) saveUserSettings(token, { vibingTransport: value }).catch(() => {});
+  };
 
   // Load custom relay servers and sync preference from AsyncStorage
   useEffect(() => {
@@ -972,6 +990,31 @@ export default function SettingsScreen() {
               </Pressable>
             </View>
           )}
+        </View>
+
+        {/* Vibing */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Vibing (live preview)</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Streaming transport</Text>
+            <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2, marginBottom: 10 }}>
+              Auto = SSE by default, upgrades to WebRTC (low latency) on Relay Pro.
+            </Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {(["auto", "sse", "webrtc"] as const).map((id) => {
+                const active = vibingTransport === id;
+                return (
+                  <Pressable
+                    key={id}
+                    onPress={() => saveVibingTransport(id)}
+                    style={({ focused }) => [styles.runnerOption, { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "20" : c.bg }, focused && { transform: [{ scale: 1.05 }] }]}
+                  >
+                    <Text style={{ color: active ? c.accent : c.textMuted, fontSize: 13, textTransform: "capitalize" }}>{id}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
         </View>
 
         {/* Appearance */}

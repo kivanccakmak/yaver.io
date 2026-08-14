@@ -640,6 +640,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		Model         string `json:"model"`
 		Runner        string `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
 		CustomCommand string `json:"customCommand"` // arbitrary command — runs via sh -c
+		Mode          string `json:"mode"`          // agent mode: "build", "plan", or custom agent (opencode --agent)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -650,18 +651,21 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand)
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand, body.Mode)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
 	}
 
-	log.Printf("[HTTP] Task created: %s — %s (status: %s, model: %s, runner: %s)", task.ID, task.Title, task.Status, body.Model, task.RunnerID)
+	log.Printf("[HTTP] Task created: %s — %s (status: %s, model: %s, runner: %s, mode: %s)", task.ID, task.Title, task.Status, body.Model, task.RunnerID, body.Mode)
 	resp := map[string]interface{}{
 		"ok":       true,
 		"taskId":   task.ID,
 		"status":   task.Status,
 		"runnerId": task.RunnerID,
+	}
+	if task.Mode != "" {
+		resp["mode"] = task.Mode
 	}
 	log.Printf("[HTTP] Sending create response for task %s", task.ID)
 	jsonReply(w, http.StatusCreated, resp)
@@ -907,6 +911,7 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 
 	var body struct {
 		Input string `json:"input"`
+		Mode  string `json:"mode"` // agent mode override for this continuation
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -917,7 +922,7 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	task, err := s.taskMgr.ResumeTask(id, body.Input)
+	task, err := s.taskMgr.ResumeTask(id, body.Input, body.Mode)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("resume failed: %v", err))
 		return
@@ -1049,16 +1054,19 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 	case "create_task":
 		var args struct {
 			Prompt string `json:"prompt"`
+			Model  string `json:"model"`
+			Runner string `json:"runner"`
+			Mode   string `json:"mode"`
 		}
 		json.Unmarshal(call.Arguments, &args)
 		if args.Prompt == "" {
 			return mcpToolError("prompt is required")
 		}
-		task, err := s.taskMgr.CreateTask(args.Prompt, "", "", "mcp", "", "")
+		task, err := s.taskMgr.CreateTask(args.Prompt, "", args.Model, "mcp", args.Runner, "", args.Mode)
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}
-		log.Printf("[MCP] Task created: %s", task.ID)
+		log.Printf("[MCP] Task created: %s (runner=%s, model=%s, mode=%s)", task.ID, args.Runner, args.Model, args.Mode)
 		return mcpToolResult(fmt.Sprintf("Task created successfully.\nTask ID: %s\nStatus: %s", task.ID, task.Status))
 
 	case "list_tasks":
@@ -1107,9 +1115,10 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		var args struct {
 			TaskID string `json:"task_id"`
 			Input  string `json:"input"`
+			Mode   string `json:"mode"`
 		}
 		json.Unmarshal(call.Arguments, &args)
-		task, err := s.taskMgr.ResumeTask(args.TaskID, args.Input)
+		task, err := s.taskMgr.ResumeTask(args.TaskID, args.Input, args.Mode)
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("resume failed: %v", err))
 		}

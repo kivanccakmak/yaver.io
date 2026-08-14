@@ -16,6 +16,7 @@ type persistedTask struct {
 	Description string             `json:"description"`
 	Status      TaskStatus         `json:"status"`
 	SessionID   string             `json:"session_id,omitempty"`
+	Mode        string             `json:"mode,omitempty"`
 	Output      string             `json:"output,omitempty"`
 	ResultText  string             `json:"result_text,omitempty"`
 	CostUSD     float64            `json:"cost_usd,omitempty"`
@@ -56,6 +57,7 @@ func (s *TaskStore) Save(tasks map[string]*Task) {
 			Description: t.Description,
 			Status:      t.Status,
 			SessionID:   t.SessionID,
+			Mode:        t.Mode,
 			Output:      output,
 			ResultText:  t.ResultText,
 			CostUSD:     t.CostUSD,
@@ -114,6 +116,7 @@ func (s *TaskStore) Load() map[string]*Task {
 			Description: r.Description,
 			Status:      status,
 			SessionID:   r.SessionID,
+			Mode:        r.Mode,
 			Output:      r.Output,
 			ResultText:  r.ResultText,
 			CostUSD:     r.CostUSD,
