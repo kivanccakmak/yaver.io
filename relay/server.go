@@ -445,11 +445,12 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Read request body
 	var body []byte
 	if r.Body != nil {
-		body, err = readLimitedBody(r.Body, 10<<20)
+		b, err := readLimitedBody(r.Body, 10<<20)
 		if err != nil {
 			http.Error(w, `{"ok":false,"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
 			return
 		}
+		body = b
 	}
 
 	// Build tunnel request

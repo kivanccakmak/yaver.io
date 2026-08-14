@@ -72,6 +72,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/secrets", s.auth(s.handleSecrets))
 	mux.HandleFunc("/agent/secrets/", s.auth(s.handleSecretByName))
 	mux.HandleFunc("/agent/dogfood", s.auth(s.handleDogfood))
+	mux.HandleFunc("/vibing/frame", s.auth(s.handleVibingFrame))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
 	mux.HandleFunc("/mcp", s.handleMCP)
@@ -170,6 +171,77 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"hostname": s.hostname,
 		"version":  version,
 	})
+}
+
+// frameChromeBinaries are candidate headless-Chrome binaries, tried in order.
+var frameChromeBinaries = []string{
+	"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "/usr/bin/chromium",
+}
+
+// captureFrame captures a screenshot of `url` using headless Chrome and
+// returns the PNG bytes. This powers the free "SSE vibing" frame lane: clients
+// poll this endpoint (auth via bearer token) and render the JPEG/PNG frames.
+func captureFrame(url string) ([]byte, error) {
+	tmp, err := os.CreateTemp("", "yaver-frame-*.png")
+	if err != nil {
+		return nil, err
+	}
+	shot := tmp.Name()
+	tmp.Close()
+	defer os.Remove(shot)
+
+	var lastErr error
+	for _, bin := range frameChromeBinaries {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cmd := osexec.CommandContext(ctx, bin,
+			"--headless=new",
+			"--disable-gpu",
+			"--hide-scrollbars",
+			"--window-size=1280,720",
+			"--screenshot="+shot,
+			url,
+		)
+		err := cmd.Run()
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		data, readErr := os.ReadFile(shot)
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if len(data) > 0 {
+			return data, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no chrome binary found; install chromium/chrome on this machine")
+	}
+	return nil, lastErr
+}
+
+// handleVibingFrame captures and returns a frame of the given URL.
+// GET /vibing/frame?url=<url>  → PNG bytes (auth required)
+func (s *HTTPServer) handleVibingFrame(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	url := r.URL.Query().Get("url")
+	if url == "" {
+		jsonError(w, http.StatusBadRequest, "url query param required")
+		return
+	}
+	data, err := captureFrame(url)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("capture frame: %v", err))
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(data)
 }
 
 func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {

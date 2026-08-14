@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { Device, useDevice } from "../../src/context/DeviceContext";
@@ -34,6 +34,8 @@ export default function VibingScreen() {
   const [status, setStatus] = useState<DevStatus | null>(null);
   const [working, setWorking] = useState(false);
   const [laneHtml, setLaneHtml] = useState<string>("");
+  const [frameUri, setFrameUri] = useState<string>("");
+  const [frameError, setFrameError] = useState<string>("");
   const [transport, setTransport] = useState<"auto" | "sse" | "webrtc">("auto");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -114,6 +116,46 @@ export default function VibingScreen() {
       }
     } catch {}
   };
+
+  // Live frame lane: poll the agent's /vibing/frame (headless Chrome capture of
+  // the local dev server) and render as an image. 404 → endpoint not on this box.
+  const fetchFrame = useCallback(async () => {
+    if (!base || !token || !status?.serving || !status?.port) return;
+    try {
+      const localUrl = `http://localhost:${status.port}/`;
+      const r = await fetch(
+        `${base}/vibing/frame?url=${encodeURIComponent(localUrl)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (r.status === 404) {
+        setFrameError("Frame endpoint not available on this box");
+        return;
+      }
+      if (!r.ok) return;
+      const buf = await r.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let b64 = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        b64 += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      setFrameUri(`data:image/png;base64,${btoa(b64)}`);
+      setFrameError("");
+    } catch {
+      // transient
+    }
+  }, [base, token, status]);
+
+  useEffect(() => {
+    if (!serving) {
+      setFrameUri("");
+      return;
+    }
+    setFrameUri("");
+    setFrameError("");
+    fetchFrame();
+    const iv = setInterval(fetchFrame, 2500);
+    return () => clearInterval(iv);
+  }, [serving, fetchFrame]);
 
   const serving = !!status?.serving;
   const building = !serving && status?.running === false && !!status?.port;
@@ -221,21 +263,36 @@ export default function VibingScreen() {
 
         {/* Lane proof */}
         {serving && (
-          <Pressable
-            onPress={verifyLane}
-            style={({ focused }) => [styles.card, { backgroundColor: c.bgCard, borderColor: c.border }, focused && styles.focused]}
-          >
-            <Text style={[styles.cardLabel, { color: c.textPrimary }]}>
-              {laneHtml ? "Live lane verified ✓" : "Verify live lane (headless)"}
-            </Text>
-            {laneHtml ? (
-              <Text style={[styles.laneSnippet, { color: c.textSecondary }]} numberOfLines={4}>{laneHtml}</Text>
+          <>
+            {frameUri ? (
+              <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, alignItems: "center" }]}>
+                <Text style={[styles.cardLabel, { color: c.textPrimary, alignSelf: "flex-start" }]}>
+                  Live preview {frameError ? "" : "· frames"} ✓
+                </Text>
+                <Image
+                  source={{ uri: frameUri }}
+                  style={styles.liveFrame}
+                  resizeMode="contain"
+                />
+              </View>
             ) : (
-              <Text style={[styles.hint, { color: c.textMuted }]}>
-                Fetches the running app from the box with auth — confirms the streaming lane. Full visual rendering needs WebRTC (Relay Pro) or a frame endpoint.
-              </Text>
+              <Pressable
+                onPress={verifyLane}
+                style={({ focused }) => [styles.card, { backgroundColor: c.bgCard, borderColor: c.border }, focused && styles.focused]}
+              >
+                <Text style={[styles.cardLabel, { color: c.textPrimary }]}>
+                  {laneHtml ? "Live lane verified ✓" : "Verify live lane (headless)"}
+                </Text>
+                {laneHtml ? (
+                  <Text style={[styles.laneSnippet, { color: c.textSecondary }]} numberOfLines={4}>{laneHtml}</Text>
+                ) : (
+                  <Text style={[styles.hint, { color: c.textMuted }]}>
+                    {frameError || "Fetching the running app from the box with auth — confirms the streaming lane. Full visual rendering needs the frame endpoint (self-host) or WebRTC (Relay Pro)."}
+                  </Text>
+                )}
+              </Pressable>
             )}
-          </Pressable>
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
