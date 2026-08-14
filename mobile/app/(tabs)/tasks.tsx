@@ -23,6 +23,7 @@ import { useDevice } from "../../src/context/DeviceContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { copyToClipboard } from "../../src/lib/safeClipboard";
+import { isSpeechAvailable, startListening, stopListening, transcribeAudio } from "../../src/lib/speech";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { getUserSettings } from "../../src/lib/auth";
 import {
@@ -225,11 +226,16 @@ function TaskCard({
       : null;
 
   return (
-    <TouchableOpacity
-      style={[s.cardContainer, s.taskCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
+    <Pressable
+      style={({ focused, pressed }) => [
+        s.cardContainer,
+        s.taskCard,
+        { backgroundColor: c.bgCard, borderColor: focused ? c.accent : c.border },
+        focused && (s.tvCardFocused as any),
+        pressed && { opacity: 0.7 },
+      ]}
       onPress={onPress}
       onLongPress={handleLongPress}
-      activeOpacity={0.7}
     >
       <View style={s.taskHeader}>
         <View style={[s.statusBadge, { backgroundColor: STATUS_COLORS[item.status] + "22" }]}>
@@ -247,7 +253,7 @@ function TaskCard({
         <Text style={[s.taskOutputPreview, { color: c.accent }]} numberOfLines={1}>{previewText}</Text>
       ) : null}
       <Text style={[s.taskTimestamp, { color: c.textMuted }]}>{formatRelativeTime(item.updatedAt)}</Text>
-    </TouchableOpacity>
+    </Pressable>
   );
 }
 
@@ -311,6 +317,8 @@ export default function TasksScreen() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [showNewTask, setShowNewTask] = useState(false);
   const [newTaskText, setNewTaskText] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const newTaskInputRef = useRef<TextInput>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>("sonnet");
   const [refreshing, setRefreshing] = useState(false);
@@ -596,9 +604,16 @@ export default function TasksScreen() {
       setNewTaskText("");
       // Add task to list immediately
       setTasks((prev) => [task, ...prev]);
-      // Store task to open after modal closes (onDismiss will pick it up)
-      pendingOpenTaskRef.current = task;
-      setShowNewTask(false);
+      if ((Platform as any).isTV) {
+        // tvOS: open the session immediately (Modal onDismiss is iOS-only)
+        pendingOpenTaskRef.current = null;
+        setShowNewTask(false);
+        setSelectedTask(task);
+      } else {
+        // Mobile: store task to open after the modal closes (onDismiss)
+        pendingOpenTaskRef.current = task;
+        setShowNewTask(false);
+      }
       // Refresh from server in background
       fetchTasks();
     } catch (e) {
@@ -632,13 +647,45 @@ export default function TasksScreen() {
     }
   };
 
-  // Android fallback: onDismiss is iOS-only, so use effect to detect modal close
+  // onDismiss is iOS-only; Android + tvOS use an effect to detect modal close
   useEffect(() => {
-    if (!showNewTask && pendingOpenTaskRef.current && Platform.OS === "android") {
+    if (!showNewTask && pendingOpenTaskRef.current && (Platform.OS === "android" || (Platform as any).isTV)) {
       const timer = setTimeout(handleNewTaskModalDismiss, 100);
       return () => clearTimeout(timer);
     }
   }, [showNewTask]);
+
+  // tvOS: autoFocus is unreliable — force focus so the Mac keyboard types
+  useEffect(() => {
+    if (showNewTask && (Platform as any).isTV) {
+      const timer = setTimeout(() => newTaskInputRef.current?.focus(), 400);
+      return () => clearTimeout(timer);
+    }
+  }, [showNewTask]);
+
+  // tvOS: voice task creation — press to record, press again to transcribe
+  const handleVoiceTask = useCallback(async () => {
+    if (isListening) {
+      const path = await stopListening();
+      setIsListening(false);
+      const text = await transcribeAudio(path);
+      if (text.trim()) {
+        setNewTaskText(text.trim());
+      }
+      setShowNewTask(true);
+      return;
+    }
+    if (!isSpeechAvailable()) {
+      setShowNewTask(true);
+      return;
+    }
+    const ok = await startListening();
+    if (ok) {
+      setIsListening(true);
+    } else {
+      setShowNewTask(true);
+    }
+  }, [isListening]);
 
   const handleStopTask = async (taskId: string) => {
     try { await quicClient.stopTask(taskId); await fetchTasks(); } catch {}
@@ -723,6 +770,145 @@ export default function TasksScreen() {
   const chatMessages = selectedTask ? buildChatMessages(selectedTask) : [];
   const isRunning = selectedTask?.status === "running" || selectedTask?.status === "queued";
 
+  // Full task session UI (header + console + chat + follow-up). Rendered inline
+  // on tvOS (replaces the list) and inside the mobile Chat Detail Modal.
+  const sessionContent = selectedTask ? (
+    <>
+      {/* Header */}
+      <View style={[s.chatHeader, { borderBottomColor: c.border }]}>
+        {/* Left: device info + connection status */}
+        <View style={s.chatHeaderLeft}>
+          {activeDevice && (
+            <View style={s.chatHeaderDevice}>
+              <View style={[s.statusDotSmall, { backgroundColor: connectionStatus === "connected" ? "#22c55e" : connectionStatus === "error" ? "#ef4444" : connectionStatus === "connecting" ? "#eab308" : "#666" }]} />
+              <Text style={[s.chatHeaderDeviceText, { color: connectionStatus === "connected" ? c.textSecondary : connectionStatus === "error" ? "#ef4444" : "#eab308" }]} numberOfLines={1}>
+                {activeDevice.name.replace(/\.local$/, "")}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Center: task title + status */}
+        <View style={s.chatHeaderCenter}>
+          <Text style={[s.chatHeaderTitle, { color: c.textPrimary }]} numberOfLines={1}>
+            {selectedTask.title}
+          </Text>
+          <View style={s.chatHeaderMeta}>
+            <View style={[s.statusDotSmall, { backgroundColor: STATUS_COLORS[selectedTask.status] }]} />
+            <Text style={[s.chatHeaderStatus, { color: STATUS_COLORS[selectedTask.status] }]}>
+              {selectedTask.status}
+            </Text>
+          </View>
+        </View>
+
+        {/* Right: Close / Exit */}
+        <View style={s.chatHeaderRight}>
+          {isRunning && (
+            <Pressable
+              onPress={() => handleExitTask(selectedTask.id)}
+              onLongPress={() => {
+                Alert.alert("Force Stop", "Kill the process immediately?", [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
+                ]);
+              }}
+            >
+              <Text style={s.chatStopText}>Exit</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }}>
+            <Text style={[s.chatBackText, { color: c.accent }]}>Close</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* TV: live console output (web-terminal style) */}
+      {(Platform as any).isTV && selectedTask.output.length > 0 && (
+        <View style={[s.tvConsole, { backgroundColor: "#0d1117", borderColor: c.border }]}>
+          <Text style={[s.tvConsoleTitle, { color: c.textSecondary }]}>
+            Console · {selectedTask.status}
+          </Text>
+          <ScrollView style={s.tvConsoleScroll} nestedScrollEnabled>
+            {selectedTask.output.map((line, i) => (
+              <Text key={i} style={[s.tvConsoleLine, { color: "#9cdcfe" }]}>{line}</Text>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Chat messages */}
+      <ScrollView
+        ref={chatScrollRef}
+        style={s.chatScroll}
+        contentContainerStyle={s.chatScrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        {chatMessages.map((msg, i) => (
+          <ChatBubble key={`${i}-${msg.role}`} turn={msg} c={c} />
+        ))}
+        {isRunning && chatMessages[chatMessages.length - 1]?.role !== "assistant" && (
+          <View>
+            <TypingIndicator color={c.accent || "#6366f1"} />
+            <Text style={[s.startingHint, { color: c.textMuted }]}>
+              {(selectedTask?.turns?.length ?? 0) > 2 ? "Thinking..." : "Starting..."}
+            </Text>
+          </View>
+        )}
+        {isRunning && chatMessages[chatMessages.length - 1]?.role === "assistant" && (
+          <View style={s.streamingIndicator}>
+            <ActivityIndicator size="small" color={c.accent} />
+            <Text style={[s.streamingText, { color: c.textMuted }]}>Working...</Text>
+          </View>
+        )}
+
+        {/* Debug info (foldable) */}
+        <DebugSection task={selectedTask} connMode={connMode} c={c} />
+        {selectedTask.runnerId?.startsWith("local:") && (
+          <Pressable style={[s.inlineConnectBtn, { backgroundColor: c.accent, alignSelf: "flex-start", marginTop: 12 }]} onPress={handlePushLocalWorkspace}>
+            <Text style={s.inlineConnectText}>Commit & push workspace</Text>
+          </Pressable>
+        )}
+      </ScrollView>
+
+      {/* Input bar */}
+      <View style={[s.chatInputBar, { borderTopColor: c.border, backgroundColor: c.bgCard }]}>
+        <TextInput
+          style={[s.chatInput, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
+          placeholder={isRunning ? "Send a command..." : "Follow up..."}
+          placeholderTextColor={c.textMuted}
+          value={followUpText}
+          onChangeText={setFollowUpText}
+          multiline={!(Platform as any).isTV}
+          maxLength={2000}
+          {...((Platform as any).isTV ? { returnKeyType: "send" as const, blurOnSubmit: true, onSubmitEditing: handleFollowUp } : {})}
+        />
+        {isRunning && (
+          <ActivityIndicator size="small" color={c.accent} style={{ marginRight: 4 }} />
+        )}
+        <Pressable
+          style={[
+            s.chatSendBtn,
+            { backgroundColor: c.accent },
+            (!followUpText.trim() || isSendingFollowUp) && s.submitButtonDisabled,
+          ]}
+          onPress={handleFollowUp}
+          disabled={!followUpText.trim() || isSendingFollowUp}
+        >
+          <Text style={s.chatSendText}>{isSendingFollowUp ? "..." : "\u2191"}</Text>
+        </Pressable>
+      </View>
+    </>
+  ) : null;
+
+  // tvOS: the session replaces the list (no Modal on tvOS)
+  if ((Platform as any).isTV && selectedTask && sessionContent) {
+    return (
+      <SafeAreaView style={[s.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
+        {sessionContent}
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[s.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <View style={s.container}>
@@ -793,6 +979,30 @@ export default function TasksScreen() {
           )}
         </View>
 
+        {/* TV: prominent New Task card — first action; mic creates a task */}
+        {(Platform as any).isTV && (
+          <Pressable
+            hasTVPreferredFocus
+            onPress={handleVoiceTask}
+            style={({ focused }) => [
+              s.tvNewTaskCard,
+              { backgroundColor: isListening ? c.warn + "30" : c.accent + "26", borderColor: focused ? c.accent : c.accent + "55" },
+              focused && s.tvNewTaskCardFocused,
+            ]}
+          >
+            <Text style={[s.tvNewTaskMic, { opacity: isListening ? 0.6 : 1 }]}>🎙️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.tvNewTaskTitle, { color: c.textPrimary }]}>
+                {isListening ? "Listening… speak now" : "Create new task"}
+              </Text>
+              <Text style={[s.tvNewTaskHint, { color: c.textSecondary }]}>
+                {isListening ? "Press again to finish — I'll transcribe it" : "Press to start a task with voice or text"}
+              </Text>
+            </View>
+            <Text style={[s.tvNewTaskCta, { color: c.accent }]}>{isListening ? "…" : "Start"}</Text>
+          </Pressable>
+        )}
+
         {/* Ping result overlay */}
         {showPingResult && pingResult && (
           <Pressable
@@ -844,6 +1054,7 @@ export default function TasksScreen() {
         <FlatList
           data={tasks}
           keyExtractor={(item) => item.id}
+          removeClippedSubviews={false}
           alwaysBounceVertical
           contentContainerStyle={[s.listContent, tasks.length === 0 && s.listContentEmpty]}
           refreshControl={
@@ -1017,8 +1228,8 @@ export default function TasksScreen() {
           )}
         />
 
-        {/* FAB */}
-        {isEffectivelyConnected && (
+        {/* FAB (hidden on TV — the New Task card replaces it) */}
+        {isEffectivelyConnected && !(Platform as any).isTV && (
           <Pressable style={({ pressed }) => [s.fab, pressed && s.fabPressed]} onPress={() => setShowNewTask(true)}>
             <Text style={s.fabText}>+</Text>
           </Pressable>
@@ -1050,12 +1261,31 @@ export default function TasksScreen() {
                 )}
               </View>
               <TextInput
-                style={[s.input, s.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
+                ref={newTaskInputRef}
+                style={[s.input, !(Platform as any).isTV && s.inputMultiline, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
                 placeholder={`What would you like ${selectedRunner === "codex" ? "Codex" : selectedRunner === "opencode" ? "OpenCode" : selectedRunner === "aider" ? "Aider" : "Claude"} to do?`}
                 placeholderTextColor={c.textMuted}
                 value={newTaskText}
                 onChangeText={setNewTaskText}
-                multiline numberOfLines={4} textAlignVertical="top" autoFocus
+                multiline={!(Platform as any).isTV}
+                numberOfLines={4}
+                textAlignVertical="top"
+                autoFocus
+                showSoftInputOnFocus
+                {...((Platform as any).isTV
+                  ? {
+                      returnKeyType: "send" as const,
+                      blurOnSubmit: true,
+                      onSubmitEditing: handleCreateTask,
+                      onKeyPress: ({ nativeEvent }: any) => {
+                        if (nativeEvent.key === "Escape") {
+                          Keyboard.dismiss();
+                          setShowNewTask(false);
+                          setNewTaskText("");
+                        }
+                      },
+                    }
+                  : {})}
               />
               {isLocalMode && (
                 <>
@@ -1171,8 +1401,8 @@ export default function TasksScreen() {
             )}
           </View>
         </Modal>
-        {/* ── Chat Detail Modal ───────────────────────────────────── */}
-        <Modal visible={!!selectedTask} animationType="slide" transparent onRequestClose={() => setSelectedTask(null)}>
+        {/* ── Chat Detail Modal (mobile only; tvOS renders inline) ── */}
+        <Modal visible={!!selectedTask && !(Platform as any).isTV} animationType="slide" transparent onRequestClose={() => setSelectedTask(null)}>
           <KeyboardAvoidingView
             style={s.chatModalOverlay}
             behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -1180,118 +1410,9 @@ export default function TasksScreen() {
           >
             {/* Tap outside to dismiss */}
             <Pressable style={s.chatModalDismissArea} onPress={() => setSelectedTask(null)} />
-            {selectedTask && (
-              <View style={[s.chatModal, { backgroundColor: c.bg }, !(Platform as any).isTV && { height: "88%" }]}>
-                {/* Header */}
-                <View style={[s.chatHeader, { borderBottomColor: c.border }]}>
-                  {/* Left: device info + connection status */}
-                  <View style={s.chatHeaderLeft}>
-                    {activeDevice && (
-                      <View style={s.chatHeaderDevice}>
-                        <View style={[s.statusDotSmall, { backgroundColor: connectionStatus === "connected" ? "#22c55e" : connectionStatus === "error" ? "#ef4444" : connectionStatus === "connecting" ? "#eab308" : "#666" }]} />
-                        <Text style={[s.chatHeaderDeviceText, { color: connectionStatus === "connected" ? c.textSecondary : connectionStatus === "error" ? "#ef4444" : "#eab308" }]} numberOfLines={1}>
-                          {activeDevice.name.replace(/\.local$/, "")}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-
-                  {/* Center: task title + status */}
-                  <View style={s.chatHeaderCenter}>
-                    <Text style={[s.chatHeaderTitle, { color: c.textPrimary }]} numberOfLines={1}>
-                      {selectedTask.title}
-                    </Text>
-                    <View style={s.chatHeaderMeta}>
-                      <View style={[s.statusDotSmall, { backgroundColor: STATUS_COLORS[selectedTask.status] }]} />
-                      <Text style={[s.chatHeaderStatus, { color: STATUS_COLORS[selectedTask.status] }]}>
-                        {selectedTask.status}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Right: Close / Exit */}
-                  <View style={s.chatHeaderRight}>
-                    {isRunning && (
-                      <Pressable
-                        onPress={() => handleExitTask(selectedTask.id)}
-                        onLongPress={() => {
-                          Alert.alert("Force Stop", "Kill the process immediately?", [
-                            { text: "Cancel", style: "cancel" },
-                            { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
-                          ]);
-                        }}
-                      >
-                        <Text style={s.chatStopText}>Exit</Text>
-                      </Pressable>
-                    )}
-                    <Pressable onPress={() => { setSelectedTask(null); setFollowUpText(""); }}>
-                      <Text style={[s.chatBackText, { color: c.accent }]}>Close</Text>
-                    </Pressable>
-                  </View>
-                </View>
-
-                {/* Chat messages */}
-                <ScrollView
-                  ref={chatScrollRef}
-                  style={s.chatScroll}
-                  contentContainerStyle={s.chatScrollContent}
-                  keyboardShouldPersistTaps="handled"
-                >
-                  {chatMessages.map((msg, i) => (
-                    <ChatBubble key={`${i}-${msg.role}`} turn={msg} c={c} />
-                  ))}
-                  {isRunning && chatMessages[chatMessages.length - 1]?.role !== "assistant" && (
-                    <View>
-                      <TypingIndicator color={c.accent || "#6366f1"} />
-                      <Text style={[s.startingHint, { color: c.textMuted }]}>
-                        {(selectedTask?.turns?.length ?? 0) > 2 ? "Thinking..." : "Starting..."}
-                      </Text>
-                    </View>
-                  )}
-                  {isRunning && chatMessages[chatMessages.length - 1]?.role === "assistant" && (
-                    <View style={s.streamingIndicator}>
-                      <ActivityIndicator size="small" color={c.accent} />
-                      <Text style={[s.streamingText, { color: c.textMuted }]}>Working...</Text>
-                    </View>
-                  )}
-
-                  {/* Debug info (foldable) */}
-                  <DebugSection task={selectedTask} connMode={connMode} c={c} />
-                  {selectedTask.runnerId?.startsWith("local:") && (
-                    <Pressable style={[s.inlineConnectBtn, { backgroundColor: c.accent, alignSelf: "flex-start", marginTop: 12 }]} onPress={handlePushLocalWorkspace}>
-                      <Text style={s.inlineConnectText}>Commit & push workspace</Text>
-                    </Pressable>
-                  )}
-                </ScrollView>
-
-                {/* Input bar */}
-                <View style={[s.chatInputBar, { borderTopColor: c.border, backgroundColor: c.bgCard }]}>
-                  <TextInput
-                    style={[s.chatInput, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
-                    placeholder={isRunning ? "Send a command..." : "Follow up..."}
-                    placeholderTextColor={c.textMuted}
-                    value={followUpText}
-                    onChangeText={setFollowUpText}
-                    multiline
-                    maxLength={2000}
-                  />
-                  {isRunning && (
-                    <ActivityIndicator size="small" color={c.accent} style={{ marginRight: 4 }} />
-                  )}
-                  <Pressable
-                    style={[
-                      s.chatSendBtn,
-                      { backgroundColor: c.accent },
-                      (!followUpText.trim() || isSendingFollowUp) && s.submitButtonDisabled,
-                    ]}
-                    onPress={handleFollowUp}
-                    disabled={!followUpText.trim() || isSendingFollowUp}
-                  >
-                    <Text style={s.chatSendText}>{isSendingFollowUp ? "..." : "\u2191"}</Text>
-                  </Pressable>
-                </View>
-              </View>
-            )}
+            <View style={[s.chatModal, { backgroundColor: c.bg }, { height: "88%" }]}>
+              {sessionContent}
+            </View>
           </KeyboardAvoidingView>
         </Modal>
         {/* ── Logs Modal ─────────────────────────────────────────── */}
@@ -1420,6 +1541,21 @@ const s = StyleSheet.create({
   // Task card
   cardContainer: { marginBottom: 12 },
   taskCard: { borderRadius: 12, padding: 16, borderWidth: 1 },
+  tvCardFocused: { transform: [{ scale: 1.02 }], opacity: 0.92, borderWidth: 2 },
+  tvConsole: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+  },
+  tvConsoleTitle: { fontSize: 13, fontWeight: "600", marginBottom: 6, textTransform: "uppercase" },
+  tvConsoleScroll: { maxHeight: 240 },
+  tvConsoleLine: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: "Menlo",
+  },
   taskCardPressed: { opacity: 0.7 },
   taskHeader: { flexDirection: "row", alignItems: "center", marginBottom: 8, gap: 8 },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
@@ -1432,6 +1568,21 @@ const s = StyleSheet.create({
   fab: { position: "absolute", bottom: 24, right: 24, width: 56, height: 56, borderRadius: 28, backgroundColor: "#6366f1", alignItems: "center", justifyContent: "center", elevation: 4, shadowColor: "#6366f1", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
   fabPressed: { opacity: 0.8, transform: [{ scale: 0.95 }] },
   fabText: { fontSize: 28, color: "#ffffff", fontWeight: "300" },
+  tvNewTaskCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 18,
+    borderWidth: 2,
+    marginHorizontal: 16,
+    marginTop: 14,
+    padding: 22,
+    gap: 16,
+  },
+  tvNewTaskCardFocused: { transform: [{ scale: 1.02 }], opacity: 0.92 },
+  tvNewTaskMic: { fontSize: 40 },
+  tvNewTaskTitle: { fontSize: 30, fontWeight: "700" },
+  tvNewTaskHint: { fontSize: 18, marginTop: 4 },
+  tvNewTaskCta: { fontSize: 20, fontWeight: "700" },
 
   // New task modal
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" },

@@ -26,7 +26,6 @@ function TvTabBar({ state, navigation }: any) {
           return (
             <Pressable
               key={route.key}
-              hasTVPreferredFocus={route.name === "home"}
               onPress={() => navigation.navigate(route.name)}
               style={({ focused }) => [
                 styles.tvItem,

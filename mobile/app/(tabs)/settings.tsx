@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { loadAiProviders, saveAiProviders, type AiProvidersConfig } from "../../src/lib/aiProviders";
 import { useAuth } from "../../src/context/AuthContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { CUSTOM_RELAYS_KEY } from "../../src/context/DeviceContext";
@@ -83,6 +84,12 @@ export default function SettingsScreen() {
   const [testingRelayId, setTestingRelayId] = useState<string | null>(null);
   const [relayTestResults, setRelayTestResults] = useState<Record<string, { ok: boolean; ms?: number; error?: string }>>({});
   const [relaySyncEnabled, setRelaySyncEnabled] = useState(false);
+  const [aiCfg, setAiCfg] = useState<AiProvidersConfig | null>(null);
+  const [aiSaving, setAiSaving] = useState(false);
+
+  useEffect(() => {
+    loadAiProviders().then(setAiCfg).catch(() => setAiCfg(null));
+  }, []);
 
   // Load custom relay servers and sync preference from AsyncStorage
   useEffect(() => {
@@ -853,6 +860,118 @@ export default function SettingsScreen() {
               />
             )}
           </View>
+        </View>
+
+        {/* AI & Voice */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>AI & Voice</Text>
+          {aiCfg && (
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+              <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Transcription (voice → text)</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8, marginBottom: 10 }}>
+                {["openai", "deepgram", "custom"].map((id) => {
+                  const active = aiCfg.transcription.provider === id;
+                  const txLabels: Record<string, string> = { openai: "Whisper", deepgram: "Deepgram", custom: "Local / custom" };
+                  return (
+                    <Pressable
+                      key={id}
+                      onPress={() => setAiCfg({ ...aiCfg, transcription: { ...aiCfg.transcription, provider: id } })}
+                      style={({ focused }) => [styles.runnerOption, { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "20" : c.bg }, focused && { transform: [{ scale: 1.05 }] }]}
+                    >
+                      <Text style={{ color: active ? c.accent : c.textMuted, fontSize: 13 }}>{txLabels[id] ?? id}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {aiCfg.transcription.provider === "custom" && (
+                <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 8 }}>
+                  Point at any Whisper-compatible server (e.g. whisper.cpp / faster-whisper) that accepts a multipart &quot;file&quot; and returns {"{ text }"}.
+                </Text>
+              )}
+              {aiCfg.transcription.provider !== "deepgram" && (
+                <TextInput
+                  style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                  placeholder="Model (whisper-1)"
+                  placeholderTextColor={c.textMuted}
+                  value={aiCfg.transcription.model}
+                  onChangeText={(v) => setAiCfg({ ...aiCfg, transcription: { ...aiCfg.transcription, model: v } })}
+                  autoCapitalize="none"
+                />
+              )}
+              <TextInput
+                style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                placeholder="API key"
+                placeholderTextColor={c.textMuted}
+                secureTextEntry
+                value={aiCfg.providers[aiCfg.transcription.provider]?.apiKey ?? ""}
+                onChangeText={(v) => setAiCfg({
+                  ...aiCfg,
+                  providers: {
+                    ...aiCfg.providers,
+                    [aiCfg.transcription.provider]: {
+                      apiKey: v,
+                      baseUrl: aiCfg.providers[aiCfg.transcription.provider]?.baseUrl ?? "",
+                      enabled: true,
+                      models: [],
+                    },
+                  },
+                })}
+              />
+              <TextInput
+                style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary }]}
+                placeholder={
+                  aiCfg.transcription.provider === "openai"
+                    ? "Base URL (default https://api.openai.com/v1)"
+                    : aiCfg.transcription.provider === "deepgram"
+                      ? "Base URL (default https://api.deepgram.com/v1)"
+                      : "Custom endpoint returning { text }"
+                }
+                placeholderTextColor={c.textMuted}
+                value={aiCfg.providers[aiCfg.transcription.provider]?.baseUrl ?? ""}
+                onChangeText={(v) => setAiCfg({
+                  ...aiCfg,
+                  providers: {
+                    ...aiCfg.providers,
+                    [aiCfg.transcription.provider]: {
+                      apiKey: aiCfg.providers[aiCfg.transcription.provider]?.apiKey ?? "",
+                      baseUrl: v,
+                      enabled: true,
+                      models: [],
+                    },
+                  },
+                })}
+                autoCapitalize="none"
+              />
+
+              <Text style={[styles.themeLabel, { color: c.textPrimary, marginTop: 12 }]}>Speech (text → voice)</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                {["on-device", "openai", "elevenlabs"].map((id) => {
+                  const active = aiCfg.tts.provider === id;
+                  return (
+                    <Pressable
+                      key={id}
+                      onPress={() => setAiCfg({ ...aiCfg, tts: { ...aiCfg.tts, provider: id } })}
+                      style={({ focused }) => [styles.runnerOption, { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "20" : c.bg }, focused && { transform: [{ scale: 1.05 }] }]}
+                    >
+                      <Text style={{ color: active ? c.accent : c.textMuted, fontSize: 13 }}>{id}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Pressable
+                style={({ pressed }) => [styles.customRunnerInput, { marginTop: 14, alignItems: "center", backgroundColor: c.accent, borderColor: c.accent }, pressed && { opacity: 0.8 }]}
+                disabled={aiSaving}
+                onPress={async () => {
+                  setAiSaving(true);
+                  await saveAiProviders(aiCfg);
+                  setAiSaving(false);
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700" }}>{aiSaving ? "Saving…" : "Save AI & Voice"}</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
 
         {/* Appearance */}

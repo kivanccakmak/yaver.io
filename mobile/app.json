@@ -62,7 +62,8 @@
           "tvosDeploymentTarget": "15.1"
         }
       ],
-      "./plugins/with-tv-keychain"
+      "./plugins/with-tv-keychain",
+      "./plugins/with-tv-speech"
     ]
   }
 }
