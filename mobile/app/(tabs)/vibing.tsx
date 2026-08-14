@@ -136,7 +136,7 @@ export default function VibingScreen() {
       const bytes = new Uint8Array(buf);
       let b64 = "";
       for (let i = 0; i < bytes.length; i += 0x8000) {
-        b64 += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        b64 += String.fromCharCode(...Array.from(bytes.subarray(i, i + 0x8000)));
       }
       setFrameUri(`data:image/png;base64,${btoa(b64)}`);
       setFrameError("");
@@ -146,7 +146,7 @@ export default function VibingScreen() {
   }, [base, token, status]);
 
   useEffect(() => {
-    if (!serving) {
+    if (!status?.serving) {
       setFrameUri("");
       return;
     }
@@ -155,7 +155,7 @@ export default function VibingScreen() {
     fetchFrame();
     const iv = setInterval(fetchFrame, 2500);
     return () => clearInterval(iv);
-  }, [serving, fetchFrame]);
+  }, [status?.serving, fetchFrame]);
 
   const serving = !!status?.serving;
   const building = !serving && status?.running === false && !!status?.port;
@@ -325,4 +325,5 @@ const styles = StyleSheet.create({
   btnGhostText: { fontSize: 20, fontWeight: "600" },
   focused: { transform: [{ scale: 1.03 }], opacity: 0.92 },
   laneSnippet: { fontSize: 12, marginTop: 8, fontFamily: "monospace" },
+  liveFrame: { width: "100%", height: 420, marginTop: 12, borderRadius: 12 },
 });
