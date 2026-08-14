@@ -7,6 +7,7 @@ import { Device, useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { quicClient } from "../../src/lib/quic";
 import { getUserSettings } from "../../src/lib/auth";
+import { takePendingVibingProject } from "../../src/lib/vibingStore";
 
 type Project = { name: string; path: string; framework?: string };
 type DevStatus = {
@@ -65,7 +66,8 @@ export default function VibingScreen() {
       .then((d) => {
         const list: Project[] = d.projects || [];
         setProjects(list);
-        if (list.length > 0) setSelected(list[0].path);
+        const pending = takePendingVibingProject();
+        if (list.length > 0) setSelected(pending && list.some((p) => p.path === pending) ? pending : list[0].path);
       })
       .catch(() => {});
   }, [base, token]);
@@ -86,15 +88,16 @@ export default function VibingScreen() {
     };
   }, [refreshStatus]);
 
-  const startPreview = async () => {
-    if (!base || !token || !selected) return;
+  const startPreview = async (path?: string) => {
+    const workDir = path || selected;
+    if (!base || !token || !workDir) return;
     setWorking(true);
     setLaneHtml("");
     try {
       const r = await fetch(`${base}/dev/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ workDir: selected }),
+        body: JSON.stringify({ workDir }),
       });
       if (r.ok) setStatus(await r.json());
       await refreshStatus();
@@ -212,7 +215,10 @@ export default function VibingScreen() {
                 return (
                   <Pressable
                     key={p.path}
-                    onPress={() => setSelected(p.path)}
+                    onPress={() => {
+                      setSelected(p.path);
+                      startPreview(p.path);
+                    }}
                     style={({ focused }) => [styles.chip, { borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "20" : c.bg }, focused && styles.chipFocused]}
                   >
                     <Text style={{ color: active ? c.accent : c.textSecondary, fontSize: 16 }} numberOfLines={1}>
@@ -257,7 +263,7 @@ export default function VibingScreen() {
           <Pressable
             hasTVPreferredFocus
             disabled={working || !selected}
-            onPress={startPreview}
+            onPress={() => startPreview()}
             style={({ focused }) => [styles.btnPrimary, { backgroundColor: c.accent }, focused && styles.focused, (working || !selected) && { opacity: 0.5 }]}
           >
             <Text style={styles.btnPrimaryText}>{working ? "Working…" : serving ? "Restart preview" : "Start preview"}</Text>

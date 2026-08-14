@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { router } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { quicClient } from "../../src/lib/quic";
+import { setPendingVibingProject } from "../../src/lib/vibingStore";
 
 type Project = { name: string; path: string; branch?: string };
 
@@ -62,7 +64,11 @@ export default function ProjectsScreen() {
             <Pressable
               key={p.path}
               style={({ focused }) => [styles.card, { backgroundColor: c.bgCard, borderColor: c.border }, focused && styles.focused]}
-              onPress={() => quicClient.setWorkDir(p.path).catch(() => {})}
+              onPress={() => {
+                quicClient.setWorkDir(p.path).catch(() => {});
+                setPendingVibingProject(p.path);
+                router.push("/vibing");
+              }}
             >
               <Text style={styles.cardIcon}>📁</Text>
               <View style={{ flex: 1 }}>
