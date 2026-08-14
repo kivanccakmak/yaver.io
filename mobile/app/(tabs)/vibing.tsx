@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../../src/context/AuthContext";
 import { Device, useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
@@ -36,6 +37,7 @@ export default function VibingScreen() {
   const [laneHtml, setLaneHtml] = useState<string>("");
   const [frameUri, setFrameUri] = useState<string>("");
   const [frameError, setFrameError] = useState<string>("");
+  const [frameOverride, setFrameOverride] = useState<string>("");
   const [transport, setTransport] = useState<"auto" | "sse" | "webrtc">("auto");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -47,6 +49,13 @@ export default function VibingScreen() {
       if (s.vibingTransport) setTransport(s.vibingTransport);
     }).catch(() => {});
   }, [token]);
+
+  // Dev/test: optional local frame-source override (e.g. http://localhost:8787)
+  useEffect(() => {
+    AsyncStorage.getItem("@yaver/vibing_frame_url").then((v) => {
+      if (v) setFrameOverride(v);
+    }).catch(() => {});
+  }, []);
 
   // Load projects on connect
   useEffect(() => {
@@ -119,16 +128,17 @@ export default function VibingScreen() {
 
   // Live frame lane: poll the agent's /vibing/frame (headless Chrome capture of
   // the local dev server) and render as an image. 404 → endpoint not on this box.
+  // A dev override (frameOverride) points at a local frame server instead.
   const fetchFrame = useCallback(async () => {
     if (!base || !token || !status?.serving || !status?.port) return;
     try {
-      const localUrl = `http://localhost:${status.port}/`;
-      const r = await fetch(
-        `${base}/vibing/frame?url=${encodeURIComponent(localUrl)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const override = frameOverride.replace(/\/$/, "");
+      const frameEndpoint = override
+        ? `${override}/frame?url=${encodeURIComponent(`${override}/sample`)}`
+        : `${base}/vibing/frame?url=${encodeURIComponent(`http://localhost:${status.port}/`)}`;
+      const r = await fetch(frameEndpoint, { headers: { Authorization: `Bearer ${token}` } });
       if (r.status === 404) {
-        setFrameError("Frame endpoint not available on this box");
+        setFrameError(override ? "Local frame server not found" : "Frame endpoint not available on this box");
         return;
       }
       if (!r.ok) return;
@@ -143,7 +153,7 @@ export default function VibingScreen() {
     } catch {
       // transient
     }
-  }, [base, token, status]);
+  }, [base, token, status, frameOverride]);
 
   useEffect(() => {
     if (!status?.serving) {
@@ -261,6 +271,23 @@ export default function VibingScreen() {
           </Pressable>
         </View>
 
+        {/* Dev frame-source override (test live frames without the box endpoint) */}
+        <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
+          <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Frame source (dev)</Text>
+          <TextInput
+            style={[styles.devInput, { backgroundColor: c.bg, borderColor: c.border, color: c.textPrimary }]}
+            placeholder="e.g. http://localhost:8787 (empty = box)"
+            placeholderTextColor={c.textMuted}
+            value={frameOverride}
+            onChangeText={(v) => {
+              setFrameOverride(v);
+              AsyncStorage.setItem("@yaver/vibing_frame_url", v).catch(() => {});
+            }}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+
         {/* Lane proof */}
         {serving && (
           <>
@@ -326,4 +353,5 @@ const styles = StyleSheet.create({
   focused: { transform: [{ scale: 1.03 }], opacity: 0.92 },
   laneSnippet: { fontSize: 12, marginTop: 8, fontFamily: "monospace" },
   liveFrame: { width: "100%", height: 420, marginTop: 12, borderRadius: 12 },
+  devInput: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 16, marginTop: 8 },
 });
