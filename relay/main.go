@@ -103,6 +103,8 @@ func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	quicPort := fs.Int("quic-port", 4433, "QUIC port for agent tunnels")
 	httpPort := fs.Int("http-port", 8443, "HTTP port for mobile clients")
+	turnPort := fs.Int("turn-port", 3478, "TURN port for WebRTC media relay (Relay Pro)")
+	turnSecret := fs.String("turn-secret", "", "TURN REST credential secret (defaults to the relay password)")
 	password := fs.String("password", "", "Shared password for relay authentication (env: RELAY_PASSWORD)")
 	fs.Parse(args)
 
@@ -141,6 +143,24 @@ func runServe(args []string) {
 
 	server := NewRelayServer(*quicPort, *httpPort, pw)
 	go systemdWatchdog(ctx)
+	// TURN for the WebRTC (Relay Pro) vibing lane. REST credential secret
+	// defaults to the relay password so TURN is usable out of the box.
+	turnSecretValue := *turnSecret
+	if turnSecretValue == "" {
+		turnSecretValue = pw
+	}
+	if *turnPort > 0 {
+		turnServer, err := startTURN(*turnPort, turnSecretValue)
+		if err != nil {
+			log.Printf("  TURN disabled: %v", err)
+		} else {
+			defer func() {
+				if err := turnServer.Close(); err != nil {
+					log.Printf("turn close: %v", err)
+				}
+			}()
+		}
+	}
 	if err := server.Start(ctx); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
