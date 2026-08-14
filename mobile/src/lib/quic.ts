@@ -15,6 +15,7 @@
 import { cacheTaskList, cacheTaskOutput, getCachedTaskList, getDeletedTaskIds } from "./storage";
 import { beaconListener } from "./beacon";
 import NetInfo from "@react-native-community/netinfo";
+import { Platform } from "react-native";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -121,7 +122,10 @@ export class QuicClient {
   private relayServers: RelayServer[] = [];  // all available relay servers
   private activeRelayUrl: string | null = null; // currently working relay base URL
   private activeRelayPassword: string | null = null; // password for the active relay (if any)
-  private _forceRelay = false; // default to direct-first — try LAN/local before relay
+  // Expo web cannot use the native LAN beacon reliably. Match the production
+  // Web UI there and use the authenticated HTTP relay as the primary path;
+  // native builds retain direct/LAN-first behavior.
+  private _forceRelay = Platform.OS === "web";
   private _connectionState: ConnectionState = "disconnected";
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -702,8 +706,11 @@ export class QuicClient {
     if (this.activeRelayUrl) {
       return `${this.activeRelayUrl}/d/${this.deviceId}`;
     }
-    // Direct connection (same network / Tailscale)
-    return `http://${this.host}:${this.port}`;
+    // Direct connection (same network / Tailscale) — only when a host is known
+    if (this.host) {
+      return `http://${this.host}:${this.port}`;
+    }
+    return "";
   }
 
   private get authHeaders(): Record<string, string> {
@@ -716,7 +723,7 @@ export class QuicClient {
 
   /** True when we have enough info to attempt API calls (even during reconnection). */
   private get hasConnectionInfo(): boolean {
-    return !!(this.host && this.port && this.token);
+    return !!(this.token);
   }
 
   private assertConnected(): void {
@@ -828,7 +835,9 @@ export class QuicClient {
 
   private async attemptConnect(): Promise<void> {
     const generation = this.connectionGeneration;
-    if (!this.host || !this.port || !this.token || !this.deviceId) return;
+    // Host/port may be absent for relay-only devices (the backend no longer
+    // always reports a reachable host). Require only token + deviceId.
+    if (!this.token || !this.deviceId) return;
     this.setConnectionState("connecting");
     this.activeRelayUrl = null;
     this.activeRelayPassword = null;
