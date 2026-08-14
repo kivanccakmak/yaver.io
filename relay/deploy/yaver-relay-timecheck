@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v timedatectl >/dev/null 2>&1; then
+  exit 0
+fi
+
+timedatectl set-ntp true >/dev/null 2>&1 || true
+for _ in $(seq 1 30); do
+  if [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" == "yes" ]]; then
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "warning: NTP is not synchronized; starting relay with unsynchronized clock" >&2
+exit 0

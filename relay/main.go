@@ -140,6 +140,7 @@ func runServe(args []string) {
 	}()
 
 	server := NewRelayServer(*quicPort, *httpPort, pw)
+	go systemdWatchdog(ctx)
 	if err := server.Start(ctx); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

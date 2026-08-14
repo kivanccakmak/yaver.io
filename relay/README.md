@@ -177,6 +177,33 @@ ssh root@<server-ip> journalctl -u yaver-relay --since today
 # Health check
 curl http://<server-ip>:8443/health
 
+### Production hardening
+
+The native systemd deployment includes a watchdog heartbeat, NTP preflight,
+automatic restart, and cgroup limits for CPU, memory, tasks, and file
+descriptors. Deploy the unit and its time-check helper together with
+`./deploy/up.sh`.
+
+For a small Ubuntu agent host, run the host baseline once as root:
+
+```bash
+sudo ./scripts/harden-linux-host.sh
+```
+
+Then install and enable the agent unit (replace `ubuntu` with the service
+account that owns the Yaver config):
+
+```bash
+sudo install -m 0644 desktop/agent/deploy/yaver-agent@.service \
+  /etc/systemd/system/yaver-agent@.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now yaver-agent@ubuntu.service
+```
+
+The agent unit deliberately caps memory below the host total so the kernel,
+relay/monitoring, and SSH remain usable under runner load. Review the limits
+before enabling it if other workloads share the machine.
+
 # Active tunnels
 curl http://<server-ip>:8443/tunnels
 ```

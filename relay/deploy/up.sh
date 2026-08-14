@@ -98,10 +98,12 @@ REMOTE
 
     echo "  Copying systemd unit..."
     scp deploy/yaver-relay.service "root@${SERVER}:/etc/systemd/system/yaver-relay.service"
+    scp deploy/yaver-relay-timecheck "root@${SERVER}:/tmp/yaver-relay-timecheck"
 
     echo "  Starting service..."
     ssh "root@${SERVER}" bash -s <<'REMOTE'
 chmod +x /usr/local/bin/yaver-relay
+install -D -m 0755 /tmp/yaver-relay-timecheck /usr/local/libexec/yaver-relay-timecheck
 systemctl daemon-reload
 systemctl enable yaver-relay
 systemctl restart yaver-relay

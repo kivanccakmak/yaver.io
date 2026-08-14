@@ -5,12 +5,17 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
 ExecStart=/usr/local/bin/yaver-relay serve --quic-port=4433 --http-port=8443
+NotifyAccess=main
+WatchdogSec=30s
+TimeoutStartSec=30s
+TimeoutStopSec=15s
 WorkingDirectory=/var/lib/yaver-relay
 StateDirectory=yaver-relay
 EnvironmentFile=-/etc/yaver-relay/relay.env
 Environment=RELAY_PASSWORD_FILE=/var/lib/yaver-relay/.relay-password
+ExecStartPre=/usr/local/libexec/yaver-relay-timecheck
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=60
@@ -23,6 +28,15 @@ SyslogIdentifier=yaver-relay
 
 # Performance
 LimitNOFILE=65535
+TasksMax=1024
+CPUAccounting=true
+CPUQuota=150%
+MemoryAccounting=true
+MemoryHigh=768M
+MemoryMax=1G
+MemorySwapMax=512M
+OOMPolicy=stop
+OOMScoreAdjust=-500
 
 # Security hardening
 NoNewPrivileges=true
