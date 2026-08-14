@@ -37,6 +37,7 @@ export const set = mutation({
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
     vibingTransport: v.optional(v.union(v.literal("auto"), v.literal("sse"), v.literal("webrtc"))),
+    relayTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -53,6 +54,7 @@ export const set = mutation({
       relayUrl: args.relayUrl,
       relayPassword: args.relayPassword,
       vibingTransport: args.vibingTransport,
+      relayTier: args.relayTier,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);
@@ -78,6 +80,7 @@ export const setByToken = mutation({
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
     vibingTransport: v.optional(v.union(v.literal("auto"), v.literal("sse"), v.literal("webrtc"))),
+    relayTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -97,6 +100,7 @@ export const setByToken = mutation({
       relayUrl: args.relayUrl,
       relayPassword: args.relayPassword,
       vibingTransport: args.vibingTransport,
+      relayTier: args.relayTier,
     };
     if (existing) {
       await ctx.db.patch(existing._id, patch);

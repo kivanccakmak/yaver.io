@@ -301,6 +301,7 @@ export interface UserSettings {
   relayUrl?: string;
   relayPassword?: string;
   vibingTransport?: "auto" | "sse" | "webrtc";
+  relayTier?: "free" | "pro";
 }
 
 export interface AiRunner {

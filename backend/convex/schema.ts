@@ -121,6 +121,7 @@ export default defineSchema({
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
     vibingTransport: v.optional(v.union(v.literal("auto"), v.literal("sse"), v.literal("webrtc"))),
+    relayTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
   }).index("by_userId", ["userId"]),
 
   aiRunners: defineTable({

@@ -61,6 +61,11 @@ export const all = mutation({
     // ── Default Platform Config ──
     const defaults: Record<string, string> = {
       relay_servers: "[]",
+      // Free relay WebRTC (ICE) endpoints — STUN is free, TURN (media relay) is Relay Pro.
+      relay_ice: JSON.stringify({
+        stun: "stun:public.yaver.io:3478",
+        turn: "turn:public.yaver.io:3478",
+      }),
       cli_version: "0.0.0",
       mobile_version: "0.0.0",
       relay_version: "0.0.0",

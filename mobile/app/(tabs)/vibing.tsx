@@ -40,6 +40,7 @@ export default function VibingScreen() {
   const [frameError, setFrameError] = useState<string>("");
   const [frameOverride, setFrameOverride] = useState<string>("");
   const [transport, setTransport] = useState<"auto" | "sse" | "webrtc">("auto");
+  const [relayTier, setRelayTier] = useState<"free" | "pro">("free");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const base = activeDevice && token ? deviceBaseUrl(activeDevice, token) : null;
@@ -48,6 +49,7 @@ export default function VibingScreen() {
   useEffect(() => {
     getUserSettings(token ?? "").then((s) => {
       if (s.vibingTransport) setTransport(s.vibingTransport);
+      if (s.relayTier === "pro" || s.relayTier === "free") setRelayTier(s.relayTier);
     }).catch(() => {});
   }, [token]);
 
@@ -198,8 +200,16 @@ export default function VibingScreen() {
               {transport === "webrtc" ? "WebRTC" : transport === "sse" ? "SSE" : "Auto (SSE → WebRTC)"}
             </Text>
           </View>
+          <View style={styles.cardRow}>
+            <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Relay tier</Text>
+            <Text style={[styles.cardValue, { color: relayTier === "pro" ? c.success : c.textMuted }]}>
+              {relayTier === "pro" ? "Relay Pro" : "Free"}
+            </Text>
+          </View>
           <Text style={[styles.hint, { color: c.textMuted }]}>
-            SSE streams over the free relay. WebRTC (low latency) is the Relay Pro upgrade — set it in Settings → Vibing.
+            {relayTier === "pro"
+              ? "Relay Pro: WebRTC/TURN low-latency available (set WebRTC in Settings → Vibing). STUN via the free relay."
+              : "Free relay: SSE frames + STUN (ICE). WebRTC/TURN needs Relay Pro — set it in Settings → Vibing."}
           </Text>
         </View>
 
