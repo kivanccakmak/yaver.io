@@ -24,25 +24,21 @@ const CARDS: CardDef[] = [
 
 function DeviceBar() {
   const c = useColors();
-  const { activeDevice, connectionStatus, devices } = useDevice();
+  const { activeDevice, connectionStatus, devices, disconnect } = useDevice();
   const statusColor =
     connectionStatus === "connected" ? c.success
     : connectionStatus === "connecting" ? c.warn
     : c.textMuted;
   return (
-    <Pressable
-      onPress={() => router.push("/devices")}
-      style={({ focused }) => [styles.deviceBar, { backgroundColor: c.bgCard, borderColor: c.border }, focused && styles.focused]}
-    >
-      <View style={[styles.onlineDot, { backgroundColor: statusColor }]} />
-      <Text style={[styles.deviceBarText, { color: c.textPrimary }]}>
-        {activeDevice ? activeDevice.name : "No device selected"}
-      </Text>
-      <Text style={[styles.deviceBarStatus, { color: statusColor }]}>
-        {connectionStatus}
-      </Text>
-      {devices.length > 1 && <Text style={[styles.deviceBarHint, { color: c.textMuted }]}>· switch</Text>}
-    </Pressable>
+    <View style={[styles.deviceBar, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+      <Pressable onPress={() => router.push("/devices")} style={({ focused }) => [styles.deviceSummary, focused && styles.focused]}>
+        <View style={[styles.onlineDot, { backgroundColor: statusColor }]} />
+        <Text style={[styles.deviceBarText, { color: c.textPrimary }]}>{activeDevice ? activeDevice.name : "No device selected"}</Text>
+        <Text style={[styles.deviceBarStatus, { color: statusColor }]}>{connectionStatus}</Text>
+        {devices.length > 1 && <Text style={[styles.deviceBarHint, { color: c.textMuted }]}>· switch</Text>}
+      </Pressable>
+      {activeDevice && <Pressable onPress={disconnect} accessibilityLabel="Disconnect current machine" style={({ focused }) => [styles.disconnectButton, { borderColor: c.border, backgroundColor: c.bg }, focused && styles.focused]}><Text style={[styles.disconnectText, { color: c.error }]}>Disconnect</Text></Pressable>}
+    </View>
   );
 }
 
@@ -112,6 +108,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
   },
+  deviceSummary: { flexDirection: "row", alignItems: "center", flex: 1 },
+  disconnectButton: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 8, marginLeft: 12 },
+  disconnectText: { fontSize: 16, fontWeight: "700" },
   onlineDot: { width: 12, height: 12, borderRadius: 6, marginRight: 10 },
   deviceBarText: { fontSize: 22, fontWeight: "600" },
   deviceBarStatus: { fontSize: 18, marginLeft: 12, textTransform: "capitalize" },

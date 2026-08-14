@@ -313,7 +313,7 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
 export default function TasksScreen() {
   const c = useColors();
   const { token } = useAuth();
-  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, selectDevice, isLoadingDevices, refreshDevices } = useDevice();
+  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, selectDevice, disconnect, isLoadingDevices, refreshDevices } = useDevice();
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
 
@@ -865,6 +865,11 @@ export default function TasksScreen() {
 
         {/* Right: Close / Exit */}
         <View style={s.chatHeaderRight}>
+          {activeDevice && !selectedTask.runnerId?.startsWith("local:") && (
+            <Pressable onPress={disconnect} accessibilityLabel="Disconnect current machine">
+              <Text style={[s.chatBackText, { color: c.error }]}>Disconnect</Text>
+            </Pressable>
+          )}
           {isRunning && (
             <Pressable
               onPress={() => handleExitTask(selectedTask.id)}

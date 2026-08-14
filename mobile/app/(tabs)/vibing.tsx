@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { router } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../../src/context/AuthContext";
@@ -8,6 +9,7 @@ import { useColors } from "../../src/context/ThemeContext";
 import { quicClient } from "../../src/lib/quic";
 import { getUserSettings } from "../../src/lib/auth";
 import { takePendingVibingProject } from "../../src/lib/vibingStore";
+import { getCodingMode, type CodingMode } from "../../src/lib/coding-runtime";
 
 type Project = { name: string; path: string; framework?: string };
 type DevStatus = {
@@ -52,7 +54,8 @@ function deviceBaseUrl(device: Device, token: string | null): string | null {
 export default function VibingScreen() {
   const c = useColors();
   const { token } = useAuth();
-  const { activeDevice, connectionStatus } = useDevice();
+  const { activeDevice, connectionStatus, disconnect } = useDevice();
+  const [codingMode, setCodingMode] = useState<CodingMode>("remote-preferred");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [projectSelected, setProjectSelected] = useState(false);
@@ -71,6 +74,8 @@ export default function VibingScreen() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const base = activeDevice && token ? deviceBaseUrl(activeDevice, token) : null;
+  const isLocalVibing = codingMode === "local-only" || (codingMode === "auto-fallback" && connectionStatus !== "connected");
+  const localDeviceName = (Platform as any).isTV ? "this Apple TV" : "this device";
   const appendStreamLog = useCallback((level: StreamLog["level"], message: string) => {
     setStreamLogs((current) => [...current, { id: Date.now() + Math.random(), at: new Date().toLocaleTimeString(), level, message }].slice(-16));
   }, []);
@@ -100,6 +105,14 @@ export default function VibingScreen() {
     getUserSettings(token ?? "").then((s) => {
       if (s.vibingTransport) setTransport(s.vibingTransport);
       if (s.relayTier === "pro" || s.relayTier === "free") setRelayTier(s.relayTier);
+    }).catch(() => {});
+  }, [token]);
+
+  useEffect(() => {
+    getCodingMode().then(setCodingMode).catch(() => {});
+    if (!token) return;
+    getUserSettings(token).then((settings) => {
+      if (settings.codingMode) setCodingMode(settings.codingMode);
     }).catch(() => {});
   }, [token]);
 
@@ -263,6 +276,37 @@ export default function VibingScreen() {
   const serving = !!status?.serving;
   const building = !serving && status?.running === false && !!status?.port;
 
+  if (isLocalVibing) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.bg }]} edges={["bottom"]}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.headerRow}>
+            <View style={styles.titleBlock}>
+              <Text style={[styles.title, { color: c.textPrimary }]}>Vibing</Text>
+              <Text style={[styles.subtitle, { color: c.textSecondary }]}>Running on {localDeviceName}</Text>
+            </View>
+            <View style={[styles.badge, { backgroundColor: c.success + "22" }]}><Text style={[styles.badgeText, { color: c.success }]}>Local</Text></View>
+          </View>
+
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Device-local coding</Text>
+            <Text style={[styles.hint, { color: c.textSecondary }]}>Chat, file edits, Git status/diff, explicit commits, and review-branch pushes run on {localDeviceName}. Your model API key and Git token stay in this device's secure storage.</Text>
+            <Text style={[styles.hint, { color: c.warn, marginTop: 12 }]}>Live preview is unavailable locally: this runtime has no shell, package manager, simulator, Docker, or dev server. It will never claim a preview, build, or test ran.</Text>
+          </View>
+
+          <View style={styles.controls}>
+            <Pressable hasTVPreferredFocus onPress={() => router.push("/tasks")} style={({ focused }) => [styles.btnPrimary, { backgroundColor: c.accent }, focused && styles.focused]}><Text style={styles.btnPrimaryText}>Open local coding chat</Text></Pressable>
+            {activeDevice && <Pressable onPress={disconnect} style={({ focused }) => [styles.btnGhost, { borderColor: c.border }, focused && styles.focused]}><Text style={[styles.btnGhostText, { color: c.error }]}>Disconnect machine</Text></Pressable>}
+          </View>
+
+          <Pressable onPress={() => router.push("/devices")} style={({ focused }) => [styles.changeProject, { borderColor: c.border, backgroundColor: c.bgCard }, focused && styles.focused]}>
+            <Text style={{ color: c.textMuted, fontSize: 15 }}>{activeDevice ? "Select another machine" : "Connect or select a machine"}</Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <ScrollView contentContainerStyle={[styles.container, serving && styles.streamingContainer]}>
@@ -270,7 +314,7 @@ export default function VibingScreen() {
           <View style={styles.titleBlock}>
             <Text style={[styles.title, { color: c.textPrimary }]}>Vibing</Text>
             <Text style={[styles.subtitle, { color: c.textSecondary }]}>
-              {activeDevice ? `Live preview · ${activeDevice.name}` : "Connect a device first"}
+              {activeDevice ? `Live preview · ${activeDevice.name}` : "Connect or select a machine first"}
             </Text>
           </View>
           <View style={[styles.badge, { backgroundColor: serving ? c.success + "22" : c.textMuted + "22" }]}>
@@ -279,6 +323,12 @@ export default function VibingScreen() {
             </Text>
           </View>
         </View>
+        {activeDevice && (
+          <View style={styles.remoteActions}>
+            <Pressable onPress={() => router.push("/devices")} style={({ focused }) => [styles.headerAction, { borderColor: c.border }, focused && styles.focused]}><Text style={{ color: c.textSecondary }}>Switch</Text></Pressable>
+            <Pressable onPress={disconnect} style={({ focused }) => [styles.headerAction, { borderColor: c.border }, focused && styles.focused]}><Text style={{ color: c.error }}>Disconnect</Text></Pressable>
+          </View>
+        )}
 
         {!projectSelected ? (
           <View style={styles.projectSelection}>
@@ -481,6 +531,8 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   container: { padding: 48, paddingBottom: 80 },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 28 },
+  remoteActions: { flexDirection: "row", gap: 8, alignItems: "center", marginBottom: 16 },
+  headerAction: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
   titleBlock: {},
   title: { fontSize: 48, fontWeight: "800" },
   subtitle: { fontSize: 20, marginTop: 4 },
