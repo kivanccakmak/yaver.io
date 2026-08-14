@@ -120,7 +120,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
       // Apply forceRelay setting
       if (settings.forceRelay !== undefined) {
-        quicClient.setForceRelay(settings.forceRelay);
+        quicClient.setForceRelay(Platform.OS === "web" ? true : settings.forceRelay);
       }
 
       if (devicesRes.ok) {
@@ -340,7 +340,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     settingsLoaded.current = true;
     getUserSettings(token).then((s) => {
       if (s.forceRelay !== undefined) {
-        quicClient.setForceRelay(s.forceRelay);
+        quicClient.setForceRelay(Platform.OS === "web" ? true : s.forceRelay);
         appLog("info", `[settings] forceRelay=${s.forceRelay}`);
       }
     });
