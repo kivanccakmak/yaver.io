@@ -1,19 +1,13 @@
-import { NativeEventEmitter, NativeModules } from "react-native";
+import { DeviceEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
 import { loadAiProviders, transcribeWithProviders } from "./aiProviders";
 
-// YaverSpeech is a local native pod (TTS + mic recording for tvOS). Guard
-// everything so the app works on platforms where the module isn't linked.
+// YaverSpeech is a local native module: iOS/tvOS pod + Android Kotlin module.
+// Guard everything so the app works where the module isn't linked.
 const native: any = (NativeModules as any)?.YaverSpeech ?? null;
-let emitter: NativeEventEmitter | null = null;
-if (native) {
-  try {
-    emitter = new NativeEventEmitter(native);
-  } catch {
-    emitter = null;
-  }
-}
 
 export type SpeechListeners = {
+  onPartial?: (text: string) => void;
+  onResult?: (text: string) => void;
   onError?: (code: string) => void;
 };
 
@@ -21,18 +15,20 @@ export function isSpeechAvailable(): boolean {
   return !!native;
 }
 
-/** Subscribe to STT events. Returns an unsubscribe function. */
+export function isAndroidSpeech(): boolean {
+  return Platform.OS === "android" && !!native;
+}
+
+/** Subscribe to STT events (DeviceEventEmitter works on iOS/tvOS + Android). */
 export function addSpeechListeners(listeners: SpeechListeners): () => void {
-  const unsubs: Array<{ remove: () => void }> = [];
-  if (emitter) {
-    if (listeners.onError) {
-      unsubs.push(emitter.addListener("onError", listeners.onError));
-    }
-  }
+  const subs: Array<{ remove: () => void }> = [];
+  if (listeners.onResult) subs.push(DeviceEventEmitter.addListener("onResult", listeners.onResult));
+  if (listeners.onPartial) subs.push(DeviceEventEmitter.addListener("onPartial", listeners.onPartial));
+  if (listeners.onError) subs.push(DeviceEventEmitter.addListener("onError", listeners.onError));
   return () => {
-    unsubs.forEach((u) => {
+    subs.forEach((s) => {
       try {
-        u.remove();
+        s.remove();
       } catch {
         // ignore
       }
@@ -43,7 +39,7 @@ export function addSpeechListeners(listeners: SpeechListeners): () => void {
 export async function speak(text: string, rate = 0.5): Promise<boolean> {
   if (!native?.speak) return false;
   try {
-    return await native.speak(text, rate);
+    return (await native.speak(text, rate)) === true;
   } catch {
     return false;
   }
@@ -65,35 +61,47 @@ export async function isSpeaking(): Promise<boolean> {
   }
 }
 
-/** Start recording the system microphone. Resolves true when recording. */
-export async function startListening(): Promise<boolean> {
+/** Start listening. On Android requests RECORD_AUDIO first. */
+export async function startListening(locale = "en-US"): Promise<boolean> {
   if (!native?.startListening) return false;
+  if (Platform.OS === "android") {
+    try {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) return false;
+    } catch {
+      return false;
+    }
+  }
   try {
-    return await native.startListening("en-US");
+    return (await native.startListening(locale)) === true;
   } catch {
     return false;
   }
 }
 
-/** Stop recording. Resolves the absolute path of the recorded audio file. */
+/**
+ * Stop listening. On iOS/tvOS resolves the recorded audio file path (fed to a
+ * cloud transcription provider). On Android the result arrives via the
+ * "onResult" event instead, so this resolves "".
+ */
 export async function stopListening(): Promise<string> {
   if (!native?.stopListening) return "";
   try {
-    const path = await native.stopListening();
-    return typeof path === "string" ? path : "";
+    const r = await native.stopListening();
+    return typeof r === "string" ? r : "";
   } catch {
     return "";
   }
 }
 
-/** True if a transcription provider is configured with a key. */
+/** True if a transcription provider is configured with a key (iOS/tvOS path). */
 export async function isTranscriptionAvailable(): Promise<boolean> {
   const cfg = await loadAiProviders();
   const p = cfg.providers[cfg.transcription.provider];
   return !!(p?.enabled && p.apiKey);
 }
 
-/** Upload a recorded audio file and get back transcribed text. */
+/** Upload a recorded audio file and get back transcribed text (iOS/tvOS). */
 export async function transcribeAudio(audioPath: string): Promise<string> {
   if (!audioPath) return "";
   return transcribeWithProviders(audioPath);

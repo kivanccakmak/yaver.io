@@ -23,7 +23,7 @@ import { useDevice } from "../../src/context/DeviceContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { copyToClipboard } from "../../src/lib/safeClipboard";
-import { isSpeechAvailable, startListening, stopListening, transcribeAudio } from "../../src/lib/speech";
+import { addSpeechListeners, isAndroidSpeech, isSpeechAvailable, startListening, stopListening, transcribeAudio } from "../../src/lib/speech";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { getUserSettings } from "../../src/lib/auth";
 import {
@@ -663,14 +663,17 @@ export default function TasksScreen() {
     }
   }, [showNewTask]);
 
-  // tvOS: voice task creation — press to record, press again to transcribe
+  // tvOS / Android TV: voice task creation — press to record, press again to finish
   const handleVoiceTask = useCallback(async () => {
     if (isListening) {
       const path = await stopListening();
       setIsListening(false);
-      const text = await transcribeAudio(path);
-      if (text.trim()) {
-        setNewTaskText(text.trim());
+      if (!isAndroidSpeech()) {
+        // iOS/tvOS: transcribe the recorded file via the configured provider
+        const text = await transcribeAudio(path);
+        if (text.trim()) {
+          setNewTaskText(text.trim());
+        }
       }
       setShowNewTask(true);
       return;
@@ -680,10 +683,28 @@ export default function TasksScreen() {
       return;
     }
     const ok = await startListening();
-    if (ok) {
-      setIsListening(true);
-    } else {
+    if (!ok) {
       setShowNewTask(true);
+      return;
+    }
+    setIsListening(true);
+    if (isAndroidSpeech()) {
+      // Android: result arrives via the onResult event
+      const unsub = addSpeechListeners({
+        onResult: (text) => {
+          unsub();
+          setIsListening(false);
+          if (text.trim()) {
+            setNewTaskText(text.trim());
+          }
+          setShowNewTask(true);
+        },
+        onError: () => {
+          unsub();
+          setIsListening(false);
+          setShowNewTask(true);
+        },
+      });
     }
   }, [isListening]);
 
