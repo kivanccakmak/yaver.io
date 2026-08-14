@@ -618,6 +618,7 @@ http.route({
         taskId: body.taskId,
         runner: body.runner,
         model: body.model,
+        reasoningEffort: body.reasoningEffort,
         durationSec: body.durationSec,
         startedAt: body.startedAt,
         finishedAt: body.finishedAt,
@@ -627,6 +628,36 @@ http.route({
     } catch (e: any) {
       return errorResponse(e.message || "Failed to record usage", 500);
     }
+  }),
+});
+
+/** POST /task-runs — record metadata only; task content never reaches Convex. */
+http.route({
+  path: "/task-runs",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const body = await request.json();
+    if (!body.taskId || !body.runtime || !body.status) return errorResponse("taskId, runtime and status are required", 400);
+    await ctx.runMutation(api.taskRuns.record, {
+      tokenHash: await sha256Hex(authHeader.slice(7)), taskId: body.taskId,
+      runtime: body.runtime, status: body.status, runnerId: body.runnerId,
+      model: body.model, reasoningEffort: body.reasoningEffort, deviceId: body.deviceId,
+      gitProvider: body.gitProvider, gitRef: body.gitRef, commitSha: body.commitSha,
+    });
+    return jsonResponse({ ok: true });
+  }),
+});
+
+http.route({
+  path: "/task-runs",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const runs = await ctx.runQuery(api.taskRuns.list, { tokenHash: await sha256Hex(authHeader.slice(7)) });
+    return jsonResponse({ runs });
   }),
 });
 
@@ -738,7 +769,7 @@ http.route({
     const settings = await ctx.runQuery(api.userSettings.getByToken, { tokenHash });
     return jsonResponse({
       ok: true,
-      settings: settings || { forceRelay: true, runnerId: undefined, customRunnerCommand: undefined, relayUrl: undefined, relayPassword: undefined, vibingTransport: undefined, relayTier: undefined },
+      settings: settings || { forceRelay: true, codingMode: undefined, localProvider: undefined, localModel: undefined, runnerId: undefined, runnerModel: undefined, reasoningEffort: undefined, customRunnerCommand: undefined, relayUrl: undefined, relayPassword: undefined, vibingTransport: undefined, relayTier: undefined },
     });
   }),
 });
@@ -754,7 +785,12 @@ http.route({
     await ctx.runMutation(api.userSettings.setByToken, {
       tokenHash,
       forceRelay: body.forceRelay,
+      codingMode: body.codingMode,
+      localProvider: body.localProvider,
+      localModel: body.localModel,
       runnerId: body.runnerId,
+      runnerModel: body.runnerModel,
+      reasoningEffort: body.reasoningEffort,
       customRunnerCommand: body.customRunnerCommand,
       relayUrl: body.relayUrl,
       relayPassword: body.relayPassword,

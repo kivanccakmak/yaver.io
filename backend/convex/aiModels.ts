@@ -26,10 +26,20 @@ export const PREDEFINED_MODELS = [
   },
   // Codex models
   {
-    modelId: "o3-mini",
+    modelId: "gpt-5.6-terra",
     runnerId: "codex",
-    name: "o3-mini",
-    description: "Default Codex model",
+    name: "GPT-5.6 Terra",
+    description: "Codex model profile; use medium reasoning for balanced remote tasks",
+    isDefault: true,
+    sortOrder: 1,
+  },
+  // OpenCode models are intentionally independent from Codex. This lets a task
+  // switch between provider ecosystems without putting OpenCode in Codex's path.
+  {
+    modelId: "deepseek-v4-flash",
+    runnerId: "opencode",
+    name: "DeepSeek V4 Flash",
+    description: "Fast DeepSeek profile through OpenCode",
     isDefault: true,
     sortOrder: 1,
   },

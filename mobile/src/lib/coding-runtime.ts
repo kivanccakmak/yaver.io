@@ -102,10 +102,10 @@ export async function getLocalProvider(): Promise<LlmProvider> {
 export async function setLocalProvider(provider: LlmProvider): Promise<void> { await AsyncStorage.setItem(PROVIDER_KEY, provider); }
 export async function getLocalModel(): Promise<string> { return (await AsyncStorage.getItem(MODEL_KEY)) || "deepseek-chat"; }
 export async function setLocalModel(model: string): Promise<void> { await AsyncStorage.setItem(MODEL_KEY, model.trim() || "deepseek-chat"); }
-export async function getLocalApiKey(provider: LlmProvider): Promise<string> { return (await SecureStore.getItemAsync(SECRET_PREFIX + provider)) || ""; }
-export async function setLocalApiKey(provider: LlmProvider, key: string): Promise<void> { key.trim() ? await SecureStore.setItemAsync(SECRET_PREFIX + provider, key.trim()) : await SecureStore.deleteItemAsync(SECRET_PREFIX + provider); }
-export async function getGitToken(provider: GitProvider): Promise<string> { return (await SecureStore.getItemAsync(GIT_SECRET_PREFIX + provider)) || ""; }
-export async function setGitToken(provider: GitProvider, token: string): Promise<void> { token.trim() ? await SecureStore.setItemAsync(GIT_SECRET_PREFIX + provider, token.trim()) : await SecureStore.deleteItemAsync(GIT_SECRET_PREFIX + provider); }
+export async function getLocalApiKey(provider: LlmProvider): Promise<string> { return (await SecureStore.getSecret(SECRET_PREFIX + provider)) || ""; }
+export async function setLocalApiKey(provider: LlmProvider, key: string): Promise<void> { key.trim() ? await SecureStore.setSecret(SECRET_PREFIX + provider, key.trim()) : await SecureStore.deleteSecret(SECRET_PREFIX + provider); }
+export async function getGitToken(provider: GitProvider): Promise<string> { return (await SecureStore.getSecret(GIT_SECRET_PREFIX + provider)) || ""; }
+export async function setGitToken(provider: GitProvider, token: string): Promise<void> { token.trim() ? await SecureStore.setSecret(GIT_SECRET_PREFIX + provider, token.trim()) : await SecureStore.deleteSecret(GIT_SECRET_PREFIX + provider); }
 
 export async function listLocalWorkspaces(): Promise<LocalWorkspace[]> {
   try { return JSON.parse((await AsyncStorage.getItem(WORKSPACES_KEY)) || "[]"); } catch { return []; }
@@ -211,6 +211,13 @@ export async function gitPush(workspace: LocalWorkspace): Promise<void> {
 
 /** Backwards-compatible task action: make a real local commit, then push it. */
 export async function pushWorkspace(_provider: GitProvider, _ownerOrNamespace: string, workspace: LocalWorkspace, message: string): Promise<void> {
+  // Phone-local edits are never pushed directly to the checked-out branch.
+  // Create a review branch first; a PR can then be opened in the provider UI.
+  const current = await git.currentBranch({ fs, dir: workspace.root, fullname: false }) || workspace.branch;
+  const reviewBranch = `yaver/local-${Date.now().toString(36)}`;
+  await git.branch({ fs, dir: workspace.root, ref: reviewBranch, object: current });
+  await git.checkout({ fs, dir: workspace.root, ref: reviewBranch });
+  workspace = { ...workspace, branch: reviewBranch, updatedAt: Date.now() };
   const status = await gitStatus(workspace);
   if (status.changes.length) await gitCommit(workspace, message);
   await gitPush(workspace);
@@ -247,7 +254,13 @@ async function callModel(provider: LlmProvider, model: string, messages: any[]):
 export async function runLocalPrompt(prompt: string, workspace: LocalWorkspace): Promise<LocalTaskResult> {
   const provider = await getLocalProvider();
   const model = await getLocalModel();
-  const messages: any[] = [{ role: "system", content: "You are Yaver Local. You can read, search, edit files and use read-only Git plus commit. You cannot run shell, Docker, native builds, browser automation or deploy. Never claim a command ran. Ask the user to use remote/CI for execution." }, { role: "user", content: prompt }];
+  const messages: any[] = [{ role: "system", content: `You are Yaver Local, a device-local coding assistant. Work only through the tools provided.
+
+You CAN: read/search/write files in this workspace; inspect Git status and changed files; create a local Git commit when explicitly asked.
+
+You CANNOT: run shell commands; run npm, npx, yarn, pnpm, bun, pip, ruby, gradle, xcodebuild, pod, fastlane, or any package manager; start servers; install dependencies; use Docker; access a simulator/emulator/device; compile, test, lint, typecheck, build iOS/Android/web/native apps; browse; deploy; push Git; create pull requests; or execute OpenCode/Codex.
+
+For an iOS, Android, TV, or dependency/test/build request, make safe source edits if appropriate, then clearly say: "Not executed — device-local Yaver has no shell or native build runtime." State the exact command or CI job the user should run later, but never claim it ran or infer a pass/fail result. Do not invent tool output, files, dependencies, commit SHAs, test results, screenshots, or external state. Prefer a small reviewable diff. Before a destructive or broad edit, explain the intended change and ask for confirmation.` }, { role: "user", content: prompt }];
   const changed = new Set<string>();
   for (let turn = 0; turn < 8; turn++) {
     const message = await callModel(provider, model, messages);

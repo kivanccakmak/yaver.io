@@ -24,11 +24,17 @@ export interface Task {
   output: string[];
   resultText?: string;
   costUsd?: number;
+  runnerId?: string;
+  model?: string;
+  reasoningEffort?: "low" | "medium" | "high";
   turns?: ConversationTurn[];
   createdAt: number;
   updatedAt: number;
   deviceName?: string;
 }
+
+export interface ModelInfo { id: string; name: string; description?: string; isDefault?: boolean; }
+export interface RunnerInfo { id: string; name: string; command: string; installed: boolean; isDefault: boolean; models: ModelInfo[]; }
 
 export interface RemoteProject {
   name: string;
@@ -155,12 +161,12 @@ class AgentClient {
 
   // ── Task API ───────────────────────────────────────────────────────
 
-  async sendTask(title: string, description: string): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, reasoningEffort?: "low" | "medium" | "high"): Promise<Task> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ title, description }),
+      body: JSON.stringify({ title, description, ...(model ? { model } : {}), ...(runner ? { runner } : {}), ...(reasoningEffort ? { reasoningEffort } : {}) }),
     });
     if (!res.ok) throw new Error(`Failed to create task: ${res.status}`);
     const data = await res.json();
@@ -169,10 +175,21 @@ class AgentClient {
       title,
       description,
       status: data.status,
+      runnerId: data.runnerId,
+      model: data.model || model,
+      reasoningEffort: data.reasoningEffort || reasoningEffort,
       output: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
+  }
+
+  async getRunners(): Promise<RunnerInfo[]> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/agent/runners`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to load runners: ${res.status}`);
+    const data = await res.json();
+    return data.runners || [];
   }
 
   async listTasks(): Promise<Task[]> {
@@ -196,6 +213,9 @@ class AgentClient {
           : Array.isArray(t.output) ? t.output : [],
         resultText: t.resultText || undefined,
         costUsd: t.costUsd || undefined,
+        runnerId: t.runnerId || undefined,
+        model: t.model || undefined,
+        reasoningEffort: t.reasoningEffort || undefined,
         turns: t.turns || undefined,
         createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
         updatedAt: t.finishedAt
@@ -230,6 +250,9 @@ class AgentClient {
         : Array.isArray(t.output) ? t.output : [],
       resultText: t.resultText || undefined,
       costUsd: t.costUsd || undefined,
+      runnerId: t.runnerId || undefined,
+      model: t.model || undefined,
+      reasoningEffort: t.reasoningEffort || undefined,
       turns: t.turns || undefined,
       createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
       updatedAt: t.finishedAt

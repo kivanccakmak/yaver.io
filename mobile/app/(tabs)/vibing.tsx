@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -21,6 +21,28 @@ type DevStatus = {
   previewHealth?: { state?: string; reason?: string };
 };
 
+type BoxCapabilities = {
+  browser?: boolean;
+  android?: boolean;
+  iosSimulator?: boolean;
+  tvosSimulator?: boolean;
+  xr?: boolean;
+};
+type PreviewOption = { id: "web" | "android" | "ios" | "tvos" | "xr"; label: string; detail: string };
+type StreamLog = { id: number; at: string; level: "info" | "success" | "warn" | "error"; message: string };
+
+function previewOptionsFor(framework: string | undefined, caps: BoxCapabilities): PreviewOption[] {
+  const f = (framework || "").toLowerCase();
+  const options: PreviewOption[] = [];
+  const web = /next|react|vue|svelte|angular|web|expo|flutter/.test(f);
+  // A runtime being present is not enough: an option is production-ready only
+  // when the agent can launch it *and* return frames. Today that full path is
+  // implemented for browser previews; native target launch/capture adapters
+  // will add their options here together with their agent handlers.
+  if (web && caps.browser) options.push({ id: "web", label: "Web UI", detail: "Chrome on this box" });
+  return options;
+}
+
 function deviceBaseUrl(device: Device, token: string | null): string | null {
   const relays = quicClient.getRelayServers();
   if (relays.length > 0) return `${relays[0].httpUrl}/d/${device.id}`;
@@ -33,17 +55,45 @@ export default function VibingScreen() {
   const { activeDevice, connectionStatus } = useDevice();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<string>("");
+  const [projectSelected, setProjectSelected] = useState(false);
+  const [capabilities, setCapabilities] = useState<BoxCapabilities>({ browser: true });
+  const [previewTarget, setPreviewTarget] = useState<PreviewOption["id"]>("web");
   const [status, setStatus] = useState<DevStatus | null>(null);
   const [working, setWorking] = useState(false);
   const [laneHtml, setLaneHtml] = useState<string>("");
+  const [streamLogs, setStreamLogs] = useState<StreamLog[]>([]);
   const [frameUri, setFrameUri] = useState<string>("");
   const [frameError, setFrameError] = useState<string>("");
+  const [framePollingEnabled, setFramePollingEnabled] = useState(true);
   const [frameOverride, setFrameOverride] = useState<string>("");
   const [transport, setTransport] = useState<"auto" | "sse" | "webrtc">("auto");
   const [relayTier, setRelayTier] = useState<"free" | "pro">("free");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const base = activeDevice && token ? deviceBaseUrl(activeDevice, token) : null;
+  const appendStreamLog = useCallback((level: StreamLog["level"], message: string) => {
+    setStreamLogs((current) => [...current, { id: Date.now() + Math.random(), at: new Date().toLocaleTimeString(), level, message }].slice(-16));
+  }, []);
+  const selectedProject = useMemo(() => projects.find((p) => p.path === selected), [projects, selected]);
+  const previewOptions = useMemo(
+    () => previewOptionsFor(selectedProject?.framework, capabilities),
+    [selectedProject?.framework, capabilities],
+  );
+  const selectedPreview = previewOptions.find((option) => option.id === previewTarget) || previewOptions[0];
+
+  useEffect(() => {
+    if (!base || !token) return;
+    fetch(`${base}/vibing/capabilities`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data?.capabilities) setCapabilities(data.capabilities); })
+      .catch(() => {});
+  }, [base, token]);
+
+  useEffect(() => {
+    if (previewOptions.length && !previewOptions.some((option) => option.id === previewTarget)) {
+      setPreviewTarget(previewOptions[0].id);
+    }
+  }, [previewOptions, previewTarget]);
 
   // Load transport preference
   useEffect(() => {
@@ -69,7 +119,13 @@ export default function VibingScreen() {
         const list: Project[] = d.projects || [];
         setProjects(list);
         const pending = takePendingVibingProject();
-        if (list.length > 0) setSelected(pending && list.some((p) => p.path === pending) ? pending : list[0].path);
+        if (list.length > 0) {
+          const hasPendingProject = !!pending && list.some((p) => p.path === pending);
+          setSelected(hasPendingProject ? pending! : list[0].path);
+          // Project → Vibing deep links should preserve their direct workflow;
+          // entering from the tvOS home always begins at project selection.
+          setProjectSelected(hasPendingProject);
+        }
       })
       .catch(() => {});
   }, [base, token]);
@@ -78,9 +134,16 @@ export default function VibingScreen() {
     if (!base || !token) return;
     try {
       const r = await fetch(`${base}/dev/status`, { headers: { Authorization: `Bearer ${token}` } });
-      if (r.ok) setStatus(await r.json());
+      if (r.ok) {
+        const next = await r.json() as DevStatus;
+        setStatus((previous) => {
+          if (next.serving && !previous?.serving) appendStreamLog("success", `Serving ${next.framework || "preview"} on port ${next.port || "?"}`);
+          if (!next.serving && previous?.serving) appendStreamLog("warn", "Preview stopped on the box");
+          return next;
+        });
+      }
     } catch {}
-  }, [base, token]);
+  }, [base, token, appendStreamLog]);
 
   useEffect(() => {
     refreshStatus();
@@ -95,15 +158,26 @@ export default function VibingScreen() {
     if (!base || !token || !workDir) return;
     setWorking(true);
     setLaneHtml("");
+    setFramePollingEnabled(true);
+    setStreamLogs([]);
+    appendStreamLog("info", `Launching ${selectedProject?.name || workDir} as ${selectedPreview?.label || "preview"}…`);
     try {
       const r = await fetch(`${base}/dev/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ workDir }),
+        body: JSON.stringify({ workDir, previewTarget }),
       });
-      if (r.ok) setStatus(await r.json());
+      if (r.ok) {
+        const started = await r.json() as DevStatus;
+        setStatus(started);
+        appendStreamLog("info", `Box accepted launch · ${started.framework || "detecting framework"}${started.port ? ` · port ${started.port}` : ""}`);
+      } else {
+        appendStreamLog("error", `Launch rejected (${r.status})`);
+      }
       await refreshStatus();
-    } catch {}
+    } catch {
+      appendStreamLog("error", "Could not reach the box to launch preview");
+    }
     setWorking(false);
   };
 
@@ -127,8 +201,11 @@ export default function VibingScreen() {
       if (r.ok) {
         const html = await r.text();
         setLaneHtml(html.slice(0, 400));
+        appendStreamLog("success", `Live browser lane verified · ${html.length} bytes received`);
       }
-    } catch {}
+    } catch {
+      appendStreamLog("error", "Live lane verification failed");
+    }
   };
 
   // Live frame lane: poll the agent's /vibing/frame (headless Chrome capture of
@@ -144,9 +221,16 @@ export default function VibingScreen() {
       const r = await fetch(frameEndpoint, { headers: { Authorization: `Bearer ${token}` } });
       if (r.status === 404) {
         setFrameError(override ? "Local frame server not found" : "Frame endpoint not available on this box");
+        setFramePollingEnabled(false);
+        appendStreamLog("warn", override ? "Local frame server was not found" : "Box has no /vibing/frame endpoint");
         return;
       }
-      if (!r.ok) return;
+      if (!r.ok) {
+        setFramePollingEnabled(false);
+        setFrameError(`Frame capture stopped after box error ${r.status}`);
+        appendStreamLog("warn", `Frame capture disabled after box error ${r.status}`);
+        return;
+      }
       const buf = await r.arrayBuffer();
       const bytes = new Uint8Array(buf);
       let b64 = "";
@@ -155,29 +239,33 @@ export default function VibingScreen() {
       }
       setFrameUri(`data:image/png;base64,${btoa(b64)}`);
       setFrameError("");
+      appendStreamLog("success", `Frame received · ${(buf.byteLength / 1024).toFixed(0)} KB`);
     } catch {
-      // transient
+      setFramePollingEnabled(false);
+      setFrameError("Frame capture stopped after a connection error");
+      appendStreamLog("warn", "Frame capture disabled after a connection error");
     }
-  }, [base, token, status, frameOverride]);
+  }, [base, token, status, frameOverride, appendStreamLog]);
 
   useEffect(() => {
     if (!status?.serving) {
       setFrameUri("");
       return;
     }
+    if (!framePollingEnabled) return;
     setFrameUri("");
     setFrameError("");
     fetchFrame();
     const iv = setInterval(fetchFrame, 2500);
     return () => clearInterval(iv);
-  }, [status?.serving, fetchFrame]);
+  }, [status?.serving, fetchFrame, framePollingEnabled]);
 
   const serving = !!status?.serving;
   const building = !serving && status?.running === false && !!status?.port;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.bg }]} edges={["bottom"]}>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView contentContainerStyle={[styles.container, serving && styles.streamingContainer]}>
         <View style={styles.headerRow}>
           <View style={styles.titleBlock}>
             <Text style={[styles.title, { color: c.textPrimary }]}>Vibing</Text>
@@ -192,6 +280,35 @@ export default function VibingScreen() {
           </View>
         </View>
 
+        {!projectSelected ? (
+          <View style={styles.projectSelection}>
+            <Text style={[styles.sectionLabel, { color: c.textPrimary }]}>Choose a project to preview</Text>
+            <Text style={[styles.hint, { color: c.textMuted, marginBottom: 12 }]}>Select a discovered project, then choose how to run its preview.</Text>
+            {projects.length === 0 ? (
+              <ActivityIndicator color={c.accent} style={{ marginVertical: 24 }} />
+            ) : (
+              projects.map((p) => (
+                <Pressable
+                  key={p.path}
+                  hasTVPreferredFocus={p.path === selected}
+                  onPress={() => {
+                    setSelected(p.path);
+                    setProjectSelected(true);
+                  }}
+                  style={({ focused }) => [styles.projectCard, { backgroundColor: c.bgCard, borderColor: focused ? c.accent : c.border }, focused && styles.focused]}
+                >
+                  <Text style={styles.projectIcon}>📁</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.projectName, { color: c.textPrimary }]} numberOfLines={1}>{p.name}</Text>
+                    <Text style={[styles.projectPath, { color: c.textSecondary }]} numberOfLines={1}>{p.path}</Text>
+                  </View>
+                  {p.framework ? <Text style={[styles.projectFramework, { color: c.accent }]}>{p.framework}</Text> : null}
+                </Pressable>
+              ))
+            )}
+          </View>
+        ) : (
+          <>
         {/* Transport */}
         <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
           <View style={styles.cardRow}>
@@ -213,33 +330,40 @@ export default function VibingScreen() {
           </Text>
         </View>
 
-        {/* Project picker */}
-        <Text style={[styles.sectionLabel, { color: c.textPrimary }]}>Project on device</Text>
+        {/* Repository-aware preview target selection. The box only offers
+            targets it reported as installed and runnable. */}
         <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-          {projects.length === 0 ? (
-            <ActivityIndicator color={c.accent} style={{ marginVertical: 16 }} />
-          ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {projects.map((p) => {
-                const active = selected === p.path;
+          <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Run on this box</Text>
+          <Text style={[styles.hint, { color: c.textMuted }]}>
+            {selectedProject?.framework ? `${selectedProject.framework} project · choose a discovered target` : "Choose a target supported by this project and box"}
+          </Text>
+          {previewOptions.length ? (
+            <View style={styles.previewOptions}>
+              {previewOptions.map((option) => {
+                const active = selectedPreview?.id === option.id;
                 return (
                   <Pressable
-                    key={p.path}
-                    onPress={() => {
-                      setSelected(p.path);
-                      startPreview(p.path);
-                    }}
-                    style={({ focused }) => [styles.chip, { borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "20" : c.bg }, focused && styles.chipFocused]}
+                    key={option.id}
+                    onPress={() => setPreviewTarget(option.id)}
+                    style={({ focused }) => [styles.previewOption, { backgroundColor: active ? c.accent + "20" : c.bg, borderColor: active ? c.accent : c.border }, focused && styles.focused]}
                   >
-                    <Text style={{ color: active ? c.accent : c.textSecondary, fontSize: 16 }} numberOfLines={1}>
-                      {p.name}
-                    </Text>
+                    <Text style={{ color: active ? c.accent : c.textPrimary, fontSize: 17, fontWeight: "700" }}>{option.label}</Text>
+                    <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 3 }}>{option.detail}</Text>
                   </Pressable>
                 );
               })}
-            </ScrollView>
+            </View>
+          ) : (
+            <Text style={[styles.hint, { color: c.warn }]}>No runnable preview target was discovered on this box.</Text>
           )}
         </View>
+
+        <Pressable
+          onPress={() => setProjectSelected(false)}
+          style={({ focused }) => [styles.changeProject, { borderColor: c.border, backgroundColor: c.bgCard }, focused && styles.focused]}
+        >
+          <Text style={{ color: c.textMuted, fontSize: 15 }}>Previewing {selectedProject?.name || "project"} · Change project</Text>
+        </Pressable>
 
         {/* Status */}
         <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -272,11 +396,11 @@ export default function VibingScreen() {
         <View style={styles.controls}>
           <Pressable
             hasTVPreferredFocus
-            disabled={working || !selected}
+            disabled={working || !selected || !selectedPreview}
             onPress={() => startPreview()}
-            style={({ focused }) => [styles.btnPrimary, { backgroundColor: c.accent }, focused && styles.focused, (working || !selected) && { opacity: 0.5 }]}
+            style={({ focused }) => [styles.btnPrimary, { backgroundColor: c.accent }, focused && styles.focused, (working || !selected || !selectedPreview) && { opacity: 0.5 }]}
           >
-            <Text style={styles.btnPrimaryText}>{working ? "Working…" : serving ? "Restart preview" : "Start preview"}</Text>
+            <Text style={styles.btnPrimaryText}>{working ? "Working…" : serving ? "Restart preview" : `Run ${selectedPreview?.label || "preview"}`}</Text>
           </Pressable>
           <Pressable
             disabled={working || !serving}
@@ -308,20 +432,20 @@ export default function VibingScreen() {
         {serving && (
           <>
             {frameUri ? (
-              <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, alignItems: "center" }]}>
+              <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, alignItems: "center" }, styles.livePreviewPanel]}>
                 <Text style={[styles.cardLabel, { color: c.textPrimary, alignSelf: "flex-start" }]}>
                   Live preview {frameError ? "" : "· frames"} ✓
                 </Text>
                 <Image
                   source={{ uri: frameUri }}
-                  style={styles.liveFrame}
+                  style={[styles.liveFrame, serving && styles.liveFrameStreaming]}
                   resizeMode="contain"
                 />
               </View>
             ) : (
               <Pressable
                 onPress={verifyLane}
-                style={({ focused }) => [styles.card, { backgroundColor: c.bgCard, borderColor: c.border }, focused && styles.focused]}
+                style={({ focused }) => [styles.card, { backgroundColor: c.bgCard, borderColor: c.border }, styles.livePreviewPanel, focused && styles.focused]}
               >
                 <Text style={[styles.cardLabel, { color: c.textPrimary }]}>
                   {laneHtml ? "Live lane verified ✓" : "Verify live lane (headless)"}
@@ -333,8 +457,19 @@ export default function VibingScreen() {
                     {frameError || "Fetching the running app from the box with auth — confirms the streaming lane. Full visual rendering needs the frame endpoint (self-host) or WebRTC (Relay Pro)."}
                   </Text>
                 )}
+                {streamLogs.length > 0 && (
+                  <View style={styles.streamLogPanel}>
+                    {streamLogs.slice(-6).reverse().map((entry) => (
+                      <Text key={entry.id} style={[styles.streamLogLine, { color: entry.level === "error" ? c.error : entry.level === "warn" ? c.warn : entry.level === "success" ? c.success : c.textSecondary }]} numberOfLines={1}>
+                        {entry.at} · {entry.message}
+                      </Text>
+                    ))}
+                  </View>
+                )}
               </Pressable>
             )}
+          </>
+        )}
           </>
         )}
       </ScrollView>
@@ -357,10 +492,7 @@ const styles = StyleSheet.create({
   cardLabel: { fontSize: 17, fontWeight: "600" },
   cardValue: { fontSize: 17 },
   hint: { fontSize: 14, lineHeight: 20, marginTop: 4 },
-  chip: {
-    borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, marginRight: 10,
-  },
-  chipFocused: { transform: [{ scale: 1.05 }] },
+  changeProject: { alignSelf: "flex-start", borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9, marginBottom: 12 },
   controls: { flexDirection: "row", gap: 16, marginTop: 8 },
   btnPrimary: { borderRadius: 12, paddingHorizontal: 28, paddingVertical: 16, alignItems: "center" },
   btnPrimaryText: { color: "#fff", fontSize: 20, fontWeight: "700" },
@@ -369,5 +501,18 @@ const styles = StyleSheet.create({
   focused: { transform: [{ scale: 1.03 }], opacity: 0.92 },
   laneSnippet: { fontSize: 12, marginTop: 8, fontFamily: "monospace" },
   liveFrame: { width: "100%", height: 420, marginTop: 12, borderRadius: 12 },
+  streamingContainer: { paddingRight: "54%" },
+  livePreviewPanel: { position: "absolute", top: 120, right: 48, width: "48%" },
+  liveFrameStreaming: { height: 640 },
+  projectSelection: { maxWidth: 1100, alignSelf: "center", width: "100%" },
+  projectCard: { flexDirection: "row", alignItems: "center", borderWidth: 2, borderRadius: 16, padding: 22, marginBottom: 14 },
+  projectIcon: { fontSize: 30, marginRight: 18 },
+  projectName: { fontSize: 22, fontWeight: "700" },
+  projectPath: { fontSize: 15, marginTop: 4 },
+  projectFramework: { fontSize: 15, fontWeight: "600", marginLeft: 16 },
+  previewOptions: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 14 },
+  previewOption: { minWidth: 180, borderWidth: 1, borderRadius: 12, padding: 14 },
+  streamLogPanel: { marginTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "rgba(255,255,255,0.15)", paddingTop: 10, gap: 5 },
+  streamLogLine: { fontSize: 12, fontFamily: "monospace" },
   devInput: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 16, marginTop: 8 },
 });

@@ -25,7 +25,7 @@ import { useColors } from "../../src/context/ThemeContext";
 import { copyToClipboard } from "../../src/lib/safeClipboard";
 import { addSpeechListeners, isAndroidSpeech, isSpeechAvailable, startListening, stopListening, transcribeAudio } from "../../src/lib/speech";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
-import { getUserSettings } from "../../src/lib/auth";
+import { getUserSettings, recordTaskRun } from "../../src/lib/auth";
 import {
   AgentStatus,
   ConnectionMode,
@@ -178,6 +178,7 @@ function DebugSection({
           <Text style={[s.debugLine, { color: c.textMuted }]}>Task ID: {task.id}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Status: {task.status}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Runner: {task.runnerId || "default"}</Text>
+          <Text style={[s.debugLine, { color: c.textMuted }]}>Model: {task.model || "runner default"}{task.reasoningEffort ? ` · ${task.reasoningEffort}` : ""}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Agent Mode: {task.mode || "default"}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Output lines: {task.output.length}</Text>
           <Text style={[s.debugLine, { color: c.textMuted }]}>Output chars: {task.output.join("").length}</Text>
@@ -348,6 +349,7 @@ export default function TasksScreen() {
   const [customCommand, setCustomCommand] = useState("");
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [selectedMode, setSelectedMode] = useState<string>(""); // "" = default, "build", "plan", or "custom"
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<"low" | "medium" | "high">("medium");
   const [customMode, setCustomMode] = useState(""); // custom agent name when selectedMode === "custom"
   const [followUpMode, setFollowUpMode] = useState<string>(""); // mode override for the next continuation
   const [targetDeviceId, setTargetDeviceId] = useState<string>(""); // device id to run on ("" = active)
@@ -591,7 +593,7 @@ export default function TasksScreen() {
         task = {
           id: `local-task-${now}`,
           title: newTaskText.trim(),
-          description: "Phone-only local coding task",
+          description: (Platform as any).isTV ? "Apple TV local coding task" : "Device-local coding task",
           status: "completed",
           output: [],
           resultText: result.text,
@@ -602,8 +604,9 @@ export default function TasksScreen() {
           ],
           createdAt: now,
           updatedAt: now,
-          deviceName: "This phone",
+          deviceName: (Platform as any).isTV ? "This Apple TV" : "This device",
         };
+        if (token) await recordTaskRun(token, { taskId: task.id, runtime: "local-yaver", status: "completed", runnerId: `local:${result.provider}`, model: result.model, gitProvider: workspace.provider === "github" || workspace.provider === "gitlab" ? workspace.provider : undefined, gitRef: workspace.branch });
       } else {
         // If a different target device was chosen, connect to it first so the
         // task runs there — the session then follows that device.
@@ -620,7 +623,9 @@ export default function TasksScreen() {
           selectedRunner === "custom" ? "custom" : (selectedRunner || undefined),
           selectedRunner === "custom" ? customCommand.trim() || undefined : undefined,
           effectiveMode,
+          selectedRunner === "codex" ? selectedReasoningEffort : undefined,
         );
+        if (token) await recordTaskRun(token, { taskId: task.id, runtime: "remote-agent", status: "queued", runnerId: task.runnerId, model: task.model, reasoningEffort: task.reasoningEffort, deviceId: activeDevice?.id });
       }
       setNewTaskText("");
       // Add task to list immediately
@@ -653,6 +658,8 @@ export default function TasksScreen() {
     try {
       const parts = localWorkspace.repoUrl.replace(/\.git$/, "").split("/").filter(Boolean);
       const owner = parts.slice(-2, -1)[0];
+      const confirmed = await new Promise<boolean>((resolve) => Alert.alert("Commit and push", `Commit and push to ${localWorkspace.branch}?`, [{ text: "Cancel", style: "cancel", onPress: () => resolve(false) }, { text: "Commit & push", onPress: () => resolve(true) }]));
+      if (!confirmed) return;
       await pushWorkspace(localWorkspace.provider === "gitlab" ? "gitlab" : "github", owner, localWorkspace, `Yaver: ${selectedTask?.title || "update workspace"}`);
       Alert.alert("Pushed", "The phone workspace was committed and pushed.");
     } catch (error) {
@@ -995,7 +1002,7 @@ export default function TasksScreen() {
           <View style={{ width: "100%", flexDirection: "row", alignItems: "center" }}>
             <View style={[s.dot, { backgroundColor: banner.dot }]} />
             <Text style={[s.bannerText, { color: banner.text, flex: 1, minWidth: 0 }]} numberOfLines={1} ellipsizeMode="tail">
-              {isLocalMode ? "Phone-only local" : `${banner.label}${modeLabel}`}{activeDevice && !isLocalMode ? ` \u00b7 ${activeDevice.name}` : ""}
+              {isLocalMode ? ((Platform as any).isTV ? "Apple TV local" : "Device-local") : `${banner.label}${modeLabel}`}{activeDevice && !isLocalMode ? ` \u00b7 ${activeDevice.name}` : ""}
               {showReconnectProgress ? ` \u00b7 ${displayedAttempt}/${quicClient.maxReconnectAttempts}` : ""}
             </Text>
             {showReconnectProgress && (
@@ -1545,6 +1552,18 @@ export default function TasksScreen() {
                     autoCorrect={false}
                   />
                 )}
+              </>
+            )}
+            {selectedRunner === "codex" && (
+              <>
+                <Text style={[s.agentPickerSection, { color: c.textMuted }]}>REASONING EFFORT</Text>
+                <View style={s.agentPickerChips}>
+                  {(["low", "medium", "high"] as const).map((effort) => (
+                    <Pressable key={effort} style={[s.modelChip, { borderColor: selectedReasoningEffort === effort ? c.accent : c.border }, selectedReasoningEffort === effort && { backgroundColor: c.accent + "20" }]} onPress={() => setSelectedReasoningEffort(effort)}>
+                      <Text style={[s.modelChipText, { color: selectedReasoningEffort === effort ? c.accent : c.textMuted }]}>{effort[0].toUpperCase() + effort.slice(1)}</Text>
+                    </Pressable>
+                  ))}
+                </View>
               </>
             )}
           </View>

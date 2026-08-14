@@ -17,7 +17,7 @@ type CardDef = {
 
 const CARDS: CardDef[] = [
   { key: "chat", label: "Chat", subtitle: "Run and watch tasks", icon: "💬", route: "/tasks", primary: true },
-  { key: "projects", label: "Projects", subtitle: "Repositories on device", icon: "📁", route: "/projects" },
+  { key: "vibing", label: "Vibing", subtitle: "Live preview", icon: "📺", route: "/vibing" },
   { key: "devices", label: "Devices", subtitle: "Switch machine", icon: "🖥️", route: "/devices" },
   { key: "settings", label: "Settings", subtitle: "Profile, relays, API keys", icon: "⚙️", route: "/settings" },
 ];

@@ -6,9 +6,8 @@ import { useColors } from "../../src/context/ThemeContext";
 const isTV = (Platform as any).isTV === true;
 
 const TV_SECTIONS: Record<string, string> = {
-  home: "Home",
   tasks: "Chat",
-  projects: "Projects",
+  vibing: "Vibing",
   devices: "Devices",
   settings: "Settings",
 };
@@ -63,6 +62,7 @@ export default function TabLayout() {
   const c = useColors();
   return (
     <Tabs
+      initialRouteName="tasks"
       screenOptions={{
         headerShown: !isTV,
         headerStyle: { backgroundColor: c.bg },
@@ -101,6 +101,15 @@ export default function TabLayout() {
       <Tabs.Screen
         name="projects"
         options={{ title: "Projects", href: null }}
+      />
+      <Tabs.Screen
+        name="vibing"
+        options={{
+          title: "Vibing",
+          // Vibing is a dedicated top-level destination on tvOS; phone users
+          // enter it from a selected project to preserve the compact tab bar.
+          href: isTV ? undefined : null,
+        }}
       />
       <Tabs.Screen
         name="devices"

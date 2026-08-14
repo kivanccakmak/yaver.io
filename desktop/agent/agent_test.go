@@ -104,6 +104,54 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestValidateFrameURL(t *testing.T) {
+	valid := []string{
+		"http://localhost:3000/",
+		"http://127.0.0.1:5173/app?x=1",
+		"http://[::1]:8080/",
+	}
+	for _, raw := range valid {
+		if _, err := validateFrameURL(raw); err != nil {
+			t.Errorf("expected %q to be valid: %v", raw, err)
+		}
+	}
+
+	invalid := []string{
+		"", "https://localhost:3000/", "http://10.0.0.1/", "http://169.254.169.254/", "http://example.com/", "http://user@localhost/",
+	}
+	for _, raw := range invalid {
+		if _, err := validateFrameURL(raw); err == nil {
+			t.Errorf("expected %q to be rejected", raw)
+		}
+	}
+}
+
+func TestFrameCaptureMemoryAdmission(t *testing.T) {
+	if canCaptureFrame(minFrameAvailableMemoryMB - 1) {
+		t.Fatal("capture must be rejected below the minimum memory reserve")
+	}
+	if !canCaptureFrame(minFrameAvailableMemoryMB) {
+		t.Fatal("capture should be allowed at the minimum memory reserve")
+	}
+	if !canCaptureFrame(0) {
+		t.Fatal("non-Linux hosts without a memory reading should remain supported")
+	}
+}
+
+func TestVibingCapabilitiesEndpoint(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	baseURL, cancel := startTestServer(t, "vibing-token", tm)
+	defer cancel()
+
+	status, body := doRequest(t, "GET", baseURL+"/vibing/capabilities", "vibing-token", "")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+	if _, ok := body["capabilities"].(map[string]interface{}); !ok {
+		t.Fatalf("expected capabilities object, got %#v", body["capabilities"])
+	}
+}
+
 func TestAuthRequired(t *testing.T) {
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
 	baseURL, cancel := startTestServer(t, "secret-token", tm)

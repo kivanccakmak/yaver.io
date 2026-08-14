@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +33,10 @@ type HTTPServer struct {
 	onShutdown  func() // called when mobile requests agent shutdown
 	dogfoodMu   sync.Mutex
 	dogfoodCmd  *osexec.Cmd
+	frameMu     sync.Mutex
+	frameURL    string
+	frameData   []byte
+	frameAt     time.Time
 
 	// Cache validated tokens (token -> userId) to avoid repeated Convex calls
 	tokenCache sync.Map
@@ -39,7 +46,9 @@ type HTTPServer struct {
 
 func NewHTTPServer(port int, token, ownerUserID, convexURL, hostname string, taskMgr *TaskManager) *HTTPServer {
 	secretStore, err := NewSecretStore()
-	if err != nil { log.Printf("secret store unavailable: %v", err) }
+	if err != nil {
+		log.Printf("secret store unavailable: %v", err)
+	}
 	return &HTTPServer{
 		port:        port,
 		token:       token,
@@ -73,6 +82,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/secrets/", s.auth(s.handleSecretByName))
 	mux.HandleFunc("/agent/dogfood", s.auth(s.handleDogfood))
 	mux.HandleFunc("/vibing/frame", s.auth(s.handleVibingFrame))
+	mux.HandleFunc("/vibing/capabilities", s.auth(s.handleVibingCapabilities))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
 	mux.HandleFunc("/mcp", s.handleMCP)
@@ -152,7 +162,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Relay-Password")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -178,10 +188,65 @@ var frameChromeBinaries = []string{
 	"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "/usr/bin/chromium",
 }
 
+// Headless Chrome can briefly consume more than 1 GB while rendering a modern
+// dev build. Do not trade the agent, relay tunnel, and SSH availability for a
+// preview frame on a small host.
+const minFrameAvailableMemoryMB int64 = 1536
+
+func availableMemoryMB() (int64, error) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		// Non-Linux development hosts do not expose /proc. Their platform memory
+		// pressure mechanisms remain in charge; production Ubuntu does.
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "MemAvailable:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			break
+		}
+		kb, parseErr := strconv.ParseInt(fields[1], 10, 64)
+		if parseErr != nil {
+			return 0, parseErr
+		}
+		return kb / 1024, nil
+	}
+	return 0, fmt.Errorf("MemAvailable not found")
+}
+
+func canCaptureFrame(availableMB int64) bool {
+	return availableMB == 0 || availableMB >= minFrameAvailableMemoryMB
+}
+
+// validateFrameURL keeps the screenshot endpoint on the box's loopback dev
+// server. Besides being the only supported preview target, this prevents an
+// authenticated client from using Chrome as an SSRF proxy to the host network.
+func validateFrameURL(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" || u.Host == "" || u.User != nil {
+		return "", fmt.Errorf("url must be an absolute http loopback URL")
+	}
+	host := strings.Trim(u.Hostname(), "[]")
+	if host == "localhost" {
+		return u.String(), nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return "", fmt.Errorf("url host must be localhost or a loopback IP")
+	}
+	return u.String(), nil
+}
+
 // captureFrame captures a screenshot of `url` using headless Chrome and
 // returns the PNG bytes. This powers the free "SSE vibing" frame lane: clients
 // poll this endpoint (auth via bearer token) and render the JPEG/PNG frames.
 func captureFrame(url string) ([]byte, error) {
+	if availableMB, err := availableMemoryMB(); err == nil && !canCaptureFrame(availableMB) {
+		return nil, fmt.Errorf("frame capture paused: only %d MB memory available (need %d MB)", availableMB, minFrameAvailableMemoryMB)
+	}
 	tmp, err := os.CreateTemp("", "yaver-frame-*.png")
 	if err != nil {
 		return nil, err
@@ -192,10 +257,16 @@ func captureFrame(url string) ([]byte, error) {
 
 	var lastErr error
 	for _, bin := range frameChromeBinaries {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		cmd := osexec.CommandContext(ctx, bin,
 			"--headless=new",
 			"--disable-gpu",
+			"--disable-dev-shm-usage",
+			"--disable-extensions",
+			"--disable-background-networking",
+			"--disable-software-rasterizer",
+			"--no-first-run",
+			"--mute-audio",
 			"--hide-scrollbars",
 			"--window-size=1280,720",
 			"--screenshot="+shot,
@@ -229,12 +300,25 @@ func (s *HTTPServer) handleVibingFrame(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "use GET")
 		return
 	}
-	url := r.URL.Query().Get("url")
-	if url == "" {
-		jsonError(w, http.StatusBadRequest, "url query param required")
+	frameURL, err := validateFrameURL(r.URL.Query().Get("url"))
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	data, err := captureFrame(url)
+
+	// Chrome is expensive on the 4 GB box. Coalesce simultaneous client polls
+	// and reuse a very recent capture rather than spawning a browser per viewer.
+	s.frameMu.Lock()
+	defer s.frameMu.Unlock()
+	data := s.frameData
+	if s.frameURL != frameURL || len(data) == 0 || time.Since(s.frameAt) > 900*time.Millisecond {
+		data, err = captureFrame(frameURL)
+		if err == nil {
+			s.frameURL = frameURL
+			s.frameData = data
+			s.frameAt = time.Now()
+		}
+	}
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("capture frame: %v", err))
 		return
@@ -242,6 +326,20 @@ func (s *HTTPServer) handleVibingFrame(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(data)
+}
+
+// handleVibingCapabilities reports preview runtimes that are usable on this
+// exact box. Clients combine this with the selected repository's framework so
+// they never offer a target that cannot be launched here.
+func (s *HTTPServer) handleVibingCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":           true,
+		"capabilities": detectPreviewCapabilities(),
+	})
 }
 
 func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +383,9 @@ func (s *HTTPServer) handleWorkDir(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
 	}
-	var body struct{ Path string `json:"path"` }
+	var body struct {
+		Path string `json:"path"`
+	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&body); err != nil || strings.TrimSpace(body.Path) == "" {
 		jsonError(w, http.StatusBadRequest, "path is required")
 		return
@@ -314,7 +414,9 @@ func (s *HTTPServer) handleDogfood(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
 	}
-	var body struct{ Path string `json:"path"` }
+	var body struct {
+		Path string `json:"path"`
+	}
 	if r.Body != nil {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&body)
 	}
@@ -391,7 +493,9 @@ func (s *HTTPServer) handleSecretByName(w http.ResponseWriter, r *http.Request) 
 	}
 	switch r.Method {
 	case http.MethodPut, http.MethodPost:
-		var body struct{ Value string `json:"value"` }
+		var body struct {
+			Value string `json:"value"`
+		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil || body.Value == "" {
 			jsonError(w, http.StatusBadRequest, "a non-empty secret value is required")
 			return
@@ -591,11 +695,13 @@ func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) 
 		newRunner = defaultRunner
 	case "codex":
 		newRunner = RunnerConfig{
-			RunnerID: "codex",
-			Name:     "OpenAI Codex",
-			Command:  "codex",
-			Args:     []string{"--quiet", "--full-auto", "{prompt}"},
-			OutputMode: "raw",
+			RunnerID:        "codex",
+			Name:            "OpenAI Codex",
+			Command:         "codex",
+			Args:            []string{"exec", "--json", "--sandbox", "workspace-write", "{prompt}"},
+			OutputMode:      "stream-json",
+			ResumeSupported: true,
+			ResumeArgs:      []string{"resume", "{sessionId}"},
 		}
 	case "opencode":
 		newRunner = RunnerConfig{
@@ -608,10 +714,10 @@ func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) 
 		}
 	case "aider":
 		newRunner = RunnerConfig{
-			RunnerID: "aider",
-			Name:     "Aider",
-			Command:  "aider",
-			Args:     []string{"--yes-always", "--no-git", "--message", "{prompt}"},
+			RunnerID:    "aider",
+			Name:        "Aider",
+			Command:     "aider",
+			Args:        []string{"--yes-always", "--no-git", "--message", "{prompt}"},
 			OutputMode:  "raw",
 			ExitCommand: "/quit",
 		}
@@ -707,12 +813,13 @@ func (s *HTTPServer) listTasks(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title         string `json:"title"`
-		Description   string `json:"description"`
-		Model         string `json:"model"`
-		Runner        string `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
-		CustomCommand string `json:"customCommand"` // arbitrary command — runs via sh -c
-		Mode          string `json:"mode"`          // agent mode: "build", "plan", or custom agent (opencode --agent)
+		Title           string `json:"title"`
+		Description     string `json:"description"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoningEffort"`
+		Runner          string `json:"runner"`        // runner ID: "claude", "codex", "aider" — empty uses default
+		CustomCommand   string `json:"customCommand"` // arbitrary command — runs via sh -c
+		Mode            string `json:"mode"`          // agent mode: "build", "plan", or custom agent (opencode --agent)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -723,7 +830,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, "mobile", body.Runner, body.CustomCommand, body.Mode)
+	task, err := s.taskMgr.CreateTask(body.Title, body.Description, body.Model, body.ReasoningEffort, "mobile", body.Runner, body.CustomCommand, body.Mode)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
@@ -731,10 +838,12 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[HTTP] Task created: %s — %s (status: %s, model: %s, runner: %s, mode: %s)", task.ID, task.Title, task.Status, body.Model, task.RunnerID, body.Mode)
 	resp := map[string]interface{}{
-		"ok":       true,
-		"taskId":   task.ID,
-		"status":   task.Status,
-		"runnerId": task.RunnerID,
+		"ok":              true,
+		"taskId":          task.ID,
+		"status":          task.Status,
+		"runnerId":        task.RunnerID,
+		"model":           task.Model,
+		"reasoningEffort": task.ReasoningEffort,
 	}
 	if task.Mode != "" {
 		resp["mode"] = task.Mode
@@ -1134,7 +1243,7 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		if args.Prompt == "" {
 			return mcpToolError("prompt is required")
 		}
-		task, err := s.taskMgr.CreateTask(args.Prompt, "", args.Model, "mcp", args.Runner, "", args.Mode)
+		task, err := s.taskMgr.CreateTask(args.Prompt, "", args.Model, "", "mcp", args.Runner, "", args.Mode)
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}
@@ -1268,16 +1377,16 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		}
 		// Redact sensitive fields
 		safeCfg := map[string]interface{}{
-			"auto_start":   cfg.AutoStart,
-			"auto_update":  cfg.AutoUpdate,
-			"relay_count":  len(cfg.RelayServers),
-			"acl_peers":    len(cfg.ACLPeers),
+			"auto_start":       cfg.AutoStart,
+			"auto_update":      cfg.AutoUpdate,
+			"relay_count":      len(cfg.RelayServers),
+			"acl_peers":        len(cfg.ACLPeers),
 			"email_configured": cfg.Email != nil && cfg.Email.Provider != "",
 		}
 		if cfg.Sandbox != nil {
 			safeCfg["sandbox"] = map[string]interface{}{
-				"enabled":     cfg.Sandbox.Enabled,
-				"allow_sudo":  cfg.Sandbox.AllowSudo,
+				"enabled":    cfg.Sandbox.Enabled,
+				"allow_sudo": cfg.Sandbox.AllowSudo,
 			}
 		} else {
 			safeCfg["sandbox"] = "default (enabled, no sudo)"
@@ -1705,8 +1814,8 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 			return mcpToolError("ACL not initialized")
 		}
 		var args struct {
-			PeerID   string          `json:"peer_id"`
-			ToolName string          `json:"tool_name"`
+			PeerID    string          `json:"peer_id"`
+			ToolName  string          `json:"tool_name"`
 			Arguments json.RawMessage `json:"arguments"`
 		}
 		json.Unmarshal(call.Arguments, &args)

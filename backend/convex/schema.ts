@@ -117,6 +117,8 @@ export default defineSchema({
     localProvider: v.optional(v.string()),
     localModel: v.optional(v.string()),
     runnerId: v.optional(v.string()),
+    runnerModel: v.optional(v.string()),
+    reasoningEffort: v.optional(v.union(v.literal("low"), v.literal("medium"), v.literal("high"))),
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
@@ -183,6 +185,7 @@ export default defineSchema({
     taskId: v.string(),           // task identifier
     runner: v.string(),           // "claude", "codex", "aider", etc.
     model: v.optional(v.string()), // "sonnet", "opus", etc.
+    reasoningEffort: v.optional(v.string()),
     durationSec: v.number(),      // how many seconds the runner ran
     startedAt: v.number(),        // epoch ms when task started
     finishedAt: v.number(),       // epoch ms when task finished
@@ -190,6 +193,25 @@ export default defineSchema({
   })
     .index("by_userId", ["userId", "startedAt"])
     .index("by_deviceId", ["deviceId", "startedAt"]),
+
+  // Privacy-safe cross-surface task timeline. Prompts, source, tool output and
+  // provider credentials stay on the selected runtime; Convex receives only
+  // routing and execution metadata.
+  taskRuns: defineTable({
+    userId: v.string(),
+    taskId: v.string(),
+    runtime: v.union(v.literal("remote-agent"), v.literal("local-yaver"), v.literal("cloud-worker"), v.literal("queued")),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed"), v.literal("stopped")),
+    runnerId: v.optional(v.string()),
+    model: v.optional(v.string()),
+    reasoningEffort: v.optional(v.string()),
+    deviceId: v.optional(v.string()),
+    gitProvider: v.optional(v.union(v.literal("github"), v.literal("gitlab"))),
+    gitRef: v.optional(v.string()),
+    commitSha: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user_task", ["userId", "taskId"]).index("by_user_updated", ["userId", "updatedAt"]),
 
   // Daily task counts per user — simple counter for analytics dashboard
   dailyTaskCounts: defineTable({

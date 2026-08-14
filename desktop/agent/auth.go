@@ -345,16 +345,17 @@ func SetRunnerDown(baseURL, token, deviceID string, down bool) error {
 }
 
 // ReportRunnerUsage records how long a runner ran for a task.
-func ReportRunnerUsage(baseURL, token, deviceID, taskID, runner, model, source string, durationSec float64, startedAt, finishedAt int64) error {
+func ReportRunnerUsage(baseURL, token, deviceID, taskID, runner, model, reasoningEffort, source string, durationSec float64, startedAt, finishedAt int64) error {
 	payload := map[string]interface{}{
-		"deviceId":    deviceID,
-		"taskId":      taskID,
-		"runner":      runner,
-		"model":       model,
-		"durationSec": durationSec,
-		"startedAt":   startedAt,
-		"finishedAt":  finishedAt,
-		"source":      source,
+		"deviceId":        deviceID,
+		"taskId":          taskID,
+		"runner":          runner,
+		"model":           model,
+		"reasoningEffort": reasoningEffort,
+		"durationSec":     durationSec,
+		"startedAt":       startedAt,
+		"finishedAt":      finishedAt,
+		"source":          source,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

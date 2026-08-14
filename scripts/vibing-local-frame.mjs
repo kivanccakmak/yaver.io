@@ -94,6 +94,17 @@ const SAMPLE = `<!doctype html><html><head><meta charset="utf-8">
 
 createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
+  // The web Vibing page sends an Authorization header, so answer its CORS
+  // preflight too. Native tvOS does not need this, but sharing the test server
+  // keeps both validation paths identical.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Relay-Password");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   if (url.pathname === "/sample") {
     res.writeHead(200, { "Content-Type": "text/html" });
     res.end(SAMPLE);

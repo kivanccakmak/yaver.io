@@ -25,6 +25,7 @@ import type * as platformConfig from "../platformConfig.js";
 import type * as runnerUsage from "../runnerUsage.js";
 import type * as seed from "../seed.js";
 import type * as survey from "../survey.js";
+import type * as taskRuns from "../taskRuns.js";
 import type * as totp from "../totp.js";
 import type * as userSettings from "../userSettings.js";
 
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   runnerUsage: typeof runnerUsage;
   seed: typeof seed;
   survey: typeof survey;
+  taskRuns: typeof taskRuns;
   totp: typeof totp;
   userSettings: typeof userSettings;
 }>;

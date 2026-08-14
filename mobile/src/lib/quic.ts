@@ -36,6 +36,8 @@ export interface Task {
   resultText?: string;    // Extracted clean result from Claude
   costUsd?: number;       // Total API cost in USD
   runnerId?: string;      // Which runner executed this task (claude, codex, opencode, aider)
+  model?: string;
+  reasoningEffort?: "low" | "medium" | "high";
   mode?: string;          // Agent mode (opencode build/plan or custom agent)
   turns?: ConversationTurn[];  // Full conversation history
   createdAt: number;
@@ -310,7 +312,7 @@ export class QuicClient {
   // ── Task API ───────────────────────────────────────────────────────
 
   /** Send a new task to the desktop agent. */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, mode?: string): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, mode?: string, reasoningEffort?: "low" | "medium" | "high"): Promise<Task> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -322,6 +324,7 @@ export class QuicClient {
         ...(runner ? { runner } : {}),
         ...(customCommand ? { customCommand } : {}),
         ...(mode ? { mode } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
       }),
     });
     if (!res.ok) {
@@ -340,6 +343,8 @@ export class QuicClient {
       description,
       status: data.status,
       runnerId: data.runnerId,
+      model: data.model || model,
+      reasoningEffort: data.reasoningEffort || reasoningEffort,
       mode: data.mode || mode || undefined,
       output: [],
       createdAt: Date.now(),
@@ -388,6 +393,8 @@ export class QuicClient {
         description: t.description,
         status: t.status,
         runnerId: t.runnerId || undefined,
+        model: t.model || undefined,
+        reasoningEffort: t.reasoningEffort || undefined,
         mode: t.mode || undefined,
         output: typeof t.output === "string" && t.output
           ? t.output.split("\n")
@@ -430,6 +437,8 @@ export class QuicClient {
       description: t.description,
       status: t.status,
       runnerId: t.runnerId || undefined,
+      model: t.model || undefined,
+      reasoningEffort: t.reasoningEffort || undefined,
       mode: t.mode || undefined,
       output: typeof t.output === "string" && t.output
         ? t.output.split("\n").filter((l: string) => l)

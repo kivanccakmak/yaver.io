@@ -297,6 +297,8 @@ export interface UserSettings {
   localProvider?: "deepseek" | "openai-compatible" | "ollama";
   localModel?: string;
   runnerId?: string;
+  runnerModel?: string;
+  reasoningEffort?: "low" | "medium" | "high";
   customRunnerCommand?: string;
   relayUrl?: string;
   relayPassword?: string;
@@ -344,6 +346,11 @@ export async function saveUserSettings(token: string, settings: Partial<UserSett
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(settings),
   }).catch(() => {});
+}
+
+export type TaskRuntime = "remote-agent" | "local-yaver" | "cloud-worker" | "queued";
+export async function recordTaskRun(token: string, run: { taskId: string; runtime: TaskRuntime; status: "queued" | "running" | "completed" | "failed" | "stopped"; runnerId?: string; model?: string; reasoningEffort?: string; deviceId?: string; gitProvider?: "github" | "gitlab"; gitRef?: string; commitSha?: string }): Promise<void> {
+  await fetch(`${getConvexSiteUrl()}/task-runs`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(run) }).catch(() => {});
 }
 
 export async function deleteAccount(): Promise<boolean> {

@@ -10,7 +10,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -28,12 +27,51 @@ import { copyToClipboard } from "../../src/lib/safeClipboard";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { quicClient, type AgentStatus, type RelayServer } from "../../src/lib/quic";
 import { createGitRepository, getCodingMode, setCodingMode, getLocalProvider, setLocalProvider, getLocalModel, setLocalModel, getLocalApiKey, setLocalApiKey, getGitToken, setGitToken, type CodingMode, type GitProvider, type LlmProvider } from "../../src/lib/coding-runtime";
+import { isPersistentSecureStorageAvailable } from "../../src/lib/secure-storage";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
 const BUILD_NUMBER =
   Constants.expoConfig?.ios?.buildNumber ??
   Constants.expoConfig?.android?.versionCode?.toString() ??
   "1";
+
+const isTV = (Platform as typeof Platform & { isTV?: boolean }).isTV === true;
+
+// react-native-tvos does not register RCTSwitch. Rendering React Native's
+// Switch crashes Settings on tvOS, so use a focusable Pressable there while
+// preserving the native control for phone builds.
+function SettingToggle({
+  value,
+  onValueChange,
+  trackColor,
+  thumbColor = "#ffffff",
+}: {
+  value: boolean;
+  onValueChange: (value: boolean) => void;
+  trackColor: { false: string; true: string };
+  thumbColor?: string;
+}) {
+  if (!isTV) {
+    const { Switch } = require("react-native") as typeof import("react-native");
+    return <Switch value={value} onValueChange={onValueChange} trackColor={trackColor} thumbColor={thumbColor} />;
+  }
+
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
+      onPress={() => onValueChange(!value)}
+      style={({ focused }) => [
+        styles.tvToggle,
+        { backgroundColor: value ? trackColor.true : trackColor.false },
+        focused && styles.tvToggleFocused,
+      ]}
+    >
+      <View style={[styles.tvToggleThumb, { backgroundColor: thumbColor }, value && styles.tvToggleThumbOn]} />
+      <Text style={styles.tvToggleLabel}>{value ? "On" : "Off"}</Text>
+    </Pressable>
+  );
+}
 
 export default function SettingsScreen() {
   const { user, token, logout, surveyCompleted, refreshUser } = useAuth();
@@ -74,6 +112,7 @@ export default function SettingsScreen() {
   const [newRepoName, setNewRepoName] = useState("");
   const [newRepoProvider, setNewRepoProvider] = useState<GitProvider>("github");
   const [isCreatingRepo, setIsCreatingRepo] = useState(false);
+  const [localSecretsAvailable, setLocalSecretsAvailable] = useState(false);
 
   // Relay servers
   const [customRelays, setCustomRelays] = useState<RelayServer[]>([]);
@@ -103,6 +142,17 @@ export default function SettingsScreen() {
     }
   }, [token]);
 
+  // Sync only non-secret local preferences across Yaver surfaces. API keys and
+  // Git tokens remain in the current device's secure store.
+  useEffect(() => {
+    if (!token) return;
+    getUserSettings(token).then(async (settings) => {
+      if (settings.codingMode) { setCodingModeState(settings.codingMode); await setCodingMode(settings.codingMode); }
+      if (settings.localProvider) { setLocalProviderState(settings.localProvider); await setLocalProvider(settings.localProvider); }
+      if (settings.localModel) { setLocalModelState(settings.localModel); await setLocalModel(settings.localModel); }
+    }).catch(() => {});
+  }, [token]);
+
   const saveVibingTransport = async (value: "auto" | "sse" | "webrtc") => {
     setVibingTransport(value);
     await AsyncStorage.setItem("@yaver/vibing_transport", value).catch(() => {});
@@ -111,9 +161,13 @@ export default function SettingsScreen() {
 
   // Load custom relay servers and sync preference from AsyncStorage
   useEffect(() => {
-    Promise.all([getCodingMode(), getLocalProvider(), getLocalModel(), getLocalApiKey("deepseek"), getGitToken("github"), getGitToken("gitlab")]).then(([mode, provider, model, deepseekKey, github, gitlab]) => {
+    Promise.all([getCodingMode(), getLocalProvider(), getLocalModel(), isPersistentSecureStorageAvailable()]).then(async ([mode, provider, model, secureAvailable]) => {
+      const [deepseekKey, github, gitlab] = secureAvailable
+        ? await Promise.all([getLocalApiKey("deepseek"), getGitToken("github"), getGitToken("gitlab")])
+        : ["", "", ""];
+      setLocalSecretsAvailable(secureAvailable);
       setCodingModeState(mode); setLocalProviderState(provider); setLocalModelState(model); setLocalApiKeyState(deepseekKey); setGithubToken(github); setGitlabToken(gitlab);
-    });
+    }).catch(() => setLocalSecretsAvailable(false));
   }, []);
 
   useEffect(() => {
@@ -789,7 +843,7 @@ export default function SettingsScreen() {
             {([
               ["remote-preferred", "Remote preferred", "Use the connected Yaver agent."],
               ["auto-fallback", "Automatic fallback", "Use local mode when remote connection fails."],
-              ["local-only", "Phone only", "Always use the local workspace and provider."],
+              ["local-only", isTV ? "This Apple TV" : "This device", "Always use this device's local workspace and provider."],
             ] as const).map(([value, label, description]) => (
               <Pressable key={value} style={[styles.runnerOption, { borderBottomColor: c.borderSubtle }]} onPress={() => { setCodingModeState(value); setCodingMode(value); if (token) saveUserSettings(token, { codingMode: value }); }}>
                 <View style={[styles.radioOuter, { borderColor: codingMode === value ? c.accent : c.border }]}>{codingMode === value && <View style={[styles.radioInner, { backgroundColor: c.accent }]} />}</View>
@@ -797,20 +851,21 @@ export default function SettingsScreen() {
               </Pressable>
             ))}
             <Text style={[styles.detailLabel, { color: c.textMuted, marginTop: 14 }]}>LOCAL LLM PROVIDER</Text>
+            {!localSecretsAvailable && <Text style={[styles.runnerDesc, { color: "#f59e0b", marginBottom: 8 }]}>Secure storage is unavailable, so API and Git credentials are disabled. Check the signed tvOS build's Keychain entitlement before using local coding.</Text>}
             <View style={styles.providerRow}>
               {(["deepseek", "openai-compatible", "ollama"] as LlmProvider[]).map((provider) => (
-                <Pressable key={provider} style={[styles.providerChip, { borderColor: localProvider === provider ? c.accent : c.border, backgroundColor: localProvider === provider ? c.accent + "22" : c.bgCardElevated }]} onPress={async () => { setLocalProviderState(provider); await setLocalProvider(provider); setLocalApiKeyState(await getLocalApiKey(provider)); }}><Text style={{ color: localProvider === provider ? c.accent : c.textMuted, fontSize: 12 }}>{provider === "openai-compatible" ? "OpenAI" : provider[0].toUpperCase() + provider.slice(1)}</Text></Pressable>
+                <Pressable key={provider} style={[styles.providerChip, { borderColor: localProvider === provider ? c.accent : c.border, backgroundColor: localProvider === provider ? c.accent + "22" : c.bgCardElevated }]} onPress={async () => { setLocalProviderState(provider); await setLocalProvider(provider); if (token) saveUserSettings(token, { localProvider: provider }); if (localSecretsAvailable) setLocalApiKeyState(await getLocalApiKey(provider)); }}><Text style={{ color: localProvider === provider ? c.accent : c.textMuted, fontSize: 12 }}>{provider === "openai-compatible" ? "OpenAI" : provider[0].toUpperCase() + provider.slice(1)}</Text></Pressable>
               ))}
             </View>
-            <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={localModel} onChangeText={(text) => { setLocalModelState(text); setLocalModel(text); }} placeholder="Model (deepseek-chat)" placeholderTextColor={c.textMuted} autoCapitalize="none" />
+            <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={localModel} onChangeText={(text) => { setLocalModelState(text); setLocalModel(text); if (token) saveUserSettings(token, { localModel: text.trim() || "deepseek-chat" }); }} placeholder="Model (deepseek-chat)" placeholderTextColor={c.textMuted} autoCapitalize="none" />
             {localProvider !== "ollama" && <>
-              <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={localApiKey} onChangeText={(text) => { setLocalApiKeyState(text); setLocalApiKey(localProvider, text); }} placeholder={`${localProvider === "deepseek" ? "DeepSeek" : "OpenAI-compatible"} API key (stored on this phone)`} placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
+              <TextInput editable={localSecretsAvailable} style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0, opacity: localSecretsAvailable ? 1 : 0.5 }]} value={localApiKey} onChangeText={(text) => { setLocalApiKeyState(text); setLocalApiKey(localProvider, text).catch((error) => Alert.alert("Credential unavailable", error.message)); }} placeholder={`${localProvider === "deepseek" ? "DeepSeek" : "OpenAI-compatible"} API key (stored on this device)`} placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
               <Pressable style={[styles.remoteSyncButton, { borderColor: c.border, opacity: connectionStatus === "connected" && localApiKey ? 1 : 0.5 }]} disabled={connectionStatus !== "connected" || !localApiKey} onPress={() => handleSyncRemoteSecret(`${localProvider.toUpperCase()}_API_KEY`, localApiKey)}><Text style={{ color: c.accent, fontSize: 12 }}>Sync provider key to remote</Text></Pressable>
             </>}
             <Text style={[styles.detailLabel, { color: c.textMuted, marginTop: 14 }]}>GIT HOST TOKENS</Text>
-            <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={githubToken} onChangeText={(text) => { setGithubToken(text); setGitToken("github", text); }} placeholder="GitHub token (repo scope)" placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
+            <TextInput editable={localSecretsAvailable} style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0, opacity: localSecretsAvailable ? 1 : 0.5 }]} value={githubToken} onChangeText={(text) => { setGithubToken(text); setGitToken("github", text).catch((error) => Alert.alert("Credential unavailable", error.message)); }} placeholder="GitHub token (repo scope)" placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
             <Pressable style={[styles.remoteSyncButton, { borderColor: c.border, opacity: connectionStatus === "connected" && githubToken ? 1 : 0.5 }]} disabled={connectionStatus !== "connected" || !githubToken} onPress={() => handleSyncRemoteSecret("GITHUB_TOKEN", githubToken)}><Text style={{ color: c.accent, fontSize: 12 }}>Sync GitHub token to remote</Text></Pressable>
-            <TextInput style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={gitlabToken} onChangeText={(text) => { setGitlabToken(text); setGitToken("gitlab", text); }} placeholder="GitLab token (api scope)" placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
+            <TextInput editable={localSecretsAvailable} style={[styles.customRunnerInput, { backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0, opacity: localSecretsAvailable ? 1 : 0.5 }]} value={gitlabToken} onChangeText={(text) => { setGitlabToken(text); setGitToken("gitlab", text).catch((error) => Alert.alert("Credential unavailable", error.message)); }} placeholder="GitLab token (api scope)" placeholderTextColor={c.textMuted} secureTextEntry autoCapitalize="none" />
             <Pressable style={[styles.remoteSyncButton, { borderColor: c.border, opacity: connectionStatus === "connected" && gitlabToken ? 1 : 0.5 }]} disabled={connectionStatus !== "connected" || !gitlabToken} onPress={() => handleSyncRemoteSecret("GITLAB_TOKEN", gitlabToken)}><Text style={{ color: c.accent, fontSize: 12 }}>Sync GitLab token to remote</Text></Pressable>
             <Text style={[styles.detailLabel, { color: c.textMuted, marginTop: 14 }]}>CREATE A REPOSITORY</Text>
             <View style={styles.providerRow}>
@@ -822,7 +877,7 @@ export default function SettingsScreen() {
               <TextInput style={[styles.customRunnerInput, { flex: 1, backgroundColor: c.bgCardElevated, borderColor: c.border, color: c.textPrimary, marginLeft: 0 }]} value={newRepoName} onChangeText={setNewRepoName} placeholder="new-monorepo" placeholderTextColor={c.textMuted} autoCapitalize="none" />
               <Pressable style={[styles.editNameButton, { backgroundColor: c.accent, opacity: isCreatingRepo ? 0.6 : 1 }]} onPress={handleCreateRepo} disabled={isCreatingRepo || !newRepoName.trim()}><Text style={styles.editNameButtonText}>{isCreatingRepo ? "..." : "Create"}</Text></Pressable>
             </View>
-            <Text style={[styles.runnerDesc, { color: c.textMuted, marginTop: 8 }]}>Tokens stay in the phone keychain and are never synced to Yaver servers. Use an explicit Sync button to provision one to the currently connected Ubuntu/remote agent; values are write-only from the mobile API.</Text>
+            <Text style={[styles.runnerDesc, { color: c.textMuted, marginTop: 8 }]}>Tokens stay in this device's keychain and are never synced to Yaver servers. Apple TV uses device-local credentials only; AirPlay does not transfer a credential. Use an explicit Sync button to provision one to the currently connected Ubuntu/remote agent; values are write-only from the mobile API.</Text>
           </View>
         </View>
 
@@ -1042,7 +1097,7 @@ export default function SettingsScreen() {
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <View style={styles.themeRow}>
               <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Dark Mode</Text>
-              <Switch
+              <SettingToggle
                 value={isDark}
                 onValueChange={toggleTheme}
                 trackColor={{ false: c.border, true: c.accent }}
@@ -1095,7 +1150,7 @@ export default function SettingsScreen() {
                   Skip direct connection, always use relay server
                 </Text>
               </View>
-              <Switch
+              <SettingToggle
                 value={forceRelay}
                 onValueChange={(v) => {
                   setForceRelay(v);
@@ -1242,7 +1297,7 @@ export default function SettingsScreen() {
                     Store relay settings in your account (syncs across devices). When off, settings are stored only on this device.
                   </Text>
                 </View>
-                <Switch
+                <SettingToggle
                   value={relaySyncEnabled}
                   onValueChange={handleToggleRelaySync}
                   trackColor={{ false: c.border, true: c.accent }}
@@ -1609,6 +1664,35 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     fontSize: 14,
+  },
+  tvToggle: {
+    minWidth: 98,
+    height: 44,
+    borderRadius: 22,
+    paddingHorizontal: 7,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  tvToggleFocused: {
+    transform: [{ scale: 1.08 }],
+    opacity: 0.9,
+  },
+  tvToggleThumb: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#ffffff",
+  },
+  tvToggleThumbOn: {
+    marginLeft: "auto",
+  },
+  tvToggleLabel: {
+    position: "absolute",
+    width: "100%",
+    textAlign: "center",
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "700",
   },
 });
 

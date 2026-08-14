@@ -80,11 +80,13 @@ var builtinRunners = map[string]RunnerConfig{
 		ExitCommand: "/exit",
 	},
 	"codex": {
-		RunnerID:   "codex",
-		Name:       "OpenAI Codex",
-		Command:    "codex",
-		Args:       []string{"--quiet", "--full-auto", "{prompt}"},
-		OutputMode: "raw",
+		RunnerID:        "codex",
+		Name:            "OpenAI Codex",
+		Command:         "codex",
+		Args:            []string{"exec", "--json", "--sandbox", "workspace-write", "{prompt}"},
+		OutputMode:      "stream-json",
+		ResumeSupported: true,
+		ResumeArgs:      []string{"resume", "{sessionId}"},
 	},
 	"opencode": {
 		RunnerID:    "opencode",
@@ -153,11 +155,12 @@ func GetCachedModels() []BackendModel {
 
 // ClaudeEvent represents a top-level line of stream-json output from Claude CLI.
 // With --include-partial-messages, events include:
-//   {"type":"system","subtype":"init",...}
-//   {"type":"stream_event","event":{...}} — incremental streaming (text_delta, tool_use, etc.)
-//   {"type":"assistant","message":{...}}  — complete assistant message (text or tool_use)
-//   {"type":"user","message":{...},"tool_use_result":{...}} — tool execution results (stdout/stderr)
-//   {"type":"result","result":"...", "total_cost_usd":0.01,...}
+//
+//	{"type":"system","subtype":"init",...}
+//	{"type":"stream_event","event":{...}} — incremental streaming (text_delta, tool_use, etc.)
+//	{"type":"assistant","message":{...}}  — complete assistant message (text or tool_use)
+//	{"type":"user","message":{...},"tool_use_result":{...}} — tool execution results (stdout/stderr)
+//	{"type":"result","result":"...", "total_cost_usd":0.01,...}
 type ClaudeEvent struct {
 	Type      string          `json:"type"`
 	Subtype   string          `json:"subtype,omitempty"`
@@ -231,11 +234,11 @@ type RunnerProcess struct {
 
 // AgentStatus is returned by the /agent/status endpoint.
 type AgentStatus struct {
-	Runner          RunnerStatusInfo  `json:"runner"`
-	RunningTasks    int               `json:"runningTasks"`
-	TotalTasks      int               `json:"totalTasks"`
-	RunnerProcesses []RunnerProcess   `json:"runnerProcesses"`
-	System          SystemInfo        `json:"system"`
+	Runner          RunnerStatusInfo `json:"runner"`
+	RunningTasks    int              `json:"runningTasks"`
+	TotalTasks      int              `json:"totalTasks"`
+	RunnerProcesses []RunnerProcess  `json:"runnerProcesses"`
+	System          SystemInfo       `json:"system"`
 }
 
 // RunnerStatusInfo describes the configured runner.
@@ -249,10 +252,10 @@ type RunnerStatusInfo struct {
 
 // SystemInfo describes the host machine.
 type SystemInfo struct {
-	Hostname string  `json:"hostname"`
-	OS       string  `json:"os"`
-	Arch     string  `json:"arch"`
-	MemoryMB int64   `json:"memoryMb,omitempty"`
+	Hostname string `json:"hostname"`
+	OS       string `json:"os"`
+	Arch     string `json:"arch"`
+	MemoryMB int64  `json:"memoryMb,omitempty"`
 }
 
 // GetRunnerInfos returns info about active runner processes for heartbeat reporting.
@@ -361,61 +364,64 @@ func (tm *TaskManager) GetAgentStatus() AgentStatus {
 
 // Task represents a single Claude CLI task running as a subprocess.
 type Task struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Status      TaskStatus `json:"status"`
-	Source      string     `json:"source,omitempty"` // "mobile", "mcp", "cli"
-	Model       string     `json:"model,omitempty"`
-	RunnerID    string     `json:"runnerId,omitempty"` // which runner is executing this task
-	Mode        string     `json:"mode,omitempty"`     // agent mode: "build", "plan", or any custom agent (opencode --agent)
-	SessionID   string     `json:"session_id,omitempty"`
-	Output      string     `json:"output"`
-	ResultText   string  // Extracted clean result text from Claude
-	CostUSD      float64 // Total API cost
-	Turns       []ConversationTurn // Full conversation history
-	CreatedAt   time.Time  `json:"created_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	ID              string             `json:"id"`
+	Title           string             `json:"title"`
+	Description     string             `json:"description"`
+	Status          TaskStatus         `json:"status"`
+	Source          string             `json:"source,omitempty"` // "mobile", "mcp", "cli"
+	Model           string             `json:"model,omitempty"`
+	ReasoningEffort string             `json:"reasoningEffort,omitempty"`
+	RunnerID        string             `json:"runnerId,omitempty"` // which runner is executing this task
+	Mode            string             `json:"mode,omitempty"`     // agent mode: "build", "plan", or any custom agent (opencode --agent)
+	SessionID       string             `json:"session_id,omitempty"`
+	Output          string             `json:"output"`
+	ResultText      string             // Extracted clean result text from Claude
+	CostUSD         float64            // Total API cost
+	Turns           []ConversationTurn // Full conversation history
+	CreatedAt       time.Time          `json:"created_at"`
+	StartedAt       *time.Time         `json:"started_at,omitempty"`
+	FinishedAt      *time.Time         `json:"finished_at,omitempty"`
 
-	runner       RunnerConfig // the runner config used for this task (not persisted)
-	cmd          *exec.Cmd
-	cancel       context.CancelFunc
-	stdin        io.WriteCloser
-	outputCh     chan string
-	doneCh       chan struct{}
-	retryCount   int  // Number of auto-restart attempts so far
+	runner     RunnerConfig // the runner config used for this task (not persisted)
+	cmd        *exec.Cmd
+	cancel     context.CancelFunc
+	stdin      io.WriteCloser
+	outputCh   chan string
+	doneCh     chan struct{}
+	retryCount int // Number of auto-restart attempts so far
 }
 
 // TaskInfo is the JSON-safe subset returned in listings.
 type TaskInfo struct {
-	ID          string             `json:"id"`
-	Title       string             `json:"title"`
-	Description string             `json:"description"`
-	Status      TaskStatus         `json:"status"`
-	RunnerID    string             `json:"runnerId,omitempty"`
-	Mode        string             `json:"mode,omitempty"` // agent mode: "build", "plan", or custom agent
-	SessionID   string             `json:"sessionId,omitempty"`
-	Output      string             `json:"output,omitempty"`
-	ResultText  string             `json:"resultText,omitempty"`
-	CostUSD     float64            `json:"costUsd,omitempty"`
-	Turns       []ConversationTurn `json:"turns,omitempty"`
-	CreatedAt   time.Time          `json:"createdAt"`
-	StartedAt   *time.Time         `json:"startedAt,omitempty"`
-	FinishedAt  *time.Time         `json:"finishedAt,omitempty"`
+	ID              string             `json:"id"`
+	Title           string             `json:"title"`
+	Description     string             `json:"description"`
+	Status          TaskStatus         `json:"status"`
+	RunnerID        string             `json:"runnerId,omitempty"`
+	Model           string             `json:"model,omitempty"`
+	ReasoningEffort string             `json:"reasoningEffort,omitempty"`
+	Mode            string             `json:"mode,omitempty"` // agent mode: "build", "plan", or custom agent
+	SessionID       string             `json:"sessionId,omitempty"`
+	Output          string             `json:"output,omitempty"`
+	ResultText      string             `json:"resultText,omitempty"`
+	CostUSD         float64            `json:"costUsd,omitempty"`
+	Turns           []ConversationTurn `json:"turns,omitempty"`
+	CreatedAt       time.Time          `json:"createdAt"`
+	StartedAt       *time.Time         `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time         `json:"finishedAt,omitempty"`
 }
 
 // TaskManager manages the lifecycle of tasks.
 type TaskManager struct {
-	mu           sync.RWMutex
-	tasks        map[string]*Task
-	workDir      string
-	store        *TaskStore
-	runner       RunnerConfig
-	Sandbox      SandboxConfig // Command sandbox configuration
-	WaitForSlot  bool // If true, wait for other Claude Code sessions to finish before starting
-	DummyMode    bool // If true, use fake responses instead of launching a real runner
-	SecretStore  *SecretStore // optional device-provisioned provider credentials
+	mu          sync.RWMutex
+	tasks       map[string]*Task
+	workDir     string
+	store       *TaskStore
+	runner      RunnerConfig
+	Sandbox     SandboxConfig // Command sandbox configuration
+	WaitForSlot bool          // If true, wait for other Claude Code sessions to finish before starting
+	DummyMode   bool          // If true, use fake responses instead of launching a real runner
+	SecretStore *SecretStore  // optional device-provisioned provider credentials
 
 	// Convex reporting (set after construction)
 	ConvexURL  string
@@ -424,9 +430,9 @@ type TaskManager struct {
 	OwnerEmail string // for dev logging
 
 	// Warm session: forked at startup, reused for all tasks
-	warmSessionID  string     // Claude session ID from warmup
-	warmPID        int        // PID of the warmup process (0 if not running)
-	warmReady      bool       // true once warmup completed successfully
+	warmSessionID string // Claude session ID from warmup
+	warmPID       int    // PID of the warmup process (0 if not running)
+	warmReady     bool   // true once warmup completed successfully
 }
 
 // SetSecretStore attaches the device-local credential store. Values are only
@@ -435,16 +441,20 @@ type TaskManager struct {
 func (tm *TaskManager) SetSecretStore(store *SecretStore) { tm.SecretStore = store }
 
 func (tm *TaskManager) runnerEnv(base []string) []string {
-	if tm.SecretStore == nil { return base }
+	if tm.SecretStore == nil {
+		return base
+	}
 	envNames := map[string]string{
 		"DEEPSEEK_API_KEY": "DEEPSEEK_API_KEY",
-		"OPENAI_API_KEY": "OPENAI_API_KEY",
-		"GITHUB_TOKEN": "GITHUB_TOKEN",
-		"GITLAB_TOKEN": "GITLAB_TOKEN",
+		"OPENAI_API_KEY":   "OPENAI_API_KEY",
+		"GITHUB_TOKEN":     "GITHUB_TOKEN",
+		"GITLAB_TOKEN":     "GITLAB_TOKEN",
 		"OPENCODE_API_KEY": "OPENCODE_API_KEY",
 	}
 	for secretName, envName := range envNames {
-		if value, ok := tm.SecretStore.Get(secretName); ok { base = append(base, envName+"="+value) }
+		if value, ok := tm.SecretStore.Get(secretName); ok {
+			base = append(base, envName+"="+value)
+		}
 	}
 	return base
 }
@@ -631,7 +641,7 @@ func (tm *TaskManager) CheckRunner() error {
 // source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
 // customCommand, if non-empty, runs an arbitrary command via sh -c (ignores runnerID).
 // mode selects the runner's agent mode (e.g. opencode "build"/"plan" via --agent) — empty uses runner default.
-func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand, mode string) (*Task, error) {
+func (tm *TaskManager) CreateTask(title, description, model, reasoningEffort, source, runnerID, customCommand, mode string) (*Task, error) {
 	var taskRunner RunnerConfig
 
 	if customCommand != "" {
@@ -675,18 +685,19 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 
 	now := time.Now()
 	task := &Task{
-		ID:          id,
-		Title:       title,
-		Description: description,
-		Status:      TaskStatusQueued,
-		Source:      source,
-		Model:       model,
-		RunnerID:    taskRunner.RunnerID,
-		Mode:        mode,
-		runner:      taskRunner,
-		CreatedAt:   now,
-		outputCh:    make(chan string, 512),
-		doneCh:      make(chan struct{}),
+		ID:              id,
+		Title:           title,
+		Description:     description,
+		Status:          TaskStatusQueued,
+		Source:          source,
+		Model:           model,
+		ReasoningEffort: reasoningEffort,
+		RunnerID:        taskRunner.RunnerID,
+		Mode:            mode,
+		runner:          taskRunner,
+		CreatedAt:       now,
+		outputCh:        make(chan string, 512),
+		doneCh:          make(chan struct{}),
 		Turns: []ConversationTurn{
 			{Role: "user", Content: title, Timestamp: now},
 		},
@@ -924,6 +935,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	runner := task.runner
 	args := buildRunnerArgs(runner, prompt)
 	args = applyModeArgs(runner, task.Mode, args)
+	if task.ReasoningEffort != "" && runner.RunnerID == "codex" {
+		args = append(args, "-c", "model_reasoning_effort="+task.ReasoningEffort)
+	}
 
 	// Use warm session if available (resume = same rate-limit bucket)
 	tm.mu.RLock()
@@ -954,6 +968,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		if !modelOverride {
 			args = append(args, "--model", task.Model)
 		}
+	}
+	if task.ReasoningEffort != "" && runner.RunnerID == "codex" {
+		args = append(args, "-c", "model_reasoning_effort="+task.ReasoningEffort)
 	}
 
 	cmd := exec.CommandContext(ctx, runner.Command, args...)
@@ -1016,6 +1033,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// Monitor stdout based on output mode.
 	if runner.OutputMode == "raw" {
 		go tm.readRawOutput(task, stdout)
+	} else if runner.RunnerID == "codex" {
+		go tm.readCodexJSON(task, stdout)
 	} else {
 		go tm.readStreamJSON(task, stdout)
 	}
@@ -1142,10 +1161,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			finishMs := task.FinishedAt.UnixMilli()
 			runner := task.runner.Name
 			model := task.Model
+			reasoningEffort := task.ReasoningEffort
 			source := task.Source
 			taskID := task.ID
 			go func() {
-				if err := ReportRunnerUsage(tm.ConvexURL, tm.AuthToken, tm.DeviceID, taskID, runner, model, source, duration, startMs, finishMs); err != nil {
+				if err := ReportRunnerUsage(tm.ConvexURL, tm.AuthToken, tm.DeviceID, taskID, runner, model, reasoningEffort, source, duration, startMs, finishMs); err != nil {
 					log.Printf("[usage] failed to report: %v", err)
 				} else {
 					log.Printf("[usage] recorded %.0fs of %s for task %s", duration, runner, taskID[:8])
@@ -1378,6 +1398,56 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 		log.Printf("[task %s] WARNING: Stream reader got zero lines from %s — process may have hung or crashed before producing output", task.ID, tm.runner.Name)
 	}
 	log.Printf("[task %s] Stream reader finished (output_len=%d, lines=%d)", task.ID, output.Len(), lineCount)
+}
+
+// readCodexJSON consumes the documented `codex exec --json` JSONL stream.
+// Yaver keeps the protocol-specific parsing here so clients receive the same
+// task stream regardless of whether the selected runner is Codex or OpenCode.
+func (tm *TaskManager) readCodexJSON(task *Task, r io.Reader) {
+	defer close(task.outputCh)
+	var output strings.Builder
+	tm.mu.RLock()
+	output.WriteString(task.Output)
+	tm.mu.RUnlock()
+
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var event struct {
+			Type     string `json:"type"`
+			ThreadID string `json:"thread_id"`
+			Item     struct {
+				Type    string `json:"type"`
+				Text    string `json:"text"`
+				Command string `json:"command"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			tm.emit(task, &output, string(line)+"\n")
+			continue
+		}
+		if event.ThreadID != "" {
+			tm.mu.Lock()
+			task.SessionID = event.ThreadID
+			tm.mu.Unlock()
+		}
+		switch event.Item.Type {
+		case "agent_message":
+			if event.Item.Text != "" {
+				tm.emit(task, &output, event.Item.Text)
+			}
+		case "command_execution":
+			if event.Item.Command != "" {
+				tm.emit(task, &output, "\n**$ "+event.Item.Command+"**\n")
+			}
+		}
+	}
+	tm.mu.Lock()
+	if task.ResultText == "" {
+		task.ResultText = strings.TrimSpace(output.String())
+	}
+	tm.mu.Unlock()
 }
 
 func truncate(s string, max int) string {
@@ -1669,8 +1739,10 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
 
-	if tm.runner.OutputMode == "raw" {
+	if runner.OutputMode == "raw" {
 		go tm.readRawOutput(task, stdout)
+	} else if runner.RunnerID == "codex" {
+		go tm.readCodexJSON(task, stdout)
 	} else {
 		go tm.readStreamJSON(task, stdout)
 	}
@@ -1724,19 +1796,21 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			output = output[len(output)-2000:]
 		}
 		result = append(result, TaskInfo{
-			ID:          t.ID,
-			Title:       t.Title,
-			Description: t.Description,
-			Status:      t.Status,
-			RunnerID:    t.RunnerID,
-			SessionID:   t.SessionID,
-			Output:      output,
-			ResultText:  t.ResultText,
-			CostUSD:     t.CostUSD,
-			Turns:       t.Turns,
-			CreatedAt:   t.CreatedAt,
-			StartedAt:   t.StartedAt,
-			FinishedAt:  t.FinishedAt,
+			ID:              t.ID,
+			Title:           t.Title,
+			Description:     t.Description,
+			Status:          t.Status,
+			RunnerID:        t.RunnerID,
+			Model:           t.Model,
+			ReasoningEffort: t.ReasoningEffort,
+			SessionID:       t.SessionID,
+			Output:          output,
+			ResultText:      t.ResultText,
+			CostUSD:         t.CostUSD,
+			Turns:           t.Turns,
+			CreatedAt:       t.CreatedAt,
+			StartedAt:       t.StartedAt,
+			FinishedAt:      t.FinishedAt,
 		})
 	}
 	return result
