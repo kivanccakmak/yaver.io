@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -36,6 +37,7 @@ type RelayServer struct {
 	startedAt time.Time // server start time for uptime tracking
 	passwordFile string
 	requestSlots chan struct{}
+	corsOrigins []string
 
 	// deviceID -> active agent tunnel
 	mu      sync.RWMutex
@@ -58,6 +60,7 @@ func NewRelayServer(quicPort, httpPort int, password string) *RelayServer {
 		tunnels:   make(map[string]*agentTunnel),
 		passwordFile: envOrDefault("RELAY_PASSWORD_FILE", ".relay-password"),
 		requestSlots: make(chan struct{}, 256),
+		corsOrigins: configuredRelayCORSOrigins(),
 	}
 }
 
@@ -242,7 +245,7 @@ func (s *RelayServer) runHTTPProxy(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", s.httpPort),
-		Handler: withRelayCORS(mux),
+		Handler: withRelayCORS(mux, s.corsOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      15 * time.Minute,
@@ -623,12 +626,47 @@ func (s *RelayServer) logTunnels(ctx context.Context) {
 
 // --- CORS ---
 
-func withRelayCORS(next http.Handler) http.Handler {
+func configuredRelayCORSOrigins() []string {
+	// Production origins are always allowed. Localhost is intentionally
+	// limited to HTTP loopback origins for Expo/Next development servers;
+	// arbitrary public origins are never accepted by default.
+	origins := []string{"https://yaver.io", "https://www.yaver.io"}
+	for _, raw := range strings.Split(os.Getenv("RELAY_CORS_ORIGINS"), ",") {
+		if origin := strings.TrimSpace(raw); origin != "" {
+			origins = append(origins, strings.TrimRight(origin, "/"))
+		}
+	}
+	return origins
+}
+
+func isAllowedRelayOrigin(origin string, configured []string) bool {
+	for _, allowed := range configured {
+		if origin == allowed {
+			return true
+		}
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" || u.Hostname() == "" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func withRelayCORS(next http.Handler, configured []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Relay-Password")
+		origin := r.Header.Get("Origin")
+		if isAllowedRelayOrigin(origin, configured) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Relay-Password")
+		}
 		if r.Method == http.MethodOptions {
+			if origin != "" && !isAllowedRelayOrigin(origin, configured) {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

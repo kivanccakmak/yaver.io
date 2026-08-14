@@ -182,6 +182,30 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       setActiveDevice(device);
 
       try {
+        // Refresh relay configuration at connect time, matching the Web UI.
+        // Startup discovery can race auth/browser storage and otherwise leave
+        // the client with an empty or stale relay list.
+        try {
+          const [configRes, settings] = await Promise.all([
+            fetch(`${CONVEX_SITE_URL}/config`),
+            getUserSettings(token),
+          ]);
+          if (configRes.ok) {
+            const data = await configRes.json();
+            const servers: RelayServer[] = data.relayServers || [];
+            if (settings.relayPassword) {
+              for (const server of servers) {
+                if (!server.password && (!settings.relayUrl || server.httpUrl === settings.relayUrl)) {
+                  server.password = settings.relayPassword;
+                }
+              }
+            }
+            quicClient.setRelayServers(servers);
+          }
+        } catch (configError) {
+          appLog("warn", `connect relay refresh failed: ${configError instanceof Error ? configError.message : String(configError)}`);
+        }
+
         sendTelemetry(token, "connect-start", `Connecting to ${device.name}`, JSON.stringify({
           host: device.host, port: device.port, deviceId: device.id.slice(0, 8),
           relayCount: quicClient.relayServerCount,
@@ -258,8 +282,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   }, [activeDevice]);
 
   // Fetch relay servers: local AsyncStorage > Convex user settings > Convex platform config
+  // Re-runs when the token becomes available so password-protected relays from
+  // user settings are loaded (relaysFetched guards against redundant fetches).
   const relaysFetched = useRef(false);
   useEffect(() => {
+    if (!token) return;
     if (relaysFetched.current) return;
     relaysFetched.current = true;
     (async () => {
