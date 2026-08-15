@@ -16,10 +16,11 @@ type CardDef = {
 };
 
 const CARDS: CardDef[] = [
-  { key: "chat", label: "Chat", subtitle: "Run and watch tasks", icon: "💬", route: "/tasks", primary: true },
+  { key: "projects", label: "Projects", subtitle: "Git and sessions", icon: "📁", route: "/projects", primary: true },
+  { key: "chat", label: "Chat", subtitle: "Run and watch tasks", icon: "💬", route: "/tasks" },
   { key: "vibing", label: "Vibing", subtitle: "Live preview", icon: "📺", route: "/vibing" },
-  { key: "devices", label: "Devices", subtitle: "Switch machine", icon: "🖥️", route: "/devices" },
-  { key: "settings", label: "Settings", subtitle: "Profile, relays, API keys", icon: "⚙️", route: "/settings" },
+  { key: "devices", label: "Runners", subtitle: "Cloud Workspace", icon: "🖥️", route: "/devices" },
+  { key: "settings", label: "Settings", subtitle: "Account and runner", icon: "⚙️", route: "/settings" },
 ];
 
 function DeviceBar() {
@@ -33,11 +34,11 @@ function DeviceBar() {
     <View style={[styles.deviceBar, { backgroundColor: c.bgCard, borderColor: c.border }]}>
       <Pressable onPress={() => router.push("/devices")} style={({ focused }) => [styles.deviceSummary, focused && styles.focused]}>
         <View style={[styles.onlineDot, { backgroundColor: statusColor }]} />
-        <Text style={[styles.deviceBarText, { color: c.textPrimary }]}>{activeDevice ? activeDevice.name : "No device selected"}</Text>
+        <Text style={[styles.deviceBarText, { color: c.textPrimary }]}>{activeDevice ? activeDevice.name : "No Cloud Runner selected"}</Text>
         <Text style={[styles.deviceBarStatus, { color: statusColor }]}>{connectionStatus}</Text>
         {devices.length > 1 && <Text style={[styles.deviceBarHint, { color: c.textMuted }]}>· switch</Text>}
       </Pressable>
-      {activeDevice && <Pressable onPress={disconnect} accessibilityLabel="Disconnect current machine" style={({ focused }) => [styles.disconnectButton, { borderColor: c.border, backgroundColor: c.bg }, focused && styles.focused]}><Text style={[styles.disconnectText, { color: c.error }]}>Disconnect</Text></Pressable>}
+      {activeDevice && <Pressable onPress={disconnect} accessibilityLabel="Disconnect current Cloud Runner" style={({ focused }) => [styles.disconnectButton, { borderColor: c.border, backgroundColor: c.bg }, focused && styles.focused]}><Text style={[styles.disconnectText, { color: c.error }]}>Disconnect</Text></Pressable>}
     </View>
   );
 }
@@ -51,9 +52,7 @@ export default function TvHomeScreen() {
       <View style={styles.container}>
         <View style={styles.header}>
           <View style={styles.logoBlock}>
-            <Text style={[styles.logo, { color: c.textPrimary }]}>
-              yaver<Text style={{ color: c.accent }}>.io</Text>
-            </Text>
+            <Text style={[styles.logo, { color: c.textPrimary }]}>yaver.io</Text>
             <Text style={[styles.greeting, { color: c.textSecondary }]}>
               {user?.name ? `Hi ${user.name.split(" ")[0]}` : "Your AI, everywhere"}
             </Text>
@@ -81,7 +80,7 @@ export default function TvHomeScreen() {
         </View>
 
         <Text style={[styles.footer, { color: c.textMuted }]}>
-          Sign in to Yaver on your phone to manage devices from anywhere
+          Cloud Studio keeps Git, runners, builds, and previews in your Cloud Workspace
         </Text>
       </View>
     </SafeAreaView>
@@ -94,13 +93,13 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     marginBottom: 48,
   },
-  logoBlock: {},
+  logoBlock: { flexShrink: 0, marginRight: 40 },
   logo: { fontSize: 44, fontWeight: "800", letterSpacing: -2 },
   greeting: { fontSize: 22, marginTop: 4 },
   deviceBar: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 14,

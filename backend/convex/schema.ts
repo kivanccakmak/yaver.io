@@ -1,5 +1,14 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import {
+  cloudAccessStatus,
+  cloudWorkspaceState,
+  deviceKind,
+  deviceTrust,
+  gitConnectionStatus,
+  runnerCapabilities,
+  runnerClass,
+} from "./validators";
 
 export default defineSchema({
   users: defineTable({
@@ -50,6 +59,14 @@ export default defineSchema({
     quicHost: v.string(),
     quicPort: v.number(),
     isOnline: v.boolean(),
+    deviceKind: v.optional(deviceKind),
+    trust: v.optional(deviceTrust),
+    cloudWorkspaceId: v.optional(v.string()),
+    runnerClass: v.optional(runnerClass),
+    region: v.optional(v.string()),
+    agentVersion: v.optional(v.string()),
+    protocolVersion: v.optional(v.number()),
+    capabilities: v.optional(runnerCapabilities),
     runnerDown: v.optional(v.boolean()),  // true when runner crashed and all retries exhausted
     runners: v.optional(v.array(v.object({
       taskId: v.string(),
@@ -126,6 +143,70 @@ export default defineSchema({
     relayTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
   }).index("by_userId", ["userId"]),
 
+  // Server-authoritative Cloud Studio access. Clients can read this through
+  // /cloud/status but cannot grant or mutate their own access.
+  cloudAccess: defineTable({
+    userId: v.id("users"),
+    status: cloudAccessStatus,
+    maxCloudWorkspaces: v.number(),
+    maxConcurrentTasks: v.number(),
+    maxConcurrentPreviews: v.number(),
+    allowedRunnerClasses: v.array(runnerClass),
+    validUntil: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_userId", ["userId"]),
+
+  cloudWorkspaces: defineTable({
+    userId: v.id("users"),
+    cloudWorkspaceId: v.string(),
+    runnerDeviceId: v.string(),
+    runnerClass,
+    region: v.string(),
+    state: cloudWorkspaceState,
+    capabilitiesDigest: v.optional(v.string()),
+    lastReadyAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_workspaceId", ["cloudWorkspaceId"])
+    .index("by_runnerDeviceId", ["runnerDeviceId"]),
+
+  // Provider credentials live in an external credential broker. Convex stores
+  // only non-secret connection state and an opaque credential reference.
+  gitConnections: defineTable({
+    userId: v.id("users"),
+    gitConnectionId: v.string(),
+    provider: v.union(v.literal("github"), v.literal("gitlab")),
+    externalAccountId: v.string(),
+    displayName: v.string(),
+    status: gitConnectionStatus,
+    credentialReference: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_connectionId", ["gitConnectionId"]),
+
+  // Hashes of short-lived runner credentials. These credentials are scoped to
+  // one managed runner and are never accepted as user sessions.
+  workloadCredentials: defineTable({
+    userId: v.id("users"),
+    tokenHash: v.string(),
+    cloudWorkspaceId: v.string(),
+    runnerDeviceId: v.string(),
+    status: v.union(v.literal("active"), v.literal("revoked")),
+    expiresAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_tokenHash", ["tokenHash"])
+    .index("by_runnerDeviceId", ["runnerDeviceId"])
+    .index("by_workspaceId", ["cloudWorkspaceId"])
+    .index("by_userId", ["userId"]),
+
   aiRunners: defineTable({
     runnerId: v.string(),
     name: v.string(),
@@ -200,7 +281,7 @@ export default defineSchema({
   taskRuns: defineTable({
     userId: v.string(),
     taskId: v.string(),
-    runtime: v.union(v.literal("remote-agent"), v.literal("local-yaver"), v.literal("cloud-worker"), v.literal("queued")),
+    runtime: v.union(v.literal("remote-agent"), v.literal("local-yaver"), v.literal("cloud-runner"), v.literal("queued")),
     status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed"), v.literal("stopped")),
     runnerId: v.optional(v.string()),
     model: v.optional(v.string()),
@@ -246,6 +327,15 @@ export default defineSchema({
     machineName: v.optional(v.string()),
     matchCode: v.optional(v.string()),
     platform: v.optional(v.string()),
+    arch: v.optional(v.string()),
+    runtimeVersion: v.optional(v.string()),
+    shell: v.optional(v.string()),
+    approvedAt: v.optional(v.number()),
+    approvedUserId: v.optional(v.id("users")),
+    authorizeAttempts: v.optional(v.number()),
+    lastAuthorizeAttemptAt: v.optional(v.number()),
+    claimHandle: v.optional(v.string()),
+    claimedAt: v.optional(v.number()),
   })
     .index("by_userCode", ["userCode"])
     .index("by_deviceCode", ["deviceCode"]),

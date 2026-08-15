@@ -1,9 +1,15 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import React from "react";
+import { LogBox, Platform } from "react-native";
 import { AuthProvider } from "../src/context/AuthContext";
 import { DeviceProvider } from "../src/context/DeviceContext";
+import { CloudStudioProvider } from "../src/context/CloudStudioContext";
 import { ThemeProvider, useTheme } from "../src/context/ThemeContext";
+
+if ((Platform as any).isTV === true) {
+  LogBox.ignoreLogs(["Persistent storage is not supported on tvOS"]);
+}
 
 function InnerLayout() {
   const { isDark, colors } = useTheme();
@@ -26,7 +32,9 @@ export default function RootLayout() {
     <ThemeProvider>
       <AuthProvider>
         <DeviceProvider>
-          <InnerLayout />
+          <CloudStudioProvider>
+            <InnerLayout />
+          </CloudStudioProvider>
         </DeviceProvider>
       </AuthProvider>
     </ThemeProvider>

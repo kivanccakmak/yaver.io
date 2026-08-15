@@ -1,7 +1,8 @@
 import type { CompanionCommand, CodingSession, SurfaceKind } from "./runtime";
 
-/** Companion surfaces are command and review clients. They never receive
- * provider tokens and never expose a shell/repository editor while driving. */
+/** Companion surfaces never receive provider tokens or expose a local shell.
+ * TV and XR may provide rich remote editing/review backed by a Project Session;
+ * watch and car remain status and command surfaces. */
 export const COMPANION_SURFACES: SurfaceKind[] = ["watch", "car", "tv", "xr"];
 
 export function validateCompanionCommand(surface: SurfaceKind, command: CompanionCommand): CompanionCommand {
@@ -10,6 +11,9 @@ export function validateCompanionCommand(surface: SurfaceKind, command: Companio
   }
   if (surface === "watch" && command.type === "review") {
     throw new Error("Review is handed off to the phone.");
+  }
+  if (surface === "tv" && command.type === "start_local") {
+    throw new Error("tvOS is remote-only. Select a Cloud Studio Project Session.");
   }
   return command;
 }

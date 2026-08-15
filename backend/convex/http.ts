@@ -38,6 +38,21 @@ async function authenticateRequest(
   return await ctx.runQuery(api.auth.validateSession, { tokenHash });
 }
 
+async function hmacSha1Base64(secret: string, value: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"]
+  );
+  const signature = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, encoder.encode(value))
+  );
+  return btoa(String.fromCharCode(...signature));
+}
+
 // ── Password Hashing Helpers (PBKDF2-SHA256) ────────────────────────
 
 async function hashPassword(password: string): Promise<string> {
@@ -446,6 +461,104 @@ http.route({
     });
 
     return jsonResponse({ devices });
+  }),
+});
+
+/** GET /cloud/status — Neutral Cloud Studio availability for authenticated
+ * clients. Apple surfaces consume this state but never receive commerce URLs. */
+http.route({
+  path: "/cloud/status",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    try {
+      const status = await ctx.runQuery(api.cloudStudio.getStatusByToken, {
+        tokenHash: await sha256Hex(authHeader.slice(7)),
+      });
+      return jsonResponse(status);
+    } catch {
+      return errorResponse("Unauthorized", 401);
+    }
+  }),
+});
+
+/** POST /cloud/runners/register — A managed runner authenticates with a
+ * short-lived credential scoped to one Cloud Workspace and runner ID. */
+http.route({
+  path: "/cloud/runners/register",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    try {
+      const body = await request.json();
+      const registration = await ctx.runMutation(api.devices.registerManagedRunner, {
+        tokenHash: await sha256Hex(authHeader.slice(7)),
+        deviceId: body.deviceId,
+        name: body.name,
+        platform: body.platform,
+        publicKey: body.publicKey || undefined,
+        quicHost: body.quicHost,
+        quicPort: body.quicPort,
+        runnerClass: body.runnerClass,
+        region: body.region,
+        agentVersion: body.agentVersion,
+        protocolVersion: body.protocolVersion,
+        capabilities: body.capabilities,
+      });
+      return jsonResponse(registration);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Runner registration failed";
+      return errorResponse(message, 403);
+    }
+  }),
+});
+
+/** POST /cloud/runners/heartbeat — Managed-runner heartbeat. General user
+ * session tokens are intentionally invalid for this endpoint. */
+http.route({
+  path: "/cloud/runners/heartbeat",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    try {
+      const body = await request.json();
+      await ctx.runMutation(api.devices.managedHeartbeat, {
+        tokenHash: await sha256Hex(authHeader.slice(7)),
+        deviceId: body.deviceId,
+        runners: body.runners,
+        quicHost: body.quicHost || undefined,
+        agentVersion: body.agentVersion,
+        protocolVersion: body.protocolVersion,
+        capabilities: body.capabilities,
+      });
+      return jsonResponse({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Runner heartbeat failed";
+      return errorResponse(message, 403);
+    }
+  }),
+});
+
+http.route({
+  path: "/cloud/runners/offline",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    try {
+      const body = await request.json();
+      await ctx.runMutation(api.devices.managedOffline, {
+        tokenHash: await sha256Hex(authHeader.slice(7)),
+        deviceId: body.deviceId,
+      });
+      return jsonResponse({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Runner offline update failed";
+      return errorResponse(message, 403);
+    }
   }),
 });
 
@@ -1104,6 +1217,75 @@ http.route({
 });
 
 // ── Platform Config ──────────────────────────────────────────────────
+
+const relayIceCorsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Authorization, Content-Type",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+};
+
+http.route({
+  path: "/relay/ice",
+  method: "OPTIONS",
+  handler: httpAction(async () =>
+    new Response(null, { status: 204, headers: relayIceCorsHeaders })
+  ),
+});
+
+/**
+ * GET /relay/ice — authenticated, short-lived STUN/TURN configuration.
+ * The TURN REST password is HMAC-SHA1(secret, "<expiry>:<userId>"), which
+ * coturn validates without storing user credentials.
+ */
+http.route({
+  path: "/relay/ice",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const user = await authenticateRequest(ctx, request);
+    if (!user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...relayIceCorsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+
+    const secret = process.env.YAVER_TURN_SECRET?.trim();
+    if (!secret) {
+      return new Response(JSON.stringify({ error: "TURN is temporarily unavailable" }), {
+        status: 503,
+        headers: { ...relayIceCorsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+
+    const expiresAtSeconds = Math.floor(Date.now() / 1000) + 3600;
+    const username = `${expiresAtSeconds}:${user.userId}`;
+    const credential = await hmacSha1Base64(secret, username);
+    const stunUrls = ["stun:public.yaver.io:3478"];
+    const turnUrls = [
+      "turn:public.yaver.io:3478?transport=udp",
+      "turn:public.yaver.io:3478?transport=tcp",
+      "turns:public.yaver.io:5349?transport=tcp",
+    ];
+
+    return new Response(
+      JSON.stringify({
+        expiresAt: expiresAtSeconds * 1000,
+        ttlSeconds: 3600,
+        stun: stunUrls[0],
+        turn: turnUrls[0],
+        turns: turnUrls[2],
+        iceServers: [
+          { urls: stunUrls },
+          { urls: turnUrls, username, credential },
+        ],
+      }),
+      {
+        status: 200,
+        headers: { ...relayIceCorsHeaders, "Content-Type": "application/json", "Cache-Control": "private, no-store" },
+      }
+    );
+  }),
+});
 
 /** GET /config — Public platform config (relay servers, runners, models). No auth required. */
 http.route({

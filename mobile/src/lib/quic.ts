@@ -44,12 +44,61 @@ export interface Task {
   updatedAt: number;
   /** Name of the device this task is executing on. */
   deviceName?: string;
+  projectSessionId?: string;
 }
 
 export interface RemoteProject {
   name: string;
   path: string;
   branch?: string;
+}
+
+export interface GitRepository {
+  repositoryId: string;
+  name: string;
+  defaultRef?: string;
+}
+
+export interface ProjectSession {
+  projectSessionId: string;
+  repositoryId: string;
+  repositoryName: string;
+  baseRef: string;
+  reviewBranch: string;
+  status: "ready" | "stopped" | "error";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RunnerCapabilities {
+  protocolVersion: number;
+  capabilities: Record<string, boolean>;
+}
+
+export interface ProjectPreviewStatus {
+  projectSessionId: string;
+  framework?: string;
+  kind: string;
+  running: boolean;
+  serving: boolean;
+  servingLabel?: string;
+  port?: number;
+  previewHealth?: { state?: string; reason?: string };
+}
+
+export interface ValidationRun {
+  validationRunId: string;
+  projectSessionId: string;
+  kind: "lint" | "typecheck" | "test" | "build";
+  commandProfile: string;
+  ref: string;
+  commitSha: string;
+  runner: string;
+  status: "queued" | "running" | "passed" | "failed" | "stopped";
+  exitCode?: number;
+  output?: string;
+  startedAt: string;
+  finishedAt?: string;
 }
 
 export interface ModelInfo {
@@ -352,6 +401,176 @@ export class QuicClient {
     };
   }
 
+  async getRunnerCapabilities(): Promise<RunnerCapabilities> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/capabilities`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to read runner capabilities: ${res.status}`);
+    return res.json();
+  }
+
+  async listGitRepositories(refresh = false): Promise<GitRepository[]> {
+    this.assertConnected();
+    const suffix = refresh ? "?refresh=1" : "";
+    const res = await fetch(`${this.baseUrl}/v2/git/repositories${suffix}`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to list Git repositories: ${res.status}`);
+    const data = await res.json() as { repositories?: GitRepository[] };
+    return Array.isArray(data.repositories) ? data.repositories : [];
+  }
+
+  async listProjectSessions(): Promise<ProjectSession[]> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to list project sessions: ${res.status}`);
+    const data = await res.json() as { projectSessions?: ProjectSession[] };
+    return Array.isArray(data.projectSessions) ? data.projectSessions : [];
+  }
+
+  async createProjectSession(repositoryId: string, baseRef?: string): Promise<ProjectSession> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ repositoryId, ...(baseRef ? { baseRef } : {}) }),
+    });
+    const data = await res.json().catch(() => ({})) as { projectSession?: ProjectSession; error?: string };
+    if (!res.ok || !data.projectSession) throw new Error(data.error || `Failed to create project session: ${res.status}`);
+    return data.projectSession;
+  }
+
+  async stopProjectSession(projectSessionId: string): Promise<ProjectSession> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/stop`, {
+      method: "POST",
+      headers: this.authHeaders,
+    });
+    const data = await res.json().catch(() => ({})) as { projectSession?: ProjectSession; error?: string };
+    if (!res.ok || !data.projectSession) throw new Error(data.error || `Failed to stop project session: ${res.status}`);
+    return data.projectSession;
+  }
+
+  async sendProjectSessionTask(projectSessionId: string, title: string, description: string, model?: string, runner?: string, customCommand?: string, mode?: string, reasoningEffort?: "low" | "medium" | "high"): Promise<Task> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/tasks`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title, description,
+        ...(model ? { model } : {}),
+        ...(runner ? { runner } : {}),
+        ...(customCommand ? { customCommand } : {}),
+        ...(mode ? { mode } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      }),
+    });
+    const data = await res.json().catch(() => ({})) as any;
+    if (!res.ok) throw new Error(data.error || `Failed to create project task: ${res.status}`);
+    const now = Date.now();
+    return {
+      id: data.taskId, title, description, status: data.status,
+      runnerId: data.runnerId, model: data.model || model,
+      reasoningEffort: data.reasoningEffort || reasoningEffort,
+      mode: data.mode || mode || undefined, output: [], createdAt: now, updatedAt: now,
+      projectSessionId: data.projectSessionId || projectSessionId,
+    };
+  }
+
+  async listProjectSessionTasks(projectSessionId: string): Promise<Task[]> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/tasks`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to list project tasks: ${res.status}`);
+    const data = await res.json() as { tasks?: any[] };
+    return (data.tasks || []).map((task) => this.mapRemoteTask(task));
+  }
+
+  async getProjectSessionGitStatus(projectSessionId: string): Promise<{ branch: string; status: string }> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/git/status`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to read Git status: ${res.status}`);
+    return res.json();
+  }
+
+  async getProjectSessionDiff(projectSessionId: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/git/diff`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({})) as { diff?: string; error?: string };
+    if (!res.ok) throw new Error(data.error || `Failed to read Git diff: ${res.status}`);
+    return data.diff || "";
+  }
+
+  async commitProjectSession(projectSessionId: string, message: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/git/commit`, {
+      method: "POST", headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    const data = await res.json().catch(() => ({})) as { commitSha?: string; error?: string };
+    if (!res.ok) throw new Error(data.error || `Failed to commit changes: ${res.status}`);
+    return data.commitSha || "";
+  }
+
+  async pushProjectSessionReview(projectSessionId: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/git/push-review`, {
+      method: "POST", headers: this.authHeaders,
+    });
+    const data = await res.json().catch(() => ({})) as { reviewBranch?: string; error?: string };
+    if (!res.ok) throw new Error(data.error || `Failed to push review branch: ${res.status}`);
+    return data.reviewBranch || "";
+  }
+
+  async startProjectSessionPreview(projectSessionId: string, previewTarget = "web"): Promise<ProjectPreviewStatus> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/preview/start`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ previewTarget }),
+    });
+    const data = await res.json().catch(() => ({})) as ProjectPreviewStatus & { error?: string };
+    if (!res.ok) throw new Error(data.error || `Failed to start preview: ${res.status}`);
+    return data;
+  }
+
+  async getProjectSessionPreviewStatus(projectSessionId: string): Promise<ProjectPreviewStatus> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/preview/status`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to read preview status: ${res.status}`);
+    return res.json();
+  }
+
+  async stopProjectSessionPreview(projectSessionId: string): Promise<ProjectPreviewStatus> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/preview/stop`, { method: "POST", headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to stop preview: ${res.status}`);
+    return res.json();
+  }
+
+  async fetchProjectSessionPreview(projectSessionId: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/preview/stream`, { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`Failed to fetch preview: ${res.status}`);
+    return res.text();
+  }
+
+  async startValidationRun(projectSessionId: string, kind: ValidationRun["kind"]): Promise<ValidationRun> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/validation-runs`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind }),
+    });
+    const data = await res.json().catch(() => ({})) as { validationRun?: ValidationRun; error?: string };
+    if (!res.ok || !data.validationRun) throw new Error(data.error || `Failed to start ${kind}: ${res.status}`);
+    return data.validationRun;
+  }
+
+  async getValidationRun(projectSessionId: string, validationRunId: string): Promise<ValidationRun> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/v2/project-sessions/${encodeURIComponent(projectSessionId)}/validation-runs/${encodeURIComponent(validationRunId)}`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({})) as { validationRun?: ValidationRun; error?: string };
+    if (!res.ok || !data.validationRun) throw new Error(data.error || `Failed to read validation run: ${res.status}`);
+    return data.validationRun;
+  }
+
   async listProjects(refresh = false): Promise<RemoteProject[]> {
     this.assertConnected();
     const suffix = refresh ? "?refresh=1" : "";
@@ -371,6 +590,21 @@ export class QuicClient {
     const data = await res.json().catch(() => ({})) as { workDir?: string; error?: string };
     if (!res.ok) throw new Error(data.error || `Failed to select project: ${res.status}`);
     return data.workDir || path;
+  }
+
+  /**
+   * Send an authenticated request to the connected agent. This keeps feature
+   * screens from rebuilding relay URLs and, importantly, carries the relay
+   * credential when the active connection is using the HTTP relay.
+   */
+  async requestAgent(path: string, init: RequestInit = {}): Promise<Response> {
+    this.assertConnected();
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    const extraHeaders = (init.headers || {}) as Record<string, string>;
+    return fetch(`${this.baseUrl}${normalizedPath}`, {
+      ...init,
+      headers: { ...this.authHeaders, ...extraHeaders },
+    });
   }
 
   /** List all tasks from the desktop agent, falling back to cache on failure. */
@@ -409,6 +643,7 @@ export class QuicClient {
         resultText: t.resultText || undefined,
         costUsd: t.costUsd || undefined,
         turns: t.turns || undefined,
+        projectSessionId: t.projectSessionId || undefined,
       }));
       // Filter out tasks the user previously deleted
       const deletedIds = await getDeletedTaskIds();
@@ -453,6 +688,33 @@ export class QuicClient {
       resultText: t.resultText || undefined,
       costUsd: t.costUsd || undefined,
       turns: t.turns || undefined,
+      projectSessionId: t.projectSessionId || undefined,
+    };
+  }
+
+  private mapRemoteTask(t: any): Task {
+    return {
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      status: t.status,
+      runnerId: t.runnerId || undefined,
+      model: t.model || undefined,
+      reasoningEffort: t.reasoningEffort || undefined,
+      mode: t.mode || undefined,
+      output: typeof t.output === "string" && t.output
+        ? t.output.split("\n")
+        : Array.isArray(t.output) ? t.output : [],
+      createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+      updatedAt: t.finishedAt
+        ? new Date(t.finishedAt).getTime()
+        : t.startedAt ? new Date(t.startedAt).getTime()
+        : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+      deviceName: this.host ?? undefined,
+      resultText: t.resultText || undefined,
+      costUsd: t.costUsd || undefined,
+      turns: t.turns || undefined,
+      projectSessionId: t.projectSessionId || undefined,
     };
   }
 

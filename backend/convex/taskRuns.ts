@@ -2,7 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { validateSessionInternal } from "./auth";
 
-const runtime = v.union(v.literal("remote-agent"), v.literal("local-yaver"), v.literal("cloud-worker"), v.literal("queued"));
+const runtime = v.union(v.literal("remote-agent"), v.literal("local-yaver"), v.literal("cloud-runner"), v.literal("queued"));
 const status = v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed"), v.literal("stopped"));
 
 export const record = mutation({

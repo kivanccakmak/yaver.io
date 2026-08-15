@@ -18,10 +18,12 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { router } from "expo-router";
 import Markdown from "react-native-markdown-display";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
+import { useCloudStudio } from "../../src/context/CloudStudioContext";
 import { copyToClipboard } from "../../src/lib/safeClipboard";
 import { addSpeechListeners, isAndroidSpeech, isSpeechAvailable, startListening, stopListening, transcribeAudio } from "../../src/lib/speech";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -40,6 +42,8 @@ import { markTaskDeleted } from "../../src/lib/storage";
 import { cloneWorkspace, createLocalWorkspace, getCodingMode, listLocalWorkspaces, pushWorkspace, runLocalPrompt, type CodingMode, type GitProvider, type LocalWorkspace } from "../../src/lib/coding-runtime";
 
 // ── Constants ────────────────────────────────────────────────────────
+
+const isTV = (Platform as typeof Platform & { isTV?: boolean }).isTV === true;
 
 const STATUS_COLORS: Record<TaskStatus, string> = {
   queued: "#eab308",
@@ -314,6 +318,10 @@ export default function TasksScreen() {
   const c = useColors();
   const { token } = useAuth();
   const { connectionStatus, activeDevice, devices, userDisconnected, lastError, selectDevice, disconnect, isLoadingDevices, refreshDevices } = useDevice();
+  const { activeProjectSession } = useCloudStudio();
+  const legacyTvRunner = isTV
+    && activeDevice?.name.trim().toLowerCase().replace(/\.local$/, "") === "ubuntu-4gb-hel1-1"
+    && !activeDevice.cloudWorkspaceId;
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
 
@@ -361,6 +369,11 @@ export default function TasksScreen() {
   const [repoProvider, setRepoProvider] = useState<GitProvider>("github");
 
   useEffect(() => {
+    if (isTV) {
+      setCodingMode("remote-preferred");
+      setLocalWorkspace(undefined);
+      return;
+    }
     getCodingMode().then(setCodingMode);
     listLocalWorkspaces().then((items) => setLocalWorkspace(items[0]));
   }, []);
@@ -370,7 +383,7 @@ export default function TasksScreen() {
     // Keep the local preference in sync with account settings when available;
     // the API key itself is intentionally never sent to the backend.
     getUserSettings(token).then((settings) => {
-      if (settings.codingMode) setCodingMode(settings.codingMode);
+      if (!isTV && settings.codingMode) setCodingMode(settings.codingMode);
     }).catch(() => {});
   }, [token]);
 
@@ -486,9 +499,15 @@ export default function TasksScreen() {
 
   // Fetch tasks
   const fetchTasks = useCallback(async () => {
-    if (codingMode === "local-only" || (codingMode === "auto-fallback" && connectionStatus !== "connected")) return;
+    if (!isTV && (codingMode === "local-only" || (codingMode === "auto-fallback" && connectionStatus !== "connected"))) return;
+    if (isTV && (connectionStatus !== "connected" || (!activeProjectSession && !legacyTvRunner))) {
+      setTasks([]);
+      return;
+    }
     try {
-      const list = await quicClient.listTasks();
+      const list = isTV && !legacyTvRunner
+        ? await quicClient.listProjectSessionTasks(activeProjectSession!.projectSessionId)
+        : await quicClient.listTasks();
       setTasks(list);
       // Keep selected task in sync with latest data
       setSelectedTask((prev) => {
@@ -496,7 +515,7 @@ export default function TasksScreen() {
         return list.find((t) => t.id === prev.id) || prev;
       });
     } catch {}
-  }, [codingMode, connectionStatus]);
+  }, [codingMode, connectionStatus, activeProjectSession?.projectSessionId, legacyTvRunner]);
 
   const hasRunningTask = tasks.some(t => t.status === "running" || t.status === "queued");
   useEffect(() => {
@@ -578,8 +597,8 @@ export default function TasksScreen() {
     Keyboard.dismiss();
     setIsSubmitting(true);
     try {
-      const shouldUseLocal = codingMode === "local-only" ||
-        (codingMode === "auto-fallback" && !isEffectivelyConnected);
+      const shouldUseLocal = !isTV && (codingMode === "local-only" ||
+        (codingMode === "auto-fallback" && !isEffectivelyConnected));
       let task: Task;
       if (shouldUseLocal) {
         let workspace = localWorkspace;
@@ -593,7 +612,7 @@ export default function TasksScreen() {
         task = {
           id: `local-task-${now}`,
           title: newTaskText.trim(),
-          description: (Platform as any).isTV ? "Apple TV local coding task" : "Device-local coding task",
+          description: "Device-local coding task",
           status: "completed",
           output: [],
           resultText: result.text,
@@ -604,10 +623,13 @@ export default function TasksScreen() {
           ],
           createdAt: now,
           updatedAt: now,
-          deviceName: (Platform as any).isTV ? "This Apple TV" : "This device",
+          deviceName: "This device",
         };
         if (token) await recordTaskRun(token, { taskId: task.id, runtime: "local-yaver", status: "completed", runnerId: `local:${result.provider}`, model: result.model, gitProvider: workspace.provider === "github" || workspace.provider === "gitlab" ? workspace.provider : undefined, gitRef: workspace.branch });
       } else {
+        if (isTV && !activeProjectSession && !legacyTvRunner) {
+          throw new Error("Select or create a Project Session from Projects first.");
+        }
         // If a different target device was chosen, connect to it first so the
         // task runs there — the session then follows that device.
         const target = targetDeviceId ? devices.find((d) => d.id === targetDeviceId) : undefined;
@@ -617,15 +639,18 @@ export default function TasksScreen() {
         const effectiveMode = selectedRunner === "opencode"
           ? (selectedMode === "custom" ? (customMode.trim() || undefined) : (selectedMode || undefined))
           : undefined;
-        task = await quicClient.sendTask(
+        const taskArgs = [
           newTaskText.trim(), "",
           selectedRunner === "custom" ? undefined : (selectedModel || undefined),
           selectedRunner === "custom" ? "custom" : (selectedRunner || undefined),
           selectedRunner === "custom" ? customCommand.trim() || undefined : undefined,
           effectiveMode,
           selectedRunner === "codex" ? selectedReasoningEffort : undefined,
-        );
-        if (token) await recordTaskRun(token, { taskId: task.id, runtime: "remote-agent", status: "queued", runnerId: task.runnerId, model: task.model, reasoningEffort: task.reasoningEffort, deviceId: activeDevice?.id });
+        ] as const;
+        task = isTV && !legacyTvRunner
+          ? await quicClient.sendProjectSessionTask(activeProjectSession!.projectSessionId, ...taskArgs)
+          : await quicClient.sendTask(...taskArgs);
+        if (token) await recordTaskRun(token, { taskId: task.id, runtime: isTV ? "cloud-runner" : "remote-agent", status: "queued", runnerId: task.runnerId, model: task.model, reasoningEffort: task.reasoningEffort, deviceId: activeDevice?.id });
       }
       setNewTaskText("");
       // Add task to list immediately
@@ -821,7 +846,8 @@ export default function TasksScreen() {
     connectionStatus === "connected" ? quicState : connectionStatus;
   const banner = BANNER_CONFIG[effectiveState];
   const isEffectivelyConnected = effectiveState === "connected";
-  const isLocalMode = codingMode === "local-only" || (codingMode === "auto-fallback" && !isEffectivelyConnected);
+  const canStartTvTask = !!activeProjectSession || legacyTvRunner;
+  const isLocalMode = !isTV && (codingMode === "local-only" || (codingMode === "auto-fallback" && !isEffectivelyConnected));
   const modeLabel = connMode === "relay" ? " via Relay" : connMode === "direct" ? " Direct" : "";
   // Show the attempt counter while we're actively retrying (attempt > 0 and
   // not yet connected). Clamp to max so the display never exceeds N/15.
@@ -1007,7 +1033,7 @@ export default function TasksScreen() {
           <View style={{ width: "100%", flexDirection: "row", alignItems: "center" }}>
             <View style={[s.dot, { backgroundColor: banner.dot }]} />
             <Text style={[s.bannerText, { color: banner.text, flex: 1, minWidth: 0 }]} numberOfLines={1} ellipsizeMode="tail">
-              {isLocalMode ? ((Platform as any).isTV ? "Apple TV local" : "Device-local") : `${banner.label}${modeLabel}`}{activeDevice && !isLocalMode ? ` \u00b7 ${activeDevice.name}` : ""}
+              {isLocalMode ? "Device-local" : `${banner.label}${modeLabel}`}{activeDevice && !isLocalMode ? ` \u00b7 ${activeDevice.name}` : ""}
               {showReconnectProgress ? ` \u00b7 ${displayedAttempt}/${quicClient.maxReconnectAttempts}` : ""}
             </Text>
             {showReconnectProgress && (
@@ -1073,23 +1099,27 @@ export default function TasksScreen() {
         {(Platform as any).isTV && (
           <Pressable
             hasTVPreferredFocus
-            onPress={handleVoiceTask}
+            onPress={() => canStartTvTask ? setShowNewTask(true) : router.push("/projects")}
             style={({ focused }) => [
               s.tvNewTaskCard,
               { backgroundColor: isListening ? c.warn + "30" : c.accent + "26", borderColor: focused ? c.accent : c.accent + "55" },
               focused && s.tvNewTaskCardFocused,
             ]}
           >
-            <Text style={[s.tvNewTaskMic, { opacity: isListening ? 0.6 : 1 }]}>🎙️</Text>
+            <Text style={s.tvNewTaskMic}>⌨️</Text>
             <View style={{ flex: 1 }}>
               <Text style={[s.tvNewTaskTitle, { color: c.textPrimary }]}>
-                {isListening ? "Listening… speak now" : "Create new task"}
+                {activeProjectSession ? "Create new Cloud Studio task" : legacyTvRunner ? "Create new runner task" : "Select a Project Session"}
               </Text>
               <Text style={[s.tvNewTaskHint, { color: c.textSecondary }]}>
-                {isListening ? "Press again to finish — I'll transcribe it" : "Press to start a task with voice or text"}
+                {activeProjectSession
+                  ? `${activeProjectSession.repositoryName} · ${activeProjectSession.reviewBranch}`
+                  : legacyTvRunner
+                    ? `${activeDevice?.name} · selected project workspace`
+                  : "Choose a Git repository before starting work"}
               </Text>
             </View>
-            <Text style={[s.tvNewTaskCta, { color: c.accent }]}>{isListening ? "…" : "Start"}</Text>
+            <Text style={[s.tvNewTaskCta, { color: c.accent }]}>{canStartTvTask ? "Start" : "Projects"}</Text>
           </Pressable>
         )}
 
@@ -1156,25 +1186,25 @@ export default function TasksScreen() {
                 <Text style={[s.emptyIcon, { color: c.textMuted }]}>{"[ ]"}</Text>
                 <Text style={[s.emptyTitle, { color: c.textPrimary }]}>All Clear</Text>
                 <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>
-                  No tasks yet. Tap the + button to create your first task.
+                  {isTV ? legacyTvRunner ? "No tasks yet on this runner." : "No tasks yet in this Project Session." : "No tasks yet. Tap the + button to create your first task."}
                 </Text>
               </View>
             ) : isLoadingDevices ? (
               <View style={s.emptyList}>
                 <ActivityIndicator size="large" color={c.accent} />
                 <Text style={[s.emptySubtitle, { color: c.textSecondary, marginTop: 16 }]}>
-                  Looking for devices...
+                  {isTV ? "Looking for a Cloud Runner..." : "Looking for devices..."}
                 </Text>
               </View>
             ) : devices.length === 0 ? (
               <View style={s.emptyList}>
                 <View style={[s.discoverCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
                   <Text style={[s.discoverIcon, { color: c.textMuted }]}>{"\u2318"}</Text>
-                  <Text style={[s.emptyTitle, { color: c.textPrimary }]}>Set Up Your Dev Machine</Text>
+                  <Text style={[s.emptyTitle, { color: c.textPrimary }]}>{isTV ? "Cloud Runner unavailable" : "Set Up Your Dev Machine"}</Text>
                   <Text style={[s.emptySubtitle, { color: c.textSecondary, marginTop: 8 }]}>
-                    Install the Yaver agent on your computer to start sending tasks from your phone.
+                    {isTV ? "A ready Cloud Workspace will connect its assigned runner automatically." : "Install the Yaver agent on your computer to start sending tasks from your phone."}
                   </Text>
-                  <View style={s.discoverSteps}>
+                  {!isTV && <View style={s.discoverSteps}>
                     <View style={s.discoverStep}>
                       <View style={[s.discoverStepDot, { backgroundColor: c.accent }]}>
                         <Text style={s.discoverStepNum}>1</Text>
@@ -1193,12 +1223,12 @@ export default function TasksScreen() {
                         <Text style={[s.discoverStepDesc, { color: c.textMuted }]}>yaver auth</Text>
                       </View>
                     </View>
-                  </View>
+                  </View>}
                   <Pressable
                     style={[s.discoverBtn, { backgroundColor: c.accent }]}
                     onPress={() => refreshDevices()}
                   >
-                    <Text style={s.discoverBtnText}>Refresh Devices</Text>
+                    <Text style={s.discoverBtnText}>{isTV ? "Refresh Runners" : "Refresh Devices"}</Text>
                   </Pressable>
                 </View>
               </View>

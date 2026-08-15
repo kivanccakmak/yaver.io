@@ -181,6 +181,45 @@ export interface UsageSummary {
   totalSeconds: number;
 }
 
+export type CloudAccessStatus = "inactive" | "active" | "suspended" | "expired";
+export type CloudWorkspaceState = "provisioning" | "ready" | "paused" | "error" | "deleting";
+
+export interface CloudStudioStatus {
+  access: {
+    status: CloudAccessStatus;
+    maxCloudWorkspaces: number;
+    maxConcurrentTasks: number;
+    maxConcurrentPreviews: number;
+    allowedRunnerClasses: Array<"linux" | "macos">;
+  };
+  workspaces: Array<{
+    cloudWorkspaceId: string;
+    runnerDeviceId: string;
+    runnerClass: "linux" | "macos";
+    region: string;
+    state: CloudWorkspaceState;
+    lastReadyAt?: number;
+  }>;
+  gitConnections: Array<{
+    gitConnectionId: string;
+    provider: "github" | "gitlab";
+    externalAccountId: string;
+    displayName: string;
+    status: "pending" | "ready" | "revoked" | "error";
+  }>;
+}
+
+export async function getCloudStudioStatus(token: string): Promise<CloudStudioStatus> {
+  const response = await fetch(`${getConvexSiteUrl()}/cloud/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error ?? "Cloud Studio status is unavailable");
+  }
+  return response.json();
+}
+
 export async function getUsageSummary(token: string, since?: number): Promise<UsageSummary> {
   try {
     const params = since ? `?since=${since}` : "";
@@ -348,7 +387,7 @@ export async function saveUserSettings(token: string, settings: Partial<UserSett
   }).catch(() => {});
 }
 
-export type TaskRuntime = "remote-agent" | "local-yaver" | "cloud-worker" | "queued";
+export type TaskRuntime = "remote-agent" | "local-yaver" | "cloud-runner" | "queued";
 export async function recordTaskRun(token: string, run: { taskId: string; runtime: TaskRuntime; status: "queued" | "running" | "completed" | "failed" | "stopped"; runnerId?: string; model?: string; reasoningEffort?: string; deviceId?: string; gitProvider?: "github" | "gitlab"; gitRef?: string; commitSha?: string }): Promise<void> {
   await fetch(`${getConvexSiteUrl()}/task-runs`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify(run) }).catch(() => {});
 }

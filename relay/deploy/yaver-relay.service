@@ -3,6 +3,8 @@ Description=Yaver Relay Server — P2P tunnel for mobile-to-desktop connectivity
 Documentation=https://github.com/kivanccakmak/yaver.io
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=15min
+StartLimitBurst=5
 
 [Service]
 Type=notify
@@ -10,16 +12,21 @@ ExecStart=/usr/local/bin/yaver-relay serve --quic-port=4433 --http-port=8443
 NotifyAccess=main
 WatchdogSec=30s
 TimeoutStartSec=30s
-TimeoutStopSec=15s
+TimeoutStopSec=30s
 WorkingDirectory=/var/lib/yaver-relay
 StateDirectory=yaver-relay
+StateDirectoryMode=0700
 EnvironmentFile=-/etc/yaver-relay/relay.env
 Environment=RELAY_PASSWORD_FILE=/var/lib/yaver-relay/.relay-password
 ExecStartPre=/usr/local/libexec/yaver-relay-timecheck
-Restart=always
+Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
+RestartSteps=6
+RestartMaxDelaySec=5min
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+SendSIGKILL=true
 
 # Logging — all output goes to journald
 StandardOutput=journal
@@ -28,25 +35,40 @@ SyslogIdentifier=yaver-relay
 
 # Performance
 LimitNOFILE=65535
-TasksMax=1024
+TasksMax=512
 CPUAccounting=true
 CPUQuota=150%
 MemoryAccounting=true
 MemoryHigh=768M
 MemoryMax=1G
-MemorySwapMax=512M
+MemorySwapMax=256M
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=85%
 OOMPolicy=stop
-OOMScoreAdjust=-500
+OOMScoreAdjust=-250
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectClock=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
 RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RemoveIPC=true
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

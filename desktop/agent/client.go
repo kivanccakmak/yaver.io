@@ -247,12 +247,32 @@ func clientContinueTask(ctx context.Context, conn quic.Connection, taskID, input
 	return scanner.Err()
 }
 
+// relayPasswordTransport attaches relay authentication without sending the
+// shared password to the agent itself. The relay strips this header before
+// proxying, but use a cloned request so callers never observe a mutation.
+type relayPasswordTransport struct {
+	password string
+}
+
+func (t relayPasswordTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.password == "" || req.Header.Get("X-Relay-Password") != "" {
+		return http.DefaultTransport.RoundTrip(req)
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Header = req.Header.Clone()
+	cloned.Header.Set("X-Relay-Password", t.password)
+	return http.DefaultTransport.RoundTrip(cloned)
+}
+
 // RunClientHTTP connects to a remote Yaver agent over HTTP (via relay or direct)
 // and provides the same interactive terminal as RunClient.
-func RunClientHTTP(ctx context.Context, baseURL string, token string) error {
+func RunClientHTTP(ctx context.Context, baseURL string, token string, relayPassword string) error {
 	log.Printf("Connecting via HTTP to %s...", baseURL)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: relayPasswordTransport{password: relayPassword},
+	}
 	authHeader := "Bearer " + token
 
 	// Health check to verify connectivity
@@ -373,7 +393,8 @@ func httpCreateTask(ctx context.Context, client *http.Client, baseURL, authHeade
 	fmt.Printf("[task %s] created\n", result.TaskID)
 
 	// Stream output via SSE
-	sseClient := &http.Client{Timeout: 10 * time.Minute}
+	sseClient := *client
+	sseClient.Timeout = 10 * time.Minute
 	sseReq, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/tasks/"+result.TaskID+"/output", nil)
 	sseReq.Header.Set("Authorization", authHeader)
 
@@ -478,7 +499,8 @@ func httpContinueTask(ctx context.Context, client *http.Client, baseURL, authHea
 	fmt.Printf("[task %s] resumed\n", taskID)
 
 	// Stream output
-	sseClient := &http.Client{Timeout: 10 * time.Minute}
+	sseClient := *client
+	sseClient.Timeout = 10 * time.Minute
 	sseReq, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/tasks/"+taskID+"/output", nil)
 	sseReq.Header.Set("Authorization", authHeader)
 

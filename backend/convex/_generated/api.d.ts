@@ -13,6 +13,7 @@ import type * as aiModels from "../aiModels.js";
 import type * as aiRunners from "../aiRunners.js";
 import type * as auth from "../auth.js";
 import type * as authLogs from "../authLogs.js";
+import type * as cloudStudio from "../cloudStudio.js";
 import type * as developerLogs from "../developerLogs.js";
 import type * as deviceCode from "../deviceCode.js";
 import type * as deviceEvents from "../deviceEvents.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   aiRunners: typeof aiRunners;
   auth: typeof auth;
   authLogs: typeof authLogs;
+  cloudStudio: typeof cloudStudio;
   developerLogs: typeof developerLogs;
   deviceCode: typeof deviceCode;
   deviceEvents: typeof deviceEvents;

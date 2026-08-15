@@ -19,6 +19,7 @@ import { beaconListener } from "../lib/beacon";
 import { CONVEX_SITE_URL } from "../lib/constants";
 
 export const CUSTOM_RELAYS_KEY = "@yaver/custom_relays";
+const IS_TV = Boolean((Platform as typeof Platform & { isTV?: boolean }).isTV);
 const PRIMARY_DEVICE_NAME = "ubuntu-4gb-hel1-1";
 
 const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
@@ -29,6 +30,10 @@ const BUILD_NUMBER =
 
 // Heartbeat is sent every 2 minutes; consider "recently active" if within 5 min
 const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+
+function normalizedDeviceName(name: string): string {
+  return name.trim().toLowerCase().replace(/\.local$/, "");
+}
 
 export interface RunnerInfo {
   taskId: string;
@@ -48,6 +53,14 @@ export interface Device {
   lastSeen: number;
   os: string;
   runners: RunnerInfo[];
+  deviceKind: "private-agent" | "cloud-runner";
+  trust: "user-managed" | "yaver-managed";
+  cloudWorkspaceId?: string;
+  runnerClass?: "linux" | "macos";
+  region?: string;
+  agentVersion?: string;
+  protocolVersion?: number;
+  capabilities?: Record<string, boolean>;
   /** true when device is discovered via LAN beacon (same network) */
   local?: boolean;
 }
@@ -120,38 +133,51 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
       // Apply forceRelay setting
       if (settings.forceRelay !== undefined) {
-        quicClient.setForceRelay(Platform.OS === "web" ? true : settings.forceRelay);
+        quicClient.setForceRelay(IS_TV || Platform.OS === "web" ? true : settings.forceRelay);
       }
 
       if (devicesRes.ok) {
         const data = await devicesRes.json();
         const raw = data.devices || data || [];
         appLog("info", `Found ${raw.length} device(s)`);
-        const mapped: Device[] = raw.map((d: any) => ({
-          id: d.deviceId || d.id,
-          name: d.name,
-          host: d.quicHost || d.host,
-          port: d.quicPort || d.port,
-          online: (() => {
-            const flag = d.isOnline ?? d.online ?? false;
-            const lastSeen = d.lastHeartbeat || d.lastSeen || 0;
-            return flag && lastSeen > 0 && (Date.now() - lastSeen) < HEARTBEAT_STALE_MS;
-          })(),
-          lastSeen: d.lastHeartbeat || d.lastSeen || 0,
-          os: d.platform || d.os || "",
-          runners: d.runners ?? [],
-        }));
-        // Deduplicate by name — keep the entry with the latest lastSeen
+        const mapped: Device[] = raw.map((d: any) => {
+          const name = d.name || "Unnamed runner";
+          // Production records should carry typed Cloud Runner metadata. Keep
+          // the established primary Ubuntu box usable while older registry
+          // records are migrated so tvOS does not filter out every runner.
+          const isLegacyPrimary = !d.deviceKind && normalizedDeviceName(name) === PRIMARY_DEVICE_NAME;
+          return {
+            id: d.deviceId || d.id,
+            name,
+            host: d.quicHost || d.host,
+            port: d.quicPort || d.port,
+            online: (() => {
+              const flag = d.isOnline ?? d.online ?? false;
+              const lastSeen = d.lastHeartbeat || d.lastSeen || 0;
+              return flag && lastSeen > 0 && (Date.now() - lastSeen) < HEARTBEAT_STALE_MS;
+            })(),
+            lastSeen: d.lastHeartbeat || d.lastSeen || 0,
+            os: d.platform || d.os || "",
+            runners: d.runners ?? [],
+            deviceKind: d.deviceKind ?? (isLegacyPrimary ? "cloud-runner" : "private-agent"),
+            trust: d.trust ?? (isLegacyPrimary ? "yaver-managed" : "user-managed"),
+            cloudWorkspaceId: d.cloudWorkspaceId,
+            runnerClass: d.runnerClass ?? (isLegacyPrimary ? "linux" : undefined),
+            region: d.region,
+            agentVersion: d.agentVersion,
+            protocolVersion: d.protocolVersion,
+            capabilities: d.capabilities,
+          };
+        });
+        // A runner ID is the stable identity; display names are not unique.
         const seen = new Map<string, Device>();
-        for (const d of mapped) {
-          const existing = seen.get(d.name);
-          if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.name, d);
+        for (const d of IS_TV ? mapped.filter((device) => device.deviceKind === "cloud-runner") : mapped) {
+          const existing = seen.get(d.id);
+          if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.id, d);
         }
         const ordered = [...seen.values()].sort((a, b) => {
-          const aPrimary = a.name === PRIMARY_DEVICE_NAME ? 0 : 1;
-          const bPrimary = b.name === PRIMARY_DEVICE_NAME ? 0 : 1;
-          if (aPrimary !== bPrimary) return aPrimary - bPrimary;
           if (a.online !== b.online) return a.online ? -1 : 1;
+          if (a.deviceKind !== b.deviceKind) return a.deviceKind === "cloud-runner" ? -1 : 1;
           return b.lastSeen - a.lastSeen;
         });
         setDevices(ordered);
@@ -367,7 +393,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     settingsLoaded.current = true;
     getUserSettings(token).then((s) => {
       if (s.forceRelay !== undefined) {
-        quicClient.setForceRelay(Platform.OS === "web" ? true : s.forceRelay);
+        quicClient.setForceRelay(IS_TV || Platform.OS === "web" ? true : s.forceRelay);
         appLog("info", `[settings] forceRelay=${s.forceRelay}`);
       }
     });
@@ -375,6 +401,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // Start/stop LAN beacon listener based on auth state
   useEffect(() => {
+    if (IS_TV) return;
     if (user?.id) {
       beaconListener.setUserId(user.id).then(() => {
         beaconListener.start();
@@ -387,6 +414,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // Feed known device IDs to beacon listener for matching
   useEffect(() => {
+    if (IS_TV) return;
     if (devices.length > 0) {
       beaconListener.setKnownDevices(devices.map((d) => d.id));
     }
@@ -394,6 +422,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // When beacon discovers/loses a device, update device list
   useEffect(() => {
+    if (IS_TV) return;
     const unsubDiscover = beaconListener.onDiscovered((discovered) => {
       setDevices((prev) =>
         prev.map((d) => {
@@ -436,23 +465,25 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token, refreshDevices]);
 
-  // Auto-connect: single online device → connect immediately (unless user disconnected)
+  // Prefer the account's primary Ubuntu runner when it is online. tvOS still
+  // connects only to managed Cloud Runners; other clients retain the same
+  // primary-device behavior and use a sole online runner as their fallback.
   // Wait for relaysReady so the QUIC client has relay servers before attempting connection
   useEffect(() => {
     if (!token || !relaysReady || activeDevice || connectionStatus === "connecting" || userDisconnected) return;
 
-    const recentDevices = devices.filter((d) => d.online);
-    const primary = recentDevices.find((device) => device.name === PRIMARY_DEVICE_NAME);
-    const target = primary || (recentDevices.length === 1 ? recentDevices[0] : null);
+    const recentDevices = devices.filter((d) => d.online && (!IS_TV || d.deviceKind === "cloud-runner"));
+    const primary = recentDevices.find((device) => normalizedDeviceName(device.name) === PRIMARY_DEVICE_NAME);
+    const target = primary ?? (recentDevices.length === 1 ? recentDevices[0] : null);
 
     if (target) {
-      console.log("[DeviceContext] Auto-connecting to preferred device:", target.name);
-      sendTelemetry(token, "auto-connect", `Preferred device: ${target.name}`, JSON.stringify({
+      console.log("[DeviceContext] Auto-connecting to preferred runner:", target.name);
+      sendTelemetry(token, "auto-connect", `Preferred runner: ${target.name}`, JSON.stringify({
         relayCount: quicClient.relayServerCount, deviceId: target.id.slice(0, 8),
       }));
       selectDevice(target);
     }
-    // Multiple devices without the primary → don't auto-connect, let UI prompt user.
+    // Multiple available runners without the primary require explicit choice.
   }, [devices, token, relaysReady, activeDevice, connectionStatus, userDisconnected, selectDevice]);
 
   // Trigger immediate reconnection on network change (WiFi↔cellular roaming)

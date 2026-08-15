@@ -11,11 +11,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Alert } from "react-native";
+import { router } from "expo-router";
 import { copyToClipboard } from "../../src/lib/safeClipboard";
 import { Device, RunnerInfo, useDevice } from "../../src/context/DeviceContext";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { quicClient } from "../../src/lib/quic";
+
+const IS_TV = Boolean((Platform as typeof Platform & { isTV?: boolean }).isTV);
 
 function ConnectionBadge({ status }: { status: string }) {
   const c = useColors();
@@ -32,27 +35,44 @@ function ConnectionBadge({ status }: { status: string }) {
   );
 }
 
-function buildDeviceUrl(device: Device, token: string | null): string | null {
-  const relays = quicClient.getRelayServers();
-  if (relays.length > 0) return `${relays[0].httpUrl}/d/${device.id}`;
-  return `http://${device.host}:${device.port}`;
+type DeviceRequestTarget = {
+  baseUrl: string;
+  headers: Record<string, string>;
+};
+
+function buildDeviceRequestTargets(device: Device, token: string | null): DeviceRequestTarget[] {
+  const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const relayTargets = quicClient.getRelayServers().map((relay) => ({
+    baseUrl: `${relay.httpUrl}/d/${device.id}`,
+    headers: {
+      ...authHeaders,
+      ...(relay.password ? { "X-Relay-Password": relay.password } : {}),
+    },
+  }));
+  return [
+    ...relayTargets,
+    { baseUrl: `http://${device.host}:${device.port}`, headers: authHeaders },
+  ];
 }
 
 function DeviceCard({
   device,
   isActive,
+  isOperationallyConnected,
   onSelect,
   token,
 }: {
   device: Device;
   isActive: boolean;
+  isOperationallyConnected: boolean;
   onSelect: () => void;
   token: string | null;
 }) {
   const c = useColors();
   const [pingState, setPingState] = useState<{ pinging: boolean; rttMs?: number; ok?: boolean }>({ pinging: false });
   const [killing, setKilling] = useState<string | null>(null);
-  const isOnline = device.online;
+  // A successful live transport is stronger evidence than delayed inventory presence.
+  const isOnline = device.online || isOperationallyConnected;
   const runners = device.runners || [];
   const activeRunners = runners.filter((r) => r.status === "running");
 
@@ -68,18 +88,14 @@ function DeviceCard({
 
   const handlePing = async () => {
     setPingState({ pinging: true });
-    const relays = quicClient.getRelayServers();
-    const urls = [
-      ...relays.map((r) => `${r.httpUrl}/d/${device.id}`),
-      `http://${device.host}:${device.port}`,
-    ];
-    for (const url of urls) {
+    const targets = buildDeviceRequestTargets(device, token);
+    for (const target of targets) {
       const start = Date.now();
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(`${url}/health`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        const res = await fetch(`${target.baseUrl}/health`, {
+          headers: target.headers,
           signal: controller.signal,
         });
         clearTimeout(timeout);
@@ -95,13 +111,13 @@ function DeviceCard({
   };
 
   const killTask = async (taskId: string) => {
-    const baseUrl = buildDeviceUrl(device, token);
-    if (!baseUrl || !token) return;
+    const target = buildDeviceRequestTargets(device, token)[0];
+    if (!target || !token) return;
     setKilling(taskId);
     try {
-      await fetch(`${baseUrl}/tasks/${taskId}/stop`, {
+      await fetch(`${target.baseUrl}/tasks/${taskId}/stop`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: target.headers,
       });
     } catch {}
     setKilling(null);
@@ -118,12 +134,12 @@ function DeviceCard({
       { text: "Cancel", style: "cancel" },
       {
         text: "Shutdown", style: "destructive", onPress: async () => {
-          const baseUrl = buildDeviceUrl(device, token);
-          if (!baseUrl || !token) return;
+          const target = buildDeviceRequestTargets(device, token)[0];
+          if (!target || !token) return;
           try {
-            await fetch(`${baseUrl}/agent/shutdown`, {
+            await fetch(`${target.baseUrl}/agent/shutdown`, {
               method: "POST",
-              headers: { Authorization: `Bearer ${token}` },
+              headers: target.headers,
             });
           } catch {}
         },
@@ -150,7 +166,9 @@ function DeviceCard({
         <View style={styles.cardInfo}>
           <Text style={[styles.deviceName, { color: c.textPrimary }]}>{device.name}</Text>
           <Text style={[styles.deviceMeta, { color: c.textMuted }]}>
-            {device.os} &middot; {device.host}:{device.port}
+            {IS_TV
+              ? `${device.runnerClass || device.os} Cloud Runner${device.region ? ` · ${device.region}` : ""}`
+              : `${device.os} · ${device.host}:${device.port}`}
           </Text>
         </View>
         <View style={styles.cardRight}>
@@ -191,7 +209,7 @@ function DeviceCard({
                       {r.title}
                     </Text>
                     <Text style={[styles.runnerMeta, { color: c.textMuted }]}>
-                      {r.runnerId}{r.model ? ` / ${r.model}` : ""} &middot; PID {r.pid}
+                      {r.runnerId}{r.model ? ` / ${r.model}` : ""}{IS_TV ? "" : ` · PID ${r.pid}`}
                     </Text>
                   </View>
                   <Pressable
@@ -218,11 +236,11 @@ function DeviceCard({
           {activeRunners.length === 0 && (
             <Text style={[styles.runnerMeta, { color: c.textMuted, paddingVertical: 4 }]}>No active runners</Text>
           )}
-          <View style={[styles.menuActions, { borderTopColor: c.border }]}>
+          {!IS_TV && <View style={[styles.menuActions, { borderTopColor: c.border }]}>
             <Pressable style={[styles.menuActionBtn, { backgroundColor: c.error + "12" }]} onPress={shutdownAgent}>
               <Text style={[styles.menuActionText, { color: c.error }]}>Shutdown Agent</Text>
             </Pressable>
-          </View>
+          </View>}
         </View>
       )}
 
@@ -374,6 +392,23 @@ function SetupInstructions() {
   );
 }
 
+function CloudRunnerEmptyState() {
+  const c = useColors();
+  return (
+    <View style={styles.center}>
+      <Text style={[styles.emptyTitle, { color: c.textPrimary }]}>No Cloud Runner available</Text>
+      <Text style={[styles.emptySubtitle, { color: c.textSecondary }]}>A ready Cloud Workspace will appear here automatically.</Text>
+      <Pressable
+        hasTVPreferredFocus
+        onPress={() => router.navigate("/(tabs)/home")}
+        style={({ focused }) => [styles.homeButton, { backgroundColor: c.accent }, focused && styles.tvFocused]}
+      >
+        <Text style={styles.homeButtonText}>Back to Home</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export default function DevicesScreen() {
   const c = useColors();
   const { token } = useAuth();
@@ -413,11 +448,12 @@ export default function DevicesScreen() {
             <View style={styles.center}>
               <ActivityIndicator size="large" color={c.accent} />
             </View>
-          ) : <SetupInstructions />}
+          ) : IS_TV ? <CloudRunnerEmptyState /> : <SetupInstructions />}
           renderItem={({ item }) => (
             <DeviceCard
               device={item}
               isActive={activeDevice?.id === item.id}
+              isOperationallyConnected={activeDevice?.id === item.id && connectionStatus === "connected"}
               onSelect={() => selectDevice(item)}
               token={token}
             />
@@ -468,6 +504,9 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 20,
   },
+  homeButton: { marginTop: 24, borderRadius: 12, paddingHorizontal: 24, paddingVertical: 14 },
+  homeButtonText: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  tvFocused: { transform: [{ scale: 1.06 }], opacity: 0.9 },
   setupContainer: {
     padding: 8,
     paddingTop: 24,

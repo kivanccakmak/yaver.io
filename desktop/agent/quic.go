@@ -191,10 +191,11 @@ func (s *QUICServer) handleTaskCreate(stream quic.Stream, msg IncomingMessage) {
 		return
 	}
 
+	info, _ := s.taskManager.GetTaskInfo(task.ID, 0)
 	s.sendMessage(stream, OutgoingMessage{
 		Type:   "task_created",
 		TaskID: task.ID,
-		Status: string(task.Status),
+		Status: string(info.Status),
 	})
 
 	// Stream output in the background if the task has an output channel.
@@ -247,10 +248,11 @@ func (s *QUICServer) streamTaskOutput(stream quic.Stream, task *Task) {
 		})
 	}
 	// Send final message.
+	info, _ := s.taskManager.GetTaskInfo(task.ID, 0)
 	s.sendMessage(stream, OutgoingMessage{
 		Type:   "task_output",
 		TaskID: task.ID,
-		Text:   task.Output,
+		Text:   info.Output,
 		Final:  true,
 	})
 }

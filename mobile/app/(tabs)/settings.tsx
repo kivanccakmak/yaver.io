@@ -128,7 +128,7 @@ export default function SettingsScreen() {
   const [vibingTransport, setVibingTransport] = useState<"auto" | "sse" | "webrtc">("auto");
 
   useEffect(() => {
-    loadAiProviders().then(setAiCfg).catch(() => setAiCfg(null));
+    if (!isTV) loadAiProviders().then(setAiCfg).catch(() => setAiCfg(null));
   }, []);
 
   useEffect(() => {
@@ -147,9 +147,9 @@ export default function SettingsScreen() {
   useEffect(() => {
     if (!token) return;
     getUserSettings(token).then(async (settings) => {
-      if (settings.codingMode) { setCodingModeState(settings.codingMode); await setCodingMode(settings.codingMode); }
-      if (settings.localProvider) { setLocalProviderState(settings.localProvider); await setLocalProvider(settings.localProvider); }
-      if (settings.localModel) { setLocalModelState(settings.localModel); await setLocalModel(settings.localModel); }
+      if (!isTV && settings.codingMode) { setCodingModeState(settings.codingMode); await setCodingMode(settings.codingMode); }
+      if (!isTV && settings.localProvider) { setLocalProviderState(settings.localProvider); await setLocalProvider(settings.localProvider); }
+      if (!isTV && settings.localModel) { setLocalModelState(settings.localModel); await setLocalModel(settings.localModel); }
     }).catch(() => {});
   }, [token]);
 
@@ -161,6 +161,11 @@ export default function SettingsScreen() {
 
   // Load custom relay servers and sync preference from AsyncStorage
   useEffect(() => {
+    if (isTV) {
+      setCodingModeState("remote-preferred");
+      setLocalSecretsAvailable(false);
+      return;
+    }
     Promise.all([getCodingMode(), getLocalProvider(), getLocalModel(), isPersistentSecureStorageAvailable()]).then(async ([mode, provider, model, secureAvailable]) => {
       const [deepseekKey, github, gitlab] = secureAvailable
         ? await Promise.all([getLocalApiKey("deepseek"), getGitToken("github"), getGitToken("gitlab")])
@@ -551,7 +556,7 @@ export default function SettingsScreen() {
         </View>
 
         {/* Developer Profile — only show if survey not completed */}
-        {!surveyCompleted && (
+        {!isTV && !surveyCompleted && (
           <View style={styles.section}>
             <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Developer Profile</Text>
             <Pressable
@@ -572,14 +577,16 @@ export default function SettingsScreen() {
 
         {/* Connected device */}
         <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Connected Device</Text>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>{isTV ? "Connected Cloud Runner" : "Connected Device"}</Text>
           {activeDevice ? (
             <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
               <View style={styles.deviceRow}>
                 <View style={styles.deviceInfo}>
                   <Text style={[styles.deviceName, { color: c.textPrimary }]}>{activeDevice.name}</Text>
                   <Text style={[styles.deviceMeta, { color: c.textMuted }]}>
-                    {activeDevice.os} &middot; {activeDevice.host}:{activeDevice.port}
+                    {isTV
+                      ? `${activeDevice.runnerClass || activeDevice.os}${activeDevice.region ? ` · ${activeDevice.region}` : ""}`
+                      : `${activeDevice.os} · ${activeDevice.host}:${activeDevice.port}`}
                   </Text>
                 </View>
                 <View
@@ -640,7 +647,7 @@ export default function SettingsScreen() {
                     {isPinging ? "Pinging..." : pingRtt !== null ? `${pingRtt}ms` : "Ping"}
                   </Text>
                 </Pressable>
-                <Pressable
+                {!isTV && <Pressable
                   style={({ pressed }) => [
                     { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: c.errorBg },
                     pressed && { opacity: 0.7 },
@@ -651,7 +658,7 @@ export default function SettingsScreen() {
                   <Text style={{ fontSize: 13, color: c.error }}>
                     {isShuttingDown ? "Stopping..." : "Shutdown"}
                   </Text>
-                </Pressable>
+                </Pressable>}
               </View>
               {/* Runner status */}
               {agentStatus && (
@@ -682,14 +689,14 @@ export default function SettingsScreen() {
           ) : (
             <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
               <Text style={[styles.noDeviceText, { color: c.textMuted }]}>
-                No device connected. Go to the Devices tab to connect.
+                {isTV ? "No Cloud Runner connected. A ready Cloud Workspace will appear in Runners." : "No device connected. Go to the Devices tab to connect."}
               </Text>
             </View>
           )}
         </View>
 
         {/* Device Metrics */}
-        {activeDevice && connectionStatus === "connected" && (
+        {!isTV && activeDevice && connectionStatus === "connected" && (
           <View style={styles.section}>
             <Pressable onPress={() => setShowMetrics(!showMetrics)}>
               <Text style={[styles.sectionLabel, { color: c.textMuted }]}>
@@ -828,8 +835,8 @@ export default function SettingsScreen() {
           </View>
         )}
 
-        {/* Coding runtime */}
-        <View style={styles.section}>
+        {/* Phone-only local runtime. tvOS is a remote Cloud Studio client. */}
+        {!isTV && <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Coding Runtime</Text>
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <Text style={[styles.runnerDesc, { color: c.textMuted, marginBottom: 10 }]}>Choose how Tasks behaves when a dev machine is unavailable. Local mode supports files, search, diffs, Git, and LLM chat; builds and shell work stay remote or in CI.</Text>
@@ -879,7 +886,7 @@ export default function SettingsScreen() {
             </View>
             <Text style={[styles.runnerDesc, { color: c.textMuted, marginTop: 8 }]}>Tokens stay in this device's keychain and are never synced to Yaver servers. Apple TV uses device-local credentials only; AirPlay does not transfer a credential. Use an explicit Sync button to provision one to the currently connected Ubuntu/remote agent; values are write-only from the mobile API.</Text>
           </View>
-        </View>
+        </View>}
 
         {/* AI Runner */}
         <View style={styles.section}>
@@ -954,8 +961,8 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* AI & Voice */}
-        <View style={styles.section}>
+        {/* Local AI/provider credentials never appear on tvOS. */}
+        {!isTV && <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>AI & Voice</Text>
           {aiCfg && (
             <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -1064,7 +1071,7 @@ export default function SettingsScreen() {
               </Pressable>
             </View>
           )}
-        </View>
+        </View>}
 
         {/* Vibing */}
         <View style={styles.section}>
@@ -1072,7 +1079,7 @@ export default function SettingsScreen() {
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Streaming transport</Text>
             <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2, marginBottom: 10 }}>
-              Auto = SSE by default, upgrades to WebRTC (low latency) on Relay Pro.
+              Frames are the compatible default. WebRTC is used only when the connected runner and this client support it.
             </Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {(["auto", "sse", "webrtc"] as const).map((id) => {
@@ -1083,7 +1090,7 @@ export default function SettingsScreen() {
                     onPress={() => saveVibingTransport(id)}
                     style={({ focused }) => [styles.runnerOption, { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "20" : c.bg }, focused && { transform: [{ scale: 1.05 }] }]}
                   >
-                    <Text style={{ color: active ? c.accent : c.textMuted, fontSize: 13, textTransform: "capitalize" }}>{id}</Text>
+                    <Text style={{ color: active ? c.accent : c.textMuted, fontSize: 13, textTransform: "capitalize" }}>{id === "sse" ? "frames" : id}</Text>
                   </Pressable>
                 );
               })}

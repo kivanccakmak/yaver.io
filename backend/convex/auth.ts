@@ -305,7 +305,7 @@ export const updateProfile = mutation({
 });
 
 /**
- * Delete a user account and all associated data (sessions, devices).
+ * Delete a user account and all associated Cloud Studio data.
  * Requires a valid session token.
  */
 export const deleteAccount = mutation({
@@ -336,6 +336,39 @@ export const deleteAccount = mutation({
       .collect();
     for (const device of devices) {
       await ctx.db.delete(device._id);
+    }
+
+    // Delete workload credentials before their workspace scopes.
+    const workloadCredentials = await ctx.db
+      .query("workloadCredentials")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    for (const credential of workloadCredentials) {
+      await ctx.db.delete(credential._id);
+    }
+
+    const gitConnections = await ctx.db
+      .query("gitConnections")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    for (const connection of gitConnections) {
+      await ctx.db.delete(connection._id);
+    }
+
+    const cloudWorkspaces = await ctx.db
+      .query("cloudWorkspaces")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    for (const workspace of cloudWorkspaces) {
+      await ctx.db.delete(workspace._id);
+    }
+
+    const cloudAccess = await ctx.db
+      .query("cloudAccess")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    for (const access of cloudAccess) {
+      await ctx.db.delete(access._id);
     }
 
     // Delete the user

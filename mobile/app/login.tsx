@@ -9,8 +9,6 @@ import TvPairing from "../src/components/TvPairing";
 // build; require them defensively so login still works on tvOS (pairing/email).
 let AppleAuthentication: any = null;
 let WebBrowser: any = null;
-try { AppleAuthentication = require("expo-apple-authentication"); } catch {}
-try { WebBrowser = require("expo-web-browser"); } catch {}
 import {
   ActivityIndicator,
   Alert,
@@ -34,10 +32,15 @@ import {
   loginWithEmail,
 } from "../src/lib/auth";
 
+if ((Platform as any).isTV !== true) {
+  try { AppleAuthentication = require("expo-apple-authentication"); } catch {}
+  try { WebBrowser = require("expo-web-browser"); } catch {}
+}
+
 try { WebBrowser?.maybeCompleteAuthSession?.(); } catch {}
 
 export default function LoginScreen() {
-  const { login, surveyCompleted } = useAuth();
+  const { login, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const { isDark } = useTheme();
   const c = useColors();
   const isTV = (Platform as any).isTV === true;
@@ -50,6 +53,13 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [emailError, setEmailError] = useState("");
+
+  // Expo Router may restore /login on cold launch before AuthContext finishes
+  // hydrating. Once the stored session validates, leave the auth flow instead
+  // of stranding an already-connected TV on the pairing screen.
+  useEffect(() => {
+    if (!isAuthLoading && isAuthenticated) router.replace("/");
+  }, [isAuthLoading, isAuthenticated]);
 
   useEffect(() => {
     const subscription = Linking.addEventListener("url", async (event) => {

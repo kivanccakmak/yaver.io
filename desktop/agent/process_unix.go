@@ -33,6 +33,15 @@ func terminateProcess(proc *os.Process) error {
 	return proc.Signal(syscall.SIGTERM)
 }
 
+// terminateProcessTree gracefully stops a detached process and every child in
+// its session. Project Session commands call detachProcess before Start.
+func terminateProcessTree(proc *os.Process) error {
+	if proc == nil {
+		return nil
+	}
+	return syscall.Kill(-proc.Pid, syscall.SIGTERM)
+}
+
 // killAllClaude kills all running `claude` processes to avoid session conflicts.
 func killAllClaude() {
 	out, err := osexec.Command("pgrep", "-x", "claude").CombinedOutput()

@@ -1,9 +1,12 @@
 import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // expo-secure-store is native-only. Expo web can still use the settings
 // screens, so keep the same async API with a browser-local fallback.
 const memoryFallback: Record<string, string> = {};
+const isTV = Boolean((Platform as typeof Platform & { isTV?: boolean }).isTV);
+const tvSessionKey = (key: string) => `@yaver/tvos_session/${key}`;
 
 function webStorage(): Storage | null {
   if (Platform.OS !== "web") return null;
@@ -19,7 +22,17 @@ export async function getItem(key: string): Promise<string | null> {
   if (storage) {
     try { return storage.getItem(key); } catch { return memoryFallback[key] ?? null; }
   }
-  try { return await SecureStore.getItemAsync(key); } catch { return memoryFallback[key] ?? null; }
+  try {
+    const secureValue = await SecureStore.getItemAsync(key);
+    if (secureValue !== null) return secureValue;
+  } catch { /* use the session fallback below */ }
+  if (isTV) {
+    try {
+      const persisted = await AsyncStorage.getItem(tvSessionKey(key));
+      if (persisted !== null) return persisted;
+    } catch { /* use memory below */ }
+  }
+  return memoryFallback[key] ?? null;
 }
 
 export async function setItem(key: string, value: string): Promise<void> {
@@ -29,7 +42,14 @@ export async function setItem(key: string, value: string): Promise<void> {
     try { storage.setItem(key, value); } catch { /* memory fallback */ }
     return;
   }
-  try { await SecureStore.setItemAsync(key, value); } catch { /* memory fallback */ }
+  try { await SecureStore.setItemAsync(key, value); } catch { /* fallback below */ }
+  // Expo SecureStore is not available in every tvOS build. Session tokens and
+  // cached user identity still need to survive an app restart, so keep this
+  // best-effort API in the application sandbox. getSecret/setSecret below do
+  // not use this path and continue to require real secure storage.
+  if (isTV) {
+    try { await AsyncStorage.setItem(tvSessionKey(key), value); } catch { /* memory fallback */ }
+  }
 }
 
 export async function deleteItem(key: string): Promise<void> {
@@ -40,6 +60,9 @@ export async function deleteItem(key: string): Promise<void> {
     return;
   }
   try { await SecureStore.deleteItemAsync(key); } catch { /* best effort */ }
+  if (isTV) {
+    try { await AsyncStorage.removeItem(tvSessionKey(key)); } catch { /* best effort */ }
+  }
 }
 
 /**

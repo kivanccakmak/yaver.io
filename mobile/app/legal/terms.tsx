@@ -73,7 +73,7 @@ export default function TermsOfServiceScreen() {
       content: [
         '8.1 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT.',
         "8.2 We do not warrant that the Service will be uninterrupted, error-free, or secure. We do not guarantee the accuracy or reliability of any AI-generated output.",
-        "8.3 If the Service fails to conform to any applicable warranty, you may notify Apple or Google, who may refund the purchase price (if any). To the extent permitted by law, Apple and Google have no other warranty obligation with respect to the Service.",
+        "8.3 If the Service fails to conform to any applicable warranty, you may notify Apple or Google, who may provide any remedy required by applicable platform terms or law. To the extent permitted by law, Apple and Google have no other warranty obligation with respect to the Service.",
       ],
     },
     {
@@ -133,8 +133,12 @@ export default function TermsOfServiceScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]}>
       <View style={[styles.header, { borderBottomColor: c.border }]}>
-        <Pressable onPress={() => router.back()}>
-          <Text style={[styles.backButton, { color: c.accent }]}>Back</Text>
+        <Pressable
+          hasTVPreferredFocus
+          onPress={() => router.back()}
+          style={({ focused }) => [styles.backButton, { borderColor: focused ? c.accent : "transparent" }, focused && styles.backButtonFocused]}
+        >
+          <Text style={[styles.backButtonText, { color: c.accent }]}>Back</Text>
         </Pressable>
         <Text style={[styles.headerTitle, { color: c.textPrimary }]}>Terms of Service</Text>
         <View style={styles.headerSpacer} />
@@ -189,7 +193,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
   },
-  backButton: { fontSize: 16 },
+  backButton: { minWidth: 72, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 2 },
+  backButtonFocused: { transform: [{ scale: 1.05 }] },
+  backButtonText: { fontSize: 16, fontWeight: "700", textAlign: "center" },
   headerTitle: { fontSize: 17, fontWeight: "600" },
   headerSpacer: { width: 40 },
   container: { flex: 1 },

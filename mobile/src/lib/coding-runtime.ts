@@ -76,14 +76,37 @@ const SECRET_PREFIX = "yaver.local.api-key.";
 const GIT_SECRET_PREFIX = "yaver.git-token.";
 const WORKSPACE_DIR = `${FileSystem.documentDirectory || ""}yaver-workspaces/`;
 
+function bytesToBase64(data: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < data.length; offset += 0x8000) {
+    binary += String.fromCharCode(...Array.from(data.subarray(offset, offset + 0x8000)));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
 const fs: any = {
-  async readFile(path: string, options?: { encoding?: string }) {
-    const data = await FileSystem.readAsStringAsync(path, { encoding: FileSystem.EncodingType.UTF8 });
-    return options?.encoding === "utf8" || !options?.encoding ? data : data;
+  async readFile(path: string, options?: { encoding?: string } | string) {
+    const encoding = typeof options === "string" ? options : options?.encoding;
+    if (encoding === "utf8" || encoding === "utf-8") {
+      return FileSystem.readAsStringAsync(path, { encoding: FileSystem.EncodingType.UTF8 });
+    }
+    const encoded = await FileSystem.readAsStringAsync(path, { encoding: FileSystem.EncodingType.Base64 });
+    return base64ToBytes(encoded);
   },
   async writeFile(path: string, data: string | Uint8Array) {
     await ensureDir(path.slice(0, path.lastIndexOf("/")));
-    await FileSystem.writeAsStringAsync(path, typeof data === "string" ? data : new TextDecoder().decode(data), { encoding: FileSystem.EncodingType.UTF8 });
+    if (typeof data === "string") {
+      await FileSystem.writeAsStringAsync(path, data, { encoding: FileSystem.EncodingType.UTF8 });
+    } else {
+      await FileSystem.writeAsStringAsync(path, bytesToBase64(data), { encoding: FileSystem.EncodingType.Base64 });
+    }
   },
   async readdir(path: string) {
     const entries = await FileSystem.readDirectoryAsync(path);
@@ -92,13 +115,26 @@ const fs: any = {
   async stat(path: string) {
     const info = await FileSystem.getInfoAsync(path);
     if (!info.exists) throw new Error(`Not found: ${path}`);
-    return { isFile: () => !info.isDirectory, isDirectory: () => !!info.isDirectory, size: info.size || 0, mode: 0o100644, mtimeMs: Date.now() };
+    return {
+      isFile: () => !info.isDirectory,
+      isDirectory: () => !!info.isDirectory,
+      isSymbolicLink: () => false,
+      size: info.size || 0,
+      mode: info.isDirectory ? 0o040755 : 0o100644,
+      mtimeMs: typeof (info as any).modificationTime === "number" ? (info as any).modificationTime * 1000 : Date.now(),
+    };
   },
   async lstat(path: string) { return this.stat(path); },
   async mkdir(path: string) { await ensureDir(path); },
   async unlink(path: string) { await FileSystem.deleteAsync(path, { idempotent: true }); },
   async rmdir(path: string) { await FileSystem.deleteAsync(path, { idempotent: true }); },
-  async rename(oldPath: string, newPath: string) { await ensureDir(newPath.slice(0, newPath.lastIndexOf("/"))); await FileSystem.moveAsync({ from: oldPath, to: newPath }); },
+  async rename(oldPath: string, newPath: string) {
+    await ensureDir(newPath.slice(0, newPath.lastIndexOf("/")));
+    const destination = await FileSystem.getInfoAsync(newPath);
+    if (destination.exists) await FileSystem.deleteAsync(newPath, { idempotent: true });
+    await FileSystem.moveAsync({ from: oldPath, to: newPath });
+  },
+  async chmod() {},
 };
 
 async function ensureDir(path: string): Promise<void> {
@@ -254,9 +290,13 @@ export async function gitDiff(workspace: LocalWorkspace): Promise<string> {
   return status.changes.map((path) => `${path}: modified`).join("\n");
 }
 export async function gitCommit(workspace: LocalWorkspace, message: string): Promise<string> {
-  const status = await gitStatus(workspace);
-  if (!status.changes.length) throw new Error("There are no changes to commit.");
-  for (const path of status.changes) await git.add({ fs, dir: workspace.root, filepath: path });
+  const matrix = await git.statusMatrix({ fs, dir: workspace.root });
+  const changes = matrix.filter(([, head, workdir, stage]) => head !== workdir || workdir !== stage);
+  if (!changes.length) throw new Error("There are no changes to commit.");
+  for (const [path, , workdir] of changes) {
+    if (workdir === 0) await git.remove({ fs, dir: workspace.root, filepath: path });
+    else await git.add({ fs, dir: workspace.root, filepath: path });
+  }
   const sha = await git.commit({ fs, dir: workspace.root, message, author: { name: "Yaver", email: "yaver@localhost" } });
   await saveLocalWorkspace({ ...workspace, baseCommit: sha, dirty: false, updatedAt: Date.now() });
   return sha;

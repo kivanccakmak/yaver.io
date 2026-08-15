@@ -47,6 +47,8 @@ func main() {
 		runConnect(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
+	case "cloud-runner":
+		runCloudRunner(os.Args[2:])
 	case "logs":
 		runLogs(os.Args[2:])
 	case "stop":
@@ -109,6 +111,7 @@ Usage:
   yaver restart     Restart the agent
   yaver attach      Interactive terminal — see tasks, type prompts (like Claude Code)
   yaver serve       Start the agent manually (advanced)
+  yaver cloud-runner  Start a managed Cloud Runner (workload environment required)
   yaver logs        Show agent logs
   yaver clear-logs  Clear agent log file
   yaver config      Show current configuration
@@ -630,7 +633,14 @@ func runConnect(args []string) {
 		}
 
 		baseURL := fmt.Sprintf("%s/d/%s", strings.TrimRight(*relayURL, "/"), targetDeviceID)
-		if err := RunClientHTTP(ctx, baseURL, cfg.AuthToken); err != nil {
+		relayPassword := cfg.RelayPassword
+		for _, relay := range cfg.RelayServers {
+			if strings.TrimRight(relay.HttpURL, "/") == strings.TrimRight(*relayURL, "/") && relay.Password != "" {
+				relayPassword = relay.Password
+				break
+			}
+		}
+		if err := RunClientHTTP(ctx, baseURL, cfg.AuthToken, relayPassword); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -966,7 +976,11 @@ func runServe(args []string) {
 	}
 	taskMgr := NewTaskManager(*workDir, taskStore, runner)
 	secretStore, secretErr := NewSecretStore()
-	if secretErr != nil { log.Printf("Warning: remote credential store unavailable: %v", secretErr) } else { taskMgr.SetSecretStore(secretStore) }
+	if secretErr != nil {
+		log.Printf("Warning: remote credential store unavailable: %v", secretErr)
+	} else {
+		taskMgr.SetSecretStore(secretStore)
+	}
 	taskMgr.WaitForSlot = *waitForSession
 	taskMgr.DummyMode = *dummy
 	if *dummy {
@@ -1024,7 +1038,9 @@ func runServe(args []string) {
 
 	// Start HTTP server (V1 — primary, also serves MCP)
 	httpServer := NewHTTPServer(*httpPort, cfg.AuthToken, ownerUserID, cfg.ConvexSiteURL, hostname, taskMgr)
-	if secretStore != nil { httpServer.secretStore = secretStore }
+	if secretStore != nil {
+		httpServer.secretStore = secretStore
+	}
 	httpServer.aclMgr = aclMgr
 	httpServer.emailMgr = emailMgr
 	httpServer.onShutdown = func() {
@@ -2237,7 +2253,7 @@ type backendRunnerFull struct {
 	RunnerID        string `json:"runnerId"`
 	Name            string `json:"name"`
 	Command         string `json:"command"`
-	Args            string `json:"args"`            // JSON-encoded []string
+	Args            string `json:"args"` // JSON-encoded []string
 	OutputMode      string `json:"outputMode"`
 	ResumeSupported bool   `json:"resumeSupported"`
 	ResumeArgs      string `json:"resumeArgs,omitempty"` // JSON-encoded []string
@@ -2706,7 +2722,9 @@ func runMCP(args []string) {
 		runner = r
 	}
 	taskMgr := NewTaskManager(*workDir, taskStore, runner)
-	if secretStore, err := NewSecretStore(); err == nil { taskMgr.SetSecretStore(secretStore) }
+	if secretStore, err := NewSecretStore(); err == nil {
+		taskMgr.SetSecretStore(secretStore)
+	}
 	if cfg.Sandbox != nil {
 		taskMgr.Sandbox = *cfg.Sandbox
 	} else {
@@ -2786,8 +2804,8 @@ func runMCPStdio(taskMgr *TaskManager, aclMgr *ACLManager, emailMgr *EmailManage
 		case "initialize":
 			resp.Result = map[string]interface{}{
 				"protocolVersion": "2024-11-05",
-				"capabilities":   map[string]interface{}{"tools": map[string]interface{}{}},
-				"serverInfo":     map[string]interface{}{"name": "yaver", "version": version},
+				"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
+				"serverInfo":      map[string]interface{}{"name": "yaver", "version": version},
 			}
 		case "tools/list":
 			// Reuse the same tool list from the HTTP handler

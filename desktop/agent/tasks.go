@@ -364,23 +364,25 @@ func (tm *TaskManager) GetAgentStatus() AgentStatus {
 
 // Task represents a single Claude CLI task running as a subprocess.
 type Task struct {
-	ID              string             `json:"id"`
-	Title           string             `json:"title"`
-	Description     string             `json:"description"`
-	Status          TaskStatus         `json:"status"`
-	Source          string             `json:"source,omitempty"` // "mobile", "mcp", "cli"
-	Model           string             `json:"model,omitempty"`
-	ReasoningEffort string             `json:"reasoningEffort,omitempty"`
-	RunnerID        string             `json:"runnerId,omitempty"` // which runner is executing this task
-	Mode            string             `json:"mode,omitempty"`     // agent mode: "build", "plan", or any custom agent (opencode --agent)
-	SessionID       string             `json:"session_id,omitempty"`
-	Output          string             `json:"output"`
-	ResultText      string             // Extracted clean result text from Claude
-	CostUSD         float64            // Total API cost
-	Turns           []ConversationTurn // Full conversation history
-	CreatedAt       time.Time          `json:"created_at"`
-	StartedAt       *time.Time         `json:"started_at,omitempty"`
-	FinishedAt      *time.Time         `json:"finished_at,omitempty"`
+	ID               string             `json:"id"`
+	Title            string             `json:"title"`
+	Description      string             `json:"description"`
+	Status           TaskStatus         `json:"status"`
+	Source           string             `json:"source,omitempty"` // "mobile", "mcp", "cli"
+	Model            string             `json:"model,omitempty"`
+	ReasoningEffort  string             `json:"reasoningEffort,omitempty"`
+	RunnerID         string             `json:"runnerId,omitempty"` // which runner is executing this task
+	Mode             string             `json:"mode,omitempty"`     // agent mode: "build", "plan", or any custom agent (opencode --agent)
+	SessionID        string             `json:"session_id,omitempty"`
+	ProjectSessionID string             `json:"projectSessionId,omitempty"`
+	WorkDir          string             `json:"workDir,omitempty"`
+	Output           string             `json:"output"`
+	ResultText       string             // Extracted clean result text from Claude
+	CostUSD          float64            // Total API cost
+	Turns            []ConversationTurn // Full conversation history
+	CreatedAt        time.Time          `json:"created_at"`
+	StartedAt        *time.Time         `json:"started_at,omitempty"`
+	FinishedAt       *time.Time         `json:"finished_at,omitempty"`
 
 	runner     RunnerConfig // the runner config used for this task (not persisted)
 	cmd        *exec.Cmd
@@ -393,22 +395,23 @@ type Task struct {
 
 // TaskInfo is the JSON-safe subset returned in listings.
 type TaskInfo struct {
-	ID              string             `json:"id"`
-	Title           string             `json:"title"`
-	Description     string             `json:"description"`
-	Status          TaskStatus         `json:"status"`
-	RunnerID        string             `json:"runnerId,omitempty"`
-	Model           string             `json:"model,omitempty"`
-	ReasoningEffort string             `json:"reasoningEffort,omitempty"`
-	Mode            string             `json:"mode,omitempty"` // agent mode: "build", "plan", or custom agent
-	SessionID       string             `json:"sessionId,omitempty"`
-	Output          string             `json:"output,omitempty"`
-	ResultText      string             `json:"resultText,omitempty"`
-	CostUSD         float64            `json:"costUsd,omitempty"`
-	Turns           []ConversationTurn `json:"turns,omitempty"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	StartedAt       *time.Time         `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time         `json:"finishedAt,omitempty"`
+	ID               string             `json:"id"`
+	Title            string             `json:"title"`
+	Description      string             `json:"description"`
+	Status           TaskStatus         `json:"status"`
+	RunnerID         string             `json:"runnerId,omitempty"`
+	Model            string             `json:"model,omitempty"`
+	ReasoningEffort  string             `json:"reasoningEffort,omitempty"`
+	Mode             string             `json:"mode,omitempty"` // agent mode: "build", "plan", or custom agent
+	SessionID        string             `json:"sessionId,omitempty"`
+	ProjectSessionID string             `json:"projectSessionId,omitempty"`
+	Output           string             `json:"output,omitempty"`
+	ResultText       string             `json:"resultText,omitempty"`
+	CostUSD          float64            `json:"costUsd,omitempty"`
+	Turns            []ConversationTurn `json:"turns,omitempty"`
+	CreatedAt        time.Time          `json:"createdAt"`
+	StartedAt        *time.Time         `json:"startedAt,omitempty"`
+	FinishedAt       *time.Time         `json:"finishedAt,omitempty"`
 }
 
 // TaskManager manages the lifecycle of tasks.
@@ -642,6 +645,24 @@ func (tm *TaskManager) CheckRunner() error {
 // customCommand, if non-empty, runs an arbitrary command via sh -c (ignores runnerID).
 // mode selects the runner's agent mode (e.g. opencode "build"/"plan" via --agent) — empty uses runner default.
 func (tm *TaskManager) CreateTask(title, description, model, reasoningEffort, source, runnerID, customCommand, mode string) (*Task, error) {
+	return tm.createTask(title, description, model, reasoningEffort, source, runnerID, customCommand, mode, "", "")
+}
+
+// CreateTaskInProjectSession binds a task to one isolated project checkout.
+// The client supplies only the opaque session ID; the trusted server resolves
+// and validates the checkout directory before calling this method.
+func (tm *TaskManager) CreateTaskInProjectSession(title, description, model, reasoningEffort, source, runnerID, customCommand, mode, projectSessionID, workDir string) (*Task, error) {
+	if strings.TrimSpace(projectSessionID) == "" {
+		return nil, fmt.Errorf("project session ID is required")
+	}
+	info, err := os.Stat(workDir)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("project session checkout is unavailable")
+	}
+	return tm.createTask(title, description, model, reasoningEffort, source, runnerID, customCommand, mode, projectSessionID, filepath.Clean(workDir))
+}
+
+func (tm *TaskManager) createTask(title, description, model, reasoningEffort, source, runnerID, customCommand, mode, projectSessionID, workDir string) (*Task, error) {
 	var taskRunner RunnerConfig
 
 	if customCommand != "" {
@@ -685,19 +706,21 @@ func (tm *TaskManager) CreateTask(title, description, model, reasoningEffort, so
 
 	now := time.Now()
 	task := &Task{
-		ID:              id,
-		Title:           title,
-		Description:     description,
-		Status:          TaskStatusQueued,
-		Source:          source,
-		Model:           model,
-		ReasoningEffort: reasoningEffort,
-		RunnerID:        taskRunner.RunnerID,
-		Mode:            mode,
-		runner:          taskRunner,
-		CreatedAt:       now,
-		outputCh:        make(chan string, 512),
-		doneCh:          make(chan struct{}),
+		ID:               id,
+		Title:            title,
+		Description:      description,
+		Status:           TaskStatusQueued,
+		Source:           source,
+		Model:            model,
+		ReasoningEffort:  reasoningEffort,
+		RunnerID:         taskRunner.RunnerID,
+		Mode:             mode,
+		ProjectSessionID: projectSessionID,
+		WorkDir:          workDir,
+		runner:           taskRunner,
+		CreatedAt:        now,
+		outputCh:         make(chan string, 512),
+		doneCh:           make(chan struct{}),
 		Turns: []ConversationTurn{
 			{Role: "user", Content: title, Timestamp: now},
 		},
@@ -759,8 +782,10 @@ func (tm *TaskManager) CheckRunnerBinary(command string) error {
 // runDummyTask streams a fake response for network testing (no real runner).
 func (tm *TaskManager) runDummyTask(task *Task) {
 	now := time.Now()
+	tm.mu.Lock()
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
+	tm.mu.Unlock()
 
 	var output strings.Builder
 
@@ -770,7 +795,7 @@ func (tm *TaskManager) runDummyTask(task *Task) {
 		fmt.Sprintf("Your prompt was: *%s*\n\n", task.Title),
 		"Network connection is working correctly.\n\n",
 		fmt.Sprintf("- Device: `%s`\n", tm.DeviceID),
-		fmt.Sprintf("- Work dir: `%s`\n", tm.workDir),
+		fmt.Sprintf("- Work dir: `%s`\n", tm.taskWorkDir(task)),
 		fmt.Sprintf("- Time: `%s`\n", now.Format(time.RFC3339)),
 		"\nDummy mode active — no real AI runner was invoked.\n",
 	}
@@ -974,7 +999,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	}
 
 	cmd := exec.CommandContext(ctx, runner.Command, args...)
-	cmd.Dir = tm.workDir
+	workDir := tm.taskWorkDir(task)
+	cmd.Dir = workDir
 
 	// Ensure common tool paths are in PATH for background processes.
 	home, _ := os.UserHomeDir()
@@ -987,7 +1013,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		cmd.Env = tm.runnerEnv(cmd.Env)
 	}
 
-	log.Printf("[task %s] Launching: %s %v (dir=%s)", task.ID, runner.Command, args[:2], tm.workDir)
+	log.Printf("[task %s] Launching: %s %v (dir=%s)", task.ID, runner.Command, args[:2], workDir)
 
 	// Dev log: task launch
 	go SendDevLog(tm.ConvexURL, tm.AuthToken, tm.OwnerEmail, "task-launch",
@@ -1174,7 +1200,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		}
 		tm.persist()
 		// Save session file for recent history (non-blocking)
-		go saveSessionFile(task, task.runner.Name, tm.workDir)
+		go saveSessionFile(task, task.runner.Name, tm.taskWorkDir(task))
 		tm.mu.Unlock()
 		close(task.doneCh)
 	}()
@@ -1707,7 +1733,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	}
 
 	cmd := exec.CommandContext(ctx, runner.Command, args...)
-	cmd.Dir = tm.workDir
+	cmd.Dir = tm.taskWorkDir(task)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1775,7 +1801,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 			}
 		}
 		tm.persist()
-		go saveSessionFile(task, task.runner.Name, tm.workDir)
+		go saveSessionFile(task, task.runner.Name, tm.taskWorkDir(task))
 		tm.mu.Unlock()
 		close(task.doneCh)
 	}()
@@ -1790,30 +1816,53 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 
 	result := make([]TaskInfo, 0, len(tm.tasks))
 	for _, t := range tm.tasks {
-		// Only include last 2000 chars of output in listings.
-		output := t.Output
-		if len(output) > 2000 {
-			output = output[len(output)-2000:]
-		}
-		result = append(result, TaskInfo{
-			ID:              t.ID,
-			Title:           t.Title,
-			Description:     t.Description,
-			Status:          t.Status,
-			RunnerID:        t.RunnerID,
-			Model:           t.Model,
-			ReasoningEffort: t.ReasoningEffort,
-			SessionID:       t.SessionID,
-			Output:          output,
-			ResultText:      t.ResultText,
-			CostUSD:         t.CostUSD,
-			Turns:           t.Turns,
-			CreatedAt:       t.CreatedAt,
-			StartedAt:       t.StartedAt,
-			FinishedAt:      t.FinishedAt,
-		})
+		result = append(result, taskInfoLocked(t, 2000))
 	}
 	return result
+}
+
+func taskInfoLocked(task *Task, outputLimit int) TaskInfo {
+	output := task.Output
+	if outputLimit > 0 && len(output) > outputLimit {
+		output = output[len(output)-outputLimit:]
+	}
+	return TaskInfo{
+		ID:               task.ID,
+		Title:            task.Title,
+		Description:      task.Description,
+		Status:           task.Status,
+		RunnerID:         task.RunnerID,
+		Model:            task.Model,
+		ReasoningEffort:  task.ReasoningEffort,
+		Mode:             task.Mode,
+		SessionID:        task.SessionID,
+		ProjectSessionID: task.ProjectSessionID,
+		Output:           output,
+		ResultText:       task.ResultText,
+		CostUSD:          task.CostUSD,
+		Turns:            append([]ConversationTurn(nil), task.Turns...),
+		CreatedAt:        task.CreatedAt,
+		StartedAt:        task.StartedAt,
+		FinishedAt:       task.FinishedAt,
+	}
+}
+
+// GetTaskInfo returns a race-safe snapshot for API responses and telemetry.
+func (tm *TaskManager) GetTaskInfo(id string, outputLimit int) (TaskInfo, bool) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	task, ok := tm.tasks[id]
+	if !ok {
+		return TaskInfo{}, false
+	}
+	return taskInfoLocked(task, outputLimit), true
+}
+
+func (tm *TaskManager) taskWorkDir(task *Task) string {
+	if task != nil && task.WorkDir != "" {
+		return task.WorkDir
+	}
+	return tm.workDir
 }
 
 // GetTask returns a single task by ID.

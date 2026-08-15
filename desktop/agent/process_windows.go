@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	modkernel32         = syscall.NewLazyDLL("kernel32.dll")
-	procOpenProcess     = modkernel32.NewProc("OpenProcess")
-	procCloseHandle     = modkernel32.NewProc("CloseHandle")
+	modkernel32     = syscall.NewLazyDLL("kernel32.dll")
+	procOpenProcess = modkernel32.NewProc("OpenProcess")
+	procCloseHandle = modkernel32.NewProc("CloseHandle")
 )
 
 const (
@@ -47,6 +47,15 @@ func isProcessAlive(pid int) bool {
 // terminateProcess kills a process on Windows (no graceful SIGTERM equivalent).
 func terminateProcess(proc *os.Process) error {
 	return proc.Kill()
+}
+
+// terminateProcessTree stops the process and descendants created in its
+// detached process group.
+func terminateProcessTree(proc *os.Process) error {
+	if proc == nil {
+		return nil
+	}
+	return osexec.Command("taskkill", "/PID", fmt.Sprintf("%d", proc.Pid), "/T", "/F").Run()
 }
 
 const taskName = "YaverAgent"

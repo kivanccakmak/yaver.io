@@ -6,6 +6,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../../src/context/AuthContext";
 import { Device, useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
+import { useCloudStudio } from "../../src/context/CloudStudioContext";
 import { quicClient } from "../../src/lib/quic";
 import { getUserSettings } from "../../src/lib/auth";
 import { takePendingVibingProject } from "../../src/lib/vibingStore";
@@ -33,6 +34,9 @@ type BoxCapabilities = {
 type PreviewOption = { id: "web" | "android" | "ios" | "tvos" | "xr"; label: string; detail: string };
 type StreamLog = { id: number; at: string; level: "info" | "success" | "warn" | "error"; message: string };
 
+const isTV = (Platform as typeof Platform & { isTV?: boolean }).isTV === true;
+const isAppleSurface = Platform.OS === "ios";
+
 function previewOptionsFor(framework: string | undefined, caps: BoxCapabilities): PreviewOption[] {
   const f = (framework || "").toLowerCase();
   const options: PreviewOption[] = [];
@@ -41,7 +45,7 @@ function previewOptionsFor(framework: string | undefined, caps: BoxCapabilities)
   // when the agent can launch it *and* return frames. Today that full path is
   // implemented for browser previews; native target launch/capture adapters
   // will add their options here together with their agent handlers.
-  if (web && caps.browser) options.push({ id: "web", label: "Web UI", detail: "Chrome on this box" });
+  if (web && caps.browser) options.push({ id: "web", label: "Web UI", detail: "Chrome on the runner" });
   return options;
 }
 
@@ -55,6 +59,10 @@ export default function VibingScreen() {
   const c = useColors();
   const { token } = useAuth();
   const { activeDevice, connectionStatus, disconnect } = useDevice();
+  const { activeProjectSession } = useCloudStudio();
+  const legacyTvRunner = isTV
+    && activeDevice?.name.trim().toLowerCase().replace(/\.local$/, "") === "ubuntu-4gb-hel1-1"
+    && !activeDevice.cloudWorkspaceId;
   const [codingMode, setCodingMode] = useState<CodingMode>("remote-preferred");
   const [localWorkspace, setLocalWorkspace] = useState<LocalWorkspace | null>(null);
   const [validation, setValidation] = useState<StaticValidationReport | null>(null);
@@ -77,7 +85,7 @@ export default function VibingScreen() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const base = activeDevice && token ? deviceBaseUrl(activeDevice, token) : null;
-  const isLocalVibing = codingMode === "local-only" || (codingMode === "auto-fallback" && connectionStatus !== "connected");
+  const isLocalVibing = !isTV && (codingMode === "local-only" || (codingMode === "auto-fallback" && connectionStatus !== "connected"));
   const localDeviceName = (Platform as any).isTV ? "this Apple TV" : "this device";
   const appendStreamLog = useCallback((level: StreamLog["level"], message: string) => {
     setStreamLogs((current) => [...current, { id: Date.now() + Math.random(), at: new Date().toLocaleTimeString(), level, message }].slice(-16));
@@ -91,7 +99,7 @@ export default function VibingScreen() {
 
   useEffect(() => {
     if (!base || !token) return;
-    fetch(`${base}/vibing/capabilities`, { headers: { Authorization: `Bearer ${token}` } })
+    quicClient.requestAgent("/vibing/capabilities")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data?.capabilities) setCapabilities(data.capabilities); })
       .catch(() => {});
@@ -112,11 +120,16 @@ export default function VibingScreen() {
   }, [token]);
 
   useEffect(() => {
-    getCodingMode().then(setCodingMode).catch(() => {});
-    listLocalWorkspaces().then((workspaces) => setLocalWorkspace(workspaces[0] ?? null)).catch(() => {});
+    if (isTV) {
+      setCodingMode("remote-preferred");
+      setLocalWorkspace(null);
+    } else {
+      getCodingMode().then(setCodingMode).catch(() => {});
+      listLocalWorkspaces().then((workspaces) => setLocalWorkspace(workspaces[0] ?? null)).catch(() => {});
+    }
     if (!token) return;
     getUserSettings(token).then((settings) => {
-      if (settings.codingMode) setCodingMode(settings.codingMode);
+      if (!isTV && settings.codingMode) setCodingMode(settings.codingMode);
     }).catch(() => {});
   }, [token]);
 
@@ -136,11 +149,22 @@ export default function VibingScreen() {
 
   // Load projects on connect
   useEffect(() => {
+    if (isTV && !legacyTvRunner) {
+      if (activeProjectSession) {
+        const project = { name: activeProjectSession.repositoryName, path: activeProjectSession.reviewBranch, framework: "web" };
+        setProjects([project]);
+        setSelected(project.path);
+        setProjectSelected(true);
+      } else {
+        setProjects([]);
+        setSelected("");
+        setProjectSelected(false);
+      }
+      return;
+    }
     if (!base || !token) return;
-    fetch(`${base}/projects?refresh=1`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => {
-        const list: Project[] = d.projects || [];
+    quicClient.listProjects(true)
+      .then((list) => {
         setProjects(list);
         const pending = takePendingVibingProject();
         if (list.length > 0) {
@@ -152,22 +176,32 @@ export default function VibingScreen() {
         }
       })
       .catch(() => {});
-  }, [base, token]);
+  }, [base, token, activeProjectSession?.projectSessionId, legacyTvRunner]);
 
   const refreshStatus = useCallback(async () => {
     if (!base || !token) return;
     try {
-      const r = await fetch(`${base}/dev/status`, { headers: { Authorization: `Bearer ${token}` } });
+      if (isTV && !legacyTvRunner) {
+        if (!activeProjectSession) return;
+        const next = await quicClient.getProjectSessionPreviewStatus(activeProjectSession.projectSessionId);
+        setStatus((previous) => {
+          if (next.serving && !previous?.serving) appendStreamLog("success", `Serving ${next.framework || "preview"} on port ${next.port || "?"}`);
+          if (!next.serving && previous?.serving) appendStreamLog("warn", "Preview stopped on the Cloud Runner");
+          return next;
+        });
+        return;
+      }
+      const r = await quicClient.requestAgent("/dev/status");
       if (r.ok) {
         const next = await r.json() as DevStatus;
         setStatus((previous) => {
           if (next.serving && !previous?.serving) appendStreamLog("success", `Serving ${next.framework || "preview"} on port ${next.port || "?"}`);
-          if (!next.serving && previous?.serving) appendStreamLog("warn", "Preview stopped on the box");
+          if (!next.serving && previous?.serving) appendStreamLog("warn", "Preview stopped on the runner");
           return next;
         });
       }
     } catch {}
-  }, [base, token, appendStreamLog]);
+  }, [base, token, appendStreamLog, activeProjectSession?.projectSessionId, legacyTvRunner]);
 
   useEffect(() => {
     refreshStatus();
@@ -186,21 +220,30 @@ export default function VibingScreen() {
     setStreamLogs([]);
     appendStreamLog("info", `Launching ${selectedProject?.name || workDir} as ${selectedPreview?.label || "preview"}…`);
     try {
-      const r = await fetch(`${base}/dev/start`, {
+      if (isTV && !legacyTvRunner) {
+        if (!activeProjectSession) throw new Error("Select a Project Session first");
+        const started = await quicClient.startProjectSessionPreview(activeProjectSession.projectSessionId, previewTarget);
+        setStatus(started);
+        appendStreamLog("info", `Cloud Runner accepted launch · ${started.framework || "detecting framework"}${started.port ? ` · port ${started.port}` : ""}`);
+        await refreshStatus();
+        setWorking(false);
+        return;
+      }
+      const r = await quicClient.requestAgent("/dev/start", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workDir, previewTarget }),
       });
       if (r.ok) {
         const started = await r.json() as DevStatus;
         setStatus(started);
-        appendStreamLog("info", `Box accepted launch · ${started.framework || "detecting framework"}${started.port ? ` · port ${started.port}` : ""}`);
+        appendStreamLog("info", `Runner accepted launch · ${started.framework || "detecting framework"}${started.port ? ` · port ${started.port}` : ""}`);
       } else {
         appendStreamLog("error", `Launch rejected (${r.status})`);
       }
       await refreshStatus();
     } catch {
-      appendStreamLog("error", "Could not reach the box to launch preview");
+      appendStreamLog("error", "Could not reach the runner to launch preview");
     }
     setWorking(false);
   };
@@ -209,7 +252,11 @@ export default function VibingScreen() {
     if (!base || !token) return;
     setWorking(true);
     try {
-      await fetch(`${base}/dev/stop`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+      if (isTV && !legacyTvRunner) {
+        if (activeProjectSession) await quicClient.stopProjectSessionPreview(activeProjectSession.projectSessionId);
+      } else {
+        await quicClient.requestAgent("/dev/stop", { method: "POST" });
+      }
       setStatus(null);
       setLaneHtml("");
       await refreshStatus();
@@ -221,7 +268,14 @@ export default function VibingScreen() {
     // Headless lane proof: fetch the running app HTML with auth.
     if (!base || !token || !status?.serving) return;
     try {
-      const r = await fetch(`${base}/dev/stream`, { headers: { Authorization: `Bearer ${token}` } });
+      if (isTV && !legacyTvRunner) {
+        if (!activeProjectSession) return;
+        const html = await quicClient.fetchProjectSessionPreview(activeProjectSession.projectSessionId);
+        setLaneHtml(html.slice(0, 400));
+        appendStreamLog("success", `Live browser lane verified · ${html.length} bytes received`);
+        return;
+      }
+      const r = await quicClient.requestAgent("/dev/stream");
       if (r.ok) {
         const html = await r.text();
         setLaneHtml(html.slice(0, 400));
@@ -239,10 +293,9 @@ export default function VibingScreen() {
     if (!base || !token || !status?.serving || !status?.port) return;
     try {
       const override = frameOverride.replace(/\/$/, "");
-      const frameEndpoint = override
-        ? `${override}/frame?url=${encodeURIComponent(`${override}/sample`)}`
-        : `${base}/vibing/frame?url=${encodeURIComponent(`http://localhost:${status.port}/`)}`;
-      const r = await fetch(frameEndpoint, { headers: { Authorization: `Bearer ${token}` } });
+      const r = override
+        ? await fetch(`${override}/frame?url=${encodeURIComponent(`${override}/sample`)}`, { headers: { Authorization: `Bearer ${token}` } })
+        : await quicClient.requestAgent(`/vibing/frame?url=${encodeURIComponent(`http://localhost:${status.port}/`)}`);
       if (r.status === 404) {
         setFrameError(override ? "Local frame server not found" : "Frame endpoint not available on this box");
         setFramePollingEnabled(false);
@@ -336,7 +389,7 @@ export default function VibingScreen() {
           <View style={styles.titleBlock}>
             <Text style={[styles.title, { color: c.textPrimary }]}>Vibing</Text>
             <Text style={[styles.subtitle, { color: c.textSecondary }]}>
-              {activeDevice ? `Live preview · ${activeDevice.name}` : "Connect or select a machine first"}
+              {activeDevice ? `Live preview · ${activeDevice.name}` : isTV ? "Connect to the assigned Cloud Runner" : "Connect or select a machine first"}
             </Text>
           </View>
           <View style={[styles.badge, { backgroundColor: serving ? c.success + "22" : c.textMuted + "22" }]}>
@@ -357,7 +410,9 @@ export default function VibingScreen() {
             <Text style={[styles.sectionLabel, { color: c.textPrimary }]}>Choose a project to preview</Text>
             <Text style={[styles.hint, { color: c.textMuted, marginBottom: 12 }]}>Select a discovered project, then choose how to run its preview.</Text>
             {projects.length === 0 ? (
-              <ActivityIndicator color={c.accent} style={{ marginVertical: 24 }} />
+              isTV ? (
+                <Pressable hasTVPreferredFocus onPress={() => router.push("/projects")} style={({ focused }) => [styles.btnPrimary, { backgroundColor: c.accent }, focused && styles.focused]}><Text style={styles.btnPrimaryText}>Open Projects</Text></Pressable>
+              ) : <ActivityIndicator color={c.accent} style={{ marginVertical: 24 }} />
             ) : (
               projects.map((p) => (
                 <Pressable
@@ -386,28 +441,22 @@ export default function VibingScreen() {
           <View style={styles.cardRow}>
             <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Transport</Text>
             <Text style={[styles.cardValue, { color: c.accent }]}>
-              {transport === "webrtc" ? "WebRTC" : transport === "sse" ? "SSE" : "Auto (SSE → WebRTC)"}
+              {transport === "webrtc" ? "WebRTC" : transport === "sse" ? "Frames" : "Auto"}
             </Text>
           </View>
-          <View style={styles.cardRow}>
-            <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Relay tier</Text>
-            <Text style={[styles.cardValue, { color: relayTier === "pro" ? c.success : c.textMuted }]}>
-              {relayTier === "pro" ? "Relay Pro" : "Free"}
-            </Text>
-          </View>
-          <Text style={[styles.hint, { color: c.textMuted }]}>
-            {relayTier === "pro"
-              ? "Relay Pro: WebRTC/TURN low-latency available (set WebRTC in Settings → Vibing). STUN via the free relay."
-              : "Free relay: SSE frames + STUN (ICE). WebRTC/TURN needs Relay Pro — set it in Settings → Vibing."}
-          </Text>
+          {isAppleSurface ? (
+            <Text style={[styles.hint, { color: c.textMuted }]}>The connected runner selects an authenticated preview transport supported by this Apple TV.</Text>
+          ) : (
+            <Text style={[styles.hint, { color: c.textMuted }]}>{relayTier === "pro" ? "Low-latency transport is available for this account." : "Frames are available for this account."}</Text>
+          )}
         </View>
 
         {/* Repository-aware preview target selection. The box only offers
             targets it reported as installed and runnable. */}
         <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-          <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Run on this box</Text>
+          <Text style={[styles.cardLabel, { color: c.textPrimary }]}>{isTV ? "Run on Cloud Runner" : "Run on this machine"}</Text>
           <Text style={[styles.hint, { color: c.textMuted }]}>
-            {selectedProject?.framework ? `${selectedProject.framework} project · choose a discovered target` : "Choose a target supported by this project and box"}
+            {selectedProject?.framework ? `${selectedProject.framework} project · choose a discovered target` : `Choose a target supported by this project and ${isTV ? "runner" : "machine"}`}
           </Text>
           {previewOptions.length ? (
             <View style={styles.previewOptions}>
@@ -426,12 +475,12 @@ export default function VibingScreen() {
               })}
             </View>
           ) : (
-            <Text style={[styles.hint, { color: c.warn }]}>No runnable preview target was discovered on this box.</Text>
+            <Text style={[styles.hint, { color: c.warn }]}>No runnable preview target was discovered on this runner.</Text>
           )}
         </View>
 
         <Pressable
-          onPress={() => setProjectSelected(false)}
+          onPress={() => isTV && !legacyTvRunner ? router.push("/projects") : setProjectSelected(false)}
           style={({ focused }) => [styles.changeProject, { borderColor: c.border, backgroundColor: c.bgCard }, focused && styles.focused]}
         >
           <Text style={{ color: c.textMuted, fontSize: 15 }}>Previewing {selectedProject?.name || "project"} · Change project</Text>
@@ -526,7 +575,7 @@ export default function VibingScreen() {
                   <Text style={[styles.laneSnippet, { color: c.textSecondary }]} numberOfLines={4}>{laneHtml}</Text>
                 ) : (
                   <Text style={[styles.hint, { color: c.textMuted }]}>
-                    {frameError || "Fetching the running app from the box with auth — confirms the streaming lane. Full visual rendering needs the frame endpoint (self-host) or WebRTC (Relay Pro)."}
+                    {frameError || "Fetching the running app from the runner with authentication. Visual rendering requires a supported Frames or WebRTC endpoint."}
                   </Text>
                 )}
                 {streamLogs.length > 0 && (

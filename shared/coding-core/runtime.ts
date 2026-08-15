@@ -1,6 +1,6 @@
 /** Shared surface contract. Execution stays in an adapter; UI must never
  * assume that a shell or native toolchain exists. */
-export type RuntimeKind = "remote-agent" | "local-yaver" | "cloud" | "ci";
+export type RuntimeKind = "remote-agent" | "local-yaver" | "cloud-runner" | "ci";
 export type SurfaceKind = "mobile" | "web" | "desktop" | "watch" | "car" | "tv" | "xr";
 export type RuntimeState = "connecting" | "remote" | "remote_degraded" | "local" | "cloud" | "ci_only" | "offline";
 
@@ -37,20 +37,78 @@ export interface CodingSession {
   runtime: RuntimeKind;
   state: RuntimeState;
   workspace?: WorkspaceIdentity;
+  projectSession?: ProjectSessionIdentity;
   capabilities: RuntimeCapabilities;
   messages: Array<{ role: "user" | "assistant" | "tool"; content: string; createdAt: number }>;
   updatedAt: number;
 }
 
+export type CloudAccessStatus = "inactive" | "active" | "suspended" | "expired";
+export type CloudWorkspaceState = "provisioning" | "ready" | "paused" | "error" | "deleting";
+export type RunnerClass = "linux" | "macos";
+
+export interface CloudRunnerCapabilities {
+  git: boolean;
+  shell: boolean;
+  docker: boolean;
+  lint: boolean;
+  typecheck: boolean;
+  compile: boolean;
+  test: boolean;
+  browserFrames: boolean;
+  androidEmulator: boolean;
+  iosSimulator: boolean;
+  tvosSimulator: boolean;
+  webrtc: boolean;
+}
+
+export interface GitConnectionSummary {
+  gitConnectionId: string;
+  provider: "github" | "gitlab";
+  displayName: string;
+  status: "pending" | "ready" | "revoked" | "error";
+}
+
+export interface CloudWorkspaceSummary {
+  cloudWorkspaceId: string;
+  runnerDeviceId: string;
+  runnerClass: RunnerClass;
+  region: string;
+  state: CloudWorkspaceState;
+}
+
+export interface ProjectSessionIdentity {
+  projectSessionId: string;
+  repositoryId: string;
+  repositoryName: string;
+  baseRef: string;
+  reviewBranch: string;
+  status: "ready" | "stopped" | "error";
+}
+
+export interface CloudStudioPrerequisites {
+  access: CloudAccessStatus;
+  gitConnectionReady: boolean;
+  cloudWorkspaceReady: boolean;
+  cloudRunnerConnected: boolean;
+}
+
+export function cloudStudioReady(prerequisites: CloudStudioPrerequisites): boolean {
+  return prerequisites.access === "active"
+    && prerequisites.gitConnectionReady
+    && prerequisites.cloudWorkspaceReady
+    && prerequisites.cloudRunnerConnected;
+}
+
 /** Credentials are configured only on an execution-capable endpoint. Convex may
  * persist a runner/model preference, but never a provider key, OAuth token,
  * Git token, or refresh token. */
-export type CredentialAuthority = "device-secure-store" | "desktop-secret-store" | "worker-secret-store" | "none";
+export type CredentialAuthority = "device-secure-store" | "desktop-secret-store" | "cloud-credential-broker" | "none";
 
 export function credentialAuthority(surface: SurfaceKind, state: RuntimeState): CredentialAuthority {
-  if ((surface === "mobile" || surface === "tv") && state === "local") return "device-secure-store";
+  if (surface === "mobile" && state === "local") return "device-secure-store";
   if (state === "remote") return "desktop-secret-store";
-  if (state === "cloud") return "worker-secret-store";
+  if (state === "cloud") return "cloud-credential-broker";
   return "none";
 }
 
@@ -68,7 +126,7 @@ export const COMPANION_CAPABILITIES: Record<"watch" | "car" | "tv" | "xr", Runti
 };
 
 /**
- * Capability ceiling when no desktop, cloud worker, CI runner, or Android shell
+ * Capability ceiling when no desktop, Cloud Runner, CI runner, or Android shell
  * bridge is reachable. This is deliberately separate from companion capabilities:
  * it prevents an offline surface from presenting a remote-only action as if it
  * could execute it locally.
@@ -83,9 +141,9 @@ export const OFFLINE_ONLY_CAPABILITIES: Record<SurfaceKind, RuntimeCapabilities>
   // Companion surfaces may compose a task draft locally, but cannot execute it.
   watch: { filesystem: false, search: false, gitRead: false, gitWrite: false, network: false, shell: false, processes: false, docker: false, browserAutomation: false, nativeBuild: false, deploy: false, ciDispatch: false, remoteHandoff: false },
   car: { filesystem: false, search: false, gitRead: false, gitWrite: false, network: false, shell: false, processes: false, docker: false, browserAutomation: false, nativeBuild: false, deploy: false, ciDispatch: false, remoteHandoff: false },
-  // A signed tvOS build may provide a direct model API and app-sandbox Git
-  // workspace. It requires device-local secure storage; there is no shell,
-  // OpenCode/Codex process, Docker, build, or background worker.
-  tv: { filesystem: true, search: true, gitRead: true, gitWrite: true, network: true, shell: false, processes: false, docker: false, browserAutomation: false, nativeBuild: false, deploy: false, ciDispatch: false, remoteHandoff: false },
+  // tvOS is a remote-only Cloud Studio client. Without an authenticated Git
+  // connection and remote runner it may display cached status, but it cannot
+  // execute, edit, validate, commit, or push anything locally.
+  tv: { filesystem: false, search: false, gitRead: false, gitWrite: false, network: false, shell: false, processes: false, docker: false, browserAutomation: false, nativeBuild: false, deploy: false, ciDispatch: false, remoteHandoff: false },
   xr: { filesystem: false, search: false, gitRead: false, gitWrite: false, network: false, shell: false, processes: false, docker: false, browserAutomation: false, nativeBuild: false, deploy: false, ciDispatch: false, remoteHandoff: false },
 };

@@ -20,23 +20,27 @@ import (
 
 // HTTPServer serves the V1 HTTP API for mobile clients over Tailscale.
 type HTTPServer struct {
-	port        int
-	token       string
-	ownerUserID string
-	convexURL   string
-	hostname    string
-	taskMgr     *TaskManager
-	aclMgr      *ACLManager
-	emailMgr    *EmailManager
-	secretStore *SecretStore
-	server      *http.Server
-	onShutdown  func() // called when mobile requests agent shutdown
-	dogfoodMu   sync.Mutex
-	dogfoodCmd  *osexec.Cmd
-	frameMu     sync.Mutex
-	frameURL    string
-	frameData   []byte
-	frameAt     time.Time
+	port            int
+	token           string
+	ownerUserID     string
+	convexURL       string
+	hostname        string
+	taskMgr         *TaskManager
+	projectSessions *ProjectSessionManager
+	previewMgr      *ProjectPreviewManager
+	validationMgr   *ProjectValidationManager
+	managed         bool
+	aclMgr          *ACLManager
+	emailMgr        *EmailManager
+	secretStore     *SecretStore
+	server          *http.Server
+	onShutdown      func() // called when mobile requests agent shutdown
+	dogfoodMu       sync.Mutex
+	dogfoodCmd      *osexec.Cmd
+	frameMu         sync.Mutex
+	frameURL        string
+	frameData       []byte
+	frameAt         time.Time
 
 	// Cache validated tokens (token -> userId) to avoid repeated Convex calls
 	tokenCache sync.Map
@@ -49,14 +53,21 @@ func NewHTTPServer(port int, token, ownerUserID, convexURL, hostname string, tas
 	if err != nil {
 		log.Printf("secret store unavailable: %v", err)
 	}
+	projectSessions, sessionErr := NewProjectSessionManager()
+	if sessionErr != nil {
+		log.Printf("project sessions unavailable: %v", sessionErr)
+	}
 	return &HTTPServer{
-		port:        port,
-		token:       token,
-		ownerUserID: ownerUserID,
-		convexURL:   convexURL,
-		hostname:    hostname,
-		taskMgr:     taskMgr,
-		secretStore: secretStore,
+		port:            port,
+		token:           token,
+		ownerUserID:     ownerUserID,
+		convexURL:       convexURL,
+		hostname:        hostname,
+		taskMgr:         taskMgr,
+		projectSessions: projectSessions,
+		previewMgr:      NewProjectPreviewManager(),
+		validationMgr:   NewProjectValidationManager(),
+		secretStore:     secretStore,
 	}
 }
 
@@ -83,9 +94,16 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/dogfood", s.auth(s.handleDogfood))
 	mux.HandleFunc("/vibing/frame", s.auth(s.handleVibingFrame))
 	mux.HandleFunc("/vibing/capabilities", s.auth(s.handleVibingCapabilities))
+	mux.HandleFunc("/v2/capabilities", s.auth(s.handleV2Capabilities))
+	mux.HandleFunc("/v2/git/connections", s.auth(s.handleV2GitConnections))
+	mux.HandleFunc("/v2/git/repositories", s.auth(s.handleV2GitRepositories))
+	mux.HandleFunc("/v2/project-sessions", s.auth(s.handleV2ProjectSessions))
+	mux.HandleFunc("/v2/project-sessions/", s.auth(s.handleV2ProjectSessionByID))
 
-	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP
-	mux.HandleFunc("/mcp", s.handleMCP)
+	// Managed Cloud Runners accept work only through Project Sessions.
+	if !s.managed {
+		mux.HandleFunc("/mcp", s.handleMCP)
+	}
 
 	s.server = &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", s.port),
@@ -94,6 +112,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
+		s.previewMgr.StopAll()
+		s.validationMgr.StopAll()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		s.server.Shutdown(shutdownCtx)
@@ -344,12 +364,15 @@ func (s *HTTPServer) handleVibingCapabilities(w http.ResponseWriter, r *http.Req
 
 func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 	hostname, _ := os.Hostname()
-	jsonReply(w, http.StatusOK, map[string]interface{}{
+	info := map[string]interface{}{
 		"ok":       true,
 		"hostname": hostname,
 		"version":  version,
-		"workDir":  s.taskMgr.workDir,
-	})
+	}
+	if !s.managed {
+		info["workDir"] = s.taskMgr.workDir
+	}
+	jsonReply(w, http.StatusOK, info)
 }
 
 type remoteProject struct {
@@ -362,6 +385,10 @@ type remoteProject struct {
 // ?refresh=1 forces a synchronous scan so a newly connected machine does not
 // appear empty while the background startup scan is still running.
 func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if s.managed {
+		jsonError(w, http.StatusGone, "use /v2/git/repositories")
+		return
+	}
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "use GET")
 		return
@@ -379,6 +406,10 @@ func (s *HTTPServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 // handleWorkDir changes the directory used by subsequently created tasks.
 func (s *HTTPServer) handleWorkDir(w http.ResponseWriter, r *http.Request) {
+	if s.managed {
+		jsonError(w, http.StatusGone, "managed runners require a Project Session")
+		return
+	}
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
@@ -410,6 +441,10 @@ func (s *HTTPServer) handleWorkDir(w http.ResponseWriter, r *http.Request) {
 // project. This keeps dogfood mode on the remote box instead of requiring a
 // separate SSH/terminal workflow.
 func (s *HTTPServer) handleDogfood(w http.ResponseWriter, r *http.Request) {
+	if s.managed {
+		jsonError(w, http.StatusGone, "use the Project Session preview API")
+		return
+	}
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
@@ -470,6 +505,10 @@ func (s *HTTPServer) handleDogfood(w http.ResponseWriter, r *http.Request) {
 
 // handleSecrets returns metadata only. Values are write-only over this API.
 func (s *HTTPServer) handleSecrets(w http.ResponseWriter, r *http.Request) {
+	if s.managed {
+		jsonError(w, http.StatusForbidden, "managed runner credentials are broker-controlled")
+		return
+	}
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "use GET")
 		return
@@ -482,6 +521,10 @@ func (s *HTTPServer) handleSecrets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleSecretByName(w http.ResponseWriter, r *http.Request) {
+	if s.managed {
+		jsonError(w, http.StatusForbidden, "managed runner credentials are broker-controlled")
+		return
+	}
 	if s.secretStore == nil {
 		jsonError(w, http.StatusServiceUnavailable, "secret store unavailable")
 		return
@@ -649,6 +692,10 @@ func (s *HTTPServer) handleRunnerRestart(w http.ResponseWriter, r *http.Request)
 
 // handleRunnerSwitch switches the active runner. Validates the binary exists first.
 func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) {
+	if s.managed {
+		jsonError(w, http.StatusForbidden, "managed runner defaults are controller-managed")
+		return
+	}
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
@@ -754,6 +801,10 @@ func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) 
 
 // handleShutdown gracefully shuts down the yaver agent. Called from mobile.
 func (s *HTTPServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if s.managed {
+		jsonError(w, http.StatusForbidden, "managed runners are controlled by the Cloud Workspace controller")
+		return
+	}
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
@@ -790,6 +841,10 @@ func (s *HTTPServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 
 // handleTasks handles GET /tasks (list) and POST /tasks (create).
 func (s *HTTPServer) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if s.managed {
+		jsonError(w, http.StatusGone, "managed runners require /v2/project-sessions/{id}/tasks")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		s.listTasks(w, r)
@@ -836,21 +891,22 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[HTTP] Task created: %s — %s (status: %s, model: %s, runner: %s, mode: %s)", task.ID, task.Title, task.Status, body.Model, task.RunnerID, body.Mode)
+	info, _ := s.taskMgr.GetTaskInfo(task.ID, 0)
+	log.Printf("[HTTP] Task created: %s — %s (status: %s, model: %s, runner: %s, mode: %s)", info.ID, info.Title, info.Status, body.Model, info.RunnerID, body.Mode)
 	resp := map[string]interface{}{
 		"ok":              true,
-		"taskId":          task.ID,
-		"status":          task.Status,
-		"runnerId":        task.RunnerID,
-		"model":           task.Model,
-		"reasoningEffort": task.ReasoningEffort,
+		"taskId":          info.ID,
+		"status":          info.Status,
+		"runnerId":        info.RunnerID,
+		"model":           info.Model,
+		"reasoningEffort": info.ReasoningEffort,
 	}
-	if task.Mode != "" {
-		resp["mode"] = task.Mode
+	if info.Mode != "" {
+		resp["mode"] = info.Mode
 	}
-	log.Printf("[HTTP] Sending create response for task %s", task.ID)
+	log.Printf("[HTTP] Sending create response for task %s", info.ID)
 	jsonReply(w, http.StatusCreated, resp)
-	log.Printf("[HTTP] Response sent for task %s", task.ID)
+	log.Printf("[HTTP] Response sent for task %s", info.ID)
 }
 
 // handleTaskByID routes /tasks/{id}, /tasks/{id}/output, /tasks/{id}/stop, /tasks/{id}/continue
@@ -900,34 +956,12 @@ func (s *HTTPServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) getTask(w http.ResponseWriter, r *http.Request, id string) {
 	log.Printf("[HTTP] GET task %s", id)
-	task, ok := s.taskMgr.GetTask(id)
+	info, ok := s.taskMgr.GetTaskInfo(id, 10000)
 	if !ok {
 		log.Printf("[HTTP] Task %s not found", id)
 		jsonError(w, http.StatusNotFound, "task not found")
 		return
 	}
-
-	s.taskMgr.mu.RLock()
-	output := task.Output
-	if len(output) > 10000 {
-		output = output[len(output)-10000:]
-	}
-	info := TaskInfo{
-		ID:          task.ID,
-		Title:       task.Title,
-		Description: task.Description,
-		Status:      task.Status,
-		RunnerID:    task.RunnerID,
-		SessionID:   task.SessionID,
-		Output:      output,
-		ResultText:  task.ResultText,
-		CostUSD:     task.CostUSD,
-		Turns:       task.Turns,
-		CreatedAt:   task.CreatedAt,
-		StartedAt:   task.StartedAt,
-		FinishedAt:  task.FinishedAt,
-	}
-	s.taskMgr.mu.RUnlock()
 
 	log.Printf("[HTTP] Task %s status=%s output_len=%d", id, info.Status, len(info.Output))
 	jsonReply(w, http.StatusOK, map[string]interface{}{
@@ -1247,8 +1281,9 @@ func (s *HTTPServer) handleMCPToolCall(params json.RawMessage) interface{} {
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}
-		log.Printf("[MCP] Task created: %s (runner=%s, model=%s, mode=%s)", task.ID, args.Runner, args.Model, args.Mode)
-		return mcpToolResult(fmt.Sprintf("Task created successfully.\nTask ID: %s\nStatus: %s", task.ID, task.Status))
+		info, _ := s.taskMgr.GetTaskInfo(task.ID, 0)
+		log.Printf("[MCP] Task created: %s (runner=%s, model=%s, mode=%s)", info.ID, args.Runner, args.Model, args.Mode)
+		return mcpToolResult(fmt.Sprintf("Task created successfully.\nTask ID: %s\nStatus: %s", info.ID, info.Status))
 
 	case "list_tasks":
 		tasks := s.taskMgr.ListTasks()

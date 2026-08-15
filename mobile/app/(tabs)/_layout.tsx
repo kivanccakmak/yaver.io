@@ -6,9 +6,11 @@ import { useColors } from "../../src/context/ThemeContext";
 const isTV = (Platform as any).isTV === true;
 
 const TV_SECTIONS: Record<string, string> = {
+  home: "Home",
   tasks: "Chat",
+  projects: "Projects",
   vibing: "Vibing",
-  devices: "Devices",
+  devices: "Runners",
   settings: "Settings",
 };
 
@@ -63,6 +65,7 @@ export default function TabLayout() {
   return (
     <Tabs
       initialRouteName="tasks"
+      tabBar={isTV ? (props: any) => <TvTabBar {...props} /> : undefined}
       screenOptions={{
         headerShown: !isTV,
         headerStyle: { backgroundColor: c.bg },
@@ -77,7 +80,6 @@ export default function TabLayout() {
         tabBarActiveTintColor: c.tabActive,
         tabBarInactiveTintColor: c.tabInactive,
         sceneStyle: isTV ? { paddingTop: 64 } : undefined,
-        ...(isTV ? { tabBar: (props: any) => <TvTabBar {...props} /> } : {}),
       }}
     >
       <Tabs.Screen
@@ -100,7 +102,7 @@ export default function TabLayout() {
       />
       <Tabs.Screen
         name="projects"
-        options={{ title: "Projects", href: null }}
+        options={{ title: "Projects", href: isTV ? undefined : null }}
       />
       <Tabs.Screen
         name="vibing"

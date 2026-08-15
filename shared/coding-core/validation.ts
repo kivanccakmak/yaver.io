@@ -3,11 +3,18 @@
  * display the level actually executed; it must never present static inspection
  * as a compiler or test result.
  */
-export type ValidationLevel = "static-preflight" | "compile" | "test" | "not-available";
+export type ValidationLevel = "static-preflight" | "lint" | "typecheck" | "compile" | "test" | "not-available";
 
 export interface ValidationResult {
   level: ValidationLevel;
-  executor: "this-device" | "selected-machine" | "ci" | "none";
+  executor: "this-device" | "selected-machine" | "cloud-runner" | "ci" | "none";
+  executorId?: string;
+  commandProfile?: string;
+  ref?: string;
+  commitSha?: string;
+  exitCode?: number;
+  startedAt?: number;
+  finishedAt?: number;
   passed?: boolean;
   summary: string;
   compiled: boolean;

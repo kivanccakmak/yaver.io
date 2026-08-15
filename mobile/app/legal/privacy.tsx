@@ -10,8 +10,12 @@ export default function PrivacyPolicyScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]}>
       <View style={[styles.header, { borderBottomColor: c.border }]}>
-        <Pressable onPress={() => router.back()}>
-          <Text style={[styles.backButton, { color: c.accent }]}>Back</Text>
+        <Pressable
+          hasTVPreferredFocus
+          onPress={() => router.back()}
+          style={({ focused }) => [styles.backButton, { borderColor: focused ? c.accent : "transparent" }, focused && styles.backButtonFocused]}
+        >
+          <Text style={[styles.backButtonText, { color: c.accent }]}>Back</Text>
         </Pressable>
         <Text style={[styles.headerTitle, { color: c.textPrimary }]}>Privacy Policy</Text>
         <View style={styles.headerSpacer} />
@@ -163,7 +167,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
   },
-  backButton: { fontSize: 16 },
+  backButton: { minWidth: 72, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, borderWidth: 2 },
+  backButtonFocused: { transform: [{ scale: 1.05 }] },
+  backButtonText: { fontSize: 16, fontWeight: "700", textAlign: "center" },
   headerTitle: { fontSize: 17, fontWeight: "600" },
   headerSpacer: { width: 40 },
   container: { flex: 1 },
