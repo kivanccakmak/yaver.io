@@ -1940,6 +1940,10 @@ export default function TasksScreen() {
   const [showNewTask, setShowNewTask] = useState(false);
   const [composerProjects, setComposerProjects] = useState<ComposerProject[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState<string>(routeProjectDir);
+  // A blank project chosen by the user is intentional task context, not
+  // "project discovery has not finished". Track it per runner device so the
+  // restore effect cannot immediately overwrite No project with the old row.
+  const explicitProjectChoiceRef = useRef<{ deviceId: string; path: string } | null>(null);
   const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
   // Yaver's own MCP doorway — user-selectable, defaults ON (the agent
@@ -2036,6 +2040,28 @@ export default function TasksScreen() {
             />
           </View>
           <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+            <Pressable
+              onPress={() => {
+                const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+                explicitProjectChoiceRef.current = { deviceId: runnerDeviceId, path: "" };
+                setSelectedProjectPath("");
+              }}
+              style={[
+                s.projectPickerRow,
+                {
+                  borderColor: !selectedProjectPath ? c.accent : c.border,
+                  backgroundColor: !selectedProjectPath ? withAlpha(c.accent, "1f") : c.bg,
+                },
+              ]}
+            >
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }}>No project (optional)</Text>
+                <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
+                  Send directly with this machine's default runner.
+                </Text>
+              </View>
+              {!selectedProjectPath ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
+            </Pressable>
             {composerProjects.length === 0 ? (
               <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
                 No projects reported by the runner machine yet.
@@ -2047,9 +2073,10 @@ export default function TasksScreen() {
                   <Pressable
                     key={project.path}
                     onPress={() => {
+                      const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+                      explicitProjectChoiceRef.current = { deviceId: runnerDeviceId, path: project.path };
                       setSelectedProjectPath(project.path);
                       if (keepLastProject) {
-                        const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
                         void saveLastTaskProject({
                           deviceId: runnerDeviceId,
                           name: project.name,
@@ -5451,6 +5478,8 @@ export default function TasksScreen() {
 
       if (routeProjectDir) return;
       if (selectedProjectPath && normalizedProjects.some((project) => project.path === selectedProjectPath)) return;
+      const explicit = explicitProjectChoiceRef.current;
+      if (explicit?.deviceId === runnerDeviceId && explicit.path === "") return;
       if (keep) {
         // Convex-first, local-fallback (Snowball, 2026-08-09): the canonical
         // last-project memory is defaultRuntimeProjectByDevice — the SAME row
@@ -5472,9 +5501,9 @@ export default function TasksScreen() {
           return;
         }
       }
-      if (!selectedProjectPath && normalizedProjects[0]) {
-        setSelectedProjectPath(normalizedProjects[0].path);
-      }
+      // No remembered project means no project. The first discovery row is
+      // inventory order, not user intent; a prompt remains immediately
+      // sendable and the machine applies its preferred runner.
     })();
     return () => {
       cancelled = true;
@@ -6689,7 +6718,7 @@ export default function TasksScreen() {
                   <Ionicons name="options-outline" size={16} color={selectedComposerProject ? c.accent : c.textMuted} />
                   <Text style={[s.scopeChipText, { color: c.textSecondary }]} numberOfLines={1}>
                     {[
-                      selectedComposerProject?.name || projectNameFromPath(projectDir) || "Project",
+                      selectedComposerProject?.name || projectNameFromPath(projectDir) || "No project",
                       selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCPs",
                     ].join(" · ")}
                   </Text>
@@ -7968,7 +7997,7 @@ export default function TasksScreen() {
                         <Ionicons name="options-outline" size={16} color={selectedComposerProject ? c.accent : c.textMuted} />
                         <Text style={[s.scopeChipText, { color: c.textSecondary }]} numberOfLines={1}>
                           {[
-                            selectedComposerProject?.name || projectNameFromPath(projectDir) || "Project",
+                            selectedComposerProject?.name || projectNameFromPath(projectDir) || "No project",
                             selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCPs",
                           ].join(" · ")}
                         </Text>

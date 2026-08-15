@@ -195,6 +195,7 @@ struct WebPreviewStreamView: View {
             }
         }
         .onAppear { if !started { restart() } }
+        .accessibilityIdentifier("vibing.preview-surface")
         .onReceive(ticker) { now in if fixing { fixTicker = now } }
         // The Browse|Inspect contract, tvOS-style: flipping DOM mode ON arms
         // the probe in the captured page (hover highlight tracks in the frame
@@ -568,7 +569,11 @@ struct WebPreviewStreamView: View {
             return
         }
         guard let tool = FailureSignals.gapInstallTool(gap) else {
-            error = gap.constraint ?? "This gap carries no install route."
+            if let fix = gap.fix {
+                startGeneralFix(gap, fix)
+            } else {
+                error = gap.constraint ?? "This gap carries no runnable route."
+            }
             return
         }
         fixing = true
@@ -616,6 +621,46 @@ struct WebPreviewStreamView: View {
                 }
             }
             await stream.value
+        }
+    }
+
+    /// Run a non-install asynchronous remedy such as `/dev/start`. Dev-server
+    /// progress is already carried by the `/dev/events` stream attached to this
+    /// view, so subscribing to the install-only `/streams/install:*` protocol
+    /// would wait on a channel this route never produces. Invoke the route,
+    /// keep the existing event panel alive, and re-enter the bounded readiness
+    /// loop when the agent asks for a retry.
+    private func startGeneralFix(_ gap: CapabilityGap, _ fix: GapFix) {
+        fixing = true
+        fixStartedAt = Date()
+        fixTicker = Date()
+        appendLog("\(fix.method) \(fix.path) …")
+        fixTask?.cancel()
+        fixTask = Task {
+            guard let client = fellBackToRunner ? store.runnerClient() : store.renderClient() else {
+                await MainActor.run {
+                    fixing = false
+                    error = store.machineSplitActive
+                        ? "Your render machine needs the relay to be reachable from this TV."
+                        : "No machine selected"
+                }
+                return
+            }
+            do {
+                try await client.invokeGapFix(fix)
+            } catch {
+                await MainActor.run {
+                    fixing = false
+                    self.error = "\(fix.label) failed: \(error.localizedDescription)"
+                }
+                return
+            }
+            await MainActor.run {
+                fixing = false
+                self.gap = nil
+                appendLog("\(fix.label) started.")
+                if FailureSignals.gapRetriesAfterFix(gap) { restart() }
+            }
         }
     }
 
@@ -690,7 +735,8 @@ struct WebPreviewStreamView: View {
         startLogStream(client)
         do {
             status = "Starting \(project.name)…"
-            let dev = try await client.startDevServer(for: project)
+            let starting = try await client.startDevServer(for: project)
+            let dev = try await waitForDevServer(client, starting: starting)
             status = "Booting the browser lane…"
             let server = try await maybeStartExpoWebSibling(client)
             let target = captureTarget(dev: dev, server: server)
@@ -713,6 +759,37 @@ struct WebPreviewStreamView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// `/dev/start` returns while the framework is still compiling. Starting
+    /// capture immediately raced Chrome against an unopened port and produced
+    /// a false "Start the dev server" page even though the server was already
+    /// starting in the background. Poll the shared status endpoint, bounded,
+    /// and only proceed when it reports a real serving process.
+    private func waitForDevServer(
+        _ client: AgentClient,
+        starting initial: AgentClient.DevStartResult
+    ) async throws -> AgentClient.DevStartResult {
+        var current = initial
+        let deadline = Date().addingTimeInterval(150)
+        while !Task.isCancelled {
+            if let failure = current.error?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !failure.isEmpty {
+                throw AgentError(message: failure)
+            }
+            let ready = current.serving == true
+                || (current.running == true && current.building != true)
+            if ready { return current }
+            guard Date() < deadline else {
+                throw AgentError(message: "The (project.name) dev server did not become ready within 2½ minutes.")
+            }
+            status = current.servingLabel?.isEmpty == false
+                ? current.servingLabel!
+                : "Starting (project.name)…"
+            try await Task.sleep(nanoseconds: 600_000_000)
+            current = try await client.devServerStatus()
+        }
+        throw CancellationError()
     }
 
     private func startLogStream(_ client: AgentClient) {
@@ -858,8 +935,23 @@ struct WebPreviewStreamView: View {
         if let webUrl = server?.webUrl, webUrl.hasPrefix("http://") || webUrl.hasPrefix("https://") {
             return webUrl
         }
+        // The agent's /dev/ proxy is the canonical browser lane for Vite,
+        // Next, Flutter web, etc. Besides surviving substituted framework
+        // ports, it supplies a loopback Host header; hitting Next's raw port
+        // made Yaver's HTTPS middleware redirect the headless browser to TLS
+        // on a plain-HTTP dev port.
+        if let bundleUrl = dev.bundleUrl, bundleUrl.hasPrefix("/") {
+            return "http://127.0.0.1:\(Backend.agentPort)\(bundleUrl)"
+        }
         if let url = dev.url, url.hasPrefix("http://") || url.hasPrefix("https://") {
             return url
+        }
+        if let url = dev.directUrl, url.hasPrefix("http://") || url.hasPrefix("https://") {
+            // Chrome runs on this same box. Preserve the port but use loopback
+            // so a public/LAN address policy cannot block its own preview.
+            if let parsed = URL(string: url), let port = parsed.port {
+                return "http://127.0.0.1:\(port)"
+            }
         }
         if let port = dev.port ?? server?.port, port > 0 {
             return "http://127.0.0.1:\(port)"

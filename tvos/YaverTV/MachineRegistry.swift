@@ -31,6 +31,8 @@ struct RegisteredDevice: Decodable, Identifiable {
     let managed: Bool?
     let machineId: String?
     let lastHeartbeat: Double? // ms epoch
+    let runners: [RegisteredRunner]?
+    let installedRunnerIds: [String]?
 
     // Sharing. A box someone else owns and shared with this account comes back
     // from /devices/list looking exactly like an owned one unless we decode
@@ -54,11 +56,25 @@ struct RegisteredDevice: Decodable, Identifiable {
         return "another account"
     }
 
-    var displayName: String {
-        if let a = alias, !a.isEmpty { return a }
+    /// Stable machine name from the agent (for example
+    /// `ubuntu-4gb-hel1-1`). Aliases are account-local labels and must not
+    /// replace this identity on a TV: doing so made the same box look like a
+    /// different machine than it did in WebUI.
+    var realName: String {
         if let n = name, !n.isEmpty { return n }
+        if let a = alias, !a.isEmpty { return a }
         return String(deviceId.prefix(8))
     }
+
+    /// Account alias, rendered beside/below the real name as `@alias`.
+    var aliasLabel: String? {
+        guard let alias, !alias.isEmpty, alias != realName else { return nil }
+        return alias.hasPrefix("@") ? alias : "@\(alias)"
+    }
+
+    /// Compatibility label for sorting/narration. The real hostname leads;
+    /// UI that has room also renders `aliasLabel` explicitly.
+    var displayName: String { realName }
 
     /// Heartbeat fresh within 15 min — the same window mobile uses
     /// (HEARTBEAT_STALE_MS = 900_000, devices.ts). We can't call Date.now in a
@@ -83,6 +99,35 @@ struct RegisteredDevice: Decodable, Identifiable {
 
     var wakeable: Bool { (managed ?? false) && (machineId?.isEmpty == false) }
     var port: Int { quicPort ?? Backend.agentPort }
+}
+
+/// Coding-runner capability reported in the machine heartbeat. Settings uses
+/// this live inventory so it never offers a default the selected machine does
+/// not actually have installed.
+struct RegisteredRunner: Decodable, Identifiable {
+    let runnerId: String
+    let installed: Bool?
+    let ready: Bool?
+    let authConfigured: Bool?
+    let status: String?
+
+    var id: String { Self.canonical(runnerId) }
+
+    static func canonical(_ value: String) -> String {
+        switch value.lowercased() {
+        case "claude-code", "claude_code": return "claude"
+        default: return value.lowercased()
+        }
+    }
+
+    var label: String {
+        switch id {
+        case "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        default: return runnerId
+        }
+    }
 }
 
 /// RFC1918 — the ranges a TV on a home/office LAN can actually reach directly.
@@ -110,7 +155,14 @@ enum MachineRegistry {
     // The authoritative relay list is GET /config (the SAME source the web
     // dashboard's refreshRelayTopology reads); settings only ever supplies
     // the per-user relay password (and an optional URL override).
-    struct RelayServer: Decodable { let url: String? }
+    struct RelayServer: Decodable {
+        /// Current control-plane payload name.
+        let httpUrl: String?
+        /// Older payloads used `url`; keep accepting it during rollout.
+        let url: String?
+
+        var endpoint: String? { httpUrl ?? url }
+    }
     struct RelayConfigEnvelope: Decodable { let relayServers: [RelayServer]? }
 
     /// Relay server URLs from GET /config (relayServers[].url). Empty on any
@@ -124,7 +176,9 @@ enum MachineRegistry {
             let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
             let env = try? JSONDecoder().decode(RelayConfigEnvelope.self, from: data)
         else { return [] }
-        return (env.relayServers ?? []).compactMap { $0.url?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return (env.relayServers ?? [])
+            .compactMap { $0.endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     /// The relay leg a BoxTarget should use: settings.relayUrl when the user
@@ -141,6 +195,11 @@ enum MachineRegistry {
     struct UserSettings: Decodable {
         let relayUrl: String?
         let relayPassword: String?
+        /// Explicit auto-connect order shared with mobile/web.
+        let primaryDeviceId: String?
+        let secondaryDeviceId: String?
+        /// Per-device default coding runner shared with mobile/web.
+        let primaryRunnerByDevice: [PrimaryRunnerPref]?
         /// Runner/render machine split rows (same Convex rows the web edits).
         /// Additive decode — older payload shapes leave it nil.
         let machineRolesByProject: [MachineRolesRow]?
@@ -160,6 +219,14 @@ enum MachineRegistry {
         /// Per-device external-MCP selection + the yaver doorway toggle — the
         /// same mcpServersByDevice row mobile and web write.
         let mcpServersByDevice: [MCPServersPref]?
+    }
+
+    struct PrimaryRunnerPref: Decodable {
+        let deviceId: String?
+        let runnerId: String?
+        let model: String?
+        let mode: String?
+        let provider: String?
     }
 
     /// One defaultRuntimeProjectByDevice row (Convex userSettings).
@@ -271,7 +338,10 @@ enum MachineRegistry {
             throw AgentError(message: "Couldn't load relay settings (\(http.statusCode)).")
         }
         return (try? JSONDecoder().decode(UserSettingsEnvelope.self, from: data).settings)
-            ?? UserSettings(relayUrl: nil, relayPassword: nil, machineRolesByProject: nil,
+            ?? UserSettings(relayUrl: nil, relayPassword: nil,
+                            primaryDeviceId: nil, secondaryDeviceId: nil,
+                            primaryRunnerByDevice: nil,
+                            machineRolesByProject: nil,
                             connectionMode: nil, defaultRuntimeProjectByDevice: nil,
                             mcpServersByDevice: nil)
     }
@@ -336,6 +406,46 @@ enum MachineRegistry {
         await postSettings(token: token,
                            key: "mcpServersForDevice",
                            value: body)
+    }
+
+    /// Explicit account defaults edited from the tvOS Settings surface. These
+    /// throw so a settings screen can report a failed save instead of showing
+    /// an optimistic value that never reached the shared mobile/web row.
+    static func savePrimaryDevice(token: String, deviceId: String?) async throws {
+        try await postSettingsChecked(token: token, body: ["primaryDeviceId": deviceId ?? NSNull()])
+    }
+
+    static func savePrimaryRunner(token: String, deviceId: String, runnerId: String?) async throws {
+        try await postSettingsChecked(token: token, body: [
+            "primaryRunnerForDevice": [
+                "deviceId": deviceId,
+                "runnerId": runnerId ?? NSNull(),
+                // A model from another runner is unsafe. Clearing it lets the
+                // chosen CLI use its own configured default, matching mobile.
+                "model": NSNull(),
+                "mode": NSNull(),
+                "provider": NSNull(),
+            ],
+        ])
+    }
+
+    private static func postSettingsChecked(token: String, body: [String: Any]) async throws {
+        guard !token.isEmpty else { throw AgentError(message: "Sign in first.") }
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("settings"))
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 12
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw AgentError(message: "No response while saving Settings.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            throw AgentError(message: message ?? "Couldn't save Settings (\(http.statusCode)).")
+        }
     }
 
     /// Shared POST /settings writer. Deliberately silent on failure — a

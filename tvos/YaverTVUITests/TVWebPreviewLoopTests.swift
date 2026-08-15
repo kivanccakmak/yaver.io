@@ -48,6 +48,7 @@ final class TVWebPreviewLoopTests: XCTestCase {
     }
     private var boxHost: String { env("YAVER_BOX_HOST", "") }
     private var boxPort: Int { Int(env("YAVER_BOX_PORT", "18080")) ?? 18080 }
+    private var boxId: String { env("YAVER_BOX_ID", "closed-loop-box") }
     private var token: String { env("YAVER_BOX_TOKEN", "") }
     private var projectName: String { env("YAVER_PROJECT", "mobile") }
     /// How long to sit on the preview capturing frames. The orchestrator starts
@@ -158,6 +159,38 @@ final class TVWebPreviewLoopTests: XCTestCase {
             i += 1
             Thread.sleep(forTimeInterval: 15)
         }
+    }
+
+    /// Proves the dashboard's Vibing destination is the interactive runtime,
+    /// not the older Projects screenshot-preview surface. The account's
+    /// remembered repository must resolve directly to its runnable child, so a
+    /// monorepo chooser is a failure here rather than an acceptable waypoint.
+    func testVibingOpensRememberedInteractivePageDirectly() throws {
+        let app = XCUIApplication()
+        let boxJSON = #"[{"id":"\#(boxId)","name":"\#(boxHost)","host":"\#(boxHost)","port":\#(boxPort)}]"#
+        let plistQuoted = "\"" + boxJSON.replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        app.launchArguments = [
+            "-yaver.tv.token", token,
+            "-yaver.tv.boxes", plistQuoted,
+            "-yaver.tv.selectedBox", boxId,
+            "-yaver.tv.startAt", "vibing",
+        ]
+        app.launch()
+        snap(app, "vibing-0000-launch")
+
+        let runtime = app.otherElements["vibing.interactive-webrtc"]
+        XCTAssertTrue(
+            runtime.waitForExistence(timeout: 30),
+            "Vibing must resume the remembered runnable page, not stop at a repository or child-app chooser"
+        )
+        XCTAssertTrue(app.buttons["Pointer"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Vibe"].exists)
+        XCTAssertTrue(app.buttons["Reconnect"].exists)
+        XCTAssertFalse(app.buttons["Element"].exists, "Element/Rebuild belongs to the Projects preview surface, not Vibing")
+        XCTAssertFalse(app.staticTexts["Choose the app to open live"].exists)
+
+        Thread.sleep(forTimeInterval: 12)
+        snap(app, "vibing-0001-interactive")
     }
 
 

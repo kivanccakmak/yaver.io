@@ -3,6 +3,7 @@
     "name": "Yaver",
     "slug": "yaver",
     "version": "1.18.167",
+    "newArchEnabled": true,
     "orientation": "default",
     "scheme": "yaver",
     "icon": "./assets/icon.png",

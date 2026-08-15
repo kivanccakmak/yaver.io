@@ -542,7 +542,6 @@ export default function TabLayout() {
       <Tabs.Screen name="newproject" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="designmode" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="gitproviders" options={{ href: null, headerShown: false }} />
-      <Tabs.Screen name="guests" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="solostack" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="mail" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="studio" options={{ href: null, headerShown: false }} />

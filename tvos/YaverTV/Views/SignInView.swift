@@ -140,13 +140,11 @@ struct SignInView: View {
                                 confirmLan(allow: true)
                             }
                             .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
                             .disabled(lanConfirming)
                             Button("Deny") {
                                 confirmLan(allow: false)
                             }
                             .buttonStyle(.bordered)
-                            .controlSize(.large)
                             .disabled(lanConfirming)
                         }
                         .padding(.top, 4)
@@ -245,7 +243,6 @@ struct SignInView: View {
                             handleEmailSignIn()
                         }
                         .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
                         .disabled(emailBusy || email.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
                         Text("Type with the remote — or approve the QR above from your phone.")
                             .font(.system(size: 14))

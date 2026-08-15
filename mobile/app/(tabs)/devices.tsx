@@ -17,7 +17,7 @@ import { getConvexSiteUrlSync } from "../../src/lib/backendConfig";
 import { useLocalSearchParams, router } from "expo-router";
 import { Device, useDevice } from "../../src/context/DeviceContext";
 import { appTag } from "../../src/lib/appVersion";
-import { ENABLE_GUEST_FEATURES, HIDE_PAID_UI } from "../../src/lib/launchFlags";
+import { HIDE_PAID_UI } from "../../src/lib/launchFlags";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { chipPalette } from "../../src/lib/chipPalette";
@@ -991,7 +991,6 @@ export default function DevicesScreen() {
     hiddenDeviceCount,
     unhideAllDevices,
     removeDevice,
-    acceptGuestByCode,
     unreachableDeviceIds,
     primaryDeviceId,
     setPrimaryDevice,
@@ -1042,8 +1041,6 @@ export default function DevicesScreen() {
     return () => clearTimeout(t);
   }, [openDetailsId]);
 
-  const [guestCode, setGuestCode] = useState("");
-  const [guestLoading, setGuestLoading] = useState(false);
   const [peerStates, setPeerStates] = useState<Record<string, { state: "online" | "stale" | "offline"; lastSeen?: number }>>({});
   // Tablet master-detail: when in landscape, picking a device on
   // the left list opens its details in a persistent right pane
@@ -1196,33 +1193,6 @@ export default function DevicesScreen() {
     [token, user, refreshDevices],
   );
 
-  const handleAcceptGuestCode = async () => {
-    const code = guestCode.trim();
-    if (!code || code.length < 4) return;
-    setGuestLoading(true);
-    try {
-      const result = await acceptGuestByCode(code);
-      Alert.alert("Joined!", `You now have access to ${result.hostName}'s machine.`);
-      setGuestCode("");
-      refreshDevices();
-    } catch (e: any) {
-      // Inline classifier (mirrors more.tsx's guest-invite error shape, kept
-      // local so we don't reach into another agent's file). Never surface the
-      // raw e.message as the primary line.
-      const raw = e instanceof Error ? e.message : String(e);
-      const lower = raw.toLowerCase();
-      const friendly = /expired|expire/.test(lower)
-        ? "Invite codes expire after 2 days — ask the host to resend."
-        : /network|fetch|timeout|econn|offline|unreach|connection/.test(lower)
-          ? "Couldn't reach the server — check your connection."
-          : /not found|invalid|no such|bad code|unknown/.test(lower)
-            ? "Double-check the 6-char code."
-            : "Couldn't join with that code. Double-check it and try again.";
-      Alert.alert("Couldn't join", friendly);
-    }
-    setGuestLoading(false);
-  };
-
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <AppScreenHeader title="Devices" onBack={() => router.navigate("/(tabs)/more" as any)} />
@@ -1238,27 +1208,6 @@ export default function DevicesScreen() {
             )}
           </View>
         )}
-
-        {ENABLE_GUEST_FEATURES ? (
-          <View style={[styles.guestCodeRow, { borderBottomColor: c.border }]}>
-            <TextInput
-              style={[styles.guestCodeInput, { backgroundColor: c.bgCard, borderColor: c.borderSubtle, color: c.textPrimary }]}
-              placeholder="Invite code"
-              placeholderTextColor={c.textMuted}
-              value={guestCode}
-              onChangeText={setGuestCode}
-              autoCapitalize="characters"
-              maxLength={6}
-            />
-            <Pressable
-              style={[styles.guestCodeBtn, { backgroundColor: guestCode.trim().length >= 6 ? c.accent : c.accent + "33" }]}
-              onPress={handleAcceptGuestCode}
-              disabled={guestCode.trim().length < 6 || guestLoading}
-            >
-              <Text style={styles.guestCodeBtnText}>{guestLoading ? "..." : "Join"}</Text>
-            </Pressable>
-          </View>
-        ) : null}
 
         {/* Zero-touch: claim a Yaver-powered device by scanning its label QR
             (DPP-style). Opens the camera scanner; the box self-credentials

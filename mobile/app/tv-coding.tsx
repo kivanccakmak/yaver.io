@@ -137,7 +137,9 @@ export default function TVCodingScreen() {
         const projectMatch = last
           ? normalizedProjects.find((project) => project.path === last.path || project.name.toLowerCase() === last.name.toLowerCase())
           : null;
-        setSelectedProjectPath((current) => current || projectMatch?.path || normalizedProjects[0]?.path || "");
+        // Restore an explicit last project, but never turn discovery order into
+        // intent. No project is a valid, immediately-sendable chat scope.
+        setSelectedProjectPath((current) => current || projectMatch?.path || "");
         const primaryRunner = primaryRunnerByDevice?.[deviceId] || "";
         const runner =
           installed.find((row: RunnerInfo) => row.id === primaryRunner) ||
@@ -167,7 +169,7 @@ export default function TVCodingScreen() {
   const send = useCallback(async () => {
     if (!deviceId || !prompt.trim()) return;
     const client = connectionManager.clientFor(deviceId);
-    const projectName = selectedProject?.name || projectNameFromPath(selectedProjectPath);
+    const projectName = selectedProject?.name || (selectedProjectPath ? projectNameFromPath(selectedProjectPath) : "");
     // Yaver goal-mode: `/goal <objective>` arms a persistent goal on the
     // opencode runner via the structured `goal` field (see goalSlashCommand).
     const goalIntent = goalFromSlashCommand(prompt, selectedRunner);
@@ -209,22 +211,22 @@ export default function TVCodingScreen() {
             gitRemote: selectedProject?.gitRemote,
           });
         }
-        // MCP selection rides along to Convex (2026-08-10) — same row the
-        // web/mobile write, so the TV's MCP choice is remembered elsewhere.
-        if (token) {
-          void saveMCPServersToConvex(token, {
-            deviceId,
-            mcpServers: selectedMcpServers,
-            includeYaverMcp,
-          });
-        }
+      }
+      // MCP context is independent of project context. Persist it even when
+      // this task intentionally has no project, matching the phone composer.
+      if (token) {
+        void saveMCPServersToConvex(token, {
+          deviceId,
+          mcpServers: selectedMcpServers,
+          includeYaverMcp,
+        });
       }
       setPrompt("");
       setBusy(`Started ${task.title || task.id}`);
     } catch (error) {
       setBusy(error instanceof Error ? error.message : String(error));
     }
-  }, [deviceId, prompt, selectedMcpServers, selectedModel, selectedProject, selectedProjectPath, selectedRunner]);
+  }, [deviceId, includeYaverMcp, prompt, selectedMcpServers, selectedModel, selectedProject, selectedProjectPath, selectedRunner, token]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -236,7 +238,7 @@ export default function TVCodingScreen() {
           </Pressable>
           <Text style={styles.title}>Coding</Text>
           <Text style={styles.subtitle}>
-            {[selectedDevice?.name || "Box", selectedProject?.name || "Project", selectedRunner ? displayRunnerLabel(selectedRunner) : "Agent"].join(" · ")}
+            {[selectedDevice?.name || "Box", selectedProject?.name || "No project", selectedRunner ? displayRunnerLabel(selectedRunner) : "Agent"].join(" · ")}
           </Text>
         </View>
 
@@ -255,6 +257,9 @@ export default function TVCodingScreen() {
         </ConfigBand>
 
         <ConfigBand title="Project">
+          <TVChip active={!selectedProjectPath} colors={c} onPress={() => setSelectedProjectPath("")}>
+            No project (optional)
+          </TVChip>
           {projects.length === 0 ? <Text style={styles.muted}>No projects reported by this box.</Text> : projects.map((project) => (
             <TVChip key={project.path} active={project.path === selectedProjectPath} colors={c} onPress={() => setSelectedProjectPath(project.path)}>
               {project.name}
