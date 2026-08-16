@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const version = "0.1.23"
+const version = "0.1.25"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -241,7 +241,7 @@ func runServe(args []string) {
 	if turnIP == "" {
 		turnIP = os.Getenv("TURN_PUBLIC_IP")
 	}
-	turnSecret := os.Getenv("TURN_AUTH_SECRET")
+	turnSecret := loadTURNAuthSecret()
 	if turnSecret == "" {
 		// Reuse the relay password by default — same secret, no extra
 		// key material to distribute.
@@ -264,6 +264,7 @@ func runServe(args []string) {
 	}
 
 	server := NewRelayServer(*quicPort, *httpPort, pw, cURL, eDomain)
+	server.turnAuthSecret = turnSecret
 	if err := server.Start(ctx); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

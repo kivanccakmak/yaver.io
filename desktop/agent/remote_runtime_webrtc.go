@@ -69,6 +69,11 @@ type remoteRuntimeLiveState struct {
 	lastFrame    []byte
 	lastFrameAt  time.Time
 	eventBacklog []map[string]any
+	controlAcks  map[string]vibingWebRTCControlAckCacheEntry
+	controlOrder []string
+	// controlMu permits one DOM operation per session. A broken page cannot
+	// accumulate an unbounded queue of 10-second Evaluate/click operations.
+	controlMu sync.Mutex
 
 	// lease is the P5 single-writer control lease. Nil-check-safe:
 	// callers use ensureLease() which lazily inits with the default
@@ -348,7 +353,16 @@ func (m *RemoteRuntimeManager) ApplyWebRTCOffer(sessionID string, offer webrtc.S
 		live.closePeer()
 	}
 
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServersForPeer()})
+	m.mu.RLock()
+	iceProvider := m.iceServerProvider
+	m.mu.RUnlock()
+	iceServers := iceServersForPeer()
+	if iceProvider != nil {
+		iceCtx, iceCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		iceServers = iceProvider(iceCtx)
+		iceCancel()
+	}
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
 	if err != nil {
 		return session, webrtc.SessionDescription{}, err
 	}
@@ -371,6 +385,9 @@ func (m *RemoteRuntimeManager) ApplyWebRTCOffer(sessionID string, offer webrtc.S
 		_ = pc.Close()
 		return session, webrtc.SessionDescription{}, err
 	}
+	eventsDC.OnMessage(func(msg webrtc.DataChannelMessage) {
+		m.handleVibingWebRTCControlMessage(sessionID, live, eventsDC, msg.Data)
+	})
 	if framesDC != nil {
 		framesDC.OnOpen(func() {
 			streamer.Start(context.Background(), live, m)
@@ -474,6 +491,7 @@ func (m *RemoteRuntimeManager) ApplyWebRTCOffer(sessionID string, offer webrtc.S
 	// the viewer whether to expect a video track (rtp-h264-v1) or
 	// JPEG payloads on framesDC (datachannel-jpeg-v1).
 	eventsDC.OnOpen(func() {
+		sendVibingWebRTCHello(eventsDC, sessionID)
 		live.flushEventBacklog()
 		live.sendEventJSON(map[string]any{
 			"type":      "ready",

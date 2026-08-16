@@ -24,6 +24,7 @@ export default function RemoteRuntimeScreen() {
   const [sendingFeedback, setSendingFeedback] = useState(false);
   const [controlText, setControlText] = useState("");
   const [viewerNote, setViewerNote] = useState<string>("Create a session to start remote viewing.");
+  const [vibingProtocolVersion, setVibingProtocolVersion] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connectingTargetLabel, setConnectingTargetLabel] = useState<string | null>(null);
   const [connectingSince, setConnectingSince] = useState<number | null>(null);
@@ -100,6 +101,7 @@ export default function RemoteRuntimeScreen() {
   }, [session]);
 
   const createSession = useCallback(async (target: { id: string; label: string }) => {
+    setVibingProtocolVersion(null);
     setBusyTargetId(target.id);
     setConnectingTargetLabel(target.label);
     setConnectingSince(Date.now());
@@ -203,6 +205,7 @@ export default function RemoteRuntimeScreen() {
     try {
       await quicClient.closeRemoteRuntimeSession(session.id);
       setSession(null);
+      setVibingProtocolVersion(null);
       setViewerNote("Remote runtime session closed.");
     } catch (e) {
       Alert.alert("Could not close session", e instanceof Error ? e.message : String(e));
@@ -317,6 +320,13 @@ export default function RemoteRuntimeScreen() {
                         if (payload?.type === "stream-stalled") {
                           setViewerNote("Stream stalled — the box stopped sending frames.");
                         }
+                        if (payload?.type === "vibing-protocol" && payload.protocol?.v === 1) {
+                          setVibingProtocolVersion(1);
+                        }
+                        if (payload?.type === "vibing-ack" && payload.ack?.ok === false) {
+                          const message = payload.ack?.error?.message;
+                          if (typeof message === "string") setViewerNote(message);
+                        }
                         if (payload?.type === "feedback-launch-request") triggerFeedbackLaunch("remote-runtime");
                       } catch {
                         setViewerNote(event.nativeEvent.data);
@@ -325,7 +335,9 @@ export default function RemoteRuntimeScreen() {
                     style={styles.viewer}
                   />
                 </View>
-                <Text style={[styles.meta, { color: c.textMuted, marginTop: 10 }]}>{viewerNote}</Text>
+                <Text style={[styles.meta, { color: c.textMuted, marginTop: 10 }]}>
+                  {viewerNote}{vibingProtocolVersion ? ` · DOM control v${vibingProtocolVersion}` : ""}
+                </Text>
                 <View style={styles.row}>
                   <TextInput
                     value={controlText}
@@ -721,6 +733,20 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
           if (iceRes.ok && iceData.iceServers && iceData.iceServers.length > 0) iceServers = iceData.iceServers;
         } catch {}
         const pc = new RTCPeerConnection({ iceServers });
+        let eventsChannel = null;
+        // Native DOM-selection surfaces can call this through injected JS once
+        // the versioned hello arrives. It is deliberately bounded to the
+        // server's 16 KiB protocol limit and returns false when HTTP fallback
+        // should be used instead.
+        window.yaverVibingControl = function (message) {
+          if (!eventsChannel || eventsChannel.readyState !== "open" || !message || typeof message !== "object") return false;
+          try {
+            const wire = JSON.stringify(message);
+            if (!wire || wire.length > 16384) return false;
+            eventsChannel.send(wire);
+            return true;
+          } catch { return false; }
+        };
         const jpegChunks = new Map();
         function jpegBlobFromMessage(data) {
           if (typeof data !== "string") return new Blob([data], { type: "image/jpeg" });
@@ -787,6 +813,7 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
             };
           }
           if (event.channel.label === "events") {
+            eventsChannel = event.channel;
             event.channel.onmessage = (msg) => {
               try {
                 const payload = JSON.parse(String(msg.data));
@@ -797,6 +824,12 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
                 if (payload.type === "feedback-launch-request") {
                   post({ type: "feedback-launch-request", source: payload.source || "remote-runtime" });
                   setStatus("Feedback overlay requested.");
+                }
+                if (payload.type === "vibing.protocol") {
+                  post({ type: "vibing-protocol", protocol: payload });
+                }
+                if (payload.type === "vibing.ack") {
+                  post({ type: "vibing-ack", ack: payload });
                 }
                 if (payload.type === "frame-error" && payload.error) setStatus("Frame capture failed: " + String(payload.error));
                 else if (payload.error) setStatus(payload.error);
