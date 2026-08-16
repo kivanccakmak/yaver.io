@@ -35,8 +35,7 @@ Environment:
   TVOS_BUILD_NUMBER       Override CURRENT_PROJECT_VERSION for the archive.
   TVOS_PROVISIONING_PROFILE_SPECIFIER
                            App Store profile name for manual upload signing.
-                           Defaults to "Yaver TVOS_APP_STORE profile".
-                           Set to empty to use automatic signing.
+                           Empty (the default) uses automatic signing.
   TVOS_CODE_SIGN_IDENTITY  Signing identity for manual upload signing.
                            Defaults to "Apple Distribution".
 EOF
@@ -182,11 +181,15 @@ if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
   set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
 fi
 
-AUTH_KEY="${APP_STORE_KEY_PATH:?APP_STORE_KEY_PATH unset}"
-AUTH_KEY_ID="${APP_STORE_KEY_ID:?APP_STORE_KEY_ID unset}"
-AUTH_KEY_ISSUER="${APP_STORE_KEY_ISSUER:?APP_STORE_KEY_ISSUER unset}"
-APPLE_TEAM_ID="${APPLE_TEAM_ID:?APPLE_TEAM_ID unset}"
-TVOS_PROVISIONING_PROFILE_SPECIFIER="${TVOS_PROVISIONING_PROFILE_SPECIFIER-Yaver TVOS_APP_STORE profile}"
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
+apple_resolve_team_id "$TVOS_DIR/project.yml"
+apple_configure_xcode_auth
+
+# Automatic signing is the safe default: enabling a capability invalidates old
+# named profiles, while -allowProvisioningUpdates lets Xcode regenerate them.
+# Set a profile name explicitly only for a deliberately manual signing lane.
+TVOS_PROVISIONING_PROFILE_SPECIFIER="${TVOS_PROVISIONING_PROFILE_SPECIFIER:-}"
 TVOS_CODE_SIGN_IDENTITY="${TVOS_CODE_SIGN_IDENTITY:-Apple Distribution}"
 
 # Build number. Without this, CURRENT_PROJECT_VERSION comes from project.yml,
@@ -195,6 +198,7 @@ TVOS_CODE_SIGN_IDENTITY="${TVOS_CODE_SIGN_IDENTITY:-Apple Distribution}"
 # TestFlight cap. Bump from max(ASC, local) + 1 like deploy-testflight.sh.
 # TVOS_BUILD_NUMBER still wins when set explicitly.
 if [ -z "$BUILD_NUMBER" ]; then
+  apple_require_explicit_build_without_api_key TVOS_BUILD_NUMBER "$BUILD_NUMBER"
   # shellcheck source=scripts/asc-next-build.sh
   . "$ROOT/scripts/asc-next-build.sh"
   TVOS_LOCAL_BUILD="$(sed -n 's/.*CURRENT_PROJECT_VERSION: *"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p' "$TVOS_DIR/project.yml" | head -1)"
@@ -202,6 +206,7 @@ if [ -z "$BUILD_NUMBER" ]; then
   echo "tvOS build number: $BUILD_NUMBER"
   EXTRA_SETTINGS+=(CURRENT_PROJECT_VERSION="$BUILD_NUMBER")
 fi
+apple_validate_build_number TVOS_BUILD_NUMBER "$BUILD_NUMBER"
 
 ls -la "$ARCHIVE_PATH" "$EXPORT_PATH" "$DERIVED_DATA_PATH" 2>/dev/null || true
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
@@ -230,9 +235,7 @@ xcodebuild -project "$TVOS_DIR/YaverTV.xcodeproj" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
   "${SIGNING_SETTINGS[@]}" \
   ${ALLOW_PROVISIONING_UPDATES[@]+"${ALLOW_PROVISIONING_UPDATES[@]}"} \
-  -authenticationKeyPath "$AUTH_KEY" \
-  -authenticationKeyID "$AUTH_KEY_ID" \
-  -authenticationKeyIssuerID "$AUTH_KEY_ISSUER" \
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
   ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
   archive
 
@@ -266,8 +269,6 @@ xcodebuild -exportArchive \
   -exportOptionsPlist "$EXPORT_OPTIONS" \
   -exportPath "$EXPORT_PATH" \
   ${ALLOW_PROVISIONING_UPDATES[@]+"${ALLOW_PROVISIONING_UPDATES[@]}"} \
-  -authenticationKeyPath "$AUTH_KEY" \
-  -authenticationKeyID "$AUTH_KEY_ID" \
-  -authenticationKeyIssuerID "$AUTH_KEY_ISSUER"
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"}
 
 echo "tvOS upload submitted from $ARCHIVE_PATH"

@@ -915,6 +915,10 @@ export APP_STORE_KEY_ID="<key-id>"
 export APP_STORE_KEY_ISSUER="<uuid>"
 export APPLE_TEAM_ID="<team-id>"
 ./scripts/deploy-testflight.sh
+
+# interactive-Mac fallback: use the Apple account already signed in to Xcode.
+# Read the current highest iOS build in TestFlight first; never guess.
+YAVER_IOS_BUILD_NUMBER=<next-build> ./scripts/deploy-testflight.sh
 ```
 
 `~/.appstoreconnect/yaver.env` is gitignored and pre-seeded with all four
@@ -935,9 +939,13 @@ yaver vault add APP_STORE_KEY_ISSUER --project mobile --value <uuid>
 yaver vault add APPLE_TEAM_ID        --project mobile --value 5SJZ4KA39A
 ```
 
-The script auto-bumps CFBundleVersion, archives at `/tmp/Yaver.xcarchive`,
-exports, and uploads. On flake/timeout, re-export from the existing archive
-without re-archiving:
+With a complete API-key configuration, the script queries App Store Connect and
+auto-bumps CFBundleVersion. With no API-key variables, it uses the Apple account
+already signed in to Xcode and requires `YAVER_IOS_BUILD_NUMBER`; this prevents
+a stale local plist from colliding with an existing TestFlight build. A partial
+API-key configuration or unreadable key path is always an error. The script
+archives at `/tmp/Yaver.xcarchive`, exports, and uploads. On flake/timeout,
+re-export from the existing archive without re-archiving:
 
 ```bash
 xcodebuild -exportArchive -archivePath /tmp/Yaver.xcarchive \

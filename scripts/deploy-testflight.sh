@@ -95,6 +95,15 @@ if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
   set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
 fi
 
+# API keys are ideal for CI/headless uploads, but an interactive Mac may use
+# the Apple account already signed in to Xcode. Partial credentials still fail
+# loudly. Without API access, an explicit build number is mandatory so we do
+# not guess and collide with an existing TestFlight build.
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
+apple_resolve_team_id "$ROOT/mobile/ios/Yaver.xcodeproj/project.pbxproj"
+apple_configure_xcode_auth
+
 # macOS login-password secret for headless login.keychain-db unlocks (the
 # single-keychain layout). Owner-only, gitignored, never in CI — the same
 # file runner_auth.go reads for the Claude-Code keychain. Sourced here so the
@@ -166,11 +175,6 @@ if [ -n "${YAVER_LOGIN_PASSWORD:-}" ]; then
   fi
 fi
 
-# App Store Connect API key — set these env vars or in the Yaver vault.
-AUTH_KEY="${APP_STORE_KEY_PATH:?APP_STORE_KEY_PATH unset. Likely cause: the Yaver vault is locked (auth token rotated >1x). Recover with ANY of: (1) pre-seed ~/.appstoreconnect/yaver.env (gitignored, 4 exports — see CLAUDE.md \"iOS — TestFlight\"); (2) YAVER_VAULT_PASSPHRASE=<old-token> before deploy; (3) re-add: yaver vault add APP_STORE_KEY_PATH --project mobile --value ...}"
-AUTH_KEY_ID="${APP_STORE_KEY_ID:?Set APP_STORE_KEY_ID (env or yaver vault)}"
-AUTH_KEY_ISSUER="${APP_STORE_KEY_ISSUER:?Set APP_STORE_KEY_ISSUER (env or yaver vault)}"
-
 # Deploy lease (AUTORUN_STORE.md §6.1) — refuse if a sibling autorun is already
 # deploying TestFlight, so two runs can't race the same archive/upload and burn
 # the ~18/day cap (the 2026-07-19 incident this store exists to prevent). Also
@@ -216,7 +220,8 @@ release_lease() {
 }
 trap release_lease EXIT
 
-# Bump build number.
+# Bump build number. YAVER_IOS_BUILD_NUMBER is the explicit escape hatch for
+# signed-in-Xcode uploads, where no API credential exists to query ASC.
 #
 # BUG FIX (2026-07-19): this used to bump from the LOCAL Info.plist only. The
 # local number drifts from reality — three autorun clones on one box sat at 445,
@@ -228,6 +233,17 @@ trap release_lease EXIT
 # below now surfaces a collision clearly either way).
 PLIST="Yaver/Info.plist"
 CURRENT_BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$PLIST")
+BUILD_OVERRIDE="${YAVER_IOS_BUILD_NUMBER:-}"
+apple_require_explicit_build_without_api_key YAVER_IOS_BUILD_NUMBER "$BUILD_OVERRIDE"
+
+if [ -n "$BUILD_OVERRIDE" ]; then
+  apple_validate_build_number YAVER_IOS_BUILD_NUMBER "$BUILD_OVERRIDE"
+  if [ "$BUILD_OVERRIDE" -le "$CURRENT_BUILD" ]; then
+    echo "ERROR: YAVER_IOS_BUILD_NUMBER=$BUILD_OVERRIDE must be above local build $CURRENT_BUILD." >&2
+    exit 1
+  fi
+  NEW_BUILD="$BUILD_OVERRIDE"
+fi
 
 # This box has SEVERAL python3s (/usr/local, /opt/homebrew, Xcode's), and which
 # one answers `python3` depends on PATH order — the same trap mini-deploy.sh
@@ -236,33 +252,31 @@ CURRENT_BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$PLIST")
 # bumped from local 450 while ASC held 451, and the collision retry burned a slot
 # of the ~15-20/day cap. Pick an interpreter that can actually do the query
 # rather than the one that happens to be first.
-ASC_PY=""
-for cand in "${YAVER_PYTHON:-}" python3 /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
-  [ -n "$cand" ] || continue
-  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import jwt, requests' >/dev/null 2>&1; then
-    ASC_PY="$cand"; break
+if [ -z "$BUILD_OVERRIDE" ]; then
+  ASC_PY=""
+  for cand in "${YAVER_PYTHON:-}" python3 /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
+    [ -n "$cand" ] || continue
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import jwt, requests' >/dev/null 2>&1; then
+      ASC_PY="$cand"; break
+    fi
+  done
+  if [ -z "$ASC_PY" ]; then
+    echo "ERROR: no python3 can import PyJWT+requests, so ASC build-number lookup cannot run." >&2
+    echo "       Install PyJWT+requests or set YAVER_IOS_BUILD_NUMBER explicitly." >&2
+    exit 1
   fi
-done
-if [ -z "$ASC_PY" ]; then
-  echo "WARN: no python3 here can import PyJWT+requests, so the App Store Connect"
-  echo "      build-number lookup CANNOT run. Bumping from the local plist, which"
-  echo "      collides (and burns an upload slot) whenever ASC is ahead of it."
-  echo "      Fix: $(command -v python3 || echo python3) -m pip install --break-system-packages PyJWT cryptography requests"
-  ASC_MAX=""
-else
-  # stderr is NOT swallowed: asc-max-build.py explains every degraded lookup
-  # there, and hiding that is what let this fail silently for a whole day.
-  ASC_MAX=$(APP_STORE_KEY_PATH="$AUTH_KEY" APP_STORE_KEY_ID="$AUTH_KEY_ID" APP_STORE_KEY_ISSUER="$AUTH_KEY_ISSUER" \
-    "$ASC_PY" "$ROOT/scripts/asc-max-build.py" || echo "")
-fi
-
-if [ -n "$ASC_MAX" ] && [ "$ASC_MAX" -ge "$CURRENT_BUILD" ] 2>/dev/null; then
-  echo "ASC highest build is $ASC_MAX (local $CURRENT_BUILD) — bumping from max"
-  NEW_BUILD=$((ASC_MAX + 1))
-else
-  [ -n "$ASC_PY" ] && [ -z "$ASC_MAX" ] && \
-    echo "WARN: ASC max build unreadable (reason above) — bumping from local $CURRENT_BUILD"
-  NEW_BUILD=$((CURRENT_BUILD + 1))
+  ASC_MAX=$("$ASC_PY" "$ROOT/scripts/asc-max-build.py" || echo "")
+  if [ -z "$ASC_MAX" ]; then
+    echo "ERROR: ASC max build is unreadable; refusing to guess and consume an upload slot." >&2
+    echo "       Set YAVER_IOS_BUILD_NUMBER explicitly after checking TestFlight." >&2
+    exit 1
+  fi
+  if [ "$ASC_MAX" -ge "$CURRENT_BUILD" ] 2>/dev/null; then
+    echo "ASC highest build is $ASC_MAX (local $CURRENT_BUILD) — bumping from max"
+    NEW_BUILD=$((ASC_MAX + 1))
+  else
+    NEW_BUILD=$((CURRENT_BUILD + 1))
+  fi
 fi
 # PlistBuddy rewrites the whole plist and DROPS XML COMMENTS. Info.plist
 # carries a long comment explaining why NSAllowsArbitraryLoads is set (the
@@ -323,9 +337,7 @@ xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
   DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
   CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES \
   ENABLE_USER_SCRIPT_SANDBOXING=NO -allowProvisioningUpdates \
-  -authenticationKeyPath "$AUTH_KEY" \
-  -authenticationKeyID "$AUTH_KEY_ID" \
-  -authenticationKeyIssuerID "$AUTH_KEY_ISSUER" \
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
   -derivedDataPath "$DERIVED" >"$ARCHIVE_LOG" 2>&1 &
 ARCHIVE_PID=$!
 ARCHIVE_STARTED=$SECONDS
@@ -404,9 +416,7 @@ set +e
 xcodebuild -exportArchive -archivePath /tmp/Yaver.xcarchive \
   -exportOptionsPlist /tmp/ExportOptions.plist \
   -exportPath /tmp/YaverExport -allowProvisioningUpdates \
-  -authenticationKeyPath "$AUTH_KEY" \
-  -authenticationKeyID "$AUTH_KEY_ID" \
-  -authenticationKeyIssuerID "$AUTH_KEY_ISSUER" 2>&1 | tee "$EXPORT_LOG"
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} 2>&1 | tee "$EXPORT_LOG"
 EXPORT_EXIT=${PIPESTATUS[0]}
 set -e
 

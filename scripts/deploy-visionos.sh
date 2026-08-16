@@ -29,6 +29,9 @@ Environment:
   VISION_DIR      Override native visionOS project directory. Default: visionos/
   SCHEME          Native visionOS scheme when VISION_DIR exists. Default: YaverVision
   IOS_INFO_PLIST  Compatible iOS/iPadOS app Info.plist to analyze.
+  VISIONOS_BUILD_NUMBER
+                  Explicit build number. Required with signed-in-Xcode auth;
+                  otherwise queried from ASC when API-key auth is configured.
 EOF
 }
 
@@ -150,10 +153,13 @@ if [ "$UPLOAD" != "1" ]; then
   exit 0
 fi
 
-: "${APP_STORE_KEY_PATH:?Set APP_STORE_KEY_PATH}"
-: "${APP_STORE_KEY_ID:?Set APP_STORE_KEY_ID}"
-: "${APP_STORE_KEY_ISSUER:?Set APP_STORE_KEY_ISSUER}"
-: "${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}"
+if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
+  set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
+fi
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
+apple_resolve_team_id "$VISION_DIR/project.yml"
+apple_configure_xcode_auth
 
 # Build number. Without this, CURRENT_PROJECT_VERSION comes from project.yml,
 # where it is the literal "1" — and visionOS on ASC is already at a date-shaped
@@ -161,6 +167,7 @@ fi
 # Bump from max(ASC, local) + 1 like deploy-testflight.sh. VISIONOS_BUILD_NUMBER
 # still wins when set explicitly.
 if [ -z "${VISIONOS_BUILD_NUMBER:-}" ]; then
+  apple_require_explicit_build_without_api_key VISIONOS_BUILD_NUMBER "${VISIONOS_BUILD_NUMBER:-}"
   # shellcheck source=scripts/asc-next-build.sh
   . "$ROOT/scripts/asc-next-build.sh"
   VISION_LOCAL_BUILD="$(sed -n 's/.*CURRENT_PROJECT_VERSION: *"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p' "$VISION_DIR/project.yml" | head -1)"
@@ -168,7 +175,9 @@ if [ -z "${VISIONOS_BUILD_NUMBER:-}" ]; then
   echo "visionOS build number: $VISIONOS_BUILD_NUMBER"
   VERSION_ARGS+=("CURRENT_PROJECT_VERSION=$VISIONOS_BUILD_NUMBER")
 fi
+apple_validate_build_number VISIONOS_BUILD_NUMBER "$VISIONOS_BUILD_NUMBER"
 
+ls -la "$ARCHIVE_PATH" "$EXPORT_PATH" 2>/dev/null || true
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
 
 # AUTOMATIC signing on purpose. deploy-tvos.sh pins its profile BY NAME with
@@ -183,9 +192,7 @@ xcodebuild "${PROJECT_ARGS[@]}" \
   -archivePath "$ARCHIVE_PATH" archive \
   DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic \
   -allowProvisioningUpdates \
-  -authenticationKeyPath "$APP_STORE_KEY_PATH" \
-  -authenticationKeyID "$APP_STORE_KEY_ID" \
-  -authenticationKeyIssuerID "$APP_STORE_KEY_ISSUER" \
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
   -derivedDataPath "$DERIVED_DATA_PATH" \
   ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"}
 
@@ -212,8 +219,6 @@ echo "Exporting & uploading visionOS…"
 xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
   -exportOptionsPlist /tmp/VisionExportOptions.plist \
   -exportPath "$EXPORT_PATH" -allowProvisioningUpdates \
-  -authenticationKeyPath "$APP_STORE_KEY_PATH" \
-  -authenticationKeyID "$APP_STORE_KEY_ID" \
-  -authenticationKeyIssuerID "$APP_STORE_KEY_ISSUER"
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"}
 
 echo "✓ visionOS build uploaded to App Store Connect"
