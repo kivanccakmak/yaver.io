@@ -81,6 +81,12 @@ func platformDeployPlanForValidation(root, target string, upload bool, extra []s
 	args := append([]string{}, extra...)
 	if upload {
 		args = append(args, "--upload")
+	} else if t == "ios" {
+		// deploy-testflight.sh predates the other platform scripts and keeps its
+		// canonical no-argument behavior as "upload" for deploy/deploy.sh. MCP's
+		// default is explicitly build-only, so it must state that intent rather
+		// than relying on the script's unsafe historical default.
+		args = append(args, "--build-only")
 	}
 	plan := platformDeployPlan{Target: t, Script: script, Args: args, Upload: upload, Root: root}
 	if validation.Driver = normalizeReleaseValidationDriver(validation.Driver); validation.Driver != "" {

@@ -2,6 +2,29 @@
 set -eo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+UPLOAD=1
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/deploy-testflight.sh [--upload | --build-only]
+
+Archive the existing Yaver iOS project with automatic signing.
+  --upload       Export and upload to App Store Connect (the historical and
+                 canonical no-argument behavior).
+  --build-only   Stop after producing and verifying the signed archive. This is
+                 the default used by mobile_platform_deploy upload=false.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --upload) UPLOAD=1 ;;
+    --build-only) UPLOAD=0 ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
 
 # Keep the Apple Watch companion target present in the committed iOS project.
 # The phone bridge is injected by Expo prebuild; this target is what makes the
@@ -424,6 +447,12 @@ fi
 if [ ! -d /tmp/Yaver.xcarchive ]; then
   echo "ERROR: Archive failed — no .xcarchive produced"
   exit 1
+fi
+
+if [ "$UPLOAD" != "1" ]; then
+  DEPLOY_OUTCOME=success
+  echo "✓ Signed iOS archive ready (build-only): /tmp/Yaver.xcarchive"
+  exit 0
 fi
 
 # ExportOptions (no single-quote on EOF so APPLE_TEAM_ID expands)

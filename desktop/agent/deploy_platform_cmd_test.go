@@ -69,6 +69,14 @@ func TestPlatformDeployPlanForTVTargets(t *testing.T) {
 		t.Fatalf("unexpected ios/testflight plan: %+v", plan)
 	}
 
+	plan, err = platformDeployPlanFor(root, "ios", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Target != "ios" || plan.Script != "scripts/deploy-testflight.sh" || len(plan.Args) != 1 || plan.Args[0] != "--build-only" {
+		t.Fatalf("iOS MCP build-only plan could upload: %+v", plan)
+	}
+
 	plan, err = platformDeployPlanFor(root, "android-auto", true, nil)
 	if err != nil {
 		t.Fatal(err)
