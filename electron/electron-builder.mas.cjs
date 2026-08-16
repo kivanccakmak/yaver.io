@@ -3,7 +3,11 @@
 const path = require("node:path");
 const pkg = require("./package.json");
 
-const bundleId = "io.yaver.gui";
+// The Store build belongs to the existing multi-platform Yaver IO record.
+// Apple requires every platform in a universal-purchase record to use the
+// same bundle ID; the direct Developer ID desktop lane intentionally retains
+// io.yaver.gui in package.json.
+const bundleId = "io.yaver.mobile";
 const target = process.env.YAVER_MAS_TARGET === "mas-dev" ? "mas-dev" : "mas";
 const buildNumber = process.env.YAVER_MAC_BUILD_NUMBER || "1";
 if (!/^[0-9]+(?:\.[0-9]+){0,2}$/.test(buildNumber)) {

@@ -16,7 +16,7 @@ test("MAS config is sandboxed client-only and excludes the embedded agent", () =
     const configPath = require.resolve("../electron-builder.mas.cjs");
     delete require.cache[configPath];
     const config = require(configPath);
-    assert.equal(config.appId, "io.yaver.gui");
+    assert.equal(config.appId, "io.yaver.mobile");
     assert.equal(config.buildVersion, "202608160001");
     assert.deepEqual(config.mac.target, ["mas"]);
     assert.equal(config.mac.notarize, false);
@@ -38,4 +38,13 @@ test("MAS entitlements are least-privilege network client permissions", () => {
   assert.match(main, /com\.apple\.security\.cs\.allow-jit/);
   assert.doesNotMatch(main, /network\.server|automation\.apple-events|device\.camera|device\.microphone/);
   assert.match(child, /com\.apple\.security\.inherit/);
+});
+
+test("MAS deploy preserves the existing Yaver app identity and verifies the packaged build", () => {
+  const deploy = readFileSync(join(electronRoot, "..", "scripts", "deploy-macos-testflight.sh"), "utf8");
+  assert.match(deploy, /MAS_BUNDLE_ID="io\.yaver\.mobile"/);
+  assert.match(deploy, /manageAppVersionAndBuildNumber -bool NO/);
+  assert.match(deploy, /PACKAGED_BUNDLE_ID/);
+  assert.match(deploy, /PACKAGED_BUILD/);
+  assert.match(deploy, /codesign --verify --deep --strict/);
 });

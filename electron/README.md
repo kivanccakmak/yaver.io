@@ -155,11 +155,12 @@ MAS package, verifies signature/entitlements and absence of the agent, validates
 with App Store Connect, then uploads it to the macOS TestFlight train. Required
 credentials and profiles are listed by
 `scripts/deploy-macos-testflight.sh --help`; private material stays outside the
-repository. The App Store record/App ID must be `io.yaver.gui`.
-Apple's supported App Store Connect API does not allow creating the initial
-app record. Create that one-time record in App Store Connect (`Yaver`, macOS,
-English (U.S.), bundle ID `io.yaver.gui`, SKU `io-yaver-gui-macos`) before the
-first upload; later builds use the scripted deploy path.
+repository. The Store build uses `io.yaver.mobile`, matching the existing
+Yaver IO app record: Apple requires all platforms in one universal-purchase
+record to share a bundle ID. Add the macOS platform to that record once in App
+Store Connect before the first desktop upload; later builds use the scripted
+deploy path. The Developer ID DMG remains the separately signed
+`io.yaver.gui` desktop lane.
 
 ## What it fixes in the shell (not the web app)
 

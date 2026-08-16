@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ELECTRON_DIR="$ROOT/electron"
+MAS_BUNDLE_ID="io.yaver.mobile"
 UPLOAD=0
 DEV_BUILD=0
 
@@ -19,7 +20,7 @@ Usage: scripts/deploy-macos-testflight.sh [--upload] [--mas-dev]
   --mas-dev  Build a locally runnable sandboxed development variant (no upload).
 
 Required for MAS distribution:
-  YAVER_MAS_PROVISIONING_PROFILE       io.yaver.gui App Store profile path
+  YAVER_MAS_PROVISIONING_PROFILE       io.yaver.mobile App Store profile path
   Mac App Distribution identity        installed, or CSC_LINK + CSC_KEY_PASSWORD
   Mac Installer Distribution identity  installed, or CSC_INSTALLER_LINK +
                                        CSC_INSTALLER_KEY_PASSWORD
@@ -71,7 +72,7 @@ if [ "$DEV_BUILD" = "1" ]; then
 fi
 PROFILE_PATH="${!PROFILE_VAR:-}"
 if [ -z "$PROFILE_PATH" ] || [ ! -f "$PROFILE_PATH" ]; then
-  echo "ERROR: $PROFILE_VAR must point to an existing io.yaver.gui provisioning profile." >&2
+  echo "ERROR: $PROFILE_VAR must point to an existing $MAS_BUNDLE_ID provisioning profile." >&2
   echo "Create/download it in Apple Developer Certificates, Identifiers & Profiles, then retry." >&2
   exit 2
 fi
@@ -87,7 +88,21 @@ fi
 # and applies it to the signed app. The post-build codesign check below proves
 # the capability at the layer Apple actually validates.
 PROFILE_PLIST="$(mktemp -t yaver-mas-profile.XXXXXX)"
-cleanup() { rm -f "$PROFILE_PLIST"; }
+XCODE_PACKAGE_DIR=""
+cleanup() {
+  rm -f "$PROFILE_PLIST"
+  if [ -n "$XCODE_PACKAGE_DIR" ] && [ -d "$XCODE_PACKAGE_DIR" ]; then
+    case "$(basename "$XCODE_PACKAGE_DIR")" in
+      yaver-mas-xcode.*)
+        # The path came directly from mktemp above. Inspect the exact target
+        # before removing the large temporary archive so failed builds do not
+        # silently consume the user's SSD.
+        ls -ld "$XCODE_PACKAGE_DIR" >/dev/null
+        rm -rf -- "$XCODE_PACKAGE_DIR"
+        ;;
+    esac
+  fi
+}
 trap cleanup EXIT
 if ! security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST" 2>/dev/null; then
   echo "ERROR: $PROFILE_VAR is not a readable Apple provisioning profile." >&2
@@ -101,8 +116,8 @@ elif PROFILE_APP_ID="$(plutil -extract 'Entitlements.com\.apple\.application-ide
 else
   PROFILE_APP_ID=""
 fi
-if [[ "$PROFILE_APP_ID" != *".io.yaver.gui" ]]; then
-  echo "ERROR: provisioning profile application-identifier does not end in .io.yaver.gui." >&2
+if [[ "$PROFILE_APP_ID" != *."$MAS_BUNDLE_ID" ]]; then
+  echo "ERROR: provisioning profile application-identifier does not end in .$MAS_BUNDLE_ID." >&2
   exit 2
 fi
 
@@ -139,7 +154,16 @@ echo "Building Yaver macOS ${BUILD_LABEL} package ${YAVER_MAC_BUILD_NUMBER} (cli
 if [ "$DEV_BUILD" = "1" ]; then
   (cd "$ELECTRON_DIR" && npm run dist:mas-dev)
 else
-  (cd "$ELECTRON_DIR" && npm run dist:mas)
+  # electron-builder still searches for the legacy local "3rd Party Mac
+  # Developer Installer" identity. Xcode 16 can instead issue a cloud-managed
+  # installer certificate at export time. Preserve a fully signed app when the
+  # final productbuild step is the only failure; the capability checks below
+  # decide whether Xcode may package it safely.
+  BUILDER_EXIT=0
+  (cd "$ELECTRON_DIR" && npm run dist:mas) || BUILDER_EXIT=$?
+  if [ "$BUILDER_EXIT" != "0" ]; then
+    echo "electron-builder did not produce the installer; checking whether its signed app can use Xcode's Store exporter…" >&2
+  fi
 fi
 
 APP_PATH="$(find "$ELECTRON_DIR/dist-mas" -type d -name 'Yaver.app' -print -quit)"
@@ -165,10 +189,85 @@ fi
 
 PKG_PATH="$(find "$ELECTRON_DIR/dist-mas" -maxdepth 2 -type f -name '*.pkg' -print -quit)"
 if [ -z "$PKG_PATH" ]; then
-  echo "ERROR: no signed App Store .pkg was produced under electron/dist-mas." >&2
-  exit 1
+  # Xcode's exporter is the supported fallback for cloud-managed Mac Installer
+  # Distribution assets. Build a minimal xcarchive around the already verified
+  # Electron app. This does not build or mutate any iOS/tvOS/visionOS target.
+  APP_BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw -o - "$APP_PATH/Contents/Info.plist" 2>/dev/null || true)"
+  APP_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$APP_PATH/Contents/Info.plist" 2>/dev/null || true)"
+  APP_BUILD="$(plutil -extract CFBundleVersion raw -o - "$APP_PATH/Contents/Info.plist" 2>/dev/null || true)"
+  APP_ARCHES="$(lipo -archs "$APP_PATH/Contents/MacOS/Yaver" 2>/dev/null || true)"
+  APP_TEAM="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -1)"
+  APP_SIGNING_IDENTITY="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+  if [ "$APP_BUNDLE_ID" != "$MAS_BUNDLE_ID" ] || [ -z "$APP_VERSION" ] || [ -z "$APP_BUILD" ]; then
+    echo "ERROR: refusing Xcode packaging because the signed app identity/version is incomplete." >&2
+    exit 1
+  fi
+  if [[ " $APP_ARCHES " != *" arm64 "* ]] || [[ " $APP_ARCHES " != *" x86_64 "* ]]; then
+    echo "ERROR: refusing Xcode packaging because the Store app is not universal (architectures: ${APP_ARCHES:-none})." >&2
+    exit 1
+  fi
+  if [ -z "$APP_TEAM" ] || [ -z "$APP_SIGNING_IDENTITY" ]; then
+    echo "ERROR: refusing Xcode packaging because the app's signing team/identity could not be read." >&2
+    exit 1
+  fi
+
+  XCODE_PACKAGE_DIR="$(mktemp -d -t yaver-mas-xcode.XXXXXX)"
+  ARCHIVE_PATH="$XCODE_PACKAGE_DIR/Yaver.xcarchive"
+  EXPORT_PATH="$XCODE_PACKAGE_DIR/export"
+  EXPORT_OPTIONS="$XCODE_PACKAGE_DIR/ExportOptions.plist"
+  mkdir -p "$ARCHIVE_PATH/Products/Applications"
+  ditto "$APP_PATH" "$ARCHIVE_PATH/Products/Applications/Yaver.app"
+
+  plutil -create xml1 "$ARCHIVE_PATH/Info.plist"
+  plutil -insert ArchiveVersion -integer 2 "$ARCHIVE_PATH/Info.plist"
+  plutil -insert Name -string Yaver "$ARCHIVE_PATH/Info.plist"
+  plutil -insert SchemeName -string Yaver "$ARCHIVE_PATH/Info.plist"
+  plutil -insert ApplicationProperties -dictionary "$ARCHIVE_PATH/Info.plist"
+  plutil -insert ApplicationProperties.ApplicationPath -string Applications/Yaver.app "$ARCHIVE_PATH/Info.plist"
+  plutil -insert ApplicationProperties.Architectures -json '["arm64","x86_64"]' "$ARCHIVE_PATH/Info.plist"
+  plutil -insert ApplicationProperties.CFBundleIdentifier -string "$APP_BUNDLE_ID" "$ARCHIVE_PATH/Info.plist"
+  plutil -insert ApplicationProperties.SigningIdentity -string "$APP_SIGNING_IDENTITY" "$ARCHIVE_PATH/Info.plist"
+  plutil -insert ApplicationProperties.Team -string "$APP_TEAM" "$ARCHIVE_PATH/Info.plist"
+
+  plutil -create xml1 "$EXPORT_OPTIONS"
+  plutil -insert method -string app-store-connect "$EXPORT_OPTIONS"
+  plutil -insert teamID -string "$APP_TEAM" "$EXPORT_OPTIONS"
+  plutil -insert signingStyle -string automatic "$EXPORT_OPTIONS"
+  plutil -insert destination -string export "$EXPORT_OPTIONS"
+  plutil -insert manageAppVersionAndBuildNumber -bool NO "$EXPORT_OPTIONS"
+
+  mkdir -p "$EXPORT_PATH"
+  xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
+    -exportOptionsPlist "$EXPORT_OPTIONS" -exportPath "$EXPORT_PATH" \
+    -allowProvisioningUpdates
+  PKG_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -type f -name '*.pkg' -print -quit)"
+  if [ -z "$PKG_PATH" ]; then
+    echo "ERROR: Xcode export succeeded but produced no signed App Store .pkg." >&2
+    exit 1
+  fi
+  FALLBACK_PKG="$ELECTRON_DIR/dist-mas/yaver-gui-${APP_VERSION}-mac-testflight-universal.pkg"
+  ditto "$PKG_PATH" "$FALLBACK_PKG"
+  PKG_PATH="$FALLBACK_PKG"
 fi
 pkgutil --check-signature "$PKG_PATH"
+
+# Prove the package payload preserved the requested bundle/build identity. A
+# successful Xcode export once cleared CFBundleVersion to an empty string; that
+# package was signed but could never be accepted by App Store Connect.
+VERIFY_DIR="$XCODE_PACKAGE_DIR/verify"
+if [ -z "$XCODE_PACKAGE_DIR" ]; then
+  XCODE_PACKAGE_DIR="$(mktemp -d -t yaver-mas-xcode.XXXXXX)"
+  VERIFY_DIR="$XCODE_PACKAGE_DIR/verify"
+fi
+pkgutil --expand-full "$PKG_PATH" "$VERIFY_DIR"
+PACKAGED_APP="$(find "$VERIFY_DIR" -type d -path '*/Payload/Yaver.app' -print -quit)"
+PACKAGED_BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw -o - "$PACKAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
+PACKAGED_BUILD="$(plutil -extract CFBundleVersion raw -o - "$PACKAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
+if [ "$PACKAGED_BUNDLE_ID" != "$MAS_BUNDLE_ID" ] || [ "$PACKAGED_BUILD" != "$YAVER_MAC_BUILD_NUMBER" ]; then
+  echo "ERROR: packaged app identity/build drifted (bundle=${PACKAGED_BUNDLE_ID:-missing}, build=${PACKAGED_BUILD:-missing})." >&2
+  exit 1
+fi
+codesign --verify --deep --strict --verbose=2 "$PACKAGED_APP"
 echo "Verified App Store package: $PKG_PATH"
 
 if [ "$UPLOAD" != "1" ]; then

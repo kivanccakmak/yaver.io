@@ -85,6 +85,9 @@ __pycache__/
 desktop/agent/.yaver/
 sdk/js/dist/
 sdk/js/node_modules/
+electron/dist/
+electron/dist-mas/
+electron/node_modules/
 sdk/js/.npmrc
 sdk/**/*.tgz
 relay/relay
