@@ -39,7 +39,7 @@ export default function VibingPage() {
   const timers = useRef<ReturnType<typeof setInterval>[]>([]);
   const pcRef = useRef<RTCPeerConnection | null>(null);
 
-  const selectedDevice = useMemo(() => devices.find((d) => d.deviceId === deviceId), [devices, deviceId]);
+  const selectedDevice = useMemo(() => devices.find((d) => d.id === deviceId), [devices, deviceId]);
 
   const h = (conn: Conn, json = false) => ({
     Authorization: `Bearer ${token}`,
@@ -58,7 +58,7 @@ export default function VibingPage() {
       const cfg = (await cfgRes.json()) as { relayServers?: Array<{ httpUrl: string }>; relayIce?: { stun?: string; turn?: string } };
       const set = (await setRes.json()) as { settings?: { relayPassword?: string; relayUrl?: string; vibingTransport?: string; relayTier?: string } };
       const relayUrl = set.settings?.relayUrl || cfg.relayServers?.[0]?.httpUrl || "";
-      const c: Conn = { base: `${relayUrl}/d/${selectedDevice.deviceId}`, password: set.settings?.relayPassword || "" };
+      const c: Conn = { base: `${relayUrl}/d/${selectedDevice.id}`, password: set.settings?.relayPassword || "" };
       setConn(c);
       if (set.settings?.vibingTransport) setTransport(set.settings.vibingTransport);
       if (set.settings?.relayTier === "pro" || set.settings?.relayTier === "free") setRelayTier(set.settings.relayTier);
@@ -79,7 +79,7 @@ export default function VibingPage() {
   }, [selectedDevice]);
 
   useEffect(() => {
-    if (!deviceId && devices.length) setDeviceId((devices.find((d) => d.online && !d.runnerDown) ?? devices[0]).deviceId);
+    if (!deviceId && devices.length) setDeviceId((devices.find((d) => d.online) ?? devices[0]).id);
   }, [deviceId, devices]);
 
   const refreshStatus = useCallback(async () => {
@@ -253,7 +253,7 @@ export default function VibingPage() {
             <label className="mb-1 block text-xs font-medium text-surface-400">Device</label>
             <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)} className="w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-sm">
               {devices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>{d.name} ({d.online ? "online" : "offline"})</option>
+                <option key={d.id} value={d.id}>{d.name} ({d.online ? "online" : "offline"})</option>
               ))}
             </select>
           </div>

@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "./secure-storage";
-import * as FileSystem from "expo-file-system";
-import git from "isomorphic-git/index.js";
+import * as FileSystem from "expo-file-system/legacy";
+import git from "isomorphic-git";
 import http from "isomorphic-git/http/web";
 
 export type RuntimeKind = "remote-agent" | "local-yaver" | "cloud" | "ci";

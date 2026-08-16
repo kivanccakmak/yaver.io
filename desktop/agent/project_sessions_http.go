@@ -15,12 +15,7 @@ func binaryAvailable(name string) bool {
 }
 
 func browserFramesAvailable() bool {
-	for _, binary := range frameChromeBinaries {
-		if binaryAvailable(binary) {
-			return true
-		}
-	}
-	return false
+	return DiscoverChromeBinary() != ""
 }
 
 func (s *HTTPServer) requireProjectSessions(w http.ResponseWriter) *ProjectSessionManager {
@@ -191,7 +186,7 @@ func (s *HTTPServer) handleV2ProjectSessionByID(w http.ResponseWriter, r *http.R
 }
 
 func (s *HTTPServer) stopProjectSessionWork(sessionID string) {
-	_ = s.previewMgr.Stop(sessionID)
+	_ = s.projectPreviewMgr.Stop(sessionID)
 	s.validationMgr.StopSession(sessionID)
 	for _, task := range s.taskMgr.ListTasks() {
 		if task.ProjectSessionID == sessionID && (task.Status == TaskStatusRunning || task.Status == TaskStatusQueued) {
@@ -257,7 +252,7 @@ func (s *HTTPServer) handleV2ProjectSessionPreview(w http.ResponseWriter, r *htt
 			PreviewTarget string `json:"previewTarget"`
 		}
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&body)
-		status, err := s.previewMgr.Start(session, body.PreviewTarget)
+		status, err := s.projectPreviewMgr.Start(session, body.PreviewTarget)
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
@@ -268,13 +263,13 @@ func (s *HTTPServer) handleV2ProjectSessionPreview(w http.ResponseWriter, r *htt
 			jsonError(w, http.StatusMethodNotAllowed, "use GET")
 			return
 		}
-		jsonReply(w, http.StatusOK, s.previewMgr.Status(session.ProjectSessionID))
+		jsonReply(w, http.StatusOK, s.projectPreviewMgr.Status(session.ProjectSessionID))
 	case "stream":
 		if r.Method != http.MethodGet {
 			jsonError(w, http.StatusMethodNotAllowed, "use GET")
 			return
 		}
-		body, contentType, err := s.previewMgr.Fetch(session.ProjectSessionID)
+		body, contentType, err := s.projectPreviewMgr.Fetch(session.ProjectSessionID)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return
@@ -290,11 +285,11 @@ func (s *HTTPServer) handleV2ProjectSessionPreview(w http.ResponseWriter, r *htt
 			jsonError(w, http.StatusMethodNotAllowed, "use POST")
 			return
 		}
-		if err := s.previewMgr.Stop(session.ProjectSessionID); err != nil && !strings.Contains(err.Error(), "not running") {
+		if err := s.projectPreviewMgr.Stop(session.ProjectSessionID); err != nil && !strings.Contains(err.Error(), "not running") {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		jsonReply(w, http.StatusOK, s.previewMgr.Status(session.ProjectSessionID))
+		jsonReply(w, http.StatusOK, s.projectPreviewMgr.Status(session.ProjectSessionID))
 	default:
 		jsonError(w, http.StatusNotFound, "unknown preview action")
 	}
@@ -342,11 +337,10 @@ func (s *HTTPServer) handleV2ProjectSessionTasks(w http.ResponseWriter, r *http.
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create task: %v", err))
 		return
 	}
-	info, _ := s.taskMgr.GetTaskInfo(task.ID, 0)
 	jsonReply(w, http.StatusCreated, map[string]interface{}{
-		"taskId": info.ID, "status": info.Status, "runnerId": info.RunnerID,
-		"model": info.Model, "reasoningEffort": info.ReasoningEffort,
-		"projectSessionId": info.ProjectSessionID,
+		"taskId": task.ID, "status": task.Status, "runnerId": task.RunnerID,
+		"model": task.Model, "reasoningEffort": body.ReasoningEffort,
+		"projectSessionId": task.ProjectSessionID,
 	})
 }
 

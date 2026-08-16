@@ -78,12 +78,9 @@ func repositoryID(path string) string {
 	return "repo_" + hex.EncodeToString(digest[:12])
 }
 
-func repositoryCatalog() (map[string]remoteProject, error) {
-	projects, err := readRemoteProjects()
-	if err != nil {
-		return nil, err
-	}
-	catalog := make(map[string]remoteProject, len(projects))
+func repositoryCatalog() (map[string]projectInfo, error) {
+	projects := listDiscoveredProjects()
+	catalog := make(map[string]projectInfo, len(projects))
 	for _, project := range projects {
 		path := filepath.Clean(project.Path)
 		if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr != nil {
@@ -107,7 +104,7 @@ func ListGitRepositories(refresh bool) ([]GitRepository, error) {
 	for id, project := range catalog {
 		repositories = append(repositories, GitRepository{
 			RepositoryID: id,
-			Name:         project.Name,
+			Name:         filepath.Base(project.Path),
 			DefaultRef:   project.Branch,
 		})
 	}
@@ -135,7 +132,7 @@ func validGitRef(ref string) bool {
 	return true
 }
 
-func runGit(ctx context.Context, workDir string, args ...string) ([]byte, error) {
+func runProjectSessionGit(ctx context.Context, workDir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workDir
 	out, err := cmd.CombinedOutput()
@@ -185,21 +182,21 @@ func (m *ProjectSessionManager) Create(repositoryIDValue, baseRef string) (*Proj
 
 	ctx, cancel := context.WithTimeout(context.Background(), projectSessionCommandTimeout)
 	defer cancel()
-	if _, err := runGit(ctx, sessionDir, "clone", "--no-local", "--no-checkout", project.Path, checkoutDir); err != nil {
+	if _, err := runProjectSessionGit(ctx, sessionDir, "clone", "--no-local", "--no-checkout", project.Path, checkoutDir); err != nil {
 		return nil, err
 	}
 	// A local seed clone would otherwise retain a filesystem origin and could
 	// never publish a review branch. Preserve the seed repository's network
 	// origin when the controller provisioned one.
-	if remoteOut, remoteErr := runGit(ctx, project.Path, "remote", "get-url", "origin"); remoteErr == nil {
+	if remoteOut, remoteErr := runProjectSessionGit(ctx, project.Path, "remote", "get-url", "origin"); remoteErr == nil {
 		remote := strings.TrimSpace(string(remoteOut))
 		if isNetworkGitRemote(remote) {
-			if _, err := runGit(ctx, checkoutDir, "remote", "set-url", "origin", remote); err != nil {
+			if _, err := runProjectSessionGit(ctx, checkoutDir, "remote", "set-url", "origin", remote); err != nil {
 				return nil, err
 			}
 		}
 	}
-	if _, err := runGit(ctx, checkoutDir, "checkout", "-b", reviewBranch, baseRef); err != nil {
+	if _, err := runProjectSessionGit(ctx, checkoutDir, "checkout", "-b", reviewBranch, baseRef); err != nil {
 		return nil, err
 	}
 
@@ -207,7 +204,7 @@ func (m *ProjectSessionManager) Create(repositoryIDValue, baseRef string) (*Proj
 	session := &ProjectSession{
 		ProjectSessionID: id,
 		RepositoryID:     repositoryIDValue,
-		RepositoryName:   project.Name,
+		RepositoryName:   filepath.Base(project.Path),
 		BaseRef:          baseRef,
 		ReviewBranch:     reviewBranch,
 		Status:           "ready",
@@ -298,7 +295,7 @@ func (m *ProjectSessionManager) GitStatus(id string) (map[string]string, error) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	status, err := runGit(ctx, session.WorkDir, "status", "--short", "--branch")
+	status, err := runProjectSessionGit(ctx, session.WorkDir, "status", "--short", "--branch")
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +309,7 @@ func (m *ProjectSessionManager) GitDiff(id string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := runGit(ctx, session.WorkDir, "diff", "--no-ext-diff", "--no-color")
+	out, err := runProjectSessionGit(ctx, session.WorkDir, "diff", "--no-ext-diff", "--no-color")
 	if err != nil {
 		return "", err
 	}
@@ -334,13 +331,13 @@ func (m *ProjectSessionManager) GitCommit(id, message string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), projectSessionCommandTimeout)
 	defer cancel()
-	if _, err := runGit(ctx, session.WorkDir, "add", "--all"); err != nil {
+	if _, err := runProjectSessionGit(ctx, session.WorkDir, "add", "--all"); err != nil {
 		return "", err
 	}
-	if _, err := runGit(ctx, session.WorkDir, "commit", "-m", message); err != nil {
+	if _, err := runProjectSessionGit(ctx, session.WorkDir, "commit", "-m", message); err != nil {
 		return "", err
 	}
-	out, err := runGit(ctx, session.WorkDir, "rev-parse", "HEAD")
+	out, err := runProjectSessionGit(ctx, session.WorkDir, "rev-parse", "HEAD")
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -351,11 +348,11 @@ func (m *ProjectSessionManager) PushReview(id string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), projectSessionCommandTimeout)
 	defer cancel()
-	branchOut, err := runGit(ctx, session.WorkDir, "branch", "--show-current")
+	branchOut, err := runProjectSessionGit(ctx, session.WorkDir, "branch", "--show-current")
 	if err != nil || strings.TrimSpace(string(branchOut)) != session.ReviewBranch {
 		return "", fmt.Errorf("review branch policy violation")
 	}
-	remoteOut, err := runGit(ctx, session.WorkDir, "remote", "get-url", "origin")
+	remoteOut, err := runProjectSessionGit(ctx, session.WorkDir, "remote", "get-url", "origin")
 	if err != nil {
 		return "", err
 	}
@@ -363,7 +360,7 @@ func (m *ProjectSessionManager) PushReview(id string) (string, error) {
 	if !isNetworkGitRemote(remote) {
 		return "", fmt.Errorf("review push requires an HTTPS or SSH Git remote")
 	}
-	if _, err := runGit(ctx, session.WorkDir, "push", "--set-upstream", "origin", session.ReviewBranch); err != nil {
+	if _, err := runProjectSessionGit(ctx, session.WorkDir, "push", "--set-upstream", "origin", session.ReviewBranch); err != nil {
 		return "", err
 	}
 	return session.ReviewBranch, nil

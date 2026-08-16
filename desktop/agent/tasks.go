@@ -938,7 +938,8 @@ type TaskSliceContract struct {
 }
 
 type TaskCreateOptions struct {
-	WorkDir string
+	WorkDir          string
+	ProjectSessionID string
 
 	// InitialUserPrompt is WHAT THE USER TYPED (or said, or shook their phone
 	// about). It becomes the first stored ConversationTurn — the chat bubble
@@ -1129,8 +1130,9 @@ type Task struct {
 	RunnerID   string `json:"runnerId,omitempty"` // which runner is executing this task
 	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
 	// one-shot task. Set = persistent goal the runner keeps working toward.
-	Goal      string `json:"goal,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
+	Goal             string `json:"goal,omitempty"`
+	SessionID        string `json:"session_id,omitempty"`
+	ProjectSessionID string `json:"projectSessionId,omitempty"`
 	// ResumeLast asks startProcess to resume the prior session on the FIRST
 	// spawn (not just on follow-ups). Set by the scheduler when a recurring
 	// schedule with resume enabled re-fires, so the run picks up where the
@@ -1446,9 +1448,10 @@ type TaskInfo struct {
 	// leaked into every label and a task that ran on a sibling box
 	// looked like it ran on whichever device the phone was focused
 	// on at view time.
-	DeviceName string `json:"deviceName,omitempty"`
-	SessionID  string `json:"sessionId,omitempty"`
-	Output     string `json:"output,omitempty"`
+	DeviceName       string `json:"deviceName,omitempty"`
+	SessionID        string `json:"sessionId,omitempty"`
+	ProjectSessionID string `json:"projectSessionId,omitempty"`
+	Output           string `json:"output,omitempty"`
 	// RawOutput is the tail of the runner's RAW stdout (ANSI escape
 	// sequences, TUI redraws, box-drawing — everything the grooming filters
 	// strip) retained for the console/terminal view. Only populated on the
@@ -2049,6 +2052,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		RawRunnerCommand: rawRunnerCommand,
 		ResumeLast:       opts.ResumeLast,
 		SessionID:        opts.ResumeSessionID,
+		ProjectSessionID: strings.TrimSpace(opts.ProjectSessionID),
 		Turns:            initialTurns,
 	}
 	if len(verbosityCtx) > 0 && verbosityCtx[0] != nil {
@@ -2118,6 +2122,27 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 	log.Printf("[task %s] %s process started (PID %d)", id, taskRunner.Name, task.cmd.Process.Pid)
 
 	return task, nil
+}
+
+// CreateTaskInProjectSession binds a task to one isolated checkout while
+// reusing the current task creation pipeline and runner policy.
+func (tm *TaskManager) CreateTaskInProjectSession(title, description, model, reasoningEffort, source, runnerID, customCommand, mode, projectSessionID, workDir string) (*Task, error) {
+	projectSessionID = strings.TrimSpace(projectSessionID)
+	if projectSessionID == "" {
+		return nil, fmt.Errorf("project session ID is required")
+	}
+	info, err := os.Stat(workDir)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("project session checkout is unavailable")
+	}
+	return tm.CreateTaskWithOptions(
+		title, description, model, source, runnerID, customCommand, nil,
+		TaskCreateOptions{
+			WorkDir:          filepath.Clean(workDir),
+			ProjectSessionID: projectSessionID,
+			Mode:             mode,
+		},
+	)
 }
 
 // isRootProcess reports whether the agent runs as uid 0. os.Geteuid returns -1
@@ -2567,34 +2592,32 @@ func buildRunnerArgsWithWorkDir(runner RunnerConfig, prompt, workDir string) []s
 			}
 		}
 	}
-	// Opencode-specific: splice `--agent <mode>` immediately after the
-	// `run` subcommand when the user picked a build/plan/custom agent.
-	// Hardcoded here rather than templated because opencode is the only
-	// runner with this concept and we don't want to mint a generic
-	// "drop-paired-args-when-placeholder-empty" syntax that other
-	// runners might trip over later.
-	// "chat"/"chat:<surface>" is the embedded Q&A mode (see chatTaskResponseContext),
-	// NOT an opencode agent name — don't splice it as --agent.
-	if runner.RunnerID == "opencode" && strings.TrimSpace(runner.Mode) != "" &&
-		runner.Mode != "chat" && !strings.HasPrefix(runner.Mode, "chat:") {
-		out := make([]string, 0, len(args)+2)
-		injected := false
-		for _, a := range args {
-			out = append(out, a)
-			if !injected && a == "run" {
-				out = append(out, "--agent", strings.TrimSpace(runner.Mode))
-				injected = true
-			}
-		}
-		if !injected {
-			// Defensive: if `run` wasn't found (custom args), still
-			// surface the agent flag so the choice isn't silently
-			// dropped — opencode tolerates --agent anywhere on the line.
-			out = append([]string{"--agent", strings.TrimSpace(runner.Mode)}, out...)
-		}
-		args = out
+	return applyModeArgs(runner, runner.Mode, args)
+}
+
+// applyModeArgs adds the mode syntax understood by runners that expose modes.
+// "chat"/"chat:<surface>" is the embedded Q&A mode (see
+// chatTaskResponseContext), not an opencode agent name.
+func applyModeArgs(runner RunnerConfig, mode string, args []string) []string {
+	mode = strings.TrimSpace(mode)
+	if runner.RunnerID != "opencode" || mode == "" || mode == "chat" || strings.HasPrefix(mode, "chat:") {
+		return args
 	}
-	return args
+
+	out := make([]string, 0, len(args)+2)
+	injected := false
+	for _, arg := range args {
+		out = append(out, arg)
+		if !injected && arg == "run" {
+			out = append(out, "--agent", mode)
+			injected = true
+		}
+	}
+	if !injected {
+		// Custom opencode args may omit `run`; keep the selected agent visible.
+		out = append([]string{"--agent", mode}, out...)
+	}
+	return out
 }
 
 func insertRunnerFlagAfter(args []string, after, flag, value string) []string {
@@ -4559,19 +4582,20 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			output = output[len(output)-2000:]
 		}
 		result = append(result, TaskInfo{
-			ID:           t.ID,
-			Title:        t.Title,
-			Description:  t.Description,
-			Status:       t.Status,
-			RunnerID:     t.RunnerID,
-			SessionID:    t.SessionID,
-			Output:       output,
-			ResultText:   t.ResultText,
-			Failure:      t.Failure,
-			CostUSD:      t.CostUSD,
-			InputTokens:  t.InputTokens,
-			OutputTokens: t.OutputTokens,
-			Turns:        t.Turns,
+			ID:               t.ID,
+			Title:            t.Title,
+			Description:      t.Description,
+			Status:           t.Status,
+			RunnerID:         t.RunnerID,
+			SessionID:        t.SessionID,
+			ProjectSessionID: t.ProjectSessionID,
+			Output:           output,
+			ResultText:       t.ResultText,
+			Failure:          t.Failure,
+			CostUSD:          t.CostUSD,
+			InputTokens:      t.InputTokens,
+			OutputTokens:     t.OutputTokens,
+			Turns:            t.Turns,
 			PendingFollowUps: append([]PendingFollowUp{},
 				t.PendingFollowUps...),
 			Source:          t.Source,

@@ -166,6 +166,26 @@ export interface Task {
   failure?: TaskFailureWire | null;
 }
 
+export interface RemoteProject {
+  name: string;
+  path: string;
+  branch?: string;
+  framework?: string;
+  frameworks?: string[];
+  stack?: string;
+  stacks?: string[];
+  surfaces?: string[];
+  testSurfaces?: string[];
+  backend?: string;
+  services?: string[];
+  hosting?: string[];
+  role?: string;
+  executionMode?: string;
+  primarySurface?: string;
+  gitRemote?: string;
+  tags?: string[];
+}
+
 /** Wire shape of `GET /tasks/{id}/proof` → `{ok:true, proof:{…}}`. Media URLs
  *  are absolute agent routes behind the same bearer/relay auth as every other
  *  agent call — never fetch them bare (audit B8); use clipId with
@@ -2268,11 +2288,12 @@ export class AgentClient {
 
   // ── Task API ───────────────────────────────────────────────────────
 
-  async sendTask(title: string, description: string, opts?: { runner?: string; model?: string }): Promise<Task> {
+  async sendTask(title: string, description: string, opts?: { runner?: string; model?: string; reasoningEffort?: "low" | "medium" | "high" }): Promise<Task> {
     this.assertConnected();
     const body: Record<string, unknown> = { title, description, source: "web" };
     if (opts?.runner) body.runner = opts.runner;
     if (opts?.model) body.model = opts.model;
+    if (opts?.reasoningEffort) body.reasoningEffort = opts.reasoningEffort;
     const res = await fetch(`${this.taskBaseUrl}/tasks`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
@@ -2296,6 +2317,7 @@ export class AgentClient {
       description,
       status: data.status,
       runnerId: data.runnerId || opts?.runner,
+      model: data.model || opts?.model,
       output: [],
       capabilityGap: data.capabilityGap,
       createdAt: Date.now(),
@@ -5019,30 +5041,25 @@ export class AgentClient {
 
   // ── Projects ───────────────────────────────────────────────────────
 
-  async listProjects(): Promise<Array<{
-    name: string;
-    path: string;
-    branch?: string;
-    framework?: string;
-    frameworks?: string[];
-    stack?: string;
-    stacks?: string[];
-    surfaces?: string[];
-    testSurfaces?: string[];
-    backend?: string;
-    services?: string[];
-    hosting?: string[];
-    role?: string;
-    executionMode?: string;
-    primarySurface?: string;
-    gitRemote?: string;
-    tags?: string[];
-  }>> {
+  async listProjects(refresh = false): Promise<RemoteProject[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/projects`, { headers: this.authHeaders });
+    const suffix = refresh ? "?refresh=1" : "";
+    const res = await fetch(`${this.baseUrl}/projects${suffix}`, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to load projects: HTTP ${res.status}`);
     return data.projects ?? [];
+  }
+
+  async setWorkDir(path: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/work-dir`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const data = await res.json().catch(() => ({})) as { workDir?: string; error?: string };
+    if (!res.ok) throw new Error(data.error || `Failed to select project: ${res.status}`);
+    return data.workDir || path;
   }
 
   /** Project list from the RENDER machine when a runner/render split is

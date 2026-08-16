@@ -90,7 +90,7 @@ func (m *ProjectValidationManager) Start(session *ProjectSession, kind string) (
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	gitCtx, gitCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	commitOut, commitErr := runGit(gitCtx, session.WorkDir, "rev-parse", "HEAD")
+	commitOut, commitErr := runProjectSessionGit(gitCtx, session.WorkDir, "rev-parse", "HEAD")
 	gitCancel()
 	if commitErr != nil {
 		cancel()

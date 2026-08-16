@@ -58,6 +58,13 @@ type ProjectPreviewManager struct {
 	httpClient *http.Client
 }
 
+func terminateProcessTree(process *os.Process) error {
+	if process == nil {
+		return nil
+	}
+	return killProcessGroup(process.Pid, "TERM")
+}
+
 func NewProjectPreviewManager() *ProjectPreviewManager {
 	return &ProjectPreviewManager{
 		previews: make(map[string]*previewProcess),

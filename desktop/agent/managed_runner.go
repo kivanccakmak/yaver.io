@@ -244,8 +244,8 @@ func runCloudRunner(args []string) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	httpServer := NewHTTPServer(*httpPort, workloadToken, registration.OwnerUserID, convexURL, runnerName, taskManager)
-	httpServer.managed = true
+	httpServer := NewHTTPServer(*httpPort, workloadToken, registration.OwnerUserID, deviceID, convexURL, runnerName, taskManager)
+	httpServer.operatorMode = true
 	httpServer.onShutdown = cancel
 	go func() {
 		if err := httpServer.Start(ctx); err != nil {
@@ -260,7 +260,7 @@ func runCloudRunner(args []string) {
 			if relay.QuicAddr == "" {
 				continue
 			}
-			go runRelayTunnel(ctx, relay.QuicAddr, fmt.Sprintf("127.0.0.1:%d", *httpPort), deviceID, workloadToken, *relayPassword)
+			go runRelayTunnel(ctx, relay.QuicAddr, fmt.Sprintf("127.0.0.1:%d", *httpPort), deviceID, workloadToken, *relayPassword, nil, nil)
 		}
 	}
 

@@ -67,25 +67,28 @@ type HTTPServer struct {
 	// work this box can do.
 	localMux *http.ServeMux
 
-	taskMgr        *TaskManager
-	execMgr        *ExecManager
-	scheduler      *Scheduler
-	companion      *CompanionEngine // companion-compute engine (yaver.companion.yaml)
-	analytics      *Analytics
-	aclMgr         *ACLManager
-	emailMgr       *EmailManager
-	notifyMgr      *NotificationManager
-	vaultStore     *VaultStore
-	buildMgr       *BuildManager
-	tunnelMgr      *TunnelManager
-	testMgr        *TestManager
-	feedbackMgr    *FeedbackManager
-	designRefMgr   *DesignReferenceManager
-	blackboxMgr    *BlackBoxManager
-	runnerKeeper   *RunnerKeeper // P7 same-session continuation supervisor
-	devServerMgr   *DevServerManager
-	todolistMgr    *TodoListManager
-	sessionAuditor *SessionAuditor
+	taskMgr           *TaskManager
+	projectSessions   *ProjectSessionManager
+	projectPreviewMgr *ProjectPreviewManager
+	validationMgr     *ProjectValidationManager
+	execMgr           *ExecManager
+	scheduler         *Scheduler
+	companion         *CompanionEngine // companion-compute engine (yaver.companion.yaml)
+	analytics         *Analytics
+	aclMgr            *ACLManager
+	emailMgr          *EmailManager
+	notifyMgr         *NotificationManager
+	vaultStore        *VaultStore
+	buildMgr          *BuildManager
+	tunnelMgr         *TunnelManager
+	testMgr           *TestManager
+	feedbackMgr       *FeedbackManager
+	designRefMgr      *DesignReferenceManager
+	blackboxMgr       *BlackBoxManager
+	runnerKeeper      *RunnerKeeper // P7 same-session continuation supervisor
+	devServerMgr      *DevServerManager
+	todolistMgr       *TodoListManager
+	sessionAuditor    *SessionAuditor
 	// Deploy history (in-memory ring buffer of recent /deploy/ship runs)
 	// and per-caller concurrency limiter. Both are always live — lazy
 	// allocation happens on first use via the ensureDeploy* helpers.
@@ -287,18 +290,25 @@ func (s *HTTPServer) SetOwnerUserID(uid string) {
 
 func NewHTTPServer(port int, token, ownerUserID, deviceID, convexURL, hostname string, taskMgr *TaskManager) *HTTPServer {
 	currentLocalAgentPort.Store(int64(port))
+	projectSessions, sessionErr := NewProjectSessionManager()
+	if sessionErr != nil {
+		log.Printf("project sessions unavailable: %v", sessionErr)
+	}
 	s := &HTTPServer{
-		port:          port,
-		token:         token,
-		ownerUserID:   ownerUserID,
-		deviceID:      deviceID,
-		convexURL:     convexURL,
-		hostname:      hostname,
-		taskMgr:       taskMgr,
-		finalizeMgr:   NewFinalizeManager(taskMgr),
-		streams:       NewLogStreamRegistry(),
-		heartbeatKick: make(chan struct{}, 1),
-		windowsSeats:  newWindowsSeatIndex(),
+		port:              port,
+		token:             token,
+		ownerUserID:       ownerUserID,
+		deviceID:          deviceID,
+		convexURL:         convexURL,
+		hostname:          hostname,
+		taskMgr:           taskMgr,
+		projectSessions:   projectSessions,
+		projectPreviewMgr: NewProjectPreviewManager(),
+		validationMgr:     NewProjectValidationManager(),
+		finalizeMgr:       NewFinalizeManager(taskMgr),
+		streams:           NewLogStreamRegistry(),
+		heartbeatKick:     make(chan struct{}, 1),
+		windowsSeats:      newWindowsSeatIndex(),
 	}
 	// Lets a credential recovery re-dispatch whatever the user typed while the
 	// runner was signed out, without threading a TaskManager into the auth paths.
@@ -387,6 +397,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// Authenticated
 	mux.HandleFunc("/tasks", s.auth(s.handleTasks))
 	mux.HandleFunc("/tasks/", s.auth(s.handleTaskByID))
+	mux.HandleFunc("/v2/capabilities", s.auth(s.handleV2Capabilities))
+	mux.HandleFunc("/v2/git/connections", s.auth(s.handleV2GitConnections))
+	mux.HandleFunc("/v2/git/repositories", s.auth(s.handleV2GitRepositories))
+	mux.HandleFunc("/v2/project-sessions", s.auth(s.handleV2ProjectSessions))
+	mux.HandleFunc("/v2/project-sessions/", s.auth(s.handleV2ProjectSessionByID))
 	mux.HandleFunc("/finalize", s.auth(s.handleFinalize))
 	mux.HandleFunc("/finalize/", s.auth(s.handleFinalizeByID))
 	// Mobile Sandbox → remote runner (GLM): edit the phone-only sandbox tree on
@@ -1604,6 +1619,12 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
+		if s.projectPreviewMgr != nil {
+			s.projectPreviewMgr.StopAll()
+		}
+		if s.validationMgr != nil {
+			s.validationMgr.StopAll()
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		s.server.Shutdown(shutdownCtx)
@@ -3655,6 +3676,10 @@ func (s *HTTPServer) handleClean(w http.ResponseWriter, r *http.Request) {
 
 // handleTasks handles GET /tasks (list) and POST /tasks (create).
 func (s *HTTPServer) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if s.operatorMode {
+		jsonError(w, http.StatusGone, "managed runners require /v2/project-sessions/{id}/tasks")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		s.listTasks(w, r)

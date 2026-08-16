@@ -31,7 +31,7 @@ func TestRegisterManagedRunnerUsesWorkloadBearer(t *testing.T) {
 }
 
 func TestManagedRunnerRejectsGlobalTaskCreation(t *testing.T) {
-	server := &HTTPServer{managed: true}
+	server := &HTTPServer{operatorMode: true}
 	recorder := httptest.NewRecorder()
 	server.handleTasks(recorder, httptest.NewRequest(http.MethodPost, "/tasks", nil))
 	if recorder.Code != http.StatusGone {

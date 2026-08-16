@@ -334,6 +334,14 @@ export interface Device {
   lastSeen: number;
   os: string;
   runners: RunnerInfo[];
+  /** Cloud Studio inventory metadata. Older private agents may omit it. */
+  deviceKind?: "private-agent" | "cloud-runner";
+  trust?: "user-managed" | "yaver-managed";
+  cloudWorkspaceId?: string;
+  runnerClass?: "linux" | "macos";
+  region?: string;
+  protocolVersion?: number;
+  capabilities?: Record<string, boolean>;
   /** Durable inventory from Convex: which first-class coding CLIs are
    * installed on this device. Presence only, no auth state. */
   installedRunnerIds?: string[];
@@ -1272,6 +1280,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         const connectedDeviceId = quicClient.isConnected ? activeDevice?.id : null;
         const mapped: Device[] = raw.map((d: any) => {
           const deviceId = d.deviceId || d.id;
+          const legacyCloudRunner = !d.deviceKind && normalizedDeviceName(d.name) === "ubuntu-4gb-hel1-1";
           // If we're actively connected to this device, trust our connection over stale heartbeat
           const isActivelyConnected = connectedDeviceId === deviceId;
           const lastTunnelEvent =
@@ -1308,6 +1317,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             lastSeen: isActivelyConnected ? Date.now() : (d.lastHeartbeat || d.lastSeen || 0),
             os: d.platform || d.os || "",
             runners: d.runners ?? [],
+            deviceKind: d.deviceKind ?? (legacyCloudRunner ? "cloud-runner" : "private-agent"),
+            trust: d.trust ?? (legacyCloudRunner || d.managed === true ? "yaver-managed" : "user-managed"),
+            cloudWorkspaceId: typeof d.cloudWorkspaceId === "string" ? d.cloudWorkspaceId : undefined,
+            runnerClass: d.runnerClass === "linux" || d.runnerClass === "macos"
+              ? d.runnerClass
+              : legacyCloudRunner ? "linux" : undefined,
+            region: typeof d.region === "string" ? d.region : undefined,
+            protocolVersion: typeof d.protocolVersion === "number" ? d.protocolVersion : undefined,
+            capabilities: d.capabilities && typeof d.capabilities === "object" ? d.capabilities : undefined,
             installedRunnerIds: Array.isArray(d.installedRunnerIds) ? d.installedRunnerIds : undefined,
             publicKey: d.publicKey,
             hwid: d.hardwareId || d.hwid,
