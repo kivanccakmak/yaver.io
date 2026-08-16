@@ -44,6 +44,8 @@ test("MAS deploy preserves the existing Yaver app identity and verifies the pack
   const deploy = readFileSync(join(electronRoot, "..", "scripts", "deploy-macos-testflight.sh"), "utf8");
   assert.match(deploy, /MAS_BUNDLE_ID="io\.yaver\.mobile"/);
   assert.match(deploy, /manageAppVersionAndBuildNumber -bool NO/);
+  assert.match(deploy, /ApplicationProperties\.CFBundleShortVersionString/);
+  assert.match(deploy, /ApplicationProperties\.CFBundleVersion/);
   assert.match(deploy, /PACKAGED_BUNDLE_ID/);
   assert.match(deploy, /PACKAGED_BUILD/);
   assert.match(deploy, /codesign --verify --deep --strict/);

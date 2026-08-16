@@ -226,6 +226,11 @@ if [ -z "$PKG_PATH" ]; then
   plutil -insert ApplicationProperties.ApplicationPath -string Applications/Yaver.app "$ARCHIVE_PATH/Info.plist"
   plutil -insert ApplicationProperties.Architectures -json '["arm64","x86_64"]' "$ARCHIVE_PATH/Info.plist"
   plutil -insert ApplicationProperties.CFBundleIdentifier -string "$APP_BUNDLE_ID" "$ARCHIVE_PATH/Info.plist"
+  # Xcode's upload path reads version/build from xcarchive metadata, not only
+  # from the packaged app. Missing keys make Xcode 16 report both values empty
+  # and then crash while recording the failed distribution.
+  plutil -insert ApplicationProperties.CFBundleShortVersionString -string "$APP_VERSION" "$ARCHIVE_PATH/Info.plist"
+  plutil -insert ApplicationProperties.CFBundleVersion -string "$APP_BUILD" "$ARCHIVE_PATH/Info.plist"
   plutil -insert ApplicationProperties.SigningIdentity -string "$APP_SIGNING_IDENTITY" "$ARCHIVE_PATH/Info.plist"
   plutil -insert ApplicationProperties.Team -string "$APP_TEAM" "$ARCHIVE_PATH/Info.plist"
 
