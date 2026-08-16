@@ -160,34 +160,29 @@ The optional relationship may later use `physicalHostGroup` metadata, but this i
 
 ### 6.1 Agent ports
 
-Both environments default to port `18080`, but they are independent only while WSL2 uses its normal virtualized/NAT network namespace.
+For the first beta there is one native Windows agent on the normal local port, `18080`. It makes outbound connections to Yaver's control plane and Relay Pro. The laptop does not need a public IP, router configuration, or an inbound firewall rule.
 
-For the first beta:
+The agent listener must remain loopback/LAN-scoped according to existing Yaver policy and must never be exposed directly to the internet. A remote client reaches it only through an authenticated Yaver path.
 
-- Windows native agent: `18080`.
-- WSL agent: `18080` inside the WSL NAT namespace.
-- Do not enable WSL mirrored networking until dual-agent bind and discovery are tested.
-- Both agents register outbound to Relay Pro as different devices.
-
-Using a non-default WSL agent port sounds simple, but current CLI/status paths contain multiple hard-coded `18080` probes. Starting WSL on `18081` could make the process healthy while local diagnostics falsely report it offline. That is a product gap, not a beta workaround to normalize.
+If WSL is added later, its networking and port are a separate admission problem. Current CLI/status paths contain hard-coded `18080` probes; an alternate WSL port can be healthy while diagnostics falsely report it offline. WSL mirrored networking can also make two agents contend for the same port. Do not add the second seat until those cases are operation-tested.
 
 ### 6.2 Dev-server reachability
 
-Microsoft documents that Windows can ordinarily reach a WSL2 dev server through localhost forwarding. Windows 11 mirrored mode also permits bidirectional localhost access, but it changes the networking model. See [WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking) and [WSL interop](https://learn.microsoft.com/en-us/windows/dev-environment/wsl-interop).
-
-For GanttSnap, test the real chain:
+The native-first GanttSnap chain is:
 
 ```text
-WSL dev server
+Native Windows dev server
   -> Windows browser
   -> PowerPoint WebView2 task pane
-  -> WSL Yaver relay preview
+  -> Windows Yaver relay preview
   -> real phone on cellular
 ```
 
-Do not accept `curl localhost` inside WSL as proof that PowerPoint can load the add-in.
+Do not accept `curl localhost` or a standalone browser page as proof that PowerPoint can load and execute the add-in.
 
 The dev server should bind according to the chosen reachability model, use HTTPS when the Office add-in requires it, and expose only through the authenticated Yaver tunnel—not an unauthenticated public port.
+
+If a later Linux-only operation forces WSL, Microsoft documents that Windows ordinarily reaches a WSL2 dev server through localhost forwarding; mirrored mode changes this model. At that point test the full WSL-to-WebView2 chain described in [WSL networking](https://learn.microsoft.com/en-us/windows/wsl/networking), rather than assuming localhost equivalence.
 
 ## 7. Persistence and restart reality
 
@@ -249,49 +244,140 @@ The native Windows `desktop-screen` target already contains the intended `gdigra
 
 1. Friend creates/signs into his own Yaver account.
 2. Relay Pro entitlement is attached to that account.
-3. Install a signed/checksummed Windows Yaver release.
-4. Authorize the Windows agent and name it `ganttsnap-office`.
-5. Enable remote view; keep remote control off until explicitly tested.
-6. Run the Windows operation-level doctor.
-7. Install/update WSL2 and the selected Ubuntu distribution.
-8. Install the Linux Yaver agent inside WSL under the friend's Linux user.
-9. Authorize it as a second device and name it `ganttsnap-code`.
-10. Clone GanttSnap into the selected canonical WSL repository location.
-11. Authenticate GitHub/GitLab through the friend's supported device/browser flow.
-12. Install and authenticate one selected coding runner in WSL.
-13. Install only the cloud CLIs detected from the project.
-14. Start GanttSnap's dev server and prove Windows/PowerPoint/WebView2 reachability.
-15. Sign into PowerPoint manually and sideload/deploy the GanttSnap add-in through a supported test path.
+3. Install a signed, checksummed Windows Yaver release under the friend's normal Windows user.
+4. Authorize the Windows agent and name it `ganttsnap-windows`.
+5. Show the local consent page. The friend explicitly enables view; control remains off.
+6. Run the native Windows operation-level doctor.
+7. Select a project folder owned by the friend; do not default to the whole profile or drive.
+8. Clone GanttSnap there and authenticate GitHub/GitLab through the friend's supported browser/device flow.
+9. Detect the project and propose only its required native dependencies. The friend approves each privileged or large install.
+10. Install and authenticate one selected coding runner natively. For the first beta, if Yaver's browser handoff is not proven on Windows, the friend signs in once in a local Windows terminal.
+11. Start GanttSnap's native dev server and prove browser, Relay preview, and PowerPoint WebView2 reachability.
+12. The friend signs into PowerPoint manually and sideloads or receives the GanttSnap add-in through a supported test path.
+13. Prove view-only access from a second network.
+14. Only then may the friend opt into remote control, with local notification and immediate revoke.
 
 No Windows, Microsoft, Git, runner, or provider password is shared with the Yaver owner/operator.
 
 ### 9.2 Normal remote session
 
 1. Friend opens Yaver on phone/tablet/web.
-2. Yaver shows `ganttsnap-code` and `ganttsnap-office` as two related seats.
-3. Friend starts a coding task on `ganttsnap-code`.
-4. The live WSL runner console streams without opening the Windows desktop.
+2. Yaver shows one device, `ganttsnap-windows`, with separate Code, Preview, and Desktop capabilities.
+3. Friend starts a coding task in the allowlisted native Windows repository.
+4. The live native runner console streams without opening the desktop.
 5. Render/reload requests queue while the runner is coding.
-6. When the task completes, Yaver checks the WSL dev server.
-7. Yaver opens or focuses PowerPoint on `ganttsnap-office`.
+6. When the task completes, Yaver checks the native dev server.
+7. Yaver opens or focuses PowerPoint in the same interactive Windows session.
 8. The Windows desktop stream remains visible.
 9. GanttSnap reloads exactly once.
 10. A test action proves `Office.onReady`, required API-set support, and a disposable presentation mutation.
 11. Pixel assertion verifies visible PowerPoint chrome and task pane.
 12. Friend reviews and accepts/rejects the result.
 
-### 9.3 WSL GUI application
+### 9.3 Optional WSL expansion
+
+Add WSL only after the native Windows doctor records a named, reproducible blocker. At that point create a separate WSL device identity, choose whether Windows or WSL owns the canonical repository, and prove every cross-boundary URL/path explicitly. Do not silently move an existing Windows project into WSL or run two agents as if they were one.
+
+### 9.4 WSL GUI application
 
 If the friend wants to see a Linux GUI tool:
 
 1. Launch the application inside WSL using WSLg.
 2. It appears as an ordinary window on the Windows desktop.
-3. View/control it through `ganttsnap-office`.
-4. Keep the owning process/task status on `ganttsnap-code`.
+3. View/control it through `ganttsnap-windows`.
+4. Keep the owning process/task status on the separately named WSL seat.
 
 The UI should say `WSLg app shown through Windows desktop`, not `WSL desktop stream`.
 
-## 10. Staged delivery plan
+## 10. What the friend must provide—and what Yaver must not ask for
+
+### 10.1 Required from the friend
+
+| Item | Why it is required | Safe acquisition |
+|---|---|---|
+| His own Yaver account | Device ownership, Relay Pro entitlement, audit, and revocation | He signs in on a trusted device and pairs his laptop |
+| Physical control of the laptop | Install approval, first login, UAC, Office dialogs, and emergency revoke | Local actions by the friend; never remote password entry by an operator |
+| A dedicated Windows user profile, preferably standard-user | Separates the beta from other household/company users | Existing user or a new local/organization user he controls |
+| Supported Windows 11 amd64 laptop | Current Windows artifact and capture path target | Operation-level admission check |
+| His own Microsoft 365/Office license | Desktop PowerPoint must be licensed in his interactive session | He signs into Office and completes MFA locally |
+| A permitted GanttSnap repository and project directory | Bounds what the coding agent can read/write | Explicit folder picker plus Git remote confirmation |
+| GitHub or GitLab authorization | Clone, branch, pull, and push if he later authorizes push | Provider OAuth/device flow in his browser |
+| One runner account | Claude Code, Codex, OpenCode, or another selected coding path | Local runner/browser sign-in; Yaver stores no password |
+| Consent for named dependency installs | Git, Node, runner, FFmpeg, and project packages may change the machine | Per-install explanation, size, publisher, destination, and undo route |
+| Power/network availability | Interactive screen streaming stops when the laptop sleeps or signs out | Plugged in, agreed sleep/lid policy, outbound internet |
+| Disposable test data | Proves Office mutations without risking personal/business files | A new presentation with no confidential content |
+| Explicit view and control choices | Pixels and input are separate sensitive capabilities | View opt-in first; control opt-in later; both revocable locally |
+
+The friend does **not** need Azure credentials, a public IP, router port forwarding, RDP, an SSH server, a Microsoft tenant admin account, or WSL for the native-first beta.
+
+### 10.2 Microsoft/Office boundary
+
+Yaver needs a working interactive PowerPoint session, not possession of the friend's Microsoft identity. PowerPoint runs as the friend's Windows user; Office and WebView2 retain their own sign-in state. Microsoft documents that Office desktop add-ins on Windows use Edge WebView2, and that unattended/non-interactive Office automation—including a task running as `SYSTEM`—is unsupported. See [Office Add-in webviews](https://learn.microsoft.com/en-us/office/dev/add-ins/concepts/browsers-used-by-office-web-add-ins) and [server-side Office automation considerations](https://support.microsoft.com/en-us/visio/considerations-for-server-side-automation-of-office).
+
+For one developer, use the least powerful supported add-in path:
+
+1. local or Office-on-the-web sideload for development when permitted;
+2. Microsoft 365 Integrated Apps assignment to `Just me` or a dedicated beta group when the tenant blocks sideloading;
+3. Marketplace/production distribution only after the beta.
+
+Microsoft documents sideloading as a testing mechanism and recommends Integrated Apps for centrally deploying add-ins to selected users/groups. See [sideload Office Add-ins for testing](https://learn.microsoft.com/en-us/office/dev/add-ins/testing/sideload-office-add-ins-for-testing) and [deploy Office Add-ins in the Microsoft 365 admin center](https://learn.microsoft.com/en-us/microsoft-365/admin/manage/manage-deployment-of-add-ins).
+
+Tenant admin help is conditional, not a default requirement. It is needed only if the organization blocks sideloading, centrally deploys the manifest, or must consent to declared Microsoft Graph scopes. If GanttSnap uses Graph, GanttSnap—not Yaver—owns the Entra app registration, redirect URIs, MSAL/NAA integration, scope declaration, consent, token handling, and revocation. Yaver may surface the sign-in dialog and a structured success/failure state; it must not extract Office cookies or Graph tokens.
+
+### 10.3 Git, runners, and cloud-provider accounts
+
+The same ownership rule applies to GitHub/GitLab, Vercel, Cloudflare, Supabase, Firebase, and later providers: the friend owns the account and chooses the exact organization/team/project. Yaver detects project evidence and brokers the provider's supported login; it does not become the account owner or ask for a reusable secret in chat.
+
+Detection should be evidence-based—for example a lockfile/package dependency, `vercel.json`/`.vercel`, Wrangler config, `supabase/config.toml`, or `firebase.json`—and must degrade to “not detected.” Detection does not authorize installation, project linking, resource creation, or deployment.
+
+The first Windows workspace image should contain only the universal native core: Yaver, Git, Node/package manager, one runner, FFmpeg, and browser/Office prerequisites. Provider CLIs install on demand, preferably project-local through the lockfile. Yaver-managed SDK/CLI binaries and caches get a **10 GiB hard budget**, with projected size shown before install and an LRU/reclaim UI. Repository dependencies, Docker images, model weights, and the user's existing software are reported separately rather than hidden inside that budget.
+
+Use one uniform Yaver authorization-session UI over provider-specific flows:
+
+| Provider class | Safe beta flow | Important constraint |
+|---|---|---|
+| GitHub/GitLab | Browser OAuth or device authorization | Show provider, scopes, org/repo, expiry, and completion; never display the resulting token |
+| Vercel | Current CLI device flow | User verifies the browser request; link only the selected team/project |
+| Cloudflare Wrangler | Browser OAuth with selected scopes and OS-keyring storage | Prefer `--use-keyring`; callback is local to the Windows session |
+| Firebase | Browser login; supported non-localhost flow only when needed | Prove account with `projects:list`; avoid legacy long-lived CI tokens for an interactive seat |
+| Supabase | Supported browser/token flow routed through a secret-input control | The secret bypasses the LLM, transcript, and logs; reject plaintext credential storage |
+
+Current official provider behavior is not uniform: Vercel documents OAuth device flow; Wrangler uses browser OAuth and can use Windows Credential Manager; Firebase documents `--no-localhost` for remote login; Supabase may use a personal access token and warns that it can fall back to plaintext when native credential storage is unavailable. See [Vercel CLI login](https://vercel.com/docs/cli/login), [Wrangler login/keyring](https://developers.cloudflare.com/workers/wrangler/commands/general/), [Firebase CLI authentication](https://firebase.google.com/docs/cli), and [Supabase CLI login](https://supabase.com/docs/reference/cli/getting-started). “Seamless” therefore means one safe Yaver UX with honest provider-specific states—not pretending every provider has identical OAuth.
+
+Authentication grants the minimum connection only. `link project`, `pull environment`, `preview deploy`, `production deploy`, DNS/domain mutation, database migration, secret write, and destructive resource actions are separate capabilities. Production deploy stays off until the friend explicitly selects provider, account/team, project, environment, source commit, and action. Read-only `whoami`/project-list plus a no-op or preview operation proves the connection before any mutation.
+
+### 10.4 Never request or collect
+
+- Windows password, PIN, Windows Hello secret, or recovery questions.
+- Microsoft password, MFA code, recovery code, refresh token, or browser/Office cookies.
+- BitLocker recovery key.
+- Microsoft 365 global-admin password. If admin consent is required, the admin follows a Microsoft-hosted flow and approves only the declared app/scopes.
+- Git, runner, Vercel, Cloudflare, Supabase, Firebase, or other provider secrets pasted into chat, task prompts, logs, URLs, or screenshots.
+- Disabling Defender, firewall, Secure Boot, BitLocker, tenant Conditional Access, or endpoint protection as a blanket workaround.
+- Public RDP/WinRM/SMB/Yaver ports or permanent router forwarding.
+- Access to the entire user profile, OneDrive, Documents, or other repositories when one project directory is sufficient.
+- Real customer presentations for automated beta mutations.
+
+### 10.5 Capability grants
+
+Pairing the laptop is not blanket authorization. The friend grants capabilities independently:
+
+| Grant | Default | Scope |
+|---|---|---|
+| Device ownership | Required | One device key under his Yaver account |
+| Project access | Denied until selected | Exact canonical project root; no parent traversal |
+| Runner execution | One selected runner | Exact device, project, runner, and task |
+| Dependency installation | Ask | Named package/version/source/size; elevation shown separately |
+| Desktop view | Explicit opt-in recommended | One Windows interactive session |
+| Desktop control | Off | Separate opt-in, single-writer lease, local revoke |
+| Clipboard/files/audio | Off and out of scope | Must become separate future grants |
+| Dev-server publication | Private only | Authenticated Yaver preview for specific local port |
+| External deploy/push | Off unless the friend asks | Specific provider/project/environment/branch |
+| Guest collaboration | Off | Separate, expiring device/project/view grants; never inherited from Relay Pro |
+
+Current source defaults remote **view** on, while control defaults off. For this beta the safer product contract is an explicit local first-run view choice as well. Until that change exists, onboarding must show the current policy and require the friend to confirm it locally before any frame is served.
+
+## 11. Staged delivery plan
 
 ### Stage 0 — admit only an operable laptop
 
@@ -301,10 +387,9 @@ Required evidence:
 - laptop power and sleep/lid policy;
 - PowerPoint and WebView2 launch;
 - Office signed-in state;
-- WSL2 distribution/version/user;
+- native Git, Node, runner, FFmpeg, browser, and dev-server operation;
 - available RAM/disk;
 - signed Windows agent build;
-- current WSL agent build;
 - no conflicting listener state.
 
 **Go:** all required operations pass.  
@@ -333,23 +418,25 @@ Required evidence:
 **Go:** input is accurate, revocable, and audited.  
 **No-go:** input enters the wrong session/app or survives revoke.
 
-### Stage 3 — WSL coding seat
+### Stage 3 — native Windows coding seat
 
-- Register the WSL agent separately.
-- Prove repository path and Git operations.
+- Prove the allowlisted native repository path and Git operations.
+- Detect `package.json`, lockfile, Office manifest, and required CLIs.
+- Present dependency installs before changing the machine.
 - Prove the exact runner binary and a real model completion.
 - Stream raw console output.
-- Stop WSL with `wsl --shutdown` and confirm a named recovery route.
-- Verify Windows and WSL agents cannot be confused.
+- Stop/restart the Yaver agent and prove the named Windows seat reattaches or reports an honest loss.
+- Expire runner authentication and prove a visible re-authentication route.
 
-**Go:** a task runs entirely in the intended WSL repo.  
-**No-go:** task lands in Windows, wrong distro/user, wrong CWD, or a PATH stub.
+**Go:** a task runs entirely in the intended native Windows repo and the real runner operation succeeds.
 
-### Stage 4 — WSL-to-PowerPoint closed loop
+**No-go:** wrong user/CWD, whole-profile scan, PATH stub, silent installer, or false authenticated state.
 
-- Start the WSL dev server.
-- Load it from Windows browser and PowerPoint WebView2.
-- Run a small GanttSnap task in WSL.
+### Stage 4 — native code-to-PowerPoint closed loop
+
+- Start the native Windows dev server.
+- Load it from the Windows browser and PowerPoint WebView2.
+- Run a small GanttSnap task natively.
 - Queue one render.
 - Reload PowerPoint once after completion.
 - Prove an Office API action and visible pixels.
@@ -370,7 +457,21 @@ Required evidence:
 **Go:** actual transport matches the UI label.  
 **No-go:** Relay Pro entitlement is treated as proof of TURN.
 
-### Stage 6 — resilience week
+### Stage 6 — optional WSL admission
+
+Skip this stage unless a named native operation is impossible or materially worse.
+
+- Record the failing native command and why WSL resolves it.
+- Register WSL as a separate device identity.
+- Decide one canonical repository owner; avoid editing the same checkout from both environments.
+- Prove distro/user/CWD, runner, Git, dev-server reachability, shutdown, restart, and port isolation.
+- Show WSLg windows through the Windows desktop stream rather than claiming a WSL desktop.
+
+**Go:** WSL resolves the named blocker without weakening identity or confusing task placement.
+
+**No-go:** WSL is added only as convention, or creates ambiguous device/path/port state.
+
+### Stage 7 — resilience week
 
 Exercise repeatedly:
 
@@ -380,7 +481,7 @@ Exercise repeatedly:
 - sleep/wake;
 - Wi-Fi change;
 - relay reconnect;
-- WSL shutdown/restart;
+- optional WSL shutdown/restart, if admitted;
 - Windows Update reboot;
 - PowerPoint modal/update/activation dialog;
 - dev-server crash;
@@ -389,56 +490,146 @@ Exercise repeatedly:
 
 Every failure must become a named state with a visible next action before expanding the beta.
 
-## 11. Required headless probes
+## 12. Required headless probes
 
 | Probe | Passing evidence | Failure route |
 |---|---|---|
 | Windows agent | Signed binary answers authenticated agent route | Reinstall/repair signed agent |
 | Interactive session | Correct user, unlocked interactive desktop | Ask user to log in/unlock; never collect password |
+| Project boundary | Canonical selected root, bounded scan, and no parent traversal | Re-select the project root |
+| Git | Real remote fetch plus bounded read/write check in the project | Provider device/OAuth flow or repository permission action |
+| Node/package manager | Exact binary/version executes under the agent's environment | Signed native Windows install proposal |
+| Runner discovery | Exact `.exe`/`.cmd` path resolves under the agent, including the user's npm location | Refresh PATH/search `%APPDATA%\npm` or reinstall |
+| Runner auth | Real account/model completion, not a config-file or process check | Local Windows sign-in until remote OAuth interception is proven |
+| Provider auth | `whoami` plus exact visible account/team/project list | Typed browser/device/secret-input flow; never paste token into task output |
+| Provider scope | Preview/read operation targets selected project/environment | Re-link or reduce scope; production mutation remains disabled |
+| Tool budget | Projected and actual Yaver-managed CLI/cache usage stays within 10 GiB | Ask before install, reclaim unused version, or decline |
 | Capture | `gdigrab` returns changing frames | FFmpeg/backend remedy with bounded stderr |
 | Encode | Decodable H.264 IDR frame | Install supported FFmpeg/encoder |
 | ICE | Candidate census reaches `relay-ok` for Pro promise | TURN/firewall/certificate repair |
 | Control | Test-target input echo under lease | Enable control or repair DPI/session mapping |
-| WSL | Selected distro/version/user actually starts | WSL update/restart action |
-| WSL agent | Its own authenticated endpoint answers | Restart the WSL agent, not Windows agent |
-| Repo | Git root, remote, branch, status, read/write operation | Choose/clone/authenticate correct repo |
-| Runner | Real completion from selected account/model | Device/browser auth action |
-| Dev URL | WSL, Windows browser, WebView2, and relay fetch succeed | Bind/certificate/networking action |
+| Dev URL | Agent, Windows browser, WebView2, and remote phone fetch succeed | Bind/certificate/tunnel action |
 | Office | PowerPoint + GanttSnap + `Office.onReady` + API mutation | Sign in/activate/sideload/upgrade action |
+| Optional WSL | Exact distro/user/CWD, own authenticated endpoint, and Windows/WebView2 URL fetch | WSL update/restart/path/network action |
 
-## 12. Security rules
+An inventory result is never sufficient: `ffmpeg.exe` on `PATH`, an Office process, a runner auth file, or a TURN configuration does not pass unless the corresponding capture, API call, model completion, or relayed ICE operation succeeds.
+
+## 13. Security and P2P threat model
+
+### 13.1 Trust boundaries
+
+```text
+Friend's phone/tablet/web client
+  |  Yaver account + device/session authorization
+  |  authenticated signaling/control plane
+  v
+Shared Yaver control plane / Relay Pro
+  |  may observe routing metadata; must not hold endpoint decryption keys
+  |  same-owner/scoped-grant checks do not replace endpoint authorization
+  v
+Friend's Windows Yaver agent
+  |  local policy + project allowlist + view/control grants
+  v
+Interactive Windows user -> PowerPoint / repo / runner / provider CLIs
+```
+
+Relay Pro is connectivity and quality-of-service, not the security boundary. A hostile or compromised relay must not gain a shell, inject control, mint endpoint authorization, or cross from tenant A to tenant B. The Windows agent authorizes the caller against its own account/device/grant state before creating a session or accepting input.
+
+### 13.2 Signaling, media, and fallback
+
+For the intended WebRTC path:
+
+1. the authenticated client asks the Windows agent for a short-lived remote-runtime session;
+2. authenticated, bounded signaling exchanges SDP/ICE;
+3. ICE tries a direct host/server-reflexive path;
+4. if direct connectivity fails, the client obtains short-lived, account-scoped TURN credentials and uses TURN;
+5. video is protected by WebRTC DTLS-SRTP and data channels by DTLS/SCTP between endpoints; TURN forwards packets and does not terminate the media encryption;
+6. the agent accepts control messages only for the authorized live session and active control lease.
+
+TURN still sees connection metadata, allocation timing, and bandwidth. Direct ICE can reveal endpoint IP information to the authorized peer through signaling/candidates. For the friend's own devices, direct-first is reasonable after disclosure. For any future guest/collaborator, offer a **TURN-only privacy mode** so peers do not learn the laptop's host/server-reflexive address, while making the latency/cost trade-off clear.
+
+The authenticated JPEG fallback is not P2P and must never be described as WebRTC. It sends frames through the relay's authenticated HTTP path. The UI must state `Direct WebRTC`, `TURN WebRTC`, or `Relay JPEG`; record no pixels by default; and expose measured latency/bitrate without putting content in telemetry.
+
+### 13.3 Consent and least privilege
 
 - Friend uses his own Yaver account and credentials.
-- Native Windows and WSL seats use different device keys.
-- Pairing does not authorize either seat to impersonate the other.
+- The native Windows seat has its own non-exported device private key. Any later WSL seat gets a different key.
+- Pairing or Relay Pro entitlement does not grant project, screen, input, deploy, or guest access.
 - Relay remains shared/pass-through; keys and same-owner checks enforce isolation.
 - No public RDP/SSH/agent port.
 - No Windows/Microsoft password in Yaver, Convex, logs, tasks, or vault sync.
 - View and control are separate permissions.
-- Control defaults off until Stage 2 passes.
+- View should require a local first-run choice; control defaults off until Stage 2 passes.
+- Control is bound to one live viewer/device/session, one writer lease, and a short idle expiry.
 - Local user can revoke immediately.
+- Starting control posts a local notification/indicator that names the remote device; periodic reminders do not replace the initial indicator.
+- Lock, sign-out, user switch, device revoke, grant expiry, or agent shutdown terminates input and live peer connections.
 - No clipboard/audio/file transfer in the first beta.
 - Screen pixels, Office documents, prompts, source, and runner output do not enter control-plane telemetry.
+- Provider OAuth responses and secret-input values bypass the coding model, task transcript, screen recording, and general logs.
 - URLs do not carry long-lived bearer or relay credentials.
 - The beta uses disposable Office test documents for automated mutations.
 
-## 13. Product work required before “seamless”
+### 13.4 Local Windows security
+
+- Run Yaver as the friend's normal interactive user, never `SYSTEM`, administrator-by-default, or another logged-in user's session.
+- Use UAC only for a named operation that truly requires elevation. The friend approves it locally; remote input should not be expected to cross the Windows secure desktop.
+- Store device/runner/provider tokens in the existing encrypted local Yaver secret design; the Windows product should use a Windows user-bound protection mechanism such as DPAPI/Credential Manager rather than plaintext files. This is a required implementation check, not a claim that every current path already does so.
+- Restrict local policy and audit files to the friend. Audit view/control start, stop, caller device, grant, task, and result—never keystrokes, screen contents, OAuth codes, or document contents.
+- Pin project roots using canonical Windows path handling; reject junction/symlink/reparse-point escapes where a capability would otherwise cross the allowlist.
+- Verify downloaded Yaver and dependency artifacts by publisher/signature and checksum. Record version/source and provide an uninstall route.
+- Defender/firewall findings become named remediation states; never silently create broad exclusions.
+
+### 13.5 Revocation and incident response
+
+The friend must be able to revoke from the laptop and another trusted Yaver surface. Revocation must:
+
+1. close live WebRTC/relay streams and control leases;
+2. invalidate the scoped device/session/grant server-side;
+3. expire or rotate TURN credentials and relay sessions;
+4. prevent reconnect without a new authorized pairing/grant;
+5. preserve content-free audit metadata for the friend;
+6. offer a local `disable all remote access` kill switch that works even if the cloud is unavailable.
+
+### 13.6 Current security/product gaps that block a broad beta
+
+- Remote view currently defaults on in `desktop/agent/remotedesktop.go`; the proposed explicit first-run consent is not yet implemented.
+- The public Windows installer downloads an amd64 executable but does not currently verify checksum or Authenticode before execution.
+- Windows runner discovery relies mainly on the agent `PATH` and does not explicitly search `%APPDATA%\npm`.
+- The native Node and FFmpeg auto-install recipes do not currently cover Windows.
+- The runner browser interceptor deliberately has no working native Windows browser shim, so “remote OAuth is seamless” is unproven.
+- Mobile currently selects JPEG whenever a relay base URL exists; managed Relay Pro does not yet operation-prove TURN.
+- Several browser/WebView paths still carry `token`/`__rp` query credentials. They should become one-time exchange values or scoped, Secure/HttpOnly/SameSite cookies where browser constraints require cookies—not reusable secrets in navigation URLs, history, logs, or referrers.
+- Desktop capture uses the whole Windows desktop/virtual screen; per-window or per-monitor privacy is not yet a guarantee.
+
+## 14. Product work required before “seamless”
 
 ### P0
 
 - Restore a clean signed Windows build and release-integrity path.
+- Make Windows installer architecture-aware and verify signed/checksummed artifacts before replacement.
+- Add native Windows Node, FFmpeg, Git, and runner discovery/install/prove flows, including `%APPDATA%\npm`.
+- Add evidence-based provider detection, 10 GiB managed-tool budget, install receipts, and safe reclamation.
+- Add a real native Windows runner OAuth/device-flow handoff or an honest local-login route.
+- Add typed Git/provider authorization sessions with secret redaction, OS-keyring enforcement, scope/project selection, expiry, revoke, and operation-level proof.
+- Change first-run remote view from implicit default to explicit local consent.
 - Prove `gdigrab -> H.264 -> phone first frame` on real Windows.
 - Fix mobile's `relay URL => JPEG only` decision.
 - Deploy and externally prove managed TURN.
 - Remove/fix the stale web `/rtc/offer` and static TURN credential path.
 - Add explicit interactive-session/locked/logged-off reason codes.
-- Make WSL and Windows seats visibly distinct.
+- Replace reusable query credentials with bounded browser-safe grants/cookies.
+- Bind remote-runtime sessions to the authorized viewer device/grant and tear them down on revoke.
 
 ### P1
 
-- Add physical-host grouping and cross-seat task/render handoff.
+- Add project-root permission UX and canonical/reparse-point escape tests.
+- Add native dependency detection from repository evidence and bounded install receipts/rollback.
+- Add Office host doctor: activation, WebView2, manifest, HTTPS, `Office.onReady`, API set, and disposable mutation.
+- Add TURN-only privacy policy for guest/collaborator scenarios.
+- Add WSL physical-host grouping and cross-seat task/render handoff only when WSL is admitted.
 - Remove hard-coded default-port assumptions before supporting alternate WSL ports/mirrored networking.
-- Add operation-level WSL distro/user/repo/runner/dev-URL doctor.
+- Add operation-level WSL distro/user/repo/runner/dev-URL doctor as optional expansion work.
 - Add a signed, pinned Windows dependency installer.
 - Preserve bounded FFmpeg failure output.
 - Add multi-monitor capture/selection.
@@ -451,24 +642,25 @@ Every failure must become a named state with a visible next action before expand
 - Clipboard/files/audio with separate permissions.
 - TV/AR view clients and watch/car task-only controls.
 
-## 14. Realistic effort bands
+## 15. Realistic effort bands
 
 These are scope bands, not delivery promises:
 
-- **Manual two-seat laboratory proof:** a few focused engineering days after a clean Windows build exists.
+- **Manual native-Windows laboratory proof:** a few focused engineering days after a clean Windows build exists.
 - **One-friend view-only beta with truthful JPEG fallback:** roughly one focused iteration, assuming no new Windows capture defect.
-- **Reliable WSL coding → PowerPoint closed loop:** several focused iterations because path, URL, identity, task/render, and session boundaries all need negative tests.
+- **Reliable native coding → PowerPoint closed loop:** several focused iterations because Windows install/discovery, OAuth, WebView2, task/render, and session boundaries all need negative tests.
 - **Relay Pro TURN-backed H.264 product quality:** a separate networking/release workstream, not a checkbox inside onboarding.
+- **Optional WSL expansion:** a separate increment after a real native limitation is measured.
 - **Broad unattended consumer beta:** only after a resilience period demonstrates reboot/login/sleep/update recovery.
 
 Do not schedule from these bands until the Stage 0 probes run on the friend's exact laptop. The first operation results will determine whether the work is installer, Windows capture, WSL networking, Office, or relay dominated.
 
-## 15. Final recommendation
+## 16. Final recommendation
 
 Start with this exact product statement:
 
-> Connect your own Windows 11 laptop to Yaver Relay Pro. Use the Windows seat to view and control PowerPoint and any visible WSLg windows. Use the separate WSL2 seat for Linux repositories, AI coding runners, terminal output, tests, and dev servers. Yaver coordinates task completion and one PowerPoint reload. The laptop must be powered, networked, and logged into the friend's interactive Windows session.
+> Connect your own Windows 11 laptop to Yaver Relay Pro. One native Windows Yaver agent runs the allowlisted GanttSnap repository, selected AI coding runner, tests, dev server, browser preview, PowerPoint, and desktop stream in your own interactive user session. You grant view and control separately, keep all account passwords with their providers, and can revoke access locally. The laptop must be powered, networked, and logged in. Add WSL later only if a measured task requires Linux.
 
-For the first beta, direct WSL “screen streaming” is unnecessary and unsupported by current Yaver. WSL terminal and web output should use native structured transports; WSL GUI windows should ride inside the Windows desktop stream.
+For the first beta, direct WSL “screen streaming” is unnecessary and unsupported by current Yaver. If WSL is later admitted, its terminal and web output should use structured transports; WSL GUI windows should ride inside the Windows desktop stream.
 
-Do not call the result seamless until the two seat identities, runner placement, dev URL, PowerPoint host, Relay Pro transport, lock/logoff behavior, and recovery actions pass the acceptance stages above.
+Do not call the result seamless until native dependency installation, runner auth and real completion, project boundary, dev URL, PowerPoint host, first changing frame, control revoke, Relay Pro transport, lock/logoff behavior, and recovery actions pass the acceptance stages above.
