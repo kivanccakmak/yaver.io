@@ -91,10 +91,14 @@ struct RemoteRuntimeWebRTCView: View {
             if runtime.connected {
                 Label(runtime.transportLabel, systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+                    .accessibilityIdentifier("vibing.runtime-connected")
             } else {
                 Label(runtime.status, systemImage: "antenna.radiowaves.left.and.right")
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .accessibilityIdentifier(runtime.error == nil
+                        ? "vibing.runtime-connecting"
+                        : "vibing.runtime-error")
             }
             Spacer()
             Text(mode == .pointer ? "Move · Select clicks" : "Directions scroll · Play/Pause returns to pointer")

@@ -57,8 +57,16 @@ struct SignInView: View {
     @State private var waitingSince = Date()
 
     var body: some View {
-        HStack(spacing: 56) {
-            VStack(alignment: .leading, spacing: 14) {
+        HStack(alignment: .top, spacing: 56) {
+            ScrollView(.vertical, showsIndicators: false) {
+              VStack(alignment: .leading, spacing: 14) {
+                Image("yaver-login-wordmark-light")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 260, height: 104, alignment: .leading)
+                    .accessibilityLabel("Yaver")
+                    .accessibilityIdentifier("signin.yaver-logo")
+
                 Text("Sign in to Yaver")
                     .font(.system(size: 44, weight: .heavy))
                     .padding(.bottom, 12)
@@ -249,8 +257,11 @@ struct SignInView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+              }
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(.bottom, 36)
             }
-            .frame(maxWidth: 560, alignment: .leading)
+            .frame(maxWidth: 620, maxHeight: .infinity, alignment: .topLeading)
 
             ZStack {
                 RoundedRectangle(cornerRadius: 24).fill(.white)

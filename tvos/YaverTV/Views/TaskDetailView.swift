@@ -17,7 +17,9 @@ struct TaskDetailView: View {
     @State private var status: String?
     @State private var console = ""
     @State private var live = false
-    @State private var showConsole = false
+    // WebUI shows the runner console as part of the task, not behind an
+    // undiscoverable disclosure. Keep it visible by default on TV too.
+    @State private var showConsole = true
     @State private var streamMessage: String?
     @State private var reattachNonce = 0
     @State private var stream: Task<Void, Never>?
@@ -74,14 +76,14 @@ struct TaskDetailView: View {
             Circle().fill(color(for: status ?? task.status)).frame(width: 14, height: 14)
             VStack(alignment: .leading, spacing: 3) {
                 Text(task.safeTitle).font(.system(size: 22, weight: .semibold)).lineLimit(2)
-                Text([task.runner, task.model, status ?? task.status].compactMap { $0 }.joined(separator: " · "))
+                Text([runnerLabel, modelLabel, statusLabel].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.system(size: 15)).foregroundStyle(.secondary)
             }
             Spacer()
             if live {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("working").font(.system(size: 14, weight: .semibold)).foregroundStyle(.green)
+                    Text("LIVE").font(.system(size: 14, weight: .bold)).foregroundStyle(.green)
                 }
             }
             if task.tmuxSession?.isEmpty == false {
@@ -182,13 +184,11 @@ struct TaskDetailView: View {
                     .accessibilityIdentifier("chat.send-reply")
             }
             HStack(spacing: 10) {
-                projectChip
-                mcpChip
-                Button(showConsole ? "Hide console" : "Show console") { showConsole.toggle() }
+                Label(runnerLabel, systemImage: "terminal.fill")
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
-                Text("Project and MCP are optional context")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                Button(showConsole ? "Hide live console" : "Show live console") { showConsole.toggle() }
+                    .font(.system(size: 14, weight: .semibold))
             }
         }
         .padding(.horizontal, 48).padding(.vertical, 16)
@@ -231,66 +231,6 @@ struct TaskDetailView: View {
             .background(user ? Color.blue.opacity(0.2) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
             if !user { Spacer(minLength: 180) }
         }
-    }
-
-    private var projectChip: some View {
-        Menu {
-            Button { pickedProjectPath = nil } label: {
-                if pickedProjectPath == nil { Label("No project (optional)", systemImage: "checkmark") }
-                else { Text("No project (optional)") }
-            }
-            if !availableProjects.isEmpty { Divider() }
-            ForEach(availableProjects) { project in
-                Button {
-                    pickedProjectPath = project.path
-                    if let boxId = store.runnerBox()?.id { store.rememberProject(project, for: boxId) }
-                } label: {
-                    if pickedProjectPath == project.path { Label(project.name, systemImage: "checkmark") }
-                    else { Text(project.name) }
-                }
-            }
-        } label: {
-            Label(projectLabel, systemImage: "folder")
-                .font(.system(size: 14, weight: .semibold))
-        }
-    }
-
-    private var projectLabel: String {
-        guard let path = pickedProjectPath else { return "No project · optional" }
-        return availableProjects.first(where: { $0.path == path })?.name
-            ?? path.split(separator: "/").last.map(String.init)
-            ?? "Project"
-    }
-
-    private var mcpChip: some View {
-        Menu {
-            Button {
-                yaverMcpOn.toggle()
-                persistMCP()
-            } label: {
-                if yaverMcpOn { Label("yaver (on)", systemImage: "checkmark") }
-                else { Text("yaver (off)") }
-            }
-            if !availableMCPServers.isEmpty { Divider() }
-            ForEach(availableMCPServers, id: \.self) { name in
-                Button {
-                    if pickedMCPServers.contains(name) { pickedMCPServers.remove(name) }
-                    else { pickedMCPServers.insert(name) }
-                    persistMCP()
-                } label: {
-                    if pickedMCPServers.contains(name) { Label(name, systemImage: "checkmark") }
-                    else { Text(name) }
-                }
-            }
-        } label: {
-            Label(yaverMcpOn ? "yaver · \(pickedMCPServers.count) MCP" : "MCP optional", systemImage: "platter.2.filled.ipad")
-                .font(.system(size: 14, weight: .semibold))
-        }
-    }
-
-    private func persistMCP() {
-        guard let boxId = store.runnerBox()?.id else { return }
-        store.rememberMCPServers(Array(pickedMCPServers), includeYaverMcp: yaverMcpOn, for: boxId)
     }
 
     private func loadConfiguration() async {
@@ -468,5 +408,26 @@ struct TaskDetailView: View {
         case "failed", "stopped": return .red
         default: return .secondary
         }
+    }
+
+    private var runnerLabel: String {
+        switch task.runner?.lowercased() {
+        case "claude", "claude-code": return "Claude Code"
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        case .some(let value) where !value.isEmpty: return value
+        default: return "Runner"
+        }
+    }
+
+    private var modelLabel: String {
+        guard let model = task.model, !model.isEmpty else { return "" }
+        return model.split(separator: "/").last.map(String.init) ?? model
+    }
+
+    private var statusLabel: String {
+        let value = status ?? task.status ?? ""
+        guard !value.isEmpty else { return "" }
+        return value.prefix(1).uppercased() + value.dropFirst()
     }
 }

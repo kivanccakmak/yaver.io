@@ -1,0 +1,42 @@
+appId: io.yaver.mobile
+---
+# Regression loop for the iOS composer failure where prompt auto-focus pushed
+# the New Task header above the safe area and left the project catalog behind
+# the keyboard. The simulator is authenticated before this flow is started.
+
+- launchApp:
+    clearState: false
+
+- tapOn:
+    id: "tab-tasks"
+    optional: true
+
+- tapOn:
+    id: "new-task-button"
+
+# The close action must remain reachable after the prompt auto-focuses.
+- assertVisible:
+    id: "close-new-task"
+
+- tapOn:
+    id: "composer-project-chip"
+
+- assertVisible:
+    id: "task-configuration-done"
+
+- tapOn:
+    id: "project-picker-search"
+- inputText: "yaver.io"
+- assertVisible:
+    id: "project-picker-row-yaver.io"
+- tapOn:
+    id: "project-picker-row-yaver.io"
+- tapOn:
+    id: "task-configuration-done"
+
+- assertVisible:
+    text: ".*yaver.io.*"
+- tapOn:
+    id: "close-new-task"
+- assertNotVisible:
+    id: "new-task-scroll"

@@ -136,6 +136,7 @@ import {
   saveLastTaskProjectToConvex,
   saveMCPServersToConvex,
 } from "../../src/lib/taskComposerPrefs";
+import { visibleProjectPickerRows } from "../../src/lib/projectPickerRows";
 import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
 import { withAlpha } from "../../src/lib/themeUtils";
 import { lightCardShadow, monoFamily, spacing, typography } from "../../src/theme/tokens";
@@ -1950,6 +1951,7 @@ export default function TasksScreen() {
   // injects `yaver mcp` unless the task explicitly opts out).
   const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [projectPickerQuery, setProjectPickerQuery] = useState("");
   const [keepLastProject, setKeepLastProject] = useState(true);
   // Cross-machine surface catalogs (2026-08-13): which MCP servers / which
   // git projects live on which machine, from Convex userSettings
@@ -1970,7 +1972,27 @@ export default function TasksScreen() {
     () => composerProjects.find((project) => project.path === selectedProjectPath) || null,
     [composerProjects, selectedProjectPath],
   );
+  const visibleComposerProjects = useMemo(
+    () => visibleProjectPickerRows(composerProjects, selectedProjectPath, projectPickerQuery),
+    [composerProjects, selectedProjectPath, projectPickerQuery],
+  );
   const projectDir = selectedComposerProject?.path || selectedProjectPath || routeProjectDir;
+
+  const closeProjectPicker = useCallback(() => {
+    Keyboard.dismiss();
+    setProjectPickerQuery("");
+    setShowProjectPicker(false);
+  }, []);
+
+  const openProjectPicker = useCallback(() => {
+    // The task prompt auto-focuses, so the keyboard is normally still open
+    // when this chip is tapped. A configuration sheet has no reason to inherit
+    // that keyboard: it used to cover the bottom half of the project catalog
+    // and left the selected project unreachable.
+    Keyboard.dismiss();
+    setProjectPickerQuery("");
+    setShowProjectPicker(true);
+  }, []);
 
   // ── Project / MCP picker sheet ───────────────────────────────────────
   // Rendered in THREE places by the same function so the three can never
@@ -2016,16 +2038,49 @@ export default function TasksScreen() {
   }, [devices, activeDevice?.id, projectCatalogByDevice]);
 
   const renderProjectPickerSheet = () => (
-    <>
-      <Pressable style={[s.modalOverlay, { justifyContent: "flex-start" }]} onPress={() => setShowProjectPicker(false)} />
-      <View style={[s.agentPickerSheet, { backgroundColor: c.bgCard, maxHeight: "72%" }]}>
-        <View style={[s.agentPickerHeader, { borderBottomColor: c.border }]}>
+    <KeyboardAvoidingView
+      style={[s.modalOverlay, { justifyContent: "flex-end" }]}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      <Pressable style={StyleSheet.absoluteFillObject} onPress={closeProjectPicker} />
+      <View
+        style={[
+          s.agentPickerSheet,
+          {
+            backgroundColor: c.bgCard,
+            maxHeight: "88%",
+            paddingBottom: 0,
+            overflow: "hidden",
+          },
+        ]}
+        accessibilityViewIsModal
+        testID="task-configuration-sheet"
+      >
+        <View
+          style={[s.agentPickerHeader, { borderBottomColor: c.border }]}
+        >
           <Text style={[s.agentPickerTitle, { color: c.textPrimary }]}>Task configuration</Text>
-          <Pressable onPress={() => setShowProjectPicker(false)}>
+          <Pressable
+            onPress={closeProjectPicker}
+            accessibilityRole="button"
+            accessibilityLabel="Close task configuration"
+            testID="task-configuration-done"
+          >
             <Text style={{ color: c.accent, fontSize: 16, fontWeight: "600" }}>Done</Text>
           </Pressable>
         </View>
-        <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+        <ScrollView
+          style={{ flexShrink: 1 }}
+          contentContainerStyle={{
+            paddingHorizontal: 16,
+            paddingTop: 12,
+            paddingBottom: Math.max(insets.bottom + 12, 28),
+          }}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator
+          testID="task-configuration-scroll"
+        >
           <View style={s.keepLastRow}>
             <View style={{ flex: 1 }}>
               <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "600" }}>Keep last project</Text>
@@ -2039,7 +2094,34 @@ export default function TasksScreen() {
               }}
             />
           </View>
-          <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+          <View
+            style={[s.projectSearchShell, { borderColor: c.border, backgroundColor: c.bg }]}
+          >
+            <Ionicons name="search" size={17} color={c.textMuted} />
+            <TextInput
+              value={projectPickerQuery}
+              onChangeText={setProjectPickerQuery}
+              placeholder="Search projects"
+              placeholderTextColor={c.textMuted}
+              style={[s.projectSearchInput, { color: c.textPrimary }]}
+              autoCorrect={false}
+              autoCapitalize="none"
+              returnKeyType="search"
+              testID="project-picker-search"
+              accessibilityLabel="Search projects"
+            />
+            {projectPickerQuery ? (
+              <Pressable
+                onPress={() => setProjectPickerQuery("")}
+                accessibilityRole="button"
+                accessibilityLabel="Clear project search"
+                hitSlop={8}
+              >
+                <Ionicons name="close-circle" size={19} color={c.textMuted} />
+              </Pressable>
+            ) : null}
+          </View>
+          <View>
             <Pressable
               onPress={() => {
                 const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
@@ -2066,8 +2148,12 @@ export default function TasksScreen() {
               <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
                 No projects reported by the runner machine yet.
               </Text>
+            ) : visibleComposerProjects.length === 0 ? (
+              <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
+                No projects match “{projectPickerQuery.trim()}”.
+              </Text>
             ) : (
-              composerProjects.map((project) => {
+              visibleComposerProjects.map((project) => {
                 const active = project.path === selectedProjectPath;
                 return (
                   <Pressable
@@ -2090,6 +2176,10 @@ export default function TasksScreen() {
                       s.projectPickerRow,
                       { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg },
                     ]}
+                    testID={`project-picker-row-${project.name}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select project ${project.name}`}
+                    accessibilityState={{ selected: active }}
                   >
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{project.name}</Text>
@@ -2142,7 +2232,7 @@ export default function TasksScreen() {
                 ))}
               </>
             ) : null}
-          </ScrollView>
+          </View>
           <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>MCP SERVERS</Text>
           <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
             Yaver tools are on by default — toggle them off to run with only external MCPs.
@@ -2271,9 +2361,9 @@ export default function TasksScreen() {
             </View>
             {textCorrectionEnabled ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : <Ionicons name="ellipse-outline" size={20} color={c.textMuted} />}
           </Pressable>
-        </View>
+        </ScrollView>
       </View>
-    </>
+    </KeyboardAvoidingView>
   );
   // Multi-target wizard state. Only used when DeviceContext.multiTargetMode
   // is true: the FAB opens the wizard first, the wizard sets pendingTarget
@@ -6209,6 +6299,7 @@ export default function TasksScreen() {
             ]}
             accessibilityRole="button"
             accessibilityLabel="Dictate a new task"
+            testID="new-task-button"
             onPress={openCreateTaskDictating}
           >
             <Ionicons name="mic" size={26} color="#ffffff" />
@@ -6531,14 +6622,30 @@ export default function TasksScreen() {
         >
           <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
             <Pressable style={s.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); setAttachedImages([]); setInputFromSpeech(false); setPendingTarget(null); }} />
-            <View style={[s.modalContent, { backgroundColor: c.bgCard }]}>
+            <View
+              style={[
+                s.modalContent,
+                { backgroundColor: c.bgCard, maxHeight: "92%", flexShrink: 1, overflow: "hidden" },
+              ]}
+            >
+              <ScrollView
+                style={{ flexShrink: 1 }}
+                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) }}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                stickyHeaderIndices={[0]}
+                showsVerticalScrollIndicator
+                testID="new-task-scroll"
+              >
               {/* Two-row header: title + close on top, target chip below.
                   The chip lived inline with the title, but device names
                   like "Mobiles-Mac-mini.local · Claude" overflowed and
                   collided with the title text. Stacking lets the chip
                   use the full row width and show the full label without
                   truncation or layout pressure on the title. */}
-              <View style={s.modalHeaderStack}>
+              <View
+                style={[s.modalHeaderStack, { backgroundColor: c.bgCard, zIndex: 2 }]}
+              >
                 <View style={s.modalHeaderRow}>
                   <Text style={[s.modalTitle, { color: c.textPrimary }]}>New task</Text>
                   <Pressable
@@ -6554,6 +6661,7 @@ export default function TasksScreen() {
                     style={({ pressed }) => [s.modalCloseButton, pressed && { opacity: 0.55 }]}
                     accessibilityRole="button"
                     accessibilityLabel="Close new task"
+                    testID="close-new-task"
                   >
                     <Ionicons name="close" size={24} color={c.textSecondary} />
                   </Pressable>
@@ -6710,7 +6818,7 @@ export default function TasksScreen() {
                     { backgroundColor: c.bgCardElevated, borderColor: selectedComposerProject ? c.accent : c.border },
                     pressed && { opacity: 0.65 },
                   ]}
-                  onPress={() => setShowProjectPicker(true)}
+                  onPress={openProjectPicker}
                   accessibilityRole="button"
                   accessibilityLabel="Configure project and MCPs for this task"
                   testID="composer-project-chip"
@@ -6966,6 +7074,7 @@ export default function TasksScreen() {
                   </View>
                 </View>
               </View>
+              </ScrollView>
             </View>
           </KeyboardAvoidingView>
           {/* Project/MCP picker as an in-composer OVERLAY — never a second
@@ -6986,7 +7095,7 @@ export default function TasksScreen() {
             native Modal is invisible on iOS, so this path must never
             overlap them; the follow-up composer's chip uses the in-detail
             overlay instead (see the task-detail Modal below). */}
-        <Modal visible={showProjectPicker && !showNewTask && !selectedTask} animationType="slide" transparent onRequestClose={() => setShowProjectPicker(false)}>
+        <Modal visible={showProjectPicker && !showNewTask && !selectedTask} animationType="slide" transparent onRequestClose={closeProjectPicker}>
           {renderProjectPickerSheet()}
         </Modal>
 
@@ -7342,6 +7451,7 @@ export default function TasksScreen() {
                     style={[s.cockpitListBtn, { backgroundColor: c.accentSoft }]}
                     accessibilityRole="button"
                     accessibilityLabel="New task"
+                    testID="new-task-button"
                     onPress={() => {
                       setNewTaskText("");
                       setAttachedImages([]);
@@ -7989,7 +8099,7 @@ export default function TasksScreen() {
                           { backgroundColor: c.bgCardElevated, borderColor: selectedComposerProject ? c.accent : c.border },
                           pressed && { opacity: 0.65 },
                         ]}
-                        onPress={() => setShowProjectPicker(true)}
+                        onPress={openProjectPicker}
                         accessibilityRole="button"
                         accessibilityLabel="Configure project and MCPs for this follow-up"
                         testID="followup-project-chip"
@@ -8864,6 +8974,17 @@ const s = StyleSheet.create({
   scopeChip: { minHeight: 34, maxWidth: "100%", borderWidth: 1, borderRadius: 17, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 7 },
   scopeChipText: { fontSize: 12, fontWeight: "600", flexShrink: 1 },
   keepLastRow: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 },
+  projectSearchShell: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  projectSearchInput: { flex: 1, minWidth: 0, fontSize: 14, paddingVertical: 10 },
   projectPickerRow: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 10 },
   agentPickerChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, marginBottom: 4 },
   input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 12 },

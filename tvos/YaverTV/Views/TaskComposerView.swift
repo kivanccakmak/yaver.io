@@ -8,9 +8,8 @@
 // plus the opencode mode/goal/askMode fields so a TV-started task is
 // indistinguishable from one started in the dashboard.
 //
-// Project + MCP pickers reuse VibeTurnPanel's Convex-remembered pattern
-// (defaultRuntimeProjectByDevice / mcpServersByDevice via YaverStore), so a
-// project picked on the phone shows up pre-selected on the TV.
+// Project + MCP context is restored silently from the same Convex rows as
+// mobile/web. Its controls live in Settings, never in the one-step Chat flow.
 
 import SwiftUI
 import UIKit
@@ -96,104 +95,6 @@ struct TaskComposerView: View {
             }
             Spacer()
         }
-    }
-
-    // Project/MCP values are hydrated silently from the shared settings rows.
-
-    private var projectChip: some View {
-        Menu {
-            Button {
-                pickedProjectPath = nil
-            } label: {
-                if pickedProjectPath == nil {
-                    Label("No project (optional)", systemImage: "checkmark")
-                } else {
-                    Text("No project (optional)")
-                }
-            }
-            if !availableProjects.isEmpty { Divider() }
-            ForEach(availableProjects) { p in
-                Button {
-                    pickedProjectPath = p.path
-                    if let boxId = runnerBoxId {
-                        store.rememberProject(p, for: boxId)
-                    }
-                } label: {
-                    if p.path == pickedProjectPath {
-                        Label(p.name, systemImage: "checkmark")
-                    } else {
-                        Text(p.name)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                Text(currentProjectLabel)
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-        }
-    }
-
-    private var currentProjectLabel: String {
-        if let path = pickedProjectPath {
-            return availableProjects.first(where: { $0.path == path })?.name
-                ?? path.split(separator: "/").last.map(String.init)
-                ?? path
-        }
-        return "No project · optional ▾"
-    }
-
-    private var mcpChip: some View {
-        Menu {
-            Button {
-                yaverMcpOn.toggle()
-                persistMCP()
-            } label: {
-                if yaverMcpOn {
-                    Label("yaver (on)", systemImage: "checkmark")
-                } else {
-                    Text("yaver (off)")
-                }
-            }
-            if !availableMCPServers.isEmpty {
-                Divider()
-                ForEach(availableMCPServers, id: \.self) { name in
-                    Button {
-                        if pickedMCPServers.contains(name) {
-                            pickedMCPServers.remove(name)
-                        } else {
-                            pickedMCPServers.insert(name)
-                        }
-                        persistMCP()
-                    } label: {
-                        if pickedMCPServers.contains(name) {
-                            Label(name, systemImage: "checkmark")
-                        } else {
-                            Text(name)
-                        }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "platter.2.filled.ipad")
-                Text(yaverMcpOn ? "yaver" : "yaver (off)")
-                if !pickedMCPServers.isEmpty {
-                    Text("· \(pickedMCPServers.count) MCP")
-                }
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-        }
-    }
-
-    private func persistMCP() {
-        guard let boxId = runnerBoxId else { return }
-        store.rememberMCPServers(Array(pickedMCPServers), includeYaverMcp: yaverMcpOn, for: boxId)
     }
 
     private func loadPickerState() async {

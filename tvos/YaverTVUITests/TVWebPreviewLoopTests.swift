@@ -161,11 +161,11 @@ final class TVWebPreviewLoopTests: XCTestCase {
         }
     }
 
-    /// Proves the dashboard's Vibing destination is the interactive runtime,
-    /// not the older Projects screenshot-preview surface. The account's
-    /// remembered repository must resolve directly to its runnable child, so a
-    /// monorepo chooser is a failure here rather than an acceptable waypoint.
-    func testVibingOpensRememberedInteractivePageDirectly() throws {
+    /// Entering Vibing must stop on a horizontal project choice, with the
+    /// remembered project first/focused. The TV must not consume render/stream
+    /// resources until Select confirms that card; one Select then opens the
+    /// interactive WebRTC runtime.
+    func testVibingFocusesLatestProjectThenOpensOnSelect() throws {
         let app = XCUIApplication()
         let boxJSON = #"[{"id":"\#(boxId)","name":"\#(boxHost)","host":"\#(boxHost)","port":\#(boxPort)}]"#
         let plistQuoted = "\"" + boxJSON.replacingOccurrences(of: "\"", with: "\\\"") + "\""
@@ -178,19 +178,32 @@ final class TVWebPreviewLoopTests: XCTestCase {
         app.launch()
         snap(app, "vibing-0000-launch")
 
-        let runtime = app.otherElements["vibing.interactive-webrtc"]
-        XCTAssertTrue(
-            runtime.waitForExistence(timeout: 30),
-            "Vibing must resume the remembered runnable page, not stop at a repository or child-app chooser"
-        )
-        XCTAssertTrue(app.buttons["Pointer"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Vibing"].waitForExistence(timeout: 20))
+        let latest = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "latest project")
+        ).firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 20), "The remembered project must be labelled Latest")
+        XCTAssertTrue(latest.hasFocus, "The remembered project must receive initial focus")
+
+        XCTAssertFalse(app.buttons["Pointer"].exists, "Entering Vibing must not start streaming before Select")
+        snap(app, "vibing-0001-project-choice")
+
+        XCUIRemote.shared.press(.select)
+        let opened = app.buttons["Pointer"].waitForExistence(timeout: 20)
+        snap(app, opened ? "vibing-0002-opened" : "vibing-0002-open-failed")
+        XCTAssertTrue(opened, "One Select on Latest must open the interactive runtime")
         XCTAssertTrue(app.buttons["Vibe"].exists)
         XCTAssertTrue(app.buttons["Reconnect"].exists)
         XCTAssertFalse(app.buttons["Element"].exists, "Element/Rebuild belongs to the Projects preview surface, not Vibing")
         XCTAssertFalse(app.staticTexts["Choose the app to open live"].exists)
 
+        let connected = app.descendants(matching: .any)["vibing.runtime-connected"]
+        let mediaArrived = connected.waitForExistence(timeout: 35)
+        snap(app, mediaArrived ? "vibing-0003-connected" : "vibing-0003-media-failed")
+        XCTAssertTrue(mediaArrived, "The interactive runtime opened but no WebRTC/fallback media arrived")
+
         Thread.sleep(forTimeInterval: 12)
-        snap(app, "vibing-0001-interactive")
+        snap(app, "vibing-0004-interactive")
     }
 
 

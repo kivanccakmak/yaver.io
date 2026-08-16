@@ -43,6 +43,7 @@ final class VibingPlanTests: XCTestCase {
             isOnline: online, quicHost: "127.0.0.1", quicPort: 18080,
             localIps: [], relayConnected: online, agentVersion: nil,
             managed: false, machineId: nil, lastHeartbeat: lastHeartbeat,
+            runners: nil, installedRunnerIds: nil,
             isGuest: guest, hostName: guest ? "Host" : nil, hostEmail: nil,
             hostUserIdString: nil, accessScope: guest ? "shared-scoped" : "owner"
         )

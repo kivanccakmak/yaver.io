@@ -33,6 +33,25 @@ struct RemoteRuntimeCapabilities: Decodable, Equatable {
     let supportedTransports: [String]?
     let currentHostClass: String?
     let targets: [RemoteRuntimeTarget]
+
+    private enum CodingKeys: String, CodingKey {
+        case workDir, framework, remoteRuntimeEligible, supportedTransports
+        case currentHostClass, targets
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workDir = try container.decodeIfPresent(String.self, forKey: .workDir) ?? ""
+        framework = try container.decodeIfPresent(String.self, forKey: .framework) ?? ""
+        remoteRuntimeEligible = try container.decodeIfPresent(Bool.self, forKey: .remoteRuntimeEligible) ?? false
+        supportedTransports = try container.decodeIfPresent([String].self, forKey: .supportedTransports)
+        currentHostClass = try container.decodeIfPresent(String.self, forKey: .currentHostClass)
+        // Agents before the web-browser WebRTC capability fix encoded a nil Go
+        // slice as JSON null. Treat null as an honest empty inventory so the UI
+        // can show the named eligibility reason instead of Swift's opaque
+        // "The data couldn't be read because it is missing."
+        targets = try container.decodeIfPresent([RemoteRuntimeTarget].self, forKey: .targets) ?? []
+    }
 }
 
 struct RemoteRuntimeSession: Decodable, Equatable {

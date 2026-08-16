@@ -1,10 +1,11 @@
-// VibingView.swift — resume the remembered project's live preview.
+// VibingView.swift — choose a project, then open its live preview.
 //
 // The old dashboard split "Projects" (where previews lived) from "Vibing"
 // (a terminal session). That made the user's intended loop impossible to see:
-// pick SFMG → watch the stream while continuing the vibe. A project rail only
-// appears when the account has no remembered project; monorepos only pause for
-// a child-app choice when they genuinely contain multiple runnable apps.
+// pick SFMG → watch the stream while continuing the vibe. The remembered
+// project leads the horizontal rail and receives focus, but entering Vibing
+// never starts a stream by itself: one Select opens it, while Left/Right still
+// gives the user a real chance to choose another repository.
 
 import SwiftUI
 
@@ -19,6 +20,8 @@ struct VibingView: View {
     @State private var loading = true
     @State private var loadingOptions = false
     @State private var error: String?
+    @State private var rememberedProjectId: String?
+    @FocusState private var focusedProjectId: String?
 
     var body: some View {
         Group {
@@ -45,7 +48,7 @@ struct VibingView: View {
                 Image(systemName: "play.rectangle.fill").font(.system(size: 28)).foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Vibing").font(.system(size: 34, weight: .bold))
-                    Text("Choose a project, then Yaver will show only previews this repository and machine can run.")
+                    Text("Your latest project is ready first. Press Select to open it, or choose another.")
                         .font(.system(size: 16)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -85,15 +88,27 @@ struct VibingView: View {
             Task { await openProject(project) }
         } label: {
             VStack(alignment: .leading, spacing: 18) {
-                Image(systemName: style.symbol)
-                    .font(.system(size: 32))
-                    .foregroundStyle(style.color)
-                    .frame(width: 48, height: 48)
+                HStack {
+                    Image(systemName: style.symbol)
+                        .font(.system(size: 32))
+                        .foregroundStyle(style.color)
+                        .frame(width: 48, height: 48)
+                    Spacer()
+                    if project.id == rememberedProjectId {
+                        Text("LATEST")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.blue)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.blue.opacity(0.16), in: Capsule())
+                    }
+                }
                 VStack(alignment: .leading, spacing: 5) {
                     Text(project.name)
                         .font(.system(size: 24, weight: .semibold))
                         .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Text(projectSummary(project))
                         .font(.system(size: 15))
                         .foregroundStyle(.secondary)
@@ -107,10 +122,16 @@ struct VibingView: View {
             .padding(24)
             .frame(width: 330, height: 220, alignment: .leading)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+            .clipShape(RoundedRectangle(cornerRadius: 20))
         }
         #if os(tvOS)
         .buttonStyle(.card)
         #endif
+        .focused($focusedProjectId, equals: project.id)
+        .accessibilityIdentifier("vibing.project.\(project.name)")
+        .accessibilityLabel(project.id == rememberedProjectId
+            ? "\(project.name), latest project, open"
+            : "\(project.name), open")
     }
 
     private func selectedProjectView(_ repository: ProjectSummary) -> some View {
@@ -202,24 +223,27 @@ struct VibingView: View {
             let loaded = try await client.listProjects().sorted {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
-            projects = loaded
-            // Opening Vibing is itself an action. If another Yaver surface has
-            // already established this runner box's project context, go
-            // straight to its available preview lanes. With no remembered
-            // project, stay on the picker; discovery order is never a default.
-            if selectedRepository == nil {
-                if store.lastProject(for: store.runnerBox()?.id, projects: loaded) == nil,
-                   let settings = try? await MachineRegistry.fetchSettings(token: store.token) {
-                    store.adoptSettings(settings)
-                }
-                if let remembered = store.lastProject(for: store.runnerBox()?.id, projects: loaded) {
-                    await openProject(remembered)
-                }
+            if store.lastProject(for: store.runnerBox()?.id, projects: loaded) == nil,
+               let settings = try? await MachineRegistry.fetchSettings(token: store.token) {
+                store.adoptSettings(settings)
             }
+            let remembered = store.lastProject(for: store.runnerBox()?.id, projects: loaded)
+            rememberedProjectId = remembered?.id
+            // Latest first is both a visual and focus contract. Inventory order
+            // is otherwise alphabetical and never silently changes the default.
+            projects = remembered.map { latest in
+                [latest] + loaded.filter { $0.id != latest.id }
+            } ?? loaded
+            focusedProjectId = remembered?.id ?? projects.first?.id
         } catch {
             self.error = error.localizedDescription
         }
         loading = false
+        // The project buttons do not exist while `loading` is true. Re-assert
+        // focus on the next run loop after the rail is mounted.
+        DispatchQueue.main.async {
+            focusedProjectId = rememberedProjectId ?? projects.first?.id
+        }
     }
 
     private func loadTargets(for repository: ProjectSummary) async {

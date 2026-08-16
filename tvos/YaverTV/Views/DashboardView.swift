@@ -387,57 +387,6 @@ struct DashboardView: View {
     }
 }
 
-/// The secondary tools, one level below the five surfaces — the tiles that
-/// used to crowd the dashboard (Runtime, Apple TV remote, Capture, Android,
-/// Feedback) live here now. A sheet with its own NavigationStack so each row
-/// pushes its full-screen destination, D-pad friendly.
-private struct MoreToolsView: View {
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    moreRow(icon: "terminal", title: "Runtime", detail: "Claude · Codex · reload · voice") { RuntimeDashboardView() }
-                    moreRow(icon: "appletv", title: "Apple TV", detail: "Remote · now playing") { AppleTVRemoteView() }
-                    moreRow(icon: "video", title: "Capture", detail: "Capture card view") { AppleTVRemoteView(captureFirst: true) }
-                    moreRow(icon: "iphone.gen3", title: "Android", detail: "Watch the redroid screen live") { DroidStreamView() }
-                    moreRow(icon: "bubble.left.and.text.bubble.right", title: "Feedback", detail: "Reports from test devices") { FeedbackView() }
-                }
-                .padding(40)
-            }
-            .navigationTitle("More")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-
-    @Environment(\.dismiss) private var dismiss
-
-    private func moreRow<D: View>(icon: String, title: String, detail: String,
-                                  @ViewBuilder destination: @escaping () -> D) -> some View {
-        NavigationLink(destination: destination()) {
-            HStack(spacing: 18) {
-                Image(systemName: icon)
-                    .font(.system(size: 28))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.system(size: 24, weight: .semibold))
-                    Text(detail).font(.system(size: 16)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 28).padding(.vertical, 18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        }
-        .buttonStyle(.card)
-    }
-}
-
 private struct Tile: View {
     let icon: String
     let title: String
