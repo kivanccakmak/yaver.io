@@ -171,6 +171,15 @@ type RemoteRuntimeManager struct {
 	// browserWindowTarget{} is used. Tests inject a recorder to assert
 	// the URL Create picked without launching real Chrome.
 	browserNav browserWindowNavigator
+
+	// iceServerProvider is wired by the authenticated HTTPServer and returns
+	// bounded, short-lived managed TURN credentials. Tests and non-server
+	// callers leave it nil and retain the deterministic local STUN/TURN config.
+	iceServerProvider rtcICEServerProvider
+	// vibingControl handles reliable, versioned DOM-selection messages arriving
+	// on the events DataChannel. HTTP remains the fallback for surfaces without
+	// WebRTC data channels (today: tvOS snapshot polling and watches).
+	vibingControl vibingWebRTCControlHandler
 }
 
 // devServerInfo is the narrow read-only view attachAndNavigateBrowserWindow
@@ -222,6 +231,18 @@ func (m *RemoteRuntimeManager) SetBrowserNavigator(nav browserWindowNavigator) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.browserNav = nav
+}
+
+func (m *RemoteRuntimeManager) SetICEServerProvider(provider rtcICEServerProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.iceServerProvider = provider
+}
+
+func (m *RemoteRuntimeManager) SetVibingWebRTCControlHandler(handler vibingWebRTCControlHandler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.vibingControl = handler
 }
 
 func executionModeForFramework(framework string) ProjectExecutionMode {
@@ -1814,6 +1835,8 @@ func (s *HTTPServer) ensureRemoteRuntimeManager() *RemoteRuntimeManager {
 	if s.remoteRuntimeMgr.devManager == nil && s.devServerMgr != nil {
 		s.remoteRuntimeMgr.SetDevServerManager(s.devServerMgr)
 	}
+	s.remoteRuntimeMgr.SetICEServerProvider(s.iceServersForHTTPServer)
+	s.remoteRuntimeMgr.SetVibingWebRTCControlHandler(s.handleVibingWebRTCControl)
 	return s.remoteRuntimeMgr
 }
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the bounded Yaver relay health supervisor
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+AccuracySec=15s
+RandomizedDelaySec=10s
+Unit=yaver-relay-watchdog.service
+
+[Install]
+WantedBy=timers.target

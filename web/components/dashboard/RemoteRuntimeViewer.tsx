@@ -58,6 +58,7 @@ export default function RemoteRuntimeViewer({
   const [iceState, setIceState] = useState("new");
   const [iceGatheringState, setIceGatheringState] = useState("new");
   const [dataState, setDataState] = useState("closed");
+  const [vibingProtocolVersion, setVibingProtocolVersion] = useState<number | null>(null);
   const [mediaState, setMediaState] = useState("waiting");
   const [iceCandidateCount, setIceCandidateCount] = useState(0);
   const [lastFrameAt, setLastFrameAt] = useState<number | null>(null);
@@ -236,6 +237,7 @@ export default function RemoteRuntimeViewer({
   // renegotiation-loop note at the ref declarations above.
   useEffect(() => {
     let cancelled = false;
+    setVibingProtocolVersion(null);
     // Shared HTTP JPEG pump — the relay-jpeg-poll transport AND the WebRTC
     // watchdog fallback both consume it. The HTTP frame path is proven (the
     // lab logs "first frame ok" over HTTP while WebRTC negotiates); it must
@@ -469,6 +471,19 @@ export default function RemoteRuntimeViewer({
               if (payload?.type === "browser-log") {
                 onRuntimeEventRef.current?.(payload as Record<string, unknown>);
               }
+              // Vibing control is negotiated on this same reliable, ordered
+              // channel. Forward hello/acks to the owning surface so DOM-mode,
+              // cursor, and selection UIs can use WebRTC while older agents or
+              // non-RTC surfaces retain the advertised HTTP fallback.
+              if (payload?.type === "vibing.protocol") {
+                if (payload.v === 1 && Array.isArray(payload.capabilities)) {
+                  setVibingProtocolVersion(1);
+                }
+                onRuntimeEventRef.current?.(payload as Record<string, unknown>);
+              }
+              if (payload?.type === "vibing.ack") {
+                onRuntimeEventRef.current?.(payload as Record<string, unknown>);
+              }
               if (payload?.type === "frame-error" && payload.error) {
                 setViewerNote(`Frame capture failed: ${String(payload.error)}`);
               }
@@ -659,7 +674,11 @@ export default function RemoteRuntimeViewer({
 
       <div className="grid gap-2 text-[11px] sm:grid-cols-4">
         <StatusPill label="Signaling" value={`${iceState}/${iceGatheringState}`} good={iceState === "connected" || iceState === "completed"} />
-        <StatusPill label="Data" value={dataState} good={dataState === "open"} />
+        <StatusPill
+          label="Data"
+          value={`${dataState}${vibingProtocolVersion ? ` · DOM v${vibingProtocolVersion}` : ""}`}
+          good={dataState === "open"}
+        />
         <StatusPill label="Media" value={mediaState} good={["playing", "jpeg", "metadata"].includes(mediaState)} />
         <StatusPill label="Frames" value={frameAgeLabel} good={frameAgeLabel === "live media"} />
       </div>

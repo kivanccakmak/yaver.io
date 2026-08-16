@@ -1,70 +1,75 @@
 [Unit]
-Description=Yaver Relay Server — P2P tunnel for mobile-to-desktop connectivity
-Documentation=https://github.com/kivanccakmak/yaver.io
+Description=Yaver Relay Server — authenticated Web/QUIC gateway
+Documentation=https://github.com/yaver-io/yaver.io
 After=network-online.target
 Wants=network-online.target
-
-[Service]
-Type=simple
-# This unit ships with the OFFICIAL public.yaver.io deployment.
-# YAVER_RELAY_OFFICIAL=1 tells the binary it's safe to fall back to
-# Yaver's prod Convex backend if no CONVEX_URL is explicitly set.
-# Self-hosted users running their own relay should NOT use this unit
-# unchanged — clone it, drop YAVER_RELAY_OFFICIAL, and either set
-# CONVEX_URL to their own Convex deploy or leave it empty for
-# shared-password-only mode.
-#
-# CONVEX_URL drives official free-relay validation: the relay POSTs to
-# {CONVEX_URL}/relay/validate for agent registration and /d/<device>
-# proxy requests so Convex can enforce per-user credentials, active
-# sessions, device ownership, and quota. Override CONVEX_URL via
-# /etc/default/yaver-relay for staging-Convex deploys.
-Environment=YAVER_RELAY_OFFICIAL=1
-Environment=CONVEX_URL=https://perceptive-minnow-557.eu-west-1.convex.site
-# Built-in abuse guard defaults are intentionally generous for normal
-# mobile/web/Hermes reload traffic. Override these in
-# /etc/default/yaver-relay only when production telemetry says to tighten
-# or relax them:
-#   RELAY_PROXY_RATE_PER_IP_PER_MIN=240
-#   RELAY_PROXY_BURST_PER_IP=80
-#   RELAY_PROXY_RATE_PER_USER_PER_MIN=240
-#   RELAY_PROXY_BURST_PER_USER=80
-#   RELAY_QUIC_REGISTER_RATE_PER_IP_PER_MIN=60
-#   RELAY_MAX_CONCURRENT_PER_DEVICE=64
-#   RELAY_MAX_REQUEST_BODY_BYTES=67108864
-# EXPOSE_DOMAIN drives the auto-provisioned per-device subdomain that
-# the relay assigns to every connected agent (e.g.
-# <deviceId>.dev.yaver.io) and publishes back as `publicUrl` in the
-# heartbeat. Routed via Cloudflare DNS (`*.dev.yaver.io` → A → this
-# relay's IP, DNS-only / gray cloud) so the wildcard never enters the
-# Worker that serves the apex `yaver.io` marketing site. Self-hosted
-# operators override this in /etc/default/yaver-relay or leave it
-# empty to disable the auto-subdomain feature entirely.
-Environment=EXPOSE_DOMAIN=dev.yaver.io
-EnvironmentFile=-/etc/default/yaver-relay
-ExecStart=/usr/local/bin/yaver-relay serve --quic-port=4433 --http-port=8443 --expose-domain=${EXPOSE_DOMAIN}
-Restart=always
-RestartSec=5
-StartLimitIntervalSec=60
+StartLimitIntervalSec=15min
 StartLimitBurst=5
 
-# Logging — all output goes to journald
+[Service]
+# Current released relay binaries do not emit sd_notify READY/WATCHDOG frames.
+# Keep Type=simple until a preflight proves the exact deployed binary does;
+# Type=notify would turn a healthy listener into a perpetual start-timeout loop.
+Type=simple
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+ExecStartPre=/usr/local/libexec/yaver-relay-timecheck
+ExecStart=/usr/local/bin/yaver-relay serve --quic-port=4433 --http-port=8080 --turn-port=0
+WorkingDirectory=/var/lib/yaver-relay
+StateDirectory=yaver-relay
+StateDirectoryMode=0700
+EnvironmentFile=-/etc/default/yaver-relay
+EnvironmentFile=-/etc/yaver-relay/relay.env
+# Optional. If absent, the relay stays healthy but GET /ice fails closed with a
+# named 503. The credential bytes never appear in this unit or the command line.
+Environment=TURN_AUTH_SECRET_FILE=/etc/yaver-relay/turn-secret
+Restart=on-failure
+RestartSec=5s
+RestartSteps=6
+RestartMaxDelaySec=5min
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+SendSIGKILL=true
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=yaver-relay
 
-# Performance
 LimitNOFILE=65535
+TasksMax=512
+CPUAccounting=true
+CPUQuota=150%
+MemoryAccounting=true
+MemoryHigh=768M
+MemoryMax=1G
+MemorySwapMax=256M
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=85%
+OOMPolicy=stop
+OOMScoreAdjust=-250
 
-# Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectClock=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
 RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RemoveIPC=true
+ReadWritePaths=/var/lib/yaver-relay
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

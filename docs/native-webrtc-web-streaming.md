@@ -126,13 +126,12 @@ sees a WebRTC affordance and never produces an SDP offer.
                         └──────────────┘
 
 ┌────────────────────────────┐
-│ Mobile app  (UNCHANGED)    │
+│ Mobile app                 │
 │   • RN/Expo Hermes super   │
 │     host, hot reload       │
-│   • Native projects show a │
-│     `WebRTC` badge + a     │
-│     "open in web dash" URL │
-│   • Never opens an SDP     │
+│   • WebView RTC viewer for │
+│     remote-runtime targets │
+│   • JPEG/HTTP fallback     │
 └────────────────────────────┘
 ```
 
@@ -146,8 +145,16 @@ last-ditch fallback through the existing relay tunnel.
 | Surface | What it does for native-WebRTC projects | What it does for RN/Hermes projects |
 |---|---|---|
 | **Web dashboard (THE viewer)** | The viewer. Browser RTCPeerConnection negotiates with the agent, decodes H.264 via the platform decoder, paints the device, captures clicks/keys, sends them back over the events DataChannel. | Existing project list + dev-server preview. Unchanged. |
-| **Mobile app** | Shows a badge `WebRTC` on the project card with the device dims, current viewer (if any), and a deep-link to the web dashboard. **Never** opens a peer connection. | Hot Reload tab + super-host bundle loading. **Unchanged.** |
+| **Mobile app** | Its embedded viewer negotiates the same SDP, H.264/JPEG channels, managed ICE servers, and versioned Vibing control channel as web. HTTP JPEG remains the bounded fallback. | Hot Reload tab + super-host bundle loading. **Unchanged.** |
 | **Go agent (Linux/Mac)** | Orchestrates: capture, encode, RTP, signaling, control. Never renders. | `/dev/*` endpoints exactly as today. |
+
+Current companion boundaries are explicit: tvOS uses snapshot streaming plus the
+three protocol-equivalent DOM HTTPS routes; visionOS currently uses its native
+HTTP preview lane. watchOS, Wear OS, and automotive surfaces are command/status
+surfaces, not full-frame DOM pickers. They do not receive a fake “WebRTC
+supported” capability. The relay broker returns standard `RTCIceServer` data,
+so a future native viewer on any of those platforms does not require another
+TURN credential design.
 
 ## 5b. The TeamViewer-style session contract
 
@@ -159,6 +166,44 @@ last-ditch fallback through the existing relay tunnel.
 6. **Auth is owner-only for input. Read-only metadata is owner + vibing-scope-guest.**
 
 ## 6. Wire protocol — extension, not replacement
+
+### 6.0 Reliable Vibing DOM control
+
+The server-created `events` DataChannel is ordered and reliable and works in
+both directions. On open, the agent advertises protocol version 1:
+
+```json
+{
+  "v": 1,
+  "type": "vibing.protocol",
+  "channel": "events",
+  "ordered": true,
+  "reliable": true,
+  "capabilities": [
+    "vibing.dom.mode",
+    "vibing.dom.cursor",
+    "vibing.dom.select"
+  ]
+}
+```
+
+A client command has a unique `id`, version, project, and bounded arguments:
+
+```json
+{"v":1,"id":"select-42","type":"vibing.dom.select","project":"todo","workDir":"/workspace/todo","x":420,"y":170}
+```
+
+The agent answers with `{"v":1,"id":"select-42","type":"vibing.ack","ok":true,"result":...}`
+or a stable error object containing `code`, `message`, and `retryable`.
+Messages are capped at 16 KiB, operations at 10 seconds, one operation may run
+per session, and the most recent 128 acknowledgements are cached by ID so a
+network retry cannot click twice. An ID reused for different bytes is rejected.
+
+Surfaces without an RTC DataChannel use the advertised HTTPS fallbacks:
+`POST /vibing/preview/dom-mode`, `/cursor`, and `/select`. This is the tvOS
+path today and is intentionally protocol-equivalent rather than a separate
+selection implementation. The WebRTC signaling route and the HTTP fallbacks
+remain subject to the agent's existing authentication/scope checks.
 
 ### 6.1 Capabilities response
 
@@ -617,8 +662,8 @@ dep with pure Go.
 
 ## 11.8 Mobile + web viewer migration
 
-- `web/components/dashboard/RemoteRuntimeViewer.tsx` is rewritten to the RTP-track-consuming component in §11.1. The old JPEG `<img>` + tap handler are removed.
-- `mobile/app/remote-runtime.tsx` becomes a metadata-only screen — drop the `<Image>`, drop the SDP offer, show framework + dims + a deep-link to the dashboard. **Mobile is not touched in this Go-agent-first iteration.** It stays JPEG-renderable until a future minor bump removes the rendering.
+- `web/components/dashboard/RemoteRuntimeViewer.tsx` consumes RTP when available and retains JPEG DataChannel/HTTP fallbacks for targets without an encoder.
+- `mobile/app/remote-runtime.tsx` has the same WebRTC offer, video/JPEG consumers, managed ICE configuration, and Vibing protocol negotiation inside its WebView. Native code receives protocol/ack messages through the WebView bridge.
 
 ## 12. Compliance with the existing protocol (and Hermes path)
 
