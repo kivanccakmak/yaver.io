@@ -127,56 +127,34 @@ The user must understand one physical constraint: if the laptop sleeps, powers o
 
 The manual tool prerequisites are current product gaps, not the desired final onboarding. Yaver's bundled Node installer has no Windows artifact path, the FFmpeg install plan has only macOS/Linux recipes, and Windows runner discovery does not search the normal `%APPDATA%\npm` directory explicitly. The production goal is still “install Yaver, approve named dependencies, and let Yaver install/prove them.”
 
-## 5. Identity and seat layout
+## 5. Identity and execution layout
 
-### 5.1 Windows seat
+### 5.1 One native Windows device
 
-Suggested alias: `ganttsnap-office`.
+Suggested alias: `ganttsnap-windows`.
 
-Owns:
+The single native agent owns:
 
-- PowerPoint and Office activation;
-- WebView2;
-- visible Windows/WSLg windows;
+- the canonical Windows repository path;
+- Git credentials and operations;
+- native Node/package manager;
+- native Claude Code, OpenCode, Codex, or another selected runner;
+- tests, builds, and dev-server processes;
+- browser preview;
+- PowerPoint, Office activation, and WebView2;
 - desktop screen capture;
 - mouse/keyboard input;
-- Windows-native tools;
-- optional browser;
 - Windows session state and scheduled logon task.
 
-It must use a unique device key and the friend's Yaver account.
+It uses one unique device key under the friend's Yaver account. All task, terminal, preview, desktop, and Office operations resolve against this same device until a real limitation requires another seat.
 
-### 5.2 WSL seat
+### 5.2 Optional WSL expansion
 
-Suggested alias: `ganttsnap-code`.
+Only add WSL if a named operation fails natively—for example a Linux-only build script, shell assumption, container workflow, or deployment parity test.
 
-Owns:
+If added, WSL becomes a separate `ganttsnap-wsl` device with its own key, repository decision, runner credentials, status, and port. It is not an invisible extension of `ganttsnap-windows`.
 
-- canonical repository when Linux is the selected development environment;
-- Git credentials;
-- Node/package manager;
-- Claude Code, OpenCode, Codex, or another selected runner;
-- tests/builds;
-- dev-server process;
-- Linux terminal/tmux stream;
-- provider CLIs that the project actually needs.
-
-It has a different Yaver device ID and key even though it shares hardware with the Windows seat.
-
-### 5.3 Pairing metadata
-
-The product should eventually group both seats under one physical host without merging their security identities:
-
-```json
-{
-  "physicalHostGroup": "opaque-generated-id",
-  "role": "office-host | coding-runner",
-  "peerDeviceId": "owned-device-id",
-  "handoffCapabilities": ["dev-url", "task-complete", "render-request"]
-}
-```
-
-For the earliest manual beta, two clearly named device cards are acceptable. A hidden or automatic merge is not.
+The optional relationship may later use `physicalHostGroup` metadata, but this is not needed for the native-first beta.
 
 ## 6. Port and networking plan
 
