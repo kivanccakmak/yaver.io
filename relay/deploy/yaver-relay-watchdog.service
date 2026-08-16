@@ -1,0 +1,28 @@
+[Unit]
+Description=Bounded health supervisor for the Yaver relay
+After=network-online.target yaver-relay.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/yaver-relay/watchdog.env
+ExecStart=/usr/local/libexec/yaver-relay-watchdog
+TimeoutStartSec=75s
+StateDirectory=yaver-relay-watchdog
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/yaver-relay-watchdog
+UMask=0077

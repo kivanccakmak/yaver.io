@@ -154,6 +154,12 @@ type RelayServer struct {
 	// the password. Without this split the cutover is a guess. See sigFailReason.
 	sigFailMu sync.Mutex
 	sigFails  map[sigFailReason]uint64
+
+	// turnAuthSecret is used only to mint short-lived TURN REST credentials
+	// from GET /ice. It never crosses the HTTP boundary. The official relay
+	// loads it from a systemd credential file; self-hosters may still use the
+	// TURN_AUTH_SECRET environment variable.
+	turnAuthSecret string
 }
 
 type validatedAccessMeta struct {
@@ -1542,6 +1548,7 @@ func (s *RelayServer) handleAgentWebSocket(ws *websocket.Conn) {
 func (s *RelayServer) runHTTPProxy(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/ice", s.handleICECredentials)
 	mux.HandleFunc("/tunnels", s.handleListTunnels)
 	mux.HandleFunc("/presence", s.handlePresence)
 	mux.HandleFunc("/admin/set-password", s.handleSetPassword)

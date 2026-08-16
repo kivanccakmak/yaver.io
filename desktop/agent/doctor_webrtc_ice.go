@@ -9,11 +9,10 @@ package main
 // inventory, and all of it stays green on a box where no WebRTC session can
 // ever connect across networks.
 //
-// The thing that decides that is ICE, and it was invisible. TURN is gated on
-// three switches that must all be on (relay --turn-port + TURN_PUBLIC_IP, agent
-// YAVER_TURN_URL, a shared secret) and a repo-wide grep found the first two set
-// in documentation and tests ONLY. Without TURN the agent returns STUN-only —
-// stream_webrtc.go says so in a comment: "works on same-network". Host + srflx
+// The thing that decides that is ICE, and it was invisible. TURN can come from
+// either an explicit self-hosted configuration or the authenticated /ice broker
+// advertised by a configured Yaver relay. Without TURN the agent returns
+// STUN-only. Host + srflx
 // candidates succeed on a LAN and behind cone NAT, and fail on symmetric NAT and
 // CG-NAT, i.e. most cellular. A phone on LTE reaching a box at home is exactly
 // the case that fails, and it is a headline use case.
@@ -69,7 +68,8 @@ type ICEProbeResult struct {
 }
 
 // ProbeICEReachability gathers candidates against the agent's real ICE
-// configuration (iceServersForPeer) and classifies what came back.
+// configuration and classifies what came back. The managed relay broker is the
+// same source used by real WebRTC sessions, so doctor cannot drift from runtime.
 //
 // It creates a PeerConnection, adds a recvonly video transceiver so the
 // gatherer has something to gather for, and waits for gathering to complete or
@@ -81,6 +81,15 @@ func ProbeICEReachability(ctx context.Context, wait time.Duration) ICEProbeResul
 		wait = 8 * time.Second
 	}
 	servers := iceServersForPeer()
+	// Explicit/self-hosted TURN wins. Otherwise try the account-scoped relay
+	// broker with the caller's deadline; failure safely retains STUN-only.
+	if len(servers) == 1 {
+		if cfg, err := LoadConfig(); err == nil && cfg != nil {
+			if managed, err := managedICEServersFromConfig(ctx, cfg); err == nil && len(managed) > 0 {
+				servers = managed
+			}
+		}
+	}
 	res := ICEProbeResult{Reachability: ICEReachabilityNone}
 	for _, s := range servers {
 		res.ServersTried = append(res.ServersTried, strings.Join(s.URLs, ","))
@@ -165,9 +174,9 @@ func classifyICECandidates(host, srflx, relay int, turnConfigured bool) (ICEReac
 		return ICEReachabilityFull, true,
 			"TURN answered — sessions can traverse symmetric NAT / CG-NAT", ""
 	case srflx > 0:
-		remedy := "no TURN server is configured, so this box is same-network only. Start the relay with --turn-port 3478 --turn-public-ip <WAN_IP> and set YAVER_TURN_URL=turn:<WAN_IP>:3478 on the agent (auth reuses RELAY_PASSWORD)"
+		remedy := "no TURN server is configured, so this box is same-network only. Configure an authenticated relay with /ice support, or set YAVER_TURN_URL and TURN_AUTH_SECRET for self-hosted TURN"
 		if turnConfigured {
-			remedy = "a TURN server is configured but returned no relay candidate — check the relay is running with --turn-port and TURN_PUBLIC_IP, that UDP 3478 is open, and that the agent secret matches the relay (TURN_AUTH_SECRET or RELAY_PASSWORD)"
+			remedy = "a TURN server is configured but returned no relay candidate — check UDP/TCP 3478 and TLS 5349, the TURN allocation range, certificate, and the relay /ice broker or self-hosted TURN secret"
 		}
 		return ICEReachabilityDegraded, false,
 			"only host + server-reflexive candidates — this works on a LAN and behind cone NAT, but a viewer on cellular or CG-NAT will fail to connect", remedy

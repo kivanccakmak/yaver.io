@@ -32,6 +32,7 @@
 // Env: YAVER_WEBRTC_BASE (http://host:port of the box) overrides auto-resolve.
 //      YAVER_WEBRTC_SOURCE (default "yavertest").
 //      YAVER_WEBRTC_TOKEN overrides ~/.yaver/config.json for cross-box dogfood.
+//      YAVER_WEBRTC_RELAY_PASSWORD adds X-Relay-Password when BASE is /d/<id>.
 
 import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -47,6 +48,7 @@ const SOURCE = process.env.YAVER_WEBRTC_SOURCE || "yavertest";
 const OUT = process.env.YAVER_OUT_DIR || "/tmp/yaver-webrtc";
 const PLAYWRIGHT_VIDEO = process.env.YAVER_WEBRTC_NATIVE_VIDEO === "1";
 const CHROMIUM_PROFILE_ROOT = process.env.YAVER_CHROMIUM_PROFILE_ROOT || tmpdir();
+const RELAY_PASSWORD = (process.env.YAVER_WEBRTC_RELAY_PASSWORD || "").trim();
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
@@ -107,7 +109,10 @@ function startFrameRecorder(page, surface) {
     busy = true;
     try {
       n += 1;
-      await page.screenshot({ path: join(dir, `frame_${String(n).padStart(4, "0")}.png`) });
+      await page.screenshot({
+        path: join(dir, `frame_${String(n).padStart(4, "0")}.png`),
+        timeout: 5_000,
+      });
     } catch {
       n -= 1;
     } finally {
@@ -119,7 +124,9 @@ function startFrameRecorder(page, surface) {
   return async () => {
     stopped = true;
     clearInterval(timer);
-    while (busy) await sleep(20);
+    const stopDeadline = Date.now() + 6_000;
+    while (busy && Date.now() < stopDeadline) await sleep(20);
+    if (busy) return "";
     if (n <= 0) return "";
     const outDir = join(OUT, "recordings");
     mkdirSync(outDir, { recursive: true });
@@ -142,7 +149,11 @@ async function pushFrame(b64) {
   const timer = setTimeout(() => ac.abort(), Number(process.env.YAVER_WEBRTC_PUSH_TIMEOUT_MS || 8_000));
   const res = await fetch(`${BASE}/stream/push?name=${encodeURIComponent(SOURCE)}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
+      ...(RELAY_PASSWORD ? { "X-Relay-Password": RELAY_PASSWORD } : {}),
+    },
     body: JSON.stringify({ jpegB64: b64, mime: "image/jpeg" }),
     signal: ac.signal,
   }).finally(() => clearTimeout(timer));
@@ -154,7 +165,11 @@ async function offerToBox(sdp) {
   const timer = setTimeout(() => ac.abort(), Number(process.env.YAVER_WEBRTC_OFFER_TIMEOUT_MS || 20_000));
   const res = await fetch(`${BASE}/stream/webrtc/offer`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
+      ...(RELAY_PASSWORD ? { "X-Relay-Password": RELAY_PASSWORD } : {}),
+    },
     body: JSON.stringify({ source: SOURCE, sdp }),
     signal: ac.signal,
   }).finally(() => clearTimeout(timer));
@@ -164,6 +179,25 @@ async function offerToBox(sdp) {
   if (!res.ok || !data.sdp) throw new Error(`offer failed HTTP ${res.status}: ${JSON.stringify(data).slice(0, 160)}`);
   const transport = /m=video/.test(data.sdp) ? "webrtc-rtp-h264-v1" : "webrtc-none";
   return { answerSdp: data.sdp, transport };
+}
+
+async function fetchICEServers() {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), Number(process.env.YAVER_WEBRTC_ICE_TIMEOUT_MS || 8_000));
+  const res = await fetch(`${BASE}/stream/webrtc/ice`, {
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      Accept: "application/json",
+      ...(RELAY_PASSWORD ? { "X-Relay-Password": RELAY_PASSWORD } : {}),
+    },
+    cache: "no-store",
+    signal: ac.signal,
+  }).finally(() => clearTimeout(timer));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !Array.isArray(data.iceServers) || data.iceServers.length === 0) {
+    throw new Error(`ICE config failed HTTP ${res.status}: ${JSON.stringify(data).slice(0, 160)}`);
+  }
+  return data.iceServers;
 }
 
 function classify(px) {
@@ -219,15 +253,21 @@ async function runSurface(driver, surface, server) {
   (async () => { while (pushing) { try { await pushFrame(cur); } catch {} await sleep(600); } })();
   await sleep(400); // let the first frame land before the encoder starts
 
+  const iceServers = await fetchICEServers();
+  const hasTURN = iceServers.some((server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    return urls.some((url) => String(url || "").startsWith("turn"));
+  });
+  console.log(`  [${surface}] ICE config: ${hasTURN ? "TURN + STUN" : "STUN only"}`);
   console.log(`  [${surface}] creating WebRTC offer`);
-  const offer = await driver.evaluate(async (targetWindowSource) => {
+  const offer = await driver.evaluate(async ({ targetWindowSource, iceServers }) => {
     const win = eval(targetWindowSource)();
     try {
-      return await win.makeOffer();
+      return await win.makeOffer(iceServers);
     } catch (e) {
       return `ERR:${e?.message || e}`;
     }
-  }, targetWindow);
+  }, { targetWindowSource: targetWindow, iceServers });
   if (typeof offer === "string" && offer.startsWith("ERR:")) { pushing = false; throw new Error(`makeOffer ${offer}`); }
 
   console.log(`  [${surface}] sending offer to ${BASE}`);

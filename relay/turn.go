@@ -6,14 +6,13 @@ package main
 // ICE will look for a TURN candidate; this is the one the agent
 // hands the viewer.
 //
-// Auth uses the long-term-credential mechanism keyed off the same
-// shared secret the relay already enforces (RELAY_PASSWORD by
-// default). No new key material is distributed; if a self-hoster
-// rotates RELAY_PASSWORD, TURN follows automatically.
+// Auth uses Pion's long-term-credential mechanism. Production keeps a
+// dedicated TURN REST secret on the relay host and brokers one-minute
+// credentials through GET /ice. The legacy colocated listener below remains
+// available for explicit self-hosted deployments.
 //
-// We bind UDP only (TCP/TLS-TURN is a future stretch). 3478 is the
-// IANA-assigned port; production deployments should expose it the
-// same way they expose 4433 for QUIC.
+// This in-process implementation binds UDP only. The hardened public service
+// uses coturn for UDP, TCP, TLS and DTLS plus a bounded allocation range.
 
 import (
 	"context"
@@ -22,10 +21,32 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/pion/logging"
 	"github.com/pion/turn/v4"
 )
+
+// loadTURNAuthSecret keeps the long-lived TURN secret out of command lines and
+// tracked unit files. systemd deployments use TURN_AUTH_SECRET_FILE with a
+// root-readable path; environment-based self-hosted installs remain
+// compatible. A missing/unreadable file is a closed failure: /ice returns a
+// named 503 and the colocated TURN listener stays disabled.
+func loadTURNAuthSecret() string {
+	if secret := strings.TrimSpace(os.Getenv("TURN_AUTH_SECRET")); secret != "" {
+		return secret
+	}
+	path := strings.TrimSpace(os.Getenv("TURN_AUTH_SECRET_FILE"))
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("  TURN secret:      unavailable from credential file: %v", err)
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
 
 // StartTURN runs the TURN/STUN server until ctx is cancelled, then
 // closes the listener cleanly. publicIP is the address the relay
@@ -34,11 +55,8 @@ import (
 // realm is the long-term-credential realm; "yaver-relay" is the
 // default and shows up in browser devtools.
 //
-// authSecret is the shared secret used to derive each session's
-// short-lived TURN password (see Pion's GenerateLongTermCredentials
-// for the algorithm). Defaults to RELAY_PASSWORD via env var, but
-// can be overridden with TURN_AUTH_SECRET so an operator can rotate
-// TURN creds independently from the relay HTTP password.
+// authSecret is the secret used to derive each session's short-lived TURN
+// password (see Pion's GenerateLongTermCredentials for the algorithm).
 func StartTURN(ctx context.Context, publicIP, realm string, port int, authSecret string) error {
 	if authSecret == "" {
 		return fmt.Errorf("turn: authSecret cannot be empty")
