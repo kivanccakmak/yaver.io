@@ -2013,7 +2013,7 @@ export default function TasksScreen() {
   const remoteMcpRows = useMemo(() => {
     const rows: Array<{ device: Device; label: string; server: { name: string; url: string; toolCount?: number } }> = [];
     for (const d of devices || []) {
-      if (d.id === activeDevice?.id || d.isGuest) continue;
+      if (d.id === activeDevice?.id) continue;
       for (const s of mcpCatalogByDevice[d.id] || []) {
         rows.push({ device: d, label: (d.name || d.id || "other machine").trim(), server: s });
       }
@@ -2024,7 +2024,7 @@ export default function TasksScreen() {
   const remoteProjectRows = useMemo(() => {
     const rows: Array<{ device: Device; label: string; name: string; gitRemote?: string }> = [];
     for (const d of devices || []) {
-      if (d.id === activeDevice?.id || d.isGuest) continue;
+      if (d.id === activeDevice?.id) continue;
       for (const p of projectCatalogByDevice[d.id] || []) {
         rows.push({
           device: d,

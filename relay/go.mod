@@ -6,6 +6,7 @@ require (
 	github.com/pion/logging v0.2.4
 	github.com/pion/turn/v4 v4.1.4
 	github.com/quic-go/quic-go v0.48.2
+	golang.org/x/net v0.34.0
 )
 
 require (
@@ -22,7 +23,6 @@ require (
 	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/mod v0.18.0 // indirect
-	golang.org/x/net v0.34.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/tools v0.22.0 // indirect
 )
