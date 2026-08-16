@@ -36,6 +36,31 @@ fi
 
 cd "$ROOT/mobile/ios"
 
+ensure_mobile_dependencies() {
+  local mobile_dir="$ROOT/mobile"
+  local sqlite_package="$mobile_dir/node_modules/expo-sqlite/package.json"
+  local audio_package="$mobile_dir/node_modules/react-native-audio-api/package.json"
+
+  if [ -f "$sqlite_package" ] && [ -f "$audio_package" ]; then
+    return 0
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: mobile dependencies are incomplete and npm is unavailable." >&2
+    echo "       Install Node.js/npm, then rerun the deploy; Yaver will restore the lockfile." >&2
+    exit 1
+  fi
+  if [ ! -f "$mobile_dir/package-lock.json" ]; then
+    echo "ERROR: mobile dependencies are incomplete and mobile/package-lock.json is missing." >&2
+    echo "       Restore the tracked lockfile before deploying; refusing an unpinned install." >&2
+    exit 1
+  fi
+
+  echo "Mobile native dependencies are incomplete — restoring mobile/package-lock.json with npm ci."
+  echo "Install output follows; the deploy will resume automatically when it finishes."
+  (cd "$mobile_dir" && npm ci --legacy-peer-deps --no-audit --no-fund)
+}
+
 hydrate_native_dependency_artifacts() {
   local sqlite_dir="$ROOT/mobile/node_modules/expo-sqlite"
   if [ -d "$sqlite_dir/ios" ]; then
@@ -74,6 +99,7 @@ hydrate_native_dependency_artifacts() {
   [ "$missing" = 0 ] || exit 1
 }
 
+ensure_mobile_dependencies
 hydrate_native_dependency_artifacts
 
 # Load secrets from the Yaver vault (project="mobile" + globals). Vault
