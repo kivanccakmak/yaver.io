@@ -76,15 +76,17 @@ func rdPrimaryDisplay(eng *ghost.Engine) (ghost.Display, error) {
 func (s *HTTPServer) handleRemoteDesktopStatus(w http.ResponseWriter, r *http.Request) {
 	pol := loadRemoteDesktopPolicy()
 	resp := map[string]interface{}{
-		"supported":          ghost.Supported(),
-		"viewEnabled":        pol.ViewEnabled,
-		"controlEnabled":     pol.ControlEnabled,
-		"allowRemoteControl": pol.AllowRemoteControl,
-		"notifyOnControl":    pol.NotifyOnControl,
-		"streaming":          ghostStream.running(),
-		"fps":                ghostStream.curFps(),
-		"streamUrl":          "/rd/stream",
-		"frameUrl":           "/rd/frame.jpg",
+		"supported":           ghost.Supported(),
+		"viewEnabled":         pol.ViewEnabled,
+		"viewConsentSet":      pol.ViewConsentSet,
+		"viewConsentRequired": !pol.ViewConsentSet,
+		"controlEnabled":      pol.ControlEnabled,
+		"allowRemoteControl":  pol.AllowRemoteControl,
+		"notifyOnControl":     pol.NotifyOnControl,
+		"streaming":           ghostStream.running(),
+		"fps":                 ghostStream.curFps(),
+		"streamUrl":           "/rd/stream",
+		"frameUrl":            "/rd/frame.jpg",
 	}
 	// Best-effort display enumeration so the client can size/scale. Don't fail
 	// status if the engine isn't constructable yet (e.g. missing OS perms) —
@@ -117,8 +119,17 @@ func (s *HTTPServer) handleRemoteDesktopPolicy(w http.ResponseWriter, r *http.Re
 		return
 	}
 	pol := loadRemoteDesktopPolicy()
+	remote := !isLoopbackRequest(r)
+	if ok, reason := rdViewPolicyUpdateEnforce(pol, remote, body.ViewEnabled); !ok {
+		appendRemoteDesktopAudit(rdAuditEntry{Action: "deny", Remote: remote, Note: reason})
+		jsonError(w, http.StatusForbidden, reason)
+		return
+	}
 	if body.ViewEnabled != nil {
 		pol.ViewEnabled = *body.ViewEnabled
+		if !remote {
+			pol.ViewConsentSet = true
+		}
 	}
 	if body.ControlEnabled != nil {
 		pol.ControlEnabled = *body.ControlEnabled
@@ -135,12 +146,13 @@ func (s *HTTPServer) handleRemoteDesktopPolicy(w http.ResponseWriter, r *http.Re
 	}
 	appendRemoteDesktopAudit(rdAuditEntry{
 		Action: "policy",
-		Remote: !isLoopbackAddr(r.RemoteAddr),
+		Remote: remote,
 		Note:   fmt.Sprintf("view=%v control=%v allowRemote=%v", pol.ViewEnabled, pol.ControlEnabled, pol.AllowRemoteControl),
 	})
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":                 true,
 		"viewEnabled":        pol.ViewEnabled,
+		"viewConsentSet":     pol.ViewConsentSet,
 		"controlEnabled":     pol.ControlEnabled,
 		"allowRemoteControl": pol.AllowRemoteControl,
 		"notifyOnControl":    pol.NotifyOnControl,

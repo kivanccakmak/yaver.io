@@ -1527,6 +1527,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// Build toolchain preflight + deploy-script generator. Primary-owner only.
 	// /deploy/ship executes the generated script and streams stdout/stderr.
 	mux.HandleFunc("/doctor/build", s.auth(s.handleDoctorBuild))
+	// Native Windows BYO readiness. GET is inventory-only; POST may opt into
+	// bounded live capture/encode probes and never persists captured pixels.
+	mux.HandleFunc("/doctor/windows-byo", s.auth(s.handleDoctorWindowsBYO))
 	// Live transport self-diagnosis — the endpoint the out-of-band SSH channel's
 	// `doctor-transport` verb reaches so agentic self-heal can learn why the data
 	// path is down and act (see doctor_transport.go + ssh_session_cmd.go).
@@ -4893,17 +4896,10 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type checkResult struct {
-		Name    string `json:"name"`
-		Status  string `json:"status"` // "pass", "warn", "fail"
-		Detail  string `json:"detail"`
-		Section string `json:"section"`
-	}
-
-	var checks []checkResult
+	var checks []DoctorCheckResult
 
 	addCheck := func(section, name, status, detail string) {
-		checks = append(checks, checkResult{Name: name, Status: status, Detail: detail, Section: section})
+		checks = append(checks, DoctorCheckResult{Name: name, Status: status, Detail: detail, Section: section})
 	}
 
 	// Config
@@ -4951,48 +4947,10 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		addCheck("agent", "HTTP server", "warn", "Not reachable on port 18080")
 	}
 
-	// AI Runners — yaver's three first-class runners.
-	runners := []struct{ id, name, cmd, install string }{
-		{"claude", "Claude Code", "claude", "npm install -g @anthropic-ai/claude-code"},
-		{"codex", "OpenAI Codex", "codex", "npm install -g @openai/codex"},
-		{"opencode", "opencode", "opencode", "curl -fsSL https://opencode.ai/install | bash"},
-	}
-	for _, runner := range runners {
-		p, err := osexec.LookPath(runner.cmd)
-		if err != nil {
-			addCheck("runners", runner.name, "warn", "Not installed — "+runner.install)
-			continue
-		}
-		// Cap each runner --version probe at 800ms. Some runners
-		// (claude, codex) open a network socket on first run and
-		// would otherwise stall the whole /agent/doctor response
-		// past the caller's read timeout.
-		probeCtx, cancel := context.WithTimeout(r.Context(), 800*time.Millisecond)
-		out, verr := osexec.CommandContext(probeCtx, runner.cmd, "--version").CombinedOutput()
-		cancel()
-		if verr == nil {
-			ver := strings.TrimSpace(strings.Split(string(out), "\n")[0])
-			if len(ver) > 60 {
-				ver = ver[:60]
-			}
-			addCheck("runners", runner.name, "pass", fmt.Sprintf("%s (%s)", p, ver))
-		} else {
-			addCheck("runners", runner.name, "pass", p)
-		}
-	}
-
-	onboarding := collectMachineOnboardingStatus()
-	for _, provider := range onboarding.Providers {
-		status := machineOnboardingDoctorLevel(provider)
-		switch status {
-		case "pass":
-			addCheck("onboarding", provider.Name, "pass", machineOnboardingDoctorDetail(provider))
-		case "warn":
-			addCheck("onboarding", provider.Name, "warn", machineOnboardingDoctorDetail(provider))
-		default:
-			addCheck("onboarding", provider.Name, "fail", machineOnboardingDoctorDetail(provider))
-		}
-	}
+	// Shared source of truth for Electron/web/mobile and MCP. Runner readiness
+	// probes auth/provider operation, and platform-specific checks never offer
+	// an installer the current OS cannot execute.
+	checks = append(checks, s.buildDevelopmentDoctorChecks(r.Context())...)
 
 	// Relay servers
 	if cfg != nil && len(cfg.RelayServers) > 0 {
@@ -7838,6 +7796,20 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 	// --- Diagnostics & Status ---
 	case "yaver_doctor":
 		return s.mcpDoctor()
+
+	case "development_doctor":
+		checks := s.buildDevelopmentDoctorChecks(context.Background())
+		data, _ := json.MarshalIndent(map[string]interface{}{"ok": true, "checks": checks}, "", "  ")
+		return mcpToolResult(string(data))
+
+	case "development_doctor_fix":
+		var args struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil || strings.TrimSpace(args.ID) == "" {
+			return mcpToolError("id is required; use an exact check id from development_doctor")
+		}
+		return s.mcpDevelopmentDoctorFix(strings.TrimSpace(args.ID))
 
 	case "yaver_status":
 		return s.mcpStatus()
@@ -17309,6 +17281,81 @@ func firstPositiveFloat(values ...float64) float64 {
 	return 0
 }
 
+// mcpDevelopmentDoctorFix executes only the route the Doctor itself emitted.
+// The caller supplies a stable check id, never a command, URL, or package
+// name, so this MCP tool cannot become an arbitrary-shell escape hatch.
+func (s *HTTPServer) mcpDevelopmentDoctorFix(id string) interface{} {
+	checks := s.buildDevelopmentDoctorChecks(context.Background())
+	var selected *DoctorCheckResult
+	for i := range checks {
+		if checks[i].ID == id {
+			selected = &checks[i]
+			break
+		}
+	}
+	if selected == nil {
+		return mcpToolError("unknown Doctor check id; rerun development_doctor and use an exact id")
+	}
+	if selected.Status == "pass" {
+		return mcpToolResult(selected.Name + " is already ready; no fix was run")
+	}
+	if selected.Fix == nil {
+		return mcpToolError(selected.Name + " has no deterministic automatic fix on this operating system")
+	}
+	if selected.Fix.Kind != "install" {
+		data, _ := json.MarshalIndent(map[string]interface{}{
+			"ok": false, "requires_user_action": true, "check": selected, "fix": selected.Fix,
+		}, "", "  ")
+		return mcpToolResult(string(data))
+	}
+	const prefix = "/install/"
+	if !strings.HasPrefix(selected.Fix.Path, prefix) {
+		return mcpToolError("Doctor emitted an invalid install route; nothing was run")
+	}
+	tool := strings.TrimPrefix(selected.Fix.Path, prefix)
+	if tool == "" || strings.ContainsAny(tool, "/\\?#") {
+		return mcpToolError("Doctor emitted an invalid install target; nothing was run")
+	}
+	plan, ok := lookupIntegration(tool)
+	if !ok {
+		plan, ok = metaInstallPlan(tool)
+	}
+	if !ok {
+		return mcpToolError("Doctor fix is not backed by a built-in install plan; nothing was run")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+	lines := make([]string, 0, 80)
+	err := runInstallPlan(ctx, plan, func(line string) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return
+		}
+		if len(line) > 400 {
+			line = line[:400]
+		}
+		lines = append(lines, line)
+		if len(lines) > 80 {
+			lines = lines[len(lines)-80:]
+		}
+	})
+	if err != nil {
+		return mcpToolError(fmt.Sprintf("%s install failed: %v\n%s", selected.Name, err, strings.Join(lines, "\n")))
+	}
+	var after *DoctorCheckResult
+	afterChecks := s.buildDevelopmentDoctorChecks(context.Background())
+	for i := range afterChecks {
+		if afterChecks[i].ID == id {
+			after = &afterChecks[i]
+			break
+		}
+	}
+	data, _ := json.MarshalIndent(map[string]interface{}{
+		"ok": true, "installed": tool, "check": after, "output": lines,
+	}, "", "  ")
+	return mcpToolResult(string(data))
+}
+
 // mcpDoctor runs a doctor-like health check and returns results as text.
 func (s *HTTPServer) mcpDoctor() interface{} {
 	var sb strings.Builder
@@ -17458,6 +17505,18 @@ func (s *HTTPServer) mcpDoctor() interface{} {
 		check("Local IP", "ok", ip)
 	} else {
 		check("Local IP", "warn", "Could not determine")
+	}
+
+	sb.WriteString("\n── Development Toolchain & Provider Auth ──\n")
+	for _, result := range s.buildDevelopmentDoctorChecks(context.Background()) {
+		if result.Section == "runners" || result.Section == "onboarding" {
+			continue // already rendered above
+		}
+		detail := result.Detail
+		if result.Fix != nil {
+			detail += " · fix: " + result.Fix.Label
+		}
+		check(result.Name, result.Status, detail)
 	}
 
 	sb.WriteString(fmt.Sprintf("\nSummary: %d passed, %d warnings, %d failures\n", ok, warn, fail))

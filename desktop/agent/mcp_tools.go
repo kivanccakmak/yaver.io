@@ -957,10 +957,29 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	diagnosticTools := []map[string]interface{}{
 		{
 			"name":        "yaver_doctor",
-			"description": "Run a comprehensive system health check — auth, agent, runners, relay servers, tunnels, network, tmux sessions. Like 'yaver doctor' on the CLI.",
+			"description": "Run a comprehensive system health check — auth, agent, runners, provider/API-key readiness, OS-specific development tools, relay servers, tunnels, network, and tmux sessions. Like 'yaver doctor' in the GUI.",
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "development_doctor",
+			"description": "Return the same structured cross-platform development Doctor used by Yaver Desktop: Codex/Claude/OpenCode readiness, provider auth, GitHub/GitLab, Node/npm/React Native/Flutter/Go/Android, and Vercel/Cloudflare/Supabase/Firebase/Convex. Every finding carries a deterministic fix route when one is safe on this OS.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "development_doctor_fix",
+			"description": "Apply one deterministic fix advertised by development_doctor. Only known Doctor install IDs are executable; configure/open-url findings return their safe next route and never accept shell text or secrets.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{"type": "string", "description": "Exact check id returned by development_doctor."},
+				},
 			},
 		},
 		{

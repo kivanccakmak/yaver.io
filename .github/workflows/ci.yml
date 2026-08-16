@@ -31,6 +31,7 @@ jobs:
           filters: |
             cli:
               - 'desktop/agent/**'
+              - 'cli/**'
             relay:
               - 'relay/**'
             mcp:
@@ -42,7 +43,9 @@ jobs:
             backend:
               - 'backend/**'
             installer:
-              - 'desktop/installer/**'
+              - 'electron/**'
+              - 'scripts/verify-desktop-linux.mjs'
+              - '.github/workflows/release-gui.yml'
             sdk:
               - 'sdk/**'
             piImage:
@@ -127,6 +130,20 @@ jobs:
       - name: Build CLI
         run: cd desktop/agent && go build -o yaver .
 
+  npm-cli-tests:
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Test unified console and optional desktop installer commands
+        run: cd cli && npm ci && npm test
+
   # Deterministic client-side guards: connectivity robustness, the
   # false-positive-label classifiers, and every cross-surface parity check.
   # Pure TS primitives (no react-native, no 16G node_modules, no credentials,
@@ -188,6 +205,26 @@ jobs:
             nextjs-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}-
       - name: Build web
         run: cd web && npm ci && npm run build
+
+  desktop-gui-tests:
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Install canonical desktop dependencies
+        run: cd electron && npm ci
+      - name: Test canonical desktop lifecycle, auth, navigation, and policy
+        run: cd electron && npm test
+      - name: Validate electron-builder configuration without signing/release
+        run: |
+          cd electron
+          CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --linux --dir --x64 -c.extraResources=[]
 
   mobile-cloud-surface:
     needs: changes

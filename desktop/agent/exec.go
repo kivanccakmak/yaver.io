@@ -123,15 +123,6 @@ func (em *ExecManager) StartExec(command, workDir, shell string, env map[string]
 		return nil, fmt.Errorf("work directory blocked: %w", err)
 	}
 
-	// Resolve shell
-	if shell == "" {
-		if runtime.GOOS == "windows" {
-			shell = "cmd"
-		} else {
-			shell = preferredUnixShell()
-		}
-	}
-
 	// Resolve timeout
 	timeout := defaultExecTimeout
 	if timeoutSec > 0 {
@@ -144,11 +135,10 @@ func (em *ExecManager) StartExec(command, workDir, shell string, env map[string]
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
 	// Build command
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, shell, "/c", command)
-	} else {
-		cmd = exec.CommandContext(ctx, shell, "-c", command)
+	cmd, err := newCommandShellContext(ctx, runtime.GOOS, shell, command)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("resolve command shell: %w", err)
 	}
 	cmd.Dir = workDir
 

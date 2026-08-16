@@ -1,8 +1,8 @@
 # Windows BYO laptop + Relay Pro — realistic native-first beta plan
 
 **Date:** 2026-08-16  
-**Source slice:** `8cb585c85`  
-**Mode:** Planning and analysis only. No implementation, deployment, install, account change, or remote-machine mutation was performed.  
+**Source slice:** `21235ee2c4` plus the local Windows/BYO implementation and audit pass on branch `codex/windows-native-wsl-agent`.
+**Mode:** Plan plus local implementation evidence. No deployment, publish, account change, cloud provisioning, or remote-machine mutation was performed.
 **Beta user:** One invited friend, using his own Windows laptop, Microsoft/Office account, Git account, coding-runner accounts, and Yaver account.
 
 ## 1. Decision
@@ -36,6 +36,56 @@ The first beta should support four distinct surfaces:
 | Use an optional WSL-only tool | Add WSL only after a native capability failure | WSL terminal/web output; WSLg window through Windows desktop |
 
 Do **not** make WSL or a separate streamed WSL desktop a beta dependency.
+
+### 1.1 Current-code reality
+
+| Capability | Current source evidence | Honest status for the friend beta |
+|---|---|---|
+| Native Windows agent build | `GOOS=windows GOARCH=amd64 go build ./...` passed on 2026-08-16 | Cross-build passes; signed release/install/upgrade still needs proof |
+| Persistent runner terminal | `desktop/agent/windows_seat.go`, `runner_pty.go` | Native in-process Windows seats exist; reconnect survives only while the agent process lives |
+| Native command execution | `command_shell.go`, `exec.go`, `platform.go` | PowerShell 7 is preferred, Windows PowerShell and `cmd.exe` are fallbacks, and explicit `shell=wsl` has a typed interop path |
+| ConPTY startup | `pty_master_windows.go`, `windows_process_args.go` | Startup flags, UTF-16 environment block, and Windows process handles are corrected and cross-built; real Windows TUI execution remains a hardware gate |
+| PowerPoint desktop use | Interactive `ONLOGON` task plus native desktop capture/input | Correct topology; must prove the friend's exact Windows session and Office dialogs |
+| Screen capture | `remote_runtime_desktop.go` uses FFmpeg `gdigrab desktop`; `remote_runtime_capture.go` now selects its H.264 RTP path | Implemented and no longer dead behind JPEG selection, but a changing first frame on real Windows is still a gate |
+| Remote input | Local view/control policy plus session lease | First view choice and control default-off are enforced; DPI, secure-desktop boundary, notification, and revoke need closed-loop proof |
+| Relay WebRTC | Authenticated remote-runtime/WebRTC routes and TURN broker exist | Mobile currently chooses JPEG when a relay URL exists; managed TURN is not yet end-to-end proven |
+| Native dependencies | Shared discovery searches `%APPDATA%\npm`, WinGet, Scoop, Volta and other user paths; `.cmd` runner shims are launched through `cmd.exe` | Discovery/callability is improved; Node and FFmpeg auto-install recipes still do not cover Windows |
+| Runner OAuth | Auth endpoints exist | Native Windows browser interception is not implemented honestly; local one-time login is the beta fallback |
+| WSL screen | Linux path is X11-only and rejects Wayland | No direct WSLg desktop claim; Windows capture can show visible WSLg windows |
+| Windows beta doctor | `doctor_windows_byo*.go`, CLI and authenticated HTTP route | Project boundary, tools, session, Office/WebView2, power, changing-frame and H.264 probes exist; the live proof still must run on the friend's machine |
+
+### 1.2 BYO host streaming is one capability family, not a Windows special case
+
+The product target is an **optional host-desktop capability** on every BYO machine where the OS exposes a safe interactive capture/input API. “Optional” is load-bearing: installing Yaver must not silently enable screen viewing, and a headless development box remains fully useful through terminal, files, diffs, tasks, and browser preview.
+
+| BYO host | Pixel path | Input path | Honest current boundary |
+|---|---|---|---|
+| Windows | FFmpeg `gdigrab` -> libx264 -> WebRTC; authenticated JPEG fallback | `ghost`/`SendInput` under the signed-in user | Primary display only; no UAC secure-desktop crossing; requires interactive login and explicit local view/control choices |
+| macOS | FFmpeg `avfoundation` -> libx264 -> WebRTC | `ghost`/Quartz accessibility input | Screen Recording and Accessibility permissions must be operation-proven; display index and lock state remain real-machine gates |
+| Linux X11 desktop | FFmpeg `x11grab` -> libx264 -> WebRTC | `ghost` X11 input | Requires a real `DISPLAY`; container/headless inventory is not a desktop |
+| Linux Wayland | none claimed yet | none claimed yet | Fail with a named Wayland reason until a portal/PipeWire capture plus compositor-approved input design exists |
+| Headless Linux/Hetzner | no host desktop | no host desktop | Use terminal, browser-window, dev-server, and structured operations; do not manufacture a fake “PC stream” unless a separately governed virtual desktop is intentionally provisioned |
+| WSL/WSLg | native Windows agent captures visible WSLg windows as Windows pixels | native Windows input | WSL agent remains a coding seat; it does not claim the Windows host desktop or an independent WSLg desktop |
+
+The same `desktop-screen` session, consent, lease, audit, WebRTC/TURN, and fallback state machine should serve Windows, macOS, and X11 Linux. Only capture/input adapters are OS-specific.
+
+### 1.3 Client-surface contract and audited reality
+
+“All surfaces” does **not** mean squeezing a 1440x900 desktop onto every display. It means every surface consumes the same authorized capability and either provides an appropriate interaction or gives an explicit handoff.
+
+| Client surface | Appropriate mode | Current code reality | Gate before calling it supported |
+|---|---|---|---|
+| Web / desktop browser | Full pixels, pointer, keyboard, text, launch/focus | Generic `RemoteRuntimeViewer` consumes remote-runtime targets | Add a first-class, project-independent “This PC” entry and closed-loop desktop target test |
+| iOS / Android phone | Full pixels, touch-to-pointer, text, voice | `mobile/app/remote-runtime.tsx` plus the `Remote PC` native-catalog entry | Prove real desktop aspect ratio, keyboard/modifiers, revoke, direct/TURN/JPEG labels on both platforms |
+| Tablet | Same as phone with larger layout and keyboard/trackpad | Shares the RN viewer | Run genuine tablet contexts/devices; a resized phone/desktop is not proof |
+| tvOS | View plus Siri Remote pointer/scroll/text/voice | Native WebRTC/JPEG viewer and `desktop_voice` client exist | Add desktop discovery and pixel/input/revoke loop on Apple TV hardware |
+| Android TV | View plus D-pad/voice, no workstation claim | Android-TV is currently a **render target**; an equivalent Yaver TV viewer is not proven | Build/verify a client consumer or explicitly hand off to phone/web |
+| visionOS / XR | Large spatial pixels, gaze/pinch mapped to lease-bound pointer, keyboard/voice | visionOS currently exposes runtime status/reload panels, not the desktop media/control consumer | Port the generic session/transport contract and run headset pixel/input tests |
+| watchOS / Wear OS | Speech-only accessibility-tree control and short spoken result | Both native clients call `desktop_voice`; intentionally no video | Prove discovery, ambiguity, consent refusal, cross-machine routing, and handoff to phone |
+| CarPlay / Android Auto | Voice-only safe intents and spoken state; never dense pixels | Car voice/task plumbing exists, but end-to-end `desktop_voice` consumption is not proven on both | Wire allowlisted desktop intents, require confirmation for risky actions, and prohibit video while driving |
+| Glasses / Mentra | Voice/text summary, optional future low-rate glance card | Current miniapp dispatches tasks and text/TTS, not desktop media | Add explicit desktop-voice/handoff consumer; treat video as device- and safety-policy-specific |
+
+A producer with no consumer is not shipped. A catalog declaration, target ID, or comment that lists a surface is inventory—not a closed loop.
 
 ## 2. Can WSL stream its screen?
 
@@ -100,7 +150,9 @@ Pixels are the right proof for PowerPoint and GUI behavior; they are a poor subs
 - Multi-monitor PowerPoint presenter mode.
 - GPU/nested emulator guarantees.
 - Fully unattended recovery before Windows user login.
-- Watch, car, TV, or AR/VR as release gates.
+- Pixel parity on watch/car as a first-friend release gate. Their shared
+  authorization/failure/handoff plumbing is in scope, but the correct UX is
+  speech-only rather than a miniature desktop.
 - Clipboard/file synchronization through the screen session.
 - Running Office as a service or Session 0.
 
@@ -125,7 +177,7 @@ The beta laptop should satisfy:
 
 The user must understand one physical constraint: if the laptop sleeps, powers off, loses networking, or is waiting at the pre-login screen after reboot, Yaver cannot stream the interactive desktop. WSL cannot keep Windows awake.
 
-The manual tool prerequisites are current product gaps, not the desired final onboarding. Yaver's bundled Node installer has no Windows artifact path, the FFmpeg install plan has only macOS/Linux recipes, and Windows runner discovery does not search the normal `%APPDATA%\npm` directory explicitly. The production goal is still “install Yaver, approve named dependencies, and let Yaver install/prove them.”
+The manual tool prerequisites are current product gaps, not the desired final onboarding. Yaver's bundled Node installer has no Windows artifact path and the FFmpeg install plan has only macOS/Linux recipes. Native discovery now searches normal Windows user tool locations, including `%APPDATA%\npm`, but discovery is not installation and a path hit is not an operation proof. The production goal is still “install Yaver, approve named dependencies, and let Yaver install/prove them.”
 
 ## 5. Identity and execution layout
 
@@ -375,7 +427,7 @@ Pairing the laptop is not blanket authorization. The friend grants capabilities 
 | External deploy/push | Off unless the friend asks | Specific provider/project/environment/branch |
 | Guest collaboration | Off | Separate, expiring device/project/view grants; never inherited from Relay Pro |
 
-Current source defaults remote **view** on, while control defaults off. For this beta the safer product contract is an explicit local first-run view choice as well. Until that change exists, onboarding must show the current policy and require the friend to confirm it locally before any frame is served.
+Current local source now defaults remote **view** off until an explicit first-run local choice is recorded; control remains a separate opt-in. The remaining gate is closed-loop proof that remote callers cannot establish first consent, every surface renders the refusal and route, and local revoke tears down live media/input.
 
 ## 11. Staged delivery plan
 
@@ -490,6 +542,72 @@ Exercise repeatedly:
 
 Every failure must become a named state with a visible next action before expanding the beta.
 
+### Stage 8 — generalize the proven BYO contract to macOS and Linux
+
+Do this only after Windows Stages 1–7 stop producing Windows-specific contract changes.
+
+- Run the same capture -> encode -> ICE -> decode -> input -> revoke probe on a signed macOS agent with Screen Recording and Accessibility permissions.
+- Run it on a real X11 Linux workstation.
+- Run it on Wayland and headless Linux and require named, visible `unsupported` states with the correct structured alternatives.
+- Prove lock/logout/sleep behavior on each OS.
+- Keep consent, session authorization, lease, audit, bitrate accounting, and transport labels identical; only the capture/input adapter may differ.
+- Verify app launch/focus for a safe allowlisted application on each OS.
+
+**Go:** the same client can switch among authorized Windows/macOS/X11 machines without learning an OS-specific security model.
+**No-go:** a platform advertises `desktop-screen` from binary inventory but cannot deliver changing pixels or revoke input.
+
+### Stage 9 — client-surface parity
+
+- Web, iOS, Android, and tablet: full desktop viewer/control loop.
+- tvOS: full view plus constrained remote input.
+- visionOS/XR: spatial viewer/control consumer.
+- watchOS/Wear: speech-only `desktop_voice` loop plus phone handoff.
+- CarPlay/Android Auto: allowlisted voice actions plus confirmation/handoff; no driving video UI.
+- Glasses: speech/text consumer and explicit handoff; video only after a device-specific safety/privacy review.
+- Add one parity test that enumerates producer capability, consumer, supported interaction mode, refusal reason, and handoff for every surface. A surface with neither a consumer nor an explicit refusal/handoff fails.
+
+**Go:** every advertised surface has a real consumer and a failure route appropriate to its form factor.
+**No-go:** a catalog string or target declaration is counted as support without pixels/spoken output on the real client.
+
+### Stage 10 — application use cases beyond coding: PowerPoint and Talos/Logo
+
+GanttSnap/PowerPoint is the first Windows GUI closed loop. Talos adds a useful second class: a developer may need to inspect a proprietary Windows Logo ERP UI while coding the Talos web/mobile/agent stack.
+
+- Treat native PowerPoint/Logo/ERP as **host applications**, not special transports. Use `desktop-screen`, app launch/focus, accessibility-tree actions where reliable, and bounded pixel assertions.
+- Keep Talos' Logo production-data rule intact: Logo SQL and business data stay read-only. Remote desktop must never become a way to bypass provider/API permissions or automate unreviewed production mutations.
+- Prefer Talos' structured API/MCP/web surfaces for repeatable operations; use desktop pixels for visual verification, legacy UI workflows, and human-supervised diagnosis.
+- Use a disposable tenant/company/document for any write-path automation test.
+- Expect legacy Win32 accessibility trees to be incomplete. When semantic control is unavailable, require visible pixels plus user-driven pointer input; never guess coordinates invisibly.
+- Treat headless Hetzner ERPNext as web/terminal/ops, not as a fake desktop. A separately provisioned GUI session would be a new governed resource.
+- Add optional per-window capture/redaction before allowing confidential ERP desktops in a broader beta; whole-desktop capture can expose unrelated customer data and notifications.
+
+**Go:** a user can say “open PowerPoint” or “open Logo,” see the correct authorized machine, interact under a lease, and revoke immediately without weakening application/data policy.
+**No-go:** desktop access is used as an authorization bypass, wrong-window pixels are streamed, or confidential content enters telemetry.
+
+### Stage 11 — cloud Windows, only after BYO completion gates
+
+Cloud Windows is another host adapter and lifecycle provider, not a shortcut around Stages 0–10. Begin it only after BYO Windows, macOS, Linux-X11, and required client-surface contracts pass.
+
+Recommended evaluation order as of 2026-08:
+
+1. **Windows 365 Cloud PC** for the fastest persistent one-user desktop if the tenant can assign the required Windows 365 and Microsoft 365 Apps licenses. Microsoft recommends Windows 365 rather than new Dev Box investment, and supports browser/app access on major desktop/mobile platforms. Yaver remains an additional coding/streaming/control layer, not a replacement for Microsoft's access and tenant controls.
+2. **Azure Virtual Desktop personal desktop** for a one-user-to-one-VM persistent mapping, explicit Azure networking, image, autoscale, and policy control. Prefer personal rather than pooled for Office add-in development until profile, activation, runner credentials, and Yaver device identity are proven under pooling.
+3. **Raw Azure Windows 11 VM** for a bounded engineering/dev-test spike where the subscription has valid Windows client multitenant-hosting/dev-test rights. It carries the most lifecycle, access, image, patching, cost, and interactive-session work.
+4. **Microsoft Dev Box** only for an existing committed deployment. Microsoft now marks Dev Box as maintenance mode and directs new virtualized developer-environment investment toward Windows 365.
+
+Cloud admission requirements:
+
+- The user or tenant admin authorizes Yaver through Azure/Entra OAuth with least-privilege, resource-scoped roles; no tenant password or reusable Azure secret is pasted into Yaver.
+- Provisioning, start, stop, resize, snapshot, delete, image update, and cost-limit are separate grants. Delete is never implied by “disconnect.”
+- Use Windows 11 Enterprise client images for desktop Office/add-in work; do not automate Office in Session 0 or as `SYSTEM`.
+- For a personal one-user desktop, use that user's eligible Microsoft 365 Apps license and interactive sign-in. For pooled/multi-user VDI, verify Shared Computer Activation eligibility and configure it explicitly; every user still needs an eligible license.
+- The cloud machine gets its own Yaver device key, project grants, runner/provider OAuth state, and audit trail. Tenant credentials do not flow into the coding model.
+- Prove an interactive user session exists after start/restart. VM power-on is inventory; PowerPoint/WebView2/capture/input is the operation.
+- Bound spend before provision: region/SKU/disk/image/hourly estimate, idle shutdown, monthly ceiling, owner-visible usage, and an explicit persistence choice.
+- Re-run the complete Windows doctor and phone-on-cellular closed loop. Azure proximity does not prove TURN, capture, Office activation, or input.
+
+Official constraints behind this ordering: Azure supports Windows 11 Enterprise and multi-session images only with qualifying licenses; AVD personal desktops provide a persistent one-to-one user mapping; Microsoft 365 Apps shared-computer activation is for licensed multi-user/RDS/VDI scenarios; and Microsoft currently recommends Windows 365 over new Dev Box deployments. See [Windows 11 on Azure](https://learn.microsoft.com/en-us/azure/virtual-machines/windows/windows-desktop-multitenant-hosting-deployment), [AVD personal desktop assignment](https://learn.microsoft.com/en-us/azure/virtual-desktop/configure-host-pool-personal-desktop-assignment-type), [Microsoft 365 Apps shared computer activation](https://learn.microsoft.com/en-us/microsoft-365-apps/licensing-activation/overview-shared-computer-activation), [Windows 365 overview](https://learn.microsoft.com/en-us/windows-365/overview), and [Dev Box definitions](https://learn.microsoft.com/en-us/azure/dev-box/how-to-manage-dev-box-definitions).
+
 ## 12. Required headless probes
 
 | Probe | Passing evidence | Failure route |
@@ -593,26 +711,31 @@ The friend must be able to revoke from the laptop and another trusted Yaver surf
 
 ### 13.6 Current security/product gaps that block a broad beta
 
-- Remote view currently defaults on in `desktop/agent/remotedesktop.go`; the proposed explicit first-run consent is not yet implemented.
 - The public Windows installer downloads an amd64 executable but does not currently verify checksum or Authenticode before execution.
-- Windows runner discovery relies mainly on the agent `PATH` and does not explicitly search `%APPDATA%\npm`.
 - The native Node and FFmpeg auto-install recipes do not currently cover Windows.
 - The runner browser interceptor deliberately has no working native Windows browser shim, so “remote OAuth is seamless” is unproven.
 - Mobile currently selects JPEG whenever a relay base URL exists; managed Relay Pro does not yet operation-prove TURN.
 - Several browser/WebView paths still carry `token`/`__rp` query credentials. They should become one-time exchange values or scoped, Secure/HttpOnly/SameSite cookies where browser constraints require cookies—not reusable secrets in navigation URLs, history, logs, or referrers.
 - Desktop capture uses the whole Windows desktop/virtual screen; per-window or per-monitor privacy is not yet a guarantee.
+- Real Windows execution has not yet proven ConPTY, npm `.cmd` runner shims,
+  changing desktop pixels, H.264 decode, PowerPoint, WebView2, lock/logoff, or
+  local revoke on the friend's exact hardware.
+- Web/mobile/tvOS have media consumers, and watchOS/Wear have speech consumers;
+  visionOS, Android TV-as-a-client, car, and glasses still lack the complete
+  consumer/refusal/handoff parity described in Section 1.3.
 
 ## 14. Product work required before “seamless”
 
 ### P0
 
-- Restore a clean signed Windows build and release-integrity path.
+- Turn the passing Windows cross-build into a reproducible signed release and operation-proven install/upgrade path.
 - Make Windows installer architecture-aware and verify signed/checksummed artifacts before replacement.
-- Add native Windows Node, FFmpeg, Git, and runner discovery/install/prove flows, including `%APPDATA%\npm`.
+- Add native Windows Node, FFmpeg, and Git install/prove flows. Runner discovery
+  and normal npm-shim lookup/callability now exist, but signed installation and
+  real model completion still must be proven.
 - Add evidence-based provider detection, 10 GiB managed-tool budget, install receipts, and safe reclamation.
 - Add a real native Windows runner OAuth/device-flow handoff or an honest local-login route.
 - Add typed Git/provider authorization sessions with secret redaction, OS-keyring enforcement, scope/project selection, expiry, revoke, and operation-level proof.
-- Change first-run remote view from implicit default to explicit local consent.
 - Prove `gdigrab -> H.264 -> phone first frame` on real Windows.
 - Fix mobile's `relay URL => JPEG only` decision.
 - Deploy and externally prove managed TURN.
@@ -620,6 +743,9 @@ The friend must be able to revoke from the laptop and another trusted Yaver surf
 - Add explicit interactive-session/locked/logged-off reason codes.
 - Replace reusable query credentials with bounded browser-safe grants/cookies.
 - Bind remote-runtime sessions to the authorized viewer device/grant and tear them down on revoke.
+- Add the project-independent web “This PC” entry and close the visionOS,
+  Android TV client, car, and glasses consumer/handoff gaps without duplicating
+  authorization or failure classifiers.
 
 ### P1
 
@@ -635,12 +761,13 @@ The friend must be able to revoke from the laptop and another trusted Yaver surf
 - Add multi-monitor capture/selection.
 - Add task-aware sleep/park suppression and honest power state.
 
-### Later
+### Later, after the numbered gates
 
 - Direct WSLg/Wayland/PipeWire capture only if users need a dedicated Linux-window stream.
-- Cloud Windows/AVD provisioning.
+- Cloud Windows/Windows 365/AVD provisioning, strictly after BYO and client-surface gates in Stage 11.
 - Clipboard/files/audio with separate permissions.
-- TV/AR view clients and watch/car task-only controls.
+- Any pixel mode on a safety- or size-constrained client beyond the explicit
+  surface contract; watch/car remain speech/handoff surfaces by design.
 
 ## 15. Realistic effort bands
 
@@ -664,3 +791,292 @@ Start with this exact product statement:
 For the first beta, direct WSL “screen streaming” is unnecessary and unsupported by current Yaver. If WSL is later admitted, its terminal and web output should use structured transports; WSL GUI windows should ride inside the Windows desktop stream.
 
 Do not call the result seamless until native dependency installation, runner auth and real completion, project boundary, dev URL, PowerPoint host, first changing frame, control revoke, Relay Pro transport, lock/logoff behavior, and recovery actions pass the acceptance stages above.
+
+## 17. Native Windows distribution and desktop-GUI agent audit
+
+**Audit date:** 2026-08-16. The published-artifact rows below remain a read-only snapshot. The source-state notes were updated after the local hardening work described in §17.9. Nothing was published or deployed.
+
+### 17.1 Bottom line
+
+Yaver can cross-build and publish a native Windows amd64 Go executable, and a Windows x64 Electron/NSIS installer is downloadable. Those are useful release ingredients, but they do **not** yet form a production-safe native Windows install channel or a desktop app that demonstrably becomes an agent.
+
+Do not give either current Windows download to the friend as the supported beta path yet. Keep the friend on the controlled laboratory path until the P0 gates below pass. WSL2 remains the only Windows path the public download page currently calls supported, despite other public copy claiming the GUI turns Windows into a node.
+
+### 17.2 Published-state evidence
+
+| Question | Operation-level result on 2026-08-16 | Verdict |
+|---|---|---|
+| Is a current native agent artifact published? | GitHub release `v1.99.413` contains `yaver-windows-amd64.exe` and `.zip`; the downloaded exe's SHA-256 matches that release's `checksums.txt` | **Yes, amd64 bytes exist** |
+| Is the native agent Authenticode-signed? | The published 61,601,280-byte PE has a zero certificate-table offset and size | **No** |
+| Is a Windows desktop installer published? | GUI release `gui/v0.1.2` contains `yaver-gui-0.1.2-win-setup.exe` | **Yes, x64 installer bytes exist** |
+| Is the GUI installer Authenticode-signed? | The published 97,511,809-byte PE also has a zero certificate-table offset and size | **No** |
+| Is npm current? | Registry `latest` is `yaver-cli@1.99.411`, while source and the newest agent release are `1.99.413` | **No; registry is two releases behind** |
+| Does native-Windows npm fetch the current agent? | The published 1.99.411 package defaults `WINDOWS_REPO` to `kivanccakmak/yaver-cli`, whose latest release is `v1.37.0`; the canonical repo has the 1.99.x Windows asset | **No; it selects a stale distribution** |
+| Is Scoop published? | No Yaver manifest exists in this repo, Scoop Main, or Scoop Extras; no release job publishes one | **No** |
+| Is WinGet published? | No Yaver manifest exists in this repo or the community `winget-pkgs` path; no release job publishes one | **No** |
+| Is Chocolatey published? | No nuspec/package pipeline exists in current source | **No** |
+| Is there a PowerShell installer? | The source `web/public/install.ps1` is now canonical-repo and architecture-aware, requires the release SHA-256 plus valid Authenticode, installs per-user, and leaves an existing binary intact on failure. The public site has not been redeployed. | **Source hardened; published operation unproven**. The current unsigned release will correctly be rejected until a signed release exists. |
+| Can the canonical deploy wrapper ship GUI/Windows? | `deploy/deploy.sh` has CLI/npm and mobile/web targets, but no `gui`, `desktop`, or `windows` target | **No single supported deploy front door**; GUI is tag-workflow-only |
+
+The repository's `docs/security/SECURITY.md` statement that Homebrew/apt/AUR/Scoop/WinGet/Chocolatey are published from `release-cli.yml` is stale and contradicted by code. The live download page is also internally contradictory: it says the desktop GUI embeds the Go agent, later calls the GUI merely a client surface, and separately says native Windows is unsupported. Release copy must become one truthful contract before beta.
+
+### 17.3 Desktop GUI as an agent: source audit
+
+The current release candidate for the new shell is `electron/` (`yaver-gui`), not `desktop/app/` or `desktop/installer/`. All three Electron trees still exist, which is a packaging and ownership hazard. Only one may own the public product and release URL.
+
+What is present in `electron/`:
+
+- electron-builder bundles `resources/bin/yaver.exe` into the Windows app;
+- `AgentManager` can probe `127.0.0.1:18080/health`, adopt a healthy listener, or spawn `yaver serve --debug` and restart it after a crash;
+- the window loads the real Yaver web dashboard in a hardened Electron shell, so WebRTC/JPEG/terminal/task behavior can reuse the web UI instead of forming a fourth client protocol;
+- closing the window hides to the tray, which is the correct shape for an interactive per-user agent;
+- the Go agent itself can register a limited-privilege `ONLOGON` Scheduled Task once `serve` actually runs.
+- `app.whenReady()` now starts/adopts the agent, names bootstrap as `pairing`
+  instead of a false-green, and real quit stops only the child owned by the GUI;
+- a process-scoped `prevent-app-suspension` blocker and start-at-login policy
+  default on for the remote-node role, with visible tray toggles and no power-plan
+  or administrator mutation;
+- the same in-window `/auth` surface provides sign-in and account creation, and
+  the same dashboard now renders selectable ongoing/review/completed task history,
+  the raw console, stop, complete, and confirmed delete operations.
+
+What still blocks the production claim:
+
+1. Fresh-GUI pairing is not yet a packaged closed loop. The shared dashboard can
+   reclaim a bootstrap device through `/auth/pair/owner-claim`, and the tray now
+   says `pair this PC`, but a clean Windows install still needs a pixel-level
+   test proving sign-up/sign-in → local-device claim → authenticated `/info`.
+2. Agent state has a typed preload/IPC seam and an honest tray state, but the
+   dashboard does not yet consume the local status as a first-run `pairing`,
+   `ready`, `locked`, or `screen consent required` action panel.
+3. Adoption still begins with anonymous `/health`. It now distinguishes
+   bootstrap, but must additionally prove Yaver version/device identity and an
+   authenticated owner route before saying the external listener is trusted.
+4. The fetcher now verifies `checksums.txt`, and both Windows release workflows
+   fail unless every PE is Authenticode-valid. Those workflows have not yet run
+   with the real signing secret, so publisher chain/timestamp remain gates, not
+   claims.
+5. GUI start-at-login and a reversible system-awake assertion now exist. The
+   single reference-counted policy for GUI + Go agent, AC/battery guard, and
+   display-awake-only-during-view states remain to be implemented.
+6. The Electron suite is now 33 passing tests and includes readiness/quit/power
+   wiring; the web task parity contract adds three passing tests. No clean
+   Windows package test yet proves install, account creation, agent pairing,
+   task run/resume/delete, capture, lock, reboot, upgrade, or uninstall.
+7. Windows update is not trustworthy yet. npm postinstall deliberately skips
+   both `current` repoint and service bounce on Windows; the Go self-updater
+   depends on symlink creation and `syscall.Exec` behavior that is not
+   operation-proven for a standard Windows account.
+
+WebRTC is not an Electron-specific subsystem. Once the embedded Go agent is truly started, paired, registered, granted local view/control consent, and reachable, the GUI can consume the same dashboard remote-runtime viewer as web while phones/tablets use their existing client. That is the desired architecture. A bundled binary or a catalog entry alone does not prove capture, H.264, ICE/TURN, decode, pixels, control lease, revoke, or lock behavior.
+
+### 17.4 Canonical Windows install product
+
+Ship two clearly named choices from the same signed release lineage:
+
+1. **Yaver Desktop for Windows (recommended):** signed x64 first, per-user NSIS install, bundles and supervises the same signed Go agent, includes pairing/doctor/repair UI, and keeps the tray alive. No Node prerequisite merely to become a Yaver node.
+2. **Yaver Agent for PowerShell (advanced/headless):** signed native executable installed per user with a versioned path, checksum plus Authenticode verification, atomic `current` pointer appropriate for Windows, limited `ONLOGON` Scheduled Task, and an explicit uninstall/disable path.
+
+Scoop and WinGet are distribution metadata over those same signed artifacts, not new products. Publish them only after signing, stable URLs, upgrade/rollback, and install/uninstall tests pass. Prefer exact IDs (`winget install --exact --id Yaver.Yaver`) and a Yaver-owned Scoop bucket initially if community acceptance cadence is uncertain. Do not keep `irm ... | iex` as the only native path; if retained, the script must pin a release, verify SHA-256 from an independently fetched signed manifest, require a valid Yaver Authenticode publisher, and never execute on verification failure.
+
+The release front door must add a dry-runnable owner-only GUI/Windows target that triggers or validates the existing tag workflow without bypassing the repository's deployment boundary. A Windows release is complete only when CI installs the produced artifact into a clean Windows VM as a standard user and probes the operation.
+
+### 17.5 Privilege and UAC contract
+
+Yaver Desktop and the Go agent run as the signed-in friend, with the application manifest at `asInvoker`. They must **not** request administrator at first launch or run the interactive agent as `SYSTEM`.
+
+| Operation | Default privilege | Elevation behavior |
+|---|---|---|
+| Install desktop per user, pair, run agent, code, capture own desktop, WebRTC, user Scheduled Task | Standard user | No UAC |
+| Install for all users / Program Files, system service, machine-wide dependency, protected firewall rule | Elevated helper for that exact operation | Explain publisher, action, target, and why; friend approves the OS UAC prompt locally |
+| Git/runner/provider OAuth, Office sign-in | User/provider consent | Never use UAC; never collect the password |
+| Remote control while UAC/lock/Winlogon secure desktop is active | Not permitted | Pause pixels/input with `SECURE_DESKTOP_ACTIVE`; ask the friend to complete locally |
+| Change persistent AC/lid/power policy | User-selected OS setting, possibly admin/policy-managed | Diagnose and deep-link; do not silently mutate a company policy |
+
+The canonical Electron configuration now explicitly sets `asInvoker`,
+`perMachine: false`, `allowElevation: false`, and
+`selectPerMachineByDefault: false`. This is source evidence only until the NSIS
+artifact is installed on a clean standard-user Windows account. For the friend
+beta, keep the per-user path and avoid elevation unless a named dependency
+proves it is necessary.
+
+### 17.6 Power and availability contract on every desktop OS
+
+“Avoid power save” means a revocable runtime assertion, not permanently rewriting the user's power plan at initialization.
+
+| Host | Current implementation | Required behavior |
+|---|---|---|
+| Windows native agent/GUI | Electron now owns a process-scoped `prevent-app-suspension` request with a visible tray opt-out; the Go adapter remains absent and doctor only reports AC sleep policy | Unify GUI + Go ownership, add AC/battery state, and add display-required only during an authorized screen-view/control session. No admin needed. |
+| macOS agent | `caffeinate -dimsu -w <pid>` is on by default for an authenticated agent and supervised | Keep the system-availability assertion, but separate system-awake from display-awake and surface the user's choice; prove Screen Recording after display lock/wake. |
+| Linux non-WSL agent | supervised `systemd-inhibit --what=sleep` is on by default | Keep and operation-probe the inhibitor; provide a named remedy when systemd-inhibit is absent. Wayland desktop streaming remains unsupported until portal/PipeWire exists. |
+| WSL agent | Correctly refuses to claim it can inhibit the Windows host | Native Windows companion owns host availability; WSL reports the dependency and never changes host power by inference. |
+| Desktop Electron shell | Process-scoped system-awake blocker defaults on, is tray-controlled, and stops on real quit | The canonical shell and agent must share one reference-counted policy so two inhibitors do not fight. Add task/view/battery states and stop assertions on disable/sign-out/uninstall/real quit. |
+
+Recommended states:
+
+- `available`: keep system awake while the user has enabled “This PC is remotely available” and the machine is on AC;
+- `task-active`: keep system awake for an active coding/build/deploy task;
+- `view-active`: keep system and display awake for an authorized live desktop session;
+- `battery-guard`: warn and release the always-on assertion at a user-selected low-battery threshold unless a safety-critical save is finishing;
+- `disabled`: no assertion, with the UI honestly warning that the machine may go offline;
+- lid close, shutdown, hibernate, firmware behavior, corporate policy, and pre-login remain OS/physical boundaries, never claims Yaver bypasses.
+
+The first-run UI should ask once: “Keep this PC available for remote Yaver sessions while plugged in?” Default on for the explicitly chosen remote-node role, with a visible toggle and exact effect. This is consent to a runtime inhibitor, not consent to change the Windows power plan.
+
+### 17.7 P0 release gates
+
+1. Choose `electron/` as canonical or migrate it, then archive/remove the two competing release-capable Electron products from public ownership paths.
+2. Wire embedded-agent start, fresh pairing, authenticated identity/version adoption, status/recovery UI, ownership-aware quit, and standard-user Scheduled Task persistence.
+3. Add a test that fails when `app.whenReady()` does not start/adopt the agent; add a packaged clean-VM test that installs GUI, signs in, and proves authenticated `/info` plus device registration.
+4. Sign the outer NSIS installer, installed GUI executable, and embedded/native Go agent with the expected Yaver publisher. Make release fail when any required PE lacks a valid timestamped Authenticode chain.
+5. Make the GUI release publish `checksums.txt` and provenance; verify the embedded agent before packaging and verify download artifacts before install/update.
+6. Point every Windows resolver at `yaver-io/yaver.io`, publish npm at the same version only after Windows assets exist, and fail release when npm/GitHub/GUI embedded versions diverge.
+7. Replace the native PowerShell prototype with an architecture-aware, pinned, signed/checksummed per-user installer and repair/uninstall commands.
+8. Add `gui`/`desktop` release validation to `deploy/deploy.sh`; do not publish by ad hoc tag instructions outside the canonical owner gate.
+9. Implement Windows native keep-awake plus the cross-platform reference-counted power state above; never request admin merely to inhibit sleep.
+10. Prove native Windows ConPTY runner completion, PowerShell and npm `.cmd` shims, dependency install routes, PowerPoint/WebView2, changing pixels, H.264, direct WebRTC, TURN, JPEG fallback, input/revoke, lock/UAC pause, sleep/wake, reboot/login, upgrade, rollback, and uninstall on a clean Windows 11 x64 VM and the friend's laptop.
+11. Make website/download/dashboard/release notes say one consistent truth and remove claims that are not backed by those operations.
+12. Only after the signed x64 lane is stable, add a separately built and tested Windows arm64 agent/GUI/installer and architecture-aware package-manager manifests.
+
+### 17.8 Go/no-go sentence
+
+**Go** when a standard Windows user downloads one signed Yaver installer, verifies the Yaver publisher, installs without UAC for the per-user path, signs in once, sees the local agent become ready, keeps the PC available while plugged in, and can complete a real runner-to-PowerPoint-to-phone/WebRTC loop with local revoke.
+
+**No-go for the published build today:** the downloadable PE entry points remain
+unsigned and npm remains stale; Scoop/WinGet and clean-Windows proof do not
+exist; fresh pairing/identity and the PowerPoint/WebRTC/revoke loop are not
+closed; and public copy still contradicts itself. Local source now starts the
+embedded agent, reports pairing honestly, supports account creation plus shared
+task history/actions, inhibits sleep reversibly, verifies release checksums,
+uses the canonical Windows resolver, and fails future releases closed on
+missing Authenticode—but none of that is a shipped claim until the release and
+clean-machine gates pass.
+
+### 17.9 Local implementation delta: GUI account and task parity
+
+The canonical desktop product is `electron/`: one hardened Electron shell over
+the shared web dashboard plus one bundled Go agent. React Native is not embedded
+as a second desktop renderer. Mobile/phone/tablet continue to use the React
+Native app; desktop reuses the web dashboard; both speak the same Go-agent task,
+terminal, preview, OAuth, device, and relay protocols. This avoids a fourth task
+store and keeps a task resumable from any authorized surface.
+
+Account behavior inside the GUI:
+
+- an unauthenticated desktop opens the same chrome-free `/auth` journey inside
+  the app window;
+- account creation supports passkeys and Google, Microsoft, Apple, GitHub, and
+  GitLab OAuth; email/password sign-up and reset render when that backend
+  capability is enabled;
+- provider pages and callbacks are allowlisted in-window, while unrelated web
+  navigation stays outside the application;
+- Yaver account authentication, runner OAuth (Codex/Claude/OpenCode providers),
+  Git provider authorization, and Office sign-in remain distinct grants. The
+  GUI must never treat one as consent for another.
+
+Task behavior inside the GUI:
+
+- the sidebar consumes the agent's real 20-row task list and labels
+  queued/running work as `ongoing`, with review/completed/failed/stopped history;
+- selecting a historical task hydrates full turns and reconnects its raw
+  `rawSince` console lane; the runner/tmux session remains agent-owned, so hiding
+  the window or moving to mobile does not create a new task;
+- ongoing work has Stop, review has Complete, and terminal work has confirmed
+  Delete. Delete removes the agent-local task record; it is not represented as a
+  recoverable trash state;
+- terminal state crosses an explicit preload bridge for native notifications;
+  DOM text observation remains only a compatibility fallback for older deployed
+  dashboards;
+- Electron remains in the tray when its window closes. Explicit Quit releases
+  the GUI-owned sleep assertion and stops only the agent child the GUI spawned;
+  an independently running agent that was adopted is left alone.
+
+Verification completed locally on 2026-08-16:
+
+- Electron unit/contracts: 33/33;
+- desktop task/runner-renderer parity contract: 4/4;
+- web TypeScript and the full Next.js production build: pass after
+  regenerating Next route types;
+- native Windows/WSL/ConPTY/capture/control focused Go contract set: pass;
+- `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build`: pass;
+- Electron 43.4.0 + electron-builder 26.15.3 audit: zero known npm
+  vulnerabilities (the prior lock had 14, including one critical);
+- unsigned directory-only macOS packaging/config validation: pass;
+- `git diff --check`: pass.
+
+The repository-wide `go test -count=1 ./...` is **not green** and is not being
+reported as one: several assertions outside the focused Windows set fail (ACP
+method mapping, MCP inventory, autorun flags/git configuration, browser CDP), two
+HTTP tests time out, and `TestBuildBusConcurrentRaceOneWinner` hangs until the
+suite's ten-minute timeout. The Windows-focused contracts above complete in
+under one second, but the global suite remains a release gate that needs its
+own repair rather than being waived.
+
+Still required before the friend beta: a signed Windows CLI release, a signed
+NSIS build produced by the hardened workflow, checksum/provenance publication,
+standard-user clean-VM install, pixel-level sign-up/OAuth and device-pair proof,
+real Codex/OpenCode task resume across desktop and phone, secure-desktop/lock
+refusal, restart/start-at-login, and the GanttSnap PowerPoint + WebRTC loop.
+
+### 17.10 Canonical macOS/Linux desktop and npm entry point
+
+`electron/` is now the one release-capable desktop product. The old
+`desktop/installer` workflow is a fail-closed tombstone so it cannot publish a
+second app with a different ID, auth/task UI, repository URL, or lifecycle.
+
+The canonical GUI release matrix is:
+
+| OS | Architectures | Artifacts | Release requirement |
+|---|---|---|---|
+| macOS | arm64, x64 | architecture-specific DMG + ZIP | Developer ID signature, hardened runtime, notarization, Gatekeeper assessment, stapled ticket, embedded agent |
+| Windows | x64 first | per-user NSIS installer | valid Simkab Authenticode on every PE, timestamp, embedded agent, no elevation |
+| Linux | x64, arm64 | AppImage, deb, rpm, tar.gz | package metadata/content probe, executable AppImage runtime, embedded agent |
+
+The unified npm package remains the console product and does not embed an
+Electron runtime. `yaver desktop install|update|status|path|download` is an
+explicit optional GUI entry point. It selects the current OS/architecture,
+resolves only a `gui/v*` component release, downloads the exact asset plus
+`checksums.txt`, verifies SHA-256, applies the OS trust check, and installs per
+user. macOS uses `~/Applications/Yaver.app`; Linux AppImage uses
+`~/.local/opt/yaver` plus an XDG desktop entry and `~/.local/bin/yaver-desktop`;
+deb/rpm downloads print the exact explicit `apt-get`/`dnf` command instead of
+silently requesting sudo. Windows opens the verified Simkab-signed installer.
+
+The desktop release front door is now `./deploy/deploy.sh desktop` (or `gui`).
+It validates synchronized GUI versions, a clean `main` worktree, and immutable
+tag state before pushing `gui/v<version>`. No release was triggered here.
+
+Local evidence on 2026-08-16: CLI desktop contracts 7/7; Electron contracts
+33/33; desktop task/placement parity 4/4; macOS arm64 unsigned directory-only
+packaging succeeds; Electron dependency audit reports zero known
+vulnerabilities; full web production build succeeds. Signed DMG/NSIS and native
+Linux packages remain CI/clean-machine gates.
+
+## 18. PowerPoint add-in and local/remote runner-renderer decision
+
+The detailed Office/Partner Center analysis is in
+[`docs/audits/yaver-powerpoint-addin-windows-partner-deep-audit-2026-08.md`](../audits/yaver-powerpoint-addin-windows-partner-deep-audit-2026-08.md).
+
+The decision is to keep Yaver Desktop as the shared control surface and native
+agent, optionally add a thin Office.js developer bridge, and keep GanttSnap as
+the real PowerPoint add-in. The add-in performs semantic PowerPoint operations;
+the native Windows agent owns repositories, runners, capture, WebRTC, input,
+consent, and recovery.
+
+Runner and renderer placement is intentionally independent and already has a
+shared code path across web/mobile/Electron through machine roles. All four
+combinations are valid: local/local, remote/remote, local runner/remote
+renderer, and remote runner/local renderer. For the first GanttSnap split, use
+the friend-selected runner and set `ganttsnap-windows` as renderer, with
+`runner-clone` and `autoPush: ask`.
+
+Do not call the Office lane complete until a real PowerPoint host—not a
+standalone task-pane URL—passes `Office.onReady`, a reversible Office.js
+operation, one post-task reload, a visible PowerPoint/task-pane pixel assertion,
+WebRTC direct and TURN first-frame tests, and local revoke/lock refusal.
+
+Simkab can enroll as the Microsoft publisher, but Partner Center enrollment is
+separate from Windows Authenticode. The existing SimplySign/Certum license must
+still be proven usable either as an exportable protected CI PFX or on a tightly
+controlled Windows signing runner; ownership of the license alone does not make
+the current hosted workflow operable.

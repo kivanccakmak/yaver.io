@@ -69,12 +69,7 @@ func commonInstallPrefixes() []string {
 			"/bin",
 		)
 	case "windows":
-		prefixes = append(prefixes,
-			filepath.Join(os.Getenv("ProgramFiles"), "nodejs"),
-			filepath.Join(os.Getenv("ProgramFiles"), "Git\\bin"),
-			filepath.Join(os.Getenv("USERPROFILE"), "scoop\\shims"),
-			filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs"),
-		)
+		prefixes = append(prefixes, windowsUserBinaryPrefixes(home, os.Getenv)...)
 	}
 
 	if home != "" {
@@ -118,6 +113,44 @@ func commonInstallPrefixes() []string {
 	prefixes = append(prefixes, androidSDKToolDirs()...)
 
 	return prefixes
+}
+
+// windowsUserBinaryPrefixes is shared by general tool discovery and runner
+// resolution so a Windows service sees the same binaries as the interactive
+// user. In particular, npm's default global shim directory is %APPDATA%\npm;
+// it is normally absent from a service account's inherited PATH.
+//
+// The explicit inputs keep this logic unit-testable on non-Windows builders.
+func windowsUserBinaryPrefixes(home string, getenv func(string) string) []string {
+	if getenv == nil {
+		getenv = func(string) string { return "" }
+	}
+	userProfile := getenv("USERPROFILE")
+	if userProfile == "" {
+		userProfile = home
+	}
+	candidates := []string{
+		filepath.Join(getenv("APPDATA"), "npm"),
+		filepath.Join(getenv("LOCALAPPDATA"), "Microsoft", "WinGet", "Packages"),
+		filepath.Join(getenv("LOCALAPPDATA"), "Programs"),
+		filepath.Join(getenv("LOCALAPPDATA"), "pnpm"),
+		filepath.Join(userProfile, "scoop", "shims"),
+		filepath.Join(userProfile, ".volta", "bin"),
+		filepath.Join(getenv("ProgramFiles"), "nodejs"),
+		filepath.Join(getenv("ProgramFiles"), "Git", "bin"),
+		filepath.Join(getenv("ProgramFiles(x86)"), "Git", "bin"),
+	}
+	seen := make(map[string]bool, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		if candidate == "." || candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		out = append(out, candidate)
+	}
+	return out
 }
 
 // androidSDKToolDirs returns the bin dirs of every Android SDK root that

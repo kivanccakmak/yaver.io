@@ -1075,6 +1075,30 @@ export interface RunnerAuthStatusRow {
   version?: string;
 }
 
+export interface DevelopmentDoctorFix {
+  kind: "install" | "configure" | "open-url";
+  label: string;
+  method?: string;
+  path?: string;
+  stream?: string;
+  tab?: string;
+  url?: string;
+}
+
+export interface DevelopmentDoctorCheck {
+  id?: string;
+  name: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
+  section: string;
+  fix?: DevelopmentDoctorFix;
+}
+
+export interface DevelopmentDoctorReport {
+  ok: boolean;
+  checks: DevelopmentDoctorCheck[];
+}
+
 export interface RunnerBrowserAuthSession {
   id: string;
   runner: "claude" | "codex";
@@ -5096,7 +5120,7 @@ export class AgentClient {
     return data.projects ?? [];
   }
 
-  async listWorkspaceRepos(): Promise<Array<{
+  async listWorkspaceRepos(source: "connected" | "render" = "connected"): Promise<Array<{
     name: string;
     path: string;
     branch?: string;
@@ -5111,7 +5135,8 @@ export class AgentClient {
     };
   }>> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/repos/list`, { headers: this.authHeaders });
+    const base = source === "render" ? this.devBaseUrl : this.baseUrl;
+    const res = await fetch(`${base}/repos/list`, { headers: this.authHeaders });
     if (!res.ok) return [];
     const data = await res.json().catch(() => []);
     return Array.isArray(data) ? data as Array<{
@@ -5140,7 +5165,10 @@ export class AgentClient {
    *
    *  Returns full MobileProject records: name, path, framework,
    *  capability flags, monorepoRoot/monorepoApp lineage. */
-  async listProjectsByCapability(capability: "web" | "mobile" | "all"): Promise<Array<{
+  async listProjectsByCapability(
+    capability: "web" | "mobile" | "all",
+    source: "connected" | "render" = "connected",
+  ): Promise<Array<{
     name: string;
     path: string;
     framework: string;
@@ -5158,7 +5186,8 @@ export class AgentClient {
   }>> {
     this.assertConnected();
     const path = capability === "web" ? "/projects/web" : capability === "all" ? "/projects/all" : "/projects/mobile";
-    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.authHeaders });
+    const base = source === "render" ? this.devBaseUrl : this.baseUrl;
+    const res = await fetch(`${base}${path}`, { headers: this.authHeaders });
     if (!res.ok) return [];
     const data = (await res.json().catch(() => ({}))) as { projects?: unknown };
     return Array.isArray(data?.projects) ? (data.projects as Array<Record<string, unknown>>).map((p) => ({
@@ -5753,13 +5782,18 @@ export class AgentClient {
     } catch { return null; }
   }
 
-  async getWorkspaceApps(kind?: string | string[], root?: string): Promise<WorkspaceAppView[]> {
+  async getWorkspaceApps(
+    kind?: string | string[],
+    root?: string,
+    source: "connected" | "render" = "connected",
+  ): Promise<WorkspaceAppView[]> {
     this.assertConnected();
     const params = new URLSearchParams();
     if (kind) params.set("kind", Array.isArray(kind) ? kind.join(",") : kind);
     if (root) params.set("root", root);
     const query = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(`${this.baseUrl}/workspace/apps${query}`, { headers: this.authHeaders });
+    const base = source === "render" ? this.devBaseUrl : this.baseUrl;
+    const res = await fetch(`${base}/workspace/apps${query}`, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to load workspace apps: HTTP ${res.status}`);
     return Array.isArray(data?.apps) ? data.apps : [];
@@ -8217,6 +8251,16 @@ export class AgentClient {
   }
 
   // ── Health Monitoring ─────────────────────────────────────────────
+
+  async developmentDoctor(): Promise<DevelopmentDoctorReport> {
+    const res = await this.agentFetch("/agent/doctor", { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Development Doctor failed: HTTP ${res.status}`);
+    return {
+      ok: data?.ok === true,
+      checks: Array.isArray(data?.checks) ? data.checks : [],
+    };
+  }
 
   async listHealthTargets(): Promise<{ id: string; url: string; name?: string; status?: string; responseTime?: number }[]> {
     this.assertConnected();

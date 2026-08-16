@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -166,7 +167,11 @@ func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
 		tmuxArgs = append(tmuxArgs, inner)
 		cmd = exec.Command(tmuxCmdName(), tmuxArgs...)
 	} else {
-		cmd = exec.Command(rc.Command, args...)
+		cmd, err = newExecutableCommand(runtime.GOOS, resolveRunnerBinary(rc.Command), args...)
+		if err != nil {
+			runnerPTYFail(conn, "runner launch failed: "+err.Error())
+			return
+		}
 		if cwd != "" {
 			cmd.Dir = cwd
 		}

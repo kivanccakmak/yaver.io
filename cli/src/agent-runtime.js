@@ -13,7 +13,10 @@ const PACKAGE = require('../package.json');
 // stale owner ("release lookup failed (403) from kivanccakmak/yaver.io"),
 // so resolve releases from the canonical path directly.
 const DEFAULT_REPO = process.env.YAVER_AGENT_REPO || 'yaver-io/yaver.io';
-const WINDOWS_REPO = process.env.YAVER_WINDOWS_AGENT_REPO || 'kivanccakmak/yaver-cli';
+// Windows is released beside every other agent build in the canonical repo.
+// The historical yaver-cli repo stopped at v1.37.0; resolving from it made a
+// current npm wrapper silently install a years-old Windows agent.
+const WINDOWS_REPO = process.env.YAVER_WINDOWS_AGENT_REPO || DEFAULT_REPO;
 const CACHE_ROOT = process.env.YAVER_AGENT_CACHE_DIR || path.join(os.homedir(), '.yaver', 'bin');
 let resolvedAgentVersionPromise = null;
 const resolvedAssetPromiseByKey = new Map();

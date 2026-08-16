@@ -132,15 +132,15 @@ export default function DownloadPage() {
           </p>
           <div className="mt-6 grid gap-4 md:grid-cols-3">
             <a
-              href={GUI_DOWNLOADS.mac}
+              href={GUI_DOWNLOADS.macArm64}
               className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
             >
               <div className="text-sm font-semibold text-surface-50">macOS</div>
-              <div className="mt-1 text-xs text-surface-500">DMG · Apple Silicon &amp; Intel</div>
+              <div className="mt-1 text-xs text-surface-500">Signed + notarized DMG · Apple Silicon</div>
               <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
             </a>
             <a
-              href={GUI_DOWNLOADS.win}
+              href={GUI_DOWNLOADS.winX64}
               className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
             >
               <div className="text-sm font-semibold text-surface-50">Windows</div>
@@ -148,18 +148,24 @@ export default function DownloadPage() {
               <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
             </a>
             <a
-              href={GUI_DOWNLOADS.linux}
+              href={GUI_DOWNLOADS.linuxX64}
               className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
             >
               <div className="text-sm font-semibold text-surface-50">Linux</div>
-              <div className="mt-1 text-xs text-surface-500">AppImage · x64 &amp; arm64</div>
+              <div className="mt-1 text-xs text-surface-500">AppImage · x64</div>
               <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
             </a>
           </div>
+          <div className="mt-4 flex flex-wrap gap-3 text-xs">
+            <a href={GUI_DOWNLOADS.macX64} className="text-surface-300 underline hover:text-surface-50">macOS Intel DMG</a>
+            <a href={GUI_DOWNLOADS.linuxArm64} className="text-surface-300 underline hover:text-surface-50">Linux arm64 AppImage</a>
+            <a href={GUI_DOWNLOADS.debX64} className="text-surface-300 underline hover:text-surface-50">Ubuntu/Debian x64 package</a>
+            <a href={GUI_DOWNLOADS.debArm64} className="text-surface-300 underline hover:text-surface-50">Ubuntu/Debian arm64 package</a>
+          </div>
           <p className="mt-4 text-xs text-surface-500">
-            Prefer the terminal? <code>npm install -g yaver-cli</code> is still the one path for the
-            agent — the desktop app is an optional native client surface, not another install channel
-            for the daemon. All releases:{" "}
+            Prefer the terminal? <code>npm install -g yaver-cli</code> provides both the console and
+            the verified <code>yaver desktop install</code> companion command. The GUI remains optional
+            and adopts an existing daemon instead of creating a second agent. All releases:{" "}
             <a
               href="https://github.com/yaver-io/yaver.io/releases"
               className="text-surface-300 underline hover:text-surface-50"

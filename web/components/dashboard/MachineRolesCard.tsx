@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useMachineRoles, type MachineRolesRow } from "@/lib/useMachineRoles";
+import { desktopDeviceLabel, type DesktopSurfaceInfo } from "@/lib/desktopSurface";
 
 type DeviceRow = { id: string; name: string; platform?: string };
 type RolesRow = MachineRolesRow;
@@ -26,6 +27,7 @@ export function MachineRolesCard({
   token,
   devices,
   roles,
+  desktopSurface = { isDesktop: false, localDeviceId: null },
 }: {
   token: string | null;
   devices: DeviceRow[];
@@ -33,6 +35,7 @@ export function MachineRolesCard({
    *  here update the SAME state that drives agentClient's live routing —
    *  no per-card fetch, no stale split until reload. */
   roles?: ReturnType<typeof useMachineRoles>;
+  desktopSurface?: DesktopSurfaceInfo;
 }) {
   const ownRoles = useMachineRoles(roles ? null : token);
   const { favorite: savedRow, loaded, save: saveRow, clear: clearRow } = roles ?? ownRoles;
@@ -116,7 +119,8 @@ export function MachineRolesCard({
       <p className="mt-1.5 text-[12px] text-surface-400">
         Optional: run AI tasks on one machine and build/render on another. Leave both on the same
         machine — or clear — for today&apos;s behavior. Example: a Linux box with signed-in runners as
-        the AI runner, a Mac with Xcode/Flutter as the renderer.
+        the AI runner, or a Linux cloud box for coding with this Windows PC and PowerPoint as
+        the renderer.
       </p>
       {!loaded ? (
         <p className="mt-2 text-[12px] text-surface-500">Loading…</p>
@@ -128,7 +132,7 @@ export function MachineRolesCard({
               <select value={runnerId} onChange={(e) => setRunnerId(e.target.value)} className={selectCls}>
                 <option value="">— pick a machine —</option>
                 {devices.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}{d.platform ? ` · ${d.platform}` : ""}</option>
+                  <option key={d.id} value={d.id}>{desktopDeviceLabel(d, desktopSurface)}</option>
                 ))}
               </select>
             </label>
@@ -137,7 +141,7 @@ export function MachineRolesCard({
               <select value={secondaryRunnerId} onChange={(e) => setSecondaryRunnerId(e.target.value)} className={selectCls}>
                 <option value="">none</option>
                 {devices.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}{d.platform ? ` · ${d.platform}` : ""}</option>
+                  <option key={d.id} value={d.id}>{desktopDeviceLabel(d, desktopSurface)}</option>
                 ))}
               </select>
             </label>
@@ -146,7 +150,7 @@ export function MachineRolesCard({
               <select value={renderId} onChange={(e) => setRenderId(e.target.value)} className={selectCls}>
                 <option value="">same as runner</option>
                 {devices.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}{d.platform ? ` · ${d.platform}` : ""}</option>
+                  <option key={d.id} value={d.id}>{desktopDeviceLabel(d, desktopSurface)}</option>
                 ))}
               </select>
             </label>
@@ -155,7 +159,7 @@ export function MachineRolesCard({
               <select value={secondaryRenderId} onChange={(e) => setSecondaryRenderId(e.target.value)} className={selectCls}>
                 <option value="">none</option>
                 {devices.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}{d.platform ? ` · ${d.platform}` : ""}</option>
+                  <option key={d.id} value={d.id}>{desktopDeviceLabel(d, desktopSurface)}</option>
                 ))}
               </select>
             </label>

@@ -808,6 +808,12 @@ func main() {
 			runDoctorSurfaces(os.Args[3:])
 			return
 		}
+		// Native Windows friend-beta gate: inventory plus optional bounded,
+		// non-persisting screen capture/H.264 operation proof.
+		if len(os.Args) > 2 && (os.Args[2] == "windows-byo" || os.Args[2] == "windows") {
+			runDoctorWindowsBYO(os.Args[3:])
+			return
+		}
 		runDoctor()
 	case "init", "setup":
 		runInit(os.Args[2:])

@@ -7,7 +7,7 @@ import { spawnSync } from "child_process";
 const ROOT = process.cwd();
 const DIST = process.argv[2]
   ? path.resolve(process.argv[2])
-  : path.join(ROOT, "desktop", "installer", "dist");
+  : path.join(ROOT, "electron", "dist");
 const ARCH = process.argv[3] || process.env.YAVER_TARGET_ARCH || "";
 
 function fail(message) {
@@ -54,6 +54,9 @@ function verifyDeb(debPath) {
   if (!contents.includes(".desktop")) {
     fail(`${path.basename(debPath)} is missing desktop entry`);
   }
+  if (!contents.includes("/opt/Yaver/resources/bin/yaver")) {
+    fail(`${path.basename(debPath)} is missing its embedded Yaver agent`);
+  }
 }
 
 function verifyAppImage(appImagePath) {
@@ -81,6 +84,9 @@ function verifyAppImage(appImagePath) {
   const hasExecutable = fs.existsSync(path.join(extractDir, "yaver-desktop"));
   if (!hasExecutable) {
     fail(`${path.basename(appImagePath)} did not extract yaver-desktop`);
+  }
+  if (!fs.existsSync(path.join(extractDir, "resources", "bin", "yaver"))) {
+    fail(`${path.basename(appImagePath)} did not extract the embedded Yaver agent`);
   }
 }
 

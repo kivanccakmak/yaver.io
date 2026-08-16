@@ -1,6 +1,6 @@
 {
   "name": "yaver-cli",
-  "version": "1.99.413",
+  "version": "1.99.414",
   "mcpName": "io.github.yaver-io/yaver",
   "description": "Unified npm bootstrap for the Yaver agent, SDK injection, and local-first developer runtime",
   "bin": {
@@ -11,6 +11,7 @@
   },
   "main": "src/index.js",
   "scripts": {
+    "test": "node --test test/*.test.js",
     "postinstall": "node src/postinstall.js",
     "preuninstall": "node src/preuninstall.js"
   },
@@ -39,7 +40,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kivanccakmak/yaver.io.git"
+    "url": "git+https://github.com/yaver-io/yaver.io.git"
   },
   "homepage": "https://yaver.io",
   "engines": {

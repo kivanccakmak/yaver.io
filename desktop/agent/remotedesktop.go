@@ -11,8 +11,8 @@ package main
 // live MJPEG streamer (ghost_stream.go), but it is gated by a RUNTIME consent
 // policy stored on the recorded machine — no agent restart required:
 //
-//   - View (MJPEG screen stream): allowed for the owner by default. The owner
-//     can disable it (master kill-switch).
+//   - View (MJPEG screen stream): OFF until a person on the recorded machine
+//     makes an explicit first-run choice. The owner can disable it at any time.
 //   - Control (mouse/keyboard injection): OFF by default. Injecting input is
 //     more sensitive than watching, so it must be explicitly enabled — from the
 //     box itself, or remotely once the owner has flipped it on. Every remote
@@ -34,9 +34,11 @@ import (
 
 // RemoteDesktopPolicy is the owner's local control surface for Remote Desktop.
 type RemoteDesktopPolicy struct {
-	// ViewEnabled is the master switch for the screen stream. Default true —
-	// your machines, your call — but the owner can kill it.
+	// ViewEnabled is the master switch for the screen stream. It defaults off.
 	ViewEnabled bool `json:"viewEnabled"`
+	// ViewConsentSet distinguishes an explicit local "off" choice from an old
+	// or missing policy file. Remote callers cannot establish first consent.
+	ViewConsentSet bool `json:"viewConsentSet"`
 	// ControlEnabled gates mouse/keyboard injection. Default FALSE: watching
 	// is one thing, driving the box is another, so control is opt-in.
 	ControlEnabled bool `json:"controlEnabled"`
@@ -53,7 +55,8 @@ type RemoteDesktopPolicy struct {
 
 func defaultRemoteDesktopPolicy() RemoteDesktopPolicy {
 	return RemoteDesktopPolicy{
-		ViewEnabled:        true,
+		ViewEnabled:        false,
+		ViewConsentSet:     false,
 		ControlEnabled:     false,
 		AllowRemoteControl: true,
 		NotifyOnControl:    true,
@@ -131,8 +134,21 @@ func rdControlEnforce(pol RemoteDesktopPolicy, remote bool) (bool, string) {
 
 // rdViewEnforce decides whether the screen stream may be served.
 func rdViewEnforce(pol RemoteDesktopPolicy) (bool, string) {
+	if !pol.ViewConsentSet {
+		return false, "screen view requires an explicit consent choice on this machine"
+	}
 	if !pol.ViewEnabled {
 		return false, "screen view is disabled on this machine (owner turned Remote Desktop off)"
+	}
+	return true, ""
+}
+
+// rdViewPolicyUpdateEnforce prevents an authenticated remote request from
+// silently converting a legacy/missing policy into consent. A remote owner may
+// still turn viewing off, and may toggle it after local consent was recorded.
+func rdViewPolicyUpdateEnforce(pol RemoteDesktopPolicy, remote bool, requested *bool) (bool, string) {
+	if requested != nil && *requested && remote && !pol.ViewConsentSet {
+		return false, "first screen-view consent must be granted on the Windows machine"
 	}
 	return true, ""
 }

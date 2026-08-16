@@ -13,7 +13,7 @@ Do **not** open a public GitHub issue for a security vulnerability.
 ## Scope
 
 In-scope:
-- The Yaver agent (`desktop/agent/`), relay server (`relay/`), backend (`backend/`), mobile app (`mobile/`), desktop app (`desktop/app/`), desktop installer (`desktop/installer/`), and web app (`web/`).
+- The Yaver agent (`desktop/agent/`), relay server (`relay/`), backend (`backend/`), mobile app (`mobile/`), canonical desktop GUI (`electron/`), legacy desktop trees (`desktop/app/`, `desktop/installer/`), and web app (`web/`).
 - Any of the open-source SDKs under `cli/` and `sdk/*`.
 - The Raspberry Pi dev-node image (`pi-image/`).
 - `yaver.io` and `public.yaver.io` (the relay) as operated by us.
@@ -54,7 +54,12 @@ Every published artefact comes from the CI pipeline on a pushed tag:
 - **npm** (`yaver-cli`, `yaver-sdk`, `yaver-feedback-*`, `yaver-errors`) — published from `.github/workflows/release-cli.yml` / `release-sdk.yml` after environment approval.
 - **PyPI** (`yaver`) — same, via `release-sdk.yml`.
 - **pub.dev** (`yaver`, `yaver_feedback`) — currently manual from a clean workstation.
-- **Homebrew / apt / AUR / Scoop / Winget / Chocolatey** — published from `release-cli.yml` to sibling repos; each manifest includes the SHA-256 of the release artefact. Verify the artefact hash against `checksums.txt` on the corresponding GitHub Release.
+- **OS package managers** — Linux `.deb`/`.rpm` and GUI artifacts are built by
+  their release workflows. Homebrew, AUR, Scoop, WinGet, and Chocolatey are
+  **not currently published by this repository**; do not trust a listing that
+  claims to be official until this policy and the corresponding source
+  pipeline name it. Windows PowerShell installation requires both the release
+  SHA-256 and a valid Authenticode signature.
 - **Docker** (`ghcr.io/kivanccakmak/yaver.io/cli`, `docker.io/kivanccakmak/yaver-cli`) — multi-arch images built + pushed from `release-cli.yml`.
 
 If a published artefact's SHA-256 does not match what's on the GitHub Release, stop and email us immediately.

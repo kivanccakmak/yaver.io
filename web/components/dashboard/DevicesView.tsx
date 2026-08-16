@@ -61,6 +61,7 @@ import {
   subscribeLastFailure,
 } from "@/lib/probe-backoff";
 import type { useMachineRoles, MachineRolesRow } from "@/lib/useMachineRoles";
+import { isThisDesktopDevice, type DesktopSurfaceInfo } from "@/lib/desktopSurface";
 
 function transportToneClasses(tone: TransportInfo["tone"]): string {
   switch (tone) {
@@ -1282,6 +1283,8 @@ interface DevicesViewProps {
   onNavigateCloud?: () => void;
   /** Shared runner/render role settings hook from dashboard/page.tsx. */
   machineRoles?: ReturnType<typeof useMachineRoles>;
+  /** Electron-only identity. Plain browsers never receive a local-machine claim. */
+  desktopSurface?: DesktopSurfaceInfo;
 }
 
 interface DeviceRuntimeInfo {
@@ -3218,6 +3221,7 @@ export default function DevicesView({
   hiddenCount = 0,
   onNavigateCloud,
   machineRoles,
+  desktopSurface = { isDesktop: false, localDeviceId: null },
 }: DevicesViewProps) {
   const observedAgentConnectionState = useAgentConnectionState();
   const agentConnectionState = workspaceConnectionState ?? observedAgentConnectionState;
@@ -3829,6 +3833,11 @@ export default function DevicesView({
                       <h3 className="font-semibold text-slate-900 dark:text-surface-50">
                         {device.name}
                       </h3>
+                      {isThisDesktopDevice(device.id, desktopSurface) ? (
+                        <span className="rounded-full border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200">
+                          This PC · Desktop GUI
+                        </span>
+                      ) : null}
                       {device.alias ? (
                         <span
                           className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200"

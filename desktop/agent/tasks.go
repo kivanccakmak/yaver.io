@@ -2288,12 +2288,20 @@ func commonExtraPaths() string {
 			filepath.Join(home, ".linuxbrew", "bin"),
 		)
 	}
-	return strings.Join(paths, ":")
+	return strings.Join(paths, string(os.PathListSeparator))
 }
 
 // expandedPath returns PATH with common extra binary locations prepended.
 func expandedPath() string {
-	return commonExtraPaths() + ":" + os.Getenv("PATH")
+	extra := commonExtraPaths()
+	current := os.Getenv("PATH")
+	if extra == "" {
+		return current
+	}
+	if current == "" {
+		return extra
+	}
+	return extra + string(os.PathListSeparator) + current
 }
 
 // CheckRunnerBinary checks if a runner binary is available in PATH or common locations.
@@ -2416,7 +2424,7 @@ func findInExpandedPath(command string) string {
 	if home == "" {
 		return ""
 	}
-	searchDirs := strings.Split(commonExtraPaths(), ":")
+	searchDirs := filepath.SplitList(commonExtraPaths())
 	for _, dir := range searchDirs {
 		if dir == "" {
 			continue

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -1111,8 +1112,14 @@ func defaultStartCmd(framework string) string {
 
 // shellCommand wraps a command string for execution via the OS shell.
 func shellCommand(cmdStr string) *exec.Cmd {
+	cmd, err := newCommandShellContext(context.Background(), runtime.GOOS, "", cmdStr)
+	if err == nil {
+		return cmd
+	}
+	// Preserve the historical no-error helper signature for internal callers.
+	// StartExec uses the error-returning path and surfaces an actionable cause.
 	if runtime.GOOS == "windows" {
-		return exec.Command("cmd", "/C", cmdStr)
+		return exec.Command("cmd.exe", "/D", "/S", "/C", cmdStr)
 	}
 	return exec.Command("sh", "-c", cmdStr)
 }

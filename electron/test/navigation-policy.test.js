@@ -8,6 +8,9 @@ test("allowed app paths", () => {
   assert.ok(isAllowedAppPath("/auth"));
   assert.ok(isAllowedAppPath("/auth/callback"));
   assert.ok(isAllowedAppPath("/auth/totp?return=/dashboard"));
+  assert.ok(isAllowedAppPath("/auth"));
+  assert.ok(isAllowedAppPath("/auth/reset-password"));
+  assert.ok(isAllowedAppPath("/auth/verify-email"));
   assert.ok(isAllowedAppPath("/api/auth/oauth/google/callback"));
   assert.ok(isAllowedAppPath("/dashboard"));
   assert.ok(isAllowedAppPath("/dashboard/home"));
@@ -34,6 +37,7 @@ test("prefix must not over-match (/dashboardx, /api2)", () => {
 test("allowed URLs by origin", () => {
   assert.ok(isAllowedAppUrl("https://yaver.io/dashboard?tab=chat"));
   assert.ok(isAllowedAppUrl("https://yaver.io/auth?return=/dashboard"));
+  assert.ok(isAllowedAppUrl("https://yaver.io/auth?mode=signup&return=/dashboard"));
   assert.ok(isAllowedAppUrl("https://yaver.io/d/xyz/dev/events"));
   assert.ok(isAllowedAppUrl("http://localhost:3000/dashboard"));
   assert.ok(isAllowedAppUrl("http://localhost:3000/api/auth/oauth/github/callback"));
@@ -41,6 +45,9 @@ test("allowed URLs by origin", () => {
   assert.ok(isAllowedAppUrl("https://accounts.google.com/o/oauth2/v2/auth?x=1"));
   assert.ok(isAllowedAppUrl("https://appleid.apple.com/auth/authorize"));
   assert.ok(isAllowedAppUrl("https://github.com/login/oauth/authorize"));
+  assert.ok(isAllowedAppUrl("https://gitlab.com/oauth/authorize"));
+  assert.ok(isAllowedAppUrl("https://login.microsoftonline.com/common/oauth2/v2.0/authorize"));
+  assert.ok(isAllowedAppUrl("https://login.live.com/oauth20_authorize.srf"));
   assert.ok(isAllowedAppUrl("https://perceptive-minnow-557.eu-west-1.convex.site/oauth/authorize"));
 });
 

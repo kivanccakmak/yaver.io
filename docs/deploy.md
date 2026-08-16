@@ -20,7 +20,7 @@ command here fails, read the error carefully and consult the
    then tag.** CI validators refuse to release if the tag's version
    does not match `versions.json` for that component.
 
-## The 9 deploy targets
+## Deploy targets
 
 | Target | Trigger | Surface | Script (manual) | Workflow (CI) |
 |--------|---------|---------|-----------------|----------------|
@@ -32,6 +32,8 @@ command here fails, read the error carefully and consult the
 | CLI (`yaver`) | `cli/v*` tag | npm | see §CLI below | `.github/workflows/release-cli.yml` |
 | SDKs (`yaver-sdk`, `yaver` python) | GitHub release published | npm + PyPI + pub.dev | see §SDKs below | `.github/workflows/release-sdk.yml` |
 | Desktop installer | `installer/v*` tag | macOS `.dmg` + Windows `.exe` + Linux `.AppImage` | electron-builder | `.github/workflows/release-installer.yml` |
+| Desktop GUI | protected `gui/v*` tag | signed/notarized macOS DMG, signed Windows NSIS, Linux AppImage/deb/rpm + auto-update metadata | `./deploy/deploy.sh desktop` | `.github/workflows/release-gui.yml` |
+| macOS Desktop TestFlight | explicit manual approval | sandboxed client-only `.pkg` | `./deploy/deploy.sh desktop-mas` (build) / `desktop-testflight` (upload) | local guarded path |
 | Pi image | `piImage/v*` tag | GitHub release asset | `scripts/release-pi-image.sh` | `.github/workflows/release-pi-image.yml` |
 
 For releases that go out to users (CLI, SDKs, mobile, web), **prefer
@@ -343,13 +345,14 @@ gh run watch
    `cli/` as `yaver-cli`.
 3. **publish-mcp-registry** — pushes `server.json` to the MCP
    Registry (OIDC, no stored secret).
-4. **build** (matrix) — cross-compiles for
+4. **build** (matrix) — builds for
    `darwin-arm64`, `darwin-amd64`, `linux-arm64`, `linux-amd64`,
-   `windows-amd64`. Produces: `.tar.gz`, `.dmg`, `.exe`, `.zip`,
-   `.deb`, `.rpm`. Uploads as workflow artifacts.
-5. **release** — creates a **draft** GitHub release with all
-   artifacts + `checksums.txt`. Windows `.exe` is unsigned at this
-   point; sign with SimplySign Desktop before publishing the draft.
+   `windows-amd64`. The Windows binary is built on a Windows runner and the
+   workflow refuses to continue unless it can Authenticode-sign and verify the
+   PE. Produces the raw `.exe` plus platform `.tar.gz`/`.zip` artifacts.
+5. **release** — creates or refreshes the published GitHub release with all
+   artifacts + `checksums.txt`. npm publication happens only after the release
+   assets exist.
 6. **docker-build** + **docker-manifest** — builds multi-arch
    (amd64 + arm64) images and pushes `kivanccakmak/yaver-cli:latest`
    + `:<version>` to Docker Hub and `ghcr.io`.
@@ -374,13 +377,20 @@ GOOS=linux  GOARCH=amd64 go build -ldflags="-s -w" -o yaver-linux-amd64  .
 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o yaver-windows-amd64.exe .
 ```
 
-### Windows code signing (only needed if you manually upload `.exe`)
+### Windows code signing
 
-Requires SimplySign Desktop logged in:
+The release is fail-closed. The protected GitHub `production` environment must
+provide an exportable PFX as base64 in `WIN_CSC_LINK` and its password in
+`WIN_CSC_KEY_PASSWORD`; the workflow signs with SHA-256, uses an RFC 3161
+timestamp, and verifies Authenticode before upload. Neither value belongs in the
+repository or logs.
 
-```bash
-./keys/sign-windows.sh yaver-windows-amd64.exe
-```
+The older `keys/sign-windows.sh`/manual-draft instructions no longer describe
+the code and that script is not present. If Simkab's Certum SimplySign license
+exposes only an interactive certificate-store/virtual-card identity rather than
+an exportable PFX, use a locked-down Simkab-controlled Windows signing runner or
+the certificate product's supported automation service. Do not publish unsigned
+and do not run untrusted pull-request code on a signing runner.
 
 ---
 

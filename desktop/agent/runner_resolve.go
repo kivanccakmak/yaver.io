@@ -96,6 +96,12 @@ func resolveRunnerBinary(name string) string {
 
 func runnerCandidatePaths(name string) []string {
 	home, _ := os.UserHomeDir()
+	return runnerCandidatePathsFor(runtime.GOOS, name, home, os.Getenv)
+}
+
+// runnerCandidatePathsFor accepts the platform and environment explicitly so
+// the Windows search contract can be verified by Linux/macOS CI.
+func runnerCandidatePathsFor(goos, name, home string, getenv func(string) string) []string {
 	dirs := []string{}
 	if home != "" {
 		dirs = append(dirs,
@@ -110,6 +116,9 @@ func runnerCandidatePaths(name string) []string {
 			filepath.Join(home, ".nvm", "versions", "node"),
 		)
 	}
+	if goos == "windows" {
+		dirs = append(dirs, windowsUserBinaryPrefixes(home, getenv)...)
+	}
 	dirs = append(dirs,
 		"/opt/homebrew/bin",
 		"/home/linuxbrew/.linuxbrew/bin",
@@ -121,9 +130,10 @@ func runnerCandidatePaths(name string) []string {
 	out := make([]string, 0, len(dirs)+4)
 	for _, d := range dirs {
 		out = append(out, filepath.Join(d, name))
-		if runtime.GOOS == "windows" {
+		if goos == "windows" {
 			out = append(out, filepath.Join(d, name+".exe"))
 			out = append(out, filepath.Join(d, name+".cmd"))
+			out = append(out, filepath.Join(d, name+".bat"))
 		}
 	}
 	// nvm-managed installs live one node-version down; surface both

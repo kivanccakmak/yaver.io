@@ -134,6 +134,7 @@ import WebTestsPanel from "@/components/dashboard/WebTestsPanel";
 import SettingsView from "@/components/dashboard/SettingsView";
 import { PlanUsageCard } from "@/components/dashboard/PlanUsageCard";
 import { MachineRolesCard } from "@/components/dashboard/MachineRolesCard";
+import { WEB_SURFACE_INFO, type DesktopSurfaceInfo } from "@/lib/desktopSurface";
 import type { RunnerBrowserAuthSession } from "@/lib/agent-client";
 import webPkg from "../../package.json";
 import { buildLabel } from "@/lib/buildStamp";
@@ -837,12 +838,46 @@ export default function DashboardPage() {
   const { pending: pendingClaims, refreshPending, claimPending } = usePendingClaims(token);
   const { theme, toggle: toggleTheme } = useTheme();
   const router = useRouter();
+  const [desktopSurface, setDesktopSurface] = useState<DesktopSurfaceInfo>(WEB_SURFACE_INFO);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const bridge = (window as typeof window & {
+      yaver?: {
+        surface?: string;
+        getDesktopStatus?: () => Promise<{ surface?: string; localDeviceId?: string | null }>;
+        onAgentStatus?: (listener: () => void) => (() => void);
+      };
+    }).yaver;
+    if (bridge?.surface !== "desktop-gui" || typeof bridge.getDesktopStatus !== "function") return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const status = await bridge.getDesktopStatus?.();
+        if (!cancelled && status?.surface === "desktop-gui") {
+          setDesktopSurface({
+            isDesktop: true,
+            localDeviceId: typeof status.localDeviceId === "string" && status.localDeviceId ? status.localDeviceId : null,
+          });
+        }
+      } catch {
+        if (!cancelled) setDesktopSurface({ isDesktop: true, localDeviceId: null });
+      }
+    };
+    void refresh();
+    const unsubscribe = bridge.onAgentStatus?.(() => { void refresh(); });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
 
   const [connState, setConnState] = useState<ConnectionState>("disconnected");
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [taskActionBusy, setTaskActionBusy] = useState<string | null>(null);
   const pendingDispatchRef = useRef<Set<string>>(new Set());
   // ── raw-lane note ─────────────────────────────────────────
   // Every runner (opencode, codex, claude, …) streams its RAW stdout
@@ -1765,6 +1800,22 @@ export default function DashboardPage() {
       placementStatusSyncRef.current.delete(key);
     });
   }, [token, activeTask?.placementId, activeTask?.status]);
+
+  // Electron gets an explicit task event instead of having to infer state by
+  // scraping rendered text. The bridge is absent in normal browsers, so this
+  // is a no-op there and the shared task protocol remains unchanged.
+  useEffect(() => {
+    if (!activeTask) return;
+    if (!["completed", "review", "failed", "stopped"].includes(activeTask.status)) return;
+    const bridge = (window as Window & {
+      yaver?: { taskStatus?: (payload: { taskId: string; kind: string; title: string }) => boolean };
+    }).yaver;
+    bridge?.taskStatus?.({
+      taskId: activeTask.id,
+      kind: activeTask.status,
+      title: displayTaskTitle(activeTask.title || ""),
+    });
+  }, [activeTask?.id, activeTask?.status, activeTask?.title]);
 
   // Keep selectedRunner valid: prefer the connected device's chosen
   // primary runner, then the agent's default/active runner, then a
@@ -3029,6 +3080,50 @@ export default function DashboardPage() {
       });
     }).catch(() => {});
   };
+
+  const stopTaskFromUI = async (task: Task) => {
+    if (task.id.startsWith("pending-cloud:")) {
+      setConnectError("This task has not reached an agent yet; manage the pending cloud action shown in the task.");
+      return;
+    }
+    setTaskActionBusy(`stop:${task.id}`);
+    try {
+      await agentClient.stopTask(task.id);
+      const stopped = { ...task, status: "stopped" as const, updatedAt: Date.now() };
+      setTasks((prev) => prev.map((row) => row.id === task.id ? stopped : row));
+      setActiveTask((current) => current?.id === task.id ? { ...current, ...stopped } : current);
+      setPendingFollowUps([]);
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : "Failed to stop task.");
+    } finally {
+      setTaskActionBusy(null);
+    }
+  };
+
+  const deleteTaskFromUI = async (task: Task) => {
+    if (task.id.startsWith("pending-cloud:")) {
+      setConnectError("Pending cloud dispatches cannot be deleted from the agent task history.");
+      return;
+    }
+    if (!window.confirm(`Delete “${displayTaskTitle(task.title || "this task")}”? This removes its local task history.`)) return;
+    setTaskActionBusy(`delete:${task.id}`);
+    try {
+      await agentClient.deleteTask(task.id);
+      setTasks((prev) => prev.filter((row) => row.id !== task.id));
+      if (activeTask?.id === task.id) {
+        setActiveTask(null);
+        setOutputLines([]);
+        setRawOutput([]);
+        setRawSince(0);
+        setChatMsgs([]);
+        setPendingFollowUps([]);
+      }
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : "Failed to delete task.");
+    } finally {
+      setTaskActionBusy(null);
+    }
+  };
   const onTaskCreated = () => { setActiveTab("chat"); agentClient.listTasks().then(setTasks).catch(() => {}); };
   const handleSelectPreviewTarget = async (deviceId: string | null) => {
     const target = deviceId ? devices.find((d) => d.id === deviceId) || null : null;
@@ -3236,7 +3331,7 @@ export default function DashboardPage() {
               yaver<span className="font-normal text-surface-500">.io</span>
             </span>
             <span className="mt-0.5 font-mono text-[10px] tracking-wide text-surface-400">
-              {WEB_BUILD_LABEL}
+              {WEB_BUILD_LABEL} · {desktopSurface.isDesktop ? "Desktop GUI" : "Web UI"}
             </span>
           </a>
 
@@ -3673,6 +3768,53 @@ export default function DashboardPage() {
             )}
           </div>
 
+          {/* Task history is shared with mobile: these are the agent's real
+              task rows, not an Electron-only cache. Active/review/completed
+              tasks stay selectable across GUI, web, and mobile reconnects. */}
+          {isConnected ? (
+            <div className="min-h-0 shrink border-t border-surface-800 pt-3">
+              <div className="mb-1 flex items-center justify-between">
+                <button
+                  onClick={() => setActiveTab("chat")}
+                  className="text-[10px] font-semibold uppercase tracking-widest text-surface-500 hover:text-surface-300"
+                  title="Open task chat and live console"
+                >
+                  Tasks
+                </button>
+                <span className="rounded-full bg-surface-800 px-1.5 text-[9px] text-surface-400">{tasks.length}</span>
+              </div>
+              <div className="max-h-52 space-y-0.5 overflow-y-auto pr-0.5">
+                {tasks.length === 0 ? (
+                  <p className="px-2 py-1 text-[10px] text-surface-600">No tasks yet</p>
+                ) : tasks.map((task) => {
+                  const live = task.status === "running" || task.status === "queued";
+                  const selected = activeTask?.id === task.id;
+                  return (
+                    <button
+                      key={task.id}
+                      onClick={() => selectTask(task)}
+                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                        selected ? "bg-brand-soft/60 text-brand-softFg" : "text-surface-400 hover:bg-surface-800/70 hover:text-surface-200"
+                      }`}
+                      title={`${displayTaskTitle(task.title)} · ${task.status}`}
+                    >
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        live ? "animate-pulse bg-amber-400"
+                          : task.status === "review" ? "bg-violet-400"
+                          : task.status === "completed" ? "bg-emerald-400"
+                          : "bg-surface-600"
+                      }`} />
+                      <span className="min-w-0 flex-1 truncate text-[11px]">{displayTaskTitle(task.title)}</span>
+                      <span className={`shrink-0 text-[9px] ${statusColor(task.status)}`}>
+                        {live ? "ongoing" : task.status}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           <div className="min-h-6 flex-1" />
 
         </div>
@@ -4099,6 +4241,7 @@ export default function DashboardPage() {
                 machineRoles={machineRoles.favorite}
                 onSaveMachineRoles={machineRoles.save}
                 onClearMachineRoles={machineRoles.clear}
+                desktopSurface={desktopSurface}
                 onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined}
                 onOpenTmux={(sessionName) => {
                   if (!connectedDevice) {
@@ -4264,7 +4407,7 @@ export default function DashboardPage() {
               {/* Account plan + relay usage — profile clicks land here. */}
               <PlanUsageCard deviceNames={Object.fromEntries(devices.map((d) => [d.id, d.name]))} />
               {/* Optional runner/render machine slicing — the favorite config. */}
-              <MachineRolesCard token={token} devices={devices.map((d) => ({ id: d.id, name: d.name, platform: d.platform }))} roles={machineRoles} />
+              <MachineRolesCard token={token} devices={devices.map((d) => ({ id: d.id, name: d.name, platform: d.platform }))} roles={machineRoles} desktopSurface={desktopSurface} />
               {/* Mesh lives here now — set-up-once plumbing, not a nav tab. */}
               <button
                 type="button"
@@ -4341,6 +4484,7 @@ export default function DashboardPage() {
                 hiddenCount={hiddenIds.size}
                 onNavigateCloud={() => setActiveTab("settings")}
                 machineRoles={machineRoles}
+                desktopSurface={desktopSurface}
               />
             </div>
           ) : (
@@ -4378,6 +4522,26 @@ export default function DashboardPage() {
                             className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-400/15"
                           >
                             Complete
+                          </button>
+                        ) : null}
+                        {activeTask.status === "running" || activeTask.status === "queued" ? (
+                          <button
+                            type="button"
+                            disabled={taskActionBusy === `stop:${activeTask.id}`}
+                            onClick={() => void stopTaskFromUI(activeTask)}
+                            className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-700 hover:bg-amber-400/15 disabled:opacity-40 dark:text-amber-300"
+                          >
+                            {taskActionBusy === `stop:${activeTask.id}` ? "Stopping…" : "Stop"}
+                          </button>
+                        ) : null}
+                        {!["running", "queued"].includes(activeTask.status) && !activeTask.id.startsWith("pending-cloud:") ? (
+                          <button
+                            type="button"
+                            disabled={taskActionBusy === `delete:${activeTask.id}`}
+                            onClick={() => void deleteTaskFromUI(activeTask)}
+                            className="rounded-lg border border-red-400/25 px-2 py-1 text-[10px] font-semibold text-red-700 hover:bg-red-500/10 disabled:opacity-40 dark:text-red-300"
+                          >
+                            {taskActionBusy === `delete:${activeTask.id}` ? "Deleting…" : "Delete"}
                           </button>
                         ) : null}
                         {activeTask.costUsd != null && <span className="text-[10px] text-surface-600">${activeTask.costUsd.toFixed(3)}</span>}

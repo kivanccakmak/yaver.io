@@ -3,10 +3,17 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
-const { AgentManager, resolveAgentBinary, probeAgentHealth, agentEnv, AGENT_PORT } = require("../src/agent-manager");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { AgentManager, resolveAgentBinary, probeAgentHealth, healthNeedsPairing, agentEnv, AGENT_PORT, HEALTH_WAIT_MS } = require("../src/agent-manager");
 
 test("AGENT_PORT is 18080 (matches the agent's default)", () => {
   assert.equal(AGENT_PORT, 18080);
+});
+
+test("cold desktop startup does not false-fail at the old 15 second boundary", () => {
+  assert.ok(HEALTH_WAIT_MS >= 30_000);
 });
 
 // The desktop GUI must NEVER trigger a macOS keychain prompt. The agent is
@@ -49,6 +56,27 @@ test("probeAgentHealth resolves ok=true on a healthy /health endpoint", async ()
   try {
     const h = await probeAgentHealth(port, 1000);
     assert.equal(h.ok, true);
+    assert.equal(h.data.lifecycle.state, "ready-to-connect");
+  } finally {
+    await new Promise((res) => srv.close(res));
+  }
+});
+
+test("bootstrap health is named as pairing, never a ready false-green", async () => {
+  const srv = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, mode: "bootstrap", needsAuth: true }));
+  });
+  await new Promise((res) => srv.listen(0, "127.0.0.1", res));
+  const port = srv.address().port;
+  const statuses = [];
+  const mgr = new AgentManager({ port, onStatus: (s) => statuses.push(s) });
+  try {
+    const health = await probeAgentHealth(port, 1000);
+    assert.equal(healthNeedsPairing(health), true);
+    assert.equal(await mgr.start(), "pairing");
+    assert.equal(statuses.at(-1).state, "pairing");
+    assert.match(statuses.at(-1).detail, /waiting to be paired/);
   } finally {
     await new Promise((res) => srv.close(res));
   }
@@ -75,7 +103,9 @@ test("resolveAgentBinary returns null when nothing is available", () => {
   const oldPath = process.env.PATH;
   const oldHome = process.env.HOME;
   const oldResources = process.resourcesPath;
+  const oldExplicit = process.env.YAVER_AGENT_BINARY;
   try {
+    delete process.env.YAVER_AGENT_BINARY;
     delete process.env.PATH;
     process.env.HOME = "/nonexistent-yaver-test-home-xyz";
     delete process.resourcesPath;
@@ -85,6 +115,24 @@ test("resolveAgentBinary returns null when nothing is available", () => {
     process.env.HOME = oldHome;
     if (oldResources === undefined) delete process.resourcesPath;
     else process.resourcesPath = oldResources;
+    if (oldExplicit === undefined) delete process.env.YAVER_AGENT_BINARY;
+    else process.env.YAVER_AGENT_BINARY = oldExplicit;
+  }
+});
+
+test("YAVER_AGENT_BINARY selects the exact executable under test", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yaver-electron-agent-"));
+  const bin = path.join(dir, process.platform === "win32" ? "yaver.exe" : "yaver");
+  fs.writeFileSync(bin, "test", { mode: 0o700 });
+  const old = process.env.YAVER_AGENT_BINARY;
+  try {
+    process.env.YAVER_AGENT_BINARY = bin;
+    assert.equal(resolveAgentBinary(), bin);
+    process.env.YAVER_AGENT_BINARY = path.join(dir, "missing");
+    assert.notEqual(resolveAgentBinary(), process.env.YAVER_AGENT_BINARY);
+  } finally {
+    if (old === undefined) delete process.env.YAVER_AGENT_BINARY;
+    else process.env.YAVER_AGENT_BINARY = old;
   }
 });
 

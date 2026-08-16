@@ -27,6 +27,7 @@
  *      GUI cannot supervise.
  *
  * Binary resolution order (matches the CLI's agent-runtime.js):
+ *   0. Explicit dev/test binary → YAVER_AGENT_BINARY (absolute + executable)
  *   1. Bundled with the app  → <resources>/bin/yaver (electron-builder
  *      extraResources; the release workflow drops the platform binary here)
  *   2. CLI cache             → ~/.yaver/bin/current/<platform>/yaver
@@ -49,9 +50,13 @@ const path = require("node:path");
 
 const AGENT_PORT = 18080;
 const HEALTH_TIMEOUT_MS = 1500;
-// The agent logs its first unconditional line and binds :18080 within a few
-// seconds; give the health-wait room on cold starts (macOS Gatekeeper etc).
-const HEALTH_WAIT_MS = 15000;
+// Startup includes credential validation, device registration, runner
+// discovery, and (on first launch) macOS Gatekeeper verification before the
+// HTTP listener binds. Real desktop automation measured that this can cross
+// 15 seconds on an otherwise healthy machine. Calling that state "crashed"
+// is a false red and leaves the still-running child permanently labelled
+// unavailable, so keep the bounded wait generous enough for a cold start.
+const HEALTH_WAIT_MS = 45000;
 
 /**
  * Env for the spawned agent. YAVER_VAULT_SKIP_KEYCHAIN=1 disables the macOS
@@ -75,7 +80,11 @@ function binaryName() {
   return process.platform === "win32" ? "yaver.exe" : "yaver";
 }
 
-/** Probe the anonymous /health endpoint. Resolves {ok:boolean, body}. */
+/** Probe the anonymous /health endpoint. Resolves {ok, body, data}.
+ *
+ * Bootstrap is HTTP-healthy but not ready for tasks. Keeping the parsed body
+ * prevents the GUI from turning that state into a false-green "running".
+ */
 function probeAgentHealth(port = AGENT_PORT, timeoutMs = HEALTH_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const req = http.get(`http://127.0.0.1:${port}/health`, { timeout: timeoutMs }, (res) => {
@@ -83,20 +92,27 @@ function probeAgentHealth(port = AGENT_PORT, timeoutMs = HEALTH_TIMEOUT_MS) {
       res.on("data", (c) => { body += c; });
       res.on("end", () => {
         let ok = false;
+        let data = null;
         try {
-          ok = res.statusCode === 200 && JSON.parse(body).ok === true;
+          data = JSON.parse(body);
+          ok = res.statusCode === 200 && data.ok === true;
         } catch {
           ok = res.statusCode === 200;
         }
-        resolve({ ok, body });
+        resolve({ ok, body, data });
       });
     });
-    req.on("error", () => resolve({ ok: false, body: "" }));
+    req.on("error", () => resolve({ ok: false, body: "", data: null }));
     req.on("timeout", () => {
       req.destroy();
-      resolve({ ok: false, body: "" });
+      resolve({ ok: false, body: "", data: null });
     });
   });
+}
+
+function healthNeedsPairing(health) {
+  const data = health && health.data;
+  return Boolean(data && (data.mode === "bootstrap" || data.needsAuth === true));
 }
 
 /**
@@ -104,6 +120,26 @@ function probeAgentHealth(port = AGENT_PORT, timeoutMs = HEALTH_TIMEOUT_MS) {
  * Resolution: bundled → CLI cache → PATH.
  */
 function resolveAgentBinary() {
+  // 0. Exact development/automation binary. This lets the real Electron
+  // shell exercise the Go source in the same checkout instead of silently
+  // falling back to an older release cache. A typo is not accepted: the path
+  // must be absolute and name an executable file.
+  const explicit = (() => {
+    try {
+      const candidate = typeof process.env.YAVER_AGENT_BINARY === "string"
+        ? process.env.YAVER_AGENT_BINARY.trim()
+        : "";
+      if (!candidate || !path.isAbsolute(candidate)) return null;
+      const stat = fs.statSync(candidate);
+      if (!stat.isFile()) return null;
+      if (process.platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      return null;
+    }
+  })();
+  if (explicit) return explicit;
+
   // 1. Bundled with the packaged app (electron-builder extraResources).
   const bundled = (() => {
     try {
@@ -152,7 +188,8 @@ function resolveAgentBinary() {
 
 /**
  * AgentManager — adopt-or-spawn supervisor.
- * Events: "status" (state: starting|running|adopted|stopped|missing|crashed).
+ * Events: "status"
+ * (state: starting|pairing|running|adopted|stopped|missing|crashed).
  */
 class AgentManager {
   constructor({ port = AGENT_PORT, onStatus, onLog } = {}) {
@@ -184,8 +221,9 @@ class AgentManager {
     const health = await probeAgentHealth(this.port);
     if (health.ok) {
       this.agentPath = null; // adopted — not ours to kill
-      this.setStatus("adopted");
-      return "adopted";
+      const state = healthNeedsPairing(health) ? "pairing" : "adopted";
+      this.setStatus(state, state === "pairing" ? "agent is running and waiting to be paired with this account" : null);
+      return state;
     }
 
     const bin = resolveAgentBinary();
@@ -234,8 +272,9 @@ class AgentManager {
       if (this.stopping) return "stopped";
       const h = await probeAgentHealth(this.port);
       if (h.ok) {
-        this.setStatus("running");
-        return "running";
+        const state = healthNeedsPairing(h) ? "pairing" : "running";
+        this.setStatus(state, state === "pairing" ? "agent is running and waiting to be paired with this account" : null);
+        return state;
       }
       if (Date.now() > deadline) {
         this.log("[agent] timed out waiting for health on :" + this.port);
@@ -264,4 +303,12 @@ class AgentManager {
   }
 }
 
-module.exports = { AgentManager, resolveAgentBinary, probeAgentHealth, agentEnv, AGENT_PORT };
+module.exports = {
+  AgentManager,
+  resolveAgentBinary,
+  probeAgentHealth,
+  healthNeedsPairing,
+  agentEnv,
+  AGENT_PORT,
+  HEALTH_WAIT_MS,
+};

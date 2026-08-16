@@ -8,6 +8,7 @@ const { modules } = require('./commands/modules');
 const { reset } = require('./commands/reset');
 const { status } = require('./commands/status');
 const { feedback } = require('./commands/feedback');
+const { desktop } = require('./commands/desktop');
 const { deploy, isLocalDeployToken } = require('./commands/deploy');
 const { run, isLocalRunToken } = require('./commands/run');
 const { maybePromptUpdate } = require('./update-check');
@@ -50,6 +51,12 @@ Coding runner commands (wrapped, with the yaver MCP attached):
   yaver wrap claude                 Launch Claude Code here (yolo + yaver MCP)
   yaver wrap codex                  Launch OpenAI Codex here (yolo + yaver MCP)
   yaver wrap opencode               Launch opencode here (yolo + yaver MCP)
+
+Optional desktop GUI (same account, agent, tasks, and remote-node state):
+  yaver desktop                     Open the installed native GUI
+  yaver desktop install             Download, verify, and install it per-user
+  yaver desktop update              Update from the latest verified GUI release
+  yaver desktop status              Show whether and where the GUI is installed
 
 Push-to-device commands:
   yaver push                        Bundle + validate + push current RN/Expo project
@@ -214,6 +221,11 @@ async function runUnified(args) {
     // the Go binary can still wire up the SDK. Other subcommands (list, show,
     // fix, delete) fall through to the Go agent inside feedback() itself.
     await feedback(args.slice(1));
+    return;
+  }
+
+  if (command === 'desktop' || command === 'gui') {
+    await desktop(args.slice(1));
     return;
   }
 

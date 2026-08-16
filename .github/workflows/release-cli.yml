@@ -49,6 +49,10 @@ jobs:
           echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $TAG_VERSION"
 
+      - name: Test unified npm CLI commands
+        working-directory: cli
+        run: npm ci && npm test
+
       # Fail in 10 seconds on a dead token instead of after a 3-minute build.
       # On 2026-07-19 NPM_TOKEN expired and the run burned five build jobs
       # before publish-npm died — and because `release` did not depend on
@@ -235,7 +239,7 @@ jobs:
             runner: ubuntu-latest
           - goos: windows
             goarch: amd64
-            runner: ubuntu-latest
+            runner: windows-latest
     runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -246,6 +250,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Build binary
+        shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -258,6 +263,39 @@ jobs:
           fi
           go build -ldflags="-s -w -X main.version=${VERSION}" -o "$BINARY_NAME" .
           echo "Built: $BINARY_NAME"
+
+      - name: Sign and verify Windows agent
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        working-directory: desktop/agent
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK) -or [string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) {
+            throw "WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD are required. Refusing to publish an unsigned Windows agent."
+          }
+          $encoded = $env:WIN_CSC_LINK -replace '^data:[^;]+;base64,', ''
+          $pfx = Join-Path $env:RUNNER_TEMP "yaver-windows-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($encoded))
+          try {
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+            if (-not $signtool) { throw "signtool.exe was not found on the Windows runner" }
+            $binary = "yaver-windows-${{ matrix.goarch }}.exe"
+            & $signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $pfx /p $env:WIN_CSC_KEY_PASSWORD $binary
+            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed with exit code $LASTEXITCODE" }
+            & $signtool verify /pa /all $binary
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify failed with exit code $LASTEXITCODE" }
+            $signature = Get-AuthenticodeSignature $binary
+            if ($signature.Status -ne 'Valid') { throw "Authenticode status is $($signature.Status): $($signature.StatusMessage)" }
+            if ($signature.SignerCertificate.Subject -notmatch '(?i)simkab') {
+              throw "Unexpected Windows publisher: $($signature.SignerCertificate.Subject). Expected the Simkab signing identity."
+            }
+          } finally {
+            Remove-Item -Force -ErrorAction SilentlyContinue $pfx
+          }
 
       # Sign + notarize macOS binaries so Gatekeeper doesn't kill them
       # on first run. Without this, every fresh release ships unsigned
@@ -338,9 +376,9 @@ jobs:
 
       - name: Package zip (Windows / WSL2 fallback)
         if: matrix.goos == 'windows'
-        run: |
-          cd desktop/agent
-          zip "yaver-windows-${{ matrix.goarch }}.zip" "yaver-windows-${{ matrix.goarch }}.exe"
+        shell: pwsh
+        working-directory: desktop/agent
+        run: Compress-Archive -Force "yaver-windows-${{ matrix.goarch }}.exe" "yaver-windows-${{ matrix.goarch }}.zip"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
