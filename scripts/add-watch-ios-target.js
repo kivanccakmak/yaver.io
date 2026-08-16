@@ -42,13 +42,14 @@ const SOURCE_RELATIVE_TO_GROUP = [
   "Views/SignInView.swift",
   "Views/SettingsView.swift",
   "Views/WakeProgressView.swift",
-  // SettingsView links to GuestAccessView. The standalone watch/ project is
-  // XcodeGen and globs the directory, so a new view is picked up there for
-  // free — this list is hand-maintained and silently wasn't, which failed the
-  // embedded build with "cannot find 'GuestAccessView' in scope".
-  "Views/GuestAccessView.swift",
 ];
 const SOURCES = SOURCE_RELATIVE_TO_GROUP.map((f) => `../../watch/YaverWatch/${f}`);
+// v1 deliberately has no guest/invitation client UI. Old generated projects
+// can still carry these file/build references after the source was removed;
+// prune them on every repair so TestFlight cannot be blocked by stale inputs.
+const RETIRED_SOURCES = new Set([
+  "../../watch/YaverWatch/Views/GuestAccessView.swift",
+]);
 // Version keys must NOT be rewritten on the repair path. The committed
 // pbxproj pins the REAL version (1.18.167, bumped by sync-versions.sh); this
 // script only scaffolds new targets. Before 2026-08-12 both settings were
@@ -228,6 +229,8 @@ function repairTarget(targetUuid) {
     applySettings(bs, true);
   }
 
+  removeRetiredSources(targetUuid);
+
   // The target already existed, so the addBuildPhase(SOURCES,…) at first-create
   // never ran for any file added to SOURCE_RELATIVE_TO_GROUP later. Add any
   // source that isn't already referenced, so new watch files (e.g.
@@ -244,6 +247,40 @@ function repairTarget(targetUuid) {
   // catalog lives at watch/YaverWatch/Assets.xcassets; add it to this target's
   // Resources build phase. addResourceFile is idempotent (hasFile guard).
   ensureResourceCatalog(targetUuid);
+}
+
+function removeRetiredSources(targetUuid) {
+  const objs = proj.hash.project.objects;
+  const target = proj.pbxNativeTargetSection()[targetUuid];
+  if (!target) return;
+  const fileRefs = proj.pbxFileReferenceSection();
+  const buildFiles = proj.pbxBuildFileSection();
+  const sourcePhases = objs.PBXSourcesBuildPhase || {};
+  const groups = objs.PBXGroup || {};
+
+  for (const phaseRef of target.buildPhases || []) {
+    const phase = sourcePhases[phaseRef.value];
+    if (!phase || phase.isa !== "PBXSourcesBuildPhase") continue;
+    phase.files = (phase.files || []).filter((entry) => {
+      const buildFile = buildFiles[entry.value];
+      const fileRefUuid = buildFile?.fileRef;
+      const fileRef = fileRefUuid ? fileRefs[fileRefUuid] : null;
+      const sourcePath = stripQuotes(fileRef?.path);
+      if (!RETIRED_SOURCES.has(sourcePath)) return true;
+
+      delete buildFiles[entry.value];
+      delete buildFiles[`${entry.value}_comment`];
+      if (fileRefUuid) {
+        delete fileRefs[fileRefUuid];
+        delete fileRefs[`${fileRefUuid}_comment`];
+        for (const [groupKey, group] of Object.entries(groups)) {
+          if (groupKey.endsWith("_comment") || !group || typeof group !== "object") continue;
+          group.children = (group.children || []).filter((child) => child.value !== fileRefUuid);
+        }
+      }
+      return false;
+    });
+  }
 }
 
 // Ensure every entry in SOURCES is a compiled source of this target. Runs on

@@ -2240,6 +2240,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // Returns the number of relays ultimately loaded into the QUIC client — 0 means "no relays
   // from any source", which the startup retry loop uses as the trigger to back off and retry.
   const fetchRelayServers = useCallback(async (): Promise<number> => {
+    // Relay credentials are USER-scoped. DeviceProvider mounts while auth is
+    // still restoring, so an eager call here used to fetch public /config with
+    // token=null, skip /settings, and publish the password-gated free relay
+    // bare. The auto-connect sweep then sent a guaranteed 401 before the real
+    // account password arrived. Besides painting a false connection failure,
+    // that bad set could be cached and poison later retries. Wait until both
+    // halves of the authenticated scope exist; direct/LAN discovery does not
+    // depend on this loader.
+    if (!token || !uid) return 0;
     try {
       const localRelays = parseStoredRelays(await AsyncStorage.getItem(RELAYS_KEY));
 
@@ -2371,7 +2380,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       sendTelemetry(token, "relays-failed", "Could not fetch relay config");
       return 0;
     }
-  }, [RELAY_CACHE_KEY, RELAYS_KEY, SYNC_KEY, token]);
+  }, [RELAY_CACHE_KEY, RELAYS_KEY, SYNC_KEY, token, uid]);
 
   fetchRelayServersRef.current = fetchRelayServers;
 
@@ -2517,10 +2526,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // with exponential backoff so the app recovers as soon as the network
   // is usable. Never blocks `setRelaysReady(true)` — the app can still
   // run on LAN-only connections while relays are being fetched.
-  const relaysFetched = useRef(false);
   useEffect(() => {
-    if (relaysFetched.current) return;
-    relaysFetched.current = true;
+    // Auth restoration and DeviceProvider mount race on every cold start. Do
+    // not start (or mark ready) until fetchRelayServers can read the user's
+    // password-bearing /settings row. A token rotation intentionally restarts
+    // this bounded loader with the fresh bearer.
+    if (!token || !uid) {
+      setRelaysReady(false);
+      return;
+    }
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -2547,17 +2561,18 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [fetchRelayServers]);
+  }, [fetchRelayServers, token, uid]);
 
   // Re-fetch relay config when connection is lost and relay list is empty.
   // This handles the case where relays weren't available at startup (e.g. settings
   // not yet seeded) but are now available after the backend created them on login.
   useEffect(() => {
+    if (!token || !uid) return;
     if (connectionStatus !== "error" && connectionStatus !== "disconnected") return;
     if (quicClient.relayServerCount > 0) return;
     console.log("[DeviceContext] Connection lost with no relays — re-fetching relay config");
     fetchRelayServers();
-  }, [connectionStatus, fetchRelayServers]);
+  }, [connectionStatus, fetchRelayServers, token, uid]);
 
   // Load all user settings once on startup (single API call instead of 3+ separate ones)
   const settingsLoaded = useRef(false);

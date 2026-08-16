@@ -497,6 +497,10 @@ export default function VibeCodingView({
   const [projects, setProjects] = useState<Project[]>([]);
   const [runners, setRunners] = useState<Runner[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState("");
+  // Blank is a real per-session choice, not an invitation to select the first
+  // discovered repository. Track it separately so an inventory refresh does
+  // not undo "No project (optional)" behind the user's back.
+  const projectChoiceRef = useRef<{ deviceId: string; explicit: boolean }>({ deviceId: "", explicit: false });
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
   // Yaver's own MCP doorway — user-selectable, defaults ON (the agent
@@ -689,6 +693,13 @@ export default function VibeCodingView({
     () => taskList.find((task) => task.id === activeTaskId) || taskList[0] || null,
     [taskList, activeTaskId],
   );
+
+  useEffect(() => {
+    const deviceId = connectedDevice?.id || "";
+    if (projectChoiceRef.current.deviceId === deviceId) return;
+    projectChoiceRef.current = { deviceId, explicit: false };
+    setSelectedProjectPath("");
+  }, [connectedDevice?.id]);
 
   useEffect(() => {
     const pending = listPendingCloudDispatches();
@@ -987,7 +998,8 @@ export default function VibeCodingView({
             : null,
         );
 
-        if (!selectedProjectPath && projectRows.length > 0) {
+        const projectChoice = projectChoiceRef.current;
+        if (!selectedProjectPath && !projectChoice.explicit && projectRows.length > 0) {
           const wanted = deepLinkRef.current;
           const tail = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
           // Keep-last-project, Convex-first (2026-08-09): the canonical memory
@@ -1013,7 +1025,9 @@ export default function VibeCodingView({
             : lastPath
               ? projectRows.find((row) => row.path === lastPath) || projectRows.find((row) => tail(row.path) === tail(lastPath))
             : null;
-          setSelectedProjectPath((match || projectRows[0]).path);
+          // Explicit deep link or the remembered cross-surface project wins.
+          // With neither, remain project-less: discovery order is not intent.
+          if (match) setSelectedProjectPath(match.path);
           if (wanted && match && wanted.preview === "web") {
             // Start the web preview the Projects wizard promised — the same
             // request shape as startPreview()/the projects tab, monorepo-aware
@@ -1447,8 +1461,8 @@ export default function VibeCodingView({
   }
 
   async function startChatTask() {
-    if (!selectedProject || !composer.trim()) {
-      setBusy("Pick a project and enter a prompt.");
+    if (!composer.trim()) {
+      setBusy("Enter a prompt.");
       return;
     }
     const modelVeto = opencodeModelVeto();
@@ -1476,7 +1490,7 @@ export default function VibeCodingView({
     // work end to end?") runs a multi-agent graph (investigate → answer →
     // verify) instead of a single agent. Narrow questions stay single-agent
     // ask mode (askMode below); build instructions stay normal tasks.
-    if (detectAskIntent(goalPrompt) && detectAskBreadth(goalPrompt)) {
+    if (selectedProject && detectAskIntent(goalPrompt) && detectAskBreadth(goalPrompt)) {
       setBusy("Deep ask — investigate → answer → verify…");
       const res = await agentClient.createAgentGraph({
         name: "ask",
@@ -1504,7 +1518,7 @@ export default function VibeCodingView({
     setBusy("Starting coding task…");
     // Leaving any prior deep-ask graph view when starting a normal task.
     setActiveGraphRunId(null);
-    const title = draftTitle.trim() || summarizeTitle(goalPrompt, selectedProject.name);
+    const title = draftTitle.trim() || summarizeTitle(goalPrompt, selectedProject?.name);
     let placementPreview: TaskPlacementDecision | null = null;
     const placementKind = inferTaskPlacementKind(goalPrompt);
     const profileHints = await rememberProjectProfile(placementKind);
@@ -1560,9 +1574,9 @@ export default function VibeCodingView({
           runner: selectedRunner || undefined,
           model: selectedModel || undefined,
           mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
-          projectName: selectedProject.name,
-          workDir: selectedProject.path,
-          projectDir: selectedProject.path,
+          projectName: selectedProject?.name || undefined,
+          workDir: selectedProject?.path || undefined,
+          projectDir: selectedProject?.path || undefined,
           mcpServers: selectedMcpServers,
           includeYaverMcp,
           videoEnabled: videoSummaryEnabled,
@@ -1634,9 +1648,9 @@ export default function VibeCodingView({
       runner: selectedRunner || undefined,
       model: selectedModel || undefined,
       mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
-      projectName: selectedProject.name,
-      workDir: selectedProject.path,
-      projectDir: selectedProject.path,
+      projectName: selectedProject?.name || undefined,
+      workDir: selectedProject?.path || undefined,
+      projectDir: selectedProject?.path || undefined,
       mcpServers: selectedMcpServers,
       includeYaverMcp,
       videoEnabled: videoSummaryEnabled,
@@ -1650,7 +1664,7 @@ export default function VibeCodingView({
     let task: Task;
     try {
       task = await agentClient.createTask(taskParams);
-      if (keepLastProject) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, selectedProject);
+      if (keepLastProject && selectedProject) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, selectedProject);
     } catch (err) {
       const gap = capabilityGapFromError(err);
       if (gap) {
@@ -2503,10 +2517,26 @@ export default function VibeCodingView({
               onToggle={toggleSectionOpen}
             >
               <div className="flex min-h-0 flex-col gap-2 overflow-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    projectChoiceRef.current = { deviceId: connectedDevice?.id || "", explicit: true };
+                    setSelectedProjectPath("");
+                  }}
+                  className={`rounded-2xl border p-3 text-left ${
+                    !selectedProjectPath
+                      ? "border-indigo-500/40 bg-indigo-500/10"
+                      : "border-surface-800 bg-surface-950/70 hover:border-surface-700"
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-surface-100">No project (optional)</div>
+                  <div className="mt-1 text-[11px] text-surface-500">Send with this machine's default runner and no project context.</div>
+                </button>
                 {projects.map((project) => (
                   <button
                     key={project.path}
                     onClick={() => {
+                      projectChoiceRef.current = { deviceId: connectedDevice?.id || "", explicit: true };
                       setSelectedProjectPath(project.path);
                       if (keepLastProject) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, project);
                     }}
@@ -3606,7 +3636,10 @@ export default function VibeCodingView({
               </label>
               <div className="mt-3 flex items-center justify-between gap-3">
                 <div className="text-xs text-surface-500">
-                  Task is scoped to {selectedProject?.name || "the selected project"} and runs on {connectedMachine?.name || connectedDevice?.name || "the connected machine"}.
+                  {selectedProject
+                    ? `Task is scoped to ${selectedProject.name}`
+                    : "No project context; using the runner's default workspace"}{" "}
+                  on {connectedMachine?.name || connectedDevice?.name || "the connected machine"}.
                 </div>
                 <div className="flex gap-2">
                   <button
@@ -3625,7 +3658,7 @@ export default function VibeCodingView({
                   </button>
                   <button
                     onClick={() => void startChatTask().catch((err) => setBusy(sendFailureLabel(err)))}
-                    disabled={!selectedProject || !composer.trim() || selectedRunnerRow?.ready === false}
+                    disabled={!composer.trim() || selectedRunnerRow?.ready === false}
                     className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-40"
                   >
                     Start Task
@@ -3667,9 +3700,10 @@ function hashProjectPath(input: string): string {
   return (hash >>> 0).toString(36);
 }
 
-function summarizeTitle(prompt: string, projectName: string): string {
+function summarizeTitle(prompt: string, projectName?: string): string {
   const clean = prompt.replace(/\s+/g, " ").trim();
   const base = clean.slice(0, 64);
+  if (!projectName) return base || "New task";
   return base ? `${projectName} — ${base}` : `${projectName} task`;
 }
 
@@ -3680,13 +3714,16 @@ function buildVibeTaskPrompt({
   deployTargets,
   machine,
 }: {
-  project: Project;
+  project: Project | null;
   prompt: string;
   gitStatus: GitStatusRow | null;
   deployTargets: Array<{ id: string; name: string }>;
   machine: MachineInfo | null;
 }): string {
   if (isRawRunnerCommand(prompt)) return prompt.trimStart();
+  // Mobile sends a direct prompt when no project is selected. Preserve that
+  // mechanic here instead of inventing a workspace or injecting a fake path.
+  if (!project) return prompt;
   const machineLines = describeMachineForPrompt(machine);
   const lines = [
     `You are working for a solo developer in project ${project.name}.`,

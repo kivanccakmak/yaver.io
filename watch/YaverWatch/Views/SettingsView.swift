@@ -23,9 +23,7 @@ struct SettingsView: View {
 
     var body: some View {
         // Its OWN NavigationStack: RootView presents this view with
-        // `.sheet(isPresented:)`, and a sheet starts a fresh view hierarchy that
-        // does NOT inherit RootView's stack. Without this, the "Shared access"
-        // NavigationLink below would render and simply do nothing when tapped.
+        // `.sheet(isPresented:)`, and a sheet starts a fresh view hierarchy.
         NavigationStack {
             settings
         }

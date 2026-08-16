@@ -834,7 +834,7 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 
 		// Create reverse proxy to the dev server
 		target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", ds.Port()))
-		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy := newDevServerReverseProxy(target)
 		// Rewrite the served HTML's <base href> so root-absolute asset paths
 		// resolve THROUGH this /dev/ proxy.
 		//
@@ -2291,7 +2291,7 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 					"Stop that process (lsof -nP -iTCP:%d) or start the preview again to get a free port.\n%s",
 					name, b.port, b.port, tail)
 			}
-			resp, err := http.Get(readyURL)
+            resp, err := devReadinessHTTPClient.Get(readyURL)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {
@@ -3388,7 +3388,7 @@ func (f *FlutterDevServer) startProcessWithStdin(ctx context.Context, name strin
 					"Stop that process (lsof -nP -iTCP:%d) or start the preview again to get a free port.\n%s",
 					name, f.port, f.port, tail)
 			}
-			resp, err := http.Get(readyURL)
+            resp, err := devReadinessHTTPClient.Get(readyURL)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {

@@ -1,0 +1,31 @@
+diff --git a/node_modules/@sentry/react-native/ios/RNSentry+fetchNativeStack.m b/node_modules/@sentry/react-native/ios/RNSentry+fetchNativeStack.m
+index a3e425b..4004010 100644
+--- a/node_modules/@sentry/react-native/ios/RNSentry+fetchNativeStack.m
++++ b/node_modules/@sentry/react-native/ios/RNSentry+fetchNativeStack.m
+@@ -12,7 +12,7 @@ @implementation RNSentry (fetchNativeStack)
+ - (NSDictionary *)fetchNativeStackFramesBy:(NSArray<NSNumber *> *)instructionsAddr
+                                symbolicate:(SymbolicateCallbackType)symbolicate
+ {
+-    BOOL shouldSymbolicateLocally = [SentrySDKInternal.options debug];
++    BOOL shouldSymbolicateLocally = [PrivateSentrySDKOnly.options debug];
+ 
+     NSString *appPackageName = [[NSBundle mainBundle] executablePath];
+ 
+diff --git a/node_modules/@sentry/react-native/ios/RNSentry.h b/node_modules/@sentry/react-native/ios/RNSentry.h
+index 73e2767..c9cc7d9 100644
+--- a/node_modules/@sentry/react-native/ios/RNSentry.h
++++ b/node_modules/@sentry/react-native/ios/RNSentry.h
+@@ -14,13 +14,8 @@
+ 
+ typedef int (*SymbolicateCallbackType)(const void *, Dl_info *);
+ 
+-@class SentryOptions;
+ @class SentryEvent;
+ 
+-@interface SentrySDKInternal : NSObject
+-@property (nonatomic, nullable, readonly, class) SentryOptions *options;
+-@end
+-
+ @interface RNSentry : RCTEventEmitter <RCTBridgeModule>
+ 
+ - (NSMutableDictionary *)prepareOptions:(NSDictionary *)options;

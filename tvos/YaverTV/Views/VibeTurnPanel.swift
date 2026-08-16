@@ -53,6 +53,7 @@ struct VibeTurnPanel: View {
     @State private var showProjectPicker = false
     @State private var availableProjects: [ProjectSummary] = []
     @State private var pickedProjectPath: String?
+    @State private var projectSelectionLoaded = false
     @State private var availableMCPServers: [String] = []
     @State private var pickedMCPServers: Set<String> = []
     @State private var yaverMcpOn = true
@@ -148,18 +149,35 @@ struct VibeTurnPanel: View {
         // repo the AI edits (same list ProjectsView shows).
         if let list = try? await client.listProjects() {
             availableProjects = list
+            if pickedProjectPath == nil, project == nil {
+                pickedProjectPath = store.lastProject(for: boxId, projects: list)?.path
+            }
         }
         if let servers = try? await client.listMCPServers() {
             availableMCPServers = servers.map(\.name)
+            pickedMCPServers = pickedMCPServers.intersection(Set(availableMCPServers))
         }
+        projectSelectionLoaded = true
     }
 
     /// "Project: <name> ▾" — opens a dpad-friendly list of the runner box's
     /// repos. Picking one remembers it to Convex (store.rememberProject).
     private var projectChip: some View {
         Menu {
+            Button {
+                projectSelectionLoaded = true
+                pickedProjectPath = nil
+            } label: {
+                if projectSelectionLoaded && pickedProjectPath == nil {
+                    Label("No project (optional)", systemImage: "checkmark")
+                } else {
+                    Text("No project (optional)")
+                }
+            }
+            if !availableProjects.isEmpty { Divider() }
             ForEach(availableProjects) { p in
                 Button {
+                    projectSelectionLoaded = true
                     pickedProjectPath = p.path
                     if let boxId = runnerBoxId {
                         store.rememberProject(p, for: boxId)
@@ -181,7 +199,6 @@ struct VibeTurnPanel: View {
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(.ultraThinMaterial, in: Capsule())
         }
-        .disabled(availableProjects.isEmpty)
     }
 
     private var currentProjectLabel: String {
@@ -190,7 +207,8 @@ struct VibeTurnPanel: View {
                 ?? path.split(separator: "/").last.map(String.init)
                 ?? path
         }
-        return project?.name ?? "Project ▾"
+        if !projectSelectionLoaded, let project { return project.name }
+        return "No project · optional ▾"
     }
 
     /// "yaver · 2 MCP ▾" — toggles the yaver doorway (default ON) and the

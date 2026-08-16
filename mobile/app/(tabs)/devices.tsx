@@ -1204,7 +1204,6 @@ export default function DevicesScreen() {
           </View>
         )}
 
-
         {/* Zero-touch: claim a Yaver-powered device by scanning its label QR
             (DPP-style). Opens the camera scanner; the box self-credentials
             on its next boot. See app/provision-add.tsx. */}

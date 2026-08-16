@@ -34,6 +34,7 @@ import SwiftUI
 
 struct SessionView: View {
     @EnvironmentObject var store: YaverStore
+    @Environment(\.dismiss) private var dismiss
 
     @State private var prompt = ""
     @State private var pane = ""
@@ -133,14 +134,18 @@ struct SessionView: View {
                 .font(.system(size: 24, design: .monospaced))
                 .padding(.horizontal, 20).padding(.vertical, 12)
                 .background(.gray.opacity(0.18), in: RoundedRectangle(cornerRadius: 10))
-            Button {
-                Task { await loadSessions() }
-            } label: {
-                Label("Check again", systemImage: "arrow.clockwise")
-                    .font(.system(size: 20, weight: .semibold))
-                    .padding(.horizontal, 26).padding(.vertical, 12)
+            HStack(spacing: 16) {
+                Button {
+                    Task { await loadSessions() }
+                } label: {
+                    Label("Check again", systemImage: "arrow.clockwise")
+                        .font(.system(size: 20, weight: .semibold))
+                        .padding(.horizontal, 26).padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Back") { dismiss() }
+                    .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
             .padding(.top, 6)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

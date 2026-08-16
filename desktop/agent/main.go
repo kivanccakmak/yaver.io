@@ -2470,7 +2470,13 @@ func runServe(args []string) {
 
 	// Primary local agent port should be reused instead of blindly forking
 	// another daemon that collides on the same control-plane sockets.
-	if !*debug && shouldTrackPrimaryAgent(*httpPort) {
+	//
+	// This MUST include --debug. Both generated systemd units run foreground
+	// with --debug; excluding it allowed a legacy system unit and the current
+	// user unit to kill/restart each other forever. The first healthy process
+	// owns :18080. A developer who needs a second foreground agent chooses a
+	// different --port explicitly.
+	if shouldTrackPrimaryAgent(*httpPort) {
 		if health := probeLocalAgentHealthInfo(*httpPort); health != nil {
 			refreshExistingLocalAgent(authTokenForReuse, *httpPort, *workDir)
 			fmt.Printf("Yaver agent already running on :%d", *httpPort)
