@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Yaver Console</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         background: #000000; color: #d1d5db; min-height: 100vh; padding: 16px; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 8px 20px;
+           border-bottom: 1px solid #1f2937; margin-bottom: 16px; }
+  header h1 { font-size: 16px; font-weight: 700; flex: 1; letter-spacing: .02em; }
+  .dot { width: 8px; height: 8px; border-radius: 4px; background: #10b981; }
+  .dot.offline { background: #ef4444; }
+  nav { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 16px;
+        border-bottom: 1px solid #1f2937; }
+  nav button { background: none; border: 0; color: #737373; font-family: inherit; font-size: 11px;
+               font-weight: 600; text-transform: uppercase; padding: 8px 10px; white-space: nowrap;
+               cursor: pointer; border-bottom: 2px solid transparent; }
+  nav button.active { color: #818cf8; border-color: #818cf8; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .card { background: rgba(20, 22, 28, .5); border: 1px solid #1f2937; border-radius: 8px;
+          padding: 12px; }
+  .card h3 { font-size: 10px; text-transform: uppercase; color: #737373; margin-bottom: 4px; }
+  .card .v { font-size: 22px; font-weight: 700; color: #e5e7eb; }
+  .card .s { font-size: 11px; color: #737373; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+         background: rgba(20, 22, 28, .5); border: 1px solid #1f2937; border-radius: 8px; margin-bottom: 4px; }
+  .row .name { flex: 1; font-size: 13px; }
+  .muted { color: #737373; font-size: 11px; }
+  pre { background: rgba(20, 22, 28, .5); border: 1px solid #1f2937; border-radius: 8px;
+        padding: 10px; font-size: 10px; overflow: auto; max-height: 400px; }
+  input, button.act { font-family: inherit; font-size: 13px;
+                      background: rgba(20, 22, 28, .5); border: 1px solid #1f2937;
+                      color: #e5e7eb; padding: 8px 10px; border-radius: 6px; }
+  input { width: 100%; margin-bottom: 8px; }
+  button.act { cursor: pointer; }
+  button.primary { background: #6366f1; border-color: #6366f1; color: white; font-weight: 700; }
+  button.primary:hover { background: #7c7fff; }
+  .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px;
+         text-transform: uppercase; font-weight: 600; background: #1f2937; color: #a1a1aa; }
+  .tag.ok { background: rgba(16, 185, 129, .2); color: #6ee7b7; }
+  .tag.down { background: rgba(239, 68, 68, .2); color: #fca5a5; }
+  .err { color: #fca5a5; font-size: 12px; padding: 8px; background: rgba(239, 68, 68, .1);
+         border: 1px solid rgba(239, 68, 68, .3); border-radius: 6px; margin: 8px 0; }
+  .tip { color: #737373; font-size: 11px; margin: 8px 0; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .terminal-wrap { display: grid; gap: 10px; }
+  .terminal-screen { background: #000000; border: 1px solid #1f2937; border-radius: 8px; padding: 12px;
+    min-height: 320px; max-height: 60vh; overflow: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.45; }
+  .terminal-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .terminal-status { font-size: 11px; color: #737373; }
+  .terminal-input-row { display: flex; gap: 8px; }
+  .terminal-input-row input { margin-bottom: 0; }
+</style>
+</head>
+<body>
+<header>
+  <span id="statusDot" class="dot offline"></span>
+  <h1>Yaver Console</h1>
+  <span id="hostLabel" class="muted">connecting…</span>
+</header>
+
+<nav id="tabs">
+  <button class="active" data-tab="overview">Overview</button>
+  <button data-tab="machines">Machines</button>
+  <button data-tab="containers">Containers</button>
+  <button data-tab="switch">Switch</button>
+  <button data-tab="accounts">Accounts</button>
+  <button data-tab="catalog">Catalog</button>
+  <button data-tab="deploys">Deploys</button>
+  <button data-tab="backups">Backups</button>
+  <button data-tab="domains">Domains</button>
+  <button data-tab="uptime">Uptime</button>
+  <button data-tab="schema">Schema</button>
+  <button data-tab="storage">Storage</button>
+  <button data-tab="logs">Logs</button>
+  <button data-tab="terminal">Terminal</button>
+</nav>
+
+<main id="view"></main>
+
+<script>
+/* Minimal standalone SPA that talks to this agent directly. The agent serves
+ * this file at /app/ — same origin, same auth cookie/token. Falls back to
+ * asking for a token if none present. */
+const TOKEN = new URLSearchParams(location.search).get("token")
+           || localStorage.getItem("yaver_token") || "";
+if (TOKEN) localStorage.setItem("yaver_token", TOKEN);
+
+const root = "";
+const headers = TOKEN ? { "Authorization": "Bearer " + TOKEN } : {};
+
+async function api(path, init) {
+  const res = await fetch(root + path, {
+    ...init,
+    headers: { ...headers, "Content-Type": "application/json", ...(init && init.headers) },
+  });
+  return res.json();
+}
+
+const view = document.getElementById("view");
+const tabs = document.getElementById("tabs");
+const statusDot = document.getElementById("statusDot");
+const hostLabel = document.getElementById("hostLabel");
+let terminalWS = null;
+let terminalSessionId = sessionStorage.getItem("yaver_terminal_session_id") || "";
+let terminalReconnectTimer = null;
+let terminalShouldReconnect = false;
+let terminalOutput = "";
+
+let currentTab = "overview";
+tabs.addEventListener("click", (e) => {
+  const t = e.target.closest("button[data-tab]");
+  if (!t) return;
+  tabs.querySelectorAll("button").forEach(b => b.classList.toggle("active", b === t));
+  currentTab = t.dataset.tab;
+  render();
+});
+
+async function connectCheck() {
+  try {
+    const r = await api("/console/metrics");
+    if (r.hostname) {
+      statusDot.classList.remove("offline");
+      hostLabel.textContent = r.hostname;
+      return true;
+    }
+  } catch {}
+  hostLabel.innerHTML = `<a href="https://yaver.io/dashboard" style="color:#818cf8">open yaver.io/dashboard →</a>`;
+  return false;
+}
+
+async function render() {
+  view.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    switch (currentTab) {
+      case "overview": return renderOverview();
+      case "machines": return renderMachines();
+      case "containers": return renderContainers();
+      case "switch": return renderSwitch();
+      case "accounts": return renderAccounts();
+      case "catalog": return renderCatalog();
+      case "deploys": return renderDeploys();
+      case "backups": return renderBackups();
+      case "domains": return renderDomains();
+      case "uptime": return renderUptime();
+      case "schema": return renderSchema();
+      case "storage": return renderStorage();
+      case "logs": return renderLogs();
+      case "terminal": return renderTerminal();
+    }
+  } catch (e) { view.innerHTML = `<div class="err">${e.message}</div>`; }
+}
+
+function terminalStatusText(text) {
+  const el = document.getElementById("terminalStatus");
+  if (el) el.textContent = text;
+}
+
+function appendTerminalOutput(chunk) {
+  terminalOutput += chunk;
+  if (terminalOutput.length > 256000) terminalOutput = terminalOutput.slice(terminalOutput.length - 256000);
+  const el = document.getElementById("terminalScreen");
+  if (el) {
+    el.textContent = terminalOutput || "(connected, waiting for output)";
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+function closeTerminalWS() {
+  if (terminalWS) {
+    try { terminalWS.close(); } catch {}
+    terminalWS = null;
+  }
+}
+
+function scheduleTerminalReconnect() {
+  if (!terminalShouldReconnect || terminalReconnectTimer || !TOKEN) return;
+  terminalStatusText("Reconnecting…");
+  terminalReconnectTimer = setTimeout(() => {
+    terminalReconnectTimer = null;
+    connectTerminal(true);
+  }, 1200);
+}
+
+function connectTerminal(isReconnect) {
+  if (!TOKEN) {
+    alert("A token is required for the embedded terminal.");
+    return;
+  }
+  if (terminalWS && terminalWS.readyState <= WebSocket.OPEN) return;
+  if (terminalReconnectTimer) {
+    clearTimeout(terminalReconnectTimer);
+    terminalReconnectTimer = null;
+  }
+  terminalShouldReconnect = true;
+  terminalStatusText(isReconnect ? "Reconnecting…" : "Connecting…");
+  const params = new URLSearchParams({ token: TOKEN });
+  if (terminalSessionId) params.set("session_id", terminalSessionId);
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/terminal?" + params.toString());
+  terminalWS = ws;
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    terminalStatusText(terminalSessionId ? "Connected (resumed)" : "Connected");
+  };
+  ws.onmessage = async (event) => {
+    if (typeof event.data === "string") {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "terminal_session" && msg.sessionId) {
+          terminalSessionId = msg.sessionId;
+          sessionStorage.setItem("yaver_terminal_session_id", terminalSessionId);
+          terminalStatusText(msg.resumed ? "Connected (resumed)" : "Connected");
+          const sidEl = document.getElementById("terminalSession");
+          if (sidEl) sidEl.textContent = terminalSessionId.slice(0, 12);
+          return;
+        }
+        if (msg.type === "sudo_prompt") {
+          appendTerminalOutput("\n[sudo] " + (msg.prompt || "Password required") + "\n");
+          return;
+        }
+      } catch {
+        appendTerminalOutput(event.data);
+      }
+      return;
+    }
+    if (event.data instanceof Blob) {
+      appendTerminalOutput(await event.data.text());
+      return;
+    }
+    if (event.data instanceof ArrayBuffer) {
+      appendTerminalOutput(new TextDecoder().decode(event.data));
+    }
+  };
+  ws.onerror = () => terminalStatusText("Connection error");
+  ws.onclose = () => {
+    if (terminalWS === ws) terminalWS = null;
+    if (terminalShouldReconnect) scheduleTerminalReconnect();
+    else terminalStatusText("Disconnected");
+  };
+}
+
+function disconnectTerminal() {
+  terminalShouldReconnect = false;
+  if (terminalReconnectTimer) {
+    clearTimeout(terminalReconnectTimer);
+    terminalReconnectTimer = null;
+  }
+  closeTerminalWS();
+  terminalStatusText("Disconnected");
+}
+
+function sendTerminalInput() {
+  const input = document.getElementById("terminalInput");
+  if (!input || !terminalWS || terminalWS.readyState !== WebSocket.OPEN) return;
+  const value = (input.value || "").trim();
+  if (!value) return;
+  terminalWS.send(value + "\n");
+  input.value = "";
+}
+
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(1) + " " + u[i];
+}
+
+async function renderOverview() {
+  const m = await api("/console/metrics");
+  const c = await api("/console/containers?all=1");
+  const t = await api("/tasks?limit=6");
+  const running = (c.containers || []).filter(x => x.state === "running").length;
+  const recentTasks = ((t.tasks || []).slice(0, 6)).map(task => {
+    const video = task.videoClipUrl && task.videoStatus === "ready"
+      ? `<div style="margin-top:8px">
+           <video controls preload="metadata" poster="${task.videoPosterUrl || ''}" style="width:100%;max-width:420px;border-radius:8px;border:1px solid #1f2937;background:#000000">
+             <source src="${task.videoClipUrl}" type="video/mp4">
+           </video>
+         </div>`
+      : (task.videoClipUrl
+        ? `<div class="muted" style="margin-top:6px">Video: ${task.videoStatus || 'processing'}</div>`
+        : "");
+    return `<div class="row" style="display:block">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="tag ${task.status === 'completed' ? 'ok' : (task.status === 'failed' ? 'down' : '')}">${task.status}</span>
+        <span class="name">${task.title || task.id}</span>
+        <span class="muted">${task.runnerId || ''}</span>
+        <div class="actions" style="margin-left:auto">
+          <button class="act" onclick="showTaskRaw('${task.id}')" title="Raw runner stdout (ANSI + TUI intact)">Raw</button>
+        </div>
+      </div>
+      ${task.resultText ? `<div class="muted" style="margin-top:6px">${task.resultText}</div>` : ""}
+      ${video}
+    </div>`;
+  }).join("");
+  view.innerHTML = `
+    <div class="grid">
+      <div class="card"><h3>CPU</h3><div class="v">${(m.cpuPct || 0).toFixed(1)}%</div><div class="s">${m.cores || 0} cores</div></div>
+      <div class="card"><h3>RAM</h3><div class="v">${(m.ramPct || 0).toFixed(0)}%</div><div class="s">${fmtBytes(m.ramUsed)} / ${fmtBytes(m.ramTotal)}</div></div>
+      <div class="card"><h3>Disk</h3><div class="v">${(m.diskPct || 0).toFixed(0)}%</div><div class="s">${fmtBytes(m.diskUsed)} / ${fmtBytes(m.diskTotal)}</div></div>
+      <div class="card"><h3>Containers</h3><div class="v">${running}</div><div class="s">${(c.containers || []).length} total</div></div>
+    </div>
+    <div style="margin-top:16px">
+      <h3 style="font-size:11px;text-transform:uppercase;color:#737373;margin-bottom:8px">Recent Tasks</h3>
+      ${recentTasks || '<p class="muted">No recent tasks.</p>'}
+    </div>
+    <p class="tip">Standalone in-agent console. Full dashboard with richer UI: <a href="https://yaver.io/dashboard" style="color:#818cf8">yaver.io/dashboard</a></p>
+  `;
+}
+
+// ── Task Raw view ─────────────────────────────────────────────────────
+// Per-task RAW runner stdout (ANSI + TUI intact). The agent retains a
+// tail-capped byte buffer (rawOutputMaxBytes, 512KB) and replays it via
+// `GET /tasks/{id}/output?rawSince=<bytes>`:
+//   - `rawSince=0`        → one `raw_replay` frame (full=true = snapshot)
+//   - live frames         → `raw` frames until the stream closes
+// Rendered into a `.terminal-screen` pre (`white-space: pre-wrap`) — ANSI is
+// NOT re-stripped, the bytes paint as the runner produced them.
+let taskRawController = null;   // AbortController for the current stream
+let taskRawLive = false;        // one-shot tail vs live subscribe
+let taskRawCursor = 0;          // raw byte cursor for `?rawSince=`
+let taskRawBuffer = "";         // accumulated raw bytes (cap 512KB)
+
+function taskRawStop() {
+  if (taskRawController) { try { taskRawController.abort(); } catch {} taskRawController = null; }
+  taskRawLive = false;
+}
+
+function taskRawPaint() {
+  const el = document.getElementById("rawScreen");
+  if (el) { el.textContent = taskRawBuffer || "(no raw output)"; el.scrollTop = el.scrollHeight; }
+}
+
+function taskRawStatus(text) {
+  const el = document.getElementById("rawStatus");
+  if (el) el.textContent = text || "";
+}
+
+async function taskRawSubscribe(id) {
+  taskRawStop();
+  const ac = new AbortController();
+  taskRawController = ac;
+  const url = `${root}/tasks/${id}/output?rawSince=${taskRawCursor}`;
+  taskRawStatus(taskRawLive ? "subscribing (live)…" : "fetching raw tail…");
+  let res;
+  try {
+    res = await fetch(url, { headers, signal: ac.signal });
+  } catch (e) {
+    if (e.name !== "AbortError") { taskRawStatus("request failed: " + e.message); return; }
+    return;
+  }
+  if (!res.ok || !res.body) { taskRawStatus("HTTP " + res.status); return; }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const evt = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        const line = evt.split("\n").find(l => l.startsWith("data: "));
+        if (!line) continue;
+        let frame;
+        try { frame = JSON.parse(line.slice(6)); } catch { continue; }
+        if (frame.type === "raw_replay" || frame.type === "raw") {
+          if (frame.text) {
+            if (frame.type === "raw_replay" && frame.full === true) taskRawBuffer = frame.text;
+            else taskRawBuffer = (taskRawBuffer + frame.text).slice(-512 * 1024);
+          }
+          if (typeof frame.offset === "number") taskRawCursor = frame.offset;
+          taskRawPaint();
+          if (frame.type === "raw_replay" && !taskRawLive) {
+            // One-shot tail: the snapshot IS the whole retained buffer.
+            taskRawStatus("tail shown · " + taskRawCursor + " bytes");
+            try { reader.cancel(); } catch {}
+            return;
+          }
+        }
+      }
+    }
+    taskRawStatus("stream ended");
+  } catch (e) {
+    if (e.name !== "AbortError") taskRawStatus("stream error: " + e.message);
+  }
+}
+
+window.showTaskRaw = async (id) => {
+  let task = null;
+  try {
+    const t = await api("/tasks/" + id);
+    task = t.task || t;
+  } catch {}
+  view.innerHTML = `
+    <button class="act" onclick="taskRawStop(); render()">← Back</button>
+    <div style="margin-top:12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        ${task ? `<span class="tag ${task.status === 'completed' ? 'ok' : (task.status === 'failed' ? 'down' : '')}">${task.status}</span>
+        <span class="name">${task.title || task.id}</span>
+        <span class="muted">${task.runnerId || ''}</span>` : `<span class="muted">${id}</span>`}
+        <button class="act" id="rawToggleBtn" onclick="taskRawToggleLive('${id}')">▶ Live</button>
+        <button class="act" onclick="taskRawCopy('${id}')">Copy</button>
+        <span class="muted" id="rawStatus"></span>
+      </div>
+      <pre class="terminal-screen" id="rawScreen"></pre>
+    </div>`;
+  taskRawCursor = 0;
+  taskRawBuffer = "";
+  taskRawLive = false;
+  await taskRawSubscribe(id);
+};
+
+window.taskRawToggleLive = (id) => {
+  taskRawLive = !taskRawLive;
+  const btn = document.getElementById("rawToggleBtn");
+  if (btn) btn.textContent = taskRawLive ? "⏸ Tail" : "▶ Live";
+  taskRawSubscribe(id);
+};
+
+// Copy the current raw tail as a paste-ready trace (2026-08-09) — same
+// shape the web/mobile surfaces copy, so a console diagnosis pastes into
+// the same issue format.
+window.taskRawCopy = (id) => {
+  const text = taskRawBuffer || "";
+  const header = [
+    "--- Yaver trace ---",
+    "surface: console",
+    "task: " + id,
+    "log-tail:",
+    text,
+  ].join("\n");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(header).then(() => {
+      taskRawStatus("copied " + text.length + " bytes");
+    }).catch(() => taskRawStatus("copy failed"));
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = header;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); taskRawStatus("copied " + text.length + " bytes"); } catch (e) { taskRawStatus("copy failed: " + e.message); }
+    document.body.removeChild(ta);
+  }
+};
+
+async function renderContainers() {
+  const r = await api("/console/containers?all=1");
+  const rows = (r.containers || []).map(c => `
+    <div class="row">
+      <span class="tag ${c.state === 'running' ? 'ok' : 'down'}">${c.state}</span>
+      <span class="name">${c.name}</span>
+      <span class="muted">${c.image}</span>
+      <div class="actions">
+        ${c.state === 'running'
+          ? `<button class="act" onclick="act('${c.id}','restart')">↻</button>
+             <button class="act" onclick="act('${c.id}','stop')">⏹</button>`
+          : `<button class="act" onclick="act('${c.id}','start')">▶</button>`}
+      </div>
+    </div>`).join("");
+  view.innerHTML = rows || '<p class="muted">No containers.</p>';
+}
+window.act = async (id, action) => {
+  await api("/console/containers/action", { method: "POST", body: JSON.stringify({ id, action }) });
+  render();
+};
+
+async function renderDeploys() {
+  const r = await api("/deploy/list");
+  view.innerHTML = `
+    <button class="act primary" onclick="deploy()">🚀 Deploy now</button>
+    <div style="margin-top:12px">
+      ${(r.deploys || []).map(d => `
+        <div class="row">
+          <span class="tag ${d.status === 'success' ? 'ok' : 'down'}">${d.status}</span>
+          <span class="muted">${(d.commit || '').slice(0,8)}</span>
+          <span class="name">${d.message || '(no message)'}</span>
+          <span class="muted">${d.duration || ''}</span>
+          ${d.status === 'success' ? `<button class="act" onclick="rollback('${d.id}')">Rollback</button>` : ''}
+        </div>`).join("")}
+    </div>`;
+}
+window.deploy = async () => { const r = await api("/deploy/run", { method: "POST" }); alert(r.status || r.error); render(); };
+window.rollback = async (id) => { if(!confirm("Rollback?")) return; await api("/deploy/rollback", { method: "POST", body: JSON.stringify({ id }) }); render(); };
+
+async function renderBackups() {
+  const r = await api("/backups/list");
+  view.innerHTML = `
+    <button class="act primary" onclick="snap()">📸 Snapshot now</button>
+    <div style="margin-top:12px">
+      ${(r.backups || []).map(b => `
+        <div class="row">
+          <span class="muted">${b.id}</span>
+          <span class="name">${b.backend}</span>
+          <span class="muted">${fmtBytes(b.size)}</span>
+          <button class="act" onclick="restore('${b.id}')">Restore</button>
+        </div>`).join("")}
+    </div>`;
+}
+window.snap = async () => { const r = await api("/backups/create", { method: "POST" }); alert(r.error || "Snapshot: " + r.path); render(); };
+window.restore = async (id) => { if(!confirm("Restore? Data will be overwritten.")) return; const r = await api("/backups/restore", { method: "POST", body: JSON.stringify({ id }) }); alert(r.error || "Restored"); };
+
+async function renderDomains() {
+  const r = await api("/domains/list");
+  view.innerHTML = `
+    <input id="dm" placeholder="app.example.com">
+    <input id="up" placeholder="localhost:3000">
+    <button class="act primary" onclick="addDomain()">+ Domain</button>
+    <p class="tip">Caddy auto-issues Let's Encrypt certs. Point DNS at this machine's IP.</p>
+    ${(r.domains || []).map(d => `
+      <div class="row">
+        <span class="name">${d.domain} → ${d.upstream}</span>
+        <button class="act" onclick="removeDomain('${d.domain}')">Remove</button>
+      </div>`).join("")}`;
+}
+window.addDomain = async () => {
+  const domain = document.getElementById("dm").value;
+  const upstream = document.getElementById("up").value;
+  const r = await api("/domains/add", { method: "POST", body: JSON.stringify({ domain, upstream }) });
+  if (r.error) alert(r.error); else render();
+};
+window.removeDomain = async (d) => { await api("/domains/remove", { method: "POST", body: JSON.stringify({ domain: d }) }); render(); };
+
+async function renderUptime() {
+  const r = await api("/uptime/list");
+  view.innerHTML = `
+    <input id="uptimeUrl" placeholder="https://myapp.com/health">
+    <button class="act primary" onclick="addMon()">+ Monitor</button>
+    ${(r.monitors || []).map(m => `
+      <div class="row">
+        <span class="tag ${m.status === 'up' ? 'ok' : 'down'}">${m.status || '?'}</span>
+        <span class="name">${m.name || m.url}</span>
+        <span class="muted">${m.lastLatencyMs || 0}ms</span>
+        <button class="act" onclick="rmMon('${m.id}')">×</button>
+      </div>`).join("")}`;
+}
+window.addMon = async () => {
+  const url = document.getElementById("uptimeUrl").value;
+  await api("/uptime/add", { method: "POST", body: JSON.stringify({ url, intervalSeconds: 60, alertOnDown: true }) });
+  render();
+};
+window.rmMon = async (id) => { await api("/uptime/remove", { method: "POST", body: JSON.stringify({ id }) }); render(); };
+
+async function renderLogs() {
+  view.innerHTML = `
+    <input id="q" placeholder="FTS5 query (error OR timeout)">
+    <button class="act primary" onclick="doSearch()">Search</button>
+    <pre id="logOut"></pre>`;
+}
+
+async function renderTerminal() {
+  view.innerHTML = `
+    <div class="terminal-wrap">
+      <div class="terminal-bar">
+        <div class="terminal-status">
+          <span id="terminalStatus">Disconnected</span>
+          <span style="margin-left:8px;color:#52525b">session:</span>
+          <code id="terminalSession">${terminalSessionId ? terminalSessionId.slice(0, 12) : "new"}</code>
+        </div>
+        <div class="actions">
+          <button class="act" onclick="clearTerminal()">Clear</button>
+          <button class="act" onclick="toggleTerminalConnection()">${terminalWS && terminalWS.readyState === WebSocket.OPEN ? "Disconnect" : "Connect"}</button>
+        </div>
+      </div>
+      <pre class="terminal-screen" id="terminalScreen">${terminalOutput || "(connecting terminal…)"}</pre>
+      <div class="terminal-input-row">
+        <input id="terminalInput" placeholder="git status" autocomplete="off">
+        <button class="act primary" onclick="sendTerminalInput()">Send</button>
+      </div>
+      <p class="tip">The terminal keeps a resumable session id in this browser tab. If the websocket drops, the console reconnects and resumes automatically.</p>
+    </div>`;
+  const input = document.getElementById("terminalInput");
+  if (input) {
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendTerminalInput();
+    });
+  }
+  if (!terminalWS || terminalWS.readyState > WebSocket.OPEN) connectTerminal(Boolean(terminalSessionId));
+  else terminalStatusText(terminalSessionId ? "Connected (resumed)" : "Connected");
+}
+window.sendTerminalInput = sendTerminalInput;
+window.toggleTerminalConnection = () => {
+  if (terminalWS && terminalWS.readyState === WebSocket.OPEN) disconnectTerminal();
+  else connectTerminal(Boolean(terminalSessionId));
+  if (currentTab === "terminal") renderTerminal();
+};
+window.clearTerminal = () => {
+  terminalOutput = "";
+  const el = document.getElementById("terminalScreen");
+  if (el) el.textContent = "(connected, waiting for output)";
+};
+window.doSearch = async () => {
+  const q = document.getElementById("q").value || "*";
+  const r = await api("/logs/search?q=" + encodeURIComponent(q) + "&limit=200");
+  const out = document.getElementById("logOut");
+  out.textContent = (r.hits || []).map(h => `[${h.service}] ${h.ts?.slice(11,19)} ${h.line}`).join("\n") || "(no matches)";
+};
+
+async function renderMachines() {
+  const r = await api("/console/machines");
+  view.innerHTML = `<div class="grid">` + (r.machines || []).map(m => `
+    <div class="card">
+      <h3>${m.isLocal ? '★ ' : ''}${m.name}</h3>
+      <div class="v" style="font-size:14px">${m.provider || 'unknown'}</div>
+      <div class="s">${m.platform || ''} · ${m.arch || ''}</div>
+      <div class="s"><span class="tag ${m.isOnline ? 'ok' : 'down'}">${m.isOnline ? 'online' : 'offline'}</span></div>
+    </div>`).join("") + `</div>`;
+}
+
+async function renderSwitch() {
+  const [targets, history] = await Promise.all([api("/switch/targets"), api("/switch/history")]);
+  const grouped = {};
+  for (const t of targets.targets || []) {
+    (grouped[t.family] = grouped[t.family] || []).push(t);
+  }
+  view.innerHTML = `
+    <p class="tip">Pick a target to plan a switch. Convex/Supabase Cloud: seamless (auto-captures creds).</p>
+    ${Object.entries(grouped).map(([fam, list]) => `
+      <h3 style="color:#818cf8;font-size:11px;text-transform:uppercase;margin:12px 0 6px">${fam}</h3>
+      ${list.map(t => `
+        <div class="row" onclick="planSwitch('${t.id}')" style="cursor:pointer">
+          <span class="name">${t.label}</span>
+          <span class="muted">${t.cost}</span>
+          ${t.requiresAccount ? '<span class="tag">account</span>' : ''}
+        </div>`).join("")}`).join("")}
+    <h3 style="margin-top:16px;font-size:11px;text-transform:uppercase;color:#737373">History</h3>
+    ${(history.switches || []).slice(0, 10).map(s => `
+      <div class="row">
+        <span class="tag ${s.status === 'done' ? 'ok' : 'down'}">${s.status}</span>
+        <span class="name">${s.fromBackend} → ${s.to}</span>
+        <span class="muted">${s.complexity}</span>
+        ${s.status === 'done' ? `<button class="act" onclick="rollbackSwitch('${s.id}')">Rollback</button>` : ''}
+      </div>`).join("")}
+  `;
+}
+window.planSwitch = async (target) => {
+  const plan = await api("/switch/plan", { method: "POST", body: JSON.stringify({ target, dryRun: false }) });
+  if (plan.error) { alert(plan.error); return; }
+  if (!confirm(`Switch complexity: ${plan.complexity}. ${plan.steps.length} steps. Execute?`)) return;
+  const result = await api("/switch/run", { method: "POST", body: JSON.stringify({ id: plan.id }) });
+  alert(result.status || result.error);
+  render();
+};
+window.rollbackSwitch = async (id) => {
+  if (!confirm("Rollback this switch?")) return;
+  await api("/switch/rollback", { method: "POST", body: JSON.stringify({ id }) });
+  render();
+};
+
+async function renderAccounts() {
+  const r = await api("/accounts");
+  const providers = r.providers || [];
+  const byID = {};
+  (r.accounts || []).forEach(a => byID[a.provider] = a);
+  view.innerHTML = `<div class="grid">` + providers.map(p => {
+    const acct = byID[p.id];
+    const connected = acct && acct.connected;
+    return `<div class="card">
+      <h3>${p.label}</h3>
+      <div class="s"><span class="tag ${connected ? 'ok' : ''}">${connected ? 'connected' : 'not connected'}</span></div>
+      <div class="s" style="margin-top:8px">
+        ${connected
+          ? `<button class="act" onclick="disconnect('${p.id}')">Disconnect</button>`
+          : `<button class="act primary" onclick="connect('${p.id}', ${JSON.stringify(p.fields).replace(/"/g, "&quot;")})">Connect</button>`}
+      </div>
+      ${p.tokenURL && p.tokenURL.startsWith('http') ? `<div class="s" style="margin-top:4px"><a href="${p.tokenURL}" target="_blank" style="color:#818cf8">get token →</a></div>` : ''}
+    </div>`;
+  }).join("") + `</div>`;
+}
+window.connect = async (provider, fieldsArr) => {
+  const fields = {};
+  for (const f of fieldsArr) {
+    const v = prompt("Enter " + f + ":");
+    if (!v) return;
+    fields[f] = v;
+  }
+  await api("/accounts/connect", { method: "POST", body: JSON.stringify({ provider, fields }) });
+  render();
+};
+window.disconnect = async (provider) => {
+  if (!confirm("Disconnect " + provider + "?")) return;
+  await api("/accounts/disconnect", { method: "POST", body: JSON.stringify({ provider }) });
+  render();
+};
+
+async function renderCatalog() {
+  const r = await api("/console/catalog");
+  view.innerHTML = `<p class="tip">One-click install onto the current project.</p>`
+    + Object.entries(r.categories || {}).map(([cat, list]) => `
+      <h3 style="color:#818cf8;font-size:11px;text-transform:uppercase;margin:12px 0 6px">${cat}</h3>
+      <div class="grid">${list.map(e => `
+        <div class="card">
+          <h3>${e.name}</h3>
+          <div class="s">${e.description}</div>
+          <div class="s" style="margin-top:6px"><button class="act primary" onclick="installService('${e.id}')">Install</button></div>
+        </div>`).join("")}</div>`).join("");
+}
+window.installService = async (id) => {
+  const r = await api("/console/catalog/install", { method: "POST", body: JSON.stringify({ id, fields: {} }) });
+  alert(r.error || "Installed: " + JSON.stringify(r.entry?.name || id));
+  render();
+};
+
+async function renderSchema() {
+  const r = await api("/backend/schema");
+  if (r.error) { view.innerHTML = `<div class="err">${r.error}</div>`; return; }
+  view.innerHTML = `
+    <p class="muted">Backend: ${r.backend} · Source: ${r.source}</p>
+    ${(r.tables || []).map(t => `
+      <div class="card" style="margin-bottom:8px">
+        <h3>${t.name}</h3>
+        ${(t.columns || []).map(c => `<div class="s">${c.name} <span class="muted">${c.type}</span>${c.primaryKey ? ' <span class="tag">PK</span>' : ''}</div>`).join("")}
+      </div>`).join("")}
+    <h3 style="margin-top:12px;font-size:11px">Mermaid ERD</h3>
+    <pre>${r.mermaid || ''}</pre>
+  `;
+}
+
+async function renderStorage() {
+  const r = await api("/storage/list");
+  view.innerHTML = `
+    <p class="muted">Source: ${r.source || 'none'}</p>
+    ${r.error ? `<div class="err">${r.error}</div>` : ''}
+    ${(r.files || []).map(f => `
+      <div class="row">
+        <span class="name">${f.name}</span>
+        <span class="muted">${fmtBytes(f.size)}</span>
+        <span class="muted">${(f.createdAt || '').slice(0,10)}</span>
+      </div>`).join("")}
+  `;
+}
+
+(async () => {
+  await connectCheck();
+  render();
+  setInterval(connectCheck, 15000);
+})();
+</script>
+</body>
+</html>

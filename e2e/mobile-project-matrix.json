@@ -1,0 +1,61 @@
+{
+  "remoteDeviceName": "Mobiles-Mac-mini.local",
+  "projects": [
+    {
+      "id": "sfmg-expo",
+      "label": "sfmg",
+      "match": { "name": "sfmg" },
+      "frameworks": ["expo", "react-native"],
+      "required": true
+    },
+    {
+      "id": "talos-mobile",
+      "label": "talos mobile",
+      "match": { "name": "talos", "pathSuffix": "/talos/mobile" },
+      "frameworks": ["expo", "react-native"],
+      "required": true
+    },
+    {
+      "id": "yaver-mobile",
+      "label": "yaver.io mobile",
+      "match": { "name": "yaver.io", "pathSuffix": "/yaver.io/mobile" },
+      "frameworks": ["expo", "react-native"],
+      "required": true
+    },
+    {
+      "id": "e-mobile-flutter",
+      "label": "e-mobile",
+      "match": { "name": "e-mobile" },
+      "frameworks": ["flutter"],
+      "required": true
+    },
+    {
+      "id": "todo-react-native",
+      "label": "todo React Native",
+      "match": { "name": "todo" },
+      "frameworks": ["expo", "react-native"],
+      "required": true
+    },
+    {
+      "id": "todo-swift",
+      "label": "todo Swift/iOS",
+      "match": { "name": "todo" },
+      "frameworks": ["swift", "ios"],
+      "required": true
+    },
+    {
+      "id": "todo-kotlin",
+      "label": "todo Kotlin/Android",
+      "match": { "name": "todo" },
+      "frameworks": ["kotlin", "android"],
+      "required": true
+    },
+    {
+      "id": "todo-flutter",
+      "label": "todo Flutter",
+      "match": { "name": "todo" },
+      "frameworks": ["flutter"],
+      "required": true
+    }
+  ]
+}

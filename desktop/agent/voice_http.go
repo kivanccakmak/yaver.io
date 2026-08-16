@@ -1,0 +1,614 @@
+package main
+
+// voice_http.go — HTTP + WebSocket edges for the hands-free agent loop.
+//
+//   GET  /voice/status   — capability probe for mobile / SDK clients
+//   WS   /voice/stream   — bidirectional voice session
+//
+// /voice/stream client protocol:
+//
+//   client → server (first message, JSON text frame):
+//     {"type":"start", "project":"yaver", "model":"sonnet", "runner":"",
+//      "sttProvider":"local|deepgram|openai|assemblyai",  // optional override
+//      "ttsProvider":"local|deepgram|openai|cartesia|elevenlabs"}
+//     sttProvider/ttsProvider empty → agent's configured default. "local"
+//     STT = free whisper.cpp on the host; "deepgram" = Flux nova-3.
+//
+//   client → server (PCM 16-bit LE, 16kHz mono, ~20-40ms chunks, binary):
+//     <raw bytes>
+//
+//   client → server (PTT release / explicit finalize, JSON):
+//     {"type":"stop"}
+//
+//   server → client (JSON text frames, all):
+//     {"type":"providers",          "stt":"local", "tts":"local"}  // active engines (sent once, right after start)
+//     {"type":"transcript-partial", "text":"..."}
+//     {"type":"transcript-final",   "text":"..."}
+//     {"type":"task-created",       "taskId":"..."}
+//     {"type":"task-result",        "taskId":"...", "text":"...", "status":"completed"}
+//     {"type":"tts-frame",          "pcm":"<base64>", "sampleRate":22050}
+//     {"type":"done"}
+//     {"type":"error",              "error":"..."}
+//
+// The stream stays open across the whole turn: speak → final transcript
+// → task fires → result speaks back. Closing the WS at any point aborts
+// the in-flight task gracefully.
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+var voiceUpgrader = websocket.Upgrader{
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
+	CheckOrigin:     func(r *http.Request) bool { return true }, // SDK clients live on different origins
+}
+
+// voiceStartFrame is the JSON the client sends as its first message.
+type voiceStartFrame struct {
+	Type    string `json:"type"`
+	Project string `json:"project,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Runner  string `json:"runner,omitempty"`
+	// Surface tells the prompt wrapper what display the user is on.
+	// Examples: "mobile-phone", "web-spatial-vr", "glasses-mentra-display".
+	// See TaskViewport docstring for full enum.
+	Surface      string `json:"surface,omitempty"`
+	Interaction  string `json:"interaction,omitempty"`
+	PaneCount    int    `json:"paneCount,omitempty"`
+	TTSBudget    int    `json:"ttsBudget,omitempty"`
+	VisualBudget string `json:"visualBudget,omitempty"`
+	RiskPolicy   string `json:"riskPolicy,omitempty"`
+	// Per-session provider overrides. Empty = fall back to the agent's
+	// configured default (VoiceConfig.EffectiveSTT/TTSProvider). This lets
+	// a standalone SDK client pick "local" (free whisper.cpp on the host)
+	// vs "deepgram" (Flux nova-3 streaming) per session, and surface which
+	// engine is active. STTProvider "on-device" is rejected — that path
+	// transcribes on the client and POSTs /tasks, never opening this WS.
+	STTProvider string `json:"sttProvider,omitempty"`
+	TTSProvider string `json:"ttsProvider,omitempty"`
+}
+
+// voiceCtrlFrame covers all other client-side control frames.
+type voiceCtrlFrame struct {
+	Type string `json:"type"`
+}
+
+// handleVoiceStatus returns enabled/ready flags + which providers are
+// configured. Mobile + /spatial use this on app boot to decide whether
+// to render the mic UI at all — when the user has only configured the
+// keyboard-on-glasses path (no voice keys), the mic orb hides itself
+// gracefully instead of failing mid-loop.
+func (s *HTTPServer) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	cfg, _ := LoadConfig()
+	v := voiceCfgOrNil(cfg)
+
+	sttProvider := "openai"
+	ttsProvider := "openai"
+	sttReady := false
+	ttsReady := false
+	defaultProject := ""
+
+	if v != nil {
+		sttProvider = v.EffectiveSTTProvider()
+		ttsProvider = v.EffectiveTTSProvider()
+		defaultProject = v.DefaultProject
+
+		switch sttProvider {
+		case "openai":
+			sttReady = HasVoiceCredential("openai", "api-key", v.OpenAIAPIKey)
+		case "deepgram":
+			sttReady = HasVoiceCredential("deepgram", "api-key", v.DeepgramAPIKey)
+		case "assemblyai":
+			sttReady = HasVoiceCredential("assemblyai", "api-key", v.AssemblyAIAPIKey)
+		case "local":
+			sttReady = LocalWhisperAvailable() // free/offline whisper.cpp on the host
+		case "on-device":
+			sttReady = true // mobile owns capture; agent has no key to set
+		}
+		switch ttsProvider {
+		case "openai":
+			ttsReady = HasVoiceCredential("openai", "api-key", v.OpenAIAPIKey)
+		case "cartesia":
+			ttsReady = HasVoiceCredential("cartesia", "api-key", v.CartesiaAPIKey)
+		case "elevenlabs":
+			ttsReady = HasVoiceCredential("elevenlabs", "api-key", v.ElevenLabsAPIKey)
+		case "deepgram":
+			// Same key as Deepgram STT — one signup, one credential.
+			ttsReady = HasVoiceCredential("deepgram", "api-key", v.DeepgramAPIKey)
+		case "device", "local":
+			ttsReady = true // device: mobile plays · local: agent say/espeak (terminal)
+		}
+	}
+
+	// Per-provider key-set booleans so the mobile picker can show the
+	// "key set ✓" badge for every provider, not only the currently
+	// selected one. Each lookup hits the credential resolver, which is
+	// fast (vault map lookup). Check the vault UNCONDITIONALLY (not gated
+	// on v != nil): keys may already be present from a peer P2P sync or
+	// `yaver voice setup` before voice is enabled on this device. The
+	// legacy config.json fallback only exists when v != nil.
+	var lOpenAI, lDeepgram, lCartesia, lAssembly, lEleven string
+	if v != nil {
+		lOpenAI, lDeepgram, lCartesia, lAssembly, lEleven =
+			v.OpenAIAPIKey, v.DeepgramAPIKey, v.CartesiaAPIKey, v.AssemblyAIAPIKey, v.ElevenLabsAPIKey
+	}
+	openaiSet := HasVoiceCredential("openai", "api-key", lOpenAI)
+	deepgramSet := HasVoiceCredential("deepgram", "api-key", lDeepgram)
+	cartesiaSet := HasVoiceCredential("cartesia", "api-key", lCartesia)
+	assemblyaiSet := HasVoiceCredential("assemblyai", "api-key", lAssembly)
+	elevenlabsSet := HasVoiceCredential("elevenlabs", "api-key", lEleven)
+
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":             true,
+		"enabled":        v != nil && v.Enabled,
+		"sttProvider":    sttProvider,
+		"sttReady":       sttReady,
+		"ttsProvider":    ttsProvider,
+		"ttsReady":       ttsReady,
+		"defaultProject": defaultProject,
+		"openaiSet":      openaiSet,
+		"deepgramSet":    deepgramSet,
+		"cartesiaSet":    cartesiaSet,
+		"assemblyaiSet":  assemblyaiSet,
+		"elevenlabsSet":  elevenlabsSet,
+		// availableProviders lets the mobile Settings UI render the
+		// picker even on first launch (no key set yet).
+		"availableProviders": map[string][]string{
+			"stt": {"openai", "deepgram", "assemblyai", "local", "on-device"},
+			"tts": {"openai", "deepgram", "cartesia", "elevenlabs", "local", "device"},
+		},
+	})
+}
+
+// handleVoiceStream is the long-lived WebSocket handler.
+func (s *HTTPServer) handleVoiceStream(w http.ResponseWriter, r *http.Request) {
+	cfg, _ := LoadConfig()
+	v := voiceCfgOrNil(cfg)
+	if v == nil || !v.Enabled {
+		jsonError(w, http.StatusServiceUnavailable, "voice not enabled in config — set voice.enabled=true and supply an api key (openai by default). Keyboard-on-glasses users without voice keys can ignore this and use the agent normally.")
+		return
+	}
+	// Provider is resolved AFTER the start frame (below) so a client can
+	// override it per-session. We only gate on "voice enabled" pre-upgrade;
+	// provider-specific readiness is validated once we know the choice and
+	// reported over the WS (we've already upgraded by then).
+
+	conn, err := voiceUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return // Upgrader already wrote the error
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Phase 1: wait for the client's start frame (with timeout so a
+	// stalled mobile doesn't hold a goroutine forever).
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	mt, payload, err := conn.ReadMessage()
+	if err != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	if mt != websocket.TextMessage {
+		voiceWriteErr(conn, "first frame must be a JSON 'start' message")
+		return
+	}
+	var start voiceStartFrame
+	if err := json.Unmarshal(payload, &start); err != nil || start.Type != "start" {
+		voiceWriteErr(conn, "invalid start frame")
+		return
+	}
+
+	// Resolve providers: per-session override wins, else the configured
+	// default. "local" = free whisper.cpp on the host; "deepgram" = Flux
+	// nova-3 streaming. Validate readiness and report it over the WS, then
+	// echo the resolved engines so the client can show "Local" vs "Flux".
+	sttProvider := strings.ToLower(strings.TrimSpace(start.STTProvider))
+	if sttProvider == "" {
+		sttProvider = v.EffectiveSTTProvider()
+	}
+	ttsProvider := strings.ToLower(strings.TrimSpace(start.TTSProvider))
+	if ttsProvider == "" {
+		ttsProvider = v.EffectiveTTSProvider()
+	}
+	if errMsg := validateVoiceSTTProvider(sttProvider, v); errMsg != "" {
+		voiceWriteErr(conn, errMsg)
+		return
+	}
+	voiceWriteJSON(conn, map[string]interface{}{
+		"type": "providers",
+		"stt":  sttProvider,
+		"tts":  ttsProvider,
+	})
+
+	// Resolve project keyterms for STT bias.
+	project := start.Project
+	if project == "" {
+		project = v.DefaultProject
+	}
+	var keyterms []string
+	if project != "" && v.ProjectKeyterms != nil {
+		keyterms = v.ProjectKeyterms[project]
+	}
+
+	// Open the configured STT provider. Each one publishes
+	// DeepgramEvent on the channel (the type name predates
+	// provider abstraction; it's effectively STTEvent now).
+	var sttClose func() error
+	var dgEvents <-chan DeepgramEvent
+	var sttSendAudio func([]byte) error
+	var sttFinalize func() error
+	switch sttProvider {
+	case "openai":
+		key := LookupVoiceCredential("openai", "api-key", v.OpenAIAPIKey)
+		sess, ev, err := OpenOpenAIWhisperSession(ctx, key, v.OpenAISTTModel)
+		if err != nil {
+			voiceWriteErr(conn, "openai stt: "+err.Error())
+			return
+		}
+		dgEvents = ev
+		sttSendAudio = sess.SendAudio
+		sttFinalize = sess.Finalize
+		sttClose = sess.Close
+	case "deepgram":
+		key := LookupVoiceCredential("deepgram", "api-key", v.DeepgramAPIKey)
+		sess, ev, err := OpenDeepgramSession(ctx, key, "nova-3", keyterms)
+		if err != nil {
+			voiceWriteErr(conn, "deepgram: "+err.Error())
+			return
+		}
+		dgEvents = ev
+		sttSendAudio = sess.SendAudio
+		sttFinalize = sess.Finalize
+		sttClose = sess.Close
+	case "assemblyai":
+		key := LookupVoiceCredential("assemblyai", "api-key", v.AssemblyAIAPIKey)
+		sess, ev, err := OpenAssemblyAISession(ctx, key, v.AssemblyAILanguage)
+		if err != nil {
+			voiceWriteErr(conn, "assemblyai: "+err.Error())
+			return
+		}
+		dgEvents = ev
+		sttSendAudio = sess.SendAudio
+		sttFinalize = sess.Finalize
+		sttClose = sess.Close
+	case "local":
+		// Free/offline whisper.cpp on the agent host. Streaming with live
+		// partials (rolling-window re-transcription) but push-to-talk
+		// turn boundaries: the utterance is finalized on the client's
+		// "stop" frame, so a mid-sentence pause won't cut it short.
+		sess, ev, err := OpenStreamingLocalWhisperSessionOpts(ctx, false)
+		if err != nil {
+			voiceWriteErr(conn, "local stt: "+err.Error())
+			return
+		}
+		dgEvents = ev
+		sttSendAudio = sess.SendAudio
+		sttFinalize = sess.Finalize
+		sttClose = sess.Close
+	}
+	defer sttClose()
+
+	// Fan-in: client audio + STT events.
+	clientIn := make(chan voiceClientMsg, 16)
+	go voiceReadClient(ctx, conn, clientIn)
+
+	var finalText string
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		case msg, ok := <-clientIn:
+			if !ok {
+				break loop
+			}
+			if msg.kind == "audio" {
+				if err := sttSendAudio(msg.audio); err != nil {
+					voiceWriteErr(conn, "stt audio write: "+err.Error())
+					break loop
+				}
+			} else if msg.kind == "stop" {
+				_ = sttFinalize()
+			} else if msg.kind == "close" {
+				break loop
+			}
+		case ev, ok := <-dgEvents:
+			if !ok {
+				break loop
+			}
+			switch ev.Kind {
+			case "partial":
+				voiceWriteJSON(conn, map[string]interface{}{"type": "transcript-partial", "text": ev.Text})
+			case "final":
+				finalText = ev.Text
+				voiceWriteJSON(conn, map[string]interface{}{"type": "transcript-final", "text": ev.Text})
+			case "eot":
+				if finalText != "" {
+					break loop
+				}
+			case "closed":
+				if ev.Error != "" {
+					voiceWriteErr(conn, "stt closed: "+ev.Error)
+				}
+				break loop
+			case "error":
+				voiceWriteErr(conn, "stt: "+ev.Error)
+				break loop
+			}
+		}
+	}
+
+	if finalText == "" {
+		voiceWriteErr(conn, "no transcript captured")
+		return
+	}
+
+	// Fast path: "launch <slug>" / "open <slug>" / "start <slug>"
+	// short-circuit straight to Hermes-push without a Claude roundtrip.
+	if intent := LaunchIntentMatch(finalText); intent != nil {
+		launchRes := HandleVoiceLaunch(ctx, intent, cfg, s.voiceLauncher())
+		// Glass + VR subscribers want to know the app actually came
+		// up. The launcher already broadcast the open_app command; on
+		// success we also fire app_reloaded so the surface can render
+		// its confirmation (Mentra speaks, /spatial pops a pane).
+		if launchRes.OK {
+			BroadcastAppReloaded(s.blackboxMgr, intent.Slug, "", "", "")
+		}
+		voiceWriteJSON(conn, map[string]interface{}{
+			"type":   "task-result",
+			"taskId": "",
+			"text":   launchRes.SpokenResponse,
+			"status": launchOKStatus(launchRes.OK),
+		})
+		if launchRes.SpokenResponse != "" {
+			streamTTS(ctx, conn, v, ttsProvider, launchRes.SpokenResponse)
+		}
+		voiceWriteJSON(conn, map[string]interface{}{"type": "done"})
+		return
+	}
+
+	// Fire the task. Block until terminal status, then speak result.
+	result, derr := DispatchVoiceTranscript(ctx, s.taskMgr, finalText, VoiceDispatchOptions{
+		Project: project,
+		Model:   start.Model,
+		Runner:  start.Runner,
+		Placement: TaskIngressPlacementConfig{
+			ConvexURL:     s.convexURL,
+			Token:         s.token,
+			LocalDeviceID: s.deviceID,
+			WorkDir:       s.taskMgr.workDir,
+		},
+		Viewport: &TaskViewport{
+			Surface:      start.Surface,
+			Interaction:  start.Interaction,
+			PaneCount:    start.PaneCount,
+			TTSBudget:    start.TTSBudget,
+			VisualBudget: start.VisualBudget,
+			RiskPolicy:   start.RiskPolicy,
+		},
+	})
+	if result != nil && result.TaskID != "" {
+		voiceWriteJSON(conn, map[string]interface{}{"type": "task-created", "taskId": result.TaskID})
+	}
+	if derr != nil {
+		voiceWriteErr(conn, derr.Error())
+		return
+	}
+	voiceWriteJSON(conn, map[string]interface{}{
+		"type":   "task-result",
+		"taskId": result.TaskID,
+		"text":   result.ResultText,
+		"status": result.Status,
+	})
+
+	// TTS readback — skip silently if no TTS provider is configured.
+	// For "local"/"device" providers streamTTS sends nothing; the client
+	// synthesizes from the task-result text with its own engine.
+	if result.ResultText != "" {
+		streamTTS(ctx, conn, v, ttsProvider, voiceTrimForTTS(result.ResultText))
+	}
+
+	voiceWriteJSON(conn, map[string]interface{}{"type": "done"})
+}
+
+// streamTTS picks the configured TTS provider (OpenAI default,
+// Cartesia alternate) and streams its PCM output to the WS as
+// tts-frame messages. Skips silently when no provider key is set —
+// so a keyboard-on-glasses user without voice keys gets clean text
+// results without errors.
+func streamTTS(ctx context.Context, conn *websocket.Conn, v *VoiceConfig, provider, text string) {
+	if v == nil || text == "" {
+		return
+	}
+	if provider == "" {
+		provider = v.EffectiveTTSProvider()
+	}
+	ttsCh := make(chan CartesiaFrame, 8)
+	sampleRate := 22050
+	switch provider {
+	case "openai":
+		key := LookupVoiceCredential("openai", "api-key", v.OpenAIAPIKey)
+		if key == "" {
+			return
+		}
+		sampleRate = 24000 // OpenAI TTS pcm response is 24kHz
+		go SpeakOpenAI(ctx, key, v.OpenAITTSModel, v.OpenAITTSVoice, text, ttsCh)
+	case "cartesia":
+		key := LookupVoiceCredential("cartesia", "api-key", v.CartesiaAPIKey)
+		if key == "" {
+			return
+		}
+		go SpeakCartesia(ctx, key, v.CartesiaVoiceID, text, ttsCh)
+	case "elevenlabs":
+		key := LookupVoiceCredential("elevenlabs", "api-key", v.ElevenLabsAPIKey)
+		if key == "" {
+			return
+		}
+		sampleRate = 16000 // ElevenLabs configured for pcm_16000
+		go SpeakElevenLabs(ctx, key, v.ElevenLabsTTSVoiceID, v.ElevenLabsTTSModel, text, ttsCh)
+	case "deepgram":
+		key := LookupVoiceCredential("deepgram", "api-key", v.DeepgramAPIKey)
+		if key == "" {
+			return
+		}
+		sampleRate = DeepgramTTSSampleRate // Aura-2 with linear16 = 24kHz PCM
+		go SpeakDeepgram(ctx, key, v.DeepgramTTSModel, text, ttsCh)
+	case "device", "local":
+		// "device": mobile owns playback via AVSpeech / TextToSpeech.
+		// "local": agent-host playback (say/espeak) is only useful for the
+		// terminal `yaver voice listen --tts` loop, which calls speakLocal
+		// directly — not over this WS (the host's speaker can't reach a
+		// remote client). Either way, nothing to stream here; the client
+		// synthesizes from the task-result frame.
+		return
+	default:
+		return
+	}
+	for fr := range ttsCh {
+		if fr.Error != "" {
+			log.Printf("[voice] tts error (%s): %s", provider, fr.Error)
+			break
+		}
+		if len(fr.PCM) > 0 {
+			voiceWriteJSON(conn, map[string]interface{}{
+				"type":       "tts-frame",
+				"pcm":        base64.StdEncoding.EncodeToString(fr.PCM),
+				"sampleRate": sampleRate,
+			})
+		}
+		if fr.Done {
+			break
+		}
+	}
+}
+
+// validateVoiceSTTProvider returns "" when the chosen STT provider is
+// usable, else a client-facing error message. Mirrors the readiness gate
+// that used to run pre-upgrade, but now runs per-session so an SDK client
+// can pick local vs a cloud engine and get a precise reason on failure.
+func validateVoiceSTTProvider(provider string, v *VoiceConfig) string {
+	switch provider {
+	case "openai":
+		if !HasVoiceCredential("openai", "api-key", v.OpenAIAPIKey) {
+			return "openai api key not configured (sttProvider=openai)"
+		}
+	case "deepgram":
+		if !HasVoiceCredential("deepgram", "api-key", v.DeepgramAPIKey) {
+			return "deepgram api key not configured (sttProvider=deepgram) — Flux needs a Deepgram key"
+		}
+	case "assemblyai":
+		if !HasVoiceCredential("assemblyai", "api-key", v.AssemblyAIAPIKey) {
+			return "assemblyai api key not configured (sttProvider=assemblyai)"
+		}
+	case "on-device":
+		// Client-side capture path; never opens this WS.
+		return "sttProvider=on-device transcribes on the client and POSTs /tasks — do not open /voice/stream for it"
+	case "local":
+		if !LocalWhisperAvailable() {
+			return "local stt not ready — install whisper.cpp (brew install whisper-cpp) and a ggml model (YAVER_WHISPER_MODEL or ~/.yaver/models/)"
+		}
+	default:
+		return "unknown sttProvider " + provider + " — supported: local, deepgram, openai, assemblyai"
+	}
+	return ""
+}
+
+// voiceTrimForTTS keeps the audio short. Long agent monologues are
+// unlistenable; we read the headline and tell the user to glance at
+// the screen for the rest.
+func voiceTrimForTTS(text string) string {
+	const max = 280
+	if len(text) <= max {
+		return text
+	}
+	return text[:max] + " — see screen for the rest."
+}
+
+type voiceClientMsg struct {
+	kind  string // "audio" | "stop" | "close"
+	audio []byte
+}
+
+func voiceReadClient(ctx context.Context, conn *websocket.Conn, out chan<- voiceClientMsg) {
+	defer close(out)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		mt, payload, err := conn.ReadMessage()
+		if err != nil {
+			out <- voiceClientMsg{kind: "close"}
+			return
+		}
+		switch mt {
+		case websocket.BinaryMessage:
+			b := make([]byte, len(payload))
+			copy(b, payload)
+			out <- voiceClientMsg{kind: "audio", audio: b}
+		case websocket.TextMessage:
+			var ctrl voiceCtrlFrame
+			if err := json.Unmarshal(payload, &ctrl); err == nil && ctrl.Type == "stop" {
+				out <- voiceClientMsg{kind: "stop"}
+			}
+		}
+	}
+}
+
+func voiceWriteJSON(conn *websocket.Conn, v interface{}) {
+	_ = conn.WriteJSON(v)
+}
+
+func voiceWriteErr(conn *websocket.Conn, msg string) {
+	voiceWriteJSON(conn, map[string]interface{}{"type": "error", "error": msg})
+}
+
+func voiceCfgOrNil(cfg *Config) *VoiceConfig {
+	if cfg == nil {
+		return nil
+	}
+	return cfg.Voice
+}
+
+func launchOKStatus(ok bool) string {
+	if ok {
+		return "launched"
+	}
+	return "launch-failed"
+}
+
+// voiceLauncher returns a VoiceLauncher bound to this HTTPServer's
+// blackbox bus. After the bundle smoke test passes, broadcasts the
+// same "open_app" command that `yaver insert <app>` uses — every
+// paired mobile picks it up via /blackbox/command-stream SSE and
+// loads the bundle via the existing Hermes-push path.
+func (s *HTTPServer) voiceLauncher() VoiceLauncher {
+	return func(workDir, slug string) error {
+		if s.blackboxMgr == nil {
+			return nil // no paired phones — silent no-op for v1
+		}
+		s.blackboxMgr.BroadcastCommand(BlackBoxCommand{
+			Command: "open_app",
+			Data: map[string]interface{}{
+				"app":     slug,
+				"workDir": workDir,
+				"reason":  "voice-launch",
+			},
+		})
+		return nil
+	}
+}

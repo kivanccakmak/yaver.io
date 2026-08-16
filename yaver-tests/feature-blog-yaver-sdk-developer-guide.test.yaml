@@ -1,0 +1,23 @@
+# feature-blog-yaver-sdk-developer-guide — blog post: using yaver-sdk as a
+# library. SSR'd h1 carries the post title.
+name: feature-blog-yaver-sdk-developer-guide
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /blog/yaver-sdk-developer-guide
+  - wait_for: h1
+  - assert.text: Embed Yaver
+  - assert.text: yaver-sdk as a library
+  - screenshot: true

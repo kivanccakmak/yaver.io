@@ -1,0 +1,447 @@
+import { Platform } from "react-native";
+import { quicClient } from "./quic";
+import {
+  classifyRunnerFetchOutcome,
+  type CodingRunnersProbeState as InternalCodingRunnersProbeState,
+} from "./deviceStatusRunnerProbe";
+import { buildDirectProbeTargets, isCredentialSafeBase } from "./probeTargets";
+import { isKnownUnroutable, rememberUnroutable } from "./unroutableCache";
+import { isUnroutableFailure } from "./directProbeFailure";
+
+export type { CodingRunnersProbeState } from "./deviceStatusRunnerProbe";
+export { classifyRunnerFetchOutcome } from "./deviceStatusRunnerProbe";
+
+export type MobileDeviceStatusProbe = {
+  reachable: boolean;
+  bootstrap: boolean;
+  authExpired: boolean;
+  codingReady: boolean;
+  codingRunners: CodingRunnerProbe[];
+  codingRunnersProbe: InternalCodingRunnersProbeState;
+  lifecycleState?: MobileDeviceLifecycleState | null;
+  checkedAt: number;
+  path?: "relay" | "direct";
+  info?: Record<string, any> | null;
+  error?: string;
+  /**
+   * Machine-readable form of `error`, so a caller can ACT on the reason instead
+   * of matching prose.
+   *
+   * `relay-credentials-missing` is the recoverable one: relay servers are
+   * configured but not one of them carries a password, which is the stale/absent
+   * per-user credential. DeviceContext.repairRelay fixes exactly this, and until
+   * this field existed the switch path could only tell the user to "sign in
+   * again" — the self-heal keys off connectionStatus/lastError and never sees a
+   * probe failure. Observed live: a mini that was up and reachable over its
+   * tailnet reported "no transport answered" because every relay attempt was
+   * password-less.
+   */
+  errorCode?: "relay-credentials-missing" | "no-transport" | "no-transport-configured";
+};
+
+export type CodingRunnerProbe = {
+  id: string;
+  name?: string;
+  installed: boolean;
+  ready: boolean;
+  authConfigured: boolean;
+  /** The runner's own CLI says a credential is here. LOCAL evidence — it
+   *  cannot see a server-side revocation, so it is never proof. */
+  authPresent?: boolean;
+  /** The credential was EXERCISED against the provider and the provider
+   *  answered — a completed turn, a completed OAuth — or explicitly refused it
+   *  (in which case authConfigured is false). Agent 1.99.384+; older agents
+   *  send this field carrying authPresent's weaker meaning. */
+  authVerified?: boolean;
+  /** Epoch ms the provider last spoke. Freshness of the VERDICT. */
+  authVerifiedAt?: number;
+  error?: string;
+  warning?: string;
+};
+
+export type MobileDeviceLifecycleState =
+  | "offline"
+  | "bootstrap"
+  | "yaver-auth-expired"
+  | "ready-to-connect"
+  | "connected";
+
+/** Human "last seen …" label from a heartbeat/last-signal epoch (ms).
+ * Used by device pickers to show DOWN machines honestly instead of
+ * implying they're reachable. Mirrors the relative-time formatting used
+ * by the Devices list and DeviceDetailsModal, with a "last seen" prefix
+ * so a device row reads "Down · last seen 12m ago". */
+export function lastSeenLabel(epochMs?: number): string {
+  if (!epochMs || epochMs <= 0) return "never connected";
+  const sec = Math.floor(Math.max(0, Date.now() - epochMs) / 1000);
+  if (sec < 60) return "last seen just now";
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `last seen ${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `last seen ${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `last seen ${d}d ago`;
+  const dt = new Date(epochMs);
+  return `last seen ${dt.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
+type DeviceLike = {
+  id: string;
+  host: string;
+  port?: number;
+  lanIps?: string[];
+  online?: boolean;
+  needsAuth?: boolean;
+  peerState?: "online" | "stale" | "offline";
+  lastTunnelEvent?: {
+    online: boolean;
+    at: number;
+  };
+};
+
+function hasRecentLiveSignal(device: Pick<DeviceLike, "lastTunnelEvent">, maxAgeMs = 90_000): boolean {
+  return Boolean(
+    device.lastTunnelEvent &&
+    device.lastTunnelEvent.online &&
+    device.lastTunnelEvent.at > 0 &&
+    (Date.now() - device.lastTunnelEvent.at) < maxAgeMs,
+  );
+}
+
+function parseInfo(data: Record<string, any> | null | undefined) {
+  const lifecycleState = String(
+    data?.lifecycle?.state || data?.lifecycleState || "",
+  ).trim().toLowerCase();
+  const mode = String(data?.mode || "").trim().toLowerCase();
+  return {
+    lifecycleState:
+      lifecycleState === "bootstrap" ||
+      lifecycleState === "yaver-auth-expired" ||
+      lifecycleState === "ready-to-connect"
+        ? (lifecycleState as MobileDeviceLifecycleState)
+        : null,
+    bootstrap:
+      lifecycleState === "bootstrap" ||
+      data?.needsAuth === true ||
+      mode === "bootstrap",
+    authExpired:
+      lifecycleState === "yaver-auth-expired" ||
+      (data?.authExpired === true && !(data?.needsAuth === true || mode === "bootstrap")),
+  };
+}
+
+async function fetchInfoAt(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<Record<string, any> | null> {
+  try {
+    const res = await fetch(`${url}/info`, {
+      headers,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    return await res.json().catch(() => null);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRunner(row: any): CodingRunnerProbe | null {
+  const id = String(row?.id || row?.runnerId || "").trim().toLowerCase();
+  if (!id) return null;
+  const installed = row?.installed === true;
+  const error = typeof row?.error === "string" ? row.error : undefined;
+
+  // FAIL CLOSED. This used to be `row?.authConfigured !== false`, which reads an
+  // ABSENT field as authenticated — and the agent dropped the field entirely
+  // when it was false (Go omits a false bool under `omitempty`). The two bugs
+  // multiplied: a signed-out runner arrived as `{}` and rendered green.
+  //
+  // Only an explicit `true` counts as signed in. Old agents (< 1.99.300) that
+  // genuinely omit the field now read as NOT ready, which is the safe direction
+  // to be wrong in: it prompts a sign-in the user can act on, instead of
+  // promising a runner that cannot run.
+  const authConfigured = row?.authConfigured === true;
+  return {
+    id,
+    name: typeof row?.name === "string" ? row.name : undefined,
+    installed,
+    ready: installed && row?.ready === true && authConfigured && !error,
+    authConfigured,
+    // Same fail-closed rule as authConfigured: only an explicit true counts.
+    // These two are separate because on 2026-07-27 they were one field, and
+    // it reported a REVOKED Claude token as verified — `claude auth status`
+    // reads the local store, which a revocation never touches.
+    authPresent: row?.authPresent === true,
+    authVerified: row?.authVerified === true,
+    authVerifiedAt: typeof row?.authVerifiedAt === "number" ? row.authVerifiedAt : undefined,
+    error,
+    warning: typeof row?.warning === "string" ? row.warning : undefined,
+  };
+}
+
+async function fetchCodingRunnersAt(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<{ state: InternalCodingRunnersProbeState; runners: CodingRunnerProbe[] }> {
+  try {
+    const res = await fetch(`${url}/agent/runners`, {
+      headers,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      return {
+        state: classifyRunnerFetchOutcome({ status: res.status }),
+        runners: [],
+      };
+    }
+    const data = await res.json().catch(() => null);
+    if (!Array.isArray(data?.runners)) {
+      return {
+        state: "http-error",
+        runners: [],
+      };
+    }
+    return {
+      state: "ok",
+      runners: data.runners
+        .map(normalizeRunner)
+        .filter((r: CodingRunnerProbe | null): r is CodingRunnerProbe => !!r),
+    };
+  } catch (err: any) {
+    const aborted =
+      err?.name === "AbortError" ||
+      err?.name === "TimeoutError" ||
+      err?.code === "AbortError" ||
+      err?.code === "TimeoutError";
+    return {
+      state: classifyRunnerFetchOutcome(aborted ? { aborted: true } : { networkError: err }),
+      runners: [],
+    };
+  }
+}
+
+function codingReady(runners: CodingRunnerProbe[]): boolean {
+  return runners.some((r) =>
+    (r.id === "claude" || r.id === "claude-code" || r.id === "codex" || r.id === "opencode") &&
+    r.ready,
+  );
+}
+
+export async function probeMobileDeviceStatus(
+  // host/port/lanIps are genuinely optional — the body already handles each
+  // being absent (no host legs, default port 18080, empty LAN list). The old
+  // signature demanded them and callers papered over it with `as any`, which
+  // hid the fact that a device row can legitimately arrive without a host.
+  device: { id: string } & Partial<Pick<DeviceLike, "host" | "port" | "lanIps">>,
+  token?: string | null,
+  timeoutMs = 3500,
+): Promise<MobileDeviceStatusProbe> {
+  const checkedAt = Date.now();
+  const port = device.port || 18080;
+
+  // Race ALL transports (every relay + every direct target) in parallel and
+  // take the first that answers. The old code tried relay-first, serially — so
+  // a box whose relay tunnel is registered-but-not-forwarding (heartbeating
+  // "online" yet 502/timeout on the relay path) burned the full timeout on the
+  // dead relay before ever trying its working direct LAN leg. Racing lets the
+  // 40ms direct win regardless of a hung relay.
+  type Attempt = {
+    base: string;
+    headers: Record<string, string>;
+    path: "relay" | "direct";
+    // ip/port are set for direct attempts so a rejection can be
+    // negative-cached in lib/unroutableCache. Relay attempts don't
+    // participate — a wedged relay is not the same problem class.
+    ip?: string;
+    port?: number;
+  };
+  // parseHttpBase strips the "http[s]://<ip>:<port>" prefix so we can key the
+  // negative cache on the numeric (ip, port). It tolerates the missing-port
+  // form because buildDirectProbeTargets never emits it.
+  const parseHttpBase = (base: string): { ip: string; port: number } => {
+    const m = /^https?:\/\/(\[[^\]]+\]|[^/:]+)(?::(\d+))?/i.exec(base);
+    return { ip: m?.[1] ?? "", port: Number(m?.[2] ?? 0) || 0 };
+  };
+  const attempts: Attempt[] = [];
+  let relayAttempts = 0;
+  let passwordedRelayAttempts = 0;
+  if (token && device.id) {
+    const platformHeaders: Record<string, string> =
+      Platform.OS === "web" ? {} : { "X-Client-Platform": Platform.OS };
+    for (const relay of quicClient.getRelayServers()) {
+      relayAttempts += 1;
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        ...platformHeaders,
+      };
+      if (relay.password) {
+        headers["X-Relay-Password"] = relay.password;
+        passwordedRelayAttempts += 1;
+      }
+      attempts.push({ base: `${relay.httpUrl}/d/${device.id}`, headers, path: "relay" });
+    }
+  }
+  // Direct-leg selection (including the `.local` exclusion and why) lives in
+  // lib/probeTargets.ts so it can be unit-tested without React Native.
+  for (const target of buildDirectProbeTargets({
+    host: device.host,
+    port: device.port,
+    lanIps: device.lanIps,
+  })) {
+    // Skip legs the negative cache has proven unroutable on THIS network
+    // (audit §2, 2026-07-19). The pre-fix behaviour raced nine dead
+    // addresses on every 8s probe including a Docker bridge and stale
+    // hotspot ranges; each carried the session bearer and each fell into
+    // Promise.any's silent rejection with no per-candidate log.
+    const { ip: candIp, port: candPort } = parseHttpBase(target);
+    if (candIp && isKnownUnroutable("device-status", candIp, candPort)) continue;
+    // Attach the session bearer ONLY where it cannot be read off the wire.
+    // These legs are plaintext http://, and for a Yaver-managed cloud box the
+    // host is a PUBLIC address — so the previous unconditional header shipped
+    // the user's session token in cleartext across the internet every 8s. A
+    // reachability probe does not need the caller's identity; /info answers
+    // unauthenticated with less detail, which is enough to decide "up or not".
+    //
+    // Additional §2b guard: even for a PRIVATE address (RFC1918 / CGNAT), if
+    // that address is stale — the device on the phone's current LAN that now
+    // owns 172.17.0.1 / 192.168.111.x is somebody else — spraying the bearer
+    // at it leaks a credential to a stranger. The negative-cache skip above
+    // catches the "unroutable on this network" case; here we also decline
+    // the bearer when the address IS reachable but the cache has never seen
+    // it succeed AND the token cannot leak to the internet (private range).
+    // We keep the private-range fast path because most legitimate LAN legs
+    // succeed on first attempt — the cache never seeing "reachable" doesn't
+    // mean it's stale, just new.
+    const headers: Record<string, string> =
+      token && isCredentialSafeBase(target) ? { Authorization: `Bearer ${token}` } : {};
+    attempts.push({ base: target, headers, path: "direct", ip: candIp, port: candPort });
+  }
+
+  // Hard wall-clock deadline for the WHOLE probe phase (audit §2.4,
+  // 2026-07-19). Before the fix, Promise.any settled only when EVERY leg
+  // rejected — so the same wedged tailnet fetch that raceDirectCandidates
+  // already gates with DIRECT_PHASE_DEADLINE_MS could hold this probe open
+  // for the caller's outer timeout. The gate that sits IN FRONT of connect
+  // must be no more patient than the connect race itself, or the outer
+  // "device is online" verdict flip-flops every heartbeat.
+  const PROBE_PHASE_DEADLINE_MS = Math.min(3000, timeoutMs);
+  const winner = await (attempts.length
+    ? Promise.race<{ a: Attempt; info: any } | null>([
+        Promise.any(
+          attempts.map(async (a) => {
+            try {
+              const info = await fetchInfoAt(a.base, a.headers, timeoutMs);
+              if (!info) throw new Error(`${a.path} unreachable`);
+              return { a, info };
+            } catch (e) {
+              // Negative-cache direct legs that reject unroutably on this
+              // network. Do NOT cache relay legs — a wedged relay is not
+              // the same problem class and has its own liveness watchdog
+              // (relay/tunnel_liveness.go). Do NOT cache timeouts either.
+              if (a.path === "direct" && a.ip && isUnroutableFailure(e)) {
+                rememberUnroutable("device-status", a.ip, a.port ?? 0);
+              }
+              throw e;
+            }
+          }),
+        ).catch(() => null),
+        new Promise<null>((r) => setTimeout(() => r(null), PROBE_PHASE_DEADLINE_MS)),
+      ])
+    : Promise.resolve(null));
+
+  if (winner) {
+    const parsed = parseInfo(winner.info);
+    const codingRunners = await fetchCodingRunnersAt(winner.a.base, winner.a.headers, timeoutMs);
+    return {
+      reachable: true,
+      bootstrap: parsed.bootstrap,
+      authExpired: parsed.authExpired,
+      codingReady: codingReady(codingRunners.runners),
+      codingRunners: codingRunners.runners,
+      codingRunnersProbe: codingRunners.state,
+      lifecycleState: parsed.lifecycleState,
+      checkedAt,
+      path: winner.a.path,
+      info: winner.info,
+    };
+  }
+
+  return {
+    reachable: false,
+    bootstrap: false,
+    authExpired: false,
+    codingReady: false,
+    codingRunners: [],
+    codingRunnersProbe: "network-error",
+    lifecycleState: null,
+    checkedAt,
+    error:
+      relayAttempts > 0 && passwordedRelayAttempts === 0
+        ? "No reachable transport. Sign in again to fetch relay credentials."
+        : attempts.length
+          ? "No reachable transport (tried relay + direct)"
+          : "No transport configured",
+    errorCode:
+      relayAttempts > 0 && passwordedRelayAttempts === 0
+        ? "relay-credentials-missing"
+        : attempts.length
+          ? "no-transport"
+          : "no-transport-configured",
+  };
+}
+
+export function deriveMobileDeviceLifecycleState(args: {
+  device: Pick<DeviceLike, "online" | "needsAuth" | "peerState" | "lastTunnelEvent">;
+  probe?: MobileDeviceStatusProbe | null;
+  isConnected?: boolean;
+  authExpired?: boolean;
+  unreachable?: boolean;
+}): MobileDeviceLifecycleState {
+  const { device, probe, isConnected = false, authExpired = false, unreachable = false } = args;
+  // Auth state is independent of transport. Even when this mobile reached
+  // the agent (isConnected=true), the agent's own yaver session can be
+  // expired — manifests as 401 on subsequent requests (agentAuthExpired)
+  // or as needsAuth on the convex row. Surface the auth state first so
+  // the card flips to "Re-auth & Connect" instead of silently claiming
+  // "connected" while the user's tasks 401.
+  if (probe?.bootstrap) return "bootstrap";
+  if (probe?.authExpired || authExpired) return "yaver-auth-expired";
+  if (device.needsAuth) return "yaver-auth-expired";
+  if (isConnected) return "connected";
+  if (probe?.lifecycleState) return probe.lifecycleState;
+  // "ready-to-connect" must mean we have a *positive, recent* signal that the
+  // box can actually be reached: a live probe, a fresh Convex heartbeat
+  // (device.online ≤ HEARTBEAT_STALE_MS), live P2P presence, or a relay tunnel
+  // seen up in the last 90s. A `stale` peerState or a failed reachability probe
+  // (`unreachable`) are NOT live signals — they previously let a down box like
+  // magara render "READY · reachable" while a connect attempt timed out. Let
+  // those fall through to "offline" so the card shows the honest
+  // "No recent heartbeat" copy instead.
+  //
+  // `unreachable` is the caller's PROOF that a reachability probe just failed.
+  // It outranks every optimistic signal below, because those are all claims
+  // rather than evidence: `device.online` is a Convex heartbeat up to
+  // HEARTBEAT_STALE_MS old (15 min — see _core/constants.ts, which mirrors the
+  // backend), `peerState` is a server-side sighting, and `hasRecentLiveSignal`
+  // is a tunnel event, none of which prove THIS phone has a route right now.
+  //
+  // This param was declared and then dropped on the floor (2026-07-20): the
+  // destructure above omitted it, so `devices.tsx` passed it in good faith and
+  // it did nothing — which is exactly the "magara renders READY while connect
+  // times out" bug the comment above claims to have fixed. Web has had the
+  // equivalent guard all along (`web/lib/device-lifecycle.ts` `contradicted`).
+  const optimistic =
+    probe?.reachable ||
+    device.online ||
+    device.peerState === "online" ||
+    hasRecentLiveSignal(device);
+
+  // A live probe that SUCCEEDED is itself evidence and beats a stale
+  // `unreachable` verdict from an earlier sweep; anything weaker does not.
+  if (unreachable && !probe?.reachable) return "offline";
+  if (optimistic) return "ready-to-connect";
+  return "offline";
+}

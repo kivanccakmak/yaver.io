@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Yaver</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- NSAllowsArbitraryLoads, and DELIBERATELY NOT NSAllowsLocalNetworking.
+		     MEASURED 2026-08-03 by running the real tvOS app in the simulator
+		     against a real box (tvos/YaverTVUITests). The TV displayed:
+
+		       "Box asleep — <box> isn't answering, and it can't be
+		        woken from the TV, start it from your computer or phone."
+
+		     while that box was answering GET /info with HTTP 200 throughout.
+		     ATS had refused the request before a packet left the device.
+
+		     NSAllowsLocalNetworking (which is all this plist had) exempts
+		     RFC1918 + link-local + .local. It does NOT exempt 100.64.0.0/10 —
+		     RFC 6598 shared address space, where Tailscale (100.64/10) and
+		     Yaver Mesh (100.96/12) both live. So the TV could never reach a box
+		     over either overlay.
+
+		     And DO NOT re-add NSAllowsLocalNetworking alongside: Apple IGNORES
+		     NSAllowsArbitraryLoads when it is present, which is proven — the
+		     visionOS app showed the ATS error with both keys set and read the
+		     box's real host/platform/agent with ArbitraryLoads alone. Setting
+		     both is indistinguishable from setting neither.
+
+		     Authentication is unchanged: same bearer token, same agent
+		     validation, same lane. ATS governs whether the OS permits cleartext
+		     to a host, not who may talk to the agent. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Yaver connects to a machine on your network running the Yaver agent to control your Apple TV and view its now-playing card.</string>
+	<!-- Per-user token isolation: without RunsAsCurrentUser, @AppStorage
+	     ("yaver.tv.token") lands in one container shared by every user on
+	     the Apple TV. On a family TV, another user opening Yaver would be
+	     signed in as you — their machines, sessions, Hot Reload. With
+	     RunsAsCurrentUser=true, each tvOS user gets their own container.
+	     See docs/yaver-tvos-surface.md §6. -->
+	<key>RunsAsCurrentUser</key>
+	<true/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>YaverNativeAppManifestSchemaVersion</key>
+	<string>1</string>
+	<key>YaverNativeOAuthProvider</key>
+	<string>yaver-oauth</string>
+	<key>YaverNativeRuntimeKind</key>
+	<string>hosted-yaver-runtime</string>
+	<key>YaverNativeRuntimeSurfaces</key>
+	<array>
+		<string>tvos</string>
+		<string>android-tv</string>
+		<string>remote-runner</string>
+	</array>
+</dict>
+</plist>

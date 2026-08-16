@@ -1,0 +1,150 @@
+name: mobile-headless
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile-headless/**"
+      - "mobile/package.json"
+      - "mobile/package-lock.json"
+      - "mobile/sdk-manifest.json"
+      - "mobile/ios/Yaver/sdk-manifest.json"
+      - "mobile/src/lib/**"
+      - "desktop/agent/**"
+      - "scripts/generate-sdk-manifest.mjs"
+      - "scripts/sdk-manifest.config.json"
+      - ".github/workflows/mobile-headless.yml"
+  pull_request:
+    paths:
+      - "mobile-headless/**"
+      - "mobile/package.json"
+      - "mobile/package-lock.json"
+      - "mobile/sdk-manifest.json"
+      - "mobile/ios/Yaver/sdk-manifest.json"
+      - "mobile/src/lib/**"
+      - "desktop/agent/**"
+      - "scripts/generate-sdk-manifest.mjs"
+      - "scripts/sdk-manifest.config.json"
+      - ".github/workflows/mobile-headless.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-headless-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hermetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install deps
+        working-directory: mobile-headless
+        run: bun install
+      - name: SDK manifest unit tests
+        working-directory: mobile-headless
+        run: npm run test:sdk-manifest
+      - name: Hermetic tests
+        working-directory: mobile-headless
+        run: bun run test:hermetic
+
+  smoke-local:
+    runs-on: ubuntu-latest
+    needs: hermetic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps
+        working-directory: mobile-headless
+        run: bun install
+      - name: Install OpenCode
+        run: npm install -g opencode-ai
+      - name: Build agent
+        working-directory: desktop/agent
+        run: go build -o /tmp/yaver-agent .
+      - name: Start agent in background
+        env:
+          # Pin HOME to a scratch dir so the config write below cannot
+          # clobber a real ~/.yaver/config.json if this job's steps are
+          # ever replayed outside a GitHub runner (act, local shell copy,
+          # LLM copy-paste while debugging). The agent reads config from
+          # $HOME/.yaver/config.json; isolating HOME isolates the blast
+          # radius. Must match every subsequent step that talks to the
+          # agent so they all see the same config.
+          HOME: ${{ runner.temp }}/yaver-home
+          YAVER_SKIP_AUTO_START: "1"
+          YAVER_VAULT_SKIP_KEYCHAIN: "1"
+          YAVER_DISABLE_WIZARD_AUTOINIT: "1"
+        run: |
+          mkdir -p "$HOME/.yaver"
+          mkdir -p "$RUNNER_TEMP/yaver-mobile-headless-work"
+          echo '{"auth_token":"ci-smoke-token","device_id":"ci-mobile-headless","convex_site_url":"https://perceptive-minnow-557.eu-west-1.convex.site","auto_update":false,"headless_keep_awake":false,"macos_permission_onboarding_done":true}' > "$HOME/.yaver/config.json"
+          nohup /tmp/yaver-agent serve --debug --dummy --no-relay --port 18080 --work-dir "$RUNNER_TEMP/yaver-mobile-headless-work" >/tmp/agent.log 2>&1 &
+          echo $! > /tmp/agent.pid
+          ready=0
+          for i in $(seq 1 30); do
+            sleep 1
+            if curl -fsS http://127.0.0.1:18080/health; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/agent.pid)" 2>/dev/null; then
+              echo "::error::agent exited before health became ready"
+              tail -120 /tmp/agent.log || true
+              exit 1
+            fi
+          done
+          if [ "$ready" != "1" ]; then
+            echo "::error::agent health did not become ready"
+            tail -120 /tmp/agent.log || true
+            exit 1
+          fi
+          cat /tmp/agent.log | head -50
+      - name: Run smoke tests against live agent
+        working-directory: mobile-headless
+        env:
+          HOME: ${{ runner.temp }}/yaver-home
+          YMH_DATA_DIR: /tmp/ymh-ci
+          YMH_SMOKE_AGENT_URL: http://127.0.0.1:18080
+          YMH_SMOKE_AGENT_TOKEN: ci-smoke-token
+          YMH_GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          YAVER_SKIP_AUTO_START: "1"
+          YAVER_VAULT_SKIP_KEYCHAIN: "1"
+          YAVER_DISABLE_WIZARD_AUTOINIT: "1"
+        run: |
+          if [ -n "${YMH_GLM_API_KEY:-}" ]; then
+            echo "::add-mask::$YMH_GLM_API_KEY"
+          fi
+          mkdir -p "$YMH_DATA_DIR"
+          bun test test/smoke-local.test.ts
+      - name: CLI spot-check
+        working-directory: mobile-headless
+        env:
+          HOME: ${{ runner.temp }}/yaver-home
+          YMH_DATA_DIR: /tmp/ymh-ci
+          YAVER_SKIP_AUTO_START: "1"
+          YAVER_VAULT_SKIP_KEYCHAIN: "1"
+          YAVER_DISABLE_WIZARD_AUTOINIT: "1"
+        run: |
+          bun run src/bin/cli.ts install-list --token=ci-smoke-token | head -20 || true
+          bun run src/bin/cli.ts raw-get /info --token=ci-smoke-token | head -20 || true
+      - name: Stop agent
+        if: always()
+        env:
+          HOME: ${{ runner.temp }}/yaver-home
+          YAVER_SKIP_AUTO_START: "1"
+          YAVER_VAULT_SKIP_KEYCHAIN: "1"
+          YAVER_DISABLE_WIZARD_AUTOINIT: "1"
+        run: |
+          kill $(cat /tmp/agent.pid) || true
+          tail -80 /tmp/agent.log || true

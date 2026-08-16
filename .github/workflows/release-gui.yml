@@ -1,0 +1,180 @@
+name: Release Desktop GUI
+
+on:
+  push:
+    tags:
+      - "gui/v*"
+  workflow_dispatch:
+    inputs:
+      skip_agent_bundle:
+        description: "Skip downloading the agent binary into the bundle (debug builds)."
+        type: boolean
+        default: false
+        required: false
+
+# Only repo owner can push tags (configure tag protection rules in GitHub).
+# Release jobs require the "production" environment.
+
+concurrency:
+  group: release-gui
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and validate version
+        id: version
+        run: |
+          JSON_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('versions.json','utf8')).gui)")
+          if [[ "$GITHUB_REF" == refs/tags/gui/v* ]]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/gui/v}"
+            if [ "$TAG_VERSION" != "$JSON_VERSION" ]; then
+              echo "ERROR: Tag version ($TAG_VERSION) does not match versions.json ($JSON_VERSION)"
+              exit 1
+            fi
+          else
+            TAG_VERSION="$JSON_VERSION"
+          fi
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $TAG_VERSION"
+
+  test:
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Install
+        working-directory: electron
+        run: npm ci
+      - name: Unit tests (navigation policy, auth interceptor, agent manager)
+        working-directory: electron
+        run: npm test
+
+  build:
+    needs: [validate, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+          - os: ubuntu-latest
+            platform: linux
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Install
+        working-directory: electron
+        run: npm ci
+      - name: Download agent binary into the bundle
+        if: ${{ !inputs.skip_agent_bundle }}
+        working-directory: electron
+        run: node scripts/fetch-agent-binary.mjs
+      - name: Write notarization key to file
+        # @electron/notarize's APPLE_API_KEY env is a PATH to the .p8 file,
+        # but the stored secret APP_STORE_CONNECT_API_KEY holds the p8
+        # CONTENT (release-cli.yml writes it to a file too). Passing PEM
+        # content as a path makes notarytool fail with "Invalid option".
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/notarize"
+          printf '%s' "$APP_STORE_CONNECT_API_KEY" > "$RUNNER_TEMP/notarize/api_key.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/notarize/api_key.p8" >> "$GITHUB_ENV"
+        env:
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+
+      - name: Package
+        working-directory: electron
+        env:
+          # macOS signing (hardened runtime) via the Developer ID cert.
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Notarization via notarytool — APPLE_API_KEY is the .p8 file path
+          # (written above); ID/ISSUER come from the existing
+          # APP_STORE_CONNECT_* secrets (same ones release-cli.yml uses).
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
+          APPLE_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          # Windows signing: only present when the owner configures
+          # WIN_CSC_LINK (base64 .pfx) + WIN_CSC_KEY_PASSWORD. Without them
+          # electron-builder ships an unsigned exe (SmartScreen warning).
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: npx electron-builder --${{ matrix.platform }} --publish never
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaver-gui-${{ matrix.platform }}
+          # Installers only — explicitly exclude blockmaps (matched by
+          # dist/yaver-gui-*) so the release stays clean. Multiline path
+          # lists are the supported upload-artifact form (brace globs are not
+          # minimatch; matrix multiline values collapse to the first line).
+          path: |
+            electron/dist/yaver-gui-*.AppImage
+            electron/dist/yaver-gui-*.dmg
+            electron/dist/yaver-gui-*.zip
+            electron/dist/yaver-gui-*.exe
+            electron/dist/yaver-gui-*.deb
+            electron/dist/yaver-gui-*.rpm
+            electron/dist/yaver-gui-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/gui/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+          merge-multiple: true
+      - name: Cut GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Yaver Desktop GUI ${{ github.ref_name }}"
+          body: |
+            Native desktop GUI for Yaver — sign in (OAuth or email) and vibe tasks
+            straight from your computer. Embeds the Yaver agent, so this machine is
+            itself a Yaver node (vibe it directly, or from phone/TV/watch/web).
+
+            ## Downloads
+            - **macOS** — `yaver-gui-<version>-mac.dmg` (Apple Silicon & Intel, signed + notarized)
+            - **Windows** — `yaver-gui-<version>-win-setup.exe` (x64)
+            - **Linux** — `yaver-gui-<version>-linux.AppImage` · `.deb` (apt-get) · `.rpm` · `.tar.gz`
+
+            apt-get (Debian/Ubuntu):
+            ```
+            wget <release_url>/download/gui/v<version>/yaver-gui-<version>-linux.deb
+            sudo apt-get install ./yaver-gui-<version>-linux.deb
+            ```
+            The embedded agent means a fresh machine needs no npm/node install — the app
+            carries `yaver serve` (with embedded hermesc) and self-provisions runners on demand.
+
+            See [yaver.io/download](https://yaver.io/download) for the landing page.
+          files: dist-artifacts/*

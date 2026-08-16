@@ -1,0 +1,52 @@
+{
+  "name": "yaver-cli",
+  "version": "1.99.413",
+  "mcpName": "io.github.yaver-io/yaver",
+  "description": "Unified npm bootstrap for the Yaver agent, SDK injection, and local-first developer runtime",
+  "bin": {
+    "yaver": "bin/yaver",
+    "yaver-push": "bin/yaver-push",
+    "yaver-mcp": "bin/yaver-mcp",
+    "yaver-cli": "bin/yaver-mcp"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "postinstall": "node src/postinstall.js",
+    "preuninstall": "node src/preuninstall.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "hermesc/",
+    "sdk-manifest.json"
+  ],
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude-code",
+    "codex",
+    "ai-agent",
+    "developer-tools",
+    "local-first",
+    "react-native",
+    "testing",
+    "mobile",
+    "yaver",
+    "expo-go-alternative"
+  ],
+  "author": "Yaver <hello@yaver.io>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kivanccakmak/yaver.io.git"
+  },
+  "homepage": "https://yaver.io",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "semver": "^7.6.0",
+    "yaver-mobile-headless": "^0.1.2"
+  }
+}

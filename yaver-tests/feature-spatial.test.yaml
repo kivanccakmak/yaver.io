@@ -1,0 +1,22 @@
+# feature-spatial — /spatial: glass/HUD/VR unified UI (useAgentBridge.ts
+# powers the bridge). SSR'd h1 is "Yaver Spatial".
+name: feature-spatial
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 20000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /spatial
+  - wait_for: h1
+  - assert.text: Yaver Spatial
+  - screenshot: true

@@ -1,0 +1,120 @@
+# Force the persistent yaver-test-ephemeral Hetzner box to pull the
+# latest yaver CLI release from GitHub and restart the agent. Scoped
+# narrowly so it only touches the yaver package — other remote-verify
+# workflows handle the full bootstrap. Safe to run whenever a new
+# cli/v* tag has been released and we need the change live on the
+# shared test box now, not on the agent's 6-hour self-update cycle.
+name: Refresh Test Ephemeral
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: refresh-test-ephemeral
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Skip ci/hcloud/preflight.sh on purpose — it calls the Hetzner
+      # API which needs a valid HCLOUD_TOKEN, and the token occasionally
+      # expires out from under the CI secret. For refresh we only care
+      # that SSH works; if the box is down, the SSH step fails loudly
+      # with "connection refused" which is the right signal anyway.
+
+      # Download the latest yaver .deb from the repo's GitHub releases and
+      # install it. Idempotent — dpkg -i on an already-current version is
+      # a no-op. Explicitly avoids `apt-get upgrade` which would pull
+      # unrelated system updates.
+      - name: Update yaver on persistent box
+        env:
+          HCLOUD_SSH_PRIVATE_KEY_PATH: ${{ runner.temp }}/hcloud_ssh
+        run: |
+          install -m 600 /dev/stdin "$HCLOUD_SSH_PRIVATE_KEY_PATH" <<'EOF'
+          ${{ secrets.HCLOUD_SSH_PRIVATE_KEY }}
+          EOF
+          ip="${{ secrets.HETZNER_TEST_SERVER_IP }}"
+          ssh -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+              "root@$ip" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          before=$(yaver --version 2>/dev/null || echo unknown)
+          deb_url="$(curl -fsSL https://api.github.com/repos/yaver-io/yaver.io/releases/latest \
+            | jq -r '.assets[]? | select(.name|test("_arm64\\.deb$")) | .browser_download_url' \
+            | head -1)"
+          if [ -z "${deb_url:-}" ] || [ "$deb_url" = "null" ]; then
+            echo "No arm64 .deb asset on latest release" >&2
+            exit 1
+          fi
+          echo "Before: $before"
+          echo "Pulling $deb_url"
+          curl -fsSL "$deb_url" -o /tmp/yaver.deb
+          dpkg -i /tmp/yaver.deb
+          rm -f /tmp/yaver.deb
+          after=$(yaver --version 2>/dev/null || echo unknown)
+          echo "After:  $after"
+
+          # Keep the shared box ready for native remote-runtime smoke
+          # too, not only Hermes/webview. Install the managed Android
+          # SDK / emulator lane into the actual agent user's home so
+          # Kotlin WebRTC sessions can boot an emulator later. Swift on
+          # this Linux host still correctly reports "macOS required".
+          if id yaver >/dev/null 2>&1; then
+            runuser -u yaver -- /usr/bin/env PATH="/usr/local/bin:/usr/bin:/bin" yaver install remote-runtime || true
+          fi
+
+          # Normalise /usr/bin/yaver to point at the dpkg-installed
+          # binary. On this box the .deb lives at /usr/local/bin/yaver
+          # but history left a stale 1.99.25 at /usr/bin/yaver that
+          # systemd uses. Idempotent — if they already agree, no-op.
+          if [ -x /usr/local/bin/yaver ]; then
+            NEW_VER=$(/usr/local/bin/yaver --version 2>/dev/null | head -1)
+            OLD_VER=$(/usr/bin/yaver --version 2>/dev/null | head -1 || echo missing)
+            if [ "$NEW_VER" != "$OLD_VER" ]; then
+              echo "Symlinking /usr/bin/yaver -> /usr/local/bin/yaver ($NEW_VER)"
+              rm -f /usr/bin/yaver
+              ln -s /usr/local/bin/yaver /usr/bin/yaver
+            fi
+          fi
+
+          # Kill any lingering yaver serve to force systemd to pick up
+          # the fresh binary (not just the on-disk file — the running
+          # process may still be executing an old mmaped image).
+          pkill -f "yaver serve" || true
+          sleep 1
+          pkill -9 -f "yaver serve" || true
+          fuser -k 18080/tcp 2>/dev/null || true
+          sleep 2
+
+          # systemd unit may be system-scope or yaver-user-scope. Drive
+          # both paths.
+          systemctl daemon-reload || true
+          if systemctl list-units --all --no-legend 'yaver.service' 2>/dev/null | grep -q yaver.service; then
+            systemctl restart yaver || true
+            systemctl --no-pager --lines=5 status yaver || true
+          fi
+          if id yaver >/dev/null 2>&1; then
+            YAVER_UID=$(id -u yaver)
+            loginctl enable-linger yaver 2>/dev/null || true
+            runuser -u yaver -- env XDG_RUNTIME_DIR="/run/user/$YAVER_UID" \
+              systemctl --user daemon-reload 2>/dev/null || true
+            runuser -u yaver -- env XDG_RUNTIME_DIR="/run/user/$YAVER_UID" \
+              systemctl --user restart yaver 2>/dev/null || true
+          fi
+
+          sleep 3
+          echo "Post-restart processes:"
+          pgrep -af "yaver serve" || echo "(none)"
+          for pid in $(pgrep -f "yaver serve"); do
+            exe=$(readlink "/proc/$pid/exe" 2>/dev/null || echo unknown)
+            ver=$("$exe" --version 2>/dev/null | head -1 || echo unknown)
+            echo "  pid=$pid exe=$exe version=$ver"
+          done
+          REMOTE

@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Yaver</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- App Store validation REJECTS a visionOS upload without this, even though
+	     the icon asset exists and ASSETCATALOG_COMPILER_APPICON_NAME is set in
+	     project.yml. Xcode normally synthesizes it, but this target sets
+	     GENERATE_INFOPLIST_FILE=NO and hand-writes the plist — so it has to be
+	     declared. The value is the asset-catalog icon name, NOT a filename.
+	     Failure mode is invisible until `xcodebuild -exportArchive`: the build
+	     and the archive both succeed, and Apple only rejects it at upload. -->
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundlePrimaryIcon</key>
+		<string>$(ASSETCATALOG_COMPILER_APPICON_NAME)</string>
+	</dict>
+	<!-- Native OAuth returns through yaver://oauth-callback, the same callback
+	     scheme as the phone. ASWebAuthenticationSession should intercept the
+	     redirect itself, but declaring the scheme makes the contract explicit
+	     to Launch Services, UI tests, and any future fallback path that receives
+	     the URL after the web session closes. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>yaver</string>
+			</array>
+		</dict>
+	</array>
+	<key>LSRequiresIPhoneOS</key>
+	<false/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<!-- The agent lives on the user's own LAN and serves plain HTTP on 18080.
+	     Same posture as the tvOS app: allow local networking only, never a
+	     blanket arbitrary-loads exception. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- NSAllowsLocalNetworking is DELIBERATELY ABSENT — see below. -->
+		<!-- MEASURED 2026-08-03, off the headset's own screen in the visionOS
+		     simulator (e2e/visionos-sim-loop.mjs, first run):
+
+		       "Couldn't reach <box>: The resource could not be loaded
+		        because the App Transport Security policy requires the use of a
+		        secure connection."
+
+		     NSAllowsLocalNetworking above exempts RFC1918 + link-local +
+		     .local. It does NOT exempt 100.64.0.0/10 — that is RFC 6598 shared
+		     address space (CGNAT), and BOTH overlays live there: Tailscale on
+		     100.64/10 and Yaver Mesh on 100.96/12. So every plaintext request
+		     to a box reached over either overlay failed -1022 BEFORE A PACKET
+		     LEFT THE DEVICE, and no amount of box-side debugging could have
+		     found it.
+
+		     ATS has no CIDR-range exception — NSExceptionDomains takes
+		     hostnames, not networks — so an overlay address cannot be allowed
+		     narrowly. mobile/ios/Yaver/Info.plist already carries the same flag
+		     for the same reason; this brings visionOS in line rather than
+		     inventing a policy.
+
+		     This does NOT weaken the security boundary. Authentication is
+		     unchanged: the same bearer token, validated by the agent, over the
+		     same lane. ATS governs whether the OS permits cleartext to a host,
+		     not who may talk to the agent — and the relay/agent contract
+		     (pass-through, device-key auth) is untouched. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<!-- AND WHY NSAllowsLocalNetworking IS NOT HERE.
+		     Apple ignores NSAllowsArbitraryLoads when NSAllowsArbitraryLoadsInWebContent,
+		     NSAllowsArbitraryLoadsForMedia, or NSAllowsLocalNetworking is also
+		     present. Setting both therefore does NOT mean "local networking plus
+		     everything else" — it means the arbitrary-loads flag is INERT and
+		     only the local-networking exemption applies, which is exactly the
+		     RFC1918-only behaviour that blocks 100.64/10.
+		     ArbitraryLoads alone already permits local networking, so nothing is
+		     lost by dropping the narrower key. -->
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Yaver connects to your development machine on your local network.</string>
+	<!-- Dictation. BOTH keys are mandatory: requesting either permission without
+	     its usage string is a HARD CRASH at the request, not a denial — so a
+	     missing key here would take the app down the first time anyone tapped
+	     the mic. The strings say where the audio goes because that is the
+	     question a user actually has, and the answer is "nowhere": recognition
+	     is on-device only (visionos/YaverVision/Dictation.swift enforces
+	     requiresOnDeviceRecognition and refuses rather than falling back to
+	     Apple's servers). -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Yaver turns what you say into a prompt for your coding agent. Recognition happens entirely on this device — your speech is never sent to Apple or to Yaver.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Yaver uses the microphone only while you are dictating a prompt. The audio stays on this device and is never uploaded.</string>
+	<!-- Export compliance: no proprietary crypto; HTTPS/TLS only. Declaring it
+	     here is what stops every upload from asking again. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>YaverNativeSurface</key>
+	<string>vision</string>
+</dict>
+</plist>

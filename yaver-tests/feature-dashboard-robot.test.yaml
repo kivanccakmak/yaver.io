@@ -1,0 +1,24 @@
+# feature-dashboard-robot — /dashboard/robot: robot-cell dashboard. Wrapped in
+# OwnerGate; without an owner session it deterministically renders the
+# not-available notice (no auth token required).
+name: feature-dashboard-robot
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /dashboard/robot
+  - wait_for: 'a[href="/dashboard"]'
+  - assert.text: This feature isn’t available on your account.
+  - assert.text: Back to dashboard
+  - screenshot: true

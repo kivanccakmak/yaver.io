@@ -1,0 +1,1916 @@
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import {
+  ActivityIndicator,
+  Alert,
+  Linking,
+  Modal,
+  NativeModules,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+// WebViewCompat, not react-native-webview directly: the real WebView ships NO
+// web build — on RN-web it renders the literal string "React Native WebView
+// does not support this platform." (measured against 13.15.0: lib/WebView.js is
+// the platform-neutral fallback, there is no .web.js and no `browser` field).
+// So the preview — the one screen the browser lane exists to show — was the one
+// screen that could not draw. apps.tsx was migrated to the shim; THIS file was
+// not, which is the two-browser-preview-implementations drift CLAUDE.md names by
+// name. Native resolves to the real WebView, byte-for-byte unchanged.
+import { WebView } from "./WebViewCompat";
+import { router } from "expo-router";
+import { describeDevReloadResult, devReloadReachedTarget, quicClient, type DevServerStatus } from "../lib/quic";
+import { previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix } from "../lib/previewHealth";
+import { useColors } from "../context/ThemeContext";
+import { isBundleLoaded, loadAppIfChanged, onBundleEvent } from "../lib/bundleLoader";
+import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../lib/nativeBuild";
+import { isActiveDevServerStatus } from "../lib/devServerState";
+import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane";
+import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT } from "../lib/previewReadyScript";
+import { WEBVIEW_PROBE_UNSUPPORTED } from "./WebViewCompat";
+import { detectCompileFailure } from "../lib/compileFailure";
+import { previewBundlePath } from "../lib/previewBundlePath";
+import { browserLaneProbeLine, doctorBrowserLane, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
+import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
+import { handlePreviewScreenMessage } from "../lib/screenContextBridge";
+import { handlePreviewDomMessage, subscribeDomInspectMode } from "../lib/domInspectBridge";
+import {
+  capabilityGapFromDevEvent,
+  capabilityGapFromStatus,
+  gapBody,
+  gapAIFixLabel,
+  gapConstraint,
+  gapFixBody,
+  gapFixLabel,
+  gapHeadroomLine,
+  gapReclaimLabel,
+  gapTitle,
+  gapWarning,
+  type CapabilityGap,
+} from "../lib/capabilityGap";
+import { formatFixElapsed, runCapabilityGapFix } from "../lib/capabilityGapFix";
+import { setActivePreviewLane, subscribeBrowserRender, subscribeBrowserShake } from "../lib/feedbackTrigger";
+import { subscribeSse } from "../lib/sseClient";
+import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
+import { monoFamily } from "../theme/tokens";
+
+/**
+ * Dev Preview.
+ *
+ * Expo / React Native in the Yaver mobile app must stay on the native
+ * Hermes bridge path. WebView is only for browser-style web projects.
+ *
+ * Flow:
+ * 1. Agent starts a dev server (via POST /dev/start or Claude Code task)
+ * 2. DevPreview polls /dev/status and detects it
+ * 3. Native mobile projects use "Open in Yaver" + Hermes reload
+ * 4. Web projects open a full-screen WebView through relay
+ */
+function isHermesNativeFramework(status: DevServerStatus | null): boolean {
+  const framework = String(status?.framework || "").toLowerCase();
+  return framework.includes("expo") || framework.includes("react-native");
+}
+
+function currentYaverConsumerContract() {
+  const info = (NativeModules as any)?.YaverInfo ?? {};
+  return {
+    consumerVersion: typeof info.version === "string" ? info.version : undefined,
+    consumerBuild: typeof info.build === "string" ? info.build : undefined,
+    consumerSdkVersion: typeof info.sdkVersion === "string" ? info.sdkVersion : undefined,
+    consumerHermesBCVersion: typeof info.hermesBCVersion === "number" ? info.hermesBCVersion : undefined,
+    consumerCurrentRuntimeFamilyId: typeof info.currentRuntimeFamilyId === "string" ? info.currentRuntimeFamilyId : undefined,
+    consumerDefaultRuntimeFamilyId: typeof info.defaultRuntimeFamilyId === "string" ? info.defaultRuntimeFamilyId : undefined,
+    consumerRuntimeFamilies: Array.isArray(info.runtimeFamilies) ? info.runtimeFamilies : undefined,
+  };
+}
+
+// The exact command Yaver runs to serve the web target, per framework — shown
+// in the "starting" loader so the user sees what's happening.
+function devServerSteps(framework: string): string {
+  const fw = (framework || "").toLowerCase();
+  if (fw === "flutter") return "flutter run -d web-server";
+  if (fw.includes("expo") || fw.includes("react-native")) return "expo start --web (Metro web target)";
+  if (fw.includes("next")) return "next dev";
+  if (fw.includes("vite")) return "vite";
+  return "starting the web dev server";
+}
+
+function previewLogColor(
+  line: string,
+  colors: { error: string; warn: string; success: string; info: string; textMuted: string; accent: string },
+): string {
+  const l = line.toLowerCase();
+  if (/^\s*(queued|starting|building|running|listening|ready)\s*$/i.test(line) ||
+      /^\s*\$\s+(flutter|npm|npx|yarn|pnpm|bun|expo|vite|next)\b/i.test(line)) {
+    return colors.info || colors.accent;
+  }
+  if (/\b(error|failed|failure|exception|fatal|crash|cannot|unable|denied|rejected|timed out|timeout)\b/.test(l) || /\bhttp\s*[45]\d\d\b/.test(l)) {
+    return colors.error;
+  }
+  if (/\b(warn|warning|deprecated|mismatch|expected version|recrawled|retry|stale)\b/.test(l)) {
+    return colors.warn;
+  }
+  if (/\b(ready|success|succeeded|compiled|done|listening|serving on|running|connected)\b/.test(l)) {
+    return colors.success;
+  }
+  if (/\b(queued|starting|building|waiting|scanning|probe|progress|installing)\b/.test(l)) {
+    return colors.info || colors.accent;
+  }
+  return colors.textMuted;
+}
+
+function previewLogsLookHealthy(lines: readonly string[]): boolean {
+  const tail = lines.slice(-80).join("\n").toLowerCase();
+  return /\b(queued|starting|ready|ready\s+100%|bundled|compiled|listening|serving on|running)\b/.test(tail) ||
+    /^\s*\$\s+(flutter|npm|npx|yarn|pnpm|bun|expo|vite|next)\b/im.test(tail) ||
+    /\b(?:ios|android|web)\b[^\n]*\b\d{1,3}(?:\.\d+)?%\s*\(\d+\/\d+\)/.test(tail);
+}
+
+function previewLogsNeedProjectFix(lines: readonly string[], statusError?: string | null): boolean {
+  const err = String(statusError || "").toLowerCase();
+  const tail = lines.slice(-80).join("\n").toLowerCase();
+  const text = `${err}\n${tail}`;
+  if (!text.trim()) return false;
+  if (/\b(render probe timed out|server is listening but the webview did not render|no render probe message received)\b/.test(text)) {
+    return false;
+  }
+  if (/\b(disconnected|not connected|connection dropped|relay disconnected|status polling is paused)\b/.test(text)) {
+    return false;
+  }
+  const hasRealFailure = /\b(failed to compile|compilation failed|module build failed|bundling failed|unable to resolve module|syntaxerror|error ts\d+|no file or variants found for asset|cannot find module|undefined name|isn't defined|runtime error|uncaught|exception|crash)\b/.test(text);
+  if (!hasRealFailure) return false;
+  return true;
+}
+
+// Shared gate (parity rule): both browser-preview implementations consume
+// src/lib/previewHealth — see previewHealth.test.mts for the drift guard.
+const previewCanOfferProjectFix = (status: DevServerStatus | null | undefined, lines: readonly string[]): boolean =>
+  previewHealthCanOfferProjectFix(status, lines, previewLogsNeedProjectFix);
+
+function projectLabelFromStatus(status: DevServerStatus | null): string {
+  const workDir = String(status?.workDir || "").trim();
+  if (workDir) {
+    const parts = workDir.split("/").filter(Boolean);
+    const tail = parts[parts.length - 1];
+    if (tail) return tail;
+  }
+  const framework = String(status?.framework || "").trim();
+  return framework || "App";
+}
+
+type PreviewProbeState = {
+  href?: string;
+  reason?: string;
+  mountId?: string;
+  mountChildren?: number;
+  bodyChildren?: number;
+  bodyTextLen?: number;
+  visibleBoxCount?: number;
+  mediaCount?: number;
+};
+
+export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean } = {}) {
+  const c = useColors();
+  const layout = useResponsiveLayout();
+  const [status, setStatus] = useState<DevServerStatus | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [webViewKey, setWebViewKey] = useState(0);
+  const [webStarting, setWebStarting] = useState(false);
+  // True once the WebView has ACTUAL rendered content (a real DOM / flutter-view),
+  // not merely a 200 on index.html. Flutter web returns 200 for a page that then
+  // renders black while CanvasKit boots or if assets 404 through the proxy — so
+  // onLoadEnd alone is a false "ready". We keep the progress overlay up until an
+  // injected probe confirms visible content, so the user never stares at black.
+  const [webContentLoaded, setWebContentLoaded] = useState(false);
+  // Terminal failure: the web server never came up within the retry budget, or
+  // the agent streamed an error. Drives the failure panel (with logs) instead of
+  // an endless spinner or a black page.
+  const [previewFailed, setPreviewFailed] = useState(false);
+  // Set when the readiness probe is IMPOSSIBLE (cross-origin iframe on RN-web),
+  // as opposed to merely slow. Distinguishing the two is the whole point: one is
+  // worth waiting for, the other never resolves.
+  const [probeUnavailable, setProbeUnavailable] = useState<string | null>(null);
+  // Rolling tail of dev-server log lines, for the starting + failure panels.
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [previewProbe, setPreviewProbe] = useState<PreviewProbeState | null>(null);
+  const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
+  const browserLaneDoctorRunningRef = useRef(false);
+  const browserLaneDoctorRanForKeyRef = useRef("");
+  // The named capability gap behind a failed start (missing Flutter/toolchain),
+  // produced by the agent and carried on the /dev/events error frame AND
+  // /dev/status. This screen is the OTHER browser-preview implementation: it
+  // used to offer Retry and "Fix in Yaver" — an LLM run — for a class whose
+  // deterministic one-command fix already existed, and no Install at all.
+  const [previewGap, setPreviewGap] = useState<CapabilityGap | null>(null);
+  const [gapFixRunning, setGapFixRunning] = useState(false);
+  // Hand a failure with no deterministic fixer to a coding agent, pressing the
+  // route the AGENT supplied. See quicClient.invokeGapFix for why the body is
+  // never rebuilt on this side.
+  const runGapAIFix = useCallback(async (gap: CapabilityGap) => {
+    const fix = gap.aiFix;
+    if (!fix || gapFixRunning) return;
+    setGapFixRunning(true);
+    try {
+      await (quicClient as any).invokeGapFix(fix.method, fix.path, gapFixBody(fix));
+      pushLog(`[fix] sent to the runner — ${fix.label}`);
+      setPreviewGap(null);
+    } catch (err) {
+      // Say it failed. A silent no-op is the false green this seam removes.
+      pushLog(`[fix] could not hand it to the runner: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGapFixRunning(false);
+    }
+  }, [gapFixRunning]);
+  const [gapFixStartedAt, setGapFixStartedAt] = useState<number | null>(null);
+  const [gapFixNow, setGapFixNow] = useState(Date.now());
+  const gapFixCancelRef = useRef<(() => void) | null>(null);
+  const pushLog = useCallback((line: string) => {
+    const t = (line || "").replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
+    if (!t) return;
+    setLogLines((prev) => (prev[prev.length - 1] === t ? prev : [...prev, t].slice(-40)));
+  }, []);
+  useEffect(() => {
+    if (!gapFixRunning) return;
+    const id = setInterval(() => setGapFixNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [gapFixRunning]);
+  useEffect(() => () => gapFixCancelRef.current?.(), []);
+  const webRetryCount = useRef(0);
+  const webRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webErroredThisLoad = useRef(false);
+  const wasRunning = useRef(false);
+  const webViewRef = useRef<WebView>(null);
+  const previewLogScrollRef = useRef<ScrollView>(null);
+  const reportedBundlePath = previewBundlePath(status as any);
+  const bundleUrl = reportedBundlePath ? quicClient.getDevServerBundleUrl(reportedBundlePath) : "";
+
+  // DOM mode: when the user flips Inspect on (in the Tasks-tab chip), inject
+  // the enable command into THIS WebView — the probe is loaded from the
+  // agent-proxied bundle, so it is present and listening on this window. The
+  // probe auto-offs after a selection, which is the right one-tap mobile UX.
+  useEffect(() => {
+    return subscribeDomInspectMode((on) => {
+      if (!on) return;
+      try {
+        webViewRef.current?.injectJavaScript(
+          'window.postMessage({source:"yaver-dom",t:"yaver-dom-mode",enabled:true},"*");true;',
+        );
+      } catch {
+        /* webview not mounted — the toggle just stays local until it is */
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!showPreview || logLines.length === 0) return;
+    const id = setTimeout(() => previewLogScrollRef.current?.scrollToEnd({ animated: true }), 30);
+    return () => clearTimeout(id);
+  }, [showPreview, logLines.length]);
+
+  const runBrowserLaneDoctor = useCallback((reason: string) => {
+    if (!showPreview || !bundleUrl || webContentLoaded) return;
+    const key = `${bundleUrl}|${reason}`;
+    if (browserLaneDoctorRunningRef.current || browserLaneDoctorRanForKeyRef.current === key) return;
+    browserLaneDoctorRunningRef.current = true;
+    browserLaneDoctorRanForKeyRef.current = key;
+    pushLog(`[doctor] probing browser lane after ${reason}…`);
+    void doctorBrowserLane(quicClient, 45).then((probe) => {
+      if (!probe) {
+        pushLog("[doctor] browser lane probe unavailable");
+        return;
+      }
+      setBrowserLaneProbe(probe);
+      pushLog(browserLaneProbeLine(probe));
+      if (!probe.ok) setPreviewFailed(true);
+    }).catch((err) => {
+      pushLog(`[doctor] browser lane probe failed: ${err instanceof Error ? err.message : String(err)}`);
+    }).finally(() => {
+      browserLaneDoctorRunningRef.current = false;
+    });
+  }, [bundleUrl, pushLog, showPreview, webContentLoaded]);
+
+  // Auto-retry the WebView while the framework's web server is still compiling
+  // (agent returns 503 {status:"starting"} or refuses the connection). Up to
+  // ~30 tries × 2.5s ≈ 75s, which covers a cold Flutter/expo web compile.
+  const scheduleWebRetry = useCallback(() => {
+    setLoading(false);
+    if (webRetryCount.current >= 30) {
+      // Give up quietly into the failure panel (which shows the logs + a Retry
+      // button) rather than an Alert that dismisses to a black WebView.
+      setWebStarting(false);
+      setPreviewFailed(true);
+      runBrowserLaneDoctor("webview-retry-exhausted");
+      return;
+    }
+    webRetryCount.current += 1;
+    setWebStarting(true);
+    if (webRetryTimer.current) clearTimeout(webRetryTimer.current);
+    webRetryTimer.current = setTimeout(() => setWebViewKey((k) => k + 1), 2500);
+  }, [runBrowserLaneDoctor]);
+
+  // Reset the preview's progress/failure state for a fresh open or manual retry.
+  const resetPreviewProgress = useCallback(() => {
+    webRetryCount.current = 0;
+    webErroredThisLoad.current = false;
+    setPreviewFailed(false);
+    setWebContentLoaded(false);
+    setWebStarting(false);
+    setLogLines([]);
+    setPreviewProbe(null);
+    setBrowserLaneProbe(null);
+    browserLaneDoctorRunningRef.current = false;
+    browserLaneDoctorRanForKeyRef.current = "";
+  }, []);
+
+  // Reset the retry budget whenever a fresh preview opens or the WebView loads.
+  useEffect(() => () => { if (webRetryTimer.current) clearTimeout(webRetryTimer.current); }, []);
+
+  // Shake-to-feedback for the BROWSER lane. The app runs in a WebView inside
+  // Yaver, so a phone shake (caught by the global bridge in feedbackTrigger.ts)
+  // is forwarded IN HERE and injected into the WebView, opening the guest's own
+  // web / Flutter feedback SDK — the same "shake → feedback" the Hermes lane
+  // gets from the native container. Without this, shaking a Flutter/web preview
+  // did nothing (the native shake is gated to Hermes guests only).
+  useEffect(() => {
+    if (!showPreview) return;
+    setActivePreviewLane("browser");
+    const unsub = subscribeBrowserShake(() => {
+      // Dispatch every launch signal a guest SDK might listen for. The web SDK
+      // (sdk/feedback/web) and flutter SDK (sdk/feedback/flutter, web build)
+      // listen for the "yaver-feedback:launch" event / postMessage.
+      webViewRef.current?.injectJavaScript(`(function(){try{
+        var d={source:'shake',ts:Date.now()};
+        window.dispatchEvent(new CustomEvent('yaver-feedback:launch',{detail:d}));
+        window.postMessage({type:'yaver-feedback:launch',source:'shake'}, '*');
+        if(typeof window.__yaverFeedbackLaunch==='function'){window.__yaverFeedbackLaunch('shake');}
+      }catch(e){}})(); true;`);
+    });
+    return () => { unsub(); setActivePreviewLane(null); };
+  }, [showPreview]);
+
+  // Poll dev server status every 3s.
+  //
+  // A SINGLE failed /dev/status must not tear the preview down: over relay a
+  // transient error makes getDevServerStatus() return a synthetic
+  // running:false object (or null), and the old code nulled `status` on the
+  // spot — the card vanished and the modal flash-closed, which read as "the
+  // tap did nothing". Require consecutive inactive polls before believing the
+  // server is really gone, and never tear down a preview whose WebView has
+  // ACTUAL rendered content — the user is looking at a working app; give them
+  // Stop/Back instead of yanking it.
+  const inactivePolls = useRef(0);
+  useEffect(() => {
+    let mounted = true;
+    const poll = async () => {
+      const s = await quicClient.getDevServerStatus();
+      if (!mounted) return;
+      const isActive = isActiveDevServerStatus(s);
+      if (isActive) {
+        inactivePolls.current = 0;
+        setStatus(s);
+        // Auto-show banner when dev server first starts
+        if (!wasRunning.current) {
+          wasRunning.current = true;
+        }
+        return;
+      }
+      inactivePolls.current += 1;
+      // Keep the last-known status through short blips (~2 polls ≈ 6s).
+      if (inactivePolls.current < 3) return;
+      // Persistent: the server really is gone — unless the preview has real
+      // rendered content on screen, in which case keep it (Stop/Back exit).
+      if (showPreview && webContentLoaded) return;
+      wasRunning.current = false;
+      setStatus(null);
+      if (showPreview) setShowPreview(false);
+    };
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, [showPreview, webContentLoaded]);
+
+  // Subscribe to SSE events for auto-reload + log streaming
+  useEffect(() => {
+    if (!status?.running && !status?.building) return;
+
+    const baseUrl = (quicClient as any).baseUrl;
+    if (!baseUrl) return;
+
+    // XHR-based SSE (src/lib/sseClient.ts). RN's fetch exposes no streaming
+    // body, so `res.body?.getReader()` was undefined here too and this stream
+    // never delivered a single frame — the same defect that left the other
+    // preview screen showing "waiting for the first output from the box" while
+    // the agent streamed happily. One implementation for the whole app now.
+    const sub = subscribeSse({
+      url: `${baseUrl}/dev/events`,
+      headers: (quicClient as any).authHeaders,
+      onOpen: () => setLastByteAt(Date.now()),
+      onError: (reason) => pushLog(`[preview] log stream unavailable: ${reason}`),
+      onEvent: (event: any) => {
+              {
+                // Yaver Protocol v1: structured progress + snapshots
+                // for Hermes/Metro/Expo Web. The mobile DevPreview
+                // banner shows a real percentage + currentFile while
+                // a bundle compiles instead of a vague "Building…".
+                if (event.type === "progress" && typeof event.topic === "string") {
+                  const pct = typeof event.pct === "number" ? Math.round(event.pct) : 0;
+                  const cf = typeof event.currentFile === "string" ? event.currentFile.split("/").slice(-2).join("/") : "";
+                  const phaseStr = typeof event.phase === "string" ? event.phase.replace(/_/g, " ") : "compiling";
+                  setProgressState({
+                    topic: event.topic,
+                    phase: phaseStr,
+                    pct,
+                    done: typeof event.done === "number" ? event.done : 0,
+                    total: typeof event.total === "number" ? event.total : 0,
+                    unit: typeof event.unit === "string" ? event.unit : "",
+                    currentFile: cf,
+                    src: event.progressSrc === "exact" ? "exact" : "unknown",
+                    etaMs: typeof event.etaMs === "number" ? event.etaMs : 0,
+                    updatedAt: Date.now(),
+                  });
+                  setLastByteAt(Date.now());
+                  return; // (was `continue` inside the old while-loop)
+                }
+                if (event.type === "phase" && typeof event.topic === "string") {
+                  setProgressState((prev) => {
+                    const same = prev && prev.topic === event.topic;
+                    return {
+                      topic: event.topic,
+                      phase: typeof event.phase === "string" ? event.phase.replace(/_/g, " ") : "",
+                      pct: same && prev ? prev.pct : 0,
+                      done: same && prev ? prev.done : 0,
+                      total: same && prev ? prev.total : 0,
+                      unit: same && prev ? prev.unit : "",
+                      currentFile: "",
+                      src: same && prev ? prev.src : "unknown",
+                      etaMs: 0,
+                      updatedAt: Date.now(),
+                    };
+                  });
+                  setLastByteAt(Date.now());
+                  return; // (was `continue` inside the old while-loop)
+                }
+                if (event.type === "snapshot") {
+                  setLastByteAt(Date.now());
+                  // Render fully from the snapshot's recent_log + progress
+                  // so a reconnected client never feels behind.
+                  //
+                  // recentLogs was in that comment but never actually read, so a
+                  // client attaching after the interesting output — or to a
+                  // process gone quiet on a real failure ("Failed to bind web
+                  // development server: Address already in use") — showed an
+                  // empty log tail while the snapshot carried the whole thing
+                  // every 5s. Same gap fixed in app/(tabs)/apps.tsx; keep both
+                  // in step (they are the two browser-preview implementations).
+                  if (Array.isArray(event.snapshot?.recentLogs)) {
+                    const tail = (event.snapshot.recentLogs as unknown[])
+                      .map((l) => String(l).trimEnd())
+                      .filter(Boolean);
+                    if (tail.length) {
+                      setLastLogLine(tail[tail.length - 1]);
+                      // Merge, don't append: the same tail arrives on EVERY
+                      // snapshot (~5s), and pushLog only dedupes against the
+                      // immediately-previous line — so appending would fill the
+                      // panel with repeats of the same lines.
+                      setLogLines((prev) => {
+                        const fresh = tail.filter((ln) => !prev.includes(ln));
+                        return fresh.length ? [...prev, ...fresh].slice(-40) : prev;
+                      });
+                    }
+                  }
+                  if (event.snapshot?.previewHealth) {
+                    setStatus((prev) => prev ? { ...prev, previewHealth: event.snapshot.previewHealth } : prev);
+                  }
+                  if (event.snapshot?.progress) {
+                    const p = event.snapshot.progress;
+                    setProgressState({
+                      topic: typeof p.topic === "string" ? p.topic : "dev/start",
+                      phase: typeof p.phase === "string" ? p.phase.replace(/_/g, " ") : "",
+                      pct: typeof p.pct === "number" ? Math.round(p.pct) : 0,
+                      done: typeof p.done === "number" ? p.done : 0,
+                      total: typeof p.total === "number" ? p.total : 0,
+                      unit: typeof p.unit === "string" ? p.unit : "",
+                      currentFile: typeof p.currentFile === "string" ? p.currentFile.split("/").slice(-2).join("/") : "",
+                      src: p.progressSrc === "exact" ? "exact" : "unknown",
+                      etaMs: typeof p.etaMs === "number" ? p.etaMs : 0,
+                      updatedAt: Date.now(),
+                    });
+                  }
+                  return; // (was `continue` inside the old while-loop)
+                }
+                if (event.type === "heartbeat") {
+                  setLastByteAt(Date.now());
+                  return; // (was `continue` inside the old while-loop)
+                }
+                if (event.type === "reload" || event.type === "ready") {
+                  if (!mustUseNativePreview) {
+                    setWebViewKey(k => k + 1);
+                    setLoading(true);
+                  }
+                  setLastLogLine("");
+                  setProgressState(null);
+                  setLastByteAt(Date.now());
+                } else if (event.type === "building") {
+                  setLastLogLine(event.message || "Building...");
+                  pushLog(event.message || "Building...");
+                  setLastByteAt(Date.now());
+                } else if (event.type === "log" && event.logLine) {
+                  setLastLogLine(event.logLine);
+                  pushLog(event.logLine);
+                  setLastByteAt(Date.now());
+                } else if (event.type === "error") {
+                  const em = String(event.message || "Dev server failed to start");
+                  setLastLogLine(em.split("\n")[0]);
+                  // The agent packs the real output tail into the message —
+                  // split so the failure panel reads like a log.
+                  em.split("\n").map((l) => l.trimEnd()).filter(Boolean).forEach(pushLog);
+                  setPreviewFailed(true);
+                  setLastByteAt(Date.now());
+                  // The route. mgr.Start returns before the spawn, so a missing
+                  // toolchain can only ever arrive here.
+                  const gap = capabilityGapFromDevEvent(event);
+                  if (gap) setPreviewGap(gap);
+                }
+              }
+      },
+    });
+
+    return () => sub.close();
+  }, [status?.running, status?.building, status?.framework, status?.devMode]);
+
+  const [nativeLoading, setNativeLoading] = useState(false);
+  const [reloadLoading, setReloadLoading] = useState(false);
+  const [bundleMounted, setBundleMounted] = useState(false);
+  const [lastLogLine, setLastLogLine] = useState<string>("");
+
+  // Yaver Protocol v1: per-topic structured progress + transport
+  // liveness. The DevPreview banner reads progressState to render
+  // a real percentage + currentFile while a bundle compiles. The
+  // user never sees a vague "Building…" again. lastByteAt drives
+  // a "channel: live | syncing | reconnecting | lost" indicator
+  // so even when compile is silent, the user knows transport is
+  // alive — the agent guarantees a snapshot every 5s so >6s of
+  // silence is the only "real" disconnect.
+  const [progressState, setProgressState] = useState<{
+    topic: string;
+    phase: string;
+    pct: number;
+    done: number;
+    total: number;
+    unit: string;
+    currentFile: string;
+    src: "exact" | "unknown";
+    etaMs: number;
+    updatedAt: number;
+  } | null>(null);
+  const [lastByteAt, setLastByteAt] = useState<number>(Date.now());
+  // Tick once per second so the relative-time labels refresh
+  // without waiting for new bytes.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  // When the dev server was started in the BROWSER lane (web:true → the agent
+  // serves the web target and reports platform:"web"), render the WebView even
+  // for an expo/RN project. Previously the phone was Hermes-ONLY: any expo/RN
+  // status forced the native bundle path regardless of the lane the user chose,
+  // so "Browser Reload" silently became a Hermes build (and died on missing
+  // native modules like expo-gl). The web target has no such native coupling.
+  const mustUseNativePreview = mustUseNativePreviewLane({
+    framework: status?.framework,
+    platform: status?.platform,
+    devMode: status?.devMode,
+    building: status?.building,
+  });
+
+  // Listen for bundle unload events (user pressed "Back to Yaver")
+  useEffect(() => {
+    let mounted = true;
+    void isBundleLoaded()
+      .then((loaded) => {
+        if (mounted) setBundleMounted(loaded);
+      })
+      .catch(() => {
+        if (mounted) setBundleMounted(false);
+      });
+    const sub = onBundleEvent("onBundleUnloaded", () => {
+      setNativeLoading(false);
+      setBundleMounted(false);
+    });
+    const loadedSub = onBundleEvent("onBundleLoaded", () => setBundleMounted(true));
+    return () => {
+      mounted = false;
+      sub.remove();
+      loadedSub.remove();
+    };
+  }, []);
+
+  // Load the app inside Yaver via the secondary RCTBridge (super-host mode).
+  // This gives full native module access (camera, BLE, GPS, etc.) without
+  // needing a separate dev client app installed on the phone.
+  // Declared before handleOpen so the latter can close over it without
+  // tripping the TS "used before declaration" rule.
+  const handleRunInYaver = useCallback(async () => {
+    const baseUrl = (quicClient as any).baseUrl;
+    if (!baseUrl) {
+      Alert.alert("Error", "Not connected to agent");
+      return;
+    }
+    setNativeLoading(true);
+    setLastLogLine("Building native bundle...");
+    // The Go agent caps Metro bundle at 8 min and hermesc at 3 min, so
+    // /dev/build-native worst-case duration is ~11 min. Give the client a
+    // hair more so the agent's structured "timedOut" response surfaces
+    // first; client abort is a backstop for a dead network or crashed
+    // agent. Without this the fetch hangs forever — setNativeLoading stays
+    // true, the UI is stuck on "Building..." and the user has to kill the
+    // app to recover.
+    const buildAbort = new AbortController();
+    const buildAbortTimer = setTimeout(() => buildAbort.abort(), 12 * 60 * 1000);
+    try {
+      // Ask the Go agent to build a production Hermes bytecode bundle
+      const platform = require("react-native").Platform.OS;
+      const headers = {
+        ...(quicClient as any).authHeaders,
+        "Content-Type": "application/json",
+      };
+      const buildRes = await fetch(`${baseUrl}/dev/build-native`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(
+          buildNativeBuildRequest(
+            platform,
+            currentYaverConsumerContract(),
+            status?.workDir ? { projectPath: status.workDir } : undefined,
+          ),
+        ),
+        signal: buildAbort.signal,
+      });
+      clearTimeout(buildAbortTimer);
+      const buildResult = await buildRes.json();
+
+      if (buildResult.status !== "ok") {
+        const error = new Error(nativeBuildFailureMessage(buildResult));
+        (error as any).buildResult = buildResult;
+        throw error;
+      }
+      const familySelection = buildResult.runtimeFamilySelection;
+      const familyLabel = familySelection?.selected?.label || familySelection?.selected?.id || "";
+      if (familyLabel) {
+        setLastLogLine(
+          familySelection?.exactMatch
+            ? `Runtime family matched: ${familyLabel}`
+            : `Runtime family closest host: ${familyLabel}`,
+        );
+      }
+
+      // Download assets first (if any) so images/fonts are available when JS runs
+      if (buildResult.hasAssets && buildResult.assetsUrl) {
+        setLastLogLine("Downloading assets...");
+        try {
+          const assetsRes = await fetch(`${baseUrl}${buildResult.assetsUrl}`, { headers });
+          if (assetsRes.ok) {
+            const assetsBlob = await assetsRes.blob();
+            // Push assets to the on-device HTTP server for extraction
+            const devicePort = 8347;
+            await fetch(`http://localhost:${devicePort}/assets`, {
+              method: "POST",
+              body: assetsBlob,
+              headers: { "Content-Type": "application/zip" },
+            });
+          }
+        } catch (assetErr) {
+          // Non-fatal — images may be broken but app should still render
+          console.warn("[DevPreview] asset download failed:", assetErr);
+        }
+      }
+
+      // Load the compiled native bundle. loadAppIfChanged short-circuits
+      // when md5 matches what's already running — saves the bridge reload.
+      setLastLogLine("Loading bundle on device...");
+      const bundleUrl = `${baseUrl}${buildResult.bundleUrl}`;
+      const moduleName = buildResult.moduleName || "main";
+      const loadResult = await loadAppIfChanged(
+        bundleUrl,
+        moduleName,
+        buildResult.md5,
+        (quicClient as any).authHeaders,
+      );
+      if (loadResult.skipped) {
+        setLastLogLine("Already up to date");
+      }
+      setBundleMounted(true);
+      // Success must clear the busy flag too — only the catch below did, so a
+      // successful load left the card button disabled on "Building…" until an
+      // onBundleUnloaded event happened to arrive.
+      setNativeLoading(false);
+    } catch (err: any) {
+      clearTimeout(buildAbortTimer);
+      setNativeLoading(false);
+      setLastLogLine("");
+      const aborted = err?.name === "AbortError" || buildAbort.signal.aborted;
+      const message = aborted
+        ? "Build did not respond in 12 minutes. The agent may be stuck or unreachable — check the project's node_modules and retry."
+        : err?.message || "Could not load bundle in Yaver";
+      const title = aborted
+        ? "Build Timed Out"
+        : err?.buildResult ? nativeBuildFailureTitle(err.buildResult) : "Load Failed";
+      Alert.alert(title, message);
+    }
+    // status.workDir MUST be in the deps. Agent 1.99.187+ requires
+    // every /dev/build-native to pin the project via projectName,
+    // projectPath, or bundleId — with `[]` deps the closure froze
+    // `status` to its first-render value (undefined), so the tap
+    // sent an unpinned request and the agent rejected with
+    // PROJECT_REQUIRED ("build-native requires projectName,
+    // projectPath, or bundleId..."). Including workDir means the
+    // callback refreshes whenever the dev server's project changes.
+  }, [status?.workDir]);
+
+  const handleOpen = useCallback(() => {
+    if (mustUseNativePreview) {
+      // Expo / React Native on the phone must never degrade to WebView.
+      handleRunInYaver();
+      return;
+    }
+    // Web mode: open in WebView
+    resetPreviewProgress();
+    setShowPreview(true);
+    setLoading(true);
+    setWebViewKey(k => k + 1);
+  }, [mustUseNativePreview, handleRunInYaver, resetPreviewProgress]);
+
+  /** Fast/full reload split (agent 1.99.374+).
+   *  fast — the framework's cheapest refresh: Metro/Expo built-in reload,
+   *         Flutter "r" hot reload, fresh web bundle re-served. Sub-second.
+   *  full — framework-level restart: Flutter "R" hot restart / forced
+   *         web-bundle re-export (warm cache) on the browser lane; a full
+   *         Hermes bundle rebuild + push on the native lane.
+   *  Default stays "fast" so the primary button is the cheap one. */
+  const handleReload = useCallback(async (kind: "fast" | "full" = "fast") => {
+    if (reloadLoading || nativeLoading) return;
+    if (mustUseNativePreview && !bundleMounted) {
+      await handleRunInYaver();
+      return;
+    }
+    setReloadLoading(true);
+    if (!mustUseNativePreview) {
+      setLoading(true);
+    }
+    try {
+      // Native Hermes lane: full = rebuild + push ("bundle"); fast = the
+      // dev-server hot-reload broadcast. Browser lane: fast/full go to
+      // /dev/reload where Flutter maps them onto "r"/"R".
+      const mode = mustUseNativePreview
+        ? (kind === "full" ? "bundle" : "fast")
+        : kind;
+      const result = await quicClient.reloadDevServerDetailed({
+        mode,
+        allowBundleFallback: mustUseNativePreview,
+      });
+      if (!devReloadReachedTarget(result)) {
+        setLoading(false);
+        Alert.alert("Reload Failed", describeDevReloadResult(result));
+        return;
+      }
+      if (!mustUseNativePreview) {
+        if (!showPreview || !status?.running) {
+          setWebViewKey(k => k + 1);
+        } else {
+          setTimeout(() => setWebViewKey(k => k + 1), 500);
+        }
+      }
+    } finally {
+      setReloadLoading(false);
+    }
+  }, [bundleMounted, handleRunInYaver, mustUseNativePreview, nativeLoading, reloadLoading, showPreview, status?.running]);
+
+  // Post-task render for the BROWSER lane (2026-08-02).
+  //
+  // A coding turn that lands must refresh what the user is looking at. That
+  // worked only for WebRTC simulator targets; a browser-lane preview — the
+  // route Yaver-on-Yaver is steered to — had no listener at all, so "vibe,
+  // then watch it update" simply did not happen here.
+  //
+  // Must sit BELOW handleReload: the dep array is evaluated during render, so
+  // referencing the `const` above its declaration is a TDZ ReferenceError, not
+  // a lint nit.
+  //
+  // Atomicity is preserved for free — handleReload already returns early while
+  // `reloadLoading || nativeLoading`, so an auto-render and a manual Fast
+  // Reload tap coalesce instead of stacking.
+  useEffect(() => {
+    if (!showPreview) return;
+    return subscribeBrowserRender(() => {
+      void handleReload("fast");
+    });
+  }, [showPreview, handleReload]);
+
+  const handleStop = useCallback(async () => {
+    Alert.alert("Stop Serving Preview", "This will stop serving the current preview and close it on this device.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Stop Serving", style: "destructive", onPress: async () => {
+          await quicClient.stopDevServer();
+          setShowPreview(false);
+          setStatus(null);
+        }
+      },
+    ]);
+  }, []);
+
+  // WHICH url the preview loads — previewBundlePath (shared with apps.tsx;
+  // the app's two browser-preview implementations, a fix in one is not a
+  // fix) applies the agent-is-authority rule, the single legacy
+  // "/dev/"+webPort override, and the empty-url guard.
+  if (!status) return null;
+
+  const projectLabel = projectLabelFromStatus(status);
+  const frameworkLabel = status.framework || "app";
+  const portLabel = status.port ? `port ${status.port}` : null;
+  const hotReloadLabel = status.hotReload === false ? "hot reload off" : "hot reload on";
+  const metaLine = [frameworkLabel, portLabel, hotReloadLabel].filter(Boolean).join(" · ");
+  const modeLine = status.building
+    ? "build in progress"
+    // Browser lane (web-served): the preview is the web target in a WebView,
+    // not a native/Hermes install. The agent signals this via devMode="web".
+    : (String(status.devMode || "").toLowerCase() === "web" || String(status.platform || "").toLowerCase() === "web")
+      ? "browser preview"
+      // Flutter is checked BEFORE the iOS install method, because
+      // iosInstallMethod is a global preference about how *native RN apps* get
+      // onto a phone and says nothing about a Flutter project. Reading it here
+      // labelled a Flutter preview "native install · this device" — a lane that
+      // cannot exist (Flutter is DevServerKindWeb and never loads into the Yaver
+      // container), on a card whose only other line was "Failed to compile
+      // application." The user was told they were doing something impossible and
+      // then shown an unexplained failure of it (2026-07-25 recording).
+      : frameworkLabel.toLowerCase() === "flutter"
+        ? "browser preview"
+        : (status.iosInstallMethod === "native"
+            ? "native install"
+            : "Hermes bundle in Yaver");
+  const targetLabel = status.targetDeviceName || "this device";
+  const isBusy = !!status.building || nativeLoading;
+  const openLabel = status.building
+    ? "Compiling…"
+    : nativeLoading
+      ? "Building…"
+      : "Open in Yaver";
+
+  return (
+    <>
+      <View style={[styles.card, styles.activeCard]}>
+        {/* Mirror the Projects-tab card layout so the Tasks tab's
+            dev-server section reads as the same component. The previous
+            banner squeezed the project name + meta into a small block
+            beside a heavy two-line green button; this layout puts the
+            project name at the visual centre and lets the action row
+            (Open in Yaver / Reload / Stop) sit underneath with the
+            same three-button rhythm Apps uses. */}
+        <View style={styles.cardHeader}>
+          {status.building ? (
+            <ActivityIndicator size="small" color="#eab308" />
+          ) : (
+            <View style={[styles.statusDot, { backgroundColor: "#22c55e" }]} />
+          )}
+          <View style={styles.cardTitleContainer}>
+            <Text style={styles.cardTitle} numberOfLines={1}>{projectLabel}</Text>
+            <Text style={styles.cardMeta} numberOfLines={1}>{metaLine}</Text>
+            <Text style={[styles.cardMeta, { color: "#86efac" }]} numberOfLines={1}>
+              mode · {modeLine}
+            </Text>
+            <Text style={[styles.cardMeta, { color: "#7dd3fc" }]} numberOfLines={1}>
+              target · {targetLabel}
+            </Text>
+            {lastLogLine ? (
+              <Text style={[styles.cardMeta, { color: "#94a3b8" }]} numberOfLines={1}>
+                {lastLogLine}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+        <View style={styles.cardActions}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.actionBtn,
+              styles.openBtn,
+              (isBusy || pressed) && { opacity: pressed ? 0.85 : 0.55 },
+            ]}
+            onPress={handleOpen}
+            disabled={isBusy}
+          >
+            {isBusy ? (
+              <>
+                <ActivityIndicator size="small" color="#000" />
+                <Text style={[styles.openBtnText, { marginLeft: 6 }]}>{openLabel}</Text>
+              </>
+            ) : (
+              <Text style={styles.openBtnText}>{bundleMounted ? "Reopen in Yaver" : openLabel}</Text>
+            )}
+          </Pressable>
+          {/* Reload only makes sense after the bundle is actually
+              mounted on this device — before the first Open in Yaver
+              tap there's nothing loaded to reload. Hiding it in that
+              state stops the "tapped Reload, nothing happened" trap
+              the user was hitting. For the web WebView path, the
+              modal has its own Reload button in the header, so we
+              don't need a third copy on the card. */}
+          {bundleMounted ? (
+            <>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  styles.reloadBtn,
+                  (isBusy || reloadLoading || pressed) && { opacity: pressed ? 0.85 : 0.55 },
+                ]}
+                onPress={() => void handleReload("fast")}
+                disabled={isBusy || reloadLoading}
+                accessibilityLabel="Fast Reload"
+              >
+                {reloadLoading ? (
+                  <ActivityIndicator size="small" color="#22c55e" />
+                ) : (
+                  <Text style={styles.reloadBtnText}>{"↻"} Fast Reload</Text>
+                )}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  styles.fullReloadBtn,
+                  (isBusy || reloadLoading || pressed) && { opacity: pressed ? 0.85 : 0.55 },
+                ]}
+                onPress={() => void handleReload("full")}
+                disabled={isBusy || reloadLoading}
+                accessibilityLabel="Full Reload"
+              >
+                <Text style={styles.fullReloadBtnText}>{"⟳"} Full Reload</Text>
+              </Pressable>
+            </>
+          ) : null}
+          <Pressable
+            style={({ pressed }) => [
+              styles.actionBtn,
+              styles.stopBtn,
+              pressed && { opacity: 0.85 },
+            ]}
+            onPress={handleStop}
+          >
+            <Text style={styles.stopBtnText}>Stop</Text>
+          </Pressable>
+        </View>
+      </View>
+      {/* Full-screen preview. Presentation is host-aware: iOS cannot reliably
+          present a second native <Modal> while another one is on screen — the
+          newcomer mounts invisibly behind it and the flow dead-ends (same
+          constraint tasks.tsx's handoffModal works around). When this
+          component is rendered INSIDE an already-presented modal (the Tasks
+          task-detail sheet), a nested <Modal> is exactly that dead end: "Open
+          in Yaver" set showPreview and nothing visible happened. So a hosted
+          instance renders the preview as an absolute-fill overlay inside the
+          host modal instead of presenting a second one. */}
+      {(() => {
+        const previewBody = (
+        <View style={[styles.container, { backgroundColor: c.bg }, hostedInModal && styles.inlineOverlay]}>
+          {/* Header */}
+          <View style={[styles.header, { backgroundColor: "#111", borderBottomColor: "#333" }]}>
+            <Pressable onPress={() => setShowPreview(false)} style={styles.headerBtn}>
+              <Text style={styles.headerBtnClose}>Back</Text>
+            </Pressable>
+            <View style={styles.headerCenter}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <View style={[styles.dotSmall, { backgroundColor: "#22c55e" }]} />
+                <Text style={styles.headerTitle}>
+                  {status.workDir?.split("/").pop() || status.framework}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.headerRight}>
+              <Pressable onPress={() => void handleReload("fast")} style={styles.headerBtn} accessibilityLabel="Fast Reload">
+                <Text style={styles.headerBtnReload}>Fast</Text>
+              </Pressable>
+              {/* Full reload pushes a new Hermes bundle to the MOBILE SDK
+                * listener. In the browser-preview lane there is no such
+                * listener by construction — the project is served as a Metro
+                * WEB bundle — so the tap could only ever end in
+                *
+                *   Reload Failed
+                *   No mobile SDK listener or browser bundle preview is connected on this agent.
+                *
+                * an alert whose only affordance is OK. Reported from TestFlight
+                * 2026-08-01 on todo-rn, whose own card two screens earlier read
+                * "mode · browser preview": the app already held the fact that
+                * made the action impossible, and offered it anyway.
+                *
+                * Not offering an impossible action is the cheapest rung of the
+                * failure ladder — the one the user never has to see. Fast
+                * covers refresh in this lane; Full returns with the native
+                * lane. */}
+              {mustUseNativePreview ? (
+                <Pressable onPress={() => void handleReload("full")} style={styles.headerBtn} accessibilityLabel="Full Reload">
+                  <Text style={styles.headerBtnReloadFull}>Full</Text>
+                </Pressable>
+              ) : null}
+              <Pressable onPress={handleStop} style={styles.headerBtn}>
+                <Text style={styles.headerBtnStop}>{status.stopActionLabel || "Stop Serving"}</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          {mustUseNativePreview ? (
+            /* Native dev-client mode or building: show controls / build logs */
+            <View style={styles.nativeControls}>
+              {status.building ? (
+                /* ── Building state: show compilation progress ── */
+                <>
+                  <View style={styles.nativeStatus}>
+                    <ActivityIndicator size="small" color="#eab308" />
+                    <Text style={[styles.nativeTitle, { color: "#eab308" }]}>Building Native App</Text>
+                  </View>
+                  <Text style={styles.nativeSubtext}>
+                    {status.workDir?.split("/").pop() || "app"} — compiling for device
+                  </Text>
+                  <Text style={{ fontSize: 12, color: "#666", textAlign: "center", marginTop: 4 }}>
+                    This takes 3-5 min for the first build, ~30s for incremental
+                  </Text>
+
+                  {/* Build log output */}
+                  {lastLogLine ? (
+                    <View style={{
+                      marginTop: 16,
+                      padding: 12,
+                      borderRadius: 10,
+                      backgroundColor: "#111",
+                      borderWidth: 1,
+                      borderColor: "#333",
+                      width: "100%",
+                    }}>
+                      <Text style={{
+                        fontFamily: "monospace",
+                        fontSize: 11,
+                        color: "#eab308",
+                        lineHeight: 16,
+                      }} numberOfLines={3}>
+                        {lastLogLine}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  <View style={styles.nativeButtons}>
+                    <Pressable onPress={handleStop} style={[styles.nativeBtn, { backgroundColor: "#2e1a1a" }]}>
+                      <Text style={[styles.nativeBtnText, { color: "#ef4444" }]}>Cancel Build</Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : (
+                /* ── Running state: Metro is up, show controls ── */
+                <>
+                  <View style={styles.nativeStatus}>
+                    <View style={[styles.dot, { backgroundColor: "#22c55e", width: 14, height: 14, borderRadius: 7 }]} />
+                    <Text style={styles.nativeTitle}>Dev Server Ready</Text>
+                  </View>
+                  <Text style={styles.nativeSubtext}>
+                    {status.workDir?.split("/").pop() || "app"} — {status.framework} — port {status.port}
+                  </Text>
+
+                  {/* Metro URL — tap to copy */}
+                  {status.deepLink && (
+                    <Pressable
+                      onPress={() => {
+                        const url = status.deepLink!;
+                        import("expo-clipboard").then(({ setStringAsync }) => {
+                          setStringAsync(url);
+                          Alert.alert("Copied", url);
+                        }).catch(() => {});
+                      }}
+                      style={{ marginTop: 12, paddingVertical: 10, paddingHorizontal: 20, borderRadius: 10, backgroundColor: "#111", borderWidth: 1, borderColor: "#333" }}
+                    >
+                      <Text style={{ fontFamily: "monospace", fontSize: 14, color: "#22c55e", textAlign: "center" }}>
+                        {status.deepLink}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: "#666", textAlign: "center", marginTop: 4 }}>
+                        Tap to copy — paste in dev client if Bonjour fails
+                      </Text>
+                    </Pressable>
+                  )}
+
+                  {/* Run in Yaver (super-host: load bundle inside Yaver's RCTBridge) */}
+                  <Pressable
+                    onPress={handleRunInYaver}
+                    disabled={nativeLoading}
+                    style={[styles.nativeBtn, { backgroundColor: "#1a2e1a", paddingHorizontal: 40, marginTop: 12 }]}
+                  >
+                    {nativeLoading ? (
+                      <ActivityIndicator size="small" color="#22c55e" />
+                    ) : (
+                      <Text style={[styles.nativeBtnText, { color: "#22c55e" }]}>Open in Yaver</Text>
+                    )}
+                  </Pressable>
+                  <Text style={{ fontSize: 11, color: "#555", textAlign: "center", marginTop: 4 }}>
+                    Hermes bundle on this iPhone. Ideal for Linux, WSL, and remote-host workflows.
+                  </Text>
+
+                  {/* Open in separate dev client (if installed) */}
+                  {status.deepLink && (
+                    <Pressable
+                      onPress={() => {
+                        Linking.openURL(status.deepLink!).catch(() =>
+                          Alert.alert("Open App", "Open the app from your home screen.")
+                        );
+                      }}
+                      style={[styles.nativeBtn, { backgroundColor: "#1a1a2e", paddingHorizontal: 40, marginTop: 8 }]}
+                    >
+                      <Text style={[styles.nativeBtnText, { color: "#818cf8" }]}>Open Dev Client</Text>
+                    </Pressable>
+                  )}
+
+                  <View style={styles.nativeButtons}>
+                    <Pressable
+                      onPress={() => void handleReload("fast")}
+                      disabled={reloadLoading || nativeLoading}
+                      style={[styles.nativeBtn, { backgroundColor: "#1a2e1a", opacity: reloadLoading || nativeLoading ? 0.75 : 1 }]}
+                    >
+                      <Text style={[styles.nativeBtnText, { color: "#22c55e" }]}>
+                        {reloadLoading ? "Reloading…" : bundleMounted ? "Fast Reload" : "Open first"}
+                      </Text>
+                    </Pressable>
+                    {bundleMounted ? (
+                      <Pressable
+                        onPress={() => void handleReload("full")}
+                        disabled={reloadLoading || nativeLoading}
+                        style={[styles.nativeBtn, { backgroundColor: "#1a1a2e", opacity: reloadLoading || nativeLoading ? 0.75 : 1 }]}
+                      >
+                        <Text style={[styles.nativeBtnText, { color: "#818cf8" }]}>Full Reload</Text>
+                      </Pressable>
+                    ) : null}
+                    <Pressable onPress={handleStop} style={[styles.nativeBtn, { backgroundColor: "#2e1a1a" }]}>
+                      <Text style={[styles.nativeBtnText, { color: "#ef4444" }]}>{status.stopActionLabel || "Stop Serving"}</Text>
+                    </Pressable>
+                  </View>
+                </>
+              )}
+            </View>
+          ) : (
+            /* Web mode: load app in WebView, with a progress/failure overlay
+               that stays until REAL content is confirmed (see webContentLoaded). */
+            <>
+              {!bundleUrl ? (
+                /* No address yet (or no web target at all) — mounting a
+                   WebView on uri:"" issues no request, so nothing could ever
+                   error or retry. Render an explicit waiting state instead;
+                   the progress overlay below narrates the phase on top. */
+                <View style={[styles.webview, { alignItems: "center", justifyContent: "center" }]}>
+                  <Text style={styles.previewSubtle}>
+                    Waiting for the dev server to report its address…
+                  </Text>
+                </View>
+              ) : (
+              <WebView
+                ref={webViewRef}
+                key={webViewKey}
+                source={{ uri: bundleUrl }}
+                style={styles.webview}
+                onLoadStart={() => { setLoading(true); webErroredThisLoad.current = false; }}
+                onLoadEnd={() => { setLoading(false); }}
+                onHttpError={(e) => {
+                  if (e.nativeEvent.statusCode >= 500) { webErroredThisLoad.current = true; scheduleWebRetry(); }
+                }}
+                onError={() => { webErroredThisLoad.current = true; scheduleWebRetry(); }}
+                // Confirm the page actually PAINTED something (real DOM or a
+                // flutter-view) before we hide the progress overlay — a bare 200
+                // on Flutter's index.html renders black while CanvasKit boots or
+                // if assets 404 through the proxy. Poll for up to 60s.
+                injectedJavaScriptBeforeContentLoaded={PREVIEW_LANE_SCRIPT}
+                injectedJavaScript={PREVIEW_READY_SCRIPT}
+                onMessage={(e) => {
+                  try {
+                    const m = JSON.parse(e.nativeEvent.data);
+                    // Screen context FIRST — this is the message the agent's
+                    // injected probe posts through its RN branch
+                    // (window.ReactNativeWebView.postMessage). It used to land
+                    // in the catch below and die, so the phone paid for the
+                    // probe and got none of the feature. Forwarded over the
+                    // authed quicClient, never straight from the page.
+                    if (handlePreviewScreenMessage(m, status?.workDir)) return;
+                    // DOM mode SECOND: the clicked element (and the
+                    // interactive-items inventory) from the dom probe, over the
+                    // same authed channel.
+                    if (handlePreviewDomMessage(m, status?.workDir)) return;
+                    // THE PROBE CANNOT RUN — stop waiting for it.
+                    //
+                    // On RN-web the preview is an <iframe>, and the app and the
+                    // bundle are different origins, so the browser forbids
+                    // injecting the ready-probe. Without this the surface sat on
+                    // "The dev server reported ready. The WebView has not
+                    // confirmed the first rendered frame yet." forever, while the
+                    // frame was rendering the app perfectly. A wait gated on a
+                    // signal that can never arrive is the defect; the frame is
+                    // fine, only the confirmation channel is gone.
+                    if (m && m.type === WEBVIEW_PROBE_UNSUPPORTED) {
+                      setProbeUnavailable(String(m.detail || m.reason || "the ready-probe cannot run on this frame"));
+                      return;
+                    }
+                    if (m && (m.t === "yaver-preview-probe" || m.t === "yaver-preview-timeout")) {
+                      setPreviewProbe((m.state || null) as PreviewProbeState | null);
+                      if (m.t === "yaver-preview-timeout") {
+                        pushLog(`[preview] render probe timed out: ${String(m.state?.reason || "unknown")}`);
+                        // Name the likely cause per terminal reason (shared
+                        // with apps.tsx via previewPhase.ts).
+                        pushLog(previewTimeoutExplanation(m.state?.reason, status?.framework));
+                        setPreviewFailed(true);
+                        runBrowserLaneDoctor("render-probe-timeout");
+                      }
+                    } else if (m && m.t === "yaver-rendered") {
+                      setPreviewProbe((m.state || null) as PreviewProbeState | null);
+                      setWebContentLoaded(true);
+                      setWebStarting(false);
+                      setPreviewFailed(false);
+                      webRetryCount.current = 0;
+                    }
+                  } catch { /* not our message */ }
+                }}
+                javaScriptEnabled
+                domStorageEnabled
+                allowsInlineMediaPlayback
+                originWhitelist={["*"]}
+              />
+              )}
+              {/* THE OVERLAY MUST NOT OUTLIVE ITS OWN PROBE.
+                   webContentLoaded is set by the injected ready-probe, and on a
+                   cross-origin frame that probe can NEVER fire — so this overlay
+                   covered an app that was rendering perfectly, forever. Measured
+                   2026-08-05 on sfmg: the card underneath even said "the preview
+                   is rendering", and it was drawn ON TOP of the rendering
+                   preview. Explaining why you cannot confirm something, while
+                   hiding the thing you are describing, is worse than silence.
+                   When the probe is impossible we show the frame. */}
+              {!webContentLoaded && !probeUnavailable && (
+                <View style={styles.previewOverlay}>
+                  {previewFailed ? (
+                    (() => {
+                      /* Compile failures lead with a COMPACT card — shared
+                         detector with apps.tsx (compileFailure.ts): the
+                         agent's persisted status.error (offending lines +
+                         remedy) or the tail's compile lines, never a raw
+                         dump with the truth buried. Full output follows. */
+	                      const compileCard = detectCompileFailure(status?.error, logLines);
+                      // A named capability gap outranks the compile card and the
+                      // "Fix in Yaver" escalation below: it has a deterministic,
+                      // streamed, one-tap fix. Escalating a known capability gap
+                      // to a coding agent is the most expensive possible answer
+                      // to the cheapest possible question.
+	                      const gap = previewGap || capabilityGapFromStatus(status);
+	                      const fixLabel = gapFixLabel(gap);
+	                      const healthyLogs = previewLogsLookHealthy(logLines);
+	                      const canOfferProjectFix = !gap && (
+	                        previewAgentHealthIsAuthoritative(status)
+	                          ? previewCanOfferProjectFix(status, logLines)
+	                          : (compileCard || previewCanOfferProjectFix(status, logLines))
+	                      );
+	                      const fallbackTitle = healthyLogs
+	                        ? "Preview is ready, waiting for a rendered frame"
+	                        : "Dev server didn't come up";
+	                      return (
+                    <>
+                      {gap ? (
+                        <View style={styles.gapCard}>
+                          <Ionicons name="construct-outline" size={34} color="#f59e0b" />
+                          <Text style={styles.previewFailTitle}>{gapTitle(gap)}</Text>
+                          {gapBody(gap) ? (
+                            <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>{gapBody(gap)}</Text>
+                          ) : null}
+                          {/* The headroom on the surface where the decision is
+                              made. "3.2 GB free · needs 3.0 GB" before a
+                              ten-minute download, not after it fails. */}
+                          {gapHeadroomLine(gap) ? (
+                            <Text style={[styles.previewSubtle, { textAlign: "left", fontFamily: monoFamily, fontSize: 11 }]} selectable>
+                              {gapHeadroomLine(gap)}
+                            </Text>
+                          ) : null}
+                          {/* A WARNING is not a refusal — it renders ABOVE the
+                              button, which stays. The user decides. */}
+                          {gapWarning(gap) ? (
+                            <Text style={[styles.previewSubtle, { textAlign: "left", color: "#fbbf24" }]} selectable>
+                              {gapWarning(gap)}
+                            </Text>
+                          ) : null}
+                          {fixLabel ? (
+                            <Pressable
+                              disabled={gapFixRunning}
+                              accessibilityRole="button"
+                              accessibilityLabel={fixLabel}
+                              onPress={() => {
+                                if (gapFixRunning) return;
+                                setGapFixRunning(true);
+                                setGapFixStartedAt(Date.now());
+                                gapFixCancelRef.current = runCapabilityGapFix(quicClient as any, gap, {
+                                  onLine: (line) => { pushLog(line); setLastByteAt(Date.now()); },
+                                  onDone: (ok, error) => {
+                                    gapFixCancelRef.current = null;
+                                    setGapFixRunning(false);
+                                    if (!ok) {
+                                      pushLog(`[install] failed: ${error || "unknown error"}`);
+                                      return;
+                                    }
+                                    // Return them to what they were doing: clear
+                                    // the failure and re-mount the WebView, which
+                                    // re-drives the dev-server start path.
+                                    setPreviewGap(null);
+                                    pushLog("[install] done — restarting the preview…");
+                                    resetPreviewProgress();
+                                    setPreviewFailed(false);
+                                    setLoading(true);
+                                    setWebViewKey((k) => k + 1);
+                                  },
+                                });
+                              }}
+                              style={[styles.previewBtn, styles.gapFixBtn, { backgroundColor: gapFixRunning ? "#1f2937" : "#1a2e1a" }]}
+                            >
+                              <Text style={[styles.previewBtnText, { color: gapFixRunning ? "#9ca3af" : "#22c55e" }]}>
+                                {gapFixRunning
+                                  ? `Installing… ${gapFixStartedAt ? formatFixElapsed(gapFixStartedAt, gapFixNow) : ""}`.trim()
+                                  : fixLabel}
+                              </Text>
+                            </Pressable>
+                          ) : (
+                            <>
+                              <Text style={[styles.previewSubtle, { color: "#f59e0b", textAlign: "left" }]} selectable>
+                                {gapConstraint(gap) || "Yaver has no installer for this on this machine."}
+                              </Text>
+                              {/* NO DETERMINISTIC FIXER, BUT A CODING AGENT CAN
+                                  TRY. The constraint stays visible above — the
+                                  user must know the dev server is healthy and it
+                                  is their own source that will not compile — and
+                                  the escalation is a tap instead of "retype the
+                                  compiler output into the chat yourself".
+                                  Web-only was the previous state of this button
+                                  (one hand-rolled widget in RuntimeLabView), so
+                                  this phone could not offer it for any failure. */}
+                              {gapAIFixLabel(gap) ? (
+                                <Pressable
+                                  onPress={() => void runGapAIFix(gap)}
+                                  disabled={gapFixRunning}
+                                  style={[styles.previewBtn, { borderColor: "#7c5cff", marginTop: 8 }]}
+                                >
+                                  <Text style={[styles.previewBtnText, { color: gapFixRunning ? "#9ca3af" : "#7c5cff" }]}>
+                                    {gapFixRunning ? "Sending to the runner…" : gapAIFixLabel(gap)}
+                                  </Text>
+                                </Pressable>
+                              ) : null}
+                            </>
+                          )}
+                          {/* When space is the blocker — or nearly is — the
+                              refusal ships the route that frees it. The phone
+                              opens the Storage screen, which lists every path
+                              with its size and its rebuild cost and deletes
+                              nothing without an explicit tick. */}
+                          {gapReclaimLabel(gap) ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={gapReclaimLabel(gap) || "Free up space"}
+                              onPress={() => router.push("/storage")}
+                              style={[styles.previewBtn, styles.gapFixBtn, { backgroundColor: "#2a1f0a" }]}
+                            >
+                              <Text style={[styles.previewBtnText, { color: "#f59e0b" }]}>
+                                {gapReclaimLabel(gap)}
+                              </Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      ) : null}
+	                      <Ionicons name="alert-circle-outline" size={40} color="#ef4444" />
+	                      <Text style={styles.previewFailTitle}>
+	                        {browserLaneProbe && !browserLaneProbe.ok
+	                          ? `Browser lane stopped at ${browserLaneProbe.stage}`
+	                          : compileCard ? compileCard.title : fallbackTitle}
+	                      </Text>
+	                      {browserLaneProbe && !browserLaneProbe.ok ? (
+	                        <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>
+	                          {[
+	                            browserLaneProbe.detail || "The agent probed the same browser lane and it did not render.",
+	                            browserLaneProbe.remedy ? `Remedy: ${browserLaneProbe.remedy}` : "",
+	                          ].filter(Boolean).join("\n")}
+	                        </Text>
+	                      ) : compileCard ? (
+	                        <Text style={[styles.previewSubtle, { textAlign: "left" }]} selectable>
+	                          {compileCard.detail}
+	                        </Text>
+	                      ) : healthyLogs ? (
+	                        <Text style={styles.previewStepCmd}>{probeUnavailable
+	                          ? `The dev server is ready and the preview is rendering. Readiness cannot be confirmed automatically here — ${probeUnavailable}`
+	                          : "The dev server reported ready. The WebView has not confirmed the first rendered frame yet."}</Text>
+	                      ) : (
+	                        <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
+	                      )}
+	                      <Text style={styles.previewSubtle}>
+	                        {compileCard ? "Full output:" : healthyLogs ? "Recent healthy output:" : `The ${frameworkLabel} web server never started serving. Recent output:`}
+	                      </Text>
+                      <ScrollView
+                        ref={previewLogScrollRef}
+                        style={styles.previewLogBox}
+                        contentContainerStyle={{ padding: 10 }}
+                        onContentSizeChange={() => previewLogScrollRef.current?.scrollToEnd({ animated: true })}
+                      >
+                        {(logLines.length ? logLines : [lastLogLine || "No output captured — the server may have exited immediately."]).slice(-40).map((ln, i) => (
+                          <Text key={i} style={[styles.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
+                        ))}
+                      </ScrollView>
+                      <View style={styles.previewFailBtns}>
+                        <Pressable
+                          onPress={() => { resetPreviewProgress(); setLoading(true); setWebViewKey((k) => k + 1); }}
+                          style={[styles.previewBtn, { backgroundColor: "#1a2e1a" }]}
+                        >
+                          <Text style={[styles.previewBtnText, { color: "#22c55e" }]}>Retry</Text>
+                        </Pressable>
+	                        {canOfferProjectFix ? (
+	                          <Pressable
+	                            onPress={() => {
+	                              const proj = projectLabel || frameworkLabel || "the app";
+	                              const logs = logLines.slice(-40).join("\n");
+	                              void quicClient.sendTask(
+	                                `Fix ${proj} preview (${frameworkLabel})`,
+	                                `The ${frameworkLabel} dev server / browser preview for ${proj} (workDir: ${status?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the output below and fix it so the app builds and serves in the browser lane. Common causes: a missing asset declared in config (e.g. a Flutter pubspec asset not on disk), a missing dependency, or a bad import.\n\n--- dev server output ---\n${logs}`,
+	                              ).then(() => setShowPreview(false)).catch(() => {});
+	                            }}
+	                            style={[styles.previewBtn, { backgroundColor: "#2e1f3a" }]}
+	                          >
+	                            <Text style={[styles.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
+	                          </Pressable>
+	                        ) : null}
+                        <Pressable onPress={() => void handleReload("full")} style={[styles.previewBtn, { backgroundColor: "#1a1a2e" }]}>
+                          <Text style={[styles.previewBtnText, { color: "#818cf8" }]}>Restart</Text>
+                        </Pressable>
+                      </View>
+                    </>
+                      );
+                    })()
+                  ) : (
+                    <>
+                      <ActivityIndicator size="large" color="#22c55e" />
+                      {/* Phase-accurate title (previewPhase.ts, shared with
+                          apps.tsx): a server that is already serving while
+                          Flutter's engine boots must not read "Starting…". */}
+                      <Text style={styles.previewStartTitle}>
+                        {previewPhaseTitle(status, previewProbe)}
+                      </Text>
+                      <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
+                      {progressState && progressState.pct > 0 ? (
+                        <View style={styles.previewProgressTrack}>
+                          <View style={[styles.previewProgressFill, { width: `${Math.min(100, progressState.pct)}%` }]} />
+                        </View>
+                      ) : null}
+                      <Text style={styles.previewSubtle}>
+                        {progressState
+                          ? `${progressState.phase || "compiling"}${progressState.pct ? ` · ${Math.round(progressState.pct)}%` : ""}${progressState.currentFile ? ` · ${progressState.currentFile}` : ""}`
+                          : webStarting
+                            ? "First web compile can take up to a minute — retrying…"
+                            : `Serving over ${(quicClient as any)._connectionMode === "relay" ? "relay" : "direct"} connection`}
+                      </Text>
+                      {previewProbe ? (
+                        <Text style={styles.previewSubtle} numberOfLines={2}>
+                          probe {previewProbe.reason || "waiting"} · {previewProbe.mountId ? `#${previewProbe.mountId} children ${previewProbe.mountChildren ?? 0}` : `body children ${previewProbe.bodyChildren ?? 0}`}
+                        </Text>
+                      ) : null}
+                      {logLines.length > 0 ? (
+                        <ScrollView
+                          ref={previewLogScrollRef}
+                          style={styles.previewLogBox}
+                          contentContainerStyle={{ padding: 10 }}
+                          onContentSizeChange={() => previewLogScrollRef.current?.scrollToEnd({ animated: true })}
+                        >
+                          {logLines.slice(-40).map((ln, i) => (
+                            <Text key={i} style={[styles.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
+                          ))}
+                        </ScrollView>
+                      ) : lastLogLine ? (
+                        <Text style={styles.previewSubtle} numberOfLines={2}>{lastLogLine}</Text>
+                      ) : null}
+                    </>
+                  )}
+                </View>
+              )}
+            </>
+          )}
+        </View>
+        );
+        if (hostedInModal) {
+          return showPreview ? previewBody : null;
+        }
+        return (
+          <Modal visible={showPreview} animationType="slide" onRequestClose={() => setShowPreview(false)}>
+            {previewBody}
+          </Modal>
+        );
+      })()}
+    </>
+  );
+}
+
+/** Hook to check dev server status from other components. */
+export function useDevServerStatus() {
+  const [status, setStatus] = useState<DevServerStatus | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    const poll = async () => {
+      const s = await quicClient.getDevServerStatus();
+      if (mounted) setStatus(s && (isActiveDevServerStatus(s) || Boolean((s as DevServerStatus).error)) ? s : null);
+    };
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, []);
+  return status;
+}
+
+const styles = StyleSheet.create({
+  // Replicates the Projects-tab "running app" card (apps.tsx ::
+  // card + activeCard) so the Tasks-tab dev banner reads as the same
+  // component on both screens. Dark-green background, subtle green
+  // border, generous internal padding, no shadow (RN-iOS handles depth
+  // via the bordered card itself).
+  card: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 0.5,
+  },
+  activeCard: {
+    backgroundColor: "#0f1a0f",
+    borderWidth: 1,
+    borderColor: "#22c55e44",
+    marginTop: 12,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  cardTitleContainer: { flex: 1 },
+  cardTitle: { fontSize: 16, fontWeight: "700", color: "#fff" },
+  cardMeta: { fontSize: 11, color: "#666", marginTop: 2 },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  cardActions: { flexDirection: "row", gap: 8, marginTop: 12 },
+  actionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
+  openBtn: {
+    backgroundColor: "#22c55e",
+    flex: 1,
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 4,
+  },
+  openBtnText: { color: "#000", fontSize: 13, fontWeight: "700" },
+  reloadBtn: {
+    backgroundColor: "#22c55e22",
+    flex: 1,
+    alignItems: "center",
+  },
+  reloadBtnText: { color: "#22c55e", fontSize: 13, fontWeight: "600" },
+  fullReloadBtn: {
+    backgroundColor: "#818cf822",
+    flex: 1,
+    alignItems: "center",
+  },
+  fullReloadBtnText: { color: "#818cf8", fontSize: 13, fontWeight: "600" },
+  stopBtn: { backgroundColor: "#ef444422", paddingHorizontal: 16, alignItems: "center" },
+  stopBtnText: { color: "#ef4444", fontSize: 13, fontWeight: "600" },
+
+  banner: {
+    padding: 14,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 12,
+  },
+  // Header row owns the project name + state pill on top. Replaces the
+  // old horizontal bannerLeft/bannerRight split where the project name
+  // was buried in a small block next to the action buttons.
+  bannerHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  // Single-row pair: prominent green "Open in Yaver" + flat "Stop"
+  // pill. Mirrors the Projects-tab action row styling.
+  bannerActionRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 10,
+  },
+  bannerPrimaryBtnSimple: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  bannerPrimaryTextSimple: {
+    fontSize: 15,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  bannerStopBtnSimple: {
+    minWidth: 88,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bannerMain: {
+    gap: 12,
+  },
+  bannerMainWide: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  bannerLeft: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    flex: 1,
+  },
+  bannerTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bannerTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  dotSmall: { width: 7, height: 7, borderRadius: 4 },
+  bannerTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#e4e4e7",
+    flexShrink: 1,
+  },
+  // Larger, more prominent project name for the redesigned banner.
+  // Replaces the cramped layout where the green button text was the
+  // visual anchor — now the app name is.
+  bannerTitleLarge: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#e4e4e7",
+    flexShrink: 1,
+    letterSpacing: -0.2,
+  },
+  bannerStatePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  bannerStateText: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  bannerSubtitle: {
+    fontSize: 12,
+    color: "#888",
+    marginTop: 3,
+  },
+  bannerPath: {
+    fontSize: 10,
+    marginTop: 4,
+    fontFamily: monoFamily,
+  },
+  bannerLogLine: {
+    fontSize: 10,
+    marginTop: 4,
+    fontFamily: monoFamily,
+  },
+  bannerRight: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 10,
+  },
+  bannerRightInline: {
+    width: 220,
+    flexDirection: "column",
+    // Center the button stack vertically within the row so it
+    // doesn't visually crash into the card border when the
+    // bannerLeft text column is taller than the buttons' natural
+    // size. Without this + with flex:1 on the buttons, each button
+    // stretched to half the row height — on a tablet where path +
+    // meta + log line + title made the left column 90+pt, the
+    // green/red buttons grew to ~45pt each AND sat flush against
+    // the card's borderWidth:1 frame, reading as "overlapping the
+    // boundary lines".
+    justifyContent: "center",
+  },
+  bannerRightStacked: {
+    flexDirection: "row",
+  },
+  bannerPrimaryBtn: {
+    // No flex here — bannerRightInline (tablet column) keeps the
+    // button at its natural minHeight so it doesn't stretch into
+    // the card padding. bannerRightStacked (phone row) re-applies
+    // flex:1 inline at render time via `bannerActionRowGrow` so the
+    // phone side-by-side layout still splits width evenly.
+    minHeight: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    alignSelf: "stretch",
+  },
+  bannerPrimaryContent: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  bannerPrimaryIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bannerPrimaryTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bannerPrimaryText: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  bannerPrimarySubtext: {
+    fontSize: 11,
+    fontWeight: "600",
+    opacity: 0.82,
+    marginTop: 2,
+  },
+  bannerStopBtn: {
+    minHeight: 44,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "stretch",
+  },
+  // Phone row layout splits the two buttons evenly via flex:1;
+  // injected only when bannerRightStacked is in use.
+  bannerActionRowGrow: { flex: 1 },
+  bannerStopText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  container: { flex: 1 },
+  // Hosted-in-modal presentation: cover the host modal's content instead of
+  // presenting a second native <Modal> (which iOS mounts invisibly behind the
+  // first — the "Open in Yaver did nothing" dead end).
+  inlineOverlay: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 50,
+    elevation: 50,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    paddingTop: 54,
+    borderBottomWidth: 1,
+  },
+  headerBtn: { padding: 6 },
+  headerBtnClose: { fontSize: 15, fontWeight: "600", color: "#818cf8" },
+  headerBtnReload: { fontSize: 13, fontWeight: "600", color: "#22c55e" },
+  headerBtnReloadFull: { fontSize: 13, fontWeight: "600", color: "#818cf8" },
+  headerBtnStop: { fontSize: 13, fontWeight: "600", color: "#ef4444" },
+  headerCenter: { alignItems: "center", flex: 1 },
+  headerTitle: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  headerRight: { flexDirection: "row", gap: 12 },
+  webview: { flex: 1 },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#050508",
+  },
+  loadingText: { fontSize: 14, color: "#e4e4e7", fontWeight: "600" },
+  loadingSubtext: { fontSize: 12, color: "#666" },
+  loadingBar: {
+    position: "absolute",
+    top: 94,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: "#333",
+  },
+  loadingBarFill: {
+    height: "100%",
+    width: "60%",
+    backgroundColor: "#22c55e",
+  },
+  nativeControls: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 32,
+    gap: 20,
+    backgroundColor: "#050508",
+  },
+  nativeStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  nativeTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#e4e4e7",
+  },
+  nativeSubtext: {
+    fontSize: 14,
+    color: "#888",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  nativeButtons: {
+    flexDirection: "row",
+    gap: 16,
+    marginTop: 20,
+  },
+  nativeBtn: {
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  nativeBtnText: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  previewOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#050508",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    padding: 24,
+  },
+  previewStartTitle: { fontSize: 16, fontWeight: "700", color: "#e4e4e7", textAlign: "center" },
+  previewFailTitle: { fontSize: 17, fontWeight: "700", color: "#ef4444", textAlign: "center" },
+  previewStepCmd: {
+    fontFamily: monoFamily,
+    fontSize: 12,
+    color: "#22c55e",
+    backgroundColor: "#0f1a0f",
+    borderColor: "#22c55e33",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    overflow: "hidden",
+  },
+  previewSubtle: { fontSize: 12, color: "#94a3b8", textAlign: "center", lineHeight: 17 },
+  previewProgressTrack: {
+    width: "80%",
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: "#1f2937",
+    overflow: "hidden",
+    marginTop: 2,
+  },
+  previewProgressFill: { height: "100%", backgroundColor: "#22c55e", borderRadius: 3 },
+  previewLogBox: {
+    maxHeight: 180,
+    width: "100%",
+    marginTop: 6,
+    borderRadius: 10,
+    backgroundColor: "#0a0a0f",
+    borderWidth: 1,
+    borderColor: "#333",
+  },
+  previewLogLine: { fontFamily: monoFamily, fontSize: 10.5, color: "#9ca3af", lineHeight: 15 },
+  previewFailBtns: { flexDirection: "row", gap: 12, marginTop: 8 },
+  previewBtn: { paddingHorizontal: 22, paddingVertical: 11, borderRadius: 10 },
+  previewBtnText: { fontSize: 14, fontWeight: "700" },
+  // The route gets its own space above the diagnostics — advisory text may
+  // never crowd out the one tap that fixes the problem.
+  gapCard: { alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 12, marginBottom: 10, width: "100%" },
+  gapFixBtn: { marginTop: 4, minWidth: 200, alignItems: "center" },
+});

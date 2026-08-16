@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Yaver deploy front door. This is the one canonical human/agent path:
+#   ./deploy/deploy.sh <target> [options]
+#
+# Keep this file as a thin layer over the maintained deploy machinery in
+# scripts/ and `yaver deploy`. Do not add sibling wrapper scripts; one path is
+# the point.
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+require_owner_locked_path() {
+  local path="$1"
+  if [ ! -e "$path" ]; then
+    echo "ERROR: missing path for deploy permission check: $path" >&2
+    exit 2
+  fi
+
+  local owner mode
+  if stat -c '%U' "$path" >/dev/null 2>&1; then
+    owner="$(stat -c '%U' "$path" 2>/dev/null || true)"
+    mode="$(stat -c '%a' "$path" 2>/dev/null || true)"
+  else
+    owner="$(stat -f '%Su' "$path" 2>/dev/null || true)"
+    mode="$(stat -f '%Lp' "$path" 2>/dev/null || true)"
+  fi
+
+  if [ -n "$owner" ] && [ "$owner" != "$(id -un)" ]; then
+    echo "ERROR: refusing deploy because $path is owned by $owner, not $(id -un)." >&2
+    exit 2
+  fi
+
+  if [ -n "$mode" ]; then
+    local last_two=$((10#$mode % 100))
+    local group_digit=$((last_two / 10))
+    local other_digit=$((last_two % 10))
+    if [ $((group_digit & 2)) -ne 0 ] || [ $((other_digit & 2)) -ne 0 ]; then
+      echo "ERROR: refusing deploy because $path is group/other-writable (mode $mode)." >&2
+      echo "Fix: chmod go-w '$path'" >&2
+      exit 2
+    fi
+  fi
+}
+
+require_deploy_boundary() {
+  require_owner_locked_path "$ROOT"
+  require_owner_locked_path "$ROOT/deploy/deploy.sh"
+
+  if [ "${YAVER_DEPLOY_ALLOW_SHARED:-}" = "1" ]; then
+    return 0
+  fi
+
+  case "$(umask)" in
+    0077|0027|0022|077|027|022) ;;
+    *)
+      echo "ERROR: deploy requires a conservative umask (077, 027, or 022)." >&2
+      echo "Current umask: $(umask)" >&2
+      exit 2
+      ;;
+  esac
+}
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./deploy/deploy.sh <target> [options]
+
+Targets:
+  all          Full sequential Yaver release via `yaver deploy all`
+  backend      Convex backend prod deploy
+  convex       Alias for backend
+  cloudflare   Cloudflare Workers web deploy
+  web          Alias for cloudflare
+  ios          TestFlight deploy
+  testflight   Alias for ios
+  android      Play internal deploy + upload
+  playstore    Alias for android
+  tvos         Apple TV standalone archive/upload (App Store Connect)
+  android-tv   Android TV Play AAB + leanback manifest verification
+  tv           Alias for android-tv + tvos
+  wear-os      Wear OS AAB + Play internal upload
+  visionos     visionOS archive/upload (App Store Connect)
+  watchos      Build watchOS companion (embedded in iOS — no own record)
+  carplay      CarPlay iOS target archive/upload
+  android-auto Android Auto Play AAB upload
+  npm          CLI npm release via `yaver deploy npm`
+  cli          Alias for npm
+  mcp          Publish/sync MCP registry metadata
+
+Common:
+  --dry-run    Print the command instead of running it where the target supports it
+
+Examples:
+  ./deploy/deploy.sh all --dry-run
+  ./deploy/deploy.sh backend
+  ./deploy/deploy.sh cloudflare
+  ./deploy/deploy.sh ios
+USAGE
+}
+
+if [ "${1:-}" = "" ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  usage
+  exit 0
+fi
+
+target="$1"
+shift
+
+dry_run=0
+pass_args=()
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)
+      dry_run=1
+      pass_args+=("$arg")
+      ;;
+    *)
+      pass_args+=("$arg")
+      ;;
+  esac
+done
+
+# Expand pass_args SAFELY under `set -u`.
+#
+# macOS ships bash 3.2, where "${empty_array[@]}" is an UNBOUND VARIABLE error
+# rather than the empty list bash 4.4+ gives you. So the documented front door
+# — `./deploy/deploy.sh npm`, which CLAUDE.md tells every human and agent to
+# use — died with "pass_args[@]: unbound variable" whenever no extra flag was
+# passed, i.e. the common case. It only worked if you happened to type one.
+# Found 2026-08-03 while cutting 1.99.400.
+#
+# `${name[@]+"${name[@]}"}` is the portable idiom used at the call sites below:
+# it expands to nothing when unset, and to the properly-quoted elements
+# otherwise. Do not "simplify" it back to a bare expansion — CI runs bash 5,
+# this laptop does not, and the laptop is where CLAUDE.md says to deploy from.
+
+run() {
+  if [ "$dry_run" -eq 1 ]; then
+    printf '[dry-run] cd %q &&' "$ROOT"
+    printf ' %q' "$@"
+    printf '\n'
+    return 0
+  fi
+  (cd "$ROOT" && "$@")
+}
+
+run_shell() {
+  if [ "$dry_run" -eq 1 ]; then
+    printf '[dry-run] cd %q && %s\n' "$ROOT" "$*"
+    return 0
+  fi
+  # Export ROOT so bash -lc children can reference $ROOT/scripts/... —
+  # a login shell does not inherit the parent's unexported variables.
+  (cd "$ROOT" && export ROOT && bash -lc "$*")
+}
+
+case "$target" in
+  all)
+    require_deploy_boundary
+    if ! command -v yaver >/dev/null 2>&1; then
+      echo "ERROR: yaver CLI is required for deploy target 'all'." >&2
+      exit 2
+    fi
+    # Let the CLI own version bumps, clean-tree checks, logging, and release
+    # commits. It already knows how to coalesce the full stack safely.
+    run yaver deploy all ${pass_args[@]+"${pass_args[@]}"}
+    ;;
+  backend|convex)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-convex.sh"
+    ;;
+  cloudflare|web)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-web.sh"
+    ;;
+  ios|testflight)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-testflight.sh"
+    ;;
+  android|playstore)
+    require_deploy_boundary
+    run_shell 'JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/deploy-playstore.sh && PLAY_STORE_KEY_FILE=keys/google-play-service-account.json python3 scripts/upload-playstore.py'
+    ;;
+  npm|cli)
+    require_deploy_boundary
+    if ! command -v yaver >/dev/null 2>&1; then
+      echo "ERROR: yaver CLI is required for deploy target '$target'." >&2
+      exit 2
+    fi
+    run yaver deploy npm ${pass_args[@]+"${pass_args[@]}"}
+    ;;
+  mcp)
+    require_deploy_boundary
+    run "$ROOT/scripts/publish-mcp-registries.sh" --all
+    ;;
+  tvos)
+    require_deploy_boundary
+    run_shell 'source ~/.appstoreconnect/yaver.env 2>/dev/null; bash "$ROOT/scripts/deploy-tvos.sh" --upload'
+    ;;
+  android-tv)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-android-tv.sh" --upload
+    ;;
+  tv)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-tv.sh" --upload
+    ;;
+  wear-os|wearos|wear)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-wear-os.sh" --upload
+    ;;
+  visionos)
+    require_deploy_boundary
+    # Same App Store Connect creds as TestFlight/tvOS — sourced here so the
+    # script's own APP_STORE_KEY_*:? guards pass without a manual export
+    # (2026-08-11: visionOS deploy failed "Set APP_STORE_KEY_PATH" while
+    # ~/.appstoreconnect/yaver.env existed — TestFlight sourced it, this
+    # wrapper did not).
+    run_shell 'source ~/.appstoreconnect/yaver.env 2>/dev/null; bash "$ROOT/scripts/deploy-visionos.sh" --upload'
+    ;;
+  watchos)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-watchos.sh"
+    ;;
+  carplay)
+    require_deploy_boundary
+    run_shell 'source ~/.appstoreconnect/yaver.env 2>/dev/null; bash "$ROOT/scripts/deploy-carplay.sh" --upload'
+    ;;
+  android-auto|androidauto|auto)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-android-auto.sh" --upload
+    ;;
+  *)
+    echo "ERROR: unknown deploy target '$target'." >&2
+    echo >&2
+    usage >&2
+    exit 2
+    ;;
+esac

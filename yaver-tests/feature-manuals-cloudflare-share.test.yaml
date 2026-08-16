@@ -1,0 +1,24 @@
+# feature-manuals-cloudflare-share — legacy /manuals/cloudflare-share slug that
+# 307s to /manuals/relay-setup (web/app/manuals/cloudflare-share/page.tsx is a
+# redirect page). goto follows the redirect; assert the canonical target page.
+name: feature-manuals-cloudflare-share
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /manuals/cloudflare-share
+  - wait_for: h1
+  - assert.url: /manuals/relay-setup
+  - assert.text: Yaver Relay Setup
+  - screenshot: true

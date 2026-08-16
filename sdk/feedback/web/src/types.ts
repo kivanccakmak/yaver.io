@@ -1,0 +1,407 @@
+export interface FeedbackConfig {
+  /** Yaver agent URL (e.g., http://192.168.1.100:18080 or relay URL) */
+  agentUrl?: string;
+  /**
+   * Show the small "Y" mark while this page is running INSIDE Yaver (a browser
+   * -lane preview or a streamed WebRTC surface), so a tester can tell it apart
+   * from the site they normally visit — and can find the way back.
+   *
+   * DEFAULT TRUE. The failure it prevents is silent and lands on a tester
+   * rather than a developer: a preview that looks like production produces
+   * "bug reports" against unfinished work.
+   *
+   * Costs nothing standalone — `YaverFeedback.detectLane()` returns
+   * 'standalone' in a normal browser tab and the badge is never created, so
+   * shipping with it enabled has no effect on real users.
+   */
+  modeBadge?: boolean;
+  /** Corner for the mode badge. Default 'bottom-left' — 'bottom-right' is the
+   *  floating feedback button's default, and the two must not overlap. */
+  modeBadgePosition?: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
+  /** Bearer auth token. Optional in 0.2+: omit to use the in-app sign-in modal. */
+  authToken?: string;
+  /**
+   * Shared relay password. Required when `agentUrl` points through the Yaver
+   * relay (e.g. `https://public.yaver.io/d/<deviceId>`) — the relay rejects
+   * unauthenticated requests with HTTP 401. Read from Convex
+   * `/settings.relayPassword` by the owner; surfaced to SDK builds via an
+   * env var like `VITE_YAVER_RELAY_PASSWORD`. Attached as
+   * `X-Relay-Password` on every agent request.
+   */
+  relayPassword?: string;
+  /**
+   * Override the Yaver public endpoints used for in-SDK auth and cloud-backed
+   * device discovery. Defaults to production yaver.io / Convex URLs.
+   */
+  authConvexSiteUrl?: string;
+  authWebBaseUrl?: string;
+  /**
+   * Convex site URL used for device-backed discovery. When omitted, the SDK
+   * uses `authConvexSiteUrl` (or the production default).
+   */
+  convexUrl?: string;
+  /**
+   * Preferred device ID from `/devices/list`. If omitted, the SDK can prompt
+   * the user to choose one after sign-in.
+   */
+  preferredDeviceId?: string;
+  /**
+   * When true (default), the SDK auto-opens its sign-in modal the first time
+   * the user triggers feedback and no `authToken` is provided/cached. Set false
+   * to opt out (you must provide `authToken` yourself).
+   */
+  autoLogin?: boolean;
+  /** How to trigger feedback: floating button, keyboard shortcut, or manual only */
+  trigger?: 'floating-button' | 'keyboard' | 'manual';
+  /** Keyboard shortcut to trigger (default: Ctrl+Shift+F) */
+  shortcut?: string;
+  /** Whether SDK is enabled (default: true in development) */
+  enabled?: boolean;
+  /**
+   * Is this page a DEVELOPMENT build?
+   *
+   * Gates the overlay's Hot Reload / Full Reload actions, which must never
+   * appear in a shipped app. When omitted the SDK falls back to a
+   * hostname/port heuristic (see `YaverFeedback.isDevBuild`) that errs
+   * towards "production" — set this explicitly if you serve a dev build
+   * from a real domain.
+   */
+  devBuild?: boolean;
+  /** Max screen recording duration in seconds (default: 120) */
+  maxRecordingDuration?: number;
+  /** Position of floating button */
+  buttonPosition?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+  /**
+   * Max captured errors in ring buffer. Default: 5.
+   * Errors are captured via YaverFeedback.attachError() or wrapErrorHandler().
+   * The SDK never auto-hooks window.onerror — no conflicts with Sentry, etc.
+   */
+  maxCapturedErrors?: number;
+  /** Project/app label shown in feedback reports and fix prompts. */
+  appName?: string;
+  /** Canonical project name for candidate/self-improving flows. */
+  projectName?: string;
+  /**
+   * Optional absolute local project path on the developer machine.
+   * Useful when the host app knows exactly which repo/worktree should receive
+   * candidate fixes.
+   */
+  projectPath?: string;
+  /** Which surface is being improved. */
+  surface?: YaverSurface;
+  /** All product surfaces this app/package owns. */
+  surfaces?: YaverSurface[];
+  /** Canonical development stack labels, e.g. nextjs, react-native-expo. */
+  stack?: string;
+  stacks?: string[];
+  /** Yaver preview/runtime targets that can exercise this app. */
+  testSurfaces?: string[];
+  feedbackSdk?: string;
+  feedbackTransport?: string;
+  voiceCapabilities?: string[];
+  sttProvider?: string;
+  ttsProvider?: string;
+  /** Which release lane the user is currently exercising. */
+  releaseChannel?: 'production' | 'candidate' | 'development';
+  /** Candidate deploy metadata for safe self-improving flows. */
+  candidate?: FeedbackCandidateConfig;
+  /**
+   * When true, the SDK immediately asks the agent to create a candidate fix
+   * task after the report upload succeeds.
+   */
+  autoFixOnSend?: boolean;
+  /** Called after the report upload succeeds. */
+  onReportSent?: (result: FeedbackReportSummary) => void | Promise<void>;
+  /**
+   * Called when the agent pushes a `reload` command over the command stream.
+   * Defaults to `window.location.reload()`.
+   */
+  onReload?: () => void;
+  /**
+   * Called when the agent pushes a `reload_bundle` command. Web targets usually
+   * map this to a hard page reload unless the host wants custom behavior.
+   */
+  onReloadBundle?: (bundleUrl?: string, assetsUrl?: string) => void;
+  /**
+   * Called when the agent streams progress updates (`status` commands) during a
+   * reload/build workflow.
+   */
+  onStatus?: (status: FeedbackStatusUpdate) => void;
+}
+
+export interface FeedbackCandidateConfig {
+  enabled?: boolean;
+  label?: string;
+  baseBranch?: string;
+  targetBranch?: string;
+  previewUrl?: string;
+}
+
+export interface TimelineEvent {
+  time: number; // seconds from start
+  type: 'voice' | 'screenshot' | 'annotation' | 'console-error';
+  text?: string;
+  file?: string;
+}
+
+export interface DeviceInfo {
+  platform: 'web';
+  browser: string;
+  browserVersion: string;
+  os: string;
+  screenSize: string;
+  userAgent: string;
+}
+
+export interface FeedbackBundle {
+  metadata: {
+    source: 'in-app-sdk';
+    deviceInfo: DeviceInfo;
+    appVersion?: string;
+    url: string; // current page URL
+    timeline: TimelineEvent[];
+    transcript?: string;
+    consoleErrors?: string[];
+    project?: FeedbackProjectRef;
+    candidate?: FeedbackCandidateMetadata;
+  };
+  video?: Blob;
+  audio?: Blob;
+  screenshots: Blob[];
+  /** Captured errors with stack traces. */
+  errors?: CapturedError[];
+}
+
+/** An error captured by the SDK's global error handler. */
+export interface CapturedError {
+  message: string;
+  stack: string[];
+  isFatal: boolean;
+  timestamp: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DiscoveryResult {
+  url: string;
+  hostname: string;
+  version: string;
+  latency: number; // ms
+  relayPassword?: string;
+}
+
+/**
+ * Remote browser-style sign-in session for a coding-agent CLI on the
+ * connected yaver host. Mirrors runnerBrowserAuthSession on the agent Go
+ * side — `codex login --device-auth` / `claude auth login --console`
+ * emit a verification URL + one-time code; this shape captures that
+ * progression (starting → awaiting_browser → completed / failed).
+ */
+export interface RunnerBrowserAuthSession {
+  id: string;
+  runner: string;
+  method: string;
+  status: 'starting' | 'awaiting_browser' | 'completed' | 'failed' | 'cancelled';
+  openUrl?: string;
+  code?: string;
+  detail?: string;
+  authConfigured?: boolean;
+  authSource?: string;
+  error?: string;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
+export interface RunnerAuthStatus {
+  id: string;
+  name: string;
+  installed: boolean;
+  ready: boolean;
+  authConfigured: boolean;
+  authSource?: string;
+  warning?: string;
+  error?: string;
+  detail?: string;
+}
+
+export interface RunnerAuthSetupResult {
+  ok: boolean;
+  runner: string;
+  installed: boolean;
+  installAttempt?: boolean;
+  vaultKeys?: string[];
+  loginAttempt?: boolean;
+  mcpConfigured?: string[];
+  ready: boolean;
+  authConfigured: boolean;
+  authSource?: string;
+  detail?: string;
+  warning?: string;
+  notes?: string[];
+}
+
+export interface FeedbackProjectActionResult {
+  ok: boolean;
+  projectName?: string;
+  projectPath?: string;
+  branch?: string;
+  commit?: string;
+  message?: string;
+  target?: string;
+  taskId?: string;
+}
+
+export interface GitProviderStatusRow {
+  host: string;
+  provider: string;
+  username: string;
+  avatarUrl?: string;
+  hasSsh: boolean;
+  setupAt: string;
+}
+
+export interface IncidentEvent {
+  id: string;
+  timestamp: number;
+  severity: 'info' | 'warn' | 'error' | 'fatal';
+  category: string;
+  code: string;
+  source: string;
+  title: string;
+  userMessage: string;
+  technicalInfo?: string;
+  suggestedAction?: string;
+  operationId?: string;
+  deviceId?: string;
+  projectPath?: string;
+  target?: string;
+  logsAvailable: boolean;
+  logRefs?: string[];
+  correlationId?: string;
+  recoverable: boolean;
+  metadata?: Record<string, unknown>;
+  resolved?: boolean;
+}
+
+export interface OperationState {
+  id: string;
+  kind: string;
+  status: string;
+  phase?: string;
+  message?: string;
+  progress?: number;
+  deviceId?: string;
+  projectPath?: string;
+  startedAt: number;
+  updatedAt: number;
+  incidentIds?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapabilityTargetReadiness {
+  enabled: boolean;
+  reasonCode?: string;
+  reason?: string;
+  suggestedAction?: string;
+  notes?: string[];
+}
+
+export interface CapabilitySnapshot {
+  generatedAt: string;
+  machine?: Record<string, unknown>;
+  infra?: Record<string, unknown>;
+  connectivity?: {
+    directAvailable?: boolean;
+    relayConfigured?: boolean;
+    tunnelConfigured?: boolean;
+    tailscaleAvailable?: boolean;
+  };
+  targets: Record<string, CapabilityTargetReadiness>;
+}
+
+export interface FeedbackProjectRef {
+  appName?: string;
+  projectName?: string;
+  projectPath?: string;
+  surface?: YaverSurface;
+  surfaces?: YaverSurface[];
+  stack?: string;
+  stacks?: string[];
+  testSurfaces?: string[];
+  feedbackSdk?: string;
+  feedbackTransport?: string;
+  voiceCapabilities?: string[];
+  sttProvider?: string;
+  ttsProvider?: string;
+  releaseChannel?: 'production' | 'candidate' | 'development';
+}
+
+export type YaverSurface = 'web' | 'mobile' | 'backend' | 'watch' | 'tv' | 'car' | 'vision' | 'desktop' | 'cli';
+
+export interface FeedbackCandidateMetadata {
+  enabled?: boolean;
+  label?: string;
+  baseBranch?: string;
+  targetBranch?: string;
+  previewUrl?: string;
+}
+
+export interface FeedbackReviewEntry {
+  id: string;
+  action: 'comment' | 'approve' | 'revert' | 'change_again';
+  comment?: string;
+  desiredOutcome?: string;
+  createdAt: string;
+}
+
+export interface FeedbackChangeSet {
+  id: string;
+  feedbackId: string;
+  projectName?: string;
+  projectPath?: string;
+  surface?: YaverSurface;
+  releaseChannel?: 'production' | 'candidate' | 'development';
+  status:
+    | 'draft'
+    | 'building'
+    | 'candidate_ready'
+    | 'review_required'
+    | 'approved'
+    | 'reverted'
+    | 'superseded';
+  summary?: string;
+  candidateLabel?: string;
+  candidateUrl?: string;
+  baseBranch?: string;
+  targetBranch?: string;
+  taskId?: string;
+  createdAt: string;
+  updatedAt: string;
+  reviews?: FeedbackReviewEntry[];
+}
+
+export interface FeedbackReportSummary {
+  id: string;
+  changeSet?: FeedbackChangeSet;
+}
+
+export interface FeedbackStatusUpdate {
+  message: string;
+  phase?: string;
+  progress?: number;
+  at: number;
+}
+
+export interface AgentCommand {
+  command: string;
+  data?: Record<string, unknown>;
+}
+
+export interface ReloadAck {
+  ok: boolean;
+  mode: 'dev' | 'bundle';
+  acknowledged: boolean;
+  message: string;
+  nativeChangesDetected?: boolean;
+  changeClass?: string;
+}

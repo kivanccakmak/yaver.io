@@ -1,0 +1,240 @@
+name: Remote Vibing Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which Hetzner box to run against
+        type: choice
+        default: persistent
+        options:
+          - persistent
+          - ephemeral
+      server_type:
+        description: Hetzner server type for ephemeral mode
+        required: false
+        default: cpx21
+      location:
+        description: Hetzner location for ephemeral mode
+        required: false
+        default: nbg1
+
+concurrency:
+  group: remote-vibing-smoke
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      HCLOUD_SSH_KEY_NAME: yaver-ci
+      CI_SERVER_TYPE: ${{ inputs.server_type }}
+      CI_SERVER_LOCATION: ${{ inputs.location }}
+      CI_SERVER_IMAGE: ubuntu-24.04
+      HETZNER_TEST_SNAPSHOT_ID: ${{ secrets.HETZNER_TEST_SNAPSHOT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CI runner Opencode GLM smoke
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          if [ -z "${GLM_API_KEY:-}" ]; then
+            echo "::error::GLM_API_KEY secret is required for CI runner Opencode smoke"
+            exit 1
+          fi
+          echo "::add-mask::$GLM_API_KEY"
+          chmod +x scripts/opencode-glm-smoke.sh
+          scripts/opencode-glm-smoke.sh
+
+      - name: Prepare SSH key
+        env:
+          HCLOUD_SSH_PRIVATE_KEY_PATH: ${{ runner.temp }}/hcloud_ssh
+          HCLOUD_SSH_PRIVATE_KEY: ${{ secrets.HCLOUD_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "${HCLOUD_SSH_PRIVATE_KEY:-}" ]; then
+            echo "::error::HCLOUD_SSH_PRIVATE_KEY secret is required"
+            exit 1
+          fi
+          install -m 600 /dev/null "$HCLOUD_SSH_PRIVATE_KEY_PATH"
+          printf '%s\n' "$HCLOUD_SSH_PRIVATE_KEY" > "$HCLOUD_SSH_PRIVATE_KEY_PATH"
+          echo "HCLOUD_SSH_PRIVATE_KEY_PATH=$HCLOUD_SSH_PRIVATE_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz \
+            | sudo tar -C /usr/local/bin -xz hcloud
+          hcloud version
+
+      - name: Hetzner persistent preflight
+        if: inputs.target == 'persistent'
+        env:
+          HETZNER_TEST_SERVER_ID: ${{ secrets.HETZNER_TEST_SERVER_ID }}
+          HETZNER_TEST_SERVER_IP: ${{ secrets.HETZNER_TEST_SERVER_IP }}
+        run: ./ci/hcloud/preflight.sh persistent
+
+      - name: Hetzner ephemeral preflight
+        if: inputs.target == 'ephemeral'
+        run: |
+          set -euo pipefail
+          hcloud context list >/dev/null
+          arch=amd64
+          case "$CI_SERVER_TYPE" in
+            cax*|cax1*|cax2*|cax3*|cax4*) arch=arm64 ;;
+          esac
+          cloud_image="$(jq -r --arg arch "$arch" '.providers.hetzner.snapshots[$arch] // empty' cloud-images.json)"
+          if [ -n "$cloud_image" ] && hcloud image describe "$cloud_image" >/dev/null 2>&1; then
+            echo "Using Yaver cloud image from cloud-images.json for $arch"
+            echo "HETZNER_TEST_SNAPSHOT_ID=$cloud_image" >> "$GITHUB_ENV"
+          elif [ -n "${HETZNER_TEST_SNAPSHOT_ID:-}" ] && hcloud image describe "$HETZNER_TEST_SNAPSHOT_ID" >/dev/null 2>&1; then
+            echo "Using configured Hetzner snapshot for ephemeral smoke"
+          else
+            echo "::warning::No accessible Yaver cloud image/snapshot for $arch; falling back to raw $CI_SERVER_IMAGE and source bootstrap"
+            echo "HETZNER_TEST_SNAPSHOT_ID=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Ensure Hetzner CI SSH key exists
+        if: inputs.target == 'ephemeral'
+        run: |
+          set -euo pipefail
+          if hcloud ssh-key describe "$HCLOUD_SSH_KEY_NAME" >/dev/null 2>&1; then
+            exit 0
+          fi
+          mkdir -p ci/.artifacts
+          ssh-keygen -y -f "$HCLOUD_SSH_PRIVATE_KEY_PATH" > ci/.artifacts/hcloud-ci.pub
+          ci_pub="$(awk '{print $1" "$2}' ci/.artifacts/hcloud-ci.pub)"
+          hcloud ssh-key list -o json > ci/.artifacts/hcloud-ssh-keys.json
+          existing_name="$(jq -r --arg pub "$ci_pub" '.[] | select(.public_key | startswith($pub)) | .name' ci/.artifacts/hcloud-ssh-keys.json | head -1)"
+          if [ -n "$existing_name" ]; then
+            echo "HCLOUD_SSH_KEY_NAME=$existing_name" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          hcloud ssh-key create \
+            --name "$HCLOUD_SSH_KEY_NAME" \
+            --public-key-from-file ci/.artifacts/hcloud-ci.pub >/dev/null
+
+      - name: Create ephemeral box
+        if: inputs.target == 'ephemeral'
+        run: ./ci/hcloud/create-server.sh
+
+      - name: Verify SSH key matches Hetzner key
+        run: |
+          set -euo pipefail
+          ci_pub="$(ssh-keygen -y -f "$HCLOUD_SSH_PRIVATE_KEY_PATH" | awk '{print $1" "$2}')"
+          hcloud ssh-key describe "$HCLOUD_SSH_KEY_NAME" -o json > ci/.artifacts/hcloud-ssh-key.json
+          hcloud_pub="$(jq -r '.public_key' ci/.artifacts/hcloud-ssh-key.json | awk '{print $1" "$2}')"
+          if [ "$ci_pub" != "$hcloud_pub" ]; then
+            echo "::error::HCLOUD_SSH_PRIVATE_KEY does not match Hetzner SSH key '$HCLOUD_SSH_KEY_NAME'"
+            exit 1
+          fi
+
+      - name: Wait for SSH
+        run: ./ci/hcloud/wait-for-ssh.sh
+
+      - name: Sync repo to remote box
+        run: ./ci/hcloud/sync-repo.sh
+
+      - name: Bootstrap raw ephemeral box
+        if: inputs.target == 'ephemeral'
+        run: |
+          HETZNER_TEST_SERVER_IP="$(cat ci/.artifacts/server-ip)"
+          ssh -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=40 \
+              "root@$HETZNER_TEST_SERVER_IP" \
+              "cd /opt/yaver && YAVER_SKIP_OLLAMA=1 bash ci/remote/bootstrap.sh"
+
+      - name: Build and start source agent
+        run: |
+          HETZNER_TEST_SERVER_IP="$(cat ci/.artifacts/server-ip)"
+          ssh -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+              "root@$HETZNER_TEST_SERVER_IP" \
+              "chmod +x /opt/yaver/scripts/remote-vibing-agent-setup.sh && YAVER_REMOTE_SMOKE_TOKEN=ci-remote-vibing-token bash /opt/yaver/scripts/remote-vibing-agent-setup.sh"
+
+      - name: Copy smoke scripts and fixtures
+        run: |
+          HETZNER_TEST_SERVER_IP="$(cat ci/.artifacts/server-ip)"
+          ssh_base="ssh -i $HCLOUD_SSH_PRIVATE_KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          $ssh_base "root@$HETZNER_TEST_SERVER_IP" "mkdir -p /opt/yaver/tests/fixtures /opt/yaver/scripts"
+          rsync -az -e "$ssh_base" scripts/remote-runtime-smoke.sh \
+            "root@$HETZNER_TEST_SERVER_IP:/opt/yaver/scripts/remote-runtime-smoke.sh"
+          rsync -az -e "$ssh_base" scripts/remote-opencode-hermes-smoke.sh \
+            "root@$HETZNER_TEST_SERVER_IP:/opt/yaver/scripts/remote-opencode-hermes-smoke.sh"
+          rsync -az -e "$ssh_base" scripts/remote-browser-color-vibe-smoke.sh \
+            "root@$HETZNER_TEST_SERVER_IP:/opt/yaver/scripts/remote-browser-color-vibe-smoke.sh"
+          rsync -az -e "$ssh_base" scripts/remote-browser-color-page-setup.sh \
+            "root@$HETZNER_TEST_SERVER_IP:/opt/yaver/scripts/remote-browser-color-page-setup.sh"
+          rsync -az -e "$ssh_base" scripts/remote-vibing-smoke-runner.sh \
+            "root@$HETZNER_TEST_SERVER_IP:/opt/yaver/scripts/remote-vibing-smoke-runner.sh"
+          rsync -az -e "$ssh_base" tests/fixtures/native-ios-swift/ \
+            "root@$HETZNER_TEST_SERVER_IP:/opt/yaver/tests/fixtures/native-ios-swift/"
+          rsync -az -e "$ssh_base" tests/fixtures/native-android-kotlin/ \
+            "root@$HETZNER_TEST_SERVER_IP:/opt/yaver/tests/fixtures/native-android-kotlin/"
+
+      - name: Browser WebRTC todo color smoke from CI runner
+        run: |
+          set -euo pipefail
+          HETZNER_TEST_SERVER_IP="$(cat ci/.artifacts/server-ip)"
+          ssh_base="ssh -i $HCLOUD_SSH_PRIVATE_KEY_PATH -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          token="$($ssh_base "root@$HETZNER_TEST_SERVER_IP" "python3 -c \"import json; from pathlib import Path; paths=(Path('/home/yaver/.yaver/config.json'), Path('/root/.yaver/config.json')); p=next((x for x in paths if x.exists()), None); raise SystemExit(1) if p is None else print(json.loads(p.read_text())['auth_token'])\"")"
+          echo "::add-mask::$token"
+          page_json="$($ssh_base "root@$HETZNER_TEST_SERVER_IP" "chmod +x /opt/yaver/scripts/remote-browser-color-page-setup.sh && /opt/yaver/scripts/remote-browser-color-page-setup.sh")"
+          remote_pid="$(printf '%s' "$page_json" | jq -r '.pid')"
+          remote_tmp="$(printf '%s' "$page_json" | jq -r '.tmp')"
+          remote_url="$(printf '%s' "$page_json" | jq -r '.url')"
+          tunnel_pid=""
+          cleanup() {
+            if [ -n "$tunnel_pid" ]; then
+              kill "$tunnel_pid" >/dev/null 2>&1 || true
+            fi
+            $ssh_base "root@$HETZNER_TEST_SERVER_IP" "kill '$remote_pid' >/dev/null 2>&1 || true; rm -rf '$remote_tmp'" || true
+          }
+          trap cleanup EXIT
+
+          ssh -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ExitOnForwardFailure=yes \
+            -N -L 18080:127.0.0.1:18080 \
+            "root@$HETZNER_TEST_SERVER_IP" &
+          tunnel_pid="$!"
+          sleep 1
+
+          pw_tmp="$(mktemp -d)"
+          npm --prefix "$pw_tmp" init -y >/dev/null
+          npm --prefix "$pw_tmp" install --silent playwright@1.49.0
+          npm --prefix "$pw_tmp" exec -- playwright install --with-deps chromium
+          NODE_PATH="$pw_tmp/node_modules" \
+            AGENT_BASE="http://127.0.0.1:18080" \
+            AGENT_TOKEN="$token" \
+            REMOTE_PAGE_URL="$remote_url" \
+            node scripts/browser-webrtc-color-vibe-smoke.mjs
+
+      - name: Run Opencode GLM, Hermes reload, and remote-runtime smoke
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+        run: |
+          if [ -z "${GLM_API_KEY:-}" ]; then
+            echo "::error::GLM_API_KEY secret is required for remote vibing smoke"
+            exit 1
+          fi
+          HETZNER_TEST_SERVER_IP="$(cat ci/.artifacts/server-ip)"
+          echo "::add-mask::$GLM_API_KEY"
+          printf '%s\n' "$GLM_API_KEY" | ssh -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+              "root@$HETZNER_TEST_SERVER_IP" "bash /opt/yaver/scripts/remote-vibing-smoke-runner.sh"
+
+      - name: Stop/delete ephemeral box
+        if: always() && inputs.target == 'ephemeral'
+        run: ./ci/hcloud/delete-server.sh

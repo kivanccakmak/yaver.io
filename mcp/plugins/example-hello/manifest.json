@@ -1,0 +1,20 @@
+{
+  "name": "hello",
+  "version": "1.0.0",
+  "description": "Example plugin — says hello",
+  "runtime": "python",
+  "command": "main.py",
+  "env": [],
+  "tools": [
+    {
+      "name": "hello",
+      "description": "Say hello to someone",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Name to greet (default: World)" }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,542 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  buildManagedCloudInit,
+  managedDeviceIdFor,
+  buildManagedCloudInitContainer,
+  isMachineWakeable,
+  managedMachineLimit,
+  MACHINE_SPECS,
+  planDeprovision,
+  reusableSubscriptionMachineStatus,
+  snapshotIsMandatory,
+  HOSTED_GRACE_MS,
+} from "./cloudMachines.js";
+
+test("buildManagedCloudInit writes managed agent config and service", () => {
+  const cloudInit = buildManagedCloudInit({
+    convexSite: "https://example.convex.site",
+    machineId: "machine_12345678",
+    machineToken: "machine-token-abc",
+    bootstrapDeviceCode: "device-code-xyz",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-12345678",
+    hostname: "12345678.cloud.yaver.io",
+    yaverArch: "amd64",
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64",
+    repoUrl: "https://github.com/example/repo.git",
+    gpu: false,
+  });
+
+  assert.match(cloudInit, /cat > \/home\/yaver\/\.yaver\/config\.json/);
+  assert.doesNotMatch(cloudInit, /"auth_token":/);
+  assert.match(cloudInit, /"convex_site_url": "https:\/\/example\.convex\.site"/);
+  assert.match(cloudInit, /"device_id": "cloud-12345678"/);
+  assert.match(cloudInit, /"public_endpoints": \["https:\/\/12345678\.cloud\.yaver\.io"\]/);
+  assert.match(cloudInit, /cat > \/home\/yaver\/\.yaver\/pending-auth\.json/);
+  assert.match(cloudInit, /"deviceCode": "device-code-xyz"/);
+  assert.match(cloudInit, /auth --headless --background-wait --convex-url 'https:\/\/example\.convex\.site'/);
+  assert.match(cloudInit, /cat > \/home\/yaver\/\.config\/opencode\/opencode\.json/);
+  assert.match(cloudInit, /"model": "zai-coding-plan\/glm-4\.7"/);
+  assert.match(cloudInit, /"enabled_providers": \[\n\s+"zai-coding-plan"\n\s+\]/);
+  assert.match(cloudInit, /"default_agent": "build"/);
+  assert.match(cloudInit, /"command": \[\n\s+"\/usr\/local\/bin\/yaver",\n\s+"mcp"\n\s+\]/);
+  assert.match(cloudInit, /\/usr\/local\/bin\/yaver serve --install-systemd-system --operator/);
+  assert.match(cloudInit, /install -d -o root -g root -m 0711 \/srv\/yaver\/tenants/);
+  assert.match(cloudInit, /systemctl enable --now yaver-helper yaver/);
+  assert.match(cloudInit, /After=network-online\.target nginx\.service yaver\.service/);
+  assert.doesNotMatch(cloudInit, /cat > \/etc\/systemd\/system\/yaver-agent\.service/);
+  assert.doesNotMatch(cloudInit, /NOPASSWD:ALL/);
+  assert.match(cloudInit, /cat > \/usr\/local\/bin\/yaver-bootstrap-workspace/);
+  assert.match(cloudInit, /clone_one https:\/\/github\.com\/kivanccakmak\/yaver\.io\.git yaver\.io/);
+  assert.doesNotMatch(cloudInit, /clone_one https:\/\/github\.com\/kivanccakmak\/(?!yaver\.io\.git)/);
+  assert.match(cloudInit, /clone_one 'https:\/\/github\.com\/example\/repo\.git' starter/);
+  assert.match(cloudInit, /command -v claude >\/dev\/null 2>&1 \|\| missing_pkgs="\$missing_pkgs @anthropic-ai\/claude-code"/);
+  assert.match(cloudInit, /command -v codex >\/dev\/null 2>&1 \|\| missing_pkgs="\$missing_pkgs @openai\/codex"/);
+  assert.match(cloudInit, /command -v opencode >\/dev\/null 2>&1 \|\| missing_pkgs="\$missing_pkgs opencode-ai"/);
+  assert.match(cloudInit, /npm install -g \$missing_pkgs/);
+});
+
+test("buildManagedCloudInit fetches the yaver agent as a .tar.gz and extracts it", () => {
+  // Regression guard: release-cli.yml ships the agent INSIDE
+  // yaver-linux-<arch>.tar.gz (one file named `yaver`), never as a raw
+  // asset. A raw `curl -o /usr/local/bin/yaver` 404s and leaves the box
+  // with no agent. Do not "simplify" this back to a raw curl.
+  const cloudInit = buildManagedCloudInit({
+    convexSite: "https://example.convex.site",
+    machineId: "machine_tar",
+    machineToken: "machine-token-tar",
+    bootstrapDeviceCode: "device-code-tar",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-tar",
+    hostname: "tar.cloud.yaver.io",
+    yaverArch: "amd64",
+    yaverReleaseUrl:
+      "https://github.com/kivanccakmak/yaver.io/releases/latest/download/yaver-linux-amd64.tar.gz",
+    gpu: false,
+  });
+
+  assert.match(cloudInit, /yaver-linux-amd64\.tar\.gz/);
+  assert.match(cloudInit, /tar -xzf \/tmp\/yaver\.tgz -C \/usr\/local\/bin yaver/);
+  assert.doesNotMatch(
+    cloudInit,
+    /curl -fsSL "[^"]+" -o \/usr\/local\/bin\/yaver\b/,
+  );
+});
+
+test("buildManagedCloudInit includes GPU bootstrap only for GPU machines", () => {
+  const cloudInit = buildManagedCloudInit({
+    convexSite: "https://example.convex.site",
+    machineId: "machine_gpu",
+    machineToken: "machine-token-gpu",
+    bootstrapDeviceCode: "device-code-gpu",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-gpu",
+    hostname: "gpu.cloud.yaver.io",
+    yaverArch: "amd64",
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64",
+    gpu: true,
+  });
+
+  assert.match(cloudInit, /nvidia-driver-550/);
+  assert.match(cloudInit, /ollama\.com\/install\.sh/);
+});
+
+test("buildManagedCloudInit runs self-hosted Convex only for the hosted tier", () => {
+  const base = {
+    convexSite: "https://example.convex.site",
+    machineId: "machine_tier",
+    machineToken: "machine-token-tier",
+    bootstrapDeviceCode: "device-code-tier",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-tier",
+    hostname: "tier.cloud.yaver.io",
+    yaverArch: "amd64" as const,
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64.tar.gz",
+    gpu: false,
+  };
+
+  // byok (default / absent) — byte-identical: no Convex container.
+  const byok = buildManagedCloudInit(base);
+  assert.doesNotMatch(byok, /ghcr\.io\/get-convex\/convex-backend/);
+  assert.doesNotMatch(byok, /\/etc\/yaver\/convex-selfhosted\.json/);
+  assert.equal(byok, buildManagedCloudInit({ ...base, tier: "byok" }));
+
+  // hosted — Convex container + admin-key capture, origins point at
+  // the box's own public hostname (no Convex Cloud).
+  const hosted = buildManagedCloudInit({ ...base, tier: "hosted" });
+  assert.match(hosted, /docker run -d --name yaver-convex/);
+  assert.match(hosted, /ghcr\.io\/get-convex\/convex-backend:latest/);
+  assert.match(hosted, /-v yaver-convex-data:\/convex\/data/);
+  assert.match(hosted, /generate_admin_key\.sh/);
+  assert.match(hosted, /chmod 0600 \/etc\/yaver\/convex-selfhosted\.json/);
+  assert.match(hosted, /https:\/\/tier\.cloud\.yaver\.io\/_convex-api/);
+
+  // The nginx Convex reverse-proxy is always emitted (internal-only
+  // upstreams), so a byok box's config is unchanged but valid.
+  for (const ci of [byok, hosted]) {
+    assert.match(ci, /location \/_convex-api\/ \{/);
+    assert.match(ci, /proxy_pass http:\/\/127\.0\.0\.1:3210\//);
+    assert.match(ci, /location \/_convex-http\/ \{/);
+  }
+});
+
+test("planDeprovision: hosted gets a grace window, byok deletes now, force overrides", () => {
+  const now = 1_000_000;
+
+  const hosted = planDeprovision("hosted", false, now);
+  assert.equal(hosted.grace, true);
+  assert.equal(hosted.deprovisionAt, now + HOSTED_GRACE_MS);
+  assert.equal(HOSTED_GRACE_MS, 7 * 24 * 60 * 60 * 1000);
+
+  // byok is disposable — immediate delete, no grace.
+  for (const tier of ["byok", undefined]) {
+    const p = planDeprovision(tier as string | undefined, false, now);
+    assert.equal(p.grace, false);
+    assert.equal(p.deprovisionAt, undefined);
+  }
+
+  // Explicit "delete now" (force) bypasses the hosted grace.
+  const forced = planDeprovision("hosted", true, now);
+  assert.equal(forced.grace, false);
+});
+
+test("reusableSubscriptionMachineStatus excludes dead and deleting rows", () => {
+  for (const status of ["active", "provisioning", "resuming", "paused", "suspended", "grace"]) {
+    assert.equal(reusableSubscriptionMachineStatus(status), true, status);
+  }
+  for (const status of ["stopped", "stopping", "removed", "error", "", undefined]) {
+    assert.equal(reusableSubscriptionMachineStatus(status), false, String(status));
+  }
+});
+
+test("managed machine quota keeps flat Cloud Workspace to one saved box", () => {
+  assert.equal(managedMachineLimit("cloud-workspace"), 1);
+  assert.equal(managedMachineLimit("cloud-agent"), 1);
+  const previous = process.env.YAVER_MANAGED_MACHINE_LIMIT;
+  delete process.env.YAVER_MANAGED_MACHINE_LIMIT;
+  try {
+    assert.equal(managedMachineLimit(undefined), 1);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.YAVER_MANAGED_MACHINE_LIMIT;
+    } else {
+      process.env.YAVER_MANAGED_MACHINE_LIMIT = previous;
+    }
+  }
+});
+
+test("snapshotIsMandatory: only hosted (the user's only data copy)", () => {
+  assert.equal(snapshotIsMandatory("hosted"), true);
+  assert.equal(snapshotIsMandatory("byok"), false);
+  assert.equal(snapshotIsMandatory(undefined), false);
+});
+
+test("buildManagedCloudInitContainer: byok runs only the agent; hosted adds self-hosted Convex", () => {
+  const base = {
+    convexSite: "https://example.convex.site",
+    machineId: "machine_ctr",
+    machineToken: "machine-token-ctr",
+    bootstrapDeviceCode: "device-code-ctr",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-ctr",
+    hostname: "ctr.cloud.yaver.io",
+    yaverArch: "amd64" as const,
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64.tar.gz",
+    gpu: false,
+  };
+  const IMG = "ghcr.io/kivanccakmak/yaver-cloud:latest";
+
+  // byok — agent container only, NO Convex sidecar; snippet truncated.
+  const byok = buildManagedCloudInitContainer({ ...base, tier: "byok" }, IMG);
+  assert.match(byok, /docker run -d --name yaver --restart always/);
+  assert.match(byok, /docker pull '.*yaver-cloud:latest'/);
+  assert.match(byok, /CONVEX_SELFHOSTED_FILE=\/root\/\.yaver\/convex-selfhosted\.json/);
+  assert.match(byok, /cat > \/usr\/local\/bin\/yaver-bootstrap-workspace/);
+  assert.match(byok, /cat > \/srv\/yaver\/state\/\.config\/opencode\/opencode\.json/);
+  assert.match(byok, /"model": "zai-coding-plan\/glm-4\.7"/);
+  assert.match(byok, /"enabled_providers": \[\n\s+"zai-coding-plan"\n\s+\]/);
+  assert.match(byok, /"default_agent": "build"/);
+  assert.match(byok, /"command": \[\n\s+"\/usr\/local\/bin\/yaver",\n\s+"mcp"\n\s+\]/);
+  assert.match(byok, /clone_one https:\/\/github\.com\/kivanccakmak\/yaver\.io\.git yaver\.io/);
+  assert.doesNotMatch(byok, /clone_one https:\/\/github\.com\/kivanccakmak\/(?!yaver\.io\.git)/);
+  assert.match(byok, /-v \/srv\/yaver\/state\/Workspace:\/srv\/yaver\/workspace/);
+  assert.doesNotMatch(byok, /HC_Volume_/);
+  assert.doesNotMatch(byok, /ghcr\.io\/get-convex\/convex-backend/);
+  assert.doesNotMatch(byok, /docker run -d --name yaver-convex/);
+  assert.match(byok, /: > \/etc\/nginx\/snippets\/yaver-convex\.conf/);
+  // tier absent ⇒ identical to explicit byok (byte-identical default).
+  {
+    const realNow = Date.now;
+    Date.now = () => 1_784_418_035_010;
+    try {
+      assert.equal(
+        buildManagedCloudInitContainer({ ...base, tier: "byok" }, IMG),
+        buildManagedCloudInitContainer(base, IMG),
+      );
+    } finally {
+      Date.now = realNow;
+    }
+  }
+
+  // hosted — agent container + Convex sidecar + admin-key on the
+  // PERSISTED volume (so the in-container agent reads it) + nginx WS.
+  const hosted = buildManagedCloudInitContainer({ ...base, tier: "hosted" }, IMG);
+  assert.match(hosted, /docker run -d --name yaver-convex --restart always/);
+  assert.match(hosted, /ghcr\.io\/get-convex\/convex-backend:latest/);
+  assert.match(hosted, /-v yaver-convex-data:\/convex\/data/);
+  assert.match(hosted, /generate_admin_key\.sh/);
+  assert.match(
+    hosted,
+    /cat > \/srv\/yaver\/state\/\.yaver\/convex-selfhosted\.json/,
+  );
+  assert.match(hosted, /chmod 0600 \/srv\/yaver\/state\/\.yaver\/convex-selfhosted\.json/);
+  assert.match(hosted, /https:\/\/ctr\.cloud\.yaver\.io\/_convex-api/);
+  assert.match(hosted, /location \/_convex-api\/ \{/);
+  assert.match(hosted, /proxy_pass http:\/\/127\.0\.0\.1:3210\//);
+  assert.match(hosted, /location \/_convex-http\/ \{/);
+  assert.match(hosted, /include \/etc\/nginx\/snippets\/yaver-convex\.conf;/);
+});
+
+test("buildManagedCloudInitContainer: volume-backed boxes mount durable state before writing config", () => {
+  const ci = buildManagedCloudInitContainer(
+    {
+      convexSite: "https://example.convex.site",
+      machineId: "machine_vol",
+      machineToken: "machine-token-vol",
+      bootstrapDeviceCode: "device-code-vol",
+      bootstrapExpiresAt: 1893456000000,
+      deviceId: "cloud-vol",
+      hostname: "vol.cloud.yaver.io",
+      yaverArch: "amd64",
+      yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64.tar.gz",
+      gpu: false,
+      volumeId: "123456",
+    },
+    "ghcr.io/kivanccakmak/yaver-cloud:latest",
+  );
+
+  const mountIdx = ci.indexOf("/dev/disk/by-id/scsi-0HC_Volume_123456");
+  const configIdx = ci.indexOf("cat > /srv/yaver/state/.yaver/config.json");
+  assert.ok(mountIdx > 0, "volume mount block is present");
+  assert.ok(configIdx > 0, "state config write is present");
+  assert.ok(mountIdx < configIdx, "volume is mounted before state is written");
+  assert.match(ci, /mountpoint -q \/srv\/yaver\/state \|\| mount \/srv\/yaver\/state/);
+  assert.match(ci, /refusing ephemeral state/);
+});
+
+test("isMachineWakeable requires snapshot or volume plus base image", () => {
+  assert.equal(isMachineWakeable({ status: "paused", lastSnapshotId: "snap-1" }), true);
+  assert.equal(isMachineWakeable({ status: "paused", volumeId: "vol-1", baseImageId: "ubuntu-24.04" }), true);
+  assert.equal(isMachineWakeable({ status: "paused", baseImageId: "ubuntu-24.04" }), false);
+  assert.equal(isMachineWakeable({ status: "active", volumeId: "vol-1", baseImageId: "ubuntu-24.04" }), false);
+});
+
+test("buildManagedCloudInitContainer: observability beacon + optional ssh/relay", () => {
+  const base = {
+    convexSite: "https://example.convex.site",
+    machineId: "machine_obs",
+    machineToken: "machine-token-obs",
+    bootstrapDeviceCode: "device-code-obs",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-obs",
+    hostname: "obs.cloud.yaver.io",
+    yaverArch: "amd64" as const,
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64.tar.gz",
+    gpu: false,
+  };
+  const IMG = "ghcr.io/kivanccakmak/yaver-cloud:latest";
+
+  // Default (no ssh key, no relay password): the health beacon is
+  // ALWAYS emitted, but ssh_authorized_keys / relay_password are NOT —
+  // and the absent-tier default stays byte-identical to explicit byok.
+  const plain = buildManagedCloudInitContainer(base, IMG);
+  assert.match(plain, /phase=registering/);
+  assert.match(plain, /phase=error&error=agent-health-unreachable-300s/);
+  assert.match(plain, /curl -fsS -m 4 http:\/\/127\.0\.0\.1:18080\/health/);
+  assert.match(plain, /phase=starting-agent/);
+  assert.doesNotMatch(plain, /ssh_authorized_keys:/);
+  assert.doesNotMatch(plain, /"relay_password":/);
+  assert.equal(plain, buildManagedCloudInitContainer({ ...base, tier: "byok" }, IMG));
+
+  // Operator debug key → top-level cloud-config ssh_authorized_keys
+  // (JSON-quoted ⇒ YAML-safe), still byte-stable for the same inputs.
+  const withSsh = buildManagedCloudInitContainer(
+    { ...base, sshAuthorizedKey: "ssh-ed25519 AAAAC3NzaC1 operator@debug" },
+    IMG,
+  );
+  assert.match(withSsh, /#cloud-config\nssh_authorized_keys:\n  - "ssh-ed25519 AAAAC3NzaC1 operator@debug"/);
+  assert.equal(
+    withSsh,
+    buildManagedCloudInitContainer(
+      { ...base, sshAuthorizedKey: "ssh-ed25519 AAAAC3NzaC1 operator@debug" },
+      IMG,
+    ),
+  );
+
+  // Relay password → config.json relay_password (defensive fallback now
+  // that auto-cert + public_endpoints is the primary path).
+  const withRelay = buildManagedCloudInitContainer(
+    { ...base, relayPassword: "s3cr3t-relay-pw" },
+    IMG,
+  );
+  assert.match(withRelay, /"relay_password": "s3cr3t-relay-pw"/);
+  // config.json must stay valid JSON with the extra field (no dangling
+  // comma): public_endpoints (always-present) then comma then relay_password.
+  assert.match(
+    withRelay,
+    /"public_endpoints": \["https:\/\/obs\.cloud\.yaver\.io"\],\n {6}"relay_password": "s3cr3t-relay-pw"/,
+  );
+});
+
+test("buildManagedCloudInitContainer: auto-cert the box's own subdomain (no shared relay needed)", () => {
+  const base = {
+    convexSite: "https://example.convex.site",
+    machineId: "machine_cert",
+    machineToken: "machine-token-cert",
+    bootstrapDeviceCode: "device-code-cert",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-cert",
+    hostname: "cert42.cloud.yaver.io",
+    yaverArch: "amd64" as const,
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64.tar.gz",
+    gpu: false,
+  };
+  const IMG = "ghcr.io/kivanccakmak/yaver-cloud:latest";
+  const ci = buildManagedCloudInitContainer(base, IMG);
+
+  // (1) config.json advertises HTTPS via public_endpoints so the agent
+  // registers it in PublicEndpoints and the browser dashboard skips
+  // the shared relay for this box's own traffic.
+  assert.match(ci, /"public_endpoints": \["https:\/\/cert42\.cloud\.yaver\.io"\]/);
+
+  // (2) machine.json carries hostname so the on-box reconciler can
+  // process the auto domain (not just user custom domains).
+  assert.match(
+    ci,
+    /\{"machineId":"machine_cert","machineToken":"machine-token-cert","convexSite":"https:\/\/example\.convex\.site","hostname":"cert42\.cloud\.yaver\.io"\}/,
+  );
+
+  // (3) Reconciler script reads HOST + ensures nginx server block +
+  // certbot for the auto subdomain. Idempotent (cf existence guard,
+  // certbot self-skips if not due, || true non-fatal). No
+  // /machine/tls-issued POST for the auto domain (that's userDomains-only).
+  assert.match(ci, /HOST=\$\(jq -r \.hostname "\$conf"/);
+  assert.match(ci, /if \[ -n "\$HOST" \] && \[ "\$HOST" != "null" \]/);
+  assert.match(ci, /certbot --nginx -d "\$HOST"/);
+  // The auto-domain block is BEFORE the user-custom-domain loop.
+  const reconcilerStart = ci.indexOf("yaver-tls-reconciler");
+  const autoCertIdx = ci.indexOf('certbot --nginx -d "$HOST"', reconcilerStart);
+  const customLoopIdx = ci.indexOf("pending-tls?machineId=", reconcilerStart);
+  assert.ok(autoCertIdx > 0 && customLoopIdx > 0, "both blocks present");
+  assert.ok(
+    autoCertIdx < customLoopIdx,
+    "auto-cert must run before the custom-domain loop",
+  );
+
+  // (4) byte-identical default still holds — every new field above is
+  // tier-independent and unconditional, so byok == default still passes.
+  assert.equal(ci, buildManagedCloudInitContainer({ ...base, tier: "byok" }, IMG));
+});
+
+test("buildManagedCloudInitContainer: Phase 2 — bundled yaver-relay (in-image, not sidecar) when boxRelayPassword set", () => {
+  const base = {
+    convexSite: "https://example.convex.site",
+    machineId: "machine_relay",
+    machineToken: "machine-token-relay",
+    bootstrapDeviceCode: "device-code-relay",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-relay",
+    hostname: "relay42.cloud.yaver.io",
+    yaverArch: "amd64" as const,
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64.tar.gz",
+    gpu: false,
+  };
+  const IMG = "ghcr.io/kivanccakmak/yaver-cloud:latest";
+
+  // Absent boxRelayPassword ⇒ no relay ports on the main yaver run,
+  // no RELAY_PASSWORD env, no ufw 4433/8443. The entrypoint wrapper
+  // inside the image will see RELAY_PASSWORD unset and skip starting
+  // yaver-relay (Dockerfile.yaver-cloud entrypoint).
+  const plain = buildManagedCloudInitContainer(base, IMG);
+  assert.doesNotMatch(plain, /-p 4433:4433\/udp/);
+  assert.doesNotMatch(plain, /RELAY_PASSWORD/);
+  assert.doesNotMatch(plain, /ufw allow 4433\/udp/);
+  assert.doesNotMatch(plain, /ufw allow 8443\/tcp/);
+  // tier absent ⇒ identical to explicit byok (byte-identical default).
+  assert.equal(plain, buildManagedCloudInitContainer({ ...base, tier: "byok" }, IMG));
+  // And critically NO separate yaver-relay container is launched —
+  // it's bundled INTO the yaver image (Phase 2 design call).
+  assert.doesNotMatch(plain, /--name yaver-relay\b/);
+
+  // Set ⇒ ports + env are folded into the SAME yaver docker run (the
+  // image's entrypoint wrapper backgrounds yaver-relay when it sees
+  // RELAY_PASSWORD). ufw opens QUIC + admin ports BEFORE ufw enable.
+  const withRelay = buildManagedCloudInitContainer(
+    { ...base, boxRelayPassword: "relay-pw-abc123" },
+    IMG,
+  );
+  assert.match(withRelay, /ufw allow 4433\/udp/);
+  assert.match(withRelay, /ufw allow 8443\/tcp/);
+  // Single docker run with both port pairs (the agent + the bundled relay).
+  assert.match(withRelay, /docker run -d --name yaver --restart always/);
+  assert.match(withRelay, /-p 18080:18080/);
+  assert.match(withRelay, /-p 4433:4433\/udp -p 8443:8443\/tcp/);
+  assert.match(withRelay, /-e RELAY_PASSWORD='relay-pw-abc123'/);
+  // CONVEX_URL must also be passed when relay is bundled — the
+  // entrypoint wrapper threads it as `--convex-url` so the relay
+  // per-user-validates tunnel registrations instead of running in
+  // password-only mode.
+  assert.match(withRelay, /-e CONVEX_URL='https:\/\/example\.convex\.site'/);
+  // No separate yaver-relay container — bundled.
+  assert.doesNotMatch(withRelay, /--name yaver-relay\b/);
+
+  // The ufw rules must land BEFORE `ufw --force enable` (otherwise the
+  // ports never open).
+  const ufwEnableIdx = withRelay.indexOf("ufw --force enable");
+  const ufw4433Idx = withRelay.indexOf("ufw allow 4433/udp");
+  assert.ok(ufw4433Idx > 0 && ufw4433Idx < ufwEnableIdx, "4433 rule before ufw enable");
+});
+
+// Regression: a real managed box (mn777j15, 88.198.131.204) was awake with an
+// expired Yaver session and could not be signed in from the phone — the cloud
+// row's deviceId was null, so the app refused with "the cloud row does not
+// include the device id … wait a few seconds for the wake state to refresh".
+// That could never come true: the box can't register until it's signed in, and
+// it can't be signed in without an id. The id was derivable the whole time.
+test("managedDeviceIdFor derives the id the box registers as", () => {
+  // The real machine id + the id its sibling rows actually carry.
+  assert.equal(managedDeviceIdFor("mn777j15vc4wnt1gv4ceyad5858afzs4"), "cloud-mn777j15");
+  assert.equal(managedDeviceIdFor("mn71me24abcdefghijklmnopqrstuvwx"), "cloud-mn71me24");
+});
+
+test("managedDeviceIdFor agrees with the hostname built from the same slug", () => {
+  // provision derives BOTH from `_id.substring(0,8)`; if they ever drift, a box
+  // would register under an id nothing else can address.
+  const machineId = "mn777j15vc4wnt1gv4ceyad5858afzs4";
+  const shortId = machineId.substring(0, 8);
+  assert.equal(managedDeviceIdFor(machineId), `cloud-${shortId}`);
+  assert.equal(`${shortId}.cloud.yaver.io`, "mn777j15.cloud.yaver.io");
+});
+
+test("managedDeviceIdFor is stable across every park/wake", () => {
+  // Waking recreates the server from a snapshot — a brand new Hetzner box with
+  // a new IP. The identity must not move with it, or each sleep would orphan
+  // the row.
+  const machineId = "mn777j15vc4wnt1gv4ceyad5858afzs4";
+  assert.equal(managedDeviceIdFor(machineId), managedDeviceIdFor(machineId));
+});
+
+// ── 2026-08-10 provision-blocker regression guards ──────────────────────────
+// Every standard/heavy/build provision failed for ~6 weeks with
+// "Hetzner API 422: server type <id> is deprecated" because MACHINE_SPECS
+// defaults were cx32/cx42/cx52 (types 105/106/107, all deprecated) and the
+// surfaces only ever showed the generic "provisioning failed" label. These
+// tests pin both halves: the defaults must stay orderable, and the generated
+// cloud-init must not ship a dash-rejecting bare `set -o pipefail`.
+
+test("MACHINE_SPECS hetznerType defaults are not the deprecated cx32/cx42/cx52", () => {
+  const deprecated = new Set(["cx32", "cx42", "cx52"]);
+  for (const t of ["standard", "heavy", "build"]) {
+    const hetznerType = MACHINE_SPECS[t as keyof typeof MACHINE_SPECS].hetznerType;
+    assert.ok(
+      !deprecated.has(hetznerType),
+      `${t} default ${hetznerType} is deprecated — every provision would 422`,
+    );
+    // Must be the same ladder the wake path uses (cloudLifecycle.hetznerServerType)
+    // so the two sources of truth cannot drift again.
+    const expected = { standard: "cpx22", heavy: "cpx32", build: "cpx42" }[t];
+    assert.equal(hetznerType, expected);
+  }
+});
+
+test("container cloud-init ships a POSIX-safe pipefail, never a bare bash-ism", () => {
+  const base = {
+    convexSite: "https://example.convex.site",
+    machineId: "machine_ctr",
+    machineToken: "machine-token-ctr",
+    bootstrapDeviceCode: "device-code-ctr",
+    bootstrapExpiresAt: 1893456000000,
+    deviceId: "cloud-ctr",
+    hostname: "ctr.cloud.yaver.io",
+    yaverArch: "amd64" as const,
+    yaverReleaseUrl: "https://example.invalid/yaver-linux-amd64.tar.gz",
+    gpu: false,
+    // Volume-backed (container) path — this is what trips the volume block.
+    volumeId: "106577027",
+    boxRelayPassword: "",
+  };
+  const IMG = "ghcr.io/kivanccakmak/yaver-cloud:latest";
+  const ci = buildManagedCloudInitContainer(base as never, IMG);
+  // The incident: `set -euo pipefail` at runcmd block level ran under /bin/sh
+  // (dash) → "set: Illegal option -o pipefail" → whole runcmd aborted before
+  // docker pull → first boot died. The safe form is the POSIX fallback.
+  // set is a POSIX special builtin: in dash a failed "set -euo pipefail"
+  // EXITS the shell (fallbacks never run) — the incident shape. Runcmd
+  // blocks must use dash-safe "set -eu".
+  assert.match(ci, /\n  - \|\n    set -eu\n/);
+  assert.doesNotMatch(ci, /\n  - \|\n    set -euo pipefail\n/);
+  // The wake twin must also restore the managed identity from the volume.
+  assert.match(ci, /cp \/etc\/yaver\/machine\.json \/srv\/yaver\/state\/\.yaver\/machine\.json/);
+});

@@ -1,0 +1,249 @@
+package main
+
+// task_raw_output_test.go — the raw opencode console path.
+//
+// The agent retains the runner's RAW stdout (ANSI + TUI bytes, ungroomed)
+// for the terminal view — see tasks.go emitRaw / RawOutput. This file
+// guards the CONSUMERS, which is where "the webui wasn't like the console
+// for opencode" died: the producer shipped with no way to reach a screen.
+//
+//   - GET /tasks/{id}/output?rawSince=<bytes> replays the raw tail
+//     (raw_replay frame) so a terminal can be seeded and resumed.
+//   - The same SSE stream carries live `raw` frames while the runner writes.
+//   - GET /tasks/{id} ships the wire-capped rawOutput tail + rawOffset for
+//     polling clients.
+//
+// Omitting `rawSince` must remain byte-for-byte the old stream (no
+// raw_replay frame) — clients that predate the raw lane must not change
+// behaviour.
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func startRawTestServer(t *testing.T) (*httptest.Server, *TaskManager) {
+	t.Helper()
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	hs := NewHTTPServer(0, "test-token", "test-user", "test-device", "", "test-host", tm)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/tasks", hs.auth(hs.handleTasks))
+	mux.HandleFunc("/tasks/", hs.auth(hs.handleTaskByID))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, tm
+}
+
+// createRawFixture registers a synthetic task straight into the TaskManager
+// with the raw tail pre-stamped. Deliberately NOT via POST /tasks: the real
+// create path spawns a runner process (opencode is installed on dev boxes),
+// whose live output would race the stamp and pollute RawOutput. A synthetic
+// task is deterministic — no process, no writes.
+func createRawFixture(t *testing.T, tm *TaskManager, id, raw string, status TaskStatus) string {
+	t.Helper()
+	task := &Task{
+		ID:          id,
+		Title:       "raw fixture",
+		Status:      status,
+		RunnerID:    "opencode",
+		RawOutput:   raw,
+		outputCh:    make(chan string, 512),
+		rawOutputCh: make(chan []byte, 256),
+		eventCh:     make(chan map[string]interface{}, 32),
+		doneCh:      make(chan struct{}),
+	}
+	tm.mu.Lock()
+	tm.tasks[task.ID] = task
+	tm.mu.Unlock()
+	return task.ID
+}
+
+// collectSSEFrames reads an SSE response until EOF (the handler returns on
+// ctx cancel, so a 5s deadline bounds a task that never reaches a terminal
+// state) and returns every parsed `data:` frame in order.
+func collectSSEFrames(t *testing.T, url string) []map[string]interface{} {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer res.Body.Close()
+	var frames []map[string]interface{}
+	sc := bufio.NewScanner(res.Body)
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var ev map[string]interface{}
+		if err := json.Unmarshal([]byte(line[len("data: "):]), &ev); err != nil {
+			t.Fatalf("bad SSE frame %q: %v", line, err)
+		}
+		frames = append(frames, ev)
+	}
+	return frames
+}
+
+func rawFrame(t *testing.T, frames []map[string]interface{}, wantType string) map[string]interface{} {
+	t.Helper()
+	for _, f := range frames {
+		if f["type"] == wantType {
+			return f
+		}
+	}
+	t.Fatalf("no %q frame among %d frames: %v", wantType, len(frames), frames)
+	return nil
+}
+
+// TestRawReplay_ExplicitSince — `?rawSince=<bytes>` replays the raw tail
+// from that byte offset (rune-aligned) as a raw_replay frame with the
+// authoritative offset + full flag.
+func TestRawReplay_ExplicitSince(t *testing.T) {
+	srv, tm := startRawTestServer(t)
+	raw := "\x1b[32m✔\x1b[0m analysing repo…\n\x1b[1mworkdir:\x1b[0m /root/proj\n"
+	taskID := createRawFixture(t, tm, "raw-replay-1", raw, TaskStatusFinished)
+
+	frames := collectSSEFrames(t, srv.URL+"/tasks/"+taskID+"/output?rawSince=0")
+	rf := rawFrame(t, frames, "raw_replay")
+	if text, _ := rf["text"].(string); text != raw {
+		t.Errorf("raw_replay text = %q, want full raw %q", text, raw)
+	}
+	if off, _ := rf["offset"].(float64); int(off) != len(raw) {
+		t.Errorf("raw_replay offset = %v, want %d", rf["offset"], len(raw))
+	}
+	if full, _ := rf["full"].(bool); !full {
+		t.Errorf("rawSince=0 must be a full snapshot, got full=%v", rf["full"])
+	}
+
+	// A mid-tail resume: bytes 5.. end.
+	frames = collectSSEFrames(t, srv.URL+"/tasks/"+taskID+"/output?rawSince=5")
+	rf = rawFrame(t, frames, "raw_replay")
+	text, _ := rf["text"].(string)
+	if !strings.HasPrefix(raw[5:], text) {
+		t.Errorf("raw_replay text %q is not a suffix of raw[5:] %q", text, raw[5:])
+	}
+	if full, _ := rf["full"].(bool); full {
+		t.Errorf("mid-tail resume must be an increment, got full=%v", rf["full"])
+	}
+}
+
+// TestRawReplay_OmittedSinceIsOldBehaviour — no rawSince means no
+// raw_replay frame at all, byte-for-byte the pre-raw stream.
+func TestRawReplay_OmittedSinceIsOldBehaviour(t *testing.T) {
+	srv, tm := startRawTestServer(t)
+	taskID := createRawFixture(t, tm, "raw-replay-2", "\x1b[31mred\x1b[0m\n", TaskStatusFinished)
+
+	frames := collectSSEFrames(t, srv.URL+"/tasks/"+taskID+"/output")
+	for _, f := range frames {
+		if f["type"] == "raw_replay" {
+			t.Fatalf("without ?rawSince= a legacy client must never see a raw_replay frame, got %v", f)
+		}
+	}
+}
+
+// TestRawLiveFrames — chunks pushed into rawOutputCh surface as `raw` SSE
+// frames (the terminal view's live path).
+func TestRawLiveFrames(t *testing.T) {
+	srv, tm := startRawTestServer(t)
+	taskID := createRawFixture(t, tm, "raw-live-1", "", TaskStatusRunning)
+
+	task, ok := tm.GetTask(taskID)
+	if !ok {
+		t.Fatalf("task %s not found", taskID)
+	}
+	chunks := [][]byte{
+		[]byte("\x1b[?25lloading"),
+		[]byte(" dependencies…\x1b[0m\r\n"),
+		[]byte("✓ done\x1b[?25h"),
+	}
+	for _, c := range chunks {
+		// Buffered before the handler's select drains it; 256-deep channel,
+		// so no drops.
+		task.rawOutputCh <- c
+	}
+
+	frames := collectSSEFrames(t, srv.URL+"/tasks/"+taskID+"/output?rawSince=0")
+	rawTypes := 0
+	var joined strings.Builder
+	for _, f := range frames {
+		if f["type"] == "raw" {
+			rawTypes++
+			joined.WriteString(fmt.Sprint(f["text"]))
+		}
+	}
+	if rawTypes != len(chunks) {
+		t.Errorf("got %d raw frames, want %d (frames: %v)", rawTypes, len(chunks), frames)
+	}
+	for _, want := range []string{"loading", "dependencies", "done"} {
+		if !strings.Contains(joined.String(), want) {
+			t.Errorf("raw stream missing %q; got %q", want, joined.String())
+		}
+	}
+}
+
+// TestRawCap_TruncationMarker — emitRaw must never hold more than
+// rawOutputMaxBytes in memory: past the cap the head is dropped and a
+// readable marker is prepended so a client knows the earliest bytes went.
+func TestRawCap_TruncationMarker(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	task := &Task{RunnerID: "opencode"}
+	chunk := strings.Repeat("x", 8*1024)
+	// Feed ~1.1 MB through the cap path (600 KB > 512 KB cap).
+	for i := 0; i < 80; i++ {
+		tm.emitRaw(task, []byte(chunk))
+	}
+	wantLen := rawOutputMaxBytes + len(rawOutputTruncatedMarker)
+	if len(task.RawOutput) != wantLen {
+		t.Errorf("RawOutput len = %d, want %d (cap + marker)", len(task.RawOutput), wantLen)
+	}
+	if !strings.HasPrefix(task.RawOutput, rawOutputTruncatedMarker) {
+		t.Errorf("RawOutput must start with the truncation marker; got %q", task.RawOutput[:80])
+	}
+}
+
+// TestGetTask_RawWireCap — GET /tasks/{id} ships at most
+// taskWireRawOutputCap bytes of raw tail plus the FULL byte offset, so a
+// polling client can seed a terminal and resume via ?rawSince= without
+// re-fetching the rest.
+func TestGetTask_RawWireCap(t *testing.T) {
+	srv, tm := startRawTestServer(t)
+	big := strings.Repeat("y", 200*1024) // > 64 KB wire cap, < 512 KB retain cap
+	taskID := createRawFixture(t, tm, "raw-wire-1", big, TaskStatusFinished)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/tasks/"+taskID, nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET task: %v", err)
+	}
+	defer res.Body.Close()
+	var parsed struct {
+		Task struct {
+			RawOutput string `json:"rawOutput"`
+			RawOffset int    `json:"rawOffset"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
+		t.Fatalf("decode task: %v", err)
+	}
+	if len(parsed.Task.RawOutput) != taskWireRawOutputCap {
+		t.Errorf("rawOutput wire len = %d, want cap %d", len(parsed.Task.RawOutput), taskWireRawOutputCap)
+	}
+	if parsed.Task.RawOffset != len(big) {
+		t.Errorf("rawOffset = %d, want full tail length %d", parsed.Task.RawOffset, len(big))
+	}
+	if !strings.HasSuffix(big, parsed.Task.RawOutput) {
+		t.Errorf("wire rawOutput must be the TAIL of the retained bytes")
+	}
+}

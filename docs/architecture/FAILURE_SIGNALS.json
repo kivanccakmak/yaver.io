@@ -1,0 +1,123 @@
+{
+  "$comment": [
+    "CANONICAL runner-failure signal table — the single source of truth for every surface.",
+    "",
+    "WHY THIS FILE EXISTS. Yaver classifies runner failures on web (TypeScript), the Go",
+    "agent, mobile/RN, tvOS (Swift), watchOS (Swift), Wear OS (Kotlin) and visionOS",
+    "(Swift). Native surfaces cannot import web/lib, so every one of them is an",
+    "INDEPENDENT copy — and this repo has already paid for that twice: three relay-auth",
+    "matchers drifted apart with none a superset of the others, and on 2026-08-02 every",
+    "single matcher was missing Anthropic's actual OAuth-expiry wording, so the commonest",
+    "runner failure there is produced no route on any surface.",
+    "",
+    "So the strings live HERE, once. Each surface embeds them; web/lib/failureSignalParity.test.ts",
+    "reads every surface's source and fails when one cannot name a cause another can.",
+    "Adding a signal means adding it here AND to each surface in the same change — the",
+    "parity test is what makes that non-optional.",
+    "",
+    "THE LAW THIS TABLE ENCODES: a failure that is not about the credential must never",
+    "route the user into a sign-in flow. Billing, throttling, model entitlement and a",
+    "missing provider key are all valid credentials failing for other reasons; sending",
+    "someone through OAuth for any of them is a dead end that also destroys a working",
+    "session in the rate-limit case."
+  ],
+  "version": 1,
+  "updated": "2026-08-02",
+  "kinds": {
+    "auth": {
+      "meaning": "The runner's own OAuth grant is no longer accepted.",
+      "routesToSignIn": true,
+      "action": "Sign the runner in again on that machine (Remote OAuth, or over SSH).",
+      "signals": [
+        "oauth token has expired",
+        "oauth session expired",
+        "authentication_error",
+        "authentication_failed",
+        "not authenticated",
+        "not logged in",
+        "please sign in",
+        "invalid bearer token",
+        "unauthorized",
+        "expired token",
+        "token_expired",
+        "please run /login",
+        "run codex login",
+        "codex login --device-auth",
+        "refresh_token_reused"
+      ]
+    },
+    "auth-revoked": {
+      "meaning": "The grant was revoked server-side. A refresh cannot recover it.",
+      "routesToSignIn": true,
+      "action": "Sign in again to issue a brand-new credential.",
+      "signals": [
+        "oauth access token has been revoked",
+        "token has been revoked"
+      ]
+    },
+    "billing": {
+      "meaning": "The credential is valid; the account cannot pay for the call.",
+      "routesToSignIn": false,
+      "action": "Top up or upgrade that provider account. Signing in again will not help.",
+      "signals": [
+        "credit balance is too low",
+        "credit_balance_too_low",
+        "plans & billing"
+      ]
+    },
+    "rate-limit": {
+      "meaning": "Throttled. The credential and the model are both fine.",
+      "routesToSignIn": false,
+      "action": "Wait for the limit to reset and retry. Do NOT sign in again — a fresh token does not reset a quota, and re-auth throws away a working session.",
+      "signals": [
+        "rate_limit_error",
+        "rate limit reached",
+        "rate limit exceeded",
+        "too many requests"
+      ]
+    },
+    "model-not-supported": {
+      "meaning": "The signed-in plan does not include the selected model.",
+      "routesToSignIn": false,
+      "action": "Pick a different model for this machine. Signing in again cannot move a model onto a plan.",
+      "signals": [
+        "model is not supported",
+        "does not have access to model",
+        "unsupported model"
+      ]
+    },
+    "model-not-found": {
+      "meaning": "The runner could not resolve the model id at all.",
+      "routesToSignIn": false,
+      "action": "Pick a model this runner lists on this machine. OpenCode ids must be written <providerId>/<modelId>.",
+      "signals": [
+        "providermodelnotfounderror",
+        "provider model not found",
+        "invalid model"
+      ]
+    },
+    "provider-key": {
+      "meaning": "The PROVIDER's API key is missing or rejected. Unrelated to Yaver sign-in and to the runner's OAuth.",
+      "routesToSignIn": false,
+      "action": "Set that provider's API key on the machine (env var, opencode.json options.apiKey, or /connect).",
+      "signals": [
+        "ai_loadapikeyerror",
+        "api key is missing",
+        "load api key"
+      ]
+    }
+  },
+  "authMechanisms": {
+    "$comment": [
+      "How a runner proves itself decides which failures it can even have.",
+      "An API-key runner has no OAuth grant, so token_expired / revoked / refresh_token_reused",
+      "are impossible for it — during an OAuth outage it is structurally immune, not merely",
+      "an alternative. Measured on the owner's fleet: opencode on magara reports",
+      "authSource 'GLM API key' and kept working while codex had no credentials at all.",
+      "An unrecognised label stays 'unknown' and is NEVER guessed into a bucket: recommending",
+      "a mislabelled OAuth runner is worst exactly when OAuth is what broke."
+    ],
+    "api-key": ["api key", "api-key", "apikey", "env"],
+    "subscription-oauth": ["claude.ai", "chatgpt", "login status", "oauth", "subscription"]
+  }
+}

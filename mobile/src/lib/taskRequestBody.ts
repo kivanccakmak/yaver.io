@@ -1,0 +1,60 @@
+export type SendTaskRequestBodyArgs = {
+  title: string;
+  description: string;
+  model?: string;
+  runner?: string;
+  customCommand?: string;
+  speechContext?: Record<string, unknown> | undefined;
+  images?: unknown[];
+  workDir?: string;
+  projectName?: string;
+  projectDir?: string;
+  mcpServers?: string[];
+  mode?: string;
+  video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" };
+  codeMode?: boolean;
+  allowLocalFallback?: boolean;
+  /** Yaver goal-mode objective (opencode goal plugin). When set, the task
+   *  runs as a persistent goal the opencode runner keeps working toward
+   *  across turns (create_goal + idle auto-continue) until complete with
+   *  evidence, blocked, or a safety limit. Empty = one-shot task. Only the
+   *  opencode runner honors it; other runners ignore the field. Surfaces
+   *  set this when the composer input is `/goal <objective>`. */
+  goal?: string;
+  /** Runs the task as a grounded deep question-answer (askModePreamble:
+   *  file:line citations, explain-first, confirm gate) instead of a work
+   *  run — the phone's "deep audit" frame. The web dashboard already sends
+   *  it (agent-client.ts buildCreateTaskBody); this field closes the
+   *  mobile gap so a phone-triggered ask is indistinguishable from a
+   *  dashboard one. */
+  askMode?: boolean;
+  /** Whether the runner sees Yaver's own `yaver mcp` doorway (default
+   *  true). Set false when the user deselects the `yaver` chip. */
+  includeYaverMcp?: boolean;
+};
+
+export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<string, unknown> {
+  return {
+    title: args.title,
+    description: args.description,
+    source: args.codeMode ? "mobile-code" : "mobile",
+    ...(args.model ? { model: args.model } : {}),
+    ...(args.runner ? { runner: args.runner } : {}),
+    ...(args.mode ? { mode: args.mode } : {}),
+    ...(args.customCommand ? { customCommand: args.customCommand } : {}),
+    ...(args.speechContext ? { speechContext: args.speechContext } : {}),
+    ...(args.images?.length ? { images: args.images } : {}),
+    ...(args.workDir ? { workDir: args.workDir } : {}),
+    ...(args.projectName ? { projectName: args.projectName } : {}),
+    ...(args.projectDir ? { projectDir: args.projectDir } : {}),
+    ...(args.mcpServers?.length ? { mcpServers: args.mcpServers } : {}),
+    ...(args.video?.enabled ? { videoEnabled: true } : {}),
+    ...(args.video?.source ? { videoSource: args.video.source } : {}),
+    ...(args.allowLocalFallback ? { allowLocalFallback: true } : {}),
+    ...(args.goal ? { goal: args.goal } : {}),
+    ...(args.askMode ? { askMode: true } : {}),
+    // Absent = include (server default true); only an explicit false strips
+    // Yaver's own MCP doorway so the task runs with ONLY selected externals.
+    ...(args.includeYaverMcp === false ? { includeYaverMcp: false } : {}),
+  };
+}

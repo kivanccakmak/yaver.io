@@ -1,0 +1,413 @@
+// WatchStore.swift — app-wide state + the one place that decides WHICH transport
+// a turn takes (phone-paired default, standalone fallback) and reduces a
+// WatchReply into "the line to show + the haptic to play".
+//
+// Deliberately small. The watch OWNS NOTHING and SHOWS NOTHING complex
+// (docs/yaver-smartwatch-voice-terminal.md §0): one summary line, one pending
+// confirm, a transport mode, and (only for standalone) a token + selected box.
+// No task list, no history, no code. The phone/runner is the brain-of-record.
+
+import Combine
+import Foundation
+import Security
+import SwiftUI
+
+@MainActor
+final class WatchStore: ObservableObject {
+    // MARK: Persisted (UserDefaults via @AppStorage)
+
+    // Standalone-only: a session token (from device-code auth) the watch holds
+    // when it must reach the agent WITHOUT the phone. Empty in the default
+    // phone-paired topology — that's the whole point of paired mode.
+    // Legacy migration fallback only. New standalone tokens live in Keychain.
+    @AppStorage("yaver.watch.token") private var legacyStoredToken: String = ""
+    @AppStorage("yaver.watch.box") private var storedBoxJSON: String = ""
+    // User opt-in to "use without your phone" (mode B/C). Off by default so the
+    // watch holds nothing sensitive unless the user asks.
+    @AppStorage("yaver.watch.standaloneOptIn") var standaloneOptIn: Bool = false
+
+    // MARK: Live state
+
+    @Published var token: String = ""
+    @Published var box: BoxTarget?
+
+    /// The last one-glance line we showed (the reply spoken/displayed). Big and
+    /// legible in RootView; never code.
+    @Published var lastLine: String = ""
+
+    /// A pending confirm-needed prompt; when set, ConfirmView takes over.
+    @Published var pendingConfirm: PendingConfirm?
+
+    /// Coarse UI phase for the record button / spinner.
+    enum Phase: Equatable { case idle, listening, dispatching, working }
+    @Published var phase: Phase = .idle
+
+    let phone = PhoneSession.shared
+
+    /// Box-wake lifecycle: models "the box we tried is asleep" and drives the
+    /// Asleep→…→Ready ladder when the user taps Wake. Its `objectWillChange` is
+    /// forwarded through this store (see init) so any view reading `store` also
+    /// re-renders on a phase change.
+    let lifecycle = BoxLifecycle()
+    private var cancellables = Set<AnyCancellable>()
+
+    /// Wall-clock bound on the `.working` phase. The only prior exit was a
+    /// later phone→watch push, so a lost WCSession push or a phone that died
+    /// mid-task left the wrist on "Working…" forever. Entering `.working`
+    /// arms this; any terminal reply cancels it. Firing returns the record
+    /// button with an honest line — the task itself keeps running on the box
+    /// and its summary still arrives on the phone.
+    private static let workingTimeout: TimeInterval = 90
+    private var workingTimer: DispatchWorkItem?
+
+    private func armWorkingTimeout() {
+        workingTimer?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.phase == .working else { return }
+            self.lastLine = "Still working — I'll let you know on your phone when it's done."
+            self.phase = .idle
+            self.workingTimer = nil
+        }
+        workingTimer = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + WatchStore.workingTimeout, execute: item)
+    }
+
+    private func cancelWorkingTimeout() {
+        workingTimer?.cancel()
+        workingTimer = nil
+    }
+
+    struct PendingConfirm: Equatable {
+        let token: String
+        let prompt: String
+    }
+
+    init() {
+        token = WatchCredentialStore.loadToken(legacyFallback: legacyStoredToken)
+        if !legacyStoredToken.isEmpty, !token.isEmpty {
+            legacyStoredToken = ""
+        }
+        if !storedBoxJSON.isEmpty {
+            box = try? JSONDecoder().decode(BoxTarget.self, from: Data(storedBoxJSON.utf8))
+        }
+        // Re-publish the lifecycle's changes as our own so RootView (which reads
+        // `store`) re-renders as the wake ladder advances.
+        lifecycle.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        // Pick up phone→watch background pushes (task-completion wake) and fold
+        // them into the same reduce path as a direct reply.
+        // (RootView observes phone.lastPushedReply and calls absorb().)
+        refreshStandaloneSessionOnLaunch()
+    }
+
+    /// Netflix contract for standalone watches: extend the 1-year token every
+    /// launch so an opted-in wrist never re-prompts for OAuth. No-op in the
+    /// default phone-paired mode (no token held). Extend-only — see
+    /// Backend.refreshSession for the no-rotation rationale.
+    private func refreshStandaloneSessionOnLaunch() {
+        let current = token
+        guard !current.isEmpty else { return }
+        Task { [weak self] in
+            let rotated = await DeviceCodeAuth.refreshSession(token: current)
+            guard let rotated, !rotated.isEmpty else { return }
+            await MainActor.run {
+                guard let self else { return }
+                // Only adopt if we're still on the same token (no sign-out/in raced us).
+                guard self.token == current else { return }
+                self.token = rotated
+                WatchCredentialStore.saveToken(rotated)
+            }
+        }
+    }
+
+    func activate() { phone.activate() }
+
+    // MARK: Standalone credentials
+
+    func signInStandalone(token: String, box: BoxTarget) {
+        self.token = token
+        WatchCredentialStore.saveToken(token)
+        legacyStoredToken = ""
+        self.box = box
+        persistBox(box)
+    }
+
+    /// Backfill the deviceId for a box signed in before BoxTarget carried one.
+    ///
+    /// Sign-in captures the deviceId up front (SignInView), so this only ever
+    /// fires for already-persisted installs. It runs when Settings appears —
+    /// the moment the user is most likely at home on the box's LAN, which is
+    /// the only place `/info` can answer.
+    ///
+    /// Silent on failure BY DESIGN: the box being unreachable right now is the
+    /// normal case (that's why request-update exists), and the wrist must not
+    /// nag about it. SettingsView reads `box.deviceId` and explains the gap in
+    /// place rather than offering a button that would fail.
+    func resolveDeviceIdIfNeeded() async {
+        guard standaloneOptIn, !token.isEmpty, let box, box.deviceId == nil else { return }
+        guard let id = try? await BoxIdentity.fetchDeviceId(host: box.host, port: box.port, token: token) else {
+            return
+        }
+        // Re-check: a sign-out / re-sign-in may have raced the request.
+        guard var current = self.box, current.id == box.id, current.deviceId == nil else { return }
+        current.deviceId = id
+        self.box = current
+        persistBox(current)
+    }
+
+    private func persistBox(_ box: BoxTarget) {
+        if let data = try? JSONEncoder().encode(box), let s = String(data: data, encoding: .utf8) {
+            storedBoxJSON = s
+        }
+    }
+
+    func signOutStandalone() {
+        token = ""
+        WatchCredentialStore.clearToken()
+        legacyStoredToken = ""
+        box = nil
+        storedBoxJSON = ""
+    }
+
+    var hasStandaloneCreds: Bool { !token.isEmpty && box != nil }
+
+    /// Whether we can run a turn at all right now (either transport).
+    var canDispatch: Bool {
+        phone.canUsePhone || (standaloneOptIn && hasStandaloneCreds)
+    }
+
+    // MARK: - Turn routing (the one decision point)
+
+    /// Send a transcript. Phone-paired first; standalone fallback if opted-in.
+    /// In standalone mode the transcript goes to /runner/session/turn (the LIVE
+    /// session endpoint) via SessionClient, NOT /watch/turn (which spawns a new
+    /// task). See docs/yaver-watch-surface.md §4.2.
+    func sendTranscript(_ text: String) async {
+        await run { transport in
+            switch transport {
+            case .phone: return try await self.phone.sendTranscript(text)
+            case .session(let client): return try await client.sendText(text)
+            }
+        }
+    }
+
+    /// Answer the pending confirm (or any confirm by token).
+    /// In standalone mode, confirm/cancel maps to session choice "1"/"2" —
+    /// a lossy fallback. The voice path (speak the number) is preferred.
+    func sendConfirm(token: String, reply: ConfirmReply) async {
+        pendingConfirm = nil
+        await run { transport in
+            switch transport {
+            case .phone: return try await self.phone.sendConfirm(token: token, reply: reply)
+            case .session(let client): return try await client.sendConfirm(reply: reply)
+            }
+        }
+    }
+
+    /// Fire a complication / quick-action intent.
+    func sendIntent(_ intent: WatchIntent) async {
+        await run { transport in
+            switch transport {
+            case .phone: return try await self.phone.sendIntent(intent)
+            case .session(let client):
+                // Expand the intent to a transcript and send it as a session prompt.
+                let text = WatchStore.intentToTranscript(intent)
+                return try await client.sendText(text)
+            }
+        }
+    }
+
+    /// A reply that arrived OUT of band (phone pushed a completion). Fold it in.
+    func absorb(_ reply: WatchReply) {
+        reduce(reply)
+    }
+
+    // MARK: - Internals
+
+    private enum Transport {
+        case phone
+        /// Standalone transport: drives a LIVE coding session via
+        /// POST /runner/session/turn (docs/yaver-watch-surface.md §4.2).
+        case session(SessionClient)
+    }
+
+    /// Resolve the transport, run the closure, reduce the reply (or the error).
+    private func run(_ op: @escaping (Transport) async throws -> WatchReply) async {
+        guard let transport = resolveTransport() else {
+            reduce(WatchReply(kind: .error,
+                              spoken: "Open the Yaver app on your phone, or turn on use-without-phone."))
+            return
+        }
+        phase = .dispatching
+        do {
+            let reply = try await op(transport)
+            reduce(reply)
+        } catch {
+            // A managed box that self-parked answers a turn with connection-
+            // refused / timeout. Instead of a bare error, flip into the "asleep,
+            // offer Wake" state so the wrist can start it back up. We can only do
+            // this when we know which box to wake (standalone creds present).
+            if WatchStore.isUnreachable(error), let box {
+                lifecycle.markAsleep(box: box)
+                reduce(WatchReply(kind: .error, spoken: "Box asleep. Tap Wake to start it."))
+                return
+            }
+            reduce(WatchReply(kind: .error, spoken: friendly(error)))
+        }
+    }
+
+    /// Ask the phone to wake the box we last failed against, and drive the
+    /// Asleep→…→Ready ladder. The control-plane token lives on the phone, so the
+    /// request is routed via PhoneSession; `machineId` is nil here because the
+    /// phone resolves it from the box's deviceId.
+    func wakeBox() {
+        guard let box = lifecycle.box ?? box else { return }
+        lifecycle.wake(box: box, machineId: nil, using: phone)
+    }
+
+    /// Classify a transport error as "the box is unreachable" (parked / offline)
+    /// vs a genuine failure. Covers URLError's connection-shaped codes and the
+    /// AgentError strings SessionClient throws on a dead socket.
+    private static func isUnreachable(_ error: Error) -> Bool {
+        if let url = error as? URLError {
+            switch url.code {
+            case .cannotConnectToHost, .timedOut, .networkConnectionLost,
+                 .cannotFindHost, .notConnectedToInternet, .dnsLookupFailed:
+                return true
+            default:
+                return false
+            }
+        }
+        if let a = error as? AgentError {
+            let m = a.message.lowercased()
+            return m.contains("no response") || m.contains("timed out")
+                || m.contains("could not connect") || m.contains("connection refused")
+        }
+        return false
+    }
+
+    /// Phone-paired wins when reachable; otherwise standalone (session) if
+    /// opted-in. The standalone path uses SessionClient (/runner/session/turn),
+    /// NOT AgentClient (/watch/turn) — driving the live session is the product.
+    private func resolveTransport() -> Transport? {
+        if phone.canUsePhone { return .phone }
+        if standaloneOptIn, hasStandaloneCreds, let box {
+            return .session(SessionClient(token: token, box: box))
+        }
+        return nil
+    }
+
+    /// Expand a complication intent to a transcript the session can send as a
+    /// prompt. Mirrors watch_risk.go::watchIntentToTranscript.
+    private static func intentToTranscript(_ intent: WatchIntent) -> String {
+        switch intent {
+        case .runTests: return "run the tests on the primary device and tell me if they pass"
+        case .deploy: return "deploy"
+        case .status: return "give me a one-line status of the current work"
+        }
+    }
+
+    /// The single reduce path: reply -> (line shown, haptic, spoken, phase, confirm).
+    /// This is where "voice in, one sentence + haptic + voice out" is enforced.
+    /// Speech.forReply speaks the `spoken` field aloud via AVSpeechSynthesizer
+    /// (docs/yaver-watch-surface.md §6 — the single highest-value addition).
+    private func reduce(_ reply: WatchReply) {
+        Haptics.forReply(reply)
+        Speech.forReply(reply)
+        // Any non-error reply means the box answered — clear any stale asleep
+        // state so the record button comes back.
+        if reply.kind != .error { lifecycle.markReachable() }
+        // Any reply that is NOT a fresh .working cancels the working-phase
+        // wall-clock bound below (we got the terminal word, or are moving on).
+        if reply.kind != .working { cancelWorkingTimeout() }
+        switch reply.kind {
+        case .ack:
+            lastLine = reply.spoken ?? "On it."
+            phase = .idle
+        case .working:
+            lastLine = reply.spoken ?? "Working…"
+            phase = .working   // wait for the phone/agent to wake us with a summary
+            armWorkingTimeout()
+        case .confirmNeeded:
+            // Surface the confirm UI; do NOT auto-decide on the wrist.
+            if let token = reply.token {
+                pendingConfirm = PendingConfirm(token: token,
+                                                prompt: reply.prompt ?? "Confirm this action?")
+            }
+            lastLine = reply.prompt ?? "Confirm?"
+            phase = .idle
+        case .summary:
+            lastLine = reply.spoken ?? "Done."
+            phase = .idle
+        case .error:
+            lastLine = reply.spoken ?? "Something went wrong."
+            phase = .idle
+        case .handoff:
+            lastLine = reply.spoken ?? "Sent it to your phone."
+            phase = .idle
+        }
+    }
+
+    private func friendly(_ error: Error) -> String {
+        if let p = error as? PhoneSessionError { return p.errorDescription ?? "Your phone isn't reachable." }
+        if let a = error as? AgentError { return a.message }
+        return "I couldn't reach your box."
+    }
+}
+
+private enum WatchCredentialStore {
+    private static let service = "io.yaver.watch"
+    private static let tokenAccount = "standalone-session-token"
+
+    static func loadToken(legacyFallback: String) -> String {
+        if let token = read(account: tokenAccount), !token.isEmpty {
+            return token
+        }
+        let fallback = legacyFallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fallback.isEmpty {
+            saveToken(fallback)
+        }
+        return fallback
+    }
+
+    static func saveToken(_ token: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8), !trimmed.isEmpty else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: tokenAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func clearToken() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: tokenAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    private static func read(account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+}

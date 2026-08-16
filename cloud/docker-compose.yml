@@ -1,0 +1,87 @@
+# Yaver Cloud — managed Hetzner tenant for phone-backend projects.
+#
+#   docker compose up -d
+#
+# After `docker compose up`, mobile/CLI can:
+#   yaver phone push <slug> --to https://${CLOUD_DOMAIN:-cloud.yaver.io} --token <CLOUD_OWNER_TOKEN>
+# and /phone/projects/receive on this box materialises the project in the
+# persistent yaver-data volume mounted at /root/.yaver.
+#
+# Auth model: CLOUD_OWNER_TOKEN is a shared secret. The agent's own-token
+# fast path accepts any request presenting Bearer <CLOUD_OWNER_TOKEN>, so
+# clients (mobile, CLI) supply that value via --token / YAVER_AUTH_TOKEN
+# rather than their personal Convex OAuth session.
+
+services:
+  yaver-agent:
+    build:
+      context: ..
+      dockerfile: cloud/Dockerfile
+    container_name: yaver-cloud-agent
+    restart: unless-stopped
+    # Running as root so the named volume at /root/.yaver is writable on
+    # first boot (Docker creates volumes with root ownership). Fine for a
+    # single-tenant managed box: Caddy + owner-auth is the security boundary.
+    user: "0:0"
+    ports:
+      - "${CLOUD_AGENT_PORT:-18081}:18080"
+    expose:
+      - "18080"
+    environment:
+      - YAVER_HOSTNAME=${CLOUD_DOMAIN:-cloud.yaver.io}
+      # Cloud-tenant mode: the agent's jsonError wrapper adds a "hint" +
+      # "checkoutUrl" field to 401/403 responses so mobile/CLI clients can
+      # display a helpful message when a personal OAuth token hits this box.
+      - YAVER_CLOUD_TENANT=1
+      - YAVER_CLOUD_CHECKOUT_URL=${YAVER_CLOUD_CHECKOUT_URL:-https://yaver.io/pricing}
+      # The token travels as an ENVIRONMENT variable, expanded by the shell
+      # INSIDE the container ($$ defers compose interpolation). The previous
+      # form interpolated it into the container COMMAND at create time,
+      # which put the literal token in `ps` output / `docker inspect` on the
+      # host — a process-listing credential leak (found live 2026-07-27).
+      # /proc/<pid>/environ is owner-root-only; argv is world-readable.
+      - CLOUD_OWNER_TOKEN=${CLOUD_OWNER_TOKEN:?set CLOUD_OWNER_TOKEN in .env}
+    volumes:
+      - yaver-data:/root/.yaver
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        umask 077
+        mkdir -p /root/.yaver
+        cat > /root/.yaver/config.json <<EOF
+        {
+          "auth_token": "$${CLOUD_OWNER_TOKEN}",
+          "convex_site_url": "https://shocking-echidna-394.eu-west-1.convex.site",
+          "device_id": "cloud-agent"
+        }
+        EOF
+        unset CLOUD_OWNER_TOKEN
+        exec yaver serve --debug --no-tls --no-relay --no-quic --port 18080
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: yaver-cloud-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - CLOUD_DOMAIN=${CLOUD_DOMAIN:-cloud.yaver.io}
+      - CLOUD_TLS_EMAIL=${CLOUD_TLS_EMAIL:-admin@yaver.io}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - yaver-agent
+
+volumes:
+  yaver-data:      # /root/.yaver inside the agent — phone-projects, tasks, config
+  caddy-data:      # Let's Encrypt certs
+  caddy-config:

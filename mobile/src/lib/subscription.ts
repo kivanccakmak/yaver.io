@@ -1,0 +1,284 @@
+import { getConvexSiteUrl } from "./auth";
+
+export interface ManagedCloudMachineSummary {
+  id: string;
+  machineType: string;
+  status: string;
+  hostname?: string;
+  serverIp?: string;
+  region?: string;
+  errorMessage?: string;
+  subscriptionId?: string | null;
+  hetznerServerId?: string;
+  /** Device id the managed box registers as once its agent is running. Present
+   *  even during a signed-out wake, so mobile can re-authorize the live agent. */
+  deviceId?: string | null;
+  // First-class onboarding parity with web
+  // (project_managed_cloud_onboarding_gap).
+  provisionPhase?: string | null;
+  provisionProgress?: number | null;
+  /** "golden" = booted from a prebuilt image (fast); "vanilla" =
+   *  ubuntu-24.04 first-boot setup. */
+  bootImageSource?: string | null;
+  runnersAuthorized?: boolean;
+  stoppedAt?: number | null;
+  /** True when a persistent volume holds the box's data, so wake skips the fat
+   *  disk restore. Surfaced by /subscription. */
+  hasVolume?: boolean;
+  /** Concrete provider server type the box was created on (e.g. "cx43"). */
+  serverType?: string | null;
+  /** Hardware summary — surfaced on the Parked card ("8 vCPU · 16 GB · 160 GB").
+   *  Populated once the /subscription machine mapping carries it. */
+  specs?: {
+    vcpu?: number;
+    ramGb?: number;
+    diskGb?: number;
+    arch?: string;
+    gpu?: string | null;
+  } | null;
+  /** When the box last transitioned to a parked state — "slept 3h ago". */
+  lastParkedAt?: number | null;
+  /** When the last wake was requested — "woke 2m ago" once active again. */
+  lastWokeAt?: number | null;
+  /** When the CURRENT wake run started, authored by the server (cloudLifecycle
+   *  stamps it on every wake). This is the ONLY honest anchor for an elapsed
+   *  clock: a component-local `Date.now()` restarts at 0:00 every time the card
+   *  remounts, so browsing away and back made a 6-minute wake claim it had just
+   *  begun — and reset the ETA with it. Cleared when the run ends. */
+  wakeStartedAt?: number | null;
+  /** When the current wake run finished. Paired with wakeStartedAt so a client
+   *  can tell "still running" from "ended N ago" without inferring it. */
+  wakeCompletedAt?: number | null;
+  /** When the CURRENT provision phase began — the anchor for the in-phase timer. */
+  provisionPhaseAt?: number | null;
+  /** Provider's own word for the server state during a wake ("initializing"). */
+  providerStatus?: string | null;
+  providerStatusAt?: number | null;
+  /** How long THIS box's last successful wake took — a real ETA, not a constant. */
+  lastWakeDurationMs?: number | null;
+  /** "ready" | "needs-auth" | "abandoned" | "error" — how the last wake ended. */
+  lastWakeOutcome?: string | null;
+  lastParkDurationMs?: number | null;
+  /** Stored snapshot size in GB. 0 ⇒ volume-backed, nothing snapshotted. */
+  snapshotSizeGb?: number | null;
+  snapshotCreatedAt?: number | null;
+  prepaidBalanceCents?: number | null;
+  estimatedHourlyCents?: number | null;
+  allowance?: {
+    plan?: string | null;
+    unit?: "standard_credits" | string;
+    includedStandardCredits?: number;
+    usedStandardCredits?: number;
+    remainingStandardCredits?: number;
+    includedSeconds?: number;
+    usedSeconds?: number;
+    remainingSeconds?: number;
+  } | null;
+  /** Auto-park (auto-close) when idle. Undefined === ON (the default), so a
+   *  forgotten box always stops its own meter. Only an explicit false keeps it
+   *  running while idle. */
+  autoParkEnabled?: boolean | null;
+  autoParkMinutes?: number | null;
+}
+
+export interface ManagedCloudBalanceSummary {
+  ok?: boolean;
+  balanceCents?: number;
+  prepaidBalanceCents?: number;
+  currency?: string;
+  estimatedHourlyCents?: number;
+  lowBalance?: boolean;
+  reservedCents?: number;
+  allowance?: {
+    plan?: string | null;
+    unit?: "standard_credits" | string;
+    includedStandardCredits?: number;
+    usedStandardCredits?: number;
+    remainingStandardCredits?: number;
+    includedSeconds?: number;
+    usedSeconds?: number;
+    remainingSeconds?: number;
+  } | null;
+}
+
+export interface ManagedCloudUsageEntry {
+  machineId?: string | null;
+  date: string;
+  state: string;
+  seconds: number;
+  chargedCents: number;
+  ratePerHourCents: number;
+  dryRun: boolean;
+  createdAt: number;
+}
+
+export interface ManagedCloudTopupEntry {
+  orderId: string;
+  source: string;
+  packId?: string | null;
+  amountCents: number;
+  createdAt: number;
+}
+
+export interface ManagedCloudUsageSummary {
+  ok?: boolean;
+  usage: ManagedCloudUsageEntry[];
+  topups: ManagedCloudTopupEntry[];
+}
+
+export interface ManagedSubscriptionSummary {
+  // Owner-allowlist flag (server isCloudPreviewUser). Mobile hides
+  // the managed-cloud card entirely for non-owners — cosmetic; the
+  // server independently 403s every action.
+  cloudPreviewOwner?: boolean;
+  // True when this account may use the prepaid-cloud surfaces (owner
+  // allowlist OR the YAVER_CLOUD_PUBLIC launch flag). Mobile shows the
+  // wallet + controls when EITHER this or cloudPreviewOwner is true.
+  cloudAccess?: boolean;
+  subscription: {
+    plan: string;
+    status: string;
+    currentPeriodEnd?: number;
+    cancelledAt?: number;
+  } | null;
+  relay: {
+    status: string;
+    domain?: string;
+    region?: string;
+    quicPort?: number;
+    httpPort?: number;
+  } | null;
+  machines: ManagedCloudMachineSummary[];
+  prepaidBalanceCents?: number | null;
+  currency?: string;
+  balance?: ManagedCloudBalanceSummary | null;
+}
+
+export async function getManagedSubscription(token: string): Promise<ManagedSubscriptionSummary | null> {
+  try {
+    const res = await fetch(`${getConvexSiteUrl()}/subscription`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ManagedSubscriptionSummary;
+  } catch {
+    return null;
+  }
+}
+
+async function managedCloudPost<T>(
+  token: string,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(`${getConvexSiteUrl()}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // The wake routes report their refusal in `reason`, not `error` (e.g. the
+    // 409 "snapshot still finalizing, retrying automatically"). Reading only
+    // `error` turned an explained, self-retrying condition into a bare
+    // "HTTP 409" — the user saw a failure where the system was in fact already
+    // handling it. Take whichever the server actually sent.
+    throw new Error(data?.error || data?.reason || `HTTP ${res.status}`);
+  }
+  return data as T;
+}
+
+export function stopManagedCloudMachine(token: string, machineId: string) {
+  return managedCloudPost<{ ok: boolean; machineId?: string; wakeRunId?: string | null }>(
+    token,
+    "/billing/yaver-cloud/stop",
+    { machineId },
+  );
+}
+
+/**
+ * Auto-park (auto-close): the box parks itself when idle so it stops billing.
+ * ON by default and required for customer-facing Cloud Workspace traffic; the
+ * product API accepts enable/tune requests but rejects disabling cost protection.
+ */
+export function setManagedCloudAutoPark(
+  token: string,
+  machineId: string,
+  enabled: boolean,
+  idleMinutes?: number,
+) {
+  return managedCloudPost<{ ok: boolean; autoParkEnabled?: boolean; autoParkMinutes?: number }>(
+    token,
+    "/billing/yaver-cloud/auto-park",
+    { machineId, enabled, ...(idleMinutes ? { idleMinutes } : {}) },
+  );
+}
+
+export function startManagedCloudMachine(token: string, machineId: string) {
+  return managedCloudPost<{ ok: boolean; machineId?: string; wakeRunId?: string | null }>(
+    token,
+    "/billing/yaver-cloud/start",
+    { machineId },
+  );
+}
+
+export interface ByoMachine {
+  id: string;
+  provider: string;
+  serverId: string;
+  deviceId?: string | null;
+  name: string;
+  region?: string | null;
+  plan?: string | null;
+  serverIp?: string | null;
+  imageId?: string | null;
+  snapshotImageId?: string | null;
+  state: "active" | "stopped" | "deleted";
+  createdAt: number;
+  lastUpAt?: number | null;
+  stoppedAt?: number | null;
+  deletedAt?: number | null;
+  updatedAt: number;
+}
+
+// BYO cloud boxes' lifecycle state from Convex (alive/sleeping/deleted +
+// timestamps). Convex holds id/state/timestamps only — never the token.
+export async function getByoMachines(token: string): Promise<ByoMachine[]> {
+  try {
+    const res = await fetch(`${getConvexSiteUrl()}/byo/machines`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { machines?: ByoMachine[] };
+    return Array.isArray(data.machines) ? data.machines : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getManagedCloudBalance(token: string): Promise<ManagedCloudBalanceSummary | null> {
+  try {
+    const res = await fetch(`${getConvexSiteUrl()}/billing/yaver-cloud/balance`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ManagedCloudBalanceSummary;
+  } catch {
+    return null;
+  }
+}
+
+export async function getManagedCloudUsage(token: string): Promise<ManagedCloudUsageSummary | null> {
+  try {
+    const res = await fetch(`${getConvexSiteUrl()}/billing/yaver-cloud/usage`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as ManagedCloudUsageSummary;
+  } catch {
+    return null;
+  }
+}

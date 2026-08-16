@@ -1,0 +1,22 @@
+# feature-blog-yaver-pi-image — blog post: Raspberry Pi 5 Dev-Node Image.
+name: feature-blog-yaver-pi-image
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /blog/yaver-pi-image
+  - wait_for: h1
+  - assert.text: Raspberry Pi 5 Dev-Node Image
+  - assert.text: Announcing the Yaver
+  - screenshot: true

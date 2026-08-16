@@ -1,0 +1,85 @@
+{
+  "name": "yaver-gui",
+  "productName": "Yaver",
+  "version": "0.1.2",
+  "description": "Desktop GUI for the Yaver web dashboard — chat, vibing, devices, and previews in a native shell.",
+  "main": "src/main.js",
+  "author": "Kivanç Çakmak <kivanc.cakmak@simkab.com>",
+  "homepage": "https://yaver.io/download",
+  "license": "FSL-1.1-Apache-2.0",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "YAVER_DEV=1 electron .",
+    "test": "node --test test/*.test.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "io.yaver.gui",
+    "productName": "Yaver",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "artifactName": "yaver-gui-${version}-${os}.${ext}",
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin",
+        "filter": [
+          "yaver",
+          "yaver.exe"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "dmg": {
+      "title": "yaver.io"
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "category": "Development",
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm",
+        "tar.gz"
+      ],
+      "maintainer": "Kivanç Çakmak <kivanc.cakmak@simkab.com>",
+      "synopsis": "Yaver desktop GUI — sign in and vibe tasks from your computer"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "yaver-gui-${version}-win-setup.${ext}",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
+  }
+}

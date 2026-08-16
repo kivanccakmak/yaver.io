@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Yaver Feedback SDK — Semi Interactive Mode</title>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, sans-serif; background: #0d0d1a; color: #e0e0e0; margin: 0; padding: 20px; }
+    h1 { font-size: 20px; }
+    .mode-badge { display: inline-block; background: #f59e0b; color: black; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+    pre { background: #111; padding: 12px; border-radius: 8px; font-size: 12px; overflow-x: auto; }
+    code { color: #a78bfa; }
+    .agent-msg { background: #1e1b4b; border-left: 3px solid #f59e0b; padding: 8px 12px; margin: 8px 0; border-radius: 0 8px 8px 0; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Semi Interactive Mode <span class="mode-badge">STREAMING</span></h1>
+  <p>Agent sees your screen live and comments, but doesn't auto-fix. Conversation mode.</p>
+
+  <pre><code>import { YaverFeedback } from '@yaver/feedback-web';
+
+// Semi Interactive: streaming video + conversation, no auto-fix
+YaverFeedback.init({
+  trigger: 'keyboard', // Ctrl+Shift+F
+  // feedbackMode is selected at runtime by the user
+});
+
+// In this mode:
+// 1. Screen + mic stream to agent (same as full interactive)
+// 2. Agent watches and comments on what it sees
+// 3. Agent says: "I see an issue with the nav overlap"
+// 4. User: "yeah fix that in the next release"
+// 5. Agent: "Noted. Added to backlog."
+// 6. NO hot reload — agent observes and converses only
+// 7. User can say "fix it now" to switch to full interactive for that issue
+// 8. Or "keep in mind" to defer to next session</code></pre>
+
+  <h3>Agent Commentary (simulated)</h3>
+  <div class="agent-msg">👀 Streaming your screen. I'll comment on what I see.</div>
+  <div class="agent-msg">⚠️ The sidebar menu doesn't close when you tap outside. Known issue?</div>
+  <div class="agent-msg">💡 User said: "fix it now" → Switching to full interactive for this issue...</div>
+  <div class="agent-msg">✅ Fixed sidebar dismiss. Want me to continue observing?</div>
+</body>
+</html>

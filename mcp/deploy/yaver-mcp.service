@@ -1,0 +1,35 @@
+[Unit]
+Description=Yaver MCP Server — Open-source MCP tool server with plugin support
+Documentation=https://github.com/kivanccakmak/yaver.io
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/yaver-mcp serve --http-port=18100 --plugins-dir=/var/lib/yaver-mcp/plugins
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Password from file
+EnvironmentFile=-/etc/yaver-mcp/env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=yaver-mcp
+
+# Performance
+LimitNOFILE=65535
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

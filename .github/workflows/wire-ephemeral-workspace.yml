@@ -1,0 +1,201 @@
+# One-shot: wire a yaver.workspace.yaml at /home/yaver/Workspace on
+# the ephemeral box, list carrotbet + sfmg, and retarget the yaver
+# agent to use that directory as its --work-dir. After this runs,
+# /workspace/apps returns the two projects and Web Reload / Hot
+# Reload surfaces resolve them by name from the Feedback SDK.
+#
+# Sibling of bootstrap-ephemeral-project.yml but opinionated —
+# hardwires the layout the test box already has (projects cloned
+# under /home/yaver/Workspace/<name>).
+
+name: Wire Ephemeral Workspace
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: wire-ephemeral-workspace
+  cancel-in-progress: true
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH key
+        env:
+          HCLOUD_SSH_PRIVATE_KEY_PATH: ${{ runner.temp }}/hcloud_ssh
+        run: |
+          install -m 600 /dev/stdin "$HCLOUD_SSH_PRIVATE_KEY_PATH" <<'EOF'
+          ${{ secrets.HCLOUD_SSH_PRIVATE_KEY }}
+          EOF
+          echo "HCLOUD_SSH_PRIVATE_KEY_PATH=$HCLOUD_SSH_PRIVATE_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Write manifest + retarget agent workdir
+        env:
+          HETZNER_TEST_SERVER_IP: ${{ secrets.HETZNER_TEST_SERVER_IP }}
+        run: |
+          ssh -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
+              "root@$HETZNER_TEST_SERVER_IP" bash -s <<'REMOTE'
+          set -euo pipefail
+
+          WORKSPACE_ROOT="/home/yaver/Workspace"
+          MANIFEST="$WORKSPACE_ROOT/yaver.workspace.yaml"
+
+          echo "== ensuring workspace root exists"
+          mkdir -p "$WORKSPACE_ROOT"
+
+          echo "== current dirs in $WORKSPACE_ROOT:"
+          ls -1 "$WORKSPACE_ROOT" | head -10 || true
+
+          echo "== writing manifest at $MANIFEST"
+          # carrotbet is a turbo monorepo (package.json name = "backgammon-platform").
+          # Web dev-server lives in apps/web (Vite), RN/Expo lives in mobile.
+          # The workspace manifest points at the real dev-server dirs so
+          # the Web Reload + Hot Reload surfaces kick the right thing.
+          cat >"$MANIFEST" <<'YAML'
+          version: 1
+          name: ephemeral-test
+          workspace:
+            root: "."
+          apps:
+            - name: carrotbet
+              path: ./carrotbet/apps/web
+              stack: vite
+            - name: carrotbet-mobile
+              path: ./carrotbet/mobile
+              stack: react-native-expo
+            - name: sfmg
+              path: ./sfmg
+              stack: react-native-expo
+          YAML
+
+          chown -R yaver:yaver "$WORKSPACE_ROOT" 2>/dev/null || true
+
+          echo "== contents of $MANIFEST:"
+          cat "$MANIFEST"
+
+          echo "== detecting yaver systemd unit"
+          UNIT=""
+          for candidate in \
+              /etc/systemd/system/yaver.service \
+              /home/yaver/.config/systemd/user/yaver.service \
+              /root/.config/systemd/user/yaver.service; do
+            [ -f "$candidate" ] && UNIT="$candidate" && echo "found: $UNIT" && break
+          done
+
+          if [ -z "$UNIT" ]; then
+            echo "!! no yaver.service unit found — the agent may be running from systemd --user as another user"
+            systemctl list-units --type=service --all | grep -i yaver || true
+            exit 3
+          fi
+
+          echo "== pointing $UNIT --work-dir at $WORKSPACE_ROOT"
+          sed -i "s|--work-dir=[^ \"]*|--work-dir=$WORKSPACE_ROOT|g" "$UNIT"
+          if grep -q "^WorkingDirectory=" "$UNIT"; then
+            sed -i "s|^WorkingDirectory=.*|WorkingDirectory=$WORKSPACE_ROOT|" "$UNIT"
+          fi
+          sed -n '/^\[Service\]/,/^\[/p' "$UNIT" | head -20
+
+          # Normalise binary paths. The yaver .deb installs to
+          # /usr/local/bin/yaver, but this box still has a stale 1.99.25
+          # at /usr/bin/yaver that systemd points at. Point /usr/bin/yaver
+          # at the current binary so every launcher sees the same version.
+          if [ -x /usr/local/bin/yaver ]; then
+            NEW_VER=$(/usr/local/bin/yaver --version 2>/dev/null | head -1)
+            OLD_VER=$(/usr/bin/yaver --version 2>/dev/null | head -1 || echo missing)
+            echo "== binary paths: /usr/local/bin=$NEW_VER /usr/bin=$OLD_VER"
+            if [ "$NEW_VER" != "$OLD_VER" ]; then
+              echo "== symlinking /usr/bin/yaver -> /usr/local/bin/yaver"
+              rm -f /usr/bin/yaver
+              ln -s /usr/local/bin/yaver /usr/bin/yaver
+            fi
+          fi
+
+          echo "== existing yaver serve processes BEFORE cleanup:"
+          pgrep -af "yaver serve" || echo "(none)"
+
+          # Nuke every running yaver serve. There is a known footgun on
+          # this box: a user-owned detached agent with --work-dir=
+          # /home/yaver/.yaver keeps the TCP port 18080 while systemd's
+          # user unit can't bind. pkill + SIGKILL ensures we end up
+          # with exactly one agent owned by the user unit.
+          echo "== killing all yaver serve processes"
+          pkill -f "yaver serve" || true
+          sleep 1
+          pkill -9 -f "yaver serve" || true
+          fuser -k 18080/tcp 2>/dev/null || true
+          sleep 2
+
+          # Block whatever respawner is restarting the rogue process with
+          # --work-dir=/home/yaver/.yaver. Usually this is a stray
+          # systemd unit or a long-forgotten tmux session. Disable the
+          # tmux wrapper if present.
+          if [ -d /home/yaver/.yaver/tmux ]; then
+            tmux -S /home/yaver/.yaver/tmux/default kill-server 2>/dev/null || true
+          fi
+          # And any *other* yaver.service beyond the user unit we're driving.
+          if systemctl list-units --type=service --all | grep -q 'yaver\.service'; then
+            echo "== system-scope yaver.service candidates:"
+            systemctl list-units --type=service --all 'yaver.service' | head -5
+            systemctl stop yaver.service 2>/dev/null || true
+            systemctl disable yaver.service 2>/dev/null || true
+          fi
+
+          echo "== reloading user systemd + starting agent"
+          if id yaver >/dev/null 2>&1; then
+            YAVER_UID=$(id -u yaver)
+            loginctl enable-linger yaver 2>/dev/null || true
+            runuser -u yaver -- env XDG_RUNTIME_DIR="/run/user/$YAVER_UID" \
+              systemctl --user daemon-reload 2>/dev/null || true
+            runuser -u yaver -- env XDG_RUNTIME_DIR="/run/user/$YAVER_UID" \
+              systemctl --user start yaver 2>/dev/null \
+              || runuser -u yaver -- env XDG_RUNTIME_DIR="/run/user/$YAVER_UID" \
+                 systemctl --user restart yaver 2>/dev/null \
+              || true
+          fi
+
+          sleep 3
+          echo "== yaver serve process AFTER restart:"
+          pgrep -af "yaver serve" || echo "(none)"
+          for pid in $(pgrep -f "yaver serve"); do
+            exe=$(readlink "/proc/$pid/exe" 2>/dev/null || echo unknown)
+            ver=$("$exe" --version 2>/dev/null | head -1 || echo unknown)
+            echo "   pid=$pid exe=$exe version=$ver"
+          done
+          echo "== all yaver binaries on disk:"
+          find /usr/bin /usr/local/bin /home/yaver/.yaver/bin /home/yaver/.local/bin -maxdepth 3 -name yaver -type f 2>/dev/null | while read -r bin; do
+            v=$("$bin" --version 2>/dev/null | head -1 || echo unreadable)
+            echo "   $bin — $v"
+          done
+          echo "== port 18080 holder:"
+          ss -ltnp 'sport = :18080' 2>/dev/null || true
+
+          echo "== probing /info after restart"
+          sleep 3
+          for _ in 1 2 3 4 5; do
+            if curl -fsS http://127.0.0.1:18080/health >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+
+          # Read token + hit /workspace to confirm the manifest is now
+          # visible to the agent.
+          CONFIG_PATH=""
+          for c in /root/.yaver/config.json /home/yaver/.yaver/config.json; do
+            [ -f "$c" ] && CONFIG_PATH="$c" && break
+          done
+          if [ -z "$CONFIG_PATH" ]; then
+            echo "no config file found — cannot self-test"
+            exit 0
+          fi
+          TOKEN=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('auth_token',''))" "$CONFIG_PATH")
+          echo "== /workspace (after restart):"
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18080/workspace | python3 -m json.tool | head -40 || true
+          echo "== /workspace/apps?kind=web,hybrid:"
+          curl -fsS -H "Authorization: Bearer $TOKEN" 'http://127.0.0.1:18080/workspace/apps?kind=web%2Chybrid' | python3 -m json.tool | head -40 || true
+          REMOTE

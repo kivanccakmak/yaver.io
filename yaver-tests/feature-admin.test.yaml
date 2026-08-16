@@ -1,0 +1,24 @@
+# feature-admin — /admin: admin overview shell. The AdminShell chrome (h1
+# pageTitle + sidebar) renders without auth; data fetch shows the failed-load
+# banner, so assertions target the shell, not live data.
+name: feature-admin
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /admin
+  - wait_for: h1
+  - assert.text: Overview
+  - assert.text: Fleet-wide health
+  - screenshot: true

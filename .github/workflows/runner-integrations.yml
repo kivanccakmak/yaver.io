@@ -1,0 +1,138 @@
+name: runner-integrations
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/agent/ai_generator.go"
+      - "desktop/agent/autoinit_cmd.go"
+      - "desktop/agent/autoideas_cmd.go"
+      - "desktop/agent/runner_auth*.go"
+      - "scripts/test-runner-integration.sh"
+      - ".github/workflows/runner-integrations.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  frontier-runners:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: codex
+            install: npm install -g @openai/codex
+            runner_spec: codex
+            required_secret: OPENAI_API_KEY
+          - runner: opencode-openai
+            install: npm install -g opencode-ai
+            runner_spec: opencode
+            required_secret: OPENAI_API_KEY
+            opencode_model: openai/gpt-5.4
+          - runner: opencode-glm
+            install: npm install -g opencode-ai
+            runner_spec: opencode
+            required_secret: GLM_API_KEY
+            opencode_model: glm/glm-4.5-air
+            opencode_config_content: |
+              {
+                "$schema": "https://opencode.ai/config.json",
+                "model": "{env:YAVER_OPENCODE_MODEL}",
+                "provider": {
+                  "glm": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "GLM Coding Plan",
+                    "options": {
+                      "baseURL": "https://api.z.ai/api/coding/paas/v4",
+                      "apiKey": "{env:GLM_API_KEY}"
+                    },
+                    "models": {
+                      "glm-4.5-air": {
+                        "name": "GLM-4.5-Air",
+                        "limit": {
+                          "context": 131072,
+                          "output": 98304
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: desktop/agent/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install runner CLI
+        run: ${{ matrix.install }}
+      - name: Build yaver
+        working-directory: desktop/agent
+        run: go build -o /tmp/yaver .
+      - name: Run real wrapper integration
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.GLM_API_KEY }}
+          OPENCODE_CONFIG_CONTENT: ${{ matrix.opencode_config_content }}
+          REQUIRED_SECRET: ${{ matrix.required_secret }}
+          RUNNER_SPEC: ${{ matrix.runner_spec }}
+          YAVER_OPENCODE_MODEL: ${{ matrix.opencode_model }}
+          YAVER_BIN: /tmp/yaver
+        run: |
+          if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+            echo "::add-mask::$OPENAI_API_KEY"
+          fi
+          if [[ -n "${GLM_API_KEY:-}" ]]; then
+            echo "::add-mask::$GLM_API_KEY"
+          fi
+          if [[ -n "${ZAI_API_KEY:-}" ]]; then
+            echo "::add-mask::$ZAI_API_KEY"
+          fi
+          REQUIRED_VALUE=""
+          case "${REQUIRED_SECRET:-}" in
+            OPENAI_API_KEY) REQUIRED_VALUE="${OPENAI_API_KEY:-}" ;;
+            GLM_API_KEY) REQUIRED_VALUE="${GLM_API_KEY:-}" ;;
+          esac
+          if [[ -n "${REQUIRED_SECRET:-}" && -z "${REQUIRED_VALUE:-}" ]]; then
+            echo "Skipping ${{ matrix.runner }} because ${REQUIRED_SECRET} is not configured."
+            exit 0
+          fi
+          bash scripts/test-runner-integration.sh "${RUNNER_SPEC}"
+
+  local-provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: desktop/agent/go.sum
+      - name: Install ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:11434/api/tags >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ollama failed to start" >&2
+          exit 1
+      - name: Pull local model
+        run: ollama pull qwen2.5-coder:1.5b
+      - name: Build yaver
+        working-directory: desktop/agent
+        run: go build -o /tmp/yaver .
+      - name: Run local ollama generator integration
+        env:
+          YAVER_BIN: /tmp/yaver
+        run: bash scripts/test-runner-integration.sh "ollama:qwen2.5-coder:1.5b"

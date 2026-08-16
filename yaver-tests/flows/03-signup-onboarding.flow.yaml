@@ -1,0 +1,26 @@
+# Agentic native-app signup/onboarding flow.
+#
+# Credentials are NOT hardcoded. When qa_run is invoked with
+# {"testAccount":"ephemeral"} the runner mints a randomized throwaway account and
+# substitutes the placeholders below ({{email}} / {{password}} / {{fullName}})
+# in-memory before driving — and deletes the account when the run finishes. Run
+# without testAccount and the placeholders stay literal, so the agent will stop
+# and report that injection is required rather than entering real credentials.
+name: signup-onboarding
+goal: >
+  Exercise the first-run signup/onboarding path in the Yaver Android app using
+  this throwaway test account:
+    full name: {{fullName}}
+    email:     {{email}}
+    password:  {{password}}
+  Find the sign-up (not sign-in) control, create the account with exactly those
+  values, reach the first authenticated or onboarding screen, and verify the app
+  does not crash or show an error overlay. If you still see the literal text
+  "{{email}}" anywhere, the harness did not inject credentials — stop and report
+  that this flow needs testAccount=ephemeral rather than entering any real data.
+package: io.yaver.mobile
+expectations:
+  - The account {{email}} moved past signup into an authenticated or onboarding screen.
+  - The app never showed a crash, ANR, red box, blank screen, or generic error overlay during signup.
+  - No literal "{{email}}" or "{{password}}" placeholder text remained visible, i.e. credentials were injected, not typed by hand.
+max_steps: 18

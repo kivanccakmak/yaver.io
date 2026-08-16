@@ -1,0 +1,1903 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+)
+
+// RunnerRuntimeStatus describes whether a runner is usable on this machine,
+// including runner-specific auth/config checks that plain LookPath misses.
+type RunnerRuntimeStatus struct {
+	Ready bool `json:"ready"`
+	// NO omitempty on the auth booleans, deliberately. Go drops a false bool
+	// under omitempty, so "authConfigured: false" vanished from the JSON
+	// entirely — and every client that wrote `row.authConfigured !== false`
+	// (the obvious, correct-looking guard) then read the ABSENCE as "true".
+	// A signed-out runner therefore renders as signed IN on every surface that
+	// asks politely. A negative answer must travel over the wire; silence must
+	// never be mistaken for consent.
+	AuthConfigured bool `json:"authConfigured"`
+	// AuthPresent is set when AuthConfigured was established by asking the
+	// runner itself (`claude auth status`, `codex login status`) or by finding
+	// an explicit API key — never by merely spotting a credentials file on
+	// disk.
+	//
+	// The distinction is load-bearing. `~/.claude/.credentials.json` also
+	// holds MCP plugin OAuth tokens, so on a Mac whose Claude subscription
+	// token lives in the Keychain the file exists while Claude is signed
+	// OUT of it. Mirroring that file verbatim onto a headless box produced a
+	// machine that reported "signed in" and then greeted the user with a
+	// browser login screen it had no browser to satisfy.
+	//
+	// AuthPresent carries EXACTLY the meaning the field named AuthVerified
+	// carried before 2026-07-27. It was renamed because the name was a lie:
+	// see AuthVerified below.
+	AuthPresent bool `json:"authPresent"`
+	// AuthVerified means the credential was EXERCISED against the provider and
+	// the provider answered — not that a local store says a credential exists.
+	//
+	// THE INCIDENT THAT FORCED THE SPLIT (2026-07-27, user's own box, agent
+	// 1.99.383): `/runner-auth/status` reported claude as
+	//
+	//     authConfigured:true authVerified:true authSource:"claude.ai · max" ready:true
+	//
+	// while the very next PTY turn answered
+	//
+	//     Please run /login · API Error: 401 OAuth access token has been revoked.
+	//
+	// Nothing was broken in the probe: `claude auth status --json` reads the
+	// LOCAL credential store, and a revoked token is still a perfectly
+	// well-formed local credential. The probe answered the question it was
+	// asked ("is a credential here?") and the field name promised the answer
+	// to a different one ("does the credential work?"). Green chip, ready:true,
+	// tasks dispatched, and the web launch gate fast-pathed a terminal onto a
+	// dead session.
+	//
+	// So the two questions now have two fields, and only ONE of them can be
+	// answered by looking at this machine:
+	//   AuthPresent  — local evidence. Cheap, always available, never proof.
+	//   AuthVerified — the provider spoke. Set by observing a real operation:
+	//                  a completed runner turn, a completed OAuth exchange
+	//                  (positive), or a 401/revoked in a task or PTY stream
+	//                  (negative — AuthVerified stays TRUE, AuthConfigured
+	//                  goes false; a rejection is the strongest evidence there
+	//                  is, it is just evidence of the negative).
+	//
+	// Callers about to spend the user's time or money (open a remote TUI, skip
+	// a headless sign-in, dispatch a task) must gate on AuthVerified. Callers
+	// deciding whether to bother OFFERING sign-in may read AuthPresent.
+	AuthVerified bool   `json:"authVerified"`
+	AuthSource   string `json:"authSource,omitempty"`
+	Warning      string `json:"warning,omitempty"`
+	Error        string `json:"error,omitempty"`
+	// Code is the STRUCTURED name for whatever Warning/Error says in prose —
+	// one of the reason_codes.go values, or "" when there is nothing wrong.
+	//
+	// Why it exists (2026-08-02): every field above this one is a sentence, so
+	// every surface that wanted to branch on WHY a runner is unusable had to
+	// regex the sentence. That is how mobile ended up carrying three different
+	// relay-auth matchers, none a superset of the others, all silently drifting
+	// as the wording changed. CLAUDE.md states the rule outright — "structured
+	// and named, never prose" — and this channel was the one still violating it
+	// while the task-dispatch channel had already been fixed.
+	//
+	// Additive on purpose: Warning/Error keep their exact meaning and wording,
+	// so nothing that reads them today changes behaviour. New consumers key off
+	// Code; old ones keep working.
+	Code string `json:"code,omitempty"`
+}
+
+// CheckRunnerReady verifies the binary exists and that any runner-specific
+// auth/config policy checks pass for the current workspace.
+func CheckRunnerReady(runner RunnerConfig, workDir string) error {
+	if err := CheckRunnerBinary(runner.Command); err != nil {
+		return err
+	}
+	status := DetectRunnerRuntimeStatus(runner, workDir)
+	if !status.Ready {
+		if msg := strings.TrimSpace(status.Error); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+		if msg := strings.TrimSpace(status.Warning); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+		return fmt.Errorf("%s is not ready", firstNonEmpty(strings.TrimSpace(runner.Name), strings.TrimSpace(runner.RunnerID), strings.TrimSpace(runner.Command), "runner"))
+	}
+	if err := checkRunnerWorkDirWritable(runner, workDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkRunnerWorkDirWritable returns a friendly error when the runner's
+// sandbox would fail to write into workDir. Codex 0.123.0 wraps every
+// `codex exec` in a bwrap (bubblewrap) sandbox that drops
+// CAP_DAC_OVERRIDE before invoking the model — so even root inside the
+// sandbox is treated as an unprivileged user against the host's DAC,
+// and a `chown 501:staff` left over from a Mac → Linux rsync makes
+// codex hard-fail mid-task with `bwrap: Can't create file at
+// <workDir>/.codex: Permission denied`. The user sees a partial output
+// like "blocked: every shell command fails with bwrap…" which doesn't
+// point at the actual fix (chown the dir).
+//
+// We probe by trying to create + remove a dotfile in workDir using the
+// agent's effective uid. If the create fails for any reason we surface
+// a single readable line that tells the user exactly which path is
+// unwritable, who currently owns it, and the command that fixes it.
+//
+// Skipped for non-sandboxed runners (claude, opencode) — their write
+// path is the agent's normal cmd.Dir, so the host's regular DAC rules
+// already apply and a normal "permission denied" travels straight to
+// the user without sandbox indirection.
+func checkRunnerWorkDirWritable(runner RunnerConfig, workDir string) error {
+	if normalizeRunnerID(runner.RunnerID) != "codex" {
+		return nil
+	}
+	dir := strings.TrimSpace(workDir)
+	if dir == "" {
+		return nil // empty workDir = agent uses its own cwd; that path is exercised by SDK token checks
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return nil // non-existent paths surface a clearer error elsewhere
+	}
+	probe, probeErr := os.CreateTemp(dir, ".yaver-codex-probe-*")
+	if probeErr == nil {
+		probe.Close()
+		_ = os.Remove(probe.Name())
+	}
+	// The probe lies when the agent is root: CAP_DAC_OVERRIDE lets the
+	// host write succeed even though bwrap (which strips that cap) is
+	// going to refuse the same operation. codexBwrapWillFail catches
+	// that case by inspecting ownership directly.
+	bwrapBlocked := codexBwrapWillFail(info)
+	if probeErr == nil && !bwrapBlocked {
+		return nil
+	}
+	owner := workDirOwnerLabel(info)
+	if owner == "" {
+		owner = "unknown"
+	}
+	uid := os.Geteuid()
+	gid := os.Getegid()
+	probeNote := "host probe failed: " + fmt.Sprintf("%v", probeErr)
+	if probeErr == nil && bwrapBlocked {
+		probeNote = "host probe succeeded via CAP_DAC_OVERRIDE but bwrap will drop that cap"
+	}
+	return fmt.Errorf(
+		"codex sandbox cannot write into %s (dir owner: %s, agent: uid=%d gid=%d). "+
+			"Codex's bwrap drops CAP_DAC_OVERRIDE so the project must be owned by the user running yaver. "+
+			"Run `sudo chown -R %d:%d %s` on the host and retry. (%s)",
+		dir, owner, uid, gid, uid, gid, dir, probeNote,
+	)
+}
+
+// DetectRunnerRuntimeStatus performs best-effort readiness checks for runners
+// whose real usability depends on auth state, local config, or provider policy.
+//
+// Honors `lastRunnerAuthFailure` — when a recent task with this runner exited
+// with an auth-error pattern (401 / Invalid bearer token / Not logged in),
+// flips AuthConfigured back to false even if the file/keychain is present.
+// File presence is a *necessary* but not *sufficient* signal — without this
+// override, DeviceDetailsModal cheerfully renders ✓ signed in while the next
+// task instantly 401's. Cleared via runner_auth_browser_http.go's OAuth-
+// completion path so a successful re-sign-in reverts the override.
+func DetectRunnerRuntimeStatus(runner RunnerConfig, workDir string) RunnerRuntimeStatus {
+	status := RunnerRuntimeStatus{Ready: true}
+
+	switch normalizeRunnerID(runner.RunnerID) {
+	case "codex":
+		status = detectCodexStatus()
+	case "opencode":
+		status = detectOpenCodeStatus(workDir)
+	case "claude":
+		status = detectClaudeStatus()
+	case "glm":
+		status = detectGLMStatus()
+	default:
+		return status
+	}
+	id := normalizeRunnerID(runner.RunnerID)
+
+	// A PROVEN credential — one whose last exercise against the provider
+	// succeeded — is the only thing that may set AuthVerified positive. This is
+	// deliberately the ONLY positive writer: no local probe, however
+	// authoritative-looking, is allowed to claim it (that is the whole point of
+	// the 2026-07-27 split; see RunnerRuntimeStatus.AuthVerified).
+	if status.AuthConfigured && runnerAuthProofRecent(id) {
+		status.AuthVerified = true
+	}
+
+	// An observed provider rejection outranks every local signal, including a
+	// `claude auth status` that cheerfully reports loggedIn:true off a revoked
+	// token. Checked AFTER the proof above so a rejection always wins.
+	if reason, rejected := runnerAuthFailureRecent(id); rejected {
+		// An observed provider rejection is a structured state too, not just a
+		// sentence — otherwise a surface that wants to distinguish "refused by
+		// the provider" from "never signed in" is back to reading prose.
+		switch id {
+		case "codex":
+			status.Code = ReasonRunnerCodexNotAuthenticated
+		case "claude":
+			status.Code = ReasonRunnerClaudeAuthRequired
+		}
+		status.AuthConfigured = false
+		// A 401 from the provider is the strongest possible evidence, so the
+		// answer stays verified — just negative.
+		status.AuthVerified = true
+		status.AuthSource = ""
+		if strings.TrimSpace(reason) != "" {
+			status.Warning = reason
+		} else if strings.TrimSpace(status.Warning) == "" {
+			status.Warning = "Token rejected by the provider on the last run — sign in again to refresh."
+		}
+	}
+
+	// A runner that cannot authenticate is NOT ready, whatever else is true of
+	// it. Every detect*Status above starts from Ready:true and only ever sets
+	// AuthConfigured=false on a signed-out runner — so Ready stayed true while
+	// the pickers, which filter on Ready, went on advertising it. A signed-out
+	// runner would be offered to the user in green, accept the task, and fail.
+	//
+	// "Ready" must mean "I can run your task right now". Anything weaker is a
+	// promise the next task will break.
+	if !status.AuthConfigured {
+		status.Ready = false
+		if strings.TrimSpace(status.Warning) == "" && strings.TrimSpace(status.Error) == "" {
+			status.Warning = "Not signed in — run `yaver runner auth` on this machine."
+		}
+	}
+	return status
+}
+
+// lastRunnerAuthFailure tracks runners whose most recent task spawn exited
+// with an auth-error pattern in stdout/stderr. tasks.go/watchProcess writes
+// here on detection; DetectRunnerRuntimeStatus reads to override the
+// presence-based AuthConfigured. Cleared when a fresh OAuth completes.
+//
+// Why a TTL at all: if the user signs back in via a path we can't observe
+// (e.g. they SSH'd to the box and ran `claude /login` themselves), the
+// override would otherwise stick forever. 30 min lets the next status poll
+// re-check via DetectRunnerRuntimeStatus's normal file/keychain probe.
+type runnerAuthMark struct {
+	at     time.Time
+	reason string
+}
+
+var (
+	lastRunnerAuthFailure = struct {
+		sync.Mutex
+		at map[string]runnerAuthMark
+	}{at: make(map[string]runnerAuthMark)}
+	runnerAuthFailureTTL = 30 * time.Minute
+
+	// lastRunnerAuthProof is the POSITIVE half of the same ledger: the last
+	// time this runner's credential was exercised against the provider and the
+	// provider answered normally. Only this makes AuthVerified true.
+	//
+	// TTL is long (12 h) on purpose. The cost of a stale positive is bounded —
+	// the moment a real rejection lands, MarkRunnerAuthInvalidReason overrides
+	// it — while the cost of a short TTL is that every user drops back to
+	// "present but unconfirmed" all day, which trains people to ignore the
+	// distinction.
+	lastRunnerAuthProof = struct {
+		sync.Mutex
+		at map[string]time.Time
+	}{at: make(map[string]time.Time)}
+	runnerAuthProofTTL = 12 * time.Hour
+
+	// runnerAuthChangeHook is nudged whenever a runner's auth verdict FLIPS.
+	// Registered by the HTTP server as TriggerHeartbeat, so a revocation
+	// observed in a PTY at 12:00:00 is in the Convex device row — and therefore
+	// on every surface, including ones with no live connection to this box —
+	// about a second later, instead of up to 30 s later on the next tick.
+	//
+	// A hook rather than a *HTTPServer field because the ledger is package
+	// state reached from tasks.go, terminal_session.go and the browser-auth
+	// handlers, none of which hold the server.
+	runnerAuthChangeHook = struct {
+		sync.Mutex
+		fn func()
+	}{}
+)
+
+// SetRunnerAuthChangeHook registers the callback fired when a runner's auth
+// verdict changes. Idempotent; pass nil to unregister (tests do).
+func SetRunnerAuthChangeHook(fn func()) {
+	runnerAuthChangeHook.Lock()
+	runnerAuthChangeHook.fn = fn
+	runnerAuthChangeHook.Unlock()
+}
+
+func notifyRunnerAuthChanged() {
+	runnerAuthChangeHook.Lock()
+	fn := runnerAuthChangeHook.fn
+	runnerAuthChangeHook.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// MarkRunnerAuthInvalid records that the named runner just produced an
+// auth-error. Retained for callers that have no reason string.
+func MarkRunnerAuthInvalid(runnerID string) {
+	MarkRunnerAuthInvalidReason(runnerID, "")
+}
+
+// MarkRunnerAuthInvalidReason records an observed provider rejection, together
+// with the sentence to show the user. Called from task output, the PTY stream,
+// and the browser-auth session output — every place the runner TELLS us the
+// token is dead. Safe to call from any goroutine.
+//
+// Kicks the heartbeat on a real transition so Convex (and therefore every
+// surface, connected or not) stops rendering the runner green.
+func MarkRunnerAuthInvalidReason(runnerID, reason string) {
+	id := normalizeRunnerID(runnerID)
+	if id == "" {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	lastRunnerAuthFailure.Lock()
+	prev, existed := lastRunnerAuthFailure.at[id]
+	fresh := !existed || time.Since(prev.at) > runnerAuthFailureTTL
+	lastRunnerAuthFailure.at[id] = runnerAuthMark{at: time.Now(), reason: reason}
+	lastRunnerAuthFailure.Unlock()
+
+	// A rejection also destroys any standing proof: the credential that worked
+	// an hour ago is the credential that just got refused.
+	lastRunnerAuthProof.Lock()
+	_, hadProof := lastRunnerAuthProof.at[id]
+	delete(lastRunnerAuthProof.at, id)
+	lastRunnerAuthProof.Unlock()
+
+	if fresh || hadProof {
+		invalidateRunnerAuthProbeCaches(id)
+		notifyRunnerAuthChanged()
+	}
+}
+
+// MarkRunnerAuthProven records that this runner's credential was just
+// exercised against the provider successfully — a completed turn, a completed
+// OAuth exchange. This is the only positive writer of AuthVerified.
+func MarkRunnerAuthProven(runnerID string) {
+	id := normalizeRunnerID(runnerID)
+	if id == "" {
+		return
+	}
+	lastRunnerAuthProof.Lock()
+	_, existed := lastRunnerAuthProof.at[id]
+	lastRunnerAuthProof.at[id] = time.Now()
+	lastRunnerAuthProof.Unlock()
+
+	lastRunnerAuthFailure.Lock()
+	_, hadFailure := lastRunnerAuthFailure.at[id]
+	delete(lastRunnerAuthFailure.at, id)
+	lastRunnerAuthFailure.Unlock()
+
+	if !existed || hadFailure {
+		invalidateRunnerAuthProbeCaches(id)
+		notifyRunnerAuthChanged()
+	}
+}
+
+// ClearRunnerAuthInvalid removes the rejection override for a runner. Called
+// from the browser-auth flow when a fresh OAuth completes successfully.
+//
+// It deliberately does NOT set proof: dropping a stale negative and asserting a
+// positive are different claims. Callers that genuinely completed an OAuth
+// exchange call MarkRunnerAuthProven as well.
+func ClearRunnerAuthInvalid(runnerID string) {
+	id := normalizeRunnerID(runnerID)
+	if id == "" {
+		return
+	}
+	lastRunnerAuthFailure.Lock()
+	_, existed := lastRunnerAuthFailure.at[id]
+	delete(lastRunnerAuthFailure.at, id)
+	lastRunnerAuthFailure.Unlock()
+	if existed {
+		invalidateRunnerAuthProbeCaches(id)
+		notifyRunnerAuthChanged()
+	}
+}
+
+// ClearRunnerAuthProven drops the positive half. Test seam, and used when a
+// credential is replaced on disk (a mirrored token is present, not proven).
+func ClearRunnerAuthProven(runnerID string) {
+	id := normalizeRunnerID(runnerID)
+	if id == "" {
+		return
+	}
+	lastRunnerAuthProof.Lock()
+	delete(lastRunnerAuthProof.at, id)
+	lastRunnerAuthProof.Unlock()
+}
+
+func invalidateRunnerAuthProbeCaches(id string) {
+	switch id {
+	case "claude", "glm":
+		invalidateClaudeAuthStatusCache()
+	case "codex":
+		invalidateCodexLoginStatusCache()
+	}
+}
+
+// runnerAuthFailureRecent reports whether an observed provider rejection is
+// still in force, and the sentence to show for it.
+func runnerAuthFailureRecent(runnerID string) (string, bool) {
+	lastRunnerAuthFailure.Lock()
+	defer lastRunnerAuthFailure.Unlock()
+	mark, ok := lastRunnerAuthFailure.at[runnerID]
+	if !ok {
+		return "", false
+	}
+	if time.Since(mark.at) > runnerAuthFailureTTL {
+		delete(lastRunnerAuthFailure.at, runnerID)
+		return "", false
+	}
+	return mark.reason, true
+}
+
+func runnerAuthProofRecent(runnerID string) bool {
+	lastRunnerAuthProof.Lock()
+	defer lastRunnerAuthProof.Unlock()
+	at, ok := lastRunnerAuthProof.at[runnerID]
+	if !ok {
+		return false
+	}
+	if time.Since(at) > runnerAuthProofTTL {
+		delete(lastRunnerAuthProof.at, runnerID)
+		return false
+	}
+	return true
+}
+
+// RunnerAuthProofAge returns how long ago this runner's credential was last
+// proven against the provider. ok=false means never (within the TTL).
+func RunnerAuthProofAge(runnerID string) (time.Duration, bool) {
+	id := normalizeRunnerID(runnerID)
+	lastRunnerAuthProof.Lock()
+	defer lastRunnerAuthProof.Unlock()
+	at, ok := lastRunnerAuthProof.at[id]
+	if !ok || time.Since(at) > runnerAuthProofTTL {
+		return 0, false
+	}
+	return time.Since(at), true
+}
+
+// IsRunnerAuthFailureOutput matches stdout/stderr from a runner spawn
+// against patterns indicating the OAuth token was rejected. Mirrors mobile
+// ErrorMessage.tsx::detectRunnerAuthFailure so server- and client-side
+// detections stay in sync — if a pattern triggers the mobile failure card
+// CTA, the server-side override should also fire.
+//
+// Returns the runner id ("claude" / "codex") on match, "" otherwise.
+func IsRunnerAuthFailureOutput(output string) string {
+	id, _ := ClassifyRunnerAuthFailure(output)
+	return id
+}
+
+// ClassifyRunnerAuthFailure matches a runner's output against SELF-IDENTIFYING
+// provider-rejection patterns — ones that name the runner or use its own
+// distinctive wording — and returns the runner id plus the sentence to show the
+// user.
+//
+// WHY THE REASON IS PART OF THE RETURN (2026-07-27): the previous version
+// answered only "which runner", and every caller then wrote its own generic
+// "Token rejected by API on the last task". The user's actual failure was
+//
+//	Please run /login · API Error: 401 OAuth access token has been revoked.
+//
+// which is a *different* fault from an expired token (a revoked grant cannot be
+// refreshed — re-login is the only fix) and needs a different sentence. Naming
+// the cause is the difference between a chip that says "sign in again" and one
+// that says why.
+//
+// THE PATTERNS THIS AUDIT ADDED, AND WHAT THEY MISSED BEFORE: the string above
+// matched NOTHING here. "not logged in" was required for every claude branch,
+// and Claude Code does not say that — it says "Please run /login". So the
+// canonical revocation message sailed past the classifier, the PTY stayed
+// green, and `/runner-auth/status` kept reporting authVerified:true. A
+// classifier that does not match the error your users actually see is a
+// classifier that does not exist.
+func ClassifyRunnerAuthFailure(output string) (string, string) {
+	m := strings.ToLower(output)
+	if m == "" {
+		return "", ""
+	}
+
+	// BILLING AND THROTTLING ARE NOT AUTH FAILURES (2026-08-02, researched
+	// against the providers' real error shapes).
+	//
+	// Anthropic returns 400 invalid_request_error "Your credit balance is too
+	// low…" and 429 rate_limit_error. In BOTH cases the credential is valid.
+	// Marking the runner auth-invalid for either one is the same false red the
+	// model-entitlement branch used to produce: the dashboard tells the user to
+	// sign in, they do, nothing changes — and for a rate limit the re-auth also
+	// throws away a perfectly good session for no reason. Return early so the
+	// Claude/Codex matchers below cannot claim them.
+	if strings.Contains(m, "credit balance is too low") ||
+		strings.Contains(m, "credit_balance_too_low") ||
+		strings.Contains(m, "rate_limit_error") ||
+		strings.Contains(m, "rate limit reached") ||
+		strings.Contains(m, "rate limit exceeded") {
+		return "", ""
+	}
+
+	// Claude Code — its own wording, in the order of how conclusive it is.
+	// A revoked grant is terminal: no refresh token can rescue it.
+	if strings.Contains(m, "oauth access token has been revoked") ||
+		strings.Contains(m, "access token has been revoked") ||
+		strings.Contains(m, "token has been revoked") {
+		return "claude", "Claude Code's OAuth access token has been REVOKED by the provider — a refresh cannot recover it. Sign in again to issue a new one."
+	}
+	if strings.Contains(m, "oauth token has expired") ||
+		strings.Contains(m, "oauth session expired") ||
+		strings.Contains(m, "authentication_failed") {
+		return "claude", "Claude Code's OAuth token has expired and could not be refreshed. Sign in again."
+	}
+	if strings.Contains(m, "please run /login") || strings.Contains(m, "run /login") {
+		return "claude", "Claude Code answered `Please run /login` — this machine's credential is no longer accepted. Sign in again."
+	}
+	if (strings.Contains(m, "not logged in") &&
+		(strings.Contains(m, "/login") || strings.Contains(m, "please run"))) ||
+		strings.Contains(m, "invalid bearer token") ||
+		strings.Contains(m, "invalid authentication credentials") ||
+		strings.Contains(m, "claude code-credentials") {
+		return "claude", "Claude Code reported it is not logged in on this machine. Sign in again."
+	}
+
+	// Codex.
+	if strings.Contains(m, "codex login --device-auth") ||
+		strings.Contains(m, "please run `codex login`") ||
+		strings.Contains(m, "please run codex login") ||
+		strings.Contains(m, "run `codex login`") {
+		// Quote what Codex actually said (that is the evidence), then name the
+		// sign-in that WORKS on this machine. "Sign in again" with no command is
+		// a remedy the user cannot act on, and the obvious guess — bare
+		// `codex login` — is the one form that cannot complete on the remote,
+		// headless boxes where this fires most.
+		return "codex", "Codex asked for `codex login` — this machine's ChatGPT credential is no longer accepted. Sign in again with `codex login --device-auth`."
+	}
+	if strings.Contains(m, "refresh_token_reused") {
+		return "codex", "Codex's refresh token was rejected as already-used (refresh_token_reused). Sign in again to issue a fresh one."
+	}
+	if strings.Contains(m, "token_expired") {
+		return "codex", "Codex's token has expired and could not be refreshed. Sign in again."
+	}
+	if (strings.Contains(m, "sign in required") &&
+		(strings.Contains(m, "codex") || strings.Contains(m, "chatgpt"))) ||
+		(strings.Contains(m, "not authenticated") && strings.Contains(m, "codex")) {
+		return "codex", "Codex reported it is not authenticated on this machine. Sign in again."
+	}
+	// A MODEL-ENTITLEMENT 400 IS NOT AN AUTH FAILURE (fixed 2026-08-02).
+	//
+	// This used to return ("codex", "…sign in with an account on a plan that
+	// includes it"), which made IsRunnerAuthFailureOutput report an auth
+	// failure, which called MarkRunnerAuthInvalidReason, which rendered the
+	// runner as "OpenAI Codex (sign-in needed)" across the dashboard — while
+	// the credential was working perfectly.
+	//
+	// Measured on the owner's box: the ONLY failure was
+	//   400 "The 'gpt-5.4' model is not supported when using Codex with a
+	//        ChatGPT account."
+	// and every surface then told him to sign in again. Re-authenticating
+	// cannot move a model onto a plan, so the advice was not merely useless —
+	// it hid the real cause (wrong model) behind a flow that could never fix
+	// it, and it marked a healthy login as broken. A false red with a dead-end
+	// remedy attached.
+	//
+	// The right handler is model_support_ledger.go, which records the refusal
+	// and lets effectiveModelFor drop the model so the CLI's own default runs.
+	// Deliberately NOT returning a runner here keeps the auth state honest.
+
+	// OpenCode — its failures name themselves.
+	if strings.Contains(m, "opencode") && (strings.Contains(m, "ai_apicallerror") ||
+		strings.Contains(m, "failedtoopensocket") ||
+		strings.Contains(m, "stream error") ||
+		strings.Contains(m, "providerid=")) {
+		return "opencode", "OpenCode's provider rejected the call — check the provider key for the configured model."
+	}
+	return "", ""
+}
+
+// ClassifyRunnerAuthFailureFor answers the same question when the caller
+// ALREADY KNOWS which runner produced the stream — a PTY bound to a runner, a
+// task with a runner attached.
+//
+// That extra knowledge buys the generic patterns. A bare `API Error: 401` or
+// `401 Unauthorized` names no runner, so ClassifyRunnerAuthFailure must not
+// guess from it (a task that curls a third-party API would be misattributed).
+// Scoped to a known runner it is exactly the evidence we want, and it is the
+// half of the user's real message that carried the HTTP status.
+func ClassifyRunnerAuthFailureFor(runnerID, output string) (bool, string) {
+	want := normalizeRunnerID(runnerID)
+	if want == "" || strings.TrimSpace(output) == "" {
+		return false, ""
+	}
+	if id, reason := ClassifyRunnerAuthFailure(output); id != "" {
+		if id == want {
+			return true, reason
+		}
+		// glm runs the claude binary; a claude-shaped rejection there is real.
+		if want == "glm" && id == "claude" {
+			return true, reason
+		}
+		return false, ""
+	}
+	m := strings.ToLower(output)
+	switch {
+	case strings.Contains(m, "api error: 401"), strings.Contains(m, "401 unauthorized"),
+		strings.Contains(m, "error 401"), strings.Contains(m, "status 401"),
+		strings.Contains(m, "http 401"):
+		return true, runnerCapabilityName(want) + " was refused by the provider with HTTP 401 (unauthorized) on this machine. Sign in again."
+	case strings.Contains(m, "invalid_grant"):
+		return true, runnerCapabilityName(want) + "'s refresh grant was rejected (invalid_grant) — it cannot be refreshed. Sign in again."
+	case strings.Contains(m, "oauth token expired"), strings.Contains(m, "session has expired"),
+		strings.Contains(m, "your session has expired"):
+		return true, runnerCapabilityName(want) + "'s session has expired on this machine. Sign in again."
+	}
+	return false, ""
+}
+
+func capabilityForRunner(runnerID, workDir string) CapabilityTargetReadiness {
+	cfg := GetRunnerConfig(runnerID)
+	if err := CheckRunnerBinary(cfg.Command); err != nil {
+		return CapabilityTargetReadiness{
+			Enabled:         false,
+			ReasonCode:      "runner." + normalizeRunnerID(runnerID) + ".not_installed",
+			Reason:          fmt.Sprintf("%s is not installed on this machine.", runnerCapabilityName(runnerID)),
+			SuggestedAction: fmt.Sprintf("Install %s on the host machine before using it remotely.", runnerCapabilityName(runnerID)),
+		}
+	}
+	status := DetectRunnerRuntimeStatus(cfg, workDir)
+	if code, reason, action, blocked := runnerCapabilityReason(normalizeRunnerID(runnerID), status); blocked {
+		return CapabilityTargetReadiness{
+			Enabled:         false,
+			ReasonCode:      code,
+			Reason:          reason,
+			SuggestedAction: action,
+		}
+	}
+	notes := []string{}
+	if status.AuthConfigured && strings.TrimSpace(status.AuthSource) != "" {
+		notes = append(notes, "authenticated via "+strings.TrimSpace(status.AuthSource))
+	}
+	if strings.TrimSpace(status.Warning) != "" {
+		notes = append(notes, strings.TrimSpace(status.Warning))
+	}
+	return CapabilityTargetReadiness{Enabled: true, Notes: notes}
+}
+
+func runnerCapabilityName(runnerID string) string {
+	switch normalizeRunnerID(runnerID) {
+	case "codex":
+		return "Codex"
+	case "claude":
+		return "Claude Code"
+	case "opencode":
+		return "OpenCode"
+	case "glm":
+		return "GLM (z.ai)"
+	default:
+		return strings.TrimSpace(runnerID)
+	}
+}
+
+func runnerCapabilityReason(runnerID string, status RunnerRuntimeStatus) (code, reason, action string, blocked bool) {
+	// Prefer the STRUCTURED code over grepping the sentence.
+	//
+	// The legacy branches below decide by substring-matching status.Error, and
+	// that had already rotted: the codex branch tests for "not authenticated"
+	// while detectCodexStatus actually writes "Codex is installed but no
+	// credentials were found". Those strings have never matched, so the codex
+	// capability-blocked path was dead code — a runner with no credential at all
+	// reported itself as not blocked. Nobody noticed, because a prose matcher
+	// fails silently and looks exactly like "nothing is wrong".
+	//
+	// This is the whole argument for reason codes in one function.
+	if c := strings.TrimSpace(status.Code); c != "" {
+		switch c {
+		case ReasonRunnerCodexNotAuthenticated:
+			return c, "Codex is installed but not authenticated on this machine.", "Sign in with `codex login --device-auth`, or import subscription credentials from an already-signed-in user-owned device.", true
+		case ReasonRunnerCodexCredentialExpired:
+			return c, "Codex's credential on this machine has expired and could not be renewed automatically.", "Sign in again with `codex login --device-auth`.", true
+		case ReasonRunnerCodexCredentialCorrupt:
+			return c, "Codex's credential file on this machine is unreadable — a write was interrupted.", "Sign in again with `codex login --device-auth` to write a fresh credential.", true
+		case ReasonRunnerCodexCredentialIsCopy:
+			return c, "This machine's Codex credential is a copy of another machine's and cannot be renewed here.", "Sign in on THIS machine with `codex login --device-auth` so it owns its own credential.", true
+		case ReasonRunnerCodexLinuxSandboxBlocked:
+			return c, "This Linux machine is blocking the sandbox Codex needs for execution.", "Fix the Linux sandbox prerequisites on the host before running Codex.", true
+		}
+	}
+	switch runnerID {
+	case "codex":
+		if strings.Contains(strings.ToLower(status.Error), "not authenticated") {
+			return ReasonRunnerCodexNotAuthenticated, "Codex is installed but not authenticated on this machine.", "Run the Codex browser login flow or import subscription credentials from an already-signed-in user-owned device.", true
+		}
+		if strings.Contains(strings.ToLower(status.Error), "blocking the sandbox") {
+			return ReasonRunnerCodexLinuxSandboxBlocked, "This Linux machine is blocking the sandbox Codex needs for execution.", "Fix the Linux sandbox prerequisites on the host before running Codex.", true
+		}
+	case "claude":
+		if !status.AuthConfigured {
+			return ReasonRunnerClaudeAuthRequired, "Claude Code is installed but no usable auth was detected yet.", "Run the Claude browser login flow or import subscription credentials from an already-signed-in user-owned device.", true
+		}
+	case "opencode":
+		if strings.TrimSpace(status.Error) != "" {
+			return ReasonRunnerOpenCodeUnusable, strings.TrimSpace(status.Error), "Update the OpenCode provider/auth configuration on the host before using it remotely.", true
+		}
+	}
+	return "", "", "", false
+}
+
+func runnerDoctorDetail(runner RunnerConfig, workDir, binaryPath, version string) (string, string) {
+	status := DetectRunnerRuntimeStatus(runner, workDir)
+	detail := strings.TrimSpace(binaryPath)
+	if strings.TrimSpace(version) != "" {
+		detail = strings.TrimSpace(detail + " (" + strings.TrimSpace(version) + ")")
+	}
+	switch {
+	case strings.TrimSpace(status.Error) != "":
+		if detail == "" {
+			return "warn", status.Error
+		}
+		return "warn", detail + " — " + status.Error
+	case status.AuthConfigured && strings.TrimSpace(status.AuthSource) != "":
+		if detail == "" {
+			return "ok", "authenticated via " + status.AuthSource
+		}
+		return "ok", detail + " — authenticated via " + status.AuthSource
+	case strings.TrimSpace(status.Warning) != "":
+		if detail == "" {
+			return "warn", status.Warning
+		}
+		return "warn", detail + " — " + status.Warning
+	default:
+		if detail == "" {
+			return "ok", "installed"
+		}
+		return "ok", detail
+	}
+}
+
+// normalizeRunnerID maps a user-facing runner id to the agent's
+// internal canonical id. User-facing ("claude-code") collapses onto
+// the internal id ("claude") so the agent's spawn / case tables don't
+// need to be re-threaded. Switch this if the internal canonical ever
+// flips — the rest of the agent reads through this single function.
+func normalizeRunnerID(id string) string {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case "claude-code":
+		return "claude"
+	case "zai", "z.ai", "z-ai", "glm-4.6", "glm-4.7":
+		// Retired GLM/z.ai runner aliases still collapse onto "glm" so user
+		// requests fail loudly at the retirement boundary instead of silently
+		// falling through to another runner.
+		return "glm"
+	default:
+		return strings.ToLower(strings.TrimSpace(id))
+	}
+}
+
+var retiredRunners = map[string]string{
+	"glm": "the `glm` runner ran the `claude` binary against z.ai, which mixes subscription-OAuth tooling with an API key. Use runner `opencode` with model `zai-coding-plan/glm-4.7` instead (opencode is the API-key runner).",
+}
+
+func retiredRunnerReason(id string) (string, bool) {
+	reason, ok := retiredRunners[normalizeRunnerID(id)]
+	return reason, ok
+}
+
+func detectClaudeStatus() RunnerRuntimeStatus {
+	status := RunnerRuntimeStatus{Ready: true}
+
+	// Ask Claude Code itself. `claude auth status --json` reads whichever
+	// store this platform actually uses (file on Linux, Keychain on macOS),
+	// costs no API call, and answers the only question that matters: would a
+	// TUI launched right now show a login screen? It prints well-formed JSON
+	// in both states and exits 1 when signed out, so the exit code is noise —
+	// parse stdout.
+	if st, ok := probeClaudeAuthStatus(); ok {
+		status.AuthConfigured = st.LoggedIn
+		// PRESENT, not VERIFIED. `claude auth status` reads the local store; a
+		// REVOKED token is still a well-formed local credential, so this call
+		// answers loggedIn:true for a session the provider has already killed.
+		// That exact false green is the 2026-07-27 incident. Only an observed
+		// operation may set AuthVerified.
+		status.AuthPresent = true
+		if st.LoggedIn {
+			status.AuthSource = claudeAuthSourceLabel(st)
+		} else {
+			status.Warning = "Claude Code is signed out on this machine — run the headless sign-in to authenticate it."
+		}
+		return status
+	}
+
+	// The binary could not answer (missing, too old for `auth status`, or the
+	// probe timed out). Fall back to the storage heuristics — flagged
+	// unverified so callers know these are guesses, not answers.
+	if path, ok := claudeCredentialsPath(); ok && claudeCredentialFileHasOAuth(path) {
+		status.AuthConfigured = true
+		status.AuthSource = path
+	} else if runtime.GOOS == "darwin" && claudeMacKeychainHasCreds() {
+		// macOS subscription users may have no env var and no usable
+		// ~/.claude/.credentials.json — Claude Code stores the OAuth token in
+		// the system Keychain under the service name "Claude Code-credentials".
+		// `security find-generic-password` exits 0 iff the entry exists.
+		status.AuthConfigured = true
+		status.AuthSource = "macOS Keychain · Claude Code-credentials"
+	} else {
+		status.Warning = "No Claude Code credential detected on this machine."
+	}
+	return status
+}
+
+func claudeAuthSourceLabel(st claudeAuthStatusJSON) string {
+	method := strings.TrimSpace(st.AuthMethod)
+	if method == "" {
+		method = "claude login"
+	}
+	if sub := strings.TrimSpace(st.SubscriptionType); sub != "" {
+		return method + " · " + sub
+	}
+	return method
+}
+
+// claudeAuthStatusJSON is the payload of `claude auth status --json`.
+type claudeAuthStatusJSON struct {
+	LoggedIn         bool   `json:"loggedIn"`
+	AuthMethod       string `json:"authMethod"`
+	APIProvider      string `json:"apiProvider"`
+	SubscriptionType string `json:"subscriptionType"`
+}
+
+var (
+	// claudeAuthStatusCache guards only the cached VALUE. The fork itself runs
+	// outside it, behind claudeAuthStatusFork, so a slow `claude auth status`
+	// can never wedge the /runner-auth/status handler that mobile polls every
+	// 1.5 s — readers with a warm entry never touch the fork lock at all.
+	claudeAuthStatusCache = struct {
+		sync.Mutex
+		st claudeAuthStatusJSON
+		ok bool
+		at time.Time
+	}{}
+	claudeAuthStatusFork sync.Mutex
+	claudeAuthStatusTTL  = 60 * time.Second
+)
+
+// invalidateClaudeAuthStatusCache forces the next probe to re-run the CLI.
+// Called by the `?live=1` status path and after any credential write, so a
+// caller that just repaired auth never reads a stale "signed out".
+func invalidateClaudeAuthStatusCache() {
+	claudeAuthStatusCache.Lock()
+	claudeAuthStatusCache.at = time.Time{}
+	claudeAuthStatusCache.Unlock()
+}
+
+func cachedClaudeAuthStatus() (claudeAuthStatusJSON, bool, bool) {
+	claudeAuthStatusCache.Lock()
+	defer claudeAuthStatusCache.Unlock()
+	if claudeAuthStatusCache.at.IsZero() || time.Since(claudeAuthStatusCache.at) >= claudeAuthStatusTTL {
+		return claudeAuthStatusJSON{}, false, false
+	}
+	return claudeAuthStatusCache.st, claudeAuthStatusCache.ok, true
+}
+
+// probeClaudeAuthStatus returns Claude Code's own view of its auth state.
+// ok=false means the question could not be asked (no binary, no `auth status`
+// subcommand, timeout) — NOT that the user is signed out.
+func probeClaudeAuthStatus() (claudeAuthStatusJSON, bool) {
+	if st, ok, hit := cachedClaudeAuthStatus(); hit {
+		return st, ok
+	}
+	// One fork at a time. Whoever loses the race re-reads the cache the winner
+	// just filled instead of spawning a second `claude`.
+	claudeAuthStatusFork.Lock()
+	defer claudeAuthStatusFork.Unlock()
+	if st, ok, hit := cachedClaudeAuthStatus(); hit {
+		return st, ok
+	}
+	st, ok := runClaudeAuthStatus()
+	claudeAuthStatusCache.Lock()
+	claudeAuthStatusCache.st = st
+	claudeAuthStatusCache.ok = ok
+	claudeAuthStatusCache.at = time.Now()
+	claudeAuthStatusCache.Unlock()
+	return st, ok
+}
+
+func runClaudeAuthStatus() (claudeAuthStatusJSON, bool) {
+	bin := resolveRunnerBinary("claude")
+	if bin == "" {
+		return claudeAuthStatusJSON{}, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := osexec.CommandContext(ctx, bin, "auth", "status", "--json")
+	// WaitDelay: a runner CLI (claude/codex/opencode) can spawn a child that
+	// inherits the pipe, so a context kill does NOT free Output() on its own.
+	// This runs at agent startup; without the delay a wedged runner CLI hangs
+	// the whole boot before the HTTP server binds (mac mini, 2026-07-25).
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Env = append(os.Environ(), "CI=1", "NO_COLOR=1", "TERM=dumb")
+	// Signed-out is exit 1 WITH a well-formed body, so the exit code carries no
+	// information the body doesn't. A parse hit means the CLI answered us;
+	// anything else (binary too old for `auth status`, crash, timeout) means it
+	// did not, which is "unknown", never "signed out".
+	out, _ := cmd.Output()
+	if ctx.Err() != nil {
+		return claudeAuthStatusJSON{}, false
+	}
+	body := extractFirstJSONObject(out)
+	if len(body) == 0 {
+		return claudeAuthStatusJSON{}, false
+	}
+	var st claudeAuthStatusJSON
+	if json.Unmarshal(body, &st) != nil {
+		return claudeAuthStatusJSON{}, false
+	}
+	return st, true
+}
+
+const claudeMacKeychainService = "Claude Code-credentials"
+
+// preflightClaudeMacKeychainForHeadlessLaunch proves the exact operation Claude
+// Code will need before we spawn it from a launchd/SSH-owned agent: reading the
+// subscription OAuth generic-password item from the user's login keychain.
+//
+// A hung `claude` with no stdout/stderr/socket/file writes was traced to
+// `security find-generic-password -s "Claude Code-credentials"` blocking before
+// Claude ever reached OAuth. Metadata checks are false greens here: the item can
+// exist while the non-GUI process cannot read its password. Probe with `-w`, and
+// if the operator has explicitly provided the login-keychain password locally,
+// repair only this item by setting its generic-password partition list.
+func preflightClaudeMacKeychainForHeadlessLaunch() error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	// Same gate as the status probe: when keychain access is disabled (the
+	// desktop GUI's embedded agent), never touch `security` — the GUI is not
+	// a headless Claude launcher and must not prompt.
+	if keychainAccessDisabled() {
+		return nil
+	}
+	kc := claudeLoginKeychainPath()
+	if err := probeClaudeMacKeychainPassword(kc); err == nil {
+		return nil
+	}
+	if err := probeClaudeMacKeychainItem(kc); err != nil {
+		return fmt.Errorf("No Claude Code credential detected on this machine. Run `yaver runner-auth <machine> claude` from an already signed-in device, import credentials from another owned Mac, or run `claude auth login` on this Mac")
+	}
+	pw := claudeLoginKeychainPassword()
+	if pw == "" {
+		return fmt.Errorf(
+			"Claude Code is blocked before OAuth: macOS Keychain item %q is not readable from this headless agent. "+
+				"Add YAVER_LOGIN_PASSWORD to ~/.yaver/local-secrets.env on this Mac (chmod 600) or run `security unlock-keychain` + "+
+				"`security set-generic-password-partition-list -s %q -S apple-tool:,apple: ...` for %s, then retry",
+			claudeMacKeychainService, claudeMacKeychainService, kc,
+		)
+	}
+	if err := runSecurityQuiet(5*time.Second, "unlock-keychain", "-p", pw, kc); err != nil {
+		return fmt.Errorf("Claude Code cannot read its macOS Keychain credential: unlocking %s failed: %w", kc, err)
+	}
+	// No flags = do not auto-lock mid-run. This is the same headless
+	// reliability move as codesign, applied to Claude's generic-password item.
+	_ = runSecurityQuiet(5*time.Second, "set-keychain-settings", kc)
+	if err := runSecurityQuiet(10*time.Second,
+		"set-generic-password-partition-list",
+		"-s", claudeMacKeychainService,
+		"-S", "apple-tool:,apple:",
+		"-k", pw,
+		kc,
+	); err != nil {
+		return fmt.Errorf("Claude Code cannot read its macOS Keychain credential: setting partition list for %q failed: %w", claudeMacKeychainService, err)
+	}
+	if err := probeClaudeMacKeychainPassword(kc); err != nil {
+		return fmt.Errorf("Claude Code Keychain repair ran, but %q is still not readable headlessly from %s: %w", claudeMacKeychainService, kc, err)
+	}
+	invalidateClaudeAuthStatusCache()
+	return nil
+}
+
+func probeClaudeMacKeychainPassword(keychain string) error {
+	if keychainAccessDisabled() {
+		return fmt.Errorf("keychain access disabled (YAVER_VAULT_SKIP_KEYCHAIN=1 / non-interactive)")
+	}
+	return runSecurityQuiet(5*time.Second, "find-generic-password", "-s", claudeMacKeychainService, "-w", keychain)
+}
+
+func probeClaudeMacKeychainItem(keychain string) error {
+	if keychainAccessDisabled() {
+		return fmt.Errorf("keychain access disabled (YAVER_VAULT_SKIP_KEYCHAIN=1 / non-interactive)")
+	}
+	return runSecurityQuiet(5*time.Second, "find-generic-password", "-s", claudeMacKeychainService, keychain)
+}
+
+func runSecurityQuiet(timeout time.Duration, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := osexec.CommandContext(ctx, "security", args...)
+	cmd.WaitDelay = time.Second
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return fmt.Errorf("timed out after %s", timeout)
+	}
+	return err
+}
+
+func claudeLoginKeychainPath() string {
+	if v := strings.TrimSpace(os.Getenv("YAVER_LOGIN_KEYCHAIN_PATH")); v != "" {
+		return expandHomePath(v)
+	}
+	if v := strings.TrimSpace(localSecretsEnv()["YAVER_LOGIN_KEYCHAIN_PATH"]); v != "" {
+		return expandHomePath(v)
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		return filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+	}
+	return "login.keychain"
+}
+
+func claudeLoginKeychainPassword() string {
+	if v := os.Getenv("YAVER_LOGIN_PASSWORD"); v != "" {
+		return v
+	}
+	return localSecretsEnv()["YAVER_LOGIN_PASSWORD"]
+}
+
+func localSecretsEnv() map[string]string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".yaver", "local-secrets.env"))
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		if k == "" || strings.ContainsAny(k, " \t") {
+			continue
+		}
+		out[k] = unquoteLocalSecret(strings.TrimSpace(v))
+	}
+	return out
+}
+
+func unquoteLocalSecret(v string) string {
+	if len(v) < 2 {
+		return v
+	}
+	q := v[0]
+	if (q != '\'' && q != '"') || v[len(v)-1] != q {
+		return v
+	}
+	v = v[1 : len(v)-1]
+	if q == '"' {
+		v = strings.ReplaceAll(v, `\"`, `"`)
+		v = strings.ReplaceAll(v, `\\`, `\`)
+	}
+	return v
+}
+
+func expandHomePath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+// extractFirstJSONObject slices out the outermost {...} so a stray banner or
+// update-notice line on stdout doesn't defeat the decode.
+func extractFirstJSONObject(out []byte) []byte {
+	start := bytes.IndexByte(out, '{')
+	end := bytes.LastIndexByte(out, '}')
+	if start < 0 || end <= start {
+		return nil
+	}
+	return out[start : end+1]
+}
+
+// claudeCredentialFileHasOAuth reports whether a ~/.claude/.credentials.json
+// actually carries a Claude subscription token. The same file also stores MCP
+// plugin OAuth under `mcpOAuth`, so its mere existence proves nothing — that
+// false positive is precisely what let a mirrored, Claude-less credentials
+// file mark a headless box "signed in".
+//
+// An expired accessToken still counts when a refreshToken is present: Claude
+// Code refreshes it silently on the next launch.
+func claudeCredentialFileHasOAuth(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var probe struct {
+		ClaudeAiOauth struct {
+			AccessToken  string  `json:"accessToken"`
+			RefreshToken string  `json:"refreshToken"`
+			ExpiresAt    float64 `json:"expiresAt"`
+		} `json:"claudeAiOauth"`
+	}
+	if json.Unmarshal(data, &probe) != nil {
+		return false
+	}
+	oauth := probe.ClaudeAiOauth
+	if strings.TrimSpace(oauth.AccessToken) == "" {
+		return false
+	}
+	// A refresh token means Claude can mint a new access token, so an expired
+	// accessToken is NOT signed-out. Keep this ahead of the expiry check.
+	//
+	// I briefly "fixed" this the other way — expired ⇒ signed out, refresh token
+	// or not — after finding a Mac mini whose accessToken expired 2026-05-11.
+	// That was WRONG, and the machine itself proved it: `claude auth status`
+	// reported loggedIn:true and the agent was streaming a live Claude task at
+	// the same moment. On macOS the credentials FILE is not the store at all —
+	// Claude keeps the live token in the Keychain, so a months-stale file sits
+	// on disk next to a perfectly valid session. Treating the file as
+	// authoritative would report a working machine as signed out.
+	//
+	// The file is a weak, POSITIVE-only hint. It may say "there is probably a
+	// session here"; it may never say "there is definitely not". Only
+	// probeClaudeAuthStatus() (which asks the binary, which reads the real
+	// store) can answer negatively — and it already does, above.
+	if strings.TrimSpace(oauth.RefreshToken) != "" {
+		return true
+	}
+	return oauth.ExpiresAt <= 0 || int64(oauth.ExpiresAt) > time.Now().UnixMilli()
+}
+
+// detectGLMStatus reports auth readiness for the GLM (z.ai) runner. GLM runs
+// on the claude binary pointed at z.ai's Anthropic endpoint, so "authenticated"
+// means a z.ai credential resolves — either a bare ZAI_API_KEY / GLM_API_KEY
+// (env or vault) or an explicit runner-provider config (API_KEY__glm). No
+// Anthropic OAuth / Keychain path applies here.
+func detectGLMStatus() RunnerRuntimeStatus {
+	status := RunnerRuntimeStatus{Ready: true}
+	// An explicit key needs no OAuth and no probe: its presence IS the answer.
+	if cfg := runnerProviderConfigFor("glm"); cfg.apiKey != "" {
+		status.AuthConfigured = true
+		status.AuthPresent = true
+		status.AuthSource = "z.ai key (" + cfg.baseURL + ")"
+		return status
+	}
+	if value, source := hostSecretValue("ZAI_API_KEY"); value != "" {
+		status.AuthConfigured = true
+		status.AuthPresent = true
+		status.AuthSource = source
+		return status
+	}
+	status.Warning = "No z.ai credential found — set ZAI_API_KEY (or vault runner-provider/API_KEY__glm) to use GLM."
+	return status
+}
+
+var (
+	claudeMacKeychainCache = struct {
+		sync.Mutex
+		ok bool
+		at time.Time
+	}{}
+	claudeMacKeychainTTL = 60 * time.Second
+)
+
+// claudeMacKeychainHasCreds returns true if the macOS Keychain has the
+// "Claude Code-credentials" generic password entry that Claude Code 2.x
+// uses for subscription OAuth. Result cached for 60s — the underlying
+// `security` invocation triggers a 1-time auth prompt the very first
+// time the calling process accesses the entry, but subsequent reads
+// from the same daemon are silent.
+func claudeMacKeychainHasCreds() bool {
+	// keychainAccessDisabled(): the desktop GUI spawns the agent with
+	// YAVER_VAULT_SKIP_KEYCHAIN=1 so `yaver serve` never triggers a macOS
+	// "security wants to use your confidential information" prompt. This probe
+	// is exactly the prompt source — a fresh `security find-generic-password`
+	// process asks the OS for access on its first read (runner_auth.go:1217).
+	// When keychain access is disabled, report "no keychain creds" WITHOUT
+	// shelling out; runner status degrades to the file/env heuristics, which
+	// is the correct answer for an embedded agent the GUI supervises.
+	if keychainAccessDisabled() {
+		return false
+	}
+	claudeMacKeychainCache.Lock()
+	defer claudeMacKeychainCache.Unlock()
+	if !claudeMacKeychainCache.at.IsZero() && time.Since(claudeMacKeychainCache.at) < claudeMacKeychainTTL {
+		return claudeMacKeychainCache.ok
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	cmd := osexec.CommandContext(ctx, "security", "find-generic-password", "-s", "Claude Code-credentials")
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	ok := err == nil
+	claudeMacKeychainCache.ok = ok
+	claudeMacKeychainCache.at = time.Now()
+	return ok
+}
+
+func claudeCredentialsPath() (string, bool) {
+	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+		path := filepath.Join(dir, ".credentials.json")
+		if runnerFileExists(path) {
+			return path, true
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		// Claude Code stores subscription credentials in the encrypted Keychain.
+		// We cannot cheaply probe Keychain access here, so leave auth as unknown.
+		return "", false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", false
+	}
+	path := filepath.Join(home, ".claude", ".credentials.json")
+	return path, runnerFileExists(path)
+}
+
+func detectCodexStatus() RunnerRuntimeStatus {
+	status := RunnerRuntimeStatus{Ready: true}
+	if runtime.GOOS == "linux" {
+		if err := codexLinuxSandboxPrereqErrorFunc(); err != "" {
+			status.Ready = false
+			status.Error = err
+			return status
+		}
+	}
+	// Ask the codex CLI itself FIRST. `codex login status` exits 0 with
+	// account info when authenticated, non-zero with a "run codex login"
+	// message otherwise — the only answer that settles whether a TUI opened
+	// right now would demand a sign-in. Cached (60 s) so the status poll
+	// doesn't fork codex every 1.5 s.
+	//
+	// Ordered ahead of the file probe on purpose: a credentials file proves a
+	// login happened once, not that it still works. Trusting the file first is
+	// what let a stale token report "signed in" and strand the caller.
+	// The expiry oracle runs FIRST, because it is both cheaper and strictly more
+	// truthful than the CLI probe below.
+	//
+	// Measured 2026-08-02: `codex login status` returns "Logged in using ChatGPT" in
+	// 0.08 s WITHOUT reading the access token's `exp` — so it answers "a credential
+	// file exists", not "a credential works", and it says the same thing over a
+	// ten-day-dead token. The token is a plain JWT in a file we already own, so the
+	// real expiry costs one read and one base64 decode: no fork, no network, no
+	// tokens. Preferring the fork over the file was the false green.
+	if doc, err := readCodexCredentialDoc(codexAuthPath()); err == nil {
+		fresh := codexCredentialFreshnessOf(doc, time.Now())
+		switch {
+		case fresh.Known && fresh.Expired:
+			// KNOWN dead. Say so, and say what fixes it — this box is very likely
+			// headless, where the plain `codex login` browser flow cannot complete.
+			status.AuthConfigured = false
+			status.AuthPresent = true
+			status.AuthVerified = true // verified — negatively
+			status.Ready = false
+			status.Warning = "Codex's access token on this machine expired " +
+				time.Since(fresh.ExpiresAt).Round(time.Minute).String() +
+				" ago and could not be renewed automatically. Sign in again with `codex login --device-auth`."
+			// A credential that is present but dead is a DIFFERENT state from
+			// one that was never established — the remedy is the same command,
+			// but the sentence a surface should show is not, and "not
+			// authenticated" would tell a user to redo a sign-in they did.
+			status.Code = ReasonRunnerCodexCredentialExpired
+			return status
+		case fresh.Known:
+			status.AuthConfigured = true
+			status.AuthPresent = true
+			status.AuthSource = "codex auth.json (" + fresh.describe(time.Now()) + ")"
+			return status
+		}
+		// Expiry unreadable (an opaque or future token shape) — fall through to the
+		// CLI probe rather than guessing.
+	} else if !errors.Is(err, errNoCodexCredential) {
+		// Empty or unparseable auth.json: the fingerprint of a write killed
+		// mid-flight, which on a small box means OOM. This is a real, nameable
+		// state — not "no credentials found", which would send the user looking
+		// for a login they already did.
+		status.AuthConfigured = false
+		status.Ready = false
+		status.Error = err.Error() + " Sign in again with `codex login --device-auth`."
+		status.Code = ReasonRunnerCodexCredentialCorrupt
+		return status
+	}
+
+	if codexLoginStatusOK() {
+		status.AuthConfigured = true
+		// `codex login status` reads ~/.codex/auth.json and checks shape
+		// locally. Same limit as claude's: it cannot see a server-side
+		// revocation — and, measured, it does not read expiry either.
+		// PRESENT, not VERIFIED.
+		status.AuthPresent = true
+		status.AuthSource = "codex login status"
+		return status
+	}
+	// Fall back to the paths the codex CLI is known to drop credentials at,
+	// across versions / install methods. The original detector only looked at
+	// ~/.codex/auth.json and missed installs that write credentials.json (newer
+	// device-auth) or store the OAuth payload under ~/.codex/sessions/. When
+	// the file is missing, the dashboard re-prompts for sign-in even though the
+	// user just completed the flow — that surfaced as the "Test → Sign In
+	// Codex" loop in #19.
+	//
+	// Reached only when codex could not answer (binary too old for
+	// `login status`, or the probe timed out), so AuthVerified stays false.
+	for _, path := range codexAuthCandidatePaths() {
+		if runnerFileExists(path) {
+			status.AuthConfigured = true
+			status.AuthSource = path
+			return status
+		}
+	}
+	status.Ready = false
+	status.Error = "Codex is installed but no credentials were found. Run `codex login --device-auth` and complete ChatGPT Plus/Pro plan OAuth in the browser, or import credentials from an already-signed-in user-owned device. Checked: " + strings.Join(codexAuthCandidatePaths(), ", ") + "."
+	status.Code = ReasonRunnerCodexNotAuthenticated
+	return status
+}
+
+type codexLoginStatusEntry struct {
+	ok bool
+	at time.Time
+}
+
+var (
+	// Keyed by the credential root the answer was measured under. codex reads
+	// its login from $CODEX_HOME (else $HOME), so a single global entry would
+	// let one home's answer be served for another — which is exactly how a
+	// warm "logged in" leaked across tests running under different HOMEs.
+	codexLoginStatusCache = struct {
+		sync.Mutex
+		byHome map[string]codexLoginStatusEntry
+	}{byHome: map[string]codexLoginStatusEntry{}}
+	codexLoginStatusTTL = 60 * time.Second
+)
+
+// invalidateCodexLoginStatusCache forces the next codexLoginStatusOK to
+// re-run `codex login status` instead of serving a cached verdict.
+//
+// Why it exists (codex-specific gap, 2026-07 audit): during a browser
+// sign-in the status poll keeps probing, so at the moment the OAuth
+// completes the cache almost certainly holds a fresh "not logged in".
+// The completion's heartbeat kick then shipped authVerified=false, and
+// the device card sat on amber "verify needed" for up to ~90s after a
+// SUCCESSFUL login. Claude's equivalent cache is invalidated on every
+// session snapshot (invalidateClaudeAuthStatusCache); codex had no
+// invalidation function at all.
+func invalidateCodexLoginStatusCache() {
+	codexLoginStatusCache.Lock()
+	codexLoginStatusCache.byHome = map[string]codexLoginStatusEntry{}
+	codexLoginStatusCache.Unlock()
+}
+
+func codexCredentialRoot() string {
+	if dir := strings.TrimSpace(os.Getenv("CODEX_HOME")); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
+func codexLoginStatusOK() bool {
+	key := codexCredentialRoot()
+	codexLoginStatusCache.Lock()
+	if e, ok := codexLoginStatusCache.byHome[key]; ok && time.Since(e.at) < codexLoginStatusTTL {
+		codexLoginStatusCache.Unlock()
+		return e.ok
+	}
+	codexLoginStatusCache.Unlock()
+
+	ok := false
+	if bin := resolveRunnerBinary("codex"); bin != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+		defer cancel()
+		lc := osexec.CommandContext(ctx, bin, "login", "status")
+		lc.WaitDelay = time.Second
+		ok = lc.Run() == nil
+	}
+
+	codexLoginStatusCache.Lock()
+	codexLoginStatusCache.byHome[key] = codexLoginStatusEntry{ok: ok, at: time.Now()}
+	codexLoginStatusCache.Unlock()
+	return ok
+}
+
+var codexLinuxSandboxPrereqErrorFunc = codexLinuxSandboxPrereqError
+
+func codexLinuxSandboxPrereqError() string {
+	issues := []string{}
+	if value, ok := readLinuxKernelParam("/proc/sys/kernel/unprivileged_userns_clone"); ok && value == "0" {
+		issues = append(issues, "kernel.unprivileged_userns_clone=0")
+	}
+	if value, ok := readLinuxKernelParam("/proc/sys/user/max_user_namespaces"); ok && (value == "0" || value == "") {
+		issues = append(issues, "user.max_user_namespaces=0")
+	}
+	if value, ok := readLinuxKernelParam("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"); ok && value == "1" {
+		issues = append(issues, "kernel.apparmor_restrict_unprivileged_userns=1")
+	}
+	if len(issues) == 0 {
+		return ""
+	}
+	return "Codex is installed but this Linux host is blocking the sandbox it uses for `codex exec`. Fix host user-namespace support first (`kernel.unprivileged_userns_clone=1`, `user.max_user_namespaces=1048576`, and if present `kernel.apparmor_restrict_unprivileged_userns=0`). Current blockers: " + strings.Join(issues, ", ")
+}
+
+func readLinuxKernelParam(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(data)), true
+}
+
+func codexAuthPath() string {
+	if dir := strings.TrimSpace(os.Getenv("CODEX_HOME")); dir != "" {
+		return filepath.Join(dir, "auth.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "auth.json")
+}
+
+// codexAuthCandidatePaths returns every plausible location the codex
+// CLI may drop credentials at, in priority order. Different versions
+// of the codex CLI use different file names — older cuts wrote
+// `auth.json`, the device-auth flow we shell out to writes
+// `credentials.json`, and the OAuth-session variant stashes a
+// directory of session JSON under `sessions/`. We treat any of them
+// existing as "authenticated" so the readiness probe stops re-asking
+// the user to sign in after they've already completed the flow.
+//
+// Honors CODEX_HOME, then $HOME/.codex/* and $HOME/.openai/codex/*
+// (the latter is what the OpenAI CLI defaults to when codex is
+// installed as part of the unified `openai` Python package).
+func codexAuthCandidatePaths() []string {
+	out := []string{}
+	add := func(parent string) {
+		if parent == "" {
+			return
+		}
+		out = append(out,
+			filepath.Join(parent, "auth.json"),
+			filepath.Join(parent, "credentials.json"),
+			filepath.Join(parent, "session.json"),
+			filepath.Join(parent, "sessions"),
+		)
+	}
+	if dir := strings.TrimSpace(os.Getenv("CODEX_HOME")); dir != "" {
+		add(dir)
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		add(filepath.Join(home, ".codex"))
+		add(filepath.Join(home, ".openai", "codex"))
+		add(filepath.Join(home, ".config", "codex"))
+	}
+	// De-dup while preserving order so the AuthSource we report is the
+	// first match the user is most likely to recognise.
+	seen := map[string]bool{}
+	dedup := make([]string, 0, len(out))
+	for _, p := range out {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		dedup = append(dedup, p)
+	}
+	return dedup
+}
+
+func detectOpenCodeStatus(workDir string) RunnerRuntimeStatus {
+	status := RunnerRuntimeStatus{Ready: true}
+	authPath, authText := readFirstExistingFile(openCodeAuthPaths())
+	cfgPath, cfgText := readFirstExistingFile(openCodeConfigPaths(workDir))
+	cfg := loadOpenCodeConfigMapText(cfgText)
+	providers := openCodeRuntimeProviders(cfg)
+
+	authLower := strings.ToLower(authText)
+	cfgLower := strings.ToLower(cfgText)
+	openAIValue, _ := hostSecretValue("OPENAI_API_KEY")
+	glmValue, glmSource := hostSecretValue("GLM_API_KEY")
+	anthropicValue, _ := hostSecretValue("ANTHROPIC_API_KEY")
+
+	hasOpenAIOAuth := strings.Contains(authLower, "openai")
+	hasAnthropicOAuth := strings.Contains(authLower, "anthropic")
+	hasOpenAIAPI := openAIValue != ""
+	hasGLMAPI := glmValue != ""
+	hasAnthropicAPI := anthropicValue != ""
+	hasLocalProvider := false
+	hasConfiguredProvider := false
+	for _, p := range providers {
+		id := normalizeOpenCodeProvider(p.ID)
+		baseLower := strings.ToLower(strings.TrimSpace(p.BaseURL))
+		if p.HasAPIKey || strings.TrimSpace(p.BaseURL) != "" {
+			hasConfiguredProvider = true
+		}
+		if id == "openai" && (p.HasAPIKey || openAIValue != "") {
+			hasOpenAIAPI = true
+		}
+		if (id == "glm" || id == "zai" || id == "z-ai") && (p.HasAPIKey || glmValue != "") {
+			hasGLMAPI = true
+		}
+		if id == "anthropic" && (p.HasAPIKey || anthropicValue != "") {
+			hasAnthropicAPI = true
+		}
+		if id == "ollama" || id == "lmstudio" || id == "llama.cpp" {
+			hasLocalProvider = hasLocalProvider || p.HasAPIKey || strings.TrimSpace(p.BaseURL) != ""
+		}
+		if strings.Contains(baseLower, ":11434") || strings.Contains(baseLower, ":1234") {
+			hasLocalProvider = true
+		}
+	}
+	if !hasOpenAIAPI {
+		hasOpenAIAPI = strings.Contains(cfgLower, "openai_api_key")
+	}
+	if !hasGLMAPI {
+		hasGLMAPI = strings.Contains(cfgLower, "glm_api_key") ||
+			strings.Contains(cfgLower, "zai_api_key") ||
+			strings.Contains(cfgLower, "\"glm\"") ||
+			strings.Contains(cfgLower, "\"z-ai\"") ||
+			strings.Contains(cfgLower, "\"zai\"")
+	}
+	if !hasAnthropicAPI {
+		hasAnthropicAPI = strings.Contains(cfgLower, "anthropic_api_key")
+	}
+	if !hasLocalProvider {
+		hasLocalProvider = strings.Contains(cfgLower, "ollama") ||
+			strings.Contains(cfgLower, "lmstudio") ||
+			strings.Contains(cfgLower, "llama.cpp") ||
+			strings.Contains(cfgLower, "localhost:11434") ||
+			strings.Contains(cfgLower, "127.0.0.1:11434") ||
+			strings.Contains(cfgLower, "127.0.0.1:1234")
+	}
+
+	// Anthropic explicitly forbids third-party apps from routing Claude.ai
+	// subscription OAuth credentials on behalf of users. If OpenCode is the
+	// only detected auth source and it points at Anthropic, make the dev use
+	// Yaver's direct Claude Code integration instead.
+	if hasAnthropicOAuth && !hasAnthropicAPI && !hasOpenAIOAuth && !hasOpenAIAPI && !hasLocalProvider {
+		status.Ready = false
+		status.AuthConfigured = true
+		status.AuthSource = authPath
+		status.Error = "OpenCode appears to be configured with Anthropic OAuth credentials. Anthropic does not allow third-party wrappers to route Claude.ai login on behalf of users. Use Yaver's direct `claude` runner instead, or configure OpenCode with an Anthropic API key."
+		return status
+	}
+
+	switch {
+	case hasOpenAIOAuth:
+		status.AuthConfigured = true
+		status.AuthSource = authPath
+	case hasOpenAIAPI:
+		status.AuthConfigured = true
+		status.AuthSource = "OpenAI API key"
+	case hasGLMAPI:
+		status.AuthConfigured = true
+		if glmSource != "" {
+			status.AuthSource = glmSource
+		} else {
+			status.AuthSource = "GLM API key"
+		}
+	case hasAnthropicAPI:
+		status.AuthConfigured = true
+		status.AuthSource = "Anthropic API key"
+	case hasLocalProvider:
+		status.AuthConfigured = true
+		status.AuthSource = "local provider config"
+	case hasConfiguredProvider:
+		status.AuthConfigured = true
+		if cfgPath != "" {
+			status.AuthSource = cfgPath
+		} else {
+			status.AuthSource = "provider config"
+		}
+	case strings.TrimSpace(authText) != "":
+		status.AuthConfigured = true
+		status.AuthSource = authPath
+	case strings.TrimSpace(cfgText) != "":
+		status.Warning = "OpenCode config found but no explicit auth was detected; environment-based providers may still work."
+	default:
+		status.Warning = "OpenCode auth was not detected. If tasks fail, run `opencode auth list` or `/connect`."
+	}
+
+	// Presence of *a* key doesn't mean the *configured model's* provider has
+	// one. OpenCode runs `opencode run` with no --model, so it uses the model
+	// from opencode.json — and if that model points at a provider with no key
+	// (the classic "model = zai-coding-plan/glm-4.7 but no GLM key" case), the
+	// task dies deep inside opencode with a cryptic "Unexpected server error …
+	// ref: err_XXXX". Catch it here so the runner honestly reports "needs
+	// configuration" up front instead of looking ready and then failing a task.
+	if problem := openCodeConfiguredModelProblem(
+		cfg, providers, hasOpenAIAPI, hasOpenAIOAuth, hasGLMAPI, hasAnthropicAPI, hasLocalProvider,
+	); problem != "" {
+		status.Ready = false
+		status.Error = problem
+	}
+	return status
+}
+
+// openCodeConfiguredModelProblem returns a human-actionable message when
+// opencode.json pins a default model whose provider has no usable API key on
+// this machine, "" when the configured model looks runnable (or when no
+// explicit model is set, in which case opencode picks its own default and we
+// can't second-guess it). This is the functional check `detectOpenCodeStatus`'s
+// presence heuristics miss — it's what turns "opencode ready" into "opencode
+// needs a GLM key" before a doomed task is dispatched.
+func openCodeConfiguredModelProblem(
+	cfg map[string]any,
+	providers []openCodeRuntimeProvider,
+	hasOpenAIAPI, hasOpenAIOAuth, hasGLMAPI, hasAnthropicAPI, hasLocalProvider bool,
+) string {
+	// `opencode run` uses the default agent's model, then the top-level model.
+	defaultAgent, _ := stringFromMap(cfg, "default_agent")
+	if strings.TrimSpace(defaultAgent) == "" {
+		defaultAgent = "build"
+	}
+	effModel := strings.TrimSpace(openCodeAgentModel(cfg, defaultAgent))
+	if effModel == "" {
+		effModel, _ = stringFromMap(cfg, "model")
+		effModel = strings.TrimSpace(effModel)
+	}
+	if effModel == "" {
+		return "" // no explicit model — opencode resolves its own default.
+	}
+	parts := strings.SplitN(effModel, "/", 2)
+	if len(parts) < 2 || strings.TrimSpace(parts[0]) == "" {
+		return "" // bare model id, provider implicit — don't guess.
+	}
+	providerID := normalizeOpenCodeProvider(parts[0])
+
+	authKeys := openCodeAuthProviderKeySet()
+	providerHasKey := func(id string) bool {
+		for _, p := range providers {
+			if normalizeOpenCodeProvider(p.ID) == id && p.HasAPIKey {
+				return true
+			}
+		}
+		return authKeys[id] || authKeys[parts[0]]
+	}
+	providerHasBaseURL := func(id string) bool {
+		for _, p := range providers {
+			if normalizeOpenCodeProvider(p.ID) == id && strings.TrimSpace(p.BaseURL) != "" {
+				return true
+			}
+		}
+		return false
+	}
+
+	usable := false
+	switch providerID {
+	case "openai":
+		usable = hasOpenAIAPI || hasOpenAIOAuth || providerHasKey("openai")
+	case "anthropic":
+		usable = hasAnthropicAPI || providerHasKey("anthropic")
+	case "glm", "zai", "z-ai", "zai-coding-plan", "zhipu":
+		usable = hasGLMAPI || providerHasKey(providerID) ||
+			authKeys["zai-coding-plan"] || authKeys["glm"] || authKeys["zai"] || authKeys["z-ai"]
+	case "ollama", "lmstudio", "llama.cpp":
+		usable = true // local providers need no API key.
+	default:
+		// Unknown/custom provider: trust it if it carries a key, or a baseURL
+		// (which usually implies a keyless local/self-hosted endpoint).
+		usable = providerHasKey(providerID) || providerHasBaseURL(providerID)
+	}
+	if usable {
+		return ""
+	}
+	return fmt.Sprintf(
+		"OpenCode's default model %q uses provider %q, which has no API key on this machine. "+
+			"Add a key for %q in OpenCode settings — or pick a model whose provider is already configured.",
+		effModel, providerID, providerID,
+	)
+}
+
+type openCodeRuntimeProvider struct {
+	ID        string
+	BaseURL   string
+	HasAPIKey bool
+}
+
+func loadOpenCodeConfigMapText(raw string) map[string]any {
+	clean := stripJSONC([]byte(raw))
+	if strings.TrimSpace(string(clean)) == "" {
+		return map[string]any{}
+	}
+	cfg := map[string]any{}
+	if err := json.Unmarshal(clean, &cfg); err != nil {
+		return map[string]any{}
+	}
+	return cfg
+}
+
+func openCodeRuntimeProviders(cfg map[string]any) []openCodeRuntimeProvider {
+	node, _ := cfg["provider"].(map[string]any)
+	if len(node) == 0 {
+		return nil
+	}
+	out := make([]openCodeRuntimeProvider, 0, len(node))
+	for id, raw := range node {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		options, _ := entry["options"].(map[string]any)
+		baseURL, _ := stringFromMap(options, "baseURL")
+		if strings.TrimSpace(baseURL) == "" {
+			baseURL, _ = stringFromMap(options, "baseUrl")
+		}
+		apiKey, _ := stringFromMap(options, "apiKey")
+		out = append(out, openCodeRuntimeProvider{
+			ID:        strings.TrimSpace(id),
+			BaseURL:   strings.TrimSpace(baseURL),
+			HasAPIKey: strings.TrimSpace(apiKey) != "",
+		})
+	}
+	return out
+}
+
+func openCodeAuthPaths() []string {
+	var out []string
+	if dir := strings.TrimSpace(os.Getenv("OPENCODE_DATA_DIR")); dir != "" {
+		out = append(out, filepath.Join(dir, "auth.json"))
+	}
+	if xdg := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdg != "" {
+		out = append(out, filepath.Join(xdg, "opencode", "auth.json"))
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		out = append(out,
+			filepath.Join(home, ".local", "share", "opencode", "auth.json"),
+			filepath.Join(home, ".opencode", "auth.json"),
+		)
+	}
+	return uniqStrings(out)
+}
+
+func openCodeConfigPaths(workDir string) []string {
+	var out []string
+	if workDir != "" {
+		out = append(out,
+			filepath.Join(workDir, "opencode.json"),
+			filepath.Join(workDir, "opencode.jsonc"),
+			filepath.Join(workDir, ".opencode", "opencode.json"),
+			filepath.Join(workDir, ".opencode", "opencode.jsonc"),
+		)
+	}
+	if dir := strings.TrimSpace(os.Getenv("OPENCODE_CONFIG_DIR")); dir != "" {
+		out = append(out,
+			filepath.Join(dir, "opencode.json"),
+			filepath.Join(dir, "opencode.jsonc"),
+		)
+	}
+	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+		out = append(out,
+			filepath.Join(xdg, "opencode", "opencode.json"),
+			filepath.Join(xdg, "opencode", "opencode.jsonc"),
+		)
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		out = append(out,
+			filepath.Join(home, ".config", "opencode", "opencode.json"),
+			filepath.Join(home, ".config", "opencode", "opencode.jsonc"),
+			filepath.Join(home, ".opencode.json"),
+			filepath.Join(home, ".opencode.jsonc"),
+		)
+	}
+	return uniqStrings(out)
+}
+
+func readFirstExistingFile(paths []string) (string, string) {
+	for _, path := range paths {
+		if !runnerFileExists(path) {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return path, string(data)
+		}
+	}
+	return "", ""
+}
+
+func runnerFileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func uniqStrings(in []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// applyLiveRunnerAuthProbe re-answers a runner's auth question from scratch,
+// bypassing every cache. `/runner-auth/status?live=1` uses it before a caller
+// commits to an expensive, hard-to-undo action (opening a remote TUI) where a
+// 60-second-stale "signed in" would strand the user on a login screen.
+//
+// It costs a `claude auth status` fork and zero API tokens. It deliberately
+// does NOT send a probe prompt through the model: `claude --print` is headless
+// mode, which this project does not run.
+func applyLiveRunnerAuthProbe(rows []runnerAuthStatusRow, runner string) []runnerAuthStatusRow {
+	if normalizeRunnerID(runner) == "" {
+		runner = "claude"
+	}
+	if normalizeRunnerID(runner) != "claude" {
+		return rows // only Claude Code exposes a free, authoritative auth probe
+	}
+	invalidateClaudeAuthStatusCache()
+	for i := range rows {
+		if normalizeRunnerID(rows[i].ID) != "claude" || !rows[i].Installed {
+			continue
+		}
+		// DetectRunnerRuntimeStatus, NOT detectClaudeStatus.
+		//
+		// This used to call detectClaudeStatus directly and then, on a positive
+		// answer, `ClearRunnerAuthInvalid("claude")` — i.e. a LOCAL probe was
+		// allowed to overturn an OBSERVED PROVIDER REJECTION. That inverts the
+		// evidence order and it is exactly how the 2026-07-27 incident would
+		// have survived the fix: a PTY sees `401 OAuth access token has been
+		// revoked`, marks the runner invalid, and the very next `?live=1` poll
+		// asks `claude auth status`, gets loggedIn:true off the same dead
+		// token, and clears the mark. Green again, within seconds, forever.
+		//
+		// A local store cannot see a server-side revocation, so it may never
+		// vote against one. Going through DetectRunnerRuntimeStatus keeps the
+		// rejection override applied; only a real sign-in clears it.
+		fresh := DetectRunnerRuntimeStatus(GetRunnerConfig("claude"), "")
+		rows[i].Ready = fresh.Ready
+		rows[i].AuthConfigured = fresh.AuthConfigured
+		rows[i].AuthPresent = fresh.AuthPresent
+		rows[i].AuthVerified = fresh.AuthVerified
+		rows[i].AuthSource = fresh.AuthSource
+		rows[i].Warning = fresh.Warning
+		rows[i].Error = fresh.Error
+		if detail := firstNonEmptyBrowserAuth(fresh.Error, fresh.Warning); detail != "" {
+			rows[i].Detail = detail
+		}
+	}
+	return rows
+}

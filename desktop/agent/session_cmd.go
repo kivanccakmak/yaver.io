@@ -1,0 +1,401 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	osexec "os/exec"
+	"strings"
+	"time"
+)
+
+func runSession(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage:")
+		fmt.Println("  yaver session list                         List transferable sessions")
+		fmt.Println("  yaver session transfer <taskId> --to <device>  Transfer to another device")
+		fmt.Println("  yaver session export <taskId> [--output file]  Export to file")
+		fmt.Println("  yaver session import [--input file]            Import from file")
+		os.Exit(0)
+	}
+
+	switch args[0] {
+	case "list":
+		sessionList()
+	case "transfer":
+		sessionTransfer(args[1:])
+	case "export":
+		sessionExport(args[1:])
+	case "import":
+		sessionImportCmd(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown session subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func sessionList() {
+	resp, err := localAgentRequest("GET", "/session/list", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	sessions, _ := resp["sessions"].([]interface{})
+	if len(sessions) == 0 {
+		fmt.Println("No transferable sessions found.")
+		return
+	}
+
+	fmt.Printf("%-10s %-10s %-40s %-10s %-6s %s\n", "TASK ID", "AGENT", "TITLE", "STATUS", "TURNS", "RESUMABLE")
+	fmt.Println(strings.Repeat("-", 90))
+	for _, s := range sessions {
+		sess := s.(map[string]interface{})
+		taskID := sess["taskId"].(string)
+		if len(taskID) > 8 {
+			taskID = taskID[:8]
+		}
+		title := sess["title"].(string)
+		if len(title) > 38 {
+			title = title[:38] + ".."
+		}
+		resumable := "no"
+		if r, ok := sess["resumable"].(bool); ok && r {
+			resumable = "yes"
+		}
+		turns := 0
+		if t, ok := sess["turns"].(float64); ok {
+			turns = int(t)
+		}
+		fmt.Printf("%-10s %-10s %-40s %-10s %-6d %s\n",
+			taskID, sess["agentType"], title, sess["status"], turns, resumable)
+	}
+}
+
+func sessionTransfer(args []string) {
+	fs := flag.NewFlagSet("transfer", flag.ExitOnError)
+	toDevice := fs.String("to", "", "Target device ID or hostname prefix")
+	includeWorkspace := fs.Bool("workspace", false, "Include workspace files")
+	workspaceMode := fs.String("mode", "git", "Workspace mode: none, git, tar")
+	fs.Parse(args)
+
+	if fs.NArg() == 0 || *toDevice == "" {
+		fmt.Fprintln(os.Stderr, "Usage: yaver session transfer <taskId> --to <device> [--workspace] [--mode git|tar|none]")
+		os.Exit(1)
+	}
+	taskID := fs.Arg(0)
+
+	cfg := mustLoadAuthConfig()
+
+	// Export from local agent
+	fmt.Println("Exporting session...")
+	exportResp, err := localAgentRequest("POST", "/session/export", map[string]interface{}{
+		"taskId":           taskID,
+		"includeWorkspace": *includeWorkspace,
+		"workspaceMode":    *workspaceMode,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Export failed: %v\n", err)
+		os.Exit(1)
+	}
+	if exportResp["ok"] != true {
+		fmt.Fprintf(os.Stderr, "Export failed: %v\n", exportResp["error"])
+		os.Exit(1)
+	}
+
+	bundle := exportResp["bundle"]
+	bundleJSON, _ := json.Marshal(bundle)
+	fmt.Printf("Exported session (%d bytes)\n", len(bundleJSON))
+
+	// Resolve target device
+	targetURL := resolveDeviceURL(cfg, *toDevice, true)
+
+	// Import to target
+	fmt.Printf("Transferring to %s...\n", *toDevice)
+	importBody, _ := json.Marshal(map[string]interface{}{
+		"bundle":   bundle,
+		"gitClone": *workspaceMode == "git",
+	})
+
+	req, _ := http.NewRequest("POST", targetURL+"/session/import", strings.NewReader(string(importBody)))
+	req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Transfer failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	var importResp map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&importResp)
+
+	if importResp["ok"] != true {
+		fmt.Fprintf(os.Stderr, "Import failed: %v\n", importResp["error"])
+		os.Exit(1)
+	}
+
+	fmt.Printf("Transfer complete! Task ID on target: %s\n", importResp["taskId"])
+	if warnings, ok := importResp["warnings"].([]interface{}); ok && len(warnings) > 0 {
+		fmt.Println("Warnings:")
+		for _, w := range warnings {
+			fmt.Printf("  - %s\n", w)
+		}
+	}
+}
+
+func sessionExport(args []string) {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	output := fs.String("output", "", "Output file (default: stdout)")
+	includeWorkspace := fs.Bool("workspace", false, "Include workspace files")
+	workspaceMode := fs.String("mode", "git", "Workspace mode: none, git, tar")
+	fs.Parse(args)
+
+	if fs.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: yaver session export <taskId> [--output file] [--workspace] [--mode git|tar|none]")
+		os.Exit(1)
+	}
+	taskID := fs.Arg(0)
+
+	resp, err := localAgentRequest("POST", "/session/export", map[string]interface{}{
+		"taskId":           taskID,
+		"includeWorkspace": *includeWorkspace,
+		"workspaceMode":    *workspaceMode,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if resp["ok"] != true {
+		fmt.Fprintf(os.Stderr, "Export failed: %v\n", resp["error"])
+		os.Exit(1)
+	}
+
+	data, _ := json.MarshalIndent(resp["bundle"], "", "  ")
+
+	if *output != "" {
+		if err := os.WriteFile(*output, data, 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Write error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Exported to %s (%d bytes)\n", *output, len(data))
+	} else {
+		fmt.Println(string(data))
+	}
+}
+
+func sessionImportCmd(args []string) {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	input := fs.String("input", "", "Input file (default: stdin)")
+	workDir := fs.String("work-dir", "", "Target working directory")
+	gitClone := fs.Bool("git-clone", false, "Clone git repo from bundle")
+	fs.Parse(args)
+
+	var data []byte
+	var err error
+	if *input != "" {
+		data, err = os.ReadFile(*input)
+	} else {
+		data, err = io.ReadAll(os.Stdin)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Read error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var bundle interface{}
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid JSON: %v\n", err)
+		os.Exit(1)
+	}
+
+	resp, err := localAgentRequest("POST", "/session/import", map[string]interface{}{
+		"bundle":   bundle,
+		"workDir":  *workDir,
+		"gitClone": *gitClone,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Import error: %v\n", err)
+		os.Exit(1)
+	}
+	if resp["ok"] != true {
+		fmt.Fprintf(os.Stderr, "Import failed: %v\n", resp["error"])
+		os.Exit(1)
+	}
+
+	fmt.Printf("Imported! Task ID: %s\n", resp["taskId"])
+	if warnings, ok := resp["warnings"].([]interface{}); ok && len(warnings) > 0 {
+		fmt.Println("Warnings:")
+		for _, w := range warnings {
+			fmt.Printf("  - %s\n", w)
+		}
+	}
+}
+
+// localAgentRequest makes an HTTP request to the local agent.
+// If the daemon is unreachable, it transparently spawns `yaver serve`
+// in the background, waits for it to come up, and retries once. This
+// keeps `yaver autodev` / `yaver loop` etc. self-healing.
+func localAgentRequest(method, path string, body map[string]interface{}) (map[string]interface{}, error) {
+	return localAgentRequestAuth(method, path, body, true)
+}
+
+// localAgentRequestLocal is for purely-local operations (builds) the daemon
+// serves to loopback callers without requiring cloud sign-in. It sends the
+// auth token when one exists but never refuses on a missing/empty token, so
+// `yaver build aab|ios|status|list` work whether or not the CLI is signed in.
+func localAgentRequestLocal(method, path string, body map[string]interface{}) (map[string]interface{}, error) {
+	return localAgentRequestAuth(method, path, body, false)
+}
+
+func localAgentRequestAuth(method, path string, body map[string]interface{}, requireAuth bool) (map[string]interface{}, error) {
+	cfg, err := LoadConfig()
+	if requireAuth && (err != nil || cfg == nil || cfg.AuthToken == "") {
+		return nil, fmt.Errorf("not authenticated — run 'yaver auth'")
+	}
+	authToken := ""
+	if cfg != nil {
+		authToken = cfg.AuthToken
+	}
+	baseURL := localAgentBaseURL()
+
+	doOnce := func() (map[string]interface{}, error, bool) {
+		var bodyReader io.Reader
+		if body != nil {
+			data, _ := json.Marshal(body)
+			bodyReader = strings.NewReader(string(data))
+		}
+		req, err := http.NewRequest(method, baseURL+path, bodyReader)
+		if err != nil {
+			return nil, err, false
+		}
+		if authToken != "" {
+			req.Header.Set("Authorization", "Bearer "+authToken)
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err, true // transport-level failure → eligible for retry
+		}
+		defer resp.Body.Close()
+		raw, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, readErr, false
+		}
+		var result map[string]interface{}
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &result); err != nil {
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					return nil, fmt.Errorf("invalid JSON response from local agent for %s %s (status %d)", method, path, resp.StatusCode), false
+				}
+				return nil, fmt.Errorf("local agent returned status %d for %s %s", resp.StatusCode, method, path), false
+			}
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if err := decodeCloudWorkspaceRequiredError(resp.StatusCode, raw); err != nil {
+				return nil, err, false
+			}
+			msg := strings.TrimSpace(string(raw))
+			if errMsg, ok := result["error"].(string); ok && strings.TrimSpace(errMsg) != "" {
+				msg = strings.TrimSpace(errMsg)
+			}
+			if msg == "" {
+				msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			}
+			// A refusal that came with a ROUTE gets promoted to a typed error.
+			// This one line is why the CLI could not see a capability gap: the
+			// body was fully parsed right here and everything except `error`
+			// was dropped on the floor, so `yaver dev start` printed a flat
+			// sentence over a `POST /install/flutter` the phone rendered as a
+			// button. Wrapping, not replacing — `%v` on this error still
+			// prints exactly the message it always did.
+			if err := decodeCapabilityGapError(raw, msg); err != nil {
+				return nil, err, false
+			}
+			return nil, fmt.Errorf("%s", msg), false
+		}
+		return result, nil, false
+	}
+
+	if result, err, retriable := doOnce(); err == nil {
+		return result, nil
+	} else if !retriable {
+		return nil, err
+	}
+
+	// Daemon looks dead. Try to bring it back up transparently.
+	if err := ensureDaemonAlive(); err != nil {
+		return nil, fmt.Errorf("agent not reachable and auto-start failed: %v", err)
+	}
+	if result, err, retriable := doOnce(); err == nil {
+		return result, nil
+	} else if retriable {
+		// Still a transport-level failure — the daemon really is unreachable.
+		return nil, fmt.Errorf("agent not reachable: %v", err)
+	} else {
+		// The daemon answered with an HTTP error (e.g. 403 "invalid token").
+		// Surface it verbatim instead of mislabeling it as unreachable.
+		return nil, err
+	}
+}
+
+// ensureDaemonAlive spawns `yaver serve` in the background if the
+// daemon isn't responding to /health, then polls until it comes up
+// (max ~10s). Returns nil once the daemon answers, or an error if it
+// never does.
+func ensureDaemonAlive() error {
+	healthClient := &http.Client{Timeout: 800 * time.Millisecond}
+	baseURL := localAgentBaseURL()
+	probe := func() bool {
+		resp, err := healthClient.Get(baseURL + "/health")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode < 500
+	}
+	if probe() {
+		return nil
+	}
+
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot locate yaver binary: %v", err)
+	}
+	cmd := osexec.Command(execPath, "serve")
+	// Detach: don't inherit stdio so the child survives this CLI invocation.
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("spawn `yaver serve`: %v", err)
+	}
+	// Don't Wait — let the daemon parent exit on its own after forking.
+	go func() { _ = cmd.Wait() }()
+
+	fmt.Fprintln(os.Stderr, "[yaver] daemon was down, restarting…")
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if probe() {
+			fmt.Fprintln(os.Stderr, "[yaver] daemon ready.")
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("daemon did not come up within 10s (see ~/.yaver/agent.log)")
+}
+
+func localAgentBaseURL() string {
+	if port := int(currentLocalAgentPort.Load()); port > 0 {
+		return fmt.Sprintf("http://127.0.0.1:%d", port)
+	}
+	return "http://127.0.0.1:18080"
+}

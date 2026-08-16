@@ -1,0 +1,136 @@
+# XcodeGen spec for the YaverVision visionOS app. Generate with:
+#   cd visionos && xcodegen generate
+# Keeps the .xcodeproj reproducible + out of git (see visionos/.gitignore) — edit
+# this spec, not the project. Mirrors tvos/project.yml. See visionos/README.md.
+name: YaverVision
+options:
+  deploymentTarget:
+    visionOS: "2.0"
+  createIntermediateGroups: true
+  minimumXcodeGenVersion: "2.40.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"          # match tvOS; avoid Swift 6 concurrency churn
+    DEVELOPMENT_TEAM: "5SJZ4KA39A"
+    TARGETED_DEVICE_FAMILY: "7"   # visionOS
+targets:
+  YaverVision:
+    type: application
+    platform: visionOS
+    deploymentTarget: "2.0"
+    sources:
+      - path: YaverVision
+        excludes:
+          - "Info.plist"
+      # The client layer is SHARED with the tvOS app rather than copied: these
+      # files are pure Foundation/SwiftUI and carry the contract with the agent
+      # (device-code auth + the /ops verbs). Duplicating them is how the two
+      # surfaces would silently drift apart.
+      - path: ../tvos/YaverTV/Backend.swift
+      # Native Sign in with Apple. The headset already holds an Apple ID, so this
+      # is the one path that signs in without a second device — the device-code
+      # flow exists because a TV cannot type, not because it is good.
+      - path: ../tvos/YaverTV/AppleSignIn.swift
+      # In-app OAuth (Google/Microsoft/GitHub/GitLab) on the SAME endpoints the
+      # phone uses. tvOS compiles this to nothing — it has no browser.
+      - path: ../tvos/YaverTV/OAuthSignIn.swift
+      - path: ../tvos/YaverTV/Models.swift
+      - path: ../tvos/YaverTV/AgentClient.swift
+      # Failure classification (capability gaps, scope denials, relay verdicts).
+      # AgentClient references FailureSignals, so leaving this out breaks the
+      # vision build the moment the tvOS client learns a new failure shape —
+      # which is exactly when the headset needs it most.
+      - path: ../tvos/YaverTV/FailureSignals.swift
+      # Account machine list + reachable-address resolution. YaverStore's launch
+      # auto-connect + connectivity self-heal (re-resolve a stale host) call into
+      # MachineRegistry/RegisteredDevice, so the headset needs it too — without it
+      # YaverStore won't compile here. Shared, not copied, so the surfaces don't
+      # drift.
+      - path: ../tvos/YaverTV/MachineRegistry.swift
+      - path: ../tvos/YaverTV/TokenStore.swift
+      - path: ../tvos/YaverTV/YaverStore.swift
+      - path: ../tvos/YaverTV/SessionClient.swift
+      - path: ../tvos/YaverTV/YaverNativeCatalog.swift
+      # The only caller of store.addBox() in the repo. Without it the headset's
+      # "No machine selected" screen was the terminal state of the app — no
+      # picker, no sheet, and no phone-sync to rescue it (boxes are device-local
+      # UserDefaults). Shared, not copied, for the reason above.
+      - path: ../tvos/YaverTV/AddBoxView.swift
+      # The browser-lane preview. visionOS shipped without it, so a headset
+      # could reach a box, list its projects, and had no way to SEE one — while
+      # the audit's own conclusion is that streamed pixels are the PRIMARY
+      # preview route for a headset (it has no React Native container for
+      # Hermes, and no cable for wire-push). Shared with tvOS rather than
+      # copied: both surfaces poll the same /vibing/preview endpoints, and a
+      # second copy would drift the way three relay-auth matchers already have.
+      - path: ../tvos/YaverTV/Views/WebPreviewStreamView.swift
+      # Its dependencies, added because the compiler named them — not guessed.
+      # ProjectsView carries PreviewForm (the phone/tablet/desktop render size)
+      # AND the browse list itself, which a headset needs anyway to pick what to
+      # preview. VibeTurnPanel is the "ask for a change" affordance the preview
+      # offers, and UpdateAgentView is the route its stale-agent path points at —
+      # dropping either would leave a button that goes nowhere, which is the
+      # failure this repo keeps paying for.
+      - path: ../tvos/YaverTV/Views/ProjectsView.swift
+      - path: ../tvos/YaverTV/Views/VibeTurnPanel.swift
+      - path: ../tvos/YaverTV/Views/UpdateAgentView.swift
+      # DroidStreamView is the Android-project branch of ProjectsView's
+      # destination switch. A headset watching a redroid screen is the same
+      # streamed-pixels story as the web preview, so including it costs nothing
+      # and stubbing it out would mean a project row that leads nowhere.
+      - path: ../tvos/YaverTV/Views/DroidStreamView.swift
+      # Framework icon + brand colour for the project rows. Shared so the
+      # headset labels a Flutter project the same way the TV and the phone do.
+      - path: ../tvos/YaverTV/FrameworkStyle.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.yaver.mobile   # universal w/ iPhone + TV (Universal Purchase)
+        PRODUCT_NAME: Yaver
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: "NO"
+        INFOPLIST_FILE: YaverVision/Info.plist
+        CODE_SIGN_ENTITLEMENTS: YaverVision/YaverVision.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
+
+  # UI tests drive the real app in the visionOS simulator against a stub agent
+  # (see YaverVisionUITests/README). They exist because the reload/session work
+  # is all about what the HEADSET does when the backend says something awkward —
+  # "nothing was listening", "no dev server running" — and none of that is
+  # reachable from a Go test or a compile. GENERATE_INFOPLIST_FILE is re-enabled
+  # here: the app target turns it off because it ships a hand-written plist, and
+  # the test bundle has none.
+  YaverVisionUITests:
+    type: bundle.ui-testing
+    platform: visionOS
+    deploymentTarget: "2.0"
+    sources:
+      - path: YaverVisionUITests
+        excludes:
+          - "stubagent/**"   # the fake agent is a Go program, not app source
+          - "README.md"
+          - "Info.plist"     # generated from the `info:` block below
+    dependencies:
+      - target: YaverVision
+    # The test talks to the stub agent over plain HTTP on loopback to flip
+    # scenarios, so it needs the same local-networking exemption the app has.
+    info:
+      path: YaverVisionUITests/Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.yaver.vision.uitests
+        GENERATE_INFOPLIST_FILE: "NO"
+        TEST_TARGET_NAME: YaverVision
+
+schemes:
+  YaverVision:
+    build:
+      targets:
+        YaverVision: all
+        YaverVisionUITests: [test]
+    test:
+      targets:
+        - YaverVisionUITests

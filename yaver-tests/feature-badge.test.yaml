@@ -1,0 +1,24 @@
+# feature-badge — /badge serves the embeddable "Built with Yaver" SVG badge.
+# Route handler: web/app/badge/route.ts (edge). The SVG is the page body, so
+# assert.text reads the SVG text content.
+name: feature-badge
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /badge
+  - sleep_ms: 500
+  - assert.text: Built with Yaver
+  - assert.text: yaver.io
+  - screenshot: true

@@ -1,0 +1,80 @@
+# One-shot fix: install react-native-web + react-dom into sfmg
+# on yaver-test-ephemeral so Expo Web preview can compile.
+name: Install sfmg Web Deps
+
+on:
+  workflow_dispatch:
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: SSH key
+        env:
+          HCLOUD_SSH_PRIVATE_KEY_PATH: ${{ runner.temp }}/hcloud_ssh
+        run: |
+          install -m 600 /dev/stdin "$HCLOUD_SSH_PRIVATE_KEY_PATH" <<'EOF'
+          ${{ secrets.HCLOUD_SSH_PRIVATE_KEY }}
+          EOF
+          echo "HCLOUD_SSH_PRIVATE_KEY_PATH=$HCLOUD_SSH_PRIVATE_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Render install script
+        run: |
+          cat > "$RUNNER_TEMP/install-web.sh" <<'BODY'
+          #!/usr/bin/env bash
+          set -x
+          # Stop the agent's Expo Web sibling so npm install doesn't
+          # clash with watch processes.
+          pkill -f 'expo start --web' || true
+          sleep 2
+          # Stop the dev server gracefully via the agent so the
+          # DevServerManager state cleans up.
+          for cfg in /home/yaver/.yaver/config.json /root/.yaver/config.json; do
+            if [ -f "$cfg" ]; then
+              TOK=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('auth_token',''))" "$cfg")
+              [ -n "$TOK" ] && curl -sS -X POST -H "Authorization: Bearer $TOK" http://127.0.0.1:18080/dev/web-preview/stop 2>&1 | head -3 || true
+              break
+            fi
+          done
+          sleep 1
+
+          # Run install as the yaver user
+          su -l yaver -c "$(cat <<'INNER'
+          set -x
+          cd /home/yaver/Workspace/sfmg || exit 1
+          export PATH=/home/yaver/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+          echo "[install] === starting in $(pwd) ==="
+          which npm node npx
+          echo
+          echo "[install] === before: package.json web deps ==="
+          grep -E '"react-native-web"|"react-dom"|"@expo/metro-runtime"' package.json || echo "(none of the three present)"
+          echo
+          echo "[install] === npm install ==="
+          npm install --save \
+            react-native-web@~0.21.0 \
+            react-dom@^19.0.0 \
+            @expo/metro-runtime@~6.1.0 \
+            --legacy-peer-deps 2>&1 | tail -30
+          NPM_EXIT=$?
+          echo "[install] npm install exit=$NPM_EXIT"
+          echo
+          echo "[install] === after: package.json web deps ==="
+          grep -E '"react-native-web"|"react-dom"|"@expo/metro-runtime"' package.json || echo "(STILL none of the three present)"
+          echo
+          echo "[install] === try expo --web 25s sample ==="
+          timeout 25 npx expo start --web --port 19006 2>&1 | head -40 || true
+          echo "[install] === DONE ==="
+          INNER
+          )"
+          BODY
+          chmod +x "$RUNNER_TEMP/install-web.sh"
+
+      - name: Run on box
+        env:
+          HETZNER_TEST_SERVER_IP: ${{ secrets.HETZNER_TEST_SERVER_IP }}
+        run: |
+          scp -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              "$RUNNER_TEMP/install-web.sh" "root@$HETZNER_TEST_SERVER_IP:/tmp/install-web.sh"
+          ssh -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              "root@$HETZNER_TEST_SERVER_IP" "bash /tmp/install-web.sh && rm -f /tmp/install-web.sh"

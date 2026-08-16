@@ -1,0 +1,169 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - "installer/v*"
+
+# Only repo owner can push tags (configure tag protection rules in GitHub).
+# Release/deploy jobs require the "production" environment (configure required reviewers in GitHub).
+
+concurrency:
+  group: release-installer
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and validate version
+        id: version
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/installer/v}"
+          JSON_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('versions.json','utf8')).installer)")
+          if [ "$TAG_VERSION" != "$JSON_VERSION" ]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match versions.json ($JSON_VERSION)"
+            exit 1
+          fi
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $TAG_VERSION"
+
+  build-mac:
+    needs: validate
+    strategy:
+      matrix:
+        arch: [arm64, x64]
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: cd desktop/installer && npm ci
+
+      - name: Build macOS (${{ matrix.arch }})
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          cd desktop/installer
+          npx electron-builder --mac --${{ matrix.arch }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-mac-${{ matrix.arch }}
+          path: |
+            desktop/installer/dist/*.dmg
+            desktop/installer/dist/*.zip
+          retention-days: 7
+
+  build-linux:
+    needs: validate
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: cd desktop/installer && npm ci
+
+      - name: Build Linux (${{ matrix.arch }})
+        run: |
+          cd desktop/installer
+          npx electron-builder --linux --${{ matrix.arch }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux-${{ matrix.arch }}
+          path: |
+            desktop/installer/dist/*.deb
+            desktop/installer/dist/*.AppImage
+          retention-days: 7
+
+  build-windows:
+    needs: validate
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: cd desktop/installer && npm ci
+
+      - name: Build Windows (unsigned)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          cd desktop/installer
+          npx electron-builder --win --x64
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-windows-x64
+          path: |
+            desktop/installer/dist/*.exe
+          retention-days: 7
+
+  release:
+    needs: [validate, build-mac, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: installer-*
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.deb" -o -name "*.AppImage" \) -exec cp {} release/ \;
+          cd release
+          sha256sum * > checksums.txt
+          echo "Release files:"
+          ls -la
+
+      - name: Create draft GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "installer/v${VERSION}" \
+            --title "Yaver Desktop v${VERSION}" \
+            --draft \
+            --generate-notes \
+            release/*
+
+          echo "Draft release created: installer/v${VERSION}"
+          echo "Windows installer is unsigned — sign with SimplySign before publishing."

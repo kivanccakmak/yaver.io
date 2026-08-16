@@ -1,0 +1,23 @@
+# feature-support — /support: Yaver Remote Support console (agent URL + code
+# redemption). Header + instructions are SSR'd.
+name: feature-support
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /support
+  - wait_for: h1
+  - assert.text: Yaver Remote Support
+  - assert.text: 6-character code
+  - screenshot: true

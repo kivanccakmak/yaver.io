@@ -1,0 +1,23 @@
+# feature-blog-yaver-sandbox-slim — blog post: distroless Docker image with
+# three coding agents.
+name: feature-blog-yaver-sandbox-slim
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /blog/yaver-sandbox-slim
+  - wait_for: h1
+  - assert.text: yaver-sandbox-slim
+  - assert.text: distroless
+  - screenshot: true

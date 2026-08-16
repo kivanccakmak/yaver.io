@@ -1,0 +1,346 @@
+name: Publish SDKs
+
+on:
+  # NOTE: `release: published` was removed — it auto-fired on EVERY GitHub
+  # release (cli/v*, mobile/v*, …), then blanket-republished all SDK
+  # packages at unchanged versions and ran the yaver-mobile-headless
+  # typecheck, so it failed on every release (v1.99.245, v1.99.246, …).
+  # SDK publishing is now intentional-only via workflow_dispatch, with
+  # per-package booleans — which is the path that actually works.
+  workflow_dispatch:
+    inputs:
+      publish_js:
+        description: "Publish npm package yaver-sdk"
+        required: false
+        type: boolean
+        default: true
+      publish_python:
+        description: "Publish PyPI package yaver"
+        required: false
+        type: boolean
+        default: true
+      publish_flutter_core:
+        description: "Publish pub.dev package yaver"
+        required: false
+        type: boolean
+        default: true
+      publish_feedback_rn:
+        description: "Publish npm package yaver-feedback-react-native"
+        required: false
+        type: boolean
+        default: true
+      publish_feedback_web:
+        description: "Publish npm package yaver-feedback-web"
+        required: false
+        type: boolean
+        default: true
+      publish_feedback_flutter:
+        description: "Publish pub.dev package yaver_feedback"
+        required: false
+        type: boolean
+        default: true
+      publish_mobile_headless:
+        description: "Publish npm package yaver-mobile-headless"
+        required: false
+        type: boolean
+        default: true
+      publish_web_headless:
+        description: "Publish npm package yaver-web-headless"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  # write needed by the C-lib build
+  # which `gh release upload` artifacts onto the release tag.
+  # Without this the upload step fails with HTTP 403:
+  # "Resource not accessible by integration".
+  contents: write
+
+jobs:
+  publish-npm:
+    if: ${{ github.event_name == 'release' || inputs.publish_js }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Build JS/TS SDK
+        run: |
+          cd sdk/js
+          npm ci
+          npx tsc
+
+      - name: Publish to npm
+        run: |
+          cd sdk/js
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-pypi:
+    if: ${{ github.event_name == 'release' || inputs.publish_python }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Python SDK
+        run: |
+          pip install build twine
+          cd sdk/python
+          python -m build
+
+      - name: Publish to PyPI
+        run: |
+          cd sdk/python
+          python -m twine upload dist/* --non-interactive
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+
+  build-clib:
+    if: ${{ github.event_name == 'release' || inputs.publish_js || inputs.publish_python || inputs.publish_flutter_core || inputs.publish_feedback_rn || inputs.publish_feedback_web || inputs.publish_feedback_flutter }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: so
+          - goos: linux
+            goarch: arm64
+            ext: so
+          - goos: darwin
+            goarch: arm64
+            ext: dylib
+          - goos: darwin
+            goarch: amd64
+            ext: dylib
+          - goos: windows
+            goarch: amd64
+            ext: dll
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build C shared library
+        run: |
+          cd sdk/go/clib
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -buildmode=c-shared -o libyaver-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }} .
+        # Note: cross-compiling CGO requires a cross-compiler toolchain
+        # This will only succeed for the native platform on ubuntu-latest (linux/amd64)
+        continue-on-error: true
+
+      - name: Upload to release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd sdk/go/clib
+          for f in libyaver-*; do
+            [ -f "$f" ] && gh release upload ${{ github.event.release.tag_name }} "$f" --repo ${{ github.repository }} || true
+          done
+
+  publish-feedback-rn:
+    if: ${{ github.event_name == 'release' || inputs.publish_feedback_rn }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: |
+          cd sdk/feedback/react-native
+          npm install --no-audit --no-fund
+
+      - name: Publish yaver-feedback-react-native to npm
+        run: |
+          cd sdk/feedback/react-native
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-feedback-web:
+    if: ${{ github.event_name == 'release' || inputs.publish_feedback_web }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish @yaver/feedback-web to npm
+        run: |
+          cd sdk/feedback/web
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-mobile-headless:
+    if: ${{ github.event_name == 'release' || inputs.publish_mobile_headless }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        working-directory: mobile-headless
+        run: bun install
+
+      - name: Typecheck + tests
+        working-directory: mobile-headless
+        run: |
+          bun run typecheck
+          bun test test/hermetic.test.ts test/drift.test.ts test/mcp.test.ts
+
+      - name: Publish yaver-mobile-headless to npm
+        working-directory: mobile-headless
+        # `npm publish` runs the prepublishOnly script which calls
+        # `bun run build` — produces dist/cli.js, dist/mcp.js,
+        # dist/mobile-client.js with a Node-friendly shebang.
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-web-headless:
+    # Mirrors publish-mobile-headless. Builds + publishes
+    # yaver-web-headless (the Node/bun surrogate for the web
+    # dashboard — dev-server preview, webview reload, vibing
+    # composer, reconnect-and-fix, repair-relay).
+    if: ${{ github.event_name == 'release' || inputs.publish_web_headless }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        working-directory: web-headless
+        run: bun install
+
+      - name: Typecheck + hermetic tests
+        working-directory: web-headless
+        run: |
+          bun run typecheck
+          bun test test/hermetic.test.ts
+
+      - name: Publish yaver-web-headless to npm
+        working-directory: web-headless
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-flutter-core:
+    if: ${{ github.event_name == 'release' || inputs.publish_flutter_core }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.0"
+
+      - name: Restore pub.dev credentials
+        env:
+          PUB_CREDENTIALS_JSON: ${{ secrets.PUB_CREDENTIALS_JSON }}
+        run: |
+          if [ -z "$PUB_CREDENTIALS_JSON" ]; then
+            echo "PUB_CREDENTIALS_JSON secret is not set"
+            exit 1
+          fi
+          # Dart < 2.15 reads ~/.pub-cache/credentials.json; Dart 2.15+ on
+          # Linux reads $XDG_CONFIG_HOME/dart/pub-credentials.json (typically
+          # ~/.config/dart/...). Write both so the credentials are found
+          # regardless of which Dart version subosito/flutter-action installs.
+          mkdir -p "$HOME/.pub-cache" "$HOME/.config/dart"
+          printf '%s' "$PUB_CREDENTIALS_JSON" > "$HOME/.pub-cache/credentials.json"
+          printf '%s' "$PUB_CREDENTIALS_JSON" > "$HOME/.config/dart/pub-credentials.json"
+          chmod 600 "$HOME/.pub-cache/credentials.json" "$HOME/.config/dart/pub-credentials.json"
+
+      - name: Publish yaver to pub.dev
+        run: |
+          cd sdk/flutter
+          # Skip if pub.dev already has this exact version — pub
+          # rejects the upload with "Version X already exists" and
+          # fails the workflow even when nothing else changed. CLI
+          # releases trigger this workflow on every cli/v* tag, but
+          # the Flutter SDK version only changes when sdk/flutter/
+          # itself changes.
+          PKG_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          echo "Local Flutter SDK version: $PKG_VERSION"
+          if curl -sfL "https://pub.dev/api/packages/yaver/versions/$PKG_VERSION" >/dev/null 2>&1; then
+            echo "yaver $PKG_VERSION already on pub.dev — skipping publish"
+            exit 0
+          fi
+          dart pub publish --force
+
+  publish-feedback-flutter:
+    if: ${{ github.event_name == 'release' || inputs.publish_feedback_flutter }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.0"
+
+      - name: Restore pub.dev credentials
+        env:
+          PUB_CREDENTIALS_JSON: ${{ secrets.PUB_CREDENTIALS_JSON }}
+        run: |
+          if [ -z "$PUB_CREDENTIALS_JSON" ]; then
+            echo "PUB_CREDENTIALS_JSON secret is not set"
+            exit 1
+          fi
+          # Write to both old (~/.pub-cache) and new (~/.config/dart) paths
+          # so the credentials are found regardless of Dart version.
+          mkdir -p "$HOME/.pub-cache" "$HOME/.config/dart"
+          printf '%s' "$PUB_CREDENTIALS_JSON" > "$HOME/.pub-cache/credentials.json"
+          printf '%s' "$PUB_CREDENTIALS_JSON" > "$HOME/.config/dart/pub-credentials.json"
+          chmod 600 "$HOME/.pub-cache/credentials.json" "$HOME/.config/dart/pub-credentials.json"
+
+      - name: Publish yaver_feedback to pub.dev
+        run: |
+          cd sdk/feedback/flutter
+          # Same idempotency guard as the yaver core publish.
+          PKG_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          echo "Local yaver_feedback version: $PKG_VERSION"
+          if curl -sfL "https://pub.dev/api/packages/yaver_feedback/versions/$PKG_VERSION" >/dev/null 2>&1; then
+            echo "yaver_feedback $PKG_VERSION already on pub.dev — skipping publish"
+            exit 0
+          fi
+          dart pub publish --force
+

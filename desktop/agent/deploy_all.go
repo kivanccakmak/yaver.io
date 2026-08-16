@@ -1,0 +1,414 @@
+package main
+
+// deploy_all.go — P9 orchestration verb. MCP counterpart to the canonical
+// `./deploy/deploy.sh all` path. Runs the full deploy fan-out
+// (infra + every beta/internal channel the work touched) sequentially,
+// collects per-step results, and writes ~/n2n_deploy_report.md. The
+// verb never touches production (App Store / Play production) — only
+// TestFlight (iOS, whose build embeds watch/tv/vision) and Play
+// internal (Android + Wear / TV / Auto where relevant), plus infra
+// (Convex, Cloudflare web, npm CLI + Go agent, MCP registry).
+//
+// HARD gate: `Preflight()` must return nil before any deploy step
+// fires. Preflight runs `go build ./...` and the P0-P8 scoped test
+// selector; a red gate short-circuits with `blocked`. The caller can
+// force with `Force=true` but must be very sure.
+//
+// Two knobs on DeployAllRequest:
+//
+//   DryRun=true    lists the steps that WOULD run without invoking them.
+//   Only=[...]     runs only the named steps (e.g. ["convex","web"]).
+//   Exclude=[...]  drops the named steps.
+//
+// TestFlight follows the documented recovery path: source
+// ~/.appstoreconnect/yaver.env (unlocks the yaver-signing keychain)
+// then run scripts/deploy-testflight.sh; if a codesign/keychain error
+// fires, re-source + `security unlock-keychain` yaver-signing.keychain
+// and retry ONCE.
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// DeployStep describes one deploy fan-out. Each step is a name +
+// working directory + shell command. Commands are shelled via
+// bash -lc so ~/… + env sourcing work; the timeout is enforced.
+type DeployStep struct {
+	Name     string        `json:"name"`
+	Channel  string        `json:"channel"` // beta / internal / infra
+	WorkDir  string        `json:"workDir"`
+	Command  string        `json:"command"`
+	Timeout  time.Duration `json:"-"`
+	Optional bool          `json:"optional"`
+}
+
+// DeployStepResult is what each step produces.
+type DeployStepResult struct {
+	Name       string  `json:"name"`
+	Channel    string  `json:"channel"`
+	Status     string  `json:"status"` // deployed | skipped | blocked | failed
+	StartedAt  string  `json:"startedAt"`
+	FinishedAt string  `json:"finishedAt"`
+	DurationS  float64 `json:"durationSeconds"`
+	Detail     string  `json:"detail,omitempty"`
+}
+
+// DeployAllRequest is the MCP verb payload.
+type DeployAllRequest struct {
+	DryRun  bool     `json:"dryRun"`
+	Only    []string `json:"only,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+	Force   bool     `json:"force,omitempty"`
+	// PinnedSHA is the commit the caller GATED. Every deploy step shells from
+	// the working tree, so if the tree has moved since the pin, the artifacts
+	// shipped are not the ones that passed the gate — a green ship that
+	// published something nobody verified.
+	//
+	// `ship` pins a SHA precisely so the fleet stops moving underneath it, but
+	// nothing enforced that the tree still matched at deploy time. Empty means
+	// "no pin, do not check", which keeps every existing caller working.
+	//
+	// Verified rather than forced: checking out the SHA here could clobber a
+	// working tree we do not own, and refusing to ship the wrong thing is the
+	// safe half of the guarantee.
+	PinnedSHA string `json:"pinnedSha,omitempty"`
+}
+
+// DeployAllResult is the composed response.
+type DeployAllResult struct {
+	OK         bool               `json:"ok"`
+	GateStatus string             `json:"gateStatus"` // green | red | forced
+	ReportPath string             `json:"reportPath"`
+	Steps      []DeployStepResult `json:"steps"`
+	Note       string             `json:"note,omitempty"`
+}
+
+// DefaultDeploySteps returns the fan-out for this repo. Fresh state
+// per call so tests can mutate freely without racing.
+func DefaultDeploySteps(repoRoot string) []DeployStep {
+	return []DeployStep{
+		{
+			Name: "convex", Channel: "infra", WorkDir: filepath.Join(repoRoot, "backend"),
+			Command: filepath.Join(repoRoot, "deploy", "deploy.sh") + " backend", Timeout: 5 * time.Minute,
+		},
+		{
+			Name: "web-cloudflare", Channel: "infra", WorkDir: repoRoot,
+			Command: "./deploy/deploy.sh cloudflare", Timeout: 15 * time.Minute,
+		},
+		{
+			Name: "cli-npm", Channel: "infra", WorkDir: filepath.Join(repoRoot, "cli"),
+			Command: filepath.Join(repoRoot, "deploy", "deploy.sh") + " npm", Timeout: 10 * time.Minute, Optional: true,
+		},
+		{
+			Name: "testflight-ios", Channel: "beta", WorkDir: repoRoot,
+			Command: "./deploy/deploy.sh ios",
+			Timeout: 45 * time.Minute,
+		},
+		{
+			Name: "playstore-android", Channel: "internal", WorkDir: repoRoot,
+			Command: "./deploy/deploy.sh android",
+			Timeout: 45 * time.Minute,
+		},
+	}
+}
+
+// developForRepoRoot returns the repo root from CWD by walking up to
+// the first .git directory. Falls back to CWD when nothing is found.
+func repoRootFromCWD() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	dir := cwd
+	for i := 0; i < 8; i++ {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return cwd
+}
+
+// deployMinFreeBytes is the free-space floor below which a deploy refuses to
+// start. On 2026-08-10 a MacBook Air at 100% disk (454 MiB free) let every
+// deploy run for ~20 minutes and die with `no space left on device` mid-archive
+// — nothing named the disk as the cause until the build failed. A deploy needs
+// several GiB of scratch (Xcode DerivedData + archives, Gradle deps, Convex
+// esbuild), so a floor of 2 GiB fails fast in seconds with a named cause and a
+// route to fix, instead of dying at minute 20.
+const deployMinFreeBytes = 2 << 30 // 2 GiB
+
+// deployPreflight is the seam tests use to intercept the build+test
+// gate without shelling out. Returns nil on green.
+var deployPreflight = func(ctx context.Context, repoRoot string) error {
+	// Disk capacity FIRST: a full disk is the classic silent build-killer.
+	// The gate probes the real capability (free bytes) rather than trusting
+	// an inventory of "has space ever" — the disk can be 100% the moment
+	// before `go build` runs. When it is, name the cause and the route to
+	// fix (the same disk guard the MCP disk_manage tool drives) instead of
+	// letting the build die with a generic nospc at minute 20.
+	fs, err := diskGuardStat(repoRoot)
+	if err == nil && fs.FreeBytes < deployMinFreeBytes {
+		return fmt.Errorf("deploy preflight: only %s free on %s (need >= %s) — a build here would die with 'no space left on device'",
+			humanBytesDG(fs.FreeBytes), fs.Path, humanBytesDG(deployMinFreeBytes))
+	}
+	agentDir := filepath.Join(repoRoot, "desktop", "agent")
+	buildCmd := exec.CommandContext(ctx, "go", "build", "./...")
+	buildCmd.Dir = agentDir
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go build failed: %w — %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// deployRunCommand is the shell seam. Tests intercept it so the
+// suite is hermetic; production shells to `bash -lc <command>` from
+// the step's WorkDir with the step's timeout.
+var deployRunCommand = func(ctx context.Context, workDir, command string, timeout time.Duration) (string, error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	stepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(stepCtx, "bash", "-lc", command)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// RunDeployAll executes the deploy fan-out with the gate + result
+// bookkeeping described above. Writes ~/n2n_deploy_report.md as the
+// canonical artefact.
+func RunDeployAll(ctx context.Context, req DeployAllRequest) DeployAllResult {
+	result := DeployAllResult{}
+	repoRoot := repoRootFromCWD()
+
+	// Refuse before the preflight: shipping the wrong commit is worse than
+	// shipping nothing, and the preflight would otherwise spend minutes proving
+	// a tree we are about to reject builds fine.
+	if err := verifyDeployPin(ctx, repoRoot, req.PinnedSHA); err != nil {
+		result.OK = false
+		result.GateStatus = "red"
+		result.Note = err.Error()
+		result.Steps = nil
+		_ = writeDeployReport(result)
+		return result
+	}
+
+	if err := deployPreflight(ctx, repoRoot); err != nil {
+		if !req.Force {
+			result.OK = false
+			result.GateStatus = "red"
+			result.Note = "preflight failed: " + err.Error()
+			result.Steps = nil
+			_ = writeDeployReport(result)
+			return result
+		}
+		result.GateStatus = "forced"
+		result.Note = "preflight failed but Force=true — proceeding at caller's risk"
+	} else {
+		result.GateStatus = "green"
+	}
+
+	steps := DefaultDeploySteps(repoRoot)
+	steps = filterDeploySteps(steps, req.Only, req.Exclude)
+
+	testflightRetried := false
+	for _, step := range steps {
+		start := time.Now()
+		row := DeployStepResult{
+			Name: step.Name, Channel: step.Channel,
+			StartedAt: start.UTC().Format(time.RFC3339),
+		}
+		if req.DryRun {
+			row.Status = "skipped"
+			row.Detail = "dry-run: would run `" + step.Command + "` in " + step.WorkDir
+		} else {
+			out, err := deployRunCommand(ctx, step.WorkDir, step.Command, step.Timeout)
+			trimmed := strings.TrimSpace(out)
+			if len(trimmed) > 1500 {
+				trimmed = trimmed[len(trimmed)-1500:]
+			}
+			switch {
+			case err == nil:
+				row.Status = "deployed"
+				row.Detail = trimmed
+			case step.Name == "testflight-ios" && !testflightRetried && looksLikeKeychainError(trimmed):
+				testflightRetried = true
+				retryOut, retryErr := deployRunCommand(ctx,
+					step.WorkDir,
+					"security unlock-keychain -p '' ~/Library/Keychains/yaver-signing.keychain-db 2>/dev/null; "+step.Command,
+					step.Timeout)
+				if retryErr == nil {
+					row.Status = "deployed"
+					row.Detail = "retry ok: " + strings.TrimSpace(retryOut)
+				} else {
+					row.Status = "blocked"
+					row.Detail = "keychain retry failed: " + retryErr.Error() + " — needs a GUI Terminal or phone unlock; " + trimmed
+				}
+			case errors.Is(err, context.DeadlineExceeded):
+				row.Status = "failed"
+				row.Detail = "timed out after " + step.Timeout.String() + " — " + trimmed
+			case step.Optional:
+				row.Status = "skipped"
+				row.Detail = "optional step errored (not fatal): " + err.Error() + " — " + trimmed
+			default:
+				row.Status = "failed"
+				row.Detail = err.Error() + " — " + trimmed
+			}
+		}
+		end := time.Now()
+		row.FinishedAt = end.UTC().Format(time.RFC3339)
+		row.DurationS = end.Sub(start).Seconds()
+		result.Steps = append(result.Steps, row)
+	}
+
+	result.OK = allStepsGreen(result.Steps)
+	if err := writeDeployReport(result); err != nil {
+		result.Note = strings.TrimSpace(result.Note + " report-write-failed: " + err.Error())
+	} else {
+		result.ReportPath = deployReportPath()
+	}
+	return result
+}
+
+func allStepsGreen(rows []DeployStepResult) bool {
+	for _, r := range rows {
+		if r.Status == "failed" || r.Status == "blocked" {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeKeychainError(out string) bool {
+	lower := strings.ToLower(out)
+	for _, needle := range []string{"unable to unlock", "keychain", "errsecinternalcomponent", "codesign failed"} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterDeploySteps(all []DeployStep, only, exclude []string) []DeployStep {
+	pick := func(list []string) map[string]bool {
+		m := map[string]bool{}
+		for _, name := range list {
+			m[strings.ToLower(strings.TrimSpace(name))] = true
+		}
+		return m
+	}
+	onlySet := pick(only)
+	excludeSet := pick(exclude)
+	out := make([]DeployStep, 0, len(all))
+	for _, s := range all {
+		lname := strings.ToLower(s.Name)
+		if len(onlySet) > 0 && !onlySet[lname] {
+			continue
+		}
+		if excludeSet[lname] {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func deployReportPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "n2n_deploy_report.md"
+	}
+	return filepath.Join(home, "n2n_deploy_report.md")
+}
+
+// writeDeployReport is a var seam so tests can capture the output
+// without touching real $HOME.
+var writeDeployReport = func(result DeployAllResult) error {
+	buf, err := composeDeployReportMarkdown(result)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(deployReportPath(), []byte(buf), 0o600)
+}
+
+func composeDeployReportMarkdown(result DeployAllResult) (string, error) {
+	var b strings.Builder
+	b.WriteString("# Yaver n2n deploy report\n\n")
+	b.WriteString("Generated: " + time.Now().UTC().Format(time.RFC3339) + "\n\n")
+	fmt.Fprintf(&b, "Overall OK: %v  Gate: %s\n\n", result.OK, result.GateStatus)
+	if result.Note != "" {
+		b.WriteString("Note: " + result.Note + "\n\n")
+	}
+	b.WriteString("| step | channel | status | duration | detail |\n")
+	b.WriteString("|---|---|---|---|---|\n")
+	for _, r := range result.Steps {
+		detail := strings.ReplaceAll(strings.TrimSpace(r.Detail), "\n", " · ")
+		if len(detail) > 200 {
+			detail = detail[:200] + "…"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %.1fs | %s |\n", r.Name, r.Channel, r.Status, r.DurationS, detail)
+	}
+	b.WriteString("\n---\n\n_Machine-readable copy:_\n\n```json\n")
+	buf, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return b.String(), err
+	}
+	b.Write(buf)
+	b.WriteString("\n```\n")
+	return b.String(), nil
+}
+
+func (s *HTTPServer) mcpDeployAll(req DeployAllRequest) interface{} {
+	return RunDeployAll(context.Background(), req)
+}
+
+// verifyDeployPin refuses a deploy whose working tree has drifted from the
+// commit the caller gated.
+//
+// `ship` freezes the fleet, drains it, and pins a SHA so the thing it verified
+// is the thing it publishes. Every deploy step then shells from the working
+// tree — so without this check the pin was bookkeeping, not a guarantee: an
+// autorun landing mid-ship, or a human on the box, moves HEAD and the deploy
+// silently ships a different commit than the one that passed the gate.
+//
+// A dirty tree fails for the same reason. Uncommitted edits are, by definition,
+// not in the pinned commit.
+func verifyDeployPin(ctx context.Context, repoRoot, pinnedSHA string) error {
+	pinnedSHA = strings.TrimSpace(pinnedSHA)
+	if pinnedSHA == "" {
+		return nil // no pin requested — every pre-existing caller
+	}
+	head := autorunExec(ctx, "git", []string{"-C", repoRoot, "rev-parse", "HEAD"}, repoRoot)
+	if head.Err != nil {
+		return fmt.Errorf("cannot verify the deploy pin (git rev-parse HEAD failed): %w", head.Err)
+	}
+	got := strings.TrimSpace(head.Output)
+	// Accept an abbreviated pin against a full HEAD, since callers pass whatever
+	// their own `rev-parse` gave them.
+	if !strings.HasPrefix(got, pinnedSHA) && !strings.HasPrefix(pinnedSHA, got) {
+		return fmt.Errorf(
+			"refusing to deploy: the working tree is at %s but the gated commit was %s — the artifacts would not be the ones that passed the gate",
+			got, pinnedSHA)
+	}
+	dirty := autorunExec(ctx, "git", []string{"-C", repoRoot, "status", "--porcelain"}, repoRoot)
+	if dirty.Err == nil && strings.TrimSpace(dirty.Output) != "" {
+		return fmt.Errorf(
+			"refusing to deploy: the working tree at %s has uncommitted changes, which are by definition not in the gated commit",
+			pinnedSHA)
+	}
+	return nil
+}

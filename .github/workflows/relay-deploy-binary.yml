@@ -1,0 +1,202 @@
+# Deploy the latest relay binary to public.yaver.io.
+#
+# The Hetzner box was running yaver-relay 0.1.0 — old enough that
+# validatePassword rejects the exact same password it's started
+# with via --password (i.e. our shared password is *itself*
+# "invalid" to the binary). Plus 0.1.6 ships the hardcoded Convex
+# URL fallback so future deploys don't drop into shared-only mode.
+#
+# Pulls yaver-relay-linux-arm64.tar.gz from the latest GitHub
+# release, scp's it to the box, swaps with a backup, restarts the
+# unit. ~10s downtime.
+
+name: Relay — Deploy Latest Binary
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Relay version to deploy. Empty = versions.json relay when released, otherwise newest existing relay/v* release."
+        required: false
+        default: ""
+
+concurrency:
+  group: relay-deploy-binary
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight — required config present + target reachable
+        run: |
+          # Fail FAST and CLEARLY on missing config, instead of a cryptic
+          # "Could not resolve hostname ''" halfway through. This is the class
+          # of failure that silently blocked a prior deploy.
+          fail=0
+          if [ -z "${{ secrets.RELAY_SSH_HOST }}" ]; then
+            echo "::error::RELAY_SSH_HOST secret is not set — cannot reach the relay box. Set it to the box's IP/hostname (same box as RELAY_HTTP_URL)."
+            fail=1
+          fi
+          if [ -z "${{ secrets.HCLOUD_SSH_PRIVATE_KEY }}" ]; then
+            echo "::error::HCLOUD_SSH_PRIVATE_KEY secret is not set — no SSH key to reach the box."
+            fail=1
+          fi
+          [ "$fail" = 1 ] && exit 1
+          HOST='${{ secrets.RELAY_SSH_HOST }}'
+          if ! getent hosts "$HOST" >/dev/null 2>&1 && ! echo "$HOST" | grep -qE '^[0-9.]+$'; then
+            echo "::error::RELAY_SSH_HOST '$HOST' does not resolve."
+            exit 1
+          fi
+          if ! nc -z -w 5 "$HOST" 22 2>/dev/null; then
+            echo "::error::RELAY_SSH_HOST '$HOST' is not reachable on port 22 (box down / firewall?)."
+            exit 1
+          fi
+          echo "Preflight OK — config present and $HOST:22 reachable."
+
+      - name: Resolve target version
+        run: |
+          V='${{ github.event.inputs.version }}'
+          if [ -z "$V" ]; then
+            V=$(node -e "console.log(JSON.parse(require('fs').readFileSync('versions.json','utf8')).relay)")
+            if ! gh release view "relay/v${V}" --json tagName >/dev/null 2>&1; then
+              FALLBACK=$(gh release list --limit 200 \
+                | awk -F'\t' '$3 ~ /^relay\/v/ { sub(/^relay\/v/, "", $3); print $3; exit }')
+              if [ -z "$FALLBACK" ]; then
+                echo "::error::versions.json relay=$V has no relay/v$V release, and no relay/v* release fallback exists."
+                exit 1
+              fi
+              echo "::warning::versions.json relay=$V has no relay/v$V release; deploying newest existing relay release v$FALLBACK instead."
+              V="$FALLBACK"
+            fi
+          elif ! gh release view "relay/v${V}" --json tagName >/dev/null 2>&1; then
+            echo "::error::Requested relay version v$V has no release relay/v$V."
+            exit 1
+          fi
+          echo "RELAY_VERSION=$V" >> "$GITHUB_ENV"
+          echo "Deploying yaver-relay v$V"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Download release tarball
+        run: |
+          mkdir -p /tmp/relay-dl
+          curl -fsSL "https://github.com/yaver-io/yaver.io/releases/download/relay/v${RELAY_VERSION}/yaver-relay-linux-arm64.tar.gz" \
+            -o /tmp/relay-dl/relay.tar.gz
+          tar -xzf /tmp/relay-dl/relay.tar.gz -C /tmp/relay-dl/
+          ls -la /tmp/relay-dl/
+          # Find the binary inside (release tar layout may vary).
+          BIN=$(find /tmp/relay-dl -maxdepth 3 -type f -name 'yaver-relay*' -executable | head -1)
+          if [ -z "$BIN" ]; then
+            echo "::error::No yaver-relay binary inside tarball"
+            ls -la /tmp/relay-dl/
+            exit 2
+          fi
+          cp "$BIN" /tmp/relay-dl/yaver-relay
+          chmod +x /tmp/relay-dl/yaver-relay
+          echo "Binary ready: $(file /tmp/relay-dl/yaver-relay)"
+
+      - name: Prepare CI SSH key
+        run: |
+          install -m 600 /dev/stdin "$RUNNER_TEMP/ci_key" <<'EOF'
+          ${{ secrets.HCLOUD_SSH_PRIVATE_KEY }}
+          EOF
+          echo "CI_KEY_PATH=$RUNNER_TEMP/ci_key" >> "$GITHUB_ENV"
+
+      - name: Push binary + sync systemd unit + restart service
+        run: |
+          # Upload binary + the canonical systemd unit to staging paths.
+          # We re-deploy the unit every time so the box's
+          # YAVER_RELAY_OFFICIAL=1 + Environment=CONVEX_URL=... lines
+          # never drift away from the repo's source of truth.
+          scp -i "$CI_KEY_PATH" \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              /tmp/relay-dl/yaver-relay root@${{ secrets.RELAY_SSH_HOST }}:/tmp/yaver-relay.new
+          scp -i "$CI_KEY_PATH" \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              relay/deploy/yaver-relay.service root@${{ secrets.RELAY_SSH_HOST }}:/tmp/yaver-relay.service.new
+
+          # Swap + restart in one shot to minimize downtime
+          ssh -i "$CI_KEY_PATH" \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              root@${{ secrets.RELAY_SSH_HOST }} bash -s <<'REMOTE'
+          set -euo pipefail
+          BIN=/opt/yaver-relay/yaver-relay
+          NEW=/tmp/yaver-relay.new
+          UNIT=/etc/systemd/system/yaver-relay.service
+          UNIT_NEW=/tmp/yaver-relay.service.new
+          mkdir -p /opt/yaver-relay
+
+          # Preserve the live unit's local-only directives the repo
+          # template doesn't know about — specifically the actual
+          # ExecStart line, which on this box carries the shared
+          # --password=<value>. We keep the live ExecStart and adopt
+          # everything else from the repo template (Environment lines,
+          # hardening directives, EnvironmentFile fallback).
+          LIVE_EXEC=$(grep '^ExecStart=' "$UNIT" || true)
+          if [ -n "$LIVE_EXEC" ]; then
+            # Replace the template's ExecStart placeholder with the
+            # live one so the shared password isn't dropped on the floor.
+            sed -i "s|^ExecStart=.*|$LIVE_EXEC|" "$UNIT_NEW"
+          fi
+
+          # Backup running binary + unit before swap. Manual rollback:
+          #   mv /opt/yaver-relay/yaver-relay.previous $BIN
+          #   cp /etc/systemd/system/yaver-relay.service.previous $UNIT
+          #   systemctl daemon-reload && systemctl restart yaver-relay
+          if [ -f "$BIN" ]; then cp "$BIN" "$BIN.previous"; fi
+          if [ -f "$UNIT" ]; then cp "$UNIT" "$UNIT.previous"; fi
+          install -m 0755 "$NEW" "$BIN"
+          install -m 0644 "$UNIT_NEW" "$UNIT"
+          rm -f "$NEW" "$UNIT_NEW"
+
+          systemctl daemon-reload
+          # Sanity: the new binary must at least run.
+          if ! "$BIN" --version >/dev/null 2>&1 && ! "$BIN" --help >/dev/null 2>&1; then
+            echo "::error::new binary won't execute — rolling back before restart"
+            [ -f "$BIN.previous" ] && install -m 0755 "$BIN.previous" "$BIN"
+            [ -f "$UNIT.previous" ] && cp "$UNIT.previous" "$UNIT"
+            systemctl daemon-reload; systemctl restart yaver-relay || true
+            exit 1
+          fi
+
+          systemctl restart yaver-relay
+          sleep 3
+
+          # HEALTH-GATED AUTO-ROLLBACK: if the new relay isn't serving /health,
+          # restore the .previous binary+unit and restart, so a bad deploy
+          # self-corrects instead of leaving the fallback path down.
+          # NB: RELAY_VERSION is a runner env var — NOT available inside this
+          # box-side (quoted heredoc) shell, and `set -u` would kill an echo that
+          # references it. Keep box-side messages version-free.
+          if curl -fsS -m 5 "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
+            echo "=== health OK on the new binary ==="
+            systemctl --no-pager --lines=10 status yaver-relay || true
+          else
+            echo "::error::new relay failed /health — AUTO-ROLLBACK to previous"
+            journalctl -u yaver-relay --no-pager -n 30 || true
+            [ -f "$BIN.previous" ] && install -m 0755 "$BIN.previous" "$BIN"
+            [ -f "$UNIT.previous" ] && cp "$UNIT.previous" "$UNIT"
+            systemctl daemon-reload
+            systemctl restart yaver-relay
+            sleep 3
+            if curl -fsS -m 5 "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
+              echo "rolled back to previous — healthy again"
+            else
+              echo "::error::ROLLBACK ALSO UNHEALTHY — manual intervention required"
+            fi
+            exit 1
+          fi
+          REMOTE
+
+      - name: Probe public endpoint to confirm live
+        run: |
+          # /health is unauthenticated — no secret in the workflow (the old
+          # hardcoded ?__rp=<password> was a committed credential; removed).
+          sleep 3
+          code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "https://public.yaver.io/health" || echo 000)
+          echo "public.yaver.io/health → $code"
+          [ "$code" = "200" ] || { echo "::error::public relay health not 200"; exit 1; }

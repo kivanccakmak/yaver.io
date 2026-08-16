@@ -1,0 +1,25 @@
+# feature-dashboard-ci — /dashboard/ci: self-hosted CI runner config view.
+# Header is SSR'd; device-dependent rows are client-rendered with an empty
+# device list.
+name: feature-dashboard-ci
+target: web
+url: http://127.0.0.1:3000
+viewport: { width: 1366, height: 900 }
+timeout_ms: 15000
+
+artifacts:
+  on: always
+  screenshot: true
+  video: true
+
+capture:
+  console_errors: true
+  network: true
+
+steps:
+  - goto: /dashboard/ci
+  - wait_for: h1
+  - assert.text: Self-hosted CI
+  - sleep_ms: 500
+  - assert.text: Register a repo
+  - screenshot: true

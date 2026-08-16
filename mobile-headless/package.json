@@ -1,0 +1,47 @@
+{
+  "name": "yaver-mobile-headless",
+  "version": "0.1.5",
+  "description": "Headless surrogate for the Yaver mobile app — share the same mobile/src/lib code with a Node/Bun runtime, drive real Yaver agents via CLI + MCP for tests and AI-assisted QA.",
+  "license": "FSL-1.1-Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kivanccakmak/yaver.io.git",
+    "directory": "mobile-headless"
+  },
+  "homepage": "https://github.com/kivanccakmak/yaver.io/tree/main/mobile-headless",
+  "bin": {
+    "yaver-mobile-headless": "dist/cli.js"
+  },
+  "main": "./dist/mobile-client.js",
+  "types": "./dist/mobile-client.d.ts",
+  "type": "module",
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "cli": "bun run src/bin/cli.ts",
+    "mcp": "bun run src/bin/mcp.ts",
+    "test": "bun test",
+    "test:hermetic": "bun test test/hermetic.test.ts test/build-native.test.ts test/native-build-ui.test.ts test/hot-reload-state.test.ts test/more-menu-preferences.test.ts",
+    "test:sdk-manifest": "node --test ../scripts/generate-sdk-manifest.test.mjs",
+    "test:smoke": "bun test test/smoke-local.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build src/bin/cli.ts --outdir dist --target node --minify && bun build src/bin/mcp.ts --outdir dist --target node --minify && bun build src/mobile-client.ts --outdir dist --target node && node scripts/fix-shebang.mjs",
+    "prepublishOnly": "bun run build"
+  },
+  "dependencies": {
+    "minimist": "^1.2.8",
+    "@modelcontextprotocol/sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/minimist": "^1.2.5",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

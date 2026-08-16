@@ -1,0 +1,942 @@
+package main
+
+// browser.go — BrowserManager: persistent browser sessions for AI-driven automation.
+//
+// AI agents (Claude Code, Aider, etc.) control Chrome on the dev machine
+// via MCP tools (browser_open, browser_navigate, browser_click, etc.).
+// Each action returns a screenshot so the AI can reason about what it sees.
+// Sessions persist across tool calls — cookies, auth state, and the
+// current URL survive between steps.
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/chromedp"
+)
+
+// BrowserManager manages named browser sessions.
+type BrowserManager struct {
+	mu       sync.RWMutex
+	sessions map[string]*BrowserSession
+	eventCh  chan BrowserEvent // broadcast to SSE listeners
+	stopCh   chan struct{}
+	// vpm is the clip store/recorder sink. Set via SetVibePreviewManager after
+	// construction (both managers are created together in main.go). When set,
+	// browser_open(record=true) records the session to an MP4 clip.
+	vpm *VibePreviewManager
+}
+
+// SetVibePreviewManager wires the clip store so recorded browser sessions
+// register as VibeClipRecords (reusing /vibing/preview/clip/<id> serving).
+func (bm *BrowserManager) SetVibePreviewManager(vpm *VibePreviewManager) {
+	bm.mu.Lock()
+	bm.vpm = vpm
+	bm.mu.Unlock()
+}
+
+// ensureVPM sets a clip sink if none is wired yet, preferring the first non-nil
+// fallback (e.g. the daemon's manager) and otherwise creating a local one. Used
+// by browser_open so record=true works in the stdio-child process too, where
+// no manager was wired at startup. No-op if one is already set.
+func (bm *BrowserManager) ensureVPM(fallbacks ...*VibePreviewManager) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	if bm.vpm != nil {
+		return
+	}
+	for _, f := range fallbacks {
+		if f != nil {
+			bm.vpm = f
+			return
+		}
+	}
+	bm.vpm = NewVibePreviewManager(bm)
+}
+
+// BrowserSession wraps a persistent chromedp context.
+type BrowserSession struct {
+	ID            string    `json:"id"`
+	Headful       bool      `json:"headful"`
+	CreatedAt     time.Time `json:"createdAt"`
+	LastUsedAt    time.Time `json:"lastUsedAt"`
+	CurrentURL    string    `json:"currentUrl"`
+	CurrentTitle  string    `json:"currentTitle"`
+	Interactive   bool      `json:"interactive"`
+	ProfileDir    string    `json:"profileDir,omitempty"`
+	ProxyURL      string    `json:"proxyUrl,omitempty"` // egress proxy, creds redacted
+	EgressIP      string    `json:"egressIp,omitempty"` // last observed egress IP for this vantage
+	ViewW         int       `json:"viewW,omitempty"`
+	ViewH         int       `json:"viewH,omitempty"`
+	RecordClipID  string    `json:"recordClipId,omitempty"` // set when this session is being recorded
+	allocCancel   context.CancelFunc
+	browserCtx    context.Context
+	browserCancel context.CancelFunc
+	recorder      *BrowserVideoRecorder // non-nil while recording; finalized on close
+}
+
+// BrowserEvent is pushed to SSE listeners after each action.
+type BrowserEvent struct {
+	Type          string `json:"type"` // "screenshot", "navigate", "action", "error", "closed"
+	SessionID     string `json:"sessionId"`
+	ScreenshotB64 string `json:"screenshot,omitempty"`
+	URL           string `json:"url,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Message       string `json:"message,omitempty"`
+	Timestamp     string `json:"timestamp"`
+}
+
+// BrowserActionResult is returned by actions that capture a screenshot.
+type BrowserActionResult struct {
+	ScreenshotB64 string `json:"screenshot"`
+	URL           string `json:"url"`
+	Title         string `json:"title"`
+	Message       string `json:"message,omitempty"`
+}
+
+// SessionIdleTimeout is how long an unused session stays alive.
+const SessionIdleTimeout = 30 * time.Minute
+
+// NewBrowserManager creates a manager and starts the idle cleanup goroutine.
+func NewBrowserManager() *BrowserManager {
+	bm := &BrowserManager{
+		sessions: make(map[string]*BrowserSession),
+		eventCh:  make(chan BrowserEvent, 64),
+		stopCh:   make(chan struct{}),
+	}
+	go bm.cleanupLoop()
+	return bm
+}
+
+// Stop shuts down all sessions and the cleanup goroutine, finalizing any
+// in-progress recordings first.
+func (bm *BrowserManager) Stop() {
+	close(bm.stopCh)
+	bm.mu.Lock()
+	all := make([]*BrowserSession, 0, len(bm.sessions))
+	for id, s := range bm.sessions {
+		all = append(all, s)
+		delete(bm.sessions, id)
+	}
+	bm.mu.Unlock()
+	for _, s := range all {
+		if s.recorder != nil {
+			s.recorder.Stop()
+		}
+		s.browserCancel()
+		s.allocCancel()
+	}
+}
+
+func (bm *BrowserManager) cleanupLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-bm.stopCh:
+			return
+		case <-ticker.C:
+			// Collect expired sessions under the lock; finalize (Stop waits on
+			// ffmpeg) + tear down outside it so the manager isn't blocked.
+			var expired []*BrowserSession
+			bm.mu.Lock()
+			for id, s := range bm.sessions {
+				if time.Since(s.LastUsedAt) > SessionIdleTimeout {
+					delete(bm.sessions, id)
+					expired = append(expired, s)
+				}
+			}
+			bm.mu.Unlock()
+			for _, s := range expired {
+				if s.recorder != nil {
+					s.recorder.Stop()
+				}
+				s.browserCancel()
+				s.allocCancel()
+				bm.emit(BrowserEvent{
+					Type:      "closed",
+					SessionID: s.ID,
+					Message:   "session timed out after idle",
+				})
+			}
+		}
+	}
+}
+
+func (bm *BrowserManager) emit(ev BrowserEvent) {
+	ev.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	select {
+	case bm.eventCh <- ev:
+	default:
+		// Drop if nobody is listening.
+	}
+}
+
+func (bm *BrowserManager) getSession(id string) (*BrowserSession, error) {
+	bm.mu.RLock()
+	defer bm.mu.RUnlock()
+	s, ok := bm.sessions[id]
+	if !ok {
+		return nil, fmt.Errorf("browser session %q not found", id)
+	}
+	return s, nil
+}
+
+func (bm *BrowserManager) touch(s *BrowserSession) {
+	bm.mu.Lock()
+	s.LastUsedAt = time.Now()
+	bm.mu.Unlock()
+}
+
+// OpenSession starts a new Chrome instance with machine-native egress (no proxy).
+func (bm *BrowserManager) OpenSession(id string, headful bool) error {
+	return bm.OpenSessionWithProxy(id, headful, "")
+}
+
+// OpenSessionWithProxy starts a Chrome instance whose traffic egresses through
+// proxyURL (e.g. "http://127.0.0.1:8080", "socks5://10.0.0.2:1080"). An empty
+// proxyURL means machine-native egress, identical to OpenSession.
+//
+// The proxy is how a collector adopts a chosen vantage / egress identity: route
+// a collector on this machine out through a proxy or peer the user controls so
+// the source sees that egress. Yaver only routes through egress the user owns or
+// is entitled to use — never a rotating pool to defeat a block. See
+// docs/user-directed-data-collection-runtimes.md (Multi-Vantage / Egress).
+func (bm *BrowserManager) OpenSessionWithProxy(id string, headful bool, proxyURL string) error {
+	return bm.OpenSessionWithProfile(id, headful, proxyURL, "")
+}
+
+// OpenSessionWithProfile is OpenSessionWithProxy + a persistent profile dir (F2, Access Layer).
+// When profileDir != "", Chrome reuses that user-data-dir so Cloudflare clearance + login cookies
+// PERSIST across runs and are SHARED with a headful co-browse session on the same dir: the human
+// passes the challenge once (F3 handoff) in a visible window, then headless collectors ride the
+// saved clearance until it expires. Always sets anti-automation flags + a real desktop UA so a
+// headless session looks less like a bot. See YAVER_ACCESS_LAYER.md (F2/F3 compose).
+func (bm *BrowserManager) OpenSessionWithProfile(id string, headful bool, proxyURL, profileDir string) error {
+	return bm.OpenSessionWithViewport(id, headful, proxyURL, profileDir, 0, 0)
+}
+
+// OpenSessionWithViewport is OpenSessionWithProfile with an explicit window
+// size. Zero width/height keeps the historical 1280x900 default.
+//
+// ─── Why this exists: a reported size that was never applied ───────────────
+//
+// Measured 2026-08-03. The tvOS arc asked to capture at 1920x1080,
+// /vibing/preview/status cheerfully reported `profile: {width: 1920, height:
+// 1080}` — and the actual PNG came back 1280x757, because the size was stored
+// on the session, echoed to the caller, and then thrown away here.
+//
+// That is the house failure mode wearing a new hat: the inventory says yes,
+// the operation says no. And it is worse than a cosmetic mismatch. The whole
+// point of web/lib/surfaceViewports.ts is that a closed loop driving the RIGHT
+// app at the WRONG size tests a layout no user ever sees and reports green
+// about it. Every TV, visionOS and watch verdict this pipeline has ever
+// produced was reached against a desktop-shaped window while claiming
+// otherwise — a loop that cannot be trusted about the one thing it exists to
+// check.
+func (bm *BrowserManager) OpenSessionWithViewport(id string, headful bool, proxyURL, profileDir string, width, height int) error {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+
+	if _, exists := bm.sessions[id]; exists {
+		return fmt.Errorf("browser session %q already exists", id)
+	}
+
+	// Bounded for the same reason VibePreviewManager.Start bounds them: a bad
+	// value must not ask Chrome for a 100k-wide canvas. Out-of-range falls back
+	// to the default rather than clamping silently to something the caller did
+	// not ask for.
+	if width < 200 || width > 3840 || height < 200 || height > 2160 {
+		width, height = 1280, 900
+	}
+
+	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", !headful),
+		chromedp.Flag("disable-gpu", !headful),
+		chromedp.Flag("mute-audio", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("hide-scrollbars", !headful),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"), // F2 anti-detect
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+		chromedp.WindowSize(width, height),
+	)
+	// PICK THE BINARY DELIBERATELY, ALWAYS — not only when a profile dir is set.
+	//
+	// Measured 2026-08-03 on the owner's Linux box: chromedp's own search found
+	// /snap/bin/chromium first and every launch died with "cannot create
+	// temporary directory for the root file system". A snap-packaged Chromium is
+	// CONFINED and cannot create its temp dir under a daemon — while the SAME box
+	// also had /usr/bin/google-chrome and /usr/bin/chromium-browser, either of
+	// which works. So the vibing preview could not capture a single frame, the
+	// tvOS/visionOS colour arc had nothing to sample, and nothing in the product
+	// preferred the binary that would have worked.
+	//
+	// This used to be gated on `profileDir != ""`, i.e. the ONE caller that
+	// happened to want a persistent profile got a correct binary and every other
+	// caller — including the preview capture — took whatever chromedp guessed.
+
+	if profileDir != "" {
+		// F2: persistent clearance/cookies; share this dir with the co-browse session so a
+		// human-solved Cloudflare challenge carries over to headless collection.
+		allocOpts = append(allocOpts, chromedp.UserDataDir(profileDir))
+	}
+	if proxyURL != "" {
+		allocOpts = append(allocOpts, chromedp.ProxyServer(proxyURL))
+	}
+
+	allocCtx, allocCancel := newPinnedChromeAllocator(context.Background(), allocOpts...)
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+
+	// Boot Chrome, and PIN THE VIEWPORT — not just the window.
+	//
+	// chromedp.WindowSize above sets the OS WINDOW; CaptureScreenshot captures the
+	// VIEWPORT, and headless Chrome does not guarantee they match. Measured
+	// 2026-08-04: a session opened with WindowSize(390, 844) produced a 500x701
+	// PNG — neither the request nor the 1280x900 fallback. The 2026-08-03 fix
+	// above stopped the size being thrown away entirely; this is the second half,
+	// because a window flag alone still leaves Chrome to pick the canvas.
+	//
+	// EmulateViewport issues Emulation.setDeviceMetricsOverride, which is the only
+	// way to make the captured pixels exactly the size that was asked for. Without
+	// it every per-surface layout verdict — TV, visionOS, phone, watch — is a
+	// statement about a canvas no user of that surface has.
+	if err := chromedp.Run(browserCtx, chromedp.EmulateViewport(int64(width), int64(height))); err != nil {
+		browserCancel()
+		allocCancel()
+		return fmt.Errorf("launch chrome: %w%s", err, chromeLaunchRemedy(err))
+	}
+
+	now := time.Now()
+	bm.sessions[id] = &BrowserSession{
+		ID:            id,
+		Headful:       headful,
+		ProfileDir:    profileDir,
+		ProxyURL:      redactProxyCreds(proxyURL), // store redacted; raw is baked into the alloc
+		CreatedAt:     now,
+		LastUsedAt:    now,
+		allocCancel:   allocCancel,
+		browserCtx:    browserCtx,
+		browserCancel: browserCancel,
+	}
+
+	msg := "session opened"
+	if proxyURL != "" {
+		msg = "session opened via proxy " + redactProxyCreds(proxyURL)
+	}
+	bm.emit(BrowserEvent{
+		Type:      "action",
+		SessionID: id,
+		Message:   msg,
+	})
+
+	return nil
+}
+
+// StartRecording begins recording an open session to an MP4 clip. Returns the
+// clip ID; the clip is served at /vibing/preview/clip/<id> once finalized
+// (on CloseSession, idle timeout, or the safety duration cap). durMaxSec<=0
+// uses the safety cap. Idempotent: a second call returns the existing clip ID.
+func (bm *BrowserManager) StartRecording(sessionID string, durMaxSec int) (string, error) {
+	bm.mu.RLock()
+	vpm := bm.vpm
+	bm.mu.RUnlock()
+	if vpm == nil {
+		return "", fmt.Errorf("recording unavailable: preview manager not initialised")
+	}
+	s, err := bm.getSession(sessionID)
+	if err != nil {
+		return "", err
+	}
+	bm.mu.RLock()
+	existing := s.recorder
+	existingID := s.RecordClipID
+	bm.mu.RUnlock()
+	if existing != nil {
+		return existingID, nil
+	}
+	// Start the recorder outside the lock (it spawns ffmpeg + registers the clip).
+	r, err := startBrowserRecording(vpm, s.browserCtx, sessionID, durMaxSec)
+	if err != nil {
+		return "", err
+	}
+	bm.mu.Lock()
+	// Lost-race guard: another caller may have attached a recorder meanwhile.
+	if s.recorder != nil {
+		id := s.RecordClipID
+		bm.mu.Unlock()
+		r.Stop() // discard the duplicate
+		return id, nil
+	}
+	s.recorder = r
+	s.RecordClipID = r.clipID
+	bm.mu.Unlock()
+	return r.clipID, nil
+}
+
+// redactProxyCreds strips any user:pass@ userinfo from a proxy URL so it is safe
+// to log, emit as an event, or return over HTTP. Proxy credentials belong in the
+// vault, never in logs or session listings.
+func redactProxyCreds(proxyURL string) string {
+	if proxyURL == "" {
+		return ""
+	}
+	if u, err := url.Parse(proxyURL); err == nil && u.User != nil {
+		u.User = url.User("redacted")
+		return u.String()
+	}
+	return proxyURL
+}
+
+// CloseSession shuts down a browser instance. If the session is being recorded,
+// the clip is finalized FIRST (so in-flight frames flush) before Chrome is
+// torn down. Stop()/cancel happen outside the lock — Stop waits on ffmpeg.
+func (bm *BrowserManager) CloseSession(id string) error {
+	bm.mu.Lock()
+	s, ok := bm.sessions[id]
+	if !ok {
+		bm.mu.Unlock()
+		return fmt.Errorf("browser session %q not found", id)
+	}
+	delete(bm.sessions, id)
+	rec := s.recorder
+	bm.mu.Unlock()
+
+	if rec != nil {
+		rec.Stop() // finalize MP4 before the CDP context goes away
+	}
+	s.browserCancel()
+	s.allocCancel()
+
+	bm.emit(BrowserEvent{
+		Type:      "closed",
+		SessionID: id,
+		Message:   "session closed",
+	})
+
+	return nil
+}
+
+// ListSessions returns info about all active sessions.
+func (bm *BrowserManager) ListSessions() []BrowserSession {
+	bm.mu.RLock()
+	defer bm.mu.RUnlock()
+
+	out := make([]BrowserSession, 0, len(bm.sessions))
+	for _, s := range bm.sessions {
+		out = append(out, BrowserSession{
+			ID:           s.ID,
+			Headful:      s.Headful,
+			CreatedAt:    s.CreatedAt,
+			LastUsedAt:   s.LastUsedAt,
+			CurrentURL:   s.CurrentURL,
+			CurrentTitle: s.CurrentTitle,
+			ProxyURL:     s.ProxyURL, // already redacted at open time
+			EgressIP:     s.EgressIP,
+		})
+	}
+	return out
+}
+
+// CheckEgressIP navigates the session to an IP-echo endpoint and returns the
+// egress IP the source actually sees. When the session was opened with a proxy
+// this reflects the proxy's IP — i.e. the vantage's egress identity — which is
+// how Yaver reports "the egress it actually used". echoURL must return the
+// caller's IP as its response body (e.g. https://api.ipify.org). The result is
+// cached on the session as vantage metadata. The IP is provenance, not a
+// normalized data field — keep it out of collected rows.
+func (bm *BrowserManager) CheckEgressIP(id, echoURL string) (string, error) {
+	if echoURL == "" {
+		echoURL = "https://api.ipify.org"
+	}
+	if _, err := bm.Navigate(id, echoURL); err != nil {
+		return "", fmt.Errorf("egress check navigate: %w", err)
+	}
+	ip, err := bm.ExtractText(id, "body")
+	if err != nil {
+		return "", fmt.Errorf("egress check read: %w", err)
+	}
+	ip = strings.TrimSpace(ip)
+	if s, err := bm.getSession(id); err == nil {
+		bm.mu.Lock()
+		s.EgressIP = ip
+		bm.mu.Unlock()
+	}
+	return ip, nil
+}
+
+// captureState grabs a screenshot plus current URL and title.
+func (bm *BrowserManager) captureState(s *BrowserSession) (*BrowserActionResult, error) {
+	var (
+		screenshot []byte
+		url        string
+		title      string
+	)
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.Location(&url),
+		chromedp.Title(&title),
+		chromedp.CaptureScreenshot(&screenshot),
+	); err != nil {
+		return nil, fmt.Errorf("capture state: %w", err)
+	}
+
+	bm.mu.Lock()
+	s.CurrentURL = url
+	s.CurrentTitle = title
+	bm.mu.Unlock()
+
+	b64 := base64.StdEncoding.EncodeToString(screenshot)
+
+	bm.emit(BrowserEvent{
+		Type:          "screenshot",
+		SessionID:     s.ID,
+		ScreenshotB64: b64,
+		URL:           url,
+		Title:         title,
+	})
+
+	return &BrowserActionResult{
+		ScreenshotB64: b64,
+		URL:           url,
+		Title:         title,
+	}, nil
+}
+
+// Navigate goes to a URL and returns a screenshot.
+func (bm *BrowserManager) Navigate(id, url string) (*BrowserActionResult, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return nil, err
+	}
+	bm.touch(s)
+
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.Navigate(url),
+		chromedp.Sleep(1*time.Second), // let page settle
+	); err != nil {
+		return nil, fmt.Errorf("navigate to %s: %w", url, err)
+	}
+
+	bm.emit(BrowserEvent{
+		Type:      "navigate",
+		SessionID: s.ID,
+		URL:       url,
+		Message:   "navigated to " + url,
+	})
+
+	return bm.captureState(s)
+}
+
+// Click clicks a CSS selector and returns a screenshot.
+func (bm *BrowserManager) Click(id, selector string) (*BrowserActionResult, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return nil, err
+	}
+	bm.touch(s)
+
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		chromedp.Click(selector, chromedp.ByQuery),
+		chromedp.Sleep(500*time.Millisecond),
+	); err != nil {
+		return nil, fmt.Errorf("click %q: %w", selector, err)
+	}
+
+	bm.emit(BrowserEvent{
+		Type:      "action",
+		SessionID: s.ID,
+		Message:   "clicked " + selector,
+	})
+
+	return bm.captureState(s)
+}
+
+// Type fills a text input and returns a screenshot.
+func (bm *BrowserManager) Type(id, selector, text string, clear bool) (*BrowserActionResult, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return nil, err
+	}
+	bm.touch(s)
+
+	actions := []chromedp.Action{
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+	}
+	if clear {
+		actions = append(actions, chromedp.Clear(selector, chromedp.ByQuery))
+	}
+	actions = append(actions,
+		chromedp.SendKeys(selector, text, chromedp.ByQuery),
+		chromedp.Sleep(300*time.Millisecond),
+	)
+
+	if err := chromedp.Run(s.browserCtx, actions...); err != nil {
+		return nil, fmt.Errorf("type into %q: %w", selector, err)
+	}
+
+	bm.emit(BrowserEvent{
+		Type:      "action",
+		SessionID: s.ID,
+		Message:   fmt.Sprintf("typed into %s", selector),
+	})
+
+	return bm.captureState(s)
+}
+
+// Select picks a value in a <select> dropdown and returns a screenshot.
+func (bm *BrowserManager) Select(id, selector, value string) (*BrowserActionResult, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return nil, err
+	}
+	bm.touch(s)
+
+	js := fmt.Sprintf(
+		`document.querySelector(%q).value = %q; document.querySelector(%q).dispatchEvent(new Event('change', {bubbles: true}));`,
+		selector, value, selector,
+	)
+	var ignored interface{}
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.Evaluate(js, &ignored),
+		chromedp.Sleep(300*time.Millisecond),
+	); err != nil {
+		return nil, fmt.Errorf("select %q in %q: %w", value, selector, err)
+	}
+
+	return bm.captureState(s)
+}
+
+// Screenshot captures the current page as a base64 PNG.
+func (bm *BrowserManager) Screenshot(id string) (*BrowserActionResult, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return nil, err
+	}
+	bm.touch(s)
+	return bm.captureState(s)
+}
+
+// ExtractText returns the text content of a CSS selector (or body).
+func (bm *BrowserManager) ExtractText(id, selector string) (string, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return "", err
+	}
+	bm.touch(s)
+
+	if selector == "" {
+		selector = "body"
+	}
+
+	var text string
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.Text(selector, &text, chromedp.ByQuery),
+	); err != nil {
+		return "", fmt.Errorf("extract text from %q: %w", selector, err)
+	}
+
+	return text, nil
+}
+
+// ExtractAttribute returns an attribute value from a CSS selector.
+func (bm *BrowserManager) ExtractAttribute(id, selector, attr string) (string, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return "", err
+	}
+	bm.touch(s)
+
+	var value string
+	var ok bool
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.AttributeValue(selector, attr, &value, &ok, chromedp.ByQuery),
+	); err != nil {
+		return "", fmt.Errorf("extract attribute %q from %q: %w", attr, selector, err)
+	}
+	if !ok {
+		return "", fmt.Errorf("attribute %q not found on %q", attr, selector)
+	}
+
+	return value, nil
+}
+
+// WaitFor waits for a CSS selector to become visible.
+func (bm *BrowserManager) WaitFor(id, selector string, timeoutMs int) error {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return err
+	}
+	bm.touch(s)
+
+	if timeoutMs <= 0 {
+		timeoutMs = 10000
+	}
+	ctx, cancel := context.WithTimeout(s.browserCtx, time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	if err := chromedp.Run(ctx,
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+	); err != nil {
+		return fmt.Errorf("wait for %q (timeout %dms): %w", selector, timeoutMs, err)
+	}
+
+	return nil
+}
+
+// WaitForNavigation waits for the page URL to change.
+func (bm *BrowserManager) WaitForNavigation(id string, timeoutMs int) error {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return err
+	}
+	bm.touch(s)
+
+	if timeoutMs <= 0 {
+		timeoutMs = 10000
+	}
+
+	bm.mu.RLock()
+	startURL := s.CurrentURL
+	bm.mu.RUnlock()
+
+	deadline := time.After(time.Duration(timeoutMs) * time.Millisecond)
+	for {
+		select {
+		case <-deadline:
+			return fmt.Errorf("wait_for_navigation: timed out after %dms", timeoutMs)
+		default:
+		}
+		var loc string
+		if err := chromedp.Run(s.browserCtx, chromedp.Location(&loc)); err == nil && loc != startURL {
+			bm.mu.Lock()
+			s.CurrentURL = loc
+			bm.mu.Unlock()
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// Scroll scrolls the page or an element.
+func (bm *BrowserManager) Scroll(id string, deltaX, deltaY int) (*BrowserActionResult, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return nil, err
+	}
+	bm.touch(s)
+
+	js := fmt.Sprintf("window.scrollBy(%d, %d)", deltaX, deltaY)
+	var ignored interface{}
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.Evaluate(js, &ignored),
+		chromedp.Sleep(300*time.Millisecond),
+	); err != nil {
+		return nil, fmt.Errorf("scroll: %w", err)
+	}
+
+	return bm.captureState(s)
+}
+
+// DispatchMouse moves the mouse to viewport coordinates and — when click is
+// true — presses and releases the primary button there. This is how a
+// mouse-less surface (tvOS cursor, remote runtime) turns a screen coordinate
+// into a REAL browser interaction: the hover paints CSS :hover and the click
+// fires the page's handlers, so the element the probe highlights next frame is
+// the element a human would have clicked.
+func (bm *BrowserManager) DispatchMouse(id string, x, y int, click bool) error {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return err
+	}
+	bm.touch(s)
+	if err := chromedp.Run(s.browserCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := input.DispatchMouseEvent(input.MouseMoved, float64(x), float64(y)).
+			WithButton(input.None).
+			Do(ctx); err != nil {
+			return err
+		}
+		if click {
+			if err := input.DispatchMouseEvent(input.MousePressed, float64(x), float64(y)).
+				WithButton(input.Left).
+				WithClickCount(1).
+				Do(ctx); err != nil {
+				return err
+			}
+			if err := input.DispatchMouseEvent(input.MouseReleased, float64(x), float64(y)).
+				WithButton(input.Left).
+				WithClickCount(1).
+				Do(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})); err != nil {
+		return fmt.Errorf("dispatch mouse: %w", err)
+	}
+	return nil
+}
+
+// Evaluate runs JavaScript and returns the result.
+func (bm *BrowserManager) Evaluate(id, js string) (interface{}, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return nil, err
+	}
+	bm.touch(s)
+
+	var result interface{}
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.Evaluate(js, &result),
+	); err != nil {
+		return nil, fmt.Errorf("evaluate: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetURL returns the current page URL.
+func (bm *BrowserManager) GetURL(id string) (string, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return "", err
+	}
+	bm.touch(s)
+
+	var url string
+	if err := chromedp.Run(s.browserCtx, chromedp.Location(&url)); err != nil {
+		return "", err
+	}
+	return url, nil
+}
+
+// GetDOM returns the page HTML, truncated for token budget.
+func (bm *BrowserManager) GetDOM(id string) (string, error) {
+	s, err := bm.getSession(id)
+	if err != nil {
+		return "", err
+	}
+	bm.touch(s)
+
+	var html string
+	if err := chromedp.Run(s.browserCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			node, err := dom.GetDocument().Do(ctx)
+			if err != nil {
+				return err
+			}
+			h, err := dom.GetOuterHTML().WithNodeID(node.NodeID).Do(ctx)
+			if err != nil {
+				return err
+			}
+			html = h
+			return nil
+		}),
+	); err != nil {
+		return "", fmt.Errorf("get DOM: %w", err)
+	}
+
+	// Truncate to 50KB for AI token budget.
+	const maxLen = 50 * 1024
+	if len(html) > maxLen {
+		html = html[:maxLen] + "\n<!-- truncated at 50KB -->"
+	}
+
+	// Strip excessive whitespace.
+	lines := strings.Split(html, "\n")
+	var cleaned []string
+	for _, line := range lines {
+		trimmed := strings.TrimRight(line, " \t")
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+
+	return strings.Join(cleaned, "\n"), nil
+}
+
+// chromeLaunchRemedy turns a Chrome start failure into the fix that MATCHES it.
+//
+// WHY (2026-08-03). Every launch failure ended with "(install Chrome/Chromium)".
+// On the owner's box that advice was simply wrong: chromium was installed THREE
+// times — /snap/bin/chromium, /usr/bin/chromium-browser, /usr/bin/google-chrome
+// — and the real error was
+//
+//	cannot create temporary directory for the root file system:
+//	No such file or directory
+//
+// which is snap confinement, not a missing binary. So the vibing preview could
+// not capture a frame, the tvOS/visionOS colour arc had nothing to sample, and
+// the one instruction offered was the one thing already done. Same defect class
+// as telling a rate-limited user to change their model: a remedy that cannot
+// work is worse than none, because the user spends the time.
+//
+// The binary check is deliberate — we look before we tell someone to install.
+func chromeLaunchRemedy(err error) string {
+	// A launch just failed, so whatever is cached is suspect — re-probe, and
+	// report what each candidate actually DID rather than what its path looks
+	// like. The previous version guessed "SNAP build" from `strings.Contains(p,
+	// "/snap/")`, which is false for /usr/bin/chromium-browser: the very binary
+	// that produced this error on the owner's box.
+	invalidateChromeResolution()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	chosen, attempts := resolveLaunchableChrome(ctx)
+
+	working := ""
+	for _, a := range attempts {
+		if a.OK {
+			working = a.Path
+			break
+		}
+	}
+
+	if len(attempts) == 0 {
+		return " (install Chrome/Chromium — no candidate binary found on PATH)"
+	}
+
+	if working != "" {
+		// Something on this box launches. So the failure is NOT "no browser",
+		// and telling the user to install one would send them after the wrong
+		// thing — the mistake that cost a whole session on 2026-07-19.
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "temporary directory") || strings.Contains(msg, "no such file or directory") {
+			return fmt.Sprintf(" — %s LAUNCHES fine on this box, so this is a TEMP-DIRECTORY failure, not a missing "+
+				"browser. Check TMPDIR exists and is writable by the agent's user. Do NOT reinstall Chrome. Tried: %s",
+				working, chromeAttemptsSummary(attempts))
+		}
+		return fmt.Sprintf(" — %s LAUNCHES fine on this box, so this is not a missing browser. "+
+			"Read the error above for the real cause before reinstalling anything. Tried: %s",
+			working, chromeAttemptsSummary(attempts))
+	}
+
+	// Nothing launched. The attempts already carry the specific remedy per
+	// candidate (confined snap → install an unconfined build; not executable →
+	// permissions), which is strictly better than one guessed sentence.
+	if chosen != "" {
+		return fmt.Sprintf(" — no Chrome on this box could be launched. %s", chromeAttemptsSummary(attempts))
+	}
+	return fmt.Sprintf(" (install Chrome/Chromium) — %s", chromeAttemptsSummary(attempts))
+}
+
+// preferredChromePath resolves the Chrome that ACTUALLY LAUNCHES on this box.
+//
+// It used to deprioritise any path containing "/snap/", which was a proxy for
+// "confined" and, like every proxy in this repo's incident list, drifted:
+// `/usr/bin/chromium-browser` on Ubuntu is a 2020 shell script that redirects
+// into the snap. No "/snap/" in the path, same "cannot create temporary
+// directory" failure — measured on the owner's box 2026-08-03, where it exited
+// 1 exactly like /snap/bin/chromium while /usr/bin/google-chrome ran fine.
+//
+// So the decision now runs `--version` on each candidate and believes the exit
+// code. See browser_resolve.go for the full incident and the ordering.
+func preferredChromePath() string {
+	path, _ := resolveLaunchableChrome(context.Background())
+	return path
+}

@@ -1,0 +1,94 @@
+{
+  "name": "yaver-feedback-react-native",
+  "version": "0.9.2",
+  "description": "Visual feedback SDK for Yaver — bug reports, screen recording, voice vibe coding, and local-first developer workflows",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/",
+    "src/",
+    "ios/",
+    "android/",
+    "app.plugin.js"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kivanccakmak/yaver.io",
+    "directory": "sdk/feedback/react-native"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.70.0",
+    "@react-native-async-storage/async-storage": ">=1.17.0",
+    "expo-web-browser": ">=12.0.0",
+    "expo-apple-authentication": ">=6.0.0",
+    "expo-document-picker": ">=13.0.0",
+    "react-native-view-shot": ">=3.0.0",
+    "react-native-record-screen": ">=0.0.10",
+    "expo-av": ">=14.0.0",
+    "expo-file-system": ">=16.0.0",
+    "expo-speech": ">=12.0.0"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3"
+  },
+  "peerDependenciesMeta": {
+    "expo-file-system": {
+      "optional": true
+    },
+    "expo-speech": {
+      "optional": true
+    },
+    "@expo/config-plugins": {
+      "optional": true
+    },
+    "expo-constants": {
+      "optional": true
+    },
+    "expo-apple-authentication": {
+      "optional": true
+    },
+    "expo-document-picker": {
+      "optional": true
+    },
+    "react-native-view-shot": {
+      "optional": true
+    },
+    "react-native-record-screen": {
+      "optional": true
+    },
+    "expo-av": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/jest": "^29.0.0",
+    "@types/react": "^19.2.2",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.0"
+  },
+  "scripts": {
+    "build": "rm -rf dist && (tsc -p tsconfig.json || true) && test -f dist/index.js",
+    "prepublishOnly": "npm run build",
+    "test": "jest --runInBand",
+    "test:ci": "npm run build && npm test"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/src/__tests__/**/*.test.ts"
+    ]
+  },
+  "keywords": [
+    "yaver",
+    "feedback",
+    "bug-report",
+    "screen-recording",
+    "react-native",
+    "developer-runtime",
+    "local-first"
+  ]
+}

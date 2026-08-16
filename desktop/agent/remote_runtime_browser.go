@@ -1,0 +1,873 @@
+package main
+
+// remote_runtime_browser.go — "browser-window" runtimeTarget.
+//
+// Each session = one headless Chromium tab driven via CDP (chromedp).
+// Screen frames flow through the existing jpegDataChannelStreamer
+// pump: the runtime framework calls Screenshot(deviceID, pngPath)
+// at ~1.4 fps and ships the PNG → JPEG bytes over the frames DC.
+// Pointer + keyboard events arrive on the events DC from
+// remote_runtime_dispatch.go and are translated into CDP
+// Input.dispatchMouseEvent / dispatchKeyEvent calls here.
+//
+// CanEncodeRTPH264 is false on purpose: shipping an x264 encoder
+// in-process is a separate Phase. JPEG-DC at 30-60KB/frame is
+// already enough for a usable browser quad in a Quest headset
+// over LAN, and it reuses the exact same plumbing that already
+// ships for the iOS-simulator viewer.
+//
+// URL is NOT taken via Attach — chromedp opens about:blank and
+// navigation is a separate step. This matches how a real browser
+// window works (open → then go) and avoids passing extra args
+// through the runtimeTarget.Attach(ctx) signature, which is shared
+// with every other target.
+//
+// That second step used to exist ONLY as ops "glass_pc_navigate",
+// so a runtime session streaming this browser had no way to show
+// anything: it rendered about:blank forever while tap/pinch cheerfully
+// returned 200. runtimeTarget.Navigate now exposes the same
+// browserPool.navigate primitive to the session itself.
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/input"
+	cdplog "github.com/chromedp/cdproto/log"
+	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/chromedp"
+	"github.com/google/uuid"
+)
+
+type browserWindowEntry struct {
+	id            string
+	allocCtx      context.Context
+	allocCancel   context.CancelFunc
+	browserCtx    context.Context
+	browserCancel context.CancelFunc
+	width         int
+	height        int
+	createdAt     time.Time
+	lastUsedAt    time.Time
+	url           string
+	eventSink     func(map[string]any)
+	runtimeRoot   string
+}
+
+type browserWindowPool struct {
+	mu      sync.Mutex
+	entries map[string]*browserWindowEntry
+}
+
+var browserPool = &browserWindowPool{entries: map[string]*browserWindowEntry{}}
+
+func (p *browserWindowPool) open(ctx context.Context, width, height int) (*browserWindowEntry, error) {
+	if width <= 0 {
+		width = 1280
+	}
+	if height <= 0 {
+		height = 800
+	}
+	runtimeEnv, err := newBrowserWindowRuntime()
+	if err != nil {
+		return nil, fmt.Errorf("prepare browser-window runtime: %w", err)
+	}
+	browserPath := browserWindowChromeExecPath()
+	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(browserPath),
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("mute-audio", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("hide-scrollbars", false),
+		chromedp.Flag("data-path", runtimeEnv.dataDir),
+		chromedp.Flag("disk-cache-dir", runtimeEnv.cacheDir),
+		chromedp.UserDataDir(runtimeEnv.profileDir),
+		chromedp.Env(
+			"HOME="+runtimeEnv.homeDir,
+			"TMPDIR="+runtimeEnv.tmpDir,
+			"XDG_RUNTIME_DIR="+runtimeEnv.xdgRuntimeDir,
+		),
+		chromedp.WindowSize(width, height),
+	)
+	allocCtx, allocCancel := newPinnedChromeAllocator(context.Background(), allocOpts...)
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+
+	// Boot off browserCtx, NOT the request ctx.
+	//
+	// chromedp.Run only accepts a context created by chromedp.NewContext; give
+	// it anything else and it returns ErrInvalidContext without ever launching
+	// a browser. This previously derived from `ctx` (the inbound request), so
+	// every browser-window session failed with:
+	//
+	//   launch headless chromium: invalid context (install Chrome or Chromium)
+	//
+	// — on a machine with Chrome installed at the standard macOS path. The
+	// "install Chrome" hint sent you looking for a missing dependency that was
+	// never missing.
+	//
+	// The request deadline still applies: browserCtx descends from allocCtx,
+	// and the caller's cancellation is honoured via the timeout below plus the
+	// pool's own lifecycle.
+	// Boot on browserCtx ITSELF — not a timeout child.
+	//
+	// chromedp allocates the browser against whichever context you first Run
+	// with. Passing a `context.WithTimeout(browserCtx, …)` child therefore ties
+	// the browser process to that child, and the `defer cancel()` kills it the
+	// moment this function returns: the session is created, then every frame
+	// and control call fails with "context canceled".
+	//
+	// That is the second half of this bug. The first version passed the inbound
+	// request ctx (never launched, ErrInvalidContext); the naive fix passed a
+	// timeout child (launched, died immediately). Only the parent works, and
+	// its lifetime is owned by the pool via browserCancel.
+	//
+	// The boot deadline is enforced with a watchdog instead of a context, so
+	// nothing the browser is bound to ever gets cancelled.
+	bootErr := make(chan error, 1)
+	go func() { bootErr <- chromedp.Run(browserCtx) }()
+	var bootFailure error
+	select {
+	case bootFailure = <-bootErr:
+	case <-time.After(25 * time.Second):
+		bootFailure = fmt.Errorf("timed out after 25s waiting for the browser to start")
+	case <-ctx.Done():
+		bootFailure = ctx.Err()
+	}
+	if err := bootFailure; err != nil {
+		browserCancel()
+		allocCancel()
+		_ = runtimeEnv.cleanup()
+		// Only claim the browser is missing when it actually is — otherwise
+		// report what failed. Misattributing this cost real debugging time.
+		return nil, browserWindowLaunchError(err)
+	}
+
+	// Turn on touch emulation, or Pinch dispatches events that never become a
+	// gesture.
+	//
+	// Input.dispatchTouchEvent DELIVERS touches to the page regardless, which is
+	// why pinch appeared to work: the call returned 200 and the frame changed.
+	// But Chrome only synthesises pinch-ZOOM from those touches when the target
+	// is emulating a touch device — otherwise the page just handles them as
+	// stray pointer input and the content shifts instead of scaling. Verified by
+	// pinching a loaded page and watching the text disappear rather than grow.
+	//
+	// mobile:true is what enables viewport pinch-zoom semantics; touch points
+	// must be >0 for the page to report touch support at all.
+	if err := chromedp.Run(browserCtx,
+		runtime.Enable(),
+		cdplog.Enable(),
+		emulation.SetTouchEmulationEnabled(true).WithMaxTouchPoints(5),
+		emulation.SetDeviceMetricsOverride(int64(width), int64(height), 1, true),
+	); err != nil {
+		// Non-fatal: a browser that streams and taps is still useful, and
+		// failing the whole session over a gesture nicety would be worse. But
+		// say so, because the symptom (pinch silently not zooming) is otherwise
+		// indistinguishable from the bug this replaced.
+		log.Printf("[browser-window] touch emulation unavailable — pinch will not zoom: %v", err)
+	}
+
+	now := time.Now()
+	entry := &browserWindowEntry{
+		id:            "bw_" + uuid.NewString(),
+		allocCtx:      allocCtx,
+		allocCancel:   allocCancel,
+		browserCtx:    browserCtx,
+		browserCancel: browserCancel,
+		width:         width,
+		height:        height,
+		createdAt:     now,
+		lastUsedAt:    now,
+		runtimeRoot:   runtimeEnv.root,
+	}
+	p.mu.Lock()
+	p.entries[entry.id] = entry
+	p.mu.Unlock()
+	chromedp.ListenTarget(browserCtx, func(ev any) {
+		event := browserWindowEventFromCDP(ev)
+		if event == nil {
+			return
+		}
+		p.emitEvent(entry.id, event)
+	})
+	return entry, nil
+}
+
+func (p *browserWindowPool) get(deviceID string) (*browserWindowEntry, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[deviceID]
+	if ok {
+		e.lastUsedAt = time.Now()
+	}
+	return e, ok
+}
+
+func (p *browserWindowPool) close(deviceID string) bool {
+	p.mu.Lock()
+	e, ok := p.entries[deviceID]
+	if ok {
+		delete(p.entries, deviceID)
+	}
+	p.mu.Unlock()
+	if !ok {
+		return false
+	}
+	e.browserCancel()
+	e.allocCancel()
+	if e.runtimeRoot != "" {
+		_ = os.RemoveAll(e.runtimeRoot)
+	}
+	return true
+}
+
+type browserWindowRuntime struct {
+	root          string
+	homeDir       string
+	profileDir    string
+	xdgRuntimeDir string
+	tmpDir        string
+	cacheDir      string
+	dataDir       string
+	// unprotect lifts this tree's reaper protection. Called by cleanup().
+	unprotect func()
+}
+
+func newBrowserWindowRuntime() (browserWindowRuntime, error) {
+	root, err := os.MkdirTemp("", "yaver-browser-window-*")
+	if err != nil {
+		// A failure HERE is almost always the disk, and it is the first thing
+		// that fails when the disk is full — MkdirTemp cannot write the dir.
+		return browserWindowRuntime{}, fmt.Errorf("create browser runtime dir: %w", err)
+	}
+	// Tell the reaper this tree is live.
+	//
+	// These profiles are 50-133 MB each and the lane creates one PER LAUNCH.
+	// cleanup() removes it on a clean stop — but a crash, a kill or an agent
+	// restart never reaches cleanup, so they accumulate: on 2026-08-02 three
+	// stranded ones held 237 MB on a box that then could not start Chrome at
+	// all. The periodic reaper collects the strandeds; this registration is
+	// what stops it collecting a profile a live browser is sitting in.
+	rt := browserWindowRuntime{
+		root:          root,
+		unprotect:     ReapProtect(root, "browser lane"),
+		homeDir:       filepath.Join(root, "home"),
+		profileDir:    filepath.Join(root, "profile"),
+		xdgRuntimeDir: filepath.Join(root, "runtime"),
+		tmpDir:        filepath.Join(root, "tmp"),
+		cacheDir:      filepath.Join(root, "cache"),
+		dataDir:       filepath.Join(root, "data"),
+	}
+	for _, dir := range []string{rt.homeDir, rt.profileDir, rt.xdgRuntimeDir, rt.tmpDir, rt.cacheDir, rt.dataDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			_ = rt.cleanup()
+			return browserWindowRuntime{}, err
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			_ = rt.cleanup()
+			return browserWindowRuntime{}, err
+		}
+	}
+	return rt, nil
+}
+
+func (rt browserWindowRuntime) cleanup() error {
+	if rt.root == "" {
+		return nil
+	}
+	// Lift the protection FIRST. If RemoveAll fails (a busy mount, a stray
+	// file), the tree must still become reapable — otherwise a failed cleanup
+	// creates a permanently protected leak, which is worse than the unprotected
+	// leak this whole change exists to fix.
+	if rt.unprotect != nil {
+		rt.unprotect()
+	}
+	return os.RemoveAll(rt.root)
+}
+
+// BrowserWindowLaunchError carries the browser_window.* reason as a FIELD.
+//
+// It used to be interpolated into the error STRING — `fmt.Errorf("launch
+// headless chromium: %s: %w", reason, err)` — so the five browser_window codes
+// travelled as prose. A client wanting to distinguish "install Chrome" from "the
+// snap cannot enter our private HOME" had to regex the sentence, which is
+// precisely what reason codes exist to abolish, and so no surface ever read any
+// of them (measured 2026-08-04: five of the twenty codes emitted into silence).
+//
+// Error() keeps the exact sentence it always produced, so every existing caller
+// that only prints the error is byte-for-byte unaffected. The Reason and Gap are
+// additive, for callers that can render a route.
+type BrowserWindowLaunchError struct {
+	Reason string
+	Gap    *CapabilityGap
+	Err    error
+}
+
+func (e *BrowserWindowLaunchError) Error() string {
+	if e.Reason == ReasonBrowserWindowChromeMissing {
+		return fmt.Sprintf("launch headless chromium: %s: %v (install Chrome or Chromium)", e.Reason, e.Err)
+	}
+	return fmt.Sprintf("launch headless chromium: %s: %v", e.Reason, e.Err)
+}
+
+func (e *BrowserWindowLaunchError) Unwrap() error { return e.Err }
+
+func browserWindowLaunchError(err error) error {
+	reason := browserWindowLaunchErrorReason(err)
+	return &BrowserWindowLaunchError{Reason: reason, Gap: browserWindowGap(reason), Err: err}
+}
+
+// browserWindowGap turns each browser_window reason into a named cause with the
+// route that actually helps — and the routes genuinely differ, which is the whole
+// reason these are five codes and not one.
+func browserWindowGap(reason string) *CapabilityGap {
+	switch reason {
+	case ReasonBrowserWindowChromeMissing:
+		// A real, deterministic fix: chromium has an install recipe, and
+		// capabilityGapForMissingTools validates it against the same tables
+		// `yaver install` consults, so this can never advertise a 404.
+		gap := capabilityGapForMissingTools([]string{"chromium"})
+		if gap != nil {
+			gap.Code = ReasonBrowserWindowChromeMissing
+			gap.Summary = "No browser is installed, so this machine cannot open a browser window."
+		}
+		return gap
+
+	case ReasonBrowserWindowChromeSnapConfined:
+		// A browser IS installed, so "install Chrome" reads as nonsense and an
+		// installer button would be a no-op. The remedy is a DIFFERENT build.
+		return &CapabilityGap{
+			Code:       ReasonBrowserWindowChromeSnapConfined,
+			Capability: "browser-window",
+			Summary:    "The browser on this machine is a snap, and a snap cannot enter the private directory this lane hands it.",
+			Constraint: "Snap confinement blocks it, so installing more snaps cannot help. Install the unconfined build — " +
+				"Google's .deb, or `snap remove chromium` plus your distro's chromium package — then try again.",
+		}
+
+	case ReasonBrowserWindowChromeProfile:
+		return &CapabilityGap{
+			Code:       ReasonBrowserWindowChromeProfile,
+			Capability: "browser-window",
+			Summary:    "The browser profile this lane uses is locked by another process.",
+			Constraint: "A previous browser is still holding the profile. It usually clears on its own; " +
+				"if it does not, the stale process is the thing to end, not the browser to reinstall.",
+		}
+
+	case ReasonBrowserWindowChromeRuntimeDir:
+		return &CapabilityGap{
+			Code:       ReasonBrowserWindowChromeRuntimeDir,
+			Capability: "browser-window",
+			Summary:    "The browser could not create its runtime directory.",
+			Constraint: "This is a filesystem permission or space problem on the box, not a missing browser — " +
+				"reinstalling would change nothing.",
+		}
+
+	case ReasonBrowserWindowChromeLaunch:
+		return &CapabilityGap{
+			Code:       ReasonBrowserWindowChromeLaunch,
+			Capability: "browser-window",
+			Summary:    "The browser is installed but refused to start.",
+			// Deliberately no AIFix: this is the machine's environment, not the
+			// project's source, and a coding agent cannot repair it.
+			Constraint: "The browser exists and exits immediately. The launch output on the box is the evidence; " +
+				"a reinstall is worth trying only if that output names a missing library.",
+		}
+	}
+	return nil
+}
+
+func browserWindowChromeExecPath() string {
+	if p := DiscoverChromeBinary(); p != "" {
+		return p
+	}
+	for _, bin := range []string{"microsoft-edge", "edge", "chrome"} {
+		if p, err := exec.LookPath(bin); err == nil && chromeBinaryUsable(p) {
+			return p
+		}
+	}
+	return "google-chrome"
+}
+
+func browserWindowLaunchErrorReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.ToLower(err.Error())
+	if errors.Is(err, exec.ErrNotFound) || strings.Contains(text, "executable file not found") {
+		return ReasonBrowserWindowChromeMissing
+	}
+	// SNAP-CONFINED BROWSER. Measured on ubuntu-4gb-hel1-1, 2026-08-02:
+	//
+	//	cannot create temporary directory for the root file system:
+	//	No such file or directory
+	//
+	// That is snap-confine, not Chrome. The lane gives the browser a PRIVATE
+	// HOME/TMPDIR/XDG_RUNTIME_DIR under /tmp/yaver-browser-window-*; a snap
+	// cannot see them, so it dies before Chrome starts. Reproduced by hand on
+	// the box: /snap/bin/chromium and /usr/bin/chromium-browser (the snap shim)
+	// both emit this string verbatim and exit 1, while /usr/bin/google-chrome
+	// renders about:blank fine with the identical environment.
+	//
+	// This message was previously unclassified, so it fell through to the
+	// generic launch branch and the phone rendered "Remedy: the preview URL
+	// refused the connection — the dev server bound a different port, or died
+	// after /dev/start returned; check /dev/status". Every word of that is
+	// wrong: the dev server was healthy and serving.
+	//
+	// NOT classified as insufficient disk, though the incident that surfaced it
+	// began with a full disk. The box now has 1.9 GB free and reproduces this
+	// error exactly — mapping it to disk would send users to reclaim space that
+	// is already there, which is a FALSE RED and no better than the false green
+	// it replaced. Genuine exhaustion says "no space left on device"; that is
+	// matched below on its own terms.
+	if strings.Contains(text, "cannot create temporary directory for the root file system") ||
+		strings.Contains(text, "snap-confine") ||
+		strings.Contains(text, "cannot open path of the current working directory") {
+		return ReasonBrowserWindowChromeSnapConfined
+	}
+	// GENUINE disk exhaustion, by its own unambiguous wording.
+	// capability.insufficient_disk already existed with no producer; this is
+	// its first one, and diskguard_scan / the reaper are the route it names.
+	if strings.Contains(text, "no space left on device") ||
+		strings.Contains(text, "enospc") {
+		return ReasonCapabilityInsufficientDisk
+	}
+	if strings.Contains(text, "failed to create socket directory") ||
+		strings.Contains(text, "xdg_runtime_dir") ||
+		strings.Contains(text, "runtime dir") {
+		return ReasonBrowserWindowChromeRuntimeDir
+	}
+	if strings.Contains(text, "processsingleton") ||
+		strings.Contains(text, "singleton") ||
+		strings.Contains(text, "profile directory") {
+		return ReasonBrowserWindowChromeProfile
+	}
+	return ReasonBrowserWindowChromeLaunch
+}
+
+func (p *browserWindowPool) setEventSink(deviceID string, sink func(map[string]any)) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[deviceID]
+	if !ok {
+		return false
+	}
+	e.eventSink = sink
+	e.lastUsedAt = time.Now()
+	return true
+}
+
+func (p *browserWindowPool) currentURL(deviceID string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.entries[deviceID]
+	if !ok {
+		return "", false
+	}
+	e.lastUsedAt = time.Now()
+	return e.url, true
+}
+
+func (p *browserWindowPool) emitEvent(deviceID string, event map[string]any) {
+	p.mu.Lock()
+	e, ok := p.entries[deviceID]
+	var sink func(map[string]any)
+	if ok {
+		e.lastUsedAt = time.Now()
+		sink = e.eventSink
+	}
+	p.mu.Unlock()
+	if sink != nil {
+		sink(event)
+	}
+}
+
+func browserWindowEventFromCDP(ev any) map[string]any {
+	switch e := ev.(type) {
+	case *runtime.EventConsoleAPICalled:
+		parts := make([]string, 0, len(e.Args))
+		for _, arg := range e.Args {
+			if arg == nil {
+				continue
+			}
+			if arg.Value != nil {
+				parts = append(parts, strings.TrimSpace(string(arg.Value)))
+				continue
+			}
+			if arg.Description != "" {
+				parts = append(parts, arg.Description)
+				continue
+			}
+			if arg.Type != "" {
+				parts = append(parts, string(arg.Type))
+			}
+		}
+		text := strings.TrimSpace(strings.Join(parts, " "))
+		if text == "" {
+			text = string(e.Type)
+		}
+		return map[string]any{
+			"type":    "browser-log",
+			"level":   string(e.Type),
+			"message": text,
+			"source":  "console",
+		}
+	case *runtime.EventExceptionThrown:
+		msg := e.ExceptionDetails.Text
+		if e.ExceptionDetails.Exception != nil {
+			if e.ExceptionDetails.Exception.Description != "" {
+				msg = e.ExceptionDetails.Exception.Description
+			} else if e.ExceptionDetails.Exception.Value != nil {
+				msg = strings.TrimSpace(string(e.ExceptionDetails.Exception.Value))
+			}
+		}
+		if msg == "" {
+			msg = "uncaught browser exception"
+		}
+		return map[string]any{
+			"type":    "browser-log",
+			"level":   "error",
+			"message": msg,
+			"source":  "exception",
+		}
+	case *cdplog.EventEntryAdded:
+		if e.Entry == nil || strings.TrimSpace(e.Entry.Text) == "" {
+			return nil
+		}
+		return map[string]any{
+			"type":    "browser-log",
+			"level":   string(e.Entry.Level),
+			"message": e.Entry.Text,
+			"source":  string(e.Entry.Source),
+			"url":     e.Entry.URL,
+		}
+	default:
+		return nil
+	}
+}
+
+func (p *browserWindowPool) list() []map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]map[string]any, 0, len(p.entries))
+	for _, e := range p.entries {
+		out = append(out, map[string]any{
+			"id":        e.id,
+			"url":       e.url,
+			"width":     e.width,
+			"height":    e.height,
+			"createdAt": e.createdAt.UTC().Format(time.RFC3339),
+			"lastUsed":  e.lastUsedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return out
+}
+
+func (p *browserWindowPool) navigate(deviceID, url string) error {
+	e, ok := p.get(deviceID)
+	if !ok {
+		return fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	if url == "" {
+		return errors.New("url is required")
+	}
+	if err := chromedp.Run(e.browserCtx, chromedp.Navigate(url)); err != nil {
+		return fmt.Errorf("navigate: %w", err)
+	}
+	p.mu.Lock()
+	e.url = url
+	e.lastUsedAt = time.Now()
+	p.mu.Unlock()
+	return nil
+}
+
+// browserWindowTarget plugs into the runtimeTarget interface so the
+// session pump in remote_runtime_webrtc.go works unchanged.
+type browserWindowTarget struct{}
+
+func (browserWindowTarget) Attach(ctx context.Context) (string, error) {
+	entry, err := browserPool.open(ctx, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	return entry.id, nil
+}
+
+func (browserWindowTarget) AttachViewport(ctx context.Context, width, height int) (string, error) {
+	entry, err := browserPool.open(ctx, width, height)
+	if err != nil {
+		return "", err
+	}
+	return entry.id, nil
+}
+
+func (browserWindowTarget) Tap(ctx context.Context, deviceID string, x, y int) error {
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	return chromedp.Run(e.browserCtx, chromedp.MouseClickXY(float64(x), float64(y)))
+}
+
+func (browserWindowTarget) Swipe(ctx context.Context, deviceID string, x1, y1, x2, y2, durationMs int) error {
+	// Browsers translate "swipe" to a scroll. dispatchMouseEvent with
+	// type "mouseWheel" + a deltaY proportional to (y2-y1) does the
+	// right thing for the common case of "drag finger up to scroll".
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	dy := float64(y1 - y2)
+	dx := float64(x1 - x2)
+	return chromedp.Run(e.browserCtx, chromedp.ActionFunc(func(c context.Context) error {
+		return input.DispatchMouseEvent(input.MouseWheel, float64(x1), float64(y1)).
+			WithDeltaX(dx).
+			WithDeltaY(dy).
+			Do(c)
+	}))
+}
+
+func (browserWindowTarget) Text(ctx context.Context, deviceID, text string) error {
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	return chromedp.Run(e.browserCtx, chromedp.ActionFunc(func(c context.Context) error {
+		return input.InsertText(text).Do(c)
+	}))
+}
+
+func (browserWindowTarget) Key(ctx context.Context, deviceID, key string) error {
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	// chromedp.KeyEvent understands Windows-style names ("Enter",
+	// "Tab", "ArrowLeft" …) plus single characters. The HUD
+	// KeyboardRouter ships symbols that match this set, so we pass
+	// through without translation.
+	return chromedp.Run(e.browserCtx, chromedp.KeyEvent(key))
+}
+
+func (browserWindowTarget) Screenshot(ctx context.Context, deviceID, pngPath string) error {
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	var buf []byte
+	if err := chromedp.Run(e.browserCtx, chromedp.CaptureScreenshot(&buf)); err != nil {
+		return fmt.Errorf("capture screenshot: %w", err)
+	}
+	if err := os.WriteFile(pngPath, buf, 0o600); err != nil {
+		return fmt.Errorf("write png: %w", err)
+	}
+	return nil
+}
+
+func (browserWindowTarget) Dims(_ context.Context, deviceID string) DeviceDims {
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return DeviceDims{Width: 1280, Height: 800, Scale: 1.0, Rotation: "portrait"}
+	}
+	rot := "portrait"
+	if e.width > e.height {
+		rot = "landscape"
+	}
+	return DeviceDims{
+		Width:    e.width,
+		Height:   e.height,
+		Scale:    1.0,
+		Rotation: rot,
+	}
+}
+
+func (browserWindowTarget) SpawnCapture(ctx context.Context, deviceID string) (*exec.Cmd, io.ReadCloser, error) {
+	return nil, nil, errors.New("browser-window target does not support RTP H264 capture yet")
+}
+
+func (browserWindowTarget) NewNALReader(r io.Reader) (nalSource, error) {
+	return nil, errors.New("browser-window target does not support RTP H264 capture yet")
+}
+
+func (browserWindowTarget) CanEncodeRTPH264() bool { return false }
+
+// probeBrowserWindowTarget reports whether the host can launch
+// chromedp's headless browser. We don't run a real browser to test
+// — we just check that the binary chromedp would invoke exists.
+// The browser-window family is enabled by default on every OS, and
+// degrades to a clear error if no Chrome/Chromium is installed.
+func probeBrowserWindowTarget() RemoteRuntimeTarget {
+	target := RemoteRuntimeTarget{
+		ID:               "browser-window",
+		Label:            "WebRTC over browser",
+		Platform:         "browser",
+		Surface:          "browser",
+		RuntimeHostClass: "any",
+		HostOS:           "any",
+		RequiredCLI:      "google-chrome / chromium / msedge",
+	}
+	if !browserBinaryAvailable() {
+		target.Enabled = false
+		target.Reason = "No usable browser on this host. " + ChromeInstallHint()
+		return target
+	}
+	target.Enabled = true
+	return target
+}
+
+func browserBinaryAvailable() bool {
+	// Prefer the VERIFIED probe: DiscoverChromeBinary runs `--version` and
+	// requires the output to name chrome/chromium. A LookPath hit proves
+	// nothing — Ubuntu's `chromium-browser` is a snap stub that resolves on
+	// PATH and then refuses to launch, so a name-only check reports a usable
+	// browser and the stream fails later with no explanation. See
+	// chrome_install.go.
+	if DiscoverChromeBinary() != "" {
+		return true
+	}
+	// Edge and bare `chrome` are not covered by DiscoverChromeBinary, so they
+	// still get a PATH lookup — but VERIFIED, never name-only. A LookPath hit
+	// that cannot run is precisely what made this report a usable browser on a
+	// box that had none.
+	for _, bin := range []string{"microsoft-edge", "edge", "chrome"} {
+		if p, err := exec.LookPath(bin); err == nil && chromeBinaryUsable(p) {
+			return true
+		}
+	}
+	// macOS app-bundle locations chromedp probes by default.
+	for _, p := range []string{
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+	} {
+		// Stat proves a file exists, not that it launches. Verify.
+		if _, err := os.Stat(p); err == nil && chromeBinaryUsable(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// captureScreenshotBase64 is a convenience used by the HUD push
+// path to render a static thumbnail of the remote page (e.g. for
+// the spatial view's "you are here" sidebar). Not on the hot path
+// — the JPEG pump still owns frame delivery.
+func captureBrowserScreenshotBase64(deviceID string) (string, error) {
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return "", fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	var buf []byte
+	if err := chromedp.Run(e.browserCtx, chromedp.CaptureScreenshot(&buf)); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(buf), nil
+}
+
+// browserGetTitle is exposed to ops so the HUD view can display
+// the page title alongside the URL.
+func browserGetTitle(deviceID string) (string, error) {
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return "", fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	var title string
+	if err := chromedp.Run(e.browserCtx, chromedp.Title(&title)); err != nil {
+		return "", err
+	}
+	return title, nil
+}
+
+// Pinch in a browser window via CDP's real touch API.
+//
+// This is the one target where multi-touch is genuinely first-class:
+// Input.dispatchTouchEvent takes an ARRAY of touch points, so a pinch is just
+// two points moving in opposite directions — no synthesis, no per-device
+// quirks. chromedp is already a dependency and already drives Tap/Swipe here,
+// so nothing new is introduced.
+//
+// Note this dispatches TOUCH, not mouse: Swipe above uses mouseWheel because
+// scrolling is what a swipe means on a desktop page, but a pinch has no mouse
+// analogue and pages listen for touchstart/touchmove to zoom.
+// Navigate is what makes a browser-window session useful at all.
+//
+// chromedp opens about:blank and, until this existed, nothing in the
+// remote-runtime API could change that: runtime_create took no url and the
+// control verbs were tap/swipe/text/key. A session could therefore be created,
+// streamed and clicked while every frame stayed blank — and because input
+// returned 200, the lane looked healthy. The gap was found by pinching a
+// session and getting a byte-identical frame back.
+//
+// browserPool.navigate already existed for the glass/AR-VR surface
+// (ops_glass_pc.go); this exposes the same primitive to the runtime session
+// that is being streamed, rather than adding a second mechanism.
+func (browserWindowTarget) Navigate(_ context.Context, deviceID, rawURL string) error {
+	target, err := validateNavigateURL(rawURL)
+	if err != nil {
+		return err
+	}
+	if _, ok := browserPool.get(deviceID); !ok {
+		return fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	return browserPool.navigate(deviceID, target)
+}
+
+func (browserWindowTarget) Pinch(ctx context.Context, deviceID string, x, y int, scale float64, durationMs int) error {
+	if scale <= 0 {
+		return fmt.Errorf("pinch scale must be > 0, got %v", scale)
+	}
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return fmt.Errorf("browser-window %q not found", deviceID)
+	}
+
+	// Input.synthesizePinchGesture, NOT a hand-rolled pair of touch points.
+	//
+	// The first version of this dispatched two TouchPoints moving apart over 10
+	// steps. Chrome delivered every one of those events to the page and NOTHING
+	// ZOOMED: pinch-zoom is a compositor-level gesture, not something a page
+	// derives from touch coordinates, so the events were consumed as ordinary
+	// touch input and the content shifted instead of scaling. The call returned
+	// 200 and the frame changed, which is exactly why it looked like it worked
+	// — verified by pinching a loaded page and watching the text vanish rather
+	// than grow. Enabling touch emulation did not fix it either.
+	//
+	// CDP already implements this gesture correctly, including the pointer
+	// interleaving and compositor hand-off. Using it is the whole point of not
+	// re-deriving a pinch from scratch.
+	//
+	// relativeSpeed converts the caller's duration into CDP's pixels/second:
+	// the gesture travels roughly baseRadius*|scale-1| pixels, so speed =
+	// distance/seconds keeps a longer durationMs meaning a slower pinch.
+	if durationMs <= 0 {
+		durationMs = 300
+	}
+	const baseRadius = 150.0
+	distance := baseRadius * math.Abs(scale-1)
+	if distance < 1 {
+		distance = 1
+	}
+	speed := int64(distance / (float64(durationMs) / 1000.0))
+	if speed < 50 {
+		speed = 50
+	}
+
+	return chromedp.Run(e.browserCtx, chromedp.ActionFunc(func(c context.Context) error {
+		return input.SynthesizePinchGesture(float64(x), float64(y), scale).
+			WithRelativeSpeed(speed).
+			Do(c)
+	}))
+}

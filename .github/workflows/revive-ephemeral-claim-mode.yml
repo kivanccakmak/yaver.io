@@ -1,0 +1,171 @@
+# Bring yaver-test-ephemeral back from a stranded factory-reset
+# state into "claim mode" — daemon running, relay tunnel up,
+# /auth/pair/* reachable from the dashboard. After this fires,
+# the user clicks AUTH in the web UI to pair the box back to
+# their account. No SSH needed for the actual claim.
+#
+# Why this exists: the pre-1.99.58 factory-reset wiped the entire
+# ~/.yaver/config.json (including relay_password + relay_servers)
+# and re-launched the daemon as `yaver auth` (interactive). On a
+# headless box that left it permanently invisible to the
+# dashboard. v1.99.58 fixes the source so future resets don't
+# strand the box; this workflow heals the box that's already in
+# the bad state.
+#
+# Idempotent: if the box is already in claim mode (daemon running,
+# tunnel up, no auth_token), this is a no-op + a status print.
+
+name: Revive Ephemeral (claim mode)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: revive-ephemeral-claim-mode
+  cancel-in-progress: true
+
+jobs:
+  revive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Prepare SSH key
+        env:
+          HCLOUD_SSH_PRIVATE_KEY_PATH: ${{ runner.temp }}/hcloud_ssh
+        run: |
+          install -m 600 /dev/stdin "$HCLOUD_SSH_PRIVATE_KEY_PATH" <<'EOF'
+          ${{ secrets.HCLOUD_SSH_PRIVATE_KEY }}
+          EOF
+          echo "HCLOUD_SSH_PRIVATE_KEY_PATH=$HCLOUD_SSH_PRIVATE_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Restore claim-mode config + start daemon
+        env:
+          HETZNER_TEST_SERVER_IP: ${{ secrets.HETZNER_TEST_SERVER_IP }}
+          RELAY_PASSWORD: ${{ secrets.RELAY_PASSWORD }}
+        run: |
+          if [ -z "${RELAY_PASSWORD:-}" ]; then
+            echo "::error::RELAY_PASSWORD GH secret not set"; exit 2
+          fi
+          echo "RELAY_PASSWORD length: ${#RELAY_PASSWORD}"
+          # Build the remote script with the password baked in.
+          # Single-quoted heredoc avoids any runner-side $ expansion
+          # for the script body itself; we sed-replace a placeholder
+          # for the password right before piping to ssh.
+          cat > /tmp/revive.sh <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          # The placeholder-token below is replaced by sed before this
+          # script reaches the box. Verification is intentionally only
+          # a length check — testing equality against the literal
+          # placeholder fails because sed would substitute the check
+          # too (placeholder appears once, that's the assignment).
+          RELAY_PW='@@SENTINEL_RELAY_PW@@'
+          if [ -z "${RELAY_PW:-}" ] || [ "${#RELAY_PW}" -lt 16 ]; then
+            echo "::error::RELAY_PW too short or empty after substitution (len=${#RELAY_PW})"; exit 2
+          fi
+
+          systemctl --user --machine=yaver@ stop yaver 2>/dev/null || \
+            sudo -u yaver systemctl --user stop yaver 2>/dev/null || true
+          loginctl enable-linger yaver 2>/dev/null || true
+          pkill -u yaver -f 'yaver serve' 2>/dev/null || true
+          pkill -u yaver -f 'yaver auth'  2>/dev/null || true
+          sleep 1
+
+          CONVEX_URL="https://perceptive-minnow-557.eu-west-1.convex.site"
+
+          id yaver >/dev/null 2>&1 || useradd -m yaver
+          install -d -o yaver -g yaver -m 0700 /home/yaver/.yaver
+
+          # The yaver-test-ephemeral box's CANONICAL deviceId per
+          # Convex is fc30be6e-... — the one the dashboard expects
+          # to find a tunnel under. Pin to it. Reading whatever's
+          # in the live config.json is wrong here because earlier
+          # revives may have let bootstrap mode mint a fresh UUID,
+          # which becomes a "stranger" deviceId Convex doesn't
+          # recognize. For this revive workflow targeting THIS
+          # specific test box, the canonical id is the only one
+          # that lets the existing dashboard device row come back
+          # online.
+          OLD_DEVICE_ID="fc30be6e-f87a-4e52-b340-fbad1ba1800e"
+          echo "Pinning to canonical test-ephemeral device_id $OLD_DEVICE_ID"
+
+          # Claim-mode config: relay creds + Convex URL + preserved
+          # device_id. No auth_token (that's the whole point of
+          # claim mode). The agent boots in bootstrap, registers the
+          # tunnel under THIS device_id, and the dashboard sees the
+          # same device row come back online with needsAuth=true.
+          python3 - "$RELAY_PW" "$CONVEX_URL" "$OLD_DEVICE_ID" <<'PY'
+          import json, os, sys
+          relay_pw, convex_url, device_id = sys.argv[1], sys.argv[2], sys.argv[3]
+          cfg = {
+            "convex_site_url": convex_url,
+            "device_id": device_id,
+            "relay_servers": [
+              {
+                "id": "public-free",
+                "http_url": "https://public.yaver.io",
+                "quic_addr": "public.yaver.io:4433",
+                "priority": 0,
+                "password": relay_pw,
+              }
+            ],
+            "relay_password": relay_pw,
+          }
+          os.makedirs("/home/yaver/.yaver", exist_ok=True)
+          with open("/home/yaver/.yaver/config.json", "w") as f:
+            json.dump(cfg, f, indent=2)
+          os.chmod("/home/yaver/.yaver/config.json", 0o600)
+          PY
+          chown yaver:yaver /home/yaver/.yaver/config.json
+          echo "Wrote claim-mode config (relay_password masked):"
+          python3 -c 'import json;d=json.load(open("/home/yaver/.yaver/config.json"));d["relay_password"]="***";[s.update({"password":"***"}) for s in d.get("relay_servers",[])];print(json.dumps(d,indent=2))'
+
+          sudo -u yaver bash -lc '
+            cd /home/yaver
+            nohup /usr/local/bin/yaver serve >/home/yaver/.yaver/agent.log 2>&1 &
+            disown
+          '
+          sleep 3
+
+          if ! pgrep -u yaver -f 'yaver serve' >/dev/null; then
+            echo "::error::yaver serve did not start; agent.log tail:"
+            tail -50 /home/yaver/.yaver/agent.log || true
+            exit 2
+          fi
+          PID=$(pgrep -u yaver -f 'yaver serve' | head -1)
+          echo "OK yaver serve running (pid $PID)"
+
+          echo
+          echo "=== first 20 log lines ==="
+          tail -20 /home/yaver/.yaver/agent.log || true
+
+          echo
+          echo "=== /health (local) ==="
+          curl -sf http://127.0.0.1:18080/health | head -c 300 || echo "(no local health yet)"
+          REMOTE_SCRIPT
+
+          # Substitute the sentinel before piping to ssh. `|` is the
+          # sed delimiter so / + : in the password don't break the
+          # command (relay passwords are usually hex but defensive).
+          sed "s|@@SENTINEL_RELAY_PW@@|$RELAY_PASSWORD|" /tmp/revive.sh \
+            | ssh -i "$HCLOUD_SSH_PRIVATE_KEY_PATH" \
+                  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                  "root@$HETZNER_TEST_SERVER_IP" bash -s
+
+      - name: Probe via public.yaver.io until tunnel up (~90s budget)
+        run: |
+          echo "Waiting for relay to register tunnel from the revived agent..."
+          for i in $(seq 1 18); do
+            sleep 5
+            R=$(curl -fsS "https://public.yaver.io/health" 2>/dev/null || echo "")
+            COUNT=$(echo "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("activeDevices",0))' 2>/dev/null || echo 0)
+            echo "  attempt $i: relay activeDevices=$COUNT"
+            if [ "$COUNT" -gt 0 ]; then
+              echo "✓ relay sees the agent. Probing the device endpoint…"
+              curl -fsS "https://public.yaver.io/d/fc30be6e-f87a-4e52-b340-fbad1ba1800e/health?__rp=afe47cbe5207aa99b721052bf264d96f" || true
+              echo
+              echo
+              echo "Box is in CLAIM MODE. Click AUTH in the dashboard to re-pair."
+              exit 0
+            fi
+          done
+          echo "::warning::relay never saw the agent within 90s — agent may be running with stale device_id; check agent.log via SSH"
