@@ -179,7 +179,8 @@
       ],
       "./plugins/withAndroidTV",
       "./plugins/withAndroidAutoMessaging",
-      "./plugins/withWatchBridge"
+      "./plugins/withWatchBridge",
+      "./plugins/withSentryXcode16Compat"
     ]
   }
 }

@@ -79,6 +79,40 @@ final class YaverStore: ObservableObject {
         }
     }
 
+    /// Persist the account-wide primary machine used by web, mobile and TV.
+    /// Settings awaits the write so it can keep an honest saved/error state.
+    func setPrimaryDevice(_ deviceId: String?) async throws {
+        let previous = primaryDeviceId
+        primaryDeviceId = deviceId
+        do {
+            try await MachineRegistry.savePrimaryDevice(token: token, deviceId: deviceId)
+        } catch {
+            primaryDeviceId = previous
+            throw error
+        }
+    }
+
+    /// Persist the selected machine's default coding runner. Runner changes
+    /// clear the prior runner-specific model on the server (MachineRegistry),
+    /// matching mobile and preventing an OpenCode model reaching Codex.
+    func setPrimaryRunner(_ runnerId: String?, for deviceId: String) async throws {
+        let canonical = runnerId.map(RegisteredRunner.canonical)
+        let previous = primaryRunnerByDevice[deviceId]
+        if let canonical, !canonical.isEmpty {
+            primaryRunnerByDevice[deviceId] = canonical
+        } else {
+            primaryRunnerByDevice.removeValue(forKey: deviceId)
+        }
+        do {
+            try await MachineRegistry.savePrimaryRunner(
+                token: token, deviceId: deviceId, runnerId: canonical)
+        } catch {
+            if let previous { primaryRunnerByDevice[deviceId] = previous }
+            else { primaryRunnerByDevice.removeValue(forKey: deviceId) }
+            throw error
+        }
+    }
+
     /// True when the favorite row genuinely splits work across two machines.
     var machineSplitActive: Bool {
         guard let r = machineRoles else { return false }
