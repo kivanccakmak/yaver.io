@@ -1,39 +1,40 @@
 [Unit]
-Description=Yaver Relay Server — P2P tunnel for mobile-to-desktop connectivity
-Documentation=https://github.com/kivanccakmak/yaver.io
+Description=Yaver Relay Server — authenticated Web/QUIC gateway
+Documentation=https://github.com/yaver-io/yaver.io
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=15min
 StartLimitBurst=5
 
 [Service]
-Type=notify
-ExecStart=/usr/local/bin/yaver-relay serve --quic-port=4433 --http-port=8443
-NotifyAccess=main
-WatchdogSec=30s
+# Current released relay binaries do not emit sd_notify READY/WATCHDOG frames.
+# Keep Type=simple until a preflight proves the exact deployed binary does;
+# Type=notify would turn a healthy listener into a perpetual start-timeout loop.
+Type=simple
 TimeoutStartSec=30s
 TimeoutStopSec=30s
+ExecStartPre=/usr/local/libexec/yaver-relay-timecheck
+ExecStart=/usr/local/bin/yaver-relay serve --quic-port=4433 --http-port=8080 --turn-port=0
 WorkingDirectory=/var/lib/yaver-relay
 StateDirectory=yaver-relay
 StateDirectoryMode=0700
+EnvironmentFile=-/etc/default/yaver-relay
 EnvironmentFile=-/etc/yaver-relay/relay.env
-Environment=RELAY_PASSWORD_FILE=/var/lib/yaver-relay/.relay-password
-ExecStartPre=/usr/local/libexec/yaver-relay-timecheck
+# Optional. If absent, the relay stays healthy but GET /ice fails closed with a
+# named 503. The credential bytes never appear in this unit or the command line.
+Environment=TURN_AUTH_SECRET_FILE=/etc/yaver-relay/turn-secret
 Restart=on-failure
-RestartSec=5
+RestartSec=5s
 RestartSteps=6
 RestartMaxDelaySec=5min
 KillMode=mixed
 KillSignal=SIGTERM
 FinalKillSignal=SIGKILL
 SendSIGKILL=true
-
-# Logging — all output goes to journald
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=yaver-relay
 
-# Performance
 LimitNOFILE=65535
 TasksMax=512
 CPUAccounting=true
@@ -47,7 +48,6 @@ ManagedOOMMemoryPressureLimit=85%
 OOMPolicy=stop
 OOMScoreAdjust=-250
 
-# Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -68,6 +68,7 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 RemoveIPC=true
+ReadWritePaths=/var/lib/yaver-relay
 UMask=0077
 
 [Install]

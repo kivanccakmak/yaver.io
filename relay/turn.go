@@ -1,71 +1,112 @@
 package main
 
+// turn.go — Pion TURN/STUN server colocated with the QUIC + HTTP
+// listeners. The whole reason it exists: a browser viewer behind
+// CG-NAT can't reach a Linux dev box behind another CG-NAT directly.
+// ICE will look for a TURN candidate; this is the one the agent
+// hands the viewer.
+//
+// Auth uses Pion's long-term-credential mechanism. Production keeps a
+// dedicated TURN REST secret on the relay host and brokers one-minute
+// credentials through GET /ice. The legacy colocated listener below remains
+// available for explicit self-hosted deployments.
+//
+// This in-process implementation binds UDP only. The hardened public service
+// uses coturn for UDP, TCP, TLS and DTLS plus a bounded allocation range.
+
 import (
-	"crypto/hmac"
-	"crypto/sha1"
+	"context"
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"strconv"
+	"strings"
 
-	"github.com/pion/turn/v3"
+	"github.com/pion/logging"
+	"github.com/pion/turn/v4"
 )
 
-// startTURN starts a TURN server on UDP+TCP `port` for WebRTC media relay.
-// This powers the "Relay Pro" low-latency Vibing lane: clients get short-lived
-// TURN credentials (username = expiry unix time, password = base64(HMAC-SHA1(
-// secret, username))) from the billing backend, then stream WebRTC through here.
-func startTURN(port int, secret string) (*turn.Server, error) {
-	udpConn, err := net.ListenPacket("udp4", fmt.Sprintf("0.0.0.0:%d", port))
+// loadTURNAuthSecret keeps the long-lived TURN secret out of command lines and
+// tracked unit files. systemd deployments use TURN_AUTH_SECRET_FILE with a
+// root-readable path; environment-based self-hosted installs remain
+// compatible. A missing/unreadable file is a closed failure: /ice returns a
+// named 503 and the colocated TURN listener stays disabled.
+func loadTURNAuthSecret() string {
+	if secret := strings.TrimSpace(os.Getenv("TURN_AUTH_SECRET")); secret != "" {
+		return secret
+	}
+	path := strings.TrimSpace(os.Getenv("TURN_AUTH_SECRET_FILE"))
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("turn udp listen: %w", err)
+		log.Printf("  TURN secret:      unavailable from credential file: %v", err)
+		return ""
 	}
-	tcpListener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", port))
-	if err != nil {
-		return nil, fmt.Errorf("turn tcp listen: %w", err)
-	}
-
-	relayIP, err := publicIPv4()
-	if err != nil {
-		relayIP = net.ParseIP("0.0.0.0")
-	}
-	factory := &turn.RelayAddressGeneratorStatic{
-		RelayAddress: relayIP,
-		Address:      "0.0.0.0",
-	}
-
-	server, err := turn.NewServer(turn.ServerConfig{
-		Realm: "yaver.io",
-		AuthHandler: func(username, realm string, srcAddr net.Addr) ([]byte, bool) {
-			// REST credential check: key = HMAC-SHA1(secret, username).
-			if secret == "" || username == "" {
-				return nil, false
-			}
-			mac := hmac.New(sha1.New, []byte(secret))
-			mac.Write([]byte(username))
-			return mac.Sum(nil), true
-		},
-		PacketConnConfigs: []turn.PacketConnConfig{{
-			PacketConn:            udpConn,
-			RelayAddressGenerator: factory,
-		}},
-		ListenerConfigs: []turn.ListenerConfig{{
-			Listener:              tcpListener,
-			RelayAddressGenerator: factory,
-		}},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("turn server: %w", err)
-	}
-	log.Printf("  TURN server:        :%d (UDP+TCP, Relay Pro media relay)", port)
-	return server, nil
+	return strings.TrimSpace(string(b))
 }
 
-// publicIPv4 returns the outbound public IPv4 used for relayed TURN addresses.
-func publicIPv4() (net.IP, error) {
-	conn, err := net.Dial("udp4", "8.8.8.8:80")
-	if err != nil {
-		return nil, err
+// StartTURN runs the TURN/STUN server until ctx is cancelled, then
+// closes the listener cleanly. publicIP is the address the relay
+// reports as its TURN candidate — clients open allocations against
+// it, so it must be the box's WAN-reachable address (not 127.0.0.1).
+// realm is the long-term-credential realm; "yaver-relay" is the
+// default and shows up in browser devtools.
+//
+// authSecret is the secret used to derive each session's short-lived TURN
+// password (see Pion's GenerateLongTermCredentials for the algorithm).
+func StartTURN(ctx context.Context, publicIP, realm string, port int, authSecret string) error {
+	if authSecret == "" {
+		return fmt.Errorf("turn: authSecret cannot be empty")
 	}
-	defer conn.Close()
-	return conn.LocalAddr().(*net.UDPAddr).IP, nil
+	if publicIP == "" {
+		return fmt.Errorf("turn: publicIP cannot be empty (relay needs a WAN-reachable IP for TURN candidates)")
+	}
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("turn: port %d out of range", port)
+	}
+	if realm == "" {
+		realm = "yaver-relay"
+	}
+
+	udpListener, err := net.ListenPacket("udp4", "0.0.0.0:"+strconv.Itoa(port))
+	if err != nil {
+		return fmt.Errorf("turn: bind UDP %d: %w", port, err)
+	}
+
+	// Pion's leveled logger writes to stdout by default. We pipe its
+	// output through the same writer the rest of the relay uses so a
+	// single tail -f shows everything.
+	logger := logging.NewDefaultLeveledLoggerForScope(
+		"yaver-turn",
+		logging.LogLevelInfo,
+		os.Stderr,
+	)
+
+	server, err := turn.NewServer(turn.ServerConfig{
+		Realm:       realm,
+		AuthHandler: turn.NewLongTermAuthHandler(authSecret, logger),
+		PacketConnConfigs: []turn.PacketConnConfig{
+			{
+				PacketConn: udpListener,
+				RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{
+					RelayAddress: net.ParseIP(publicIP),
+					Address:      "0.0.0.0",
+				},
+			},
+		},
+	})
+	if err != nil {
+		_ = udpListener.Close()
+		return fmt.Errorf("turn: create server: %w", err)
+	}
+	log.Printf("  TURN server:      udp/%d (realm=%s, public-ip=%s)", port, realm, publicIP)
+
+	<-ctx.Done()
+	if err := server.Close(); err != nil {
+		log.Printf("  TURN server close: %v", err)
+	}
+	return nil
 }

@@ -206,7 +206,10 @@ func (s *HTTPServer) handleStreamWebRTCOffer(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServersForPeer()})
+	iceCtx, iceCancel := context.WithTimeout(r.Context(), 5*time.Second)
+	iceServers := s.iceServersForHTTPServer(iceCtx)
+	iceCancel()
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "peer connection: "+err.Error())
 		return

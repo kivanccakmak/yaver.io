@@ -1,0 +1,535 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+type abuseGuardConfig struct {
+	HTTPPerIPPerMin         int
+	HTTPBurstPerIP          int
+	ProxyPerIPPerMin        int
+	ProxyBurstPerIP         int
+	ProxyPerUserPerMin      int
+	ProxyBurstPerUser       int
+	BusPerIPPerMin          int
+	BusBurstPerIP           int
+	AdminPerIPPerMin        int
+	AdminBurstPerIP         int
+	QUICRegisterPerIPPerMin int
+	QUICRegisterBurstPerIP  int
+	InvalidAuthPerIPPerMin  int
+	InvalidAuthBurstPerIP   int
+	TURNCredPerUserPerMin   int
+	TURNCredBurstPerUser    int
+	TURNCredPerIPPerMin     int
+	TURNCredBurstPerIP      int
+	MaxConcurrentHTTP       int
+	MaxConcurrentPerDevice  int
+	MaxRequestBodyBytes     int64
+	MaxExposeBodyBytes      int64
+	CleanupInterval         time.Duration
+	IdleEntryTTL            time.Duration
+}
+
+func defaultAbuseGuardConfig() abuseGuardConfig {
+	return abuseGuardConfig{
+		HTTPPerIPPerMin:         600,
+		HTTPBurstPerIP:          120,
+		ProxyPerIPPerMin:        240,
+		ProxyBurstPerIP:         80,
+		ProxyPerUserPerMin:      240,
+		ProxyBurstPerUser:       80,
+		BusPerIPPerMin:          120,
+		BusBurstPerIP:           40,
+		AdminPerIPPerMin:        60,
+		AdminBurstPerIP:         20,
+		QUICRegisterPerIPPerMin: 60,
+		QUICRegisterBurstPerIP:  20,
+		InvalidAuthPerIPPerMin:  12,
+		InvalidAuthBurstPerIP:   6,
+		TURNCredPerUserPerMin:   12,
+		TURNCredBurstPerUser:    6,
+		TURNCredPerIPPerMin:     60,
+		TURNCredBurstPerIP:      20,
+		MaxConcurrentHTTP:       2048,
+		MaxConcurrentPerDevice:  64,
+		MaxRequestBodyBytes:     64 << 20,
+		MaxExposeBodyBytes:      200 << 20,
+		CleanupInterval:         2 * time.Minute,
+		IdleEntryTTL:            10 * time.Minute,
+	}
+}
+
+func abuseGuardConfigFromEnv() abuseGuardConfig {
+	cfg := defaultAbuseGuardConfig()
+	cfg.HTTPPerIPPerMin = envInt("RELAY_HTTP_RATE_PER_IP_PER_MIN", cfg.HTTPPerIPPerMin)
+	cfg.HTTPBurstPerIP = envInt("RELAY_HTTP_BURST_PER_IP", cfg.HTTPBurstPerIP)
+	cfg.ProxyPerIPPerMin = envInt("RELAY_PROXY_RATE_PER_IP_PER_MIN", cfg.ProxyPerIPPerMin)
+	cfg.ProxyBurstPerIP = envInt("RELAY_PROXY_BURST_PER_IP", cfg.ProxyBurstPerIP)
+	cfg.ProxyPerUserPerMin = envInt("RELAY_PROXY_RATE_PER_USER_PER_MIN", cfg.ProxyPerUserPerMin)
+	cfg.ProxyBurstPerUser = envInt("RELAY_PROXY_BURST_PER_USER", cfg.ProxyBurstPerUser)
+	cfg.BusPerIPPerMin = envInt("RELAY_BUS_RATE_PER_IP_PER_MIN", cfg.BusPerIPPerMin)
+	cfg.BusBurstPerIP = envInt("RELAY_BUS_BURST_PER_IP", cfg.BusBurstPerIP)
+	cfg.AdminPerIPPerMin = envInt("RELAY_ADMIN_RATE_PER_IP_PER_MIN", cfg.AdminPerIPPerMin)
+	cfg.AdminBurstPerIP = envInt("RELAY_ADMIN_BURST_PER_IP", cfg.AdminBurstPerIP)
+	cfg.QUICRegisterPerIPPerMin = envInt("RELAY_QUIC_REGISTER_RATE_PER_IP_PER_MIN", cfg.QUICRegisterPerIPPerMin)
+	cfg.QUICRegisterBurstPerIP = envInt("RELAY_QUIC_REGISTER_BURST_PER_IP", cfg.QUICRegisterBurstPerIP)
+	cfg.InvalidAuthPerIPPerMin = envInt("RELAY_INVALID_AUTH_RATE_PER_IP_PER_MIN", cfg.InvalidAuthPerIPPerMin)
+	cfg.InvalidAuthBurstPerIP = envInt("RELAY_INVALID_AUTH_BURST_PER_IP", cfg.InvalidAuthBurstPerIP)
+	cfg.TURNCredPerUserPerMin = envInt("RELAY_TURN_CREDENTIAL_RATE_PER_USER_PER_MIN", cfg.TURNCredPerUserPerMin)
+	cfg.TURNCredBurstPerUser = envInt("RELAY_TURN_CREDENTIAL_BURST_PER_USER", cfg.TURNCredBurstPerUser)
+	cfg.TURNCredPerIPPerMin = envInt("RELAY_TURN_CREDENTIAL_RATE_PER_IP_PER_MIN", cfg.TURNCredPerIPPerMin)
+	cfg.TURNCredBurstPerIP = envInt("RELAY_TURN_CREDENTIAL_BURST_PER_IP", cfg.TURNCredBurstPerIP)
+	cfg.MaxConcurrentHTTP = envInt("RELAY_MAX_CONCURRENT_HTTP", cfg.MaxConcurrentHTTP)
+	cfg.MaxConcurrentPerDevice = envInt("RELAY_MAX_CONCURRENT_PER_DEVICE", cfg.MaxConcurrentPerDevice)
+	cfg.MaxRequestBodyBytes = envInt64("RELAY_MAX_REQUEST_BODY_BYTES", cfg.MaxRequestBodyBytes)
+	cfg.MaxExposeBodyBytes = envInt64("RELAY_MAX_EXPOSE_BODY_BYTES", cfg.MaxExposeBodyBytes)
+	return cfg
+}
+
+func envInt(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 0 {
+		log.Printf("[RELAY] ignoring invalid %s=%q", name, raw)
+		return fallback
+	}
+	return v
+}
+
+func envInt64(name string, fallback int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < 0 {
+		log.Printf("[RELAY] ignoring invalid %s=%q", name, raw)
+		return fallback
+	}
+	return v
+}
+
+type tokenBucket struct {
+	tokens     float64
+	lastRefill time.Time
+	lastSeen   time.Time
+}
+
+type abuseGuard struct {
+	mu             sync.Mutex
+	cfg            abuseGuardConfig
+	buckets        map[string]*tokenBucket
+	httpSem        chan struct{}
+	deviceActive   map[string]int
+	deniedLogLast  map[string]time.Time
+	trustedProxies []*net.IPNet
+}
+
+// defaultTrustedProxyCIDRs are the DEFAULT trusted reverse-proxy ranges. The
+// relay's real deployment (install-relay.sh / provision-relay.sh) puts an nginx
+// reverse proxy IN FRONT, inside Docker — so the relay's immediate peer is
+// localhost or the Docker bridge gateway (a private IP), and the real client IP
+// arrives in nginx's X-Real-IP/X-Forwarded-For. We therefore trust LOOPBACK +
+// RFC1918/ULA (the infra proxy) so that header is honored, PLUS Cloudflare's
+// edge ranges for the (currently DNS-only, but possible) CF-proxied setup. A
+// direct-connect attacker from a public IP is not in any of these, so their
+// spoofed forwarding header is ignored and they're keyed on their real socket
+// IP. Override the whole set with RELAY_TRUSTED_PROXIES (comma-separated CIDRs).
+var defaultTrustedProxyCIDRs = []string{
+	// Reverse proxy / container network (the actual deployment):
+	"127.0.0.0/8", "::1/128",
+	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7",
+	// Cloudflare edge (https://www.cloudflare.com/ips/) — for a CF-proxied relay:
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+	"2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+}
+
+func parseTrustedProxies(env string) []*net.IPNet {
+	raw := defaultTrustedProxyCIDRs
+	if s := strings.TrimSpace(env); s != "" {
+		raw = strings.Split(s, ",")
+	}
+	var nets []*net.IPNet
+	for _, c := range raw {
+		if c = strings.TrimSpace(c); c == "" {
+			continue
+		}
+		if _, n, err := net.ParseCIDR(c); err == nil {
+			nets = append(nets, n)
+		} else {
+			log.Printf("[RELAY] ignoring invalid RELAY_TRUSTED_PROXIES CIDR %q", c)
+		}
+	}
+	return nets
+}
+
+func newAbuseGuard(cfg abuseGuardConfig) *abuseGuard {
+	g := &abuseGuard{
+		cfg:            cfg,
+		buckets:        make(map[string]*tokenBucket),
+		deviceActive:   make(map[string]int),
+		deniedLogLast:  make(map[string]time.Time),
+		trustedProxies: parseTrustedProxies(os.Getenv("RELAY_TRUSTED_PROXIES")),
+	}
+	if cfg.MaxConcurrentHTTP > 0 {
+		g.httpSem = make(chan struct{}, cfg.MaxConcurrentHTTP)
+	}
+	go g.cleanupLoop()
+	return g
+}
+
+func (g *abuseGuard) isTrustedProxy(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	for _, n := range g.trustedProxies {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *abuseGuard) cleanupLoop() {
+	ticker := time.NewTicker(g.cfg.CleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		cutoff := time.Now().Add(-g.cfg.IdleEntryTTL)
+		g.mu.Lock()
+		for k, b := range g.buckets {
+			if b.lastSeen.Before(cutoff) {
+				delete(g.buckets, k)
+			}
+		}
+		for k, t := range g.deniedLogLast {
+			if t.Before(cutoff) {
+				delete(g.deniedLogLast, k)
+			}
+		}
+		g.mu.Unlock()
+	}
+}
+
+func (g *abuseGuard) allow(key string, perMinute, burst int) bool {
+	if perMinute <= 0 || burst <= 0 {
+		return true
+	}
+	now := time.Now()
+	ratePerSec := float64(perMinute) / 60.0
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	b := g.buckets[key]
+	if b == nil {
+		b = &tokenBucket{tokens: float64(burst), lastRefill: now, lastSeen: now}
+		g.buckets[key] = b
+	}
+	elapsed := now.Sub(b.lastRefill).Seconds()
+	if elapsed > 0 {
+		b.tokens += elapsed * ratePerSec
+		if b.tokens > float64(burst) {
+			b.tokens = float64(burst)
+		}
+		b.lastRefill = now
+	}
+	b.lastSeen = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func (g *abuseGuard) tryEnterHTTP() bool {
+	if g.httpSem == nil {
+		return true
+	}
+	select {
+	case g.httpSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *abuseGuard) leaveHTTP() {
+	if g.httpSem != nil {
+		<-g.httpSem
+	}
+}
+
+func (g *abuseGuard) tryEnterDevice(deviceID string) bool {
+	if g.cfg.MaxConcurrentPerDevice <= 0 {
+		return true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.deviceActive[deviceID] >= g.cfg.MaxConcurrentPerDevice {
+		return false
+	}
+	g.deviceActive[deviceID]++
+	return true
+}
+
+func (g *abuseGuard) leaveDevice(deviceID string) {
+	if g.cfg.MaxConcurrentPerDevice <= 0 {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.deviceActive[deviceID] <= 1 {
+		delete(g.deviceActive, deviceID)
+		return
+	}
+	g.deviceActive[deviceID]--
+}
+
+func (g *abuseGuard) logLimited(reason, key string) {
+	now := time.Now()
+	logKey := reason + ":" + key
+	g.mu.Lock()
+	last := g.deniedLogLast[logKey]
+	if now.Sub(last) >= 30*time.Second {
+		g.deniedLogLast[logKey] = now
+		g.mu.Unlock()
+		log.Printf("[RELAY] abuse guard denied %s for %s", reason, key)
+		return
+	}
+	g.mu.Unlock()
+}
+
+func (g *abuseGuard) clientIP(r *http.Request) string {
+	peer := g.remoteIP(r.RemoteAddr)
+	// Only honor client-supplied forwarding headers when the immediate peer is a
+	// trusted proxy (CDN/LB). A direct-connect attacker can set any header, so on
+	// an untrusted peer we key strictly off the real socket address — otherwise
+	// every per-IP rate limit is bypassable with a fresh random CF-Connecting-IP
+	// per request (relay security audit, finding #1).
+	if g.isTrustedProxy(net.ParseIP(peer)) {
+		for _, h := range []string{"CF-Connecting-IP", "X-Real-IP"} {
+			if ip := strings.TrimSpace(r.Header.Get(h)); ip != "" {
+				return ip
+			}
+		}
+		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+			if first := strings.TrimSpace(strings.Split(xff, ",")[0]); first != "" {
+				return first
+			}
+		}
+	}
+	return peer
+}
+
+func (g *abuseGuard) remoteIP(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil && host != "" {
+		return host
+	}
+	return addr
+}
+
+func (g *abuseGuard) classifyHTTPPath(path string) (name string, perMinute int, burst int) {
+	switch {
+	case strings.HasPrefix(path, "/admin/"), path == "/tunnels", path == "/presence":
+		return "admin", g.cfg.AdminPerIPPerMin, g.cfg.AdminBurstPerIP
+	case strings.HasPrefix(path, "/d/"):
+		return "proxy", g.cfg.ProxyPerIPPerMin, g.cfg.ProxyBurstPerIP
+	case strings.HasPrefix(path, "/bus/"):
+		return "bus", g.cfg.BusPerIPPerMin, g.cfg.BusBurstPerIP
+	default:
+		return "http", g.cfg.HTTPPerIPPerMin, g.cfg.HTTPBurstPerIP
+	}
+}
+
+// proxyOverBudgetKey marks a /d/ proxy request whose per-IP bucket is spent.
+// The request is NOT denied at the middleware — the whitelist decision is the
+// ACCOUNT's, and identity is only known post-auth. The proxy handler denies
+// the marked request unless the authenticated account's Convex-verified plan
+// is bandwidth-exempt (owner-dev). A hard cap (proxyHardCapMultiple × the
+// normal budget) still denies pre-auth so an unauthenticated flood stays
+// bounded — it cannot reach auth (and Convex) without limit.
+type abuseGuardCtxKey int
+
+const proxyOverBudgetKey abuseGuardCtxKey = 1
+
+const proxyHardCapMultiple = 10
+
+// proxyOverBudget reports whether the middleware marked this request as over
+// the per-IP budget, i.e. it survives only if the account is exempt.
+func proxyOverBudget(r *http.Request) bool {
+	v, _ := r.Context().Value(proxyOverBudgetKey).(bool)
+	return v
+}
+
+func (g *abuseGuard) httpMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ip := g.clientIP(r)
+		name, perMinute, burst := g.classifyHTTPPath(r.URL.Path)
+		if !g.allow("http:"+name+":"+ip, perMinute, burst) {
+			// Proxy paths defer the verdict to the ACCOUNT check post-auth,
+			// inside a hard flood bound. Everything else denies here.
+			if name == "proxy" &&
+				g.allow("http:proxy-hard:"+ip, proxyHardCapMultiple*perMinute, proxyHardCapMultiple*burst) {
+				r = r.WithContext(context.WithValue(r.Context(), proxyOverBudgetKey, true))
+			} else {
+				g.logLimited("http-"+name, ip)
+				writeRelayError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
+		}
+		if !g.tryEnterHTTP() {
+			g.logLimited("http-concurrency", ip)
+			writeRelayError(w, http.StatusServiceUnavailable, "relay overloaded")
+			return
+		}
+		defer g.leaveHTTP()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (g *abuseGuard) allowQUICRegister(remoteAddr string) bool {
+	ip := g.remoteIP(remoteAddr)
+	ok := g.allow("quic-register:"+ip, g.cfg.QUICRegisterPerIPPerMin, g.cfg.QUICRegisterBurstPerIP)
+	if !ok {
+		g.logLimited("quic-register", ip)
+	}
+	return ok
+}
+
+func (g *abuseGuard) allowInvalidAuth(remoteAddr string) bool {
+	ip := g.remoteIP(remoteAddr)
+	ok := g.allow("invalid-auth:"+ip, g.cfg.InvalidAuthPerIPPerMin, g.cfg.InvalidAuthBurstPerIP)
+	if !ok {
+		g.logLimited("invalid-auth", ip)
+	}
+	return ok
+}
+
+// clearInvalidAuth drops the invalid-auth strikes for an IP once a request
+// from it authenticates successfully.
+//
+// The bucket is keyed by public IP, but an IP is not a client: a home NAT —
+// and far worse, a carrier CGNAT — puts many independent clients behind one
+// address. Without this reset, a single misconfigured client (e.g. one that
+// retries with an empty password on a timer) drains the bucket and every
+// other client behind that NAT is refused with "too many invalid relay
+// password attempts", even though their credentials are perfectly good.
+// Proof of a valid credential from that IP is proof it is not a brute-force
+// source, so the strikes are cleared. Brute-forcers never reach this path,
+// so the rate limit still bites exactly the traffic it is meant to.
+func (g *abuseGuard) clearInvalidAuth(remoteAddr string) {
+	ip := g.remoteIP(remoteAddr)
+	g.mu.Lock()
+	delete(g.buckets, "invalid-auth:"+ip)
+	g.mu.Unlock()
+}
+
+// Stable machine-readable deny codes for the HTTP paths.
+//
+// Incident (measured live 2026-07-28): `GET /d/<deviceId>/health` with a valid
+// bearer but no X-Relay-Password answered
+//
+//	401 {"code":"Unauthorized","error":"relay password missing — sign in again to fetch it",...}
+//
+// `code` was just http.StatusText(401) — a value EVERY 401 carries — so the web
+// dashboard rendered the literal "Unauthorized" as the DEVICE's verdict
+// ("Alive · can't reach (Unauthorized)") on a box that answers 200 the instant
+// the relay password is attached. With no stable signal, every surface invented
+// its own regex over English prose, and the regexes drifted: mobile carried
+// three different relay-auth matchers, none a superset of the others, and the
+// agent's looksLikeStaleRelayPassword required "invalid|rejected|denied" so it
+// never matched "relay password MISSING" at all.
+//
+// These codes are the structured signal. The human `error`/`message` strings
+// they accompany are DELIBERATELY unchanged: every shipped client still matches
+// on the prose, and the relay is redeployed by hand (see
+// memory/project_public_relay_deploy_drift), so a client talking to an
+// older relay must keep working. Codes are additive, prose is forever.
+//
+// Naming note: the password codes are snake_case and the device/tunnel codes
+// are dotted, matching the pre-existing `relay.device_not_connected` that
+// shipped before this change. Consumers must compare exact strings, never
+// guess a separator.
+const (
+	RelayCodePasswordMissing        = "relay_password_missing"
+	RelayCodePasswordInvalid        = "relay_password_invalid"
+	RelayCodePasswordRateLimited    = "relay_password_rate_limited"
+	RelayCodeAuthBackendUnavailable = "relay_auth_backend_unavailable"
+
+	// RelayCodeDeviceNotConnected is the genuine absence: nobody holds a
+	// tunnel for this deviceId right now.
+	RelayCodeDeviceNotConnected = "relay.device_not_connected"
+	// RelayCodeDeviceOwnerMismatch is the same-owner backstop: a tunnel for
+	// this deviceId EXISTS but belongs to a different account. Before this
+	// code the two were indistinguishable — both 502 "device not connected to
+	// relay" — so a support engineer could not tell "your box is offline"
+	// from "that tunnel is someone else's".
+	RelayCodeDeviceOwnerMismatch = "relay.device_owner_mismatch"
+)
+
+func writeRelayError(w http.ResponseWriter, status int, message string) {
+	writeRelayErrorCode(w, status, http.StatusText(status), message)
+}
+
+// writeRelayErrorCode is writeRelayError with a caller-supplied STABLE code in
+// place of http.StatusText. Body shape is otherwise byte-identical, so a client
+// that only reads `error`/`message` cannot tell the difference.
+func writeRelayErrorCode(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":      false,
+		"code":    code,
+		"error":   message,
+		"message": message,
+	})
+}
+
+func readCappedBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+	if r.Body == nil {
+		return nil, true
+	}
+	if limit <= 0 {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeRelayError(w, http.StatusBadRequest, "could not read request body")
+			return nil, false
+		}
+		return body, true
+	}
+	if r.ContentLength > limit {
+		writeRelayError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("request body exceeds %d bytes", limit))
+		return nil, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeRelayError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("request body exceeds %d bytes", limit))
+		return nil, false
+	}
+	return body, true
+}
