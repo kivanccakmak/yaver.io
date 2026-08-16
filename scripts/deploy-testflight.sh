@@ -100,6 +100,7 @@ hydrate_native_dependency_artifacts() {
 }
 
 ensure_mobile_dependencies
+node "$ROOT/scripts/restore-ios-share-extension.js"
 hydrate_native_dependency_artifacts
 
 # Load secrets from the Yaver vault (project="mobile" + globals). Vault
@@ -399,6 +400,23 @@ set -e
 if [ "$ARCHIVE_EXIT" -ne 0 ]; then
   echo "ERROR: Archive failed (exit $ARCHIVE_EXIT). Last archive log lines:" >&2
   tail -40 "$ARCHIVE_LOG" >&2 || true
+  if grep -q "doesn't match the entitlements file's value for the com.apple.security.application-groups entitlement" "$ARCHIVE_LOG"; then
+    echo "DIAGNOSIS: the selected provisioning profile has no assigned App Group." >&2
+    echo "  Assign group.io.yaver.mobile to the app, Watch app, and Share Extension" >&2
+    echo "  identifiers in Apple Developer, then regenerate/download their profiles." >&2
+    echo "  A profile merely existing is a false green; its application-groups array" >&2
+    echo "  must contain the exact group declared by the entitlements file." >&2
+  fi
+  if grep -q 'ShareExtension.entitlements.*could not be opened' "$ARCHIVE_LOG"; then
+    echo "DIAGNOSIS: expo-share-intent's generated iOS source directory is absent." >&2
+    echo "  scripts/restore-ios-share-extension.js should recreate it before archive;" >&2
+    echo "  rerun that script and treat another miss as a generator regression." >&2
+  fi
+  if grep -q "deployment target.*18.4.*supported deployment target.*18.2" "$ARCHIVE_LOG"; then
+    echo "DIAGNOSIS: this Xcode SDK predates iOS 18.4." >&2
+    echo "  Yaver's widget source must compile its pre-18.4 fallback on this toolchain," >&2
+    echo "  or Xcode must be upgraded before the CarPlay supplemental family is enabled." >&2
+  fi
   exit "$ARCHIVE_EXIT"
 fi
 

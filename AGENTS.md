@@ -27,6 +27,13 @@ After reading the docs, **grep the code for the symbols the docs name** before r
 
 ## Local Deploy Memory
 
+- **Apple web consoles use Chromium through Yaver MCP only.** For Apple
+  Developer and App Store Connect work, use the authenticated Chromium profile
+  through Yaver's `browser_*` MCP tools (or a headed Chromium handoff when the
+  human must complete login/2FA). Never open or fall back to Safari, and never
+  use coordinate clicks: inspect the DOM and use named selectors. Keep every
+  mutation scoped to Yaver identifiers/apps; never touch another product just
+  because it is visible in the same Apple team.
 - **One deploy path:** use `./deploy/deploy.sh <target>` from the repo root.
   Do not call `scripts/deploy-web.sh`, `scripts/deploy-testflight.sh`,
   `scripts/deploy-playstore.sh`, `scripts/deploy-convex.sh`, or npm publish

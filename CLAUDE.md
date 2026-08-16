@@ -900,6 +900,16 @@ CI is intentionally disabled (`if: false` in `release-mobile.yml`) because GH
 runner keychains don't carry your registered iPhone UDIDs. Always run from
 this Mac.
 
+**Apple portal automation is Chromium-only.** Use Yaver's `browser_*` MCP
+tools with their persistent authenticated Chromium profile for Apple Developer
+and App Store Connect. If Apple requires login, 2FA, or another human-only
+step, open a headed Chromium handoff and continue through the same profile once
+the user finishes. Never use or fall back to Safari. Read the DOM and act on
+named selectors rather than screen coordinates. The Apple team contains other
+products: verify the bundle ID or App Store Connect Apple ID before every
+mutation, and change only Yaver resources (`io.yaver.*`, existing Yaver IO app
+Apple ID `6760467669`) unless the user explicitly names another target.
+
 ```bash
 # vault path (preferred when auth is fresh)
 $(yaver vault env --project mobile)

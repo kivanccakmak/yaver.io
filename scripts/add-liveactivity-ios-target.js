@@ -26,9 +26,11 @@ const TARGET = "YaverActivity";
 const PRODUCT_REF_BASENAME = `${TARGET}.appex`;
 const BUNDLE = "io.yaver.mobile.activity";
 const TEAM = "5SJZ4KA39A";
-// supplementalActivityFamilies — the CarPlay Dashboard hook — is iOS 18.4+.
-// The main app stays at 15.5; only this extension is gated.
-const DEPLOY = "18.4";
+// The base Live Activity exists on iOS 16.2. Newer SDKs compile the iOS 18.4
+// supplementalActivityFamilies hook for the CarPlay Dashboard; older Xcodes
+// compile the phone/watch fallback rather than making the whole iOS archive
+// impossible. The main app remains at 15.5.
+const DEPLOY = "16.2";
 const INFO_PLIST = "../native-liveactivity/widget/Info.plist";
 
 // Extension sources: the widget UI + the SHARED attributes file.
