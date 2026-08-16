@@ -2,18 +2,28 @@
   "expo": {
     "name": "Yaver",
     "slug": "yaver",
-    "version": "1.6.0",
-    "orientation": "portrait",
+    "version": "1.18.167",
+    "newArchEnabled": true,
+    "orientation": "default",
     "scheme": "yaver",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": [
+      "assets/**"
+    ],
     "splash": {
-      "backgroundColor": "#0a0a0a"
+      "backgroundColor": "#050506",
+      "image": "./assets/splash-logo.png",
+      "imageWidth": 200
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "io.yaver.mobile",
       "usesAppleSignIn": true,
+      "associatedDomains": [
+        "applinks:yaver.io",
+        "webcredentials:yaver.io"
+      ],
       "infoPlist": {
         "CFBundleURLTypes": [
           {
@@ -21,7 +31,38 @@
               "yaver"
             ]
           }
-        ]
+        ],
+        "UIApplicationShortcutItems": [
+          {
+            "UIApplicationShortcutItemType": "io.yaver.mobile.carVoice",
+            "UIApplicationShortcutItemTitle": "Car Voice Runtime",
+            "UIApplicationShortcutItemSubtitle": "Start a hands-free Yaver task",
+            "UIApplicationShortcutItemIconType": "UIApplicationShortcutIconTypeAudio"
+          }
+        ],
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "_comment_NSAllowsLocalNetworking": "REMOVED DELIBERATELY 2026-08-03: Apple IGNORES NSAllowsArbitraryLoads when NSAllowsLocalNetworking is present, so setting both left the arbitrary-loads flag INERT and kept 100.64/10 (Tailscale/Mesh CGNAT) blocked. Proven by experiment on visionOS. expo prebuild regenerates Info.plist from this file, so the two MUST agree or the next prebuild silently undoes the fix."
+        },
+        "NSMicrophoneUsageDescription": "Yaver uses your microphone for voice input — send tasks by speaking instead of typing.",
+        "NSSpeechRecognitionUsageDescription": "Yaver uses speech recognition to transcribe your voice into task descriptions.",
+        "NSCameraUsageDescription": "Yaver uses your camera for photos and running apps that need camera access.",
+        "NSPhotoLibraryUsageDescription": "Yaver uses your photo library to attach screenshots and images to coding tasks.",
+        "NSLocationWhenInUseUsageDescription": "Yaver provides location access to apps you run for testing.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Yaver provides location access to apps you run for testing.",
+        "NSBluetoothAlwaysUsageDescription": "Yaver provides Bluetooth access to apps you run for testing.",
+        "NSBluetoothPeripheralUsageDescription": "Yaver provides Bluetooth access to apps you run for testing.",
+        "NSMotionUsageDescription": "Yaver provides motion sensor access to apps you run for testing.",
+        "NSLocalNetworkUsageDescription": "Yaver discovers your Mac on the same Wi-Fi so your phone can connect directly for lowest-latency, end-to-end encrypted control of your AI coding sessions.",
+        "NSBonjourServices": [
+          "_yaver._udp",
+          "_yaver._tcp"
+        ],
+        "UIBackgroundModes": [
+          "fetch",
+          "audio"
+        ],
+        "NSSupportsLiveActivities": true
       }
     },
     "android": {
@@ -29,6 +70,20 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "permissions": [
+        "RECORD_AUDIO",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_NETWORK_STATE",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_MULTICAST_STATE",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "CAMERA",
+        "VIBRATE"
+      ],
       "package": "io.yaver.mobile",
       "intentFilters": [
         {
@@ -51,19 +106,82 @@
       "favicon": "./assets/icon.png"
     },
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#050506",
+          "image": "./assets/splash-logo.png",
+          "imageWidth": 200
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.5",
+            "extraPods": [
+              {
+                "name": "GoogleUtilities",
+                "modular_headers": true
+              },
+              {
+                "name": "RecaptchaInterop",
+                "modular_headers": true
+              }
+            ]
+          }
+        }
+      ],
       "expo-router",
       "expo-secure-store",
       "expo-apple-authentication",
       "expo-font",
       [
-        "@react-native-tvos/config-tv",
+        "expo-image-picker",
         {
-          "isTV": false,
-          "tvosDeploymentTarget": "15.1"
+          "photosPermission": "Yaver needs photo access to attach images to tasks.",
+          "cameraPermission": "Yaver needs camera access to take photos for tasks."
         }
       ],
-      "./plugins/with-tv-keychain",
-      "./plugins/with-tv-speech"
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Yaver provides camera access to apps you run for testing."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Yaver provides location access to apps you run for testing."
+        }
+      ],
+      "expo-sensors",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png"
+        }
+      ],
+      "expo-localization",
+      "expo-mail-composer",
+      "expo-updates",
+      "expo-video",
+      "expo-sqlite",
+      [
+        "expo-share-intent",
+        {
+          "iosActivationRules": {
+            "NSExtensionActivationSupportsImageWithMaxCount": 5
+          },
+          "androidIntentFilters": [
+            "image/*"
+          ]
+        }
+      ],
+      "./plugins/withAndroidTV",
+      "./plugins/withAndroidAutoMessaging",
+      "./plugins/withWatchBridge",
+      "./plugins/withSentryXcode16Compat"
     ]
   }
 }

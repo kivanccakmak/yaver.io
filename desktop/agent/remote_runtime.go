@@ -531,12 +531,17 @@ func appendDeclaredSpecialRuntimeTargets(
 func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntimeCapabilities {
 	mode := executionModeForFramework(framework)
 	rnSim := frameworkStreamsRNViaSimulator(framework)
+	webBrowser := mode == ExecutionModeWebWebview
 	projectSurfaces := runtimeProjectSurfaces(workDir, framework)
 	// Eligibility is decoupled from the PRIMARY execution mode: a native app is
 	// WebRTC-primary, while an RN app is Hermes-primary but ALSO simulator-
 	// streamable. Both are remote-runtime eligible; PrimarySurface records which
 	// is the default so the UI can present Hermes first and WebRTC as "also".
-	eligible := mode == ExecutionModeNativeWebRTC || rnSim
+	// WebView is the primary surface for ordinary web clients, but TV/vision/
+	// watch clients do not have an in-process browser. The same project is still
+	// eligible for the browser-window capture target over WebRTC. PrimarySurface
+	// remains webview so this additive lane does not change web/mobile routing.
+	eligible := mode == ExecutionModeNativeWebRTC || rnSim || webBrowser
 	caps := RemoteRuntimeCapabilities{
 		WorkDir:               strings.TrimSpace(workDir),
 		Framework:             strings.TrimSpace(framework),
@@ -546,7 +551,7 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 		// The RN app in a booted simulator carries its OWN feedback SDK, which is
 		// live there (unlike the suppressed-in-container Hermes path), so shake +
 		// feedback work natively. For native apps the note is unchanged.
-		FeedbackSDKCompatible: mode == ExecutionModeNativeWebRTC || rnSim,
+		FeedbackSDKCompatible: mode == ExecutionModeNativeWebRTC || rnSim || webBrowser,
 		FeedbackSDKNote: func() string {
 			if rnSim {
 				return "Feedback flows client→server: the phone owns shake detection (it already has ShakeDetector), and in a WebRTC session a shake sends the `shake` session command to the remote box, which injects a hardware shake into the simulator (simctl for iOS, adb sensor for Android). The guest app's OWN Yaver Feedback SDK — live in the real simulator — then fires its overlay inside the sim, and that overlay streams back to the phone over the same WebRTC video. Yaver can also push a launch-feedback control message down the events channel to trigger it directly."
@@ -569,6 +574,14 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 		FeedbackControlProtocol: "remote-runtime-feedback-v1",
 		SupportedTransports:     []string{"direct-webrtc", "relay-jpeg-poll"},
 		CurrentHostClass:        detectRuntimeHostClass(),
+		// Keep the wire shape stable. A nil Go slice serializes as null, which
+		// strict native clients correctly reject for an array field and used to
+		// turn an ordinary capability gap into "the data is missing".
+		Targets:                 []RemoteRuntimeTarget{},
+	}
+	if webBrowser {
+		caps.Targets = []RemoteRuntimeTarget{browserWindowTargetForFramework(framework)}
+		return caps
 	}
 	if !caps.RemoteRuntimeEligible {
 		return caps

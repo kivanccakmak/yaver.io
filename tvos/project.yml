@@ -1,0 +1,100 @@
+# XcodeGen spec for the YaverTV tvOS app. Generate with: cd tvos && xcodegen generate
+# Keeps the .xcodeproj reproducible + out of git (see tvos/.gitignore) — edit
+# this spec, not the project. See tvos/README.md.
+name: YaverTV
+options:
+  deploymentTarget:
+    tvOS: "17.0"
+  createIntermediateGroups: true
+  minimumXcodeGenVersion: "2.40.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"          # avoid Swift 6 strict-concurrency churn for the scaffold
+    DEVELOPMENT_TEAM: "5SJZ4KA39A"
+    TARGETED_DEVICE_FAMILY: "3"   # tvOS
+packages:
+  LiveKitWebRTC:
+    url: https://github.com/livekit/webrtc-xcframework.git
+    exactVersion: 144.7559.13
+targets:
+  YaverTV:
+    type: application
+    platform: tvOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: YaverTV
+        excludes:
+          - "Info.plist"
+      # Reuse the canonical mobile login wordmark; do not redraw the Yaver
+      # mark independently for TV and let the brand drift.
+      - path: ../mobile/assets/branding/yaver-login-wordmark-light.png
+        buildPhase: resources
+    dependencies:
+      # Raw libwebrtc only — Yaver keeps its existing Pion/SDP signaling and
+      # does not introduce a second media server. This binary ships explicit
+      # tvOS device + simulator slices.
+      - package: LiveKitWebRTC
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.yaver.mobile   # universal w/ the iPhone app (Universal Purchase)
+        PRODUCT_NAME: Yaver
+        PRODUCT_MODULE_NAME: YaverTV
+        MARKETING_VERSION: "1.2.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: "NO"
+        INFOPLIST_FILE: YaverTV/Info.plist
+        CODE_SIGN_ENTITLEMENTS: YaverTV/YaverTV.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+
+  # UI tests drive the REAL tvOS app in the simulator against the REAL box, so
+  # the native app is finally inside the closed loop rather than represented by
+  # a frame the box captured on its behalf.
+  #
+  # Mirrors visionos/project.yml's test target, with one deliberate difference:
+  # no stub agent. visionOS's UI tests use one to walk the app through awkward
+  # backend states, which is the right tool for that job. This target exists for
+  # the opposite reason — to prove the app renders pixels that came from a real
+  # machine over the real transport.
+  YaverTVUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: YaverTVUITests
+        excludes:
+          - "README.md"
+    dependencies:
+      - target: YaverTV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.yaver.tv.uitests
+        TEST_TARGET_NAME: YaverTV
+        GENERATE_INFOPLIST_FILE: "YES"
+
+  YaverTVTests:
+    type: bundle.unit-test
+    platform: tvOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: YaverTVTests
+    dependencies:
+      - target: YaverTV
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.yaver.tv.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Yaver.app/Yaver"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+# Keep the generated shared scheme honest: XcodeGen's implicit app scheme did
+# not include either test target, so `xcodebuild test` failed before executing
+# a single assertion. The headless and simulator loops both select this scheme.
+schemes:
+  YaverTV:
+    build:
+      targets:
+        YaverTV: all
+    test:
+      targets:
+        - YaverTVTests
+        - YaverTVUITests
