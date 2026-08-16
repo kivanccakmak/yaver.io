@@ -42,6 +42,7 @@ func TestSeleniumMCPToolsRegistered(t *testing.T) {
 	}
 	want := map[string]bool{
 		"selenium_status":     false,
+		"selenium_fix":        false,
 		"selenium_start":      false,
 		"selenium_search":     false,
 		"selenium_text":       false,
@@ -61,5 +62,19 @@ func TestSeleniumMCPToolsRegistered(t *testing.T) {
 		if !found {
 			t.Fatalf("missing selenium MCP tool %s", name)
 		}
+	}
+}
+
+func TestMatchingChromeDriverDownload(t *testing.T) {
+	raw := []byte(`{"builds":{"151.0.7922":{"version":"151.0.7922.138","downloads":{"chromedriver":[{"platform":"mac-arm64","url":"https://storage.googleapis.com/chrome-for-testing-public/151/mac-arm64/chromedriver.zip"}]}}}}`)
+	version, downloadURL, err := matchingChromeDriverDownload(raw, "151.0.7922", "mac-arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "151.0.7922.138" || !strings.Contains(downloadURL, "/mac-arm64/") {
+		t.Fatalf("unexpected match %q %q", version, downloadURL)
+	}
+	if _, _, err := matchingChromeDriverDownload(raw, "152.0.7977", "mac-arm64"); err == nil {
+		t.Fatal("missing browser build must fail instead of installing latest")
 	}
 }

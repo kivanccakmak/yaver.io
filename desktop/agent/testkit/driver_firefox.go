@@ -160,6 +160,14 @@ func (d *FirefoxDriver) SendKeys(ctx context.Context, selector, text string) err
 	if err != nil {
 		return err
 	}
+	// WebDriver.Fill is a replacement operation, matching CDP SetValue and the
+	// browser_type clear behavior. This used to append, which turned Apple's
+	// prefilled `group.` identifier into `group.group.io.yaver.mobile` and could
+	// have registered the wrong external resource if the confirmation guard had
+	// not caught it.
+	if _, err = d.post(ctx, "/session/"+d.sessionID+"/element/"+id+"/clear", map[string]interface{}{}); err != nil {
+		return err
+	}
 	_, err = d.post(ctx, "/session/"+d.sessionID+"/element/"+id+"/value", map[string]interface{}{
 		"text": text,
 	})

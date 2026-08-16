@@ -1,10 +1,14 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -56,6 +60,11 @@ func seleniumMCPTools() []map[string]interface{} {
 				"width":      map[string]interface{}{"type": "integer", "description": "Viewport width, default 1280"},
 				"height":     map[string]interface{}{"type": "integer", "description": "Viewport height, default 800"},
 			}},
+		},
+		{
+			"name":        "selenium_fix",
+			"description": "Install a Chrome-for-Testing ChromeDriver matching the installed Chrome/Chromium major.minor.build into Yaver's owner-only cache, then verify it executes. Use when selenium_status reports missing, quarantined, or mismatched ChromeDriver.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		},
 		{
 			"name":        "selenium_search",
@@ -121,6 +130,12 @@ func mcpSeleniumToolCall(name string, args json.RawMessage) interface{} {
 		out, err := seleniumMCP.start(a)
 		if err != nil {
 			return mcpToolError("selenium_start: " + err.Error())
+		}
+		return mcpToolJSON(out)
+	case "selenium_fix":
+		out, err := installMatchingChromeDriver()
+		if err != nil {
+			return mcpToolError("selenium_fix: " + err.Error())
 		}
 		return mcpToolJSON(out)
 	case "selenium_search":
@@ -251,9 +266,12 @@ func seleniumReadiness() map[string]interface{} {
 			"safety": "Yaver Selenium uses normal browser automation only. It must not bypass CAPTCHA, auth, paywalls, rate limits, or site access controls.",
 		}
 	}
+	browserPath, browserVersion := installedChromeVersion()
 	chromedriver, lookupErr := exec.LookPath("chromedriver")
 	driverVersion, driverErr := executableVersion(chromedriver)
-	browserPath, browserVersion := installedChromeVersion()
+	if managedPath, managedVersion := matchingManagedChromeDriver(browserVersion); managedPath != "" {
+		chromedriver, driverVersion, driverErr, lookupErr = managedPath, managedVersion, nil, nil
+	}
 	versionMatch := chromeBuildVersion(driverVersion) != "" && chromeBuildVersion(driverVersion) == chromeBuildVersion(browserVersion)
 	ready := lookupErr == nil && driverErr == nil && browserVersion != "" && versionMatch
 	errorText := ""
@@ -279,8 +297,201 @@ func seleniumReadiness() map[string]interface{} {
 		"version_match":        versionMatch,
 		"error":                errorText,
 		"install_hint":         "Install a Chrome-for-Testing ChromeDriver matching the installed browser's major.minor.build, or set SELENIUM_REMOTE_URL/YAVER_SELENIUM_REMOTE_URL.",
+		"fix_tool":             "selenium_fix",
 		"safety":               "Yaver Selenium uses normal browser automation only. It must not bypass CAPTCHA, auth, paywalls, rate limits, or site access controls.",
 	}
+}
+
+type chromeForTestingBuilds struct {
+	Builds map[string]struct {
+		Version   string `json:"version"`
+		Downloads struct {
+			ChromeDriver []struct {
+				Platform string `json:"platform"`
+				URL      string `json:"url"`
+			} `json:"chromedriver"`
+		} `json:"downloads"`
+	} `json:"builds"`
+}
+
+func installMatchingChromeDriver() (map[string]interface{}, error) {
+	_, browserVersion := installedChromeVersion()
+	build := chromeBuildVersion(browserVersion)
+	if build == "" {
+		return nil, fmt.Errorf("Chrome/Chromium is missing or did not report a major.minor.build version")
+	}
+	platform, executableName := chromeDriverPlatform()
+	if platform == "" {
+		return nil, fmt.Errorf("Chrome for Testing does not publish ChromeDriver for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Get("https://googlechromelabs.github.io/chrome-for-testing/latest-patch-versions-per-build-with-downloads.json")
+	if err != nil {
+		return nil, fmt.Errorf("read Chrome-for-Testing metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Chrome-for-Testing metadata returned HTTP %d", resp.StatusCode)
+	}
+	metadataBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, err
+	}
+	version, downloadURL, err := matchingChromeDriverDownload(metadataBytes, build, platform)
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := url.Parse(downloadURL)
+	if err != nil || u.Scheme != "https" || u.Host != "storage.googleapis.com" || !strings.HasPrefix(u.Path, "/chrome-for-testing-public/") {
+		return nil, fmt.Errorf("refusing unexpected ChromeDriver download URL %q", downloadURL)
+	}
+	download, err := client.Get(downloadURL)
+	if err != nil {
+		return nil, fmt.Errorf("download ChromeDriver %s: %w", version, err)
+	}
+	defer download.Body.Close()
+	if download.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ChromeDriver download returned HTTP %d", download.StatusCode)
+	}
+	archive, err := io.ReadAll(io.LimitReader(download.Body, 100<<20))
+	if err != nil {
+		return nil, err
+	}
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		return nil, fmt.Errorf("open ChromeDriver archive: %w", err)
+	}
+	var binary []byte
+	for _, file := range reader.File {
+		if filepath.Base(file.Name) != executableName || file.FileInfo().IsDir() {
+			continue
+		}
+		r, openErr := file.Open()
+		if openErr != nil {
+			return nil, openErr
+		}
+		binary, err = io.ReadAll(io.LimitReader(r, 100<<20))
+		_ = r.Close()
+		if err != nil {
+			return nil, err
+		}
+		break
+	}
+	if len(binary) == 0 {
+		return nil, fmt.Errorf("ChromeDriver archive did not contain %s", executableName)
+	}
+
+	destination, err := managedChromeDriverPath(version, executableName)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(filepath.Dir(destination), 0o700); err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(destination), ".chromedriver-*")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o755); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if _, err := tmp.Write(binary); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmpPath, destination); err != nil {
+		return nil, err
+	}
+	installedVersion, err := executableVersion(destination)
+	if err != nil {
+		return nil, fmt.Errorf("installed ChromeDriver cannot execute: %w", err)
+	}
+	if chromeBuildVersion(installedVersion) != build {
+		return nil, fmt.Errorf("installed ChromeDriver %s does not match browser build %s", installedVersion, build)
+	}
+	return map[string]interface{}{
+		"ok": true, "browser_version": browserVersion, "chromedriver_version": installedVersion,
+		"chromedriver_path": destination, "source": "Chrome for Testing",
+	}, nil
+}
+
+func matchingChromeDriverDownload(raw []byte, build, platform string) (string, string, error) {
+	var metadata chromeForTestingBuilds
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return "", "", fmt.Errorf("parse Chrome-for-Testing metadata: %w", err)
+	}
+	entry, ok := metadata.Builds[build]
+	if !ok {
+		return "", "", fmt.Errorf("Chrome for Testing has no ChromeDriver build matching %s", build)
+	}
+	for _, download := range entry.Downloads.ChromeDriver {
+		if download.Platform == platform && download.URL != "" {
+			return entry.Version, download.URL, nil
+		}
+	}
+	return "", "", fmt.Errorf("Chrome for Testing has no %s ChromeDriver for %s", platform, build)
+}
+
+func chromeDriverPlatform() (string, string) {
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "darwin/arm64":
+		return "mac-arm64", "chromedriver"
+	case "darwin/amd64":
+		return "mac-x64", "chromedriver"
+	case "linux/amd64":
+		return "linux64", "chromedriver"
+	case "windows/amd64":
+		return "win64", "chromedriver.exe"
+	case "windows/386":
+		return "win32", "chromedriver.exe"
+	default:
+		return "", ""
+	}
+}
+
+func managedChromeDriverPath(version, executableName string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".yaver", "browser-drivers", "chromedriver", version, executableName), nil
+}
+
+func matchingManagedChromeDriver(browserVersion string) (string, string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", ""
+	}
+	root := filepath.Join(home, ".yaver", "browser-drivers", "chromedriver")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", ""
+	}
+	executableName := "chromedriver"
+	if runtime.GOOS == "windows" {
+		executableName += ".exe"
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || chromeBuildVersion(entry.Name()) != chromeBuildVersion(browserVersion) {
+			continue
+		}
+		path := filepath.Join(root, entry.Name(), executableName)
+		if version, err := executableVersion(path); err == nil && chromeBuildVersion(version) == chromeBuildVersion(browserVersion) {
+			return path, version
+		}
+	}
+	return "", ""
 }
 
 func executableVersion(path string) (string, error) {
