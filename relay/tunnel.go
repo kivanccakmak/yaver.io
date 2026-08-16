@@ -3,12 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,8 +72,8 @@ func (t *TunnelClient) Run(ctx context.Context) error {
 			return nil
 		}
 
-		// A session that stayed up is evidence that the path and credentials are
-		// healthy. Do not let an earlier outage permanently poison reconnect time.
+		// A stable session proves that the route and credentials recovered.
+		// Reset any backoff accumulated during the earlier outage.
 		if time.Since(connectedAt) >= 10*time.Second {
 			backoff = time.Second
 		}
@@ -87,9 +93,34 @@ func (t *TunnelClient) Run(ctx context.Context) error {
 }
 
 func (t *TunnelClient) connectAndServe(ctx context.Context) error {
+	// Encrypted always (QUIC = TLS 1.3). Relay identity is verified when a pin
+	// is supplied via YAVER_RELAY_SPKI_PIN (base64 SHA-256 of the relay's
+	// SubjectPublicKeyInfo) — without it, an active MITM on the path could
+	// impersonate the relay and read the plaintext. Env-sourced here because
+	// this is the standalone `yaver-relay` CLI tunnel; the desktop agent gets
+	// its pin from platformConfig instead (see desktop/agent/relay_pinning.go).
 	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true, // relay uses self-signed cert
+		InsecureSkipVerify: true, // self-signed relay cert; identity checked below
 		NextProtos:         []string{"yaver-relay"},
+	}
+	if pin := strings.TrimSpace(os.Getenv("YAVER_RELAY_SPKI_PIN")); pin != "" {
+		pin = strings.TrimPrefix(strings.TrimPrefix(pin, "sha256/"), "sha256:")
+		tlsCfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("relay %s presented no certificate", t.relayAddr)
+			}
+			leaf, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("relay %s: parse cert: %w", t.relayAddr, err)
+			}
+			sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+			if got := base64.StdEncoding.EncodeToString(sum[:]); got != pin {
+				return fmt.Errorf("relay %s SPKI pin mismatch (possible MITM): want %s got %s", t.relayAddr, pin, got)
+			}
+			return nil
+		}
+	} else {
+		log.Printf("[TUNNEL] %s: no YAVER_RELAY_SPKI_PIN — encrypted but relay identity UNVERIFIED", t.relayAddr)
 	}
 
 	conn, err := quic.DialAddr(ctx, t.relayAddr, tlsCfg, &quic.Config{
@@ -162,13 +193,54 @@ func (t *TunnelClient) register(ctx context.Context, conn quic.Connection) error
 	return nil
 }
 
+// isLongDevRequest returns true for /dev/* paths whose handler can
+// legitimately take more than 60s on the agent (Metro bundling, hermesc
+// compile, web-export). The default httpClient.Timeout is 60s — too
+// short for these — and a 504 there surfaces as "JSON Parse error:
+// Unexpected character: h" on the mobile client because the relay
+// returns an HTML 504 page. Keep this list aligned with every slow
+// /dev/* handler in desktop/agent/devserver_http.go and build_web.go.
+func isLongDevRequest(path string) bool {
+	// /dev-web/ serves multi-MB static bundles (17MB entry bundles,
+	// CanvasKit) — over a slow link that legitimately exceeds the 60s
+	// default, and the resulting HTML 504 is unparseable client-side.
+	if strings.HasPrefix(path, "/dev-web/") {
+		return true
+	}
+	if !strings.HasPrefix(path, "/dev/") {
+		return false
+	}
+	long := []string{
+		"/dev/build-native",
+		"/dev/web-bundle",
+		"/dev/build-web",
+		"/dev/build-",
+		"/dev/start",
+		"/dev/web-preview/start",
+		"/dev/native-bundle", // bundle download — multi-MB body
+		"/dev/native-assets", // assets zip — multi-MB body
+	}
+	for _, p := range long {
+		if strings.Contains(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleRequest reads a TunnelRequest from the relay, proxies it to
 // the local agent HTTP server, and writes the TunnelResponse back.
 func (t *TunnelClient) handleRequest(stream quic.Stream) {
 	defer stream.Close()
 
-	// Read tunnel request
-	data, err := io.ReadAll(io.LimitReader(stream, 10<<20)) // 10MB
+	// Read tunnel request. Capped at 100MB (was 10MB) so large
+	// task prompts, file uploads, and multi-MB JSON payloads aren't
+	// truncated when they arrive over relay. Responses for /dev/*
+	// already allow up to 200MB via maxRespSize below. The request
+	// is fully buffered in memory before being handed to the local
+	// agent, so a higher cap trades memory for correctness — the
+	// agent still enforces per-path auth afterwards.
+	data, err := io.ReadAll(io.LimitReader(stream, 100<<20)) // 100MB
 	if err != nil {
 		log.Printf("[TUNNEL] read request: %v", err)
 		return
@@ -198,17 +270,62 @@ func (t *TunnelClient) handleRequest(stream quic.Stream) {
 		httpReq.Header.Set(k, v)
 	}
 
-	// Check if this is an SSE request (task output streaming)
-	isSSE := req.Path != "" && len(req.Path) > 7 &&
-		req.Path[len(req.Path)-7:] == "/output" && req.Method == "GET"
+	// Check if WebSocket upgrade (Metro HMR, debugger)
+	if strings.EqualFold(req.Headers["Upgrade"], "websocket") {
+		backendConn, err := net.Dial("tcp", t.agentAddr)
+		if err != nil {
+			t.sendErrorResponse(stream, req.ID, 502, fmt.Sprintf("agent unavailable: %v", err))
+			return
+		}
+		defer backendConn.Close()
+		if err := httpReq.Write(backendConn); err != nil {
+			t.sendErrorResponse(stream, req.ID, 502, fmt.Sprintf("write upgrade: %v", err))
+			return
+		}
+		done := make(chan struct{}, 2)
+		go func() { io.Copy(backendConn, stream); done <- struct{}{} }()
+		go func() { io.Copy(stream, backendConn); done <- struct{}{} }()
+		<-done
+		return
+	}
+
+	// Check if this is an SSE request (task output, dev server events,
+	// blackbox subscribe + command-stream, agent-update, /streams/*).
+	// Without this branch the relay buffers the whole response body
+	// before forwarding to the client — but SSE bodies never close, so
+	// the client times out with no response. Symptom in CI: SDK smoke
+	// hits /d/<id>/blackbox/command-stream and curl returns
+	// "exit=28 status=000". Keep this list aligned with every long-
+	// lived stream the agent serves.
+	// Hybrid SSE detection — Accept header OR path suffix.
+	// KEEP IN SYNC with relay/server.go and desktop/agent/main.go.
+	isSSE := req.Method == "GET" && req.Path != "" &&
+		(strings.Contains(req.Headers["Accept"], "text/event-stream") ||
+			strings.HasSuffix(req.Path, "/output") ||
+			strings.HasSuffix(req.Path, "/dev/events") ||
+			strings.HasSuffix(req.Path, "/subscribe") ||
+			strings.HasSuffix(req.Path, "/blackbox/command-stream") ||
+			strings.HasSuffix(req.Path, "/blackbox/stream") ||
+			strings.HasSuffix(req.Path, "/feedback/stream") ||
+			strings.Contains(req.Path, "/streams/"))
 
 	if isSSE {
 		t.handleSSERequest(stream, req, httpReq)
 		return
 	}
 
-	// Execute request against local agent
-	resp, err := t.httpClient.Do(httpReq)
+	// Pick a longer client timeout for slow /dev/* endpoints. The
+	// default 60s client.Timeout kills /dev/build-native around the
+	// time Metro finishes bundling SFMG (~54s + asset copy), so the
+	// relay returns a 504 HTML page that the mobile app's JSON.parse
+	// chokes on with "Unexpected character: h". The agent's own
+	// timeouts (bundleBuildTimeout 8m, hermesCompileTimeout 3m) are the
+	// real safety net — the relay just forwards.
+	client := t.httpClient
+	if isLongDevRequest(req.Path) {
+		client = &http.Client{Timeout: 15 * time.Minute}
+	}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		log.Printf("[TUNNEL] local request failed: %v", err)
 		t.sendErrorResponse(stream, req.ID, 502, fmt.Sprintf("agent error: %v", err))
@@ -216,13 +333,30 @@ func (t *TunnelClient) handleRequest(stream quic.Stream) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	// Dev server bundles can be large (RN bundles ~20MB, Flutter ~50MB+);
+	// raise the limit for dev-proxy paths (/dev/ AND /dev-web/ — the web
+	// sibling proxy is where the biggest bundles actually live).
+	maxRespSize := int64(10 << 20) // 10MB default
+	if isDevProxyPath(req.Path) {
+		maxRespSize = 200 << 20 // 200MB for dev server
+	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespSize))
 
 	headers := make(map[string]string)
 	for k, v := range resp.Header {
 		if len(v) > 0 {
 			headers[k] = v[0]
 		}
+	}
+
+	// Web Reload dashboard tab iframes /dev/* responses. Dev servers
+	// routinely ship frame-blocking headers (Next.js sets
+	// `frame-ancestors 'self'` in its default CSP) that prevent the
+	// iframe from rendering. Strip those headers narrowly on /dev/*
+	// only — other paths retain their production-grade security
+	// posture.
+	if isDevProxyPath(req.Path) {
+		stripFrameBlockingHeaders(headers)
 	}
 
 	tunnelResp := TunnelResponse{

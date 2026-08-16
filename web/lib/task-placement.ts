@@ -781,6 +781,17 @@ export async function hideProjectArtifact(token: string, artifactId: string): Pr
   });
 }
 
+export async function getPublicProjectArtifact(shareToken: string): Promise<ProjectArtifact> {
+  const params = new URLSearchParams({ token: shareToken });
+  const res = await fetch(`${CONVEX_URL}/project-artifacts/public?${params.toString()}`, {
+    headers: { Accept: "application/json" },
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new Error(data?.error || `Project artifact request failed (${res.status})`);
+  return data as ProjectArtifact;
+}
+
 export async function createFeedbackWorkItem(
   sdkToken: string,
   req: {
