@@ -16,6 +16,21 @@ func TestSeleniumSearchURL(t *testing.T) {
 	}
 }
 
+func TestSeleniumVersionParsingAndBuildMatching(t *testing.T) {
+	if got := dottedVersion("Google Chrome 151.0.7922.138 "); got != "151.0.7922.138" {
+		t.Fatalf("dottedVersion = %q", got)
+	}
+	if got := dottedVersion("ChromeDriver 151.0.7922.47 (abcdef)"); got != "151.0.7922.47" {
+		t.Fatalf("driver dottedVersion = %q", got)
+	}
+	if chromeBuildVersion("151.0.7922.138") != chromeBuildVersion("151.0.7922.47") {
+		t.Fatal("same Chrome build must accept a different patch")
+	}
+	if chromeBuildVersion("151.0.7922.138") == chromeBuildVersion("152.0.7977.42") {
+		t.Fatal("different Chrome builds must not match")
+	}
+}
+
 func TestSeleniumMCPToolsRegistered(t *testing.T) {
 	wrapper, ok := (&HTTPServer{}).getMCPToolsList().(map[string]interface{})
 	if !ok {

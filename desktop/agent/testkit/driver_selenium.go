@@ -32,12 +32,21 @@ func (s *seleniumBackend) Launch(ctx context.Context) error {
 		return s.newChromeSession(ctx)
 	}
 
-	bin, err := exec.LookPath("chromedriver")
-	if err != nil {
-		return fmt.Errorf("chromedriver not found for Selenium/WebDriver autotest — install ChromeDriver or set SELENIUM_REMOTE_URL/YAVER_SELENIUM_REMOTE_URL to a Selenium server")
+	bin := strings.TrimSpace(s.opts.DriverPath)
+	if bin == "" {
+		var err error
+		bin, err = exec.LookPath("chromedriver")
+		if err != nil {
+			return fmt.Errorf("chromedriver not found for Selenium/WebDriver autotest — install a browser-version-matched ChromeDriver or set SELENIUM_REMOTE_URL/YAVER_SELENIUM_REMOTE_URL to a Selenium server")
+		}
 	}
 	port := pickFreePort()
-	cmd := exec.CommandContext(ctx, bin, "--port="+fmt.Sprintf("%d", port))
+	// Do not use CommandContext here. Launch receives a bounded startup context,
+	// and its caller cancels that context immediately after Launch returns. A
+	// CommandContext therefore killed a healthy ChromeDriver at the end of every
+	// successful startup; the session was recorded as ready, then the very next
+	// screenshot hit connection refused. Driver.Close owns the process lifetime.
+	cmd := exec.Command(bin, "--port="+fmt.Sprintf("%d", port))
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -52,6 +61,12 @@ func (s *seleniumBackend) Launch(ctx context.Context) error {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+			return fmt.Errorf("start chromedriver: %w", ctx.Err())
+		default:
+		}
 		if d.ping() {
 			s.d = d
 			return s.newChromeSession(ctx)
@@ -116,13 +131,20 @@ func (s *seleniumBackend) Navigate(ctx context.Context, url string) error {
 
 func (s *seleniumBackend) Snapshot(ctx context.Context) (Snapshot, error) {
 	resp, err := s.d.post(ctx, "/session/"+s.d.sessionID+"/execute/sync", map[string]interface{}{
-		"script": domSnapshotJS,
+		// W3C execute/sync accepts a function body, not a CDP expression. Without
+		// this return, the IIFE evaluates and is discarded, WebDriver returns null,
+		// and the snapshot parser sees an empty string.
+		"script": seleniumSnapshotScript(),
 		"args":   []interface{}{},
 	})
 	if err != nil {
 		return Snapshot{}, err
 	}
 	return parseSnapshotJSON(resp.Value.String)
+}
+
+func seleniumSnapshotScript() string {
+	return "return " + domSnapshotJS
 }
 
 func (s *seleniumBackend) Click(ctx context.Context, selector string) error {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -244,16 +245,119 @@ func seleniumReadiness() map[string]interface{} {
 	if remote == "" {
 		remote = strings.TrimSpace(os.Getenv("SELENIUM_REMOTE_URL"))
 	}
-	chromedriver, chromeErr := exec.LookPath("chromedriver")
-	return map[string]interface{}{
-		"ok":                 remote != "" || chromeErr == nil,
-		"driver":             "selenium",
-		"remote_url_set":     remote != "",
-		"chromedriver_path":  chromedriver,
-		"chromedriver_ready": chromeErr == nil,
-		"install_hint":       "Install ChromeDriver on PATH, or set SELENIUM_REMOTE_URL/YAVER_SELENIUM_REMOTE_URL to a Selenium server.",
-		"safety":             "Yaver Selenium uses normal browser automation only. It must not bypass CAPTCHA, auth, paywalls, rate limits, or site access controls.",
+	if remote != "" {
+		return map[string]interface{}{
+			"ok": true, "driver": "selenium", "remote_url_set": true,
+			"safety": "Yaver Selenium uses normal browser automation only. It must not bypass CAPTCHA, auth, paywalls, rate limits, or site access controls.",
+		}
 	}
+	chromedriver, lookupErr := exec.LookPath("chromedriver")
+	driverVersion, driverErr := executableVersion(chromedriver)
+	browserPath, browserVersion := installedChromeVersion()
+	versionMatch := chromeBuildVersion(driverVersion) != "" && chromeBuildVersion(driverVersion) == chromeBuildVersion(browserVersion)
+	ready := lookupErr == nil && driverErr == nil && browserVersion != "" && versionMatch
+	errorText := ""
+	switch {
+	case lookupErr != nil:
+		errorText = "ChromeDriver is missing"
+	case driverErr != nil:
+		errorText = "ChromeDriver is present but cannot execute (on macOS, check Gatekeeper quarantine): " + driverErr.Error()
+	case browserVersion == "":
+		errorText = "Chrome/Chromium is not installed or cannot report its version"
+	case !versionMatch:
+		errorText = fmt.Sprintf("ChromeDriver %s does not match browser %s; post-M115 WebDriver requires the same major.minor.build", driverVersion, browserVersion)
+	}
+	return map[string]interface{}{
+		"ok":                   ready,
+		"driver":               "selenium",
+		"remote_url_set":       false,
+		"chromedriver_path":    chromedriver,
+		"chromedriver_ready":   driverErr == nil,
+		"chromedriver_version": driverVersion,
+		"browser_path":         browserPath,
+		"browser_version":      browserVersion,
+		"version_match":        versionMatch,
+		"error":                errorText,
+		"install_hint":         "Install a Chrome-for-Testing ChromeDriver matching the installed browser's major.minor.build, or set SELENIUM_REMOTE_URL/YAVER_SELENIUM_REMOTE_URL.",
+		"safety":               "Yaver Selenium uses normal browser automation only. It must not bypass CAPTCHA, auth, paywalls, rate limits, or site access controls.",
+	}
+}
+
+func executableVersion(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("executable not found")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	if version := dottedVersion(string(out)); version != "" {
+		return version, nil
+	}
+	return "", fmt.Errorf("version output was not understood")
+}
+
+func installedChromeVersion() (string, string) {
+	candidates := []string{}
+	if runtime.GOOS == "darwin" {
+		candidates = append(candidates,
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		)
+	}
+	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+		if path, err := exec.LookPath(name); err == nil {
+			candidates = append(candidates, path)
+		}
+	}
+	seen := map[string]bool{}
+	for _, path := range candidates {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		if version, err := executableVersion(path); err == nil {
+			return path, version
+		}
+	}
+	return "", ""
+}
+
+func dottedVersion(output string) string {
+	for _, field := range strings.Fields(output) {
+		candidate := strings.Trim(field, " ,;()[]")
+		parts := strings.Split(candidate, ".")
+		if len(parts) < 3 {
+			continue
+		}
+		valid := true
+		for _, part := range parts {
+			if part == "" {
+				valid = false
+				break
+			}
+			for _, r := range part {
+				if r < '0' || r > '9' {
+					valid = false
+					break
+				}
+			}
+		}
+		if valid {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func chromeBuildVersion(version string) string {
+	parts := strings.Split(strings.TrimSpace(version), ".")
+	if len(parts) < 3 {
+		return ""
+	}
+	return strings.Join(parts[:3], ".")
 }
 
 func (m *seleniumMCPManager) start(a seleniumStartArgs) (map[string]interface{}, error) {
@@ -274,11 +378,20 @@ func (m *seleniumMCPManager) start(a seleniumStartArgs) (map[string]interface{},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	status := seleniumReadiness()
+	if ready, _ := status["ok"].(bool); !ready {
+		if reason, _ := status["error"].(string); reason != "" {
+			return nil, fmt.Errorf("selenium capability unavailable: %s", reason)
+		}
+		return nil, fmt.Errorf("selenium capability unavailable")
+	}
+	driverPath, _ := status["chromedriver_path"].(string)
 	driver, err := testkit.NewWebDriver("selenium", testkit.ChromeOpts{
 		ViewportW:   a.Width,
 		ViewportH:   a.Height,
 		Headful:     a.Headful,
 		UserDataDir: profile,
+		DriverPath:  driverPath,
 	})
 	if err != nil {
 		return nil, err

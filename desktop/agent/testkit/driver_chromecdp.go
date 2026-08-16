@@ -50,6 +50,7 @@ type ChromeOpts struct {
 	Headful         bool // true only when the user opted into the live WebRTC stream
 	RemoteDebugPort int  // 0 = pick a free port; the spec's default is 9222
 	UserDataDir     string
+	DriverPath      string // Selenium only; empty resolves chromedriver from PATH
 }
 
 // ConsoleMsg is one captured browser console line (warn/error only —
