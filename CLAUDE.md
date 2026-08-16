@@ -926,7 +926,9 @@ export APP_STORE_KEY_ISSUER="<uuid>"
 export APPLE_TEAM_ID="<team-id>"
 ./scripts/deploy-testflight.sh
 
-# interactive-Mac fallback: use the Apple account already signed in to Xcode.
+# interactive-Mac fallback: ask Xcode to use its managed Apple account.
+# The archive operation is the auth probe; a browser login or account name in
+# preferences is not proof that Xcode's provisioning token is usable.
 # Read the current highest iOS build in TestFlight first; never guess.
 YAVER_IOS_BUILD_NUMBER=<next-build> ./scripts/deploy-testflight.sh
 ```
@@ -950,8 +952,11 @@ yaver vault add APPLE_TEAM_ID        --project mobile --value 5SJZ4KA39A
 ```
 
 With a complete API-key configuration, the script queries App Store Connect and
-auto-bumps CFBundleVersion. With no API-key variables, it uses the Apple account
-already signed in to Xcode and requires `YAVER_IOS_BUILD_NUMBER`; this prevents
+auto-bumps CFBundleVersion. With no API-key variables, it asks Xcode to use its
+managed account and requires `YAVER_IOS_BUILD_NUMBER`; the archive itself may
+still report `No Accounts` when Xcode's token is absent/expired even if the
+browser is signed in or Xcode preferences list the Apple ID. Refresh Xcode →
+Settings → Accounts in that case. The explicit build requirement prevents
 a stale local plist from colliding with an existing TestFlight build. A partial
 API-key configuration or unreadable key path is always an error. The script
 archives at `/tmp/Yaver.xcarchive`, exports, and uploads. On flake/timeout,

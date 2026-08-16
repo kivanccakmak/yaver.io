@@ -45,6 +45,11 @@ After reading the docs, **grep the code for the symbols the docs name** before r
   accounts, and `deploy/deploy.sh` refuses group/other-writable repo or script
   paths before using deploy credentials. Never weaken this to make a test pass.
 - On this Mac, local TestFlight deploys can work even when `yaver vault env --project mobile` is unauthenticated, because the deploy guide in [`CLAUDE.md`](CLAUDE.md) already documents the fallback `APP_STORE_KEY_*` / `APPLE_TEAM_ID` exports used by the working local path.
+- The API-key-free lane is **Xcode-managed, not pre-verified**. An Apple ID in
+  Xcode preferences or a browser login can coexist with an expired/missing
+  Xcode account token; only the provisioning operation proves it. If archive
+  says `No Accounts`, refresh the SIMKAB account under Xcode → Settings →
+  Accounts (or configure the complete App Store Connect API-key triplet).
 - If `scripts/deploy-testflight.sh` appears stuck with almost no output, check for another active `xcodebuild archive` from another local mobile project or an earlier Yaver run before assuming credentials are broken.
 - If you must clean local archive artifacts, inspect the exact path first (`ls -la /tmp/YaverBuild /tmp/Yaver.xcarchive /tmp/YaverExport`) and only then remove those specific directories.
 - **Headless codesign (SSH / no GUI):** `CodeSign … errSecInternalComponent` means the signing **private key** is in a **locked** keychain, not that the cert is missing. The identity spans TWO keychains — `yaver-ci.keychain-db` (Apple Distribution) + `login.keychain-db` (Apple Development private keys) — so BOTH must be `unlock-keychain` + `set-key-partition-list`'d before archiving, or the archive dies at `CodeSign …/*.appex`. Full recipe in [`CLAUDE.md`](CLAUDE.md) → "Headless codesign". `launchctl asuser` does not help; only the passwords do.

@@ -430,6 +430,12 @@ if [ "$ARCHIVE_EXIT" -ne 0 ]; then
     echo "  A profile merely existing is a false green; its application-groups array" >&2
     echo "  must contain the exact group declared by the entitlements file." >&2
   fi
+  if grep -q "No Accounts: Add a new account in Accounts settings" "$ARCHIVE_LOG"; then
+    echo "DIAGNOSIS: Xcode has no usable Apple account token for provisioning." >&2
+    echo "  A browser session and an Apple ID listed in Xcode preferences do not prove" >&2
+    echo "  signing auth. Open Xcode > Settings > Accounts and sign in/refresh the" >&2
+    echo "  SIMKAB team account, or configure a complete App Store Connect API key." >&2
+  fi
   if grep -q 'ShareExtension.entitlements.*could not be opened' "$ARCHIVE_LOG"; then
     echo "DIAGNOSIS: expo-share-intent's generated iOS source directory is absent." >&2
     echo "  scripts/restore-ios-share-extension.js should recreate it before archive;" >&2

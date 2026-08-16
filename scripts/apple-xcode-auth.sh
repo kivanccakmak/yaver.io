@@ -48,7 +48,11 @@ apple_configure_xcode_auth() {
     return 0
   fi
 
-  echo "Apple upload authentication: signed-in Xcode account"
+  # Absence of API-key variables does not prove Xcode has a usable account
+  # token. Its preferences can list an Apple ID while archive reports
+  # "No Accounts" because the token is absent/expired. Only the provisioning
+  # operation can prove this lane, so never print a false signed-in success.
+  echo "Apple upload authentication: Xcode-managed account (validated during archive)"
 }
 
 apple_resolve_team_id() {
