@@ -1,0 +1,1152 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Linking,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useColors } from "../../src/context/ThemeContext";
+import { useDevice, type Device } from "../../src/context/DeviceContext";
+import { AppBackButton } from "../../src/components/AppBackButton";
+import { quicClient } from "../../src/lib/quic";
+import {
+  PhoneBrowseResult,
+  PhoneDeployCostHint,
+  PhoneDeployCostHints,
+  PhoneProject,
+  PhoneProjectAccess,
+  PhonePushResult,
+  PhonePushTarget,
+  bindPhoneProjectToTarget,
+  browsePhoneTable,
+  clearPhoneProjectBinding,
+  deletePhoneRow,
+  getPhoneProject,
+  getPhoneProjectAccess,
+  insertPhoneRow,
+  listPhoneTablesAt,
+  phoneBundleSize,
+  phoneDeployCostHints,
+  pushPhoneProject,
+} from "../../src/lib/phoneProjects";
+
+function pickDevMachines(all: Device[], currentId: string | undefined): Device[] {
+  return all.filter(
+    (d) =>
+      d.online &&
+      !d.needsAuth &&
+      d.id !== currentId &&
+      d.deviceClass !== "edge-mobile",
+  );
+}
+
+export default function PhoneProjectDetailScreen() {
+  const c = useColors();
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { slug } = useLocalSearchParams<{ slug: string }>();
+  const slugStr = String(slug ?? "");
+
+  const [project, setProject] = useState<PhoneProject | null>(null);
+  const [access, setAccess] = useState<PhoneProjectAccess | null>(null);
+  const [tables, setTables] = useState<Array<{ name: string; rowCount?: number }>>([]);
+  const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [rows, setRows] = useState<PhoneBrowseResult["rows"]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [showInsert, setShowInsert] = useState(false);
+  const [insertJSON, setInsertJSON] = useState("{}");
+
+  const { devices, activeDevice } = useDevice();
+  const devMachines = useMemo(
+    () => pickDevMachines(devices, activeDevice?.id),
+    [devices, activeDevice?.id],
+  );
+  const [selectedDevMachineId, setSelectedDevMachineId] = useState<string | null>(null);
+  const [deploying, setDeploying] = useState(false);
+  const [gitBusy, setGitBusy] = useState<string | null>(null);
+  const [dropboxOAuth, setDropboxOAuth] = useState<{ sessionId: string; authUrl?: string } | null>(null);
+  const [dropboxCode, setDropboxCode] = useState("");
+  const [lastDeploy, setLastDeploy] = useState<{ url: string; via?: string } | null>(null);
+  const [costHints, setCostHints] = useState<PhoneDeployCostHints | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const hints = await phoneDeployCostHints();
+      if (hints) setCostHints(hints);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedDevMachineId && devMachines.length) {
+      setSelectedDevMachineId(devMachines[0].id);
+    }
+  }, [devMachines, selectedDevMachineId]);
+
+  const selectedDevMachine = useMemo(
+    () => devMachines.find((d) => d.id === selectedDevMachineId) ?? null,
+    [devMachines, selectedDevMachineId],
+  );
+
+  const load = useCallback(async () => {
+    if (!slugStr) return;
+    try {
+      setErr(null);
+      const resolved = await getPhoneProjectAccess(slugStr);
+      setAccess(resolved);
+      const [p, ts] = await Promise.all([
+        getPhoneProject(slugStr, resolved),
+        listPhoneTablesAt(slugStr, resolved),
+      ]);
+      setProject(p);
+      setTables(ts);
+      if (!selectedTable && ts.length) setSelectedTable(ts[0].name);
+    } catch (e: any) {
+      setErr(e?.message ?? "failed to load");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [selectedTable, slugStr]);
+
+  const loadRows = useCallback(async () => {
+    if (!slugStr || !selectedTable) return;
+    try {
+      const resolved = access ?? (await getPhoneProjectAccess(slugStr));
+      if (!access) setAccess(resolved);
+      const result = await browsePhoneTable(slugStr, selectedTable, "", 50, resolved);
+      setRows(result?.rows ?? []);
+    } catch (e: any) {
+      setErr(e?.message ?? "browse failed");
+    }
+  }, [access, selectedTable, slugStr]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    void loadRows();
+  }, [loadRows]);
+
+  async function doInsert() {
+    if (!slugStr || !selectedTable) return;
+    try {
+      const doc = JSON.parse(insertJSON || "{}");
+      if (!doc || typeof doc !== "object") throw new Error("JSON must be an object");
+      await insertPhoneRow(slugStr, selectedTable, doc, access);
+      setInsertJSON("{}");
+      setShowInsert(false);
+      await loadRows();
+    } catch (e: any) {
+      Alert.alert("Insert failed", e?.message ?? "invalid JSON");
+    }
+  }
+
+  async function doDeleteRow(id: unknown) {
+    if (!slugStr || !selectedTable || !id) return;
+    Alert.alert("Delete row?", String(id), [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          await deletePhoneRow(slugStr, selectedTable, String(id), access);
+          await loadRows();
+        },
+      },
+    ]);
+  }
+
+  async function runManagedGitBackup() {
+    if (!project?.managedGit?.enabled) return;
+    setGitBusy("backup");
+    try {
+      await quicClient.managedGitBackupRun({ slug: project.slug });
+      await load();
+      Alert.alert("Backup saved", "Yaver created a recoverable git backup for this project.");
+    } catch (e: any) {
+      Alert.alert("Backup failed", e?.message ?? "Could not create backup.");
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  async function enableManagedGit() {
+    if (!project) return;
+    setGitBusy("enable");
+    try {
+      await quicClient.managedGitEnable({
+        slug: project.slug,
+        name: project.name,
+        visibility: "private",
+      });
+      await load();
+      Alert.alert("Yaver Git is on", "Yaver will now save versions of this project on the main branch.");
+    } catch (e: any) {
+      Alert.alert("Could not turn on Yaver Git", e?.message ?? "Try again after connecting a Yaver agent.");
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  async function restoreLastManagedGitBackup() {
+    const path = project?.managedGit?.lastBackup?.path;
+    if (!project?.managedGit?.enabled || !path) return;
+    Alert.alert("Restore backup?", "Yaver will restore the last git backup onto the main branch.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Restore",
+        style: "destructive",
+        onPress: async () => {
+          setGitBusy("restore");
+          try {
+            await quicClient.managedGitBackupRestore({ slug: project.slug, bundlePath: path });
+            await load();
+            Alert.alert("Restored", "The project was restored from the last Yaver Git backup.");
+          } catch (e: any) {
+            Alert.alert("Restore failed", e?.message ?? "Could not restore backup.");
+          } finally {
+            setGitBusy(null);
+          }
+        },
+      },
+    ]);
+  }
+
+  async function backupToOwnStorage() {
+    if (!project?.managedGit?.enabled) return;
+    setGitBusy("own-storage");
+    try {
+      const data = await quicClient.sharedStorageProfiles();
+      const profiles = (data?.profiles ?? []) as Array<{ id: string; name?: string; type?: string; available?: boolean; readOnly?: boolean }>;
+      const target = profiles.find((p) =>
+        p.available !== false &&
+        !p.readOnly &&
+        (p.type === "local" || p.type === "storagebox")
+      );
+      if (!target) {
+        Alert.alert("No backup folder", "Add a writable shared storage profile first, such as a folder on your computer or storage box.");
+        return;
+      }
+      await quicClient.managedGitBackupCopy({
+        slug: project.slug,
+        targetKind: "shared-storage",
+        targetId: target.id,
+      });
+      await load();
+      Alert.alert("Backed up", `Yaver copied a recoverable backup to ${target.name || target.id}.`);
+    } catch (e: any) {
+      Alert.alert("Backup failed", e?.message ?? "Could not back up to your storage.");
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  async function backupToDropbox() {
+    if (!project?.managedGit?.enabled) return;
+    setGitBusy("dropbox");
+    try {
+      const status = await quicClient.managedGitDropboxStatus();
+      if (!status?.connected) {
+        const start = await quicClient.managedGitDropboxOAuthStart();
+        setDropboxOAuth({ sessionId: start.sessionId, authUrl: start.authUrl });
+        setDropboxCode("");
+        if (start?.authUrl) {
+          await Linking.openURL(start.authUrl).catch(() => undefined);
+        }
+        Alert.alert("Dropbox approval opened", "Approve Yaver in Dropbox, then paste the returned code here. Dropbox is an extra copy; Yaver Git stays on.");
+        return;
+      }
+      await quicClient.managedGitBackupCopy({ slug: project.slug, targetKind: "dropbox" });
+      await load();
+      Alert.alert("Backed up", "Yaver copied a recoverable backup to Dropbox.");
+    } catch (e: any) {
+      Alert.alert("Dropbox backup failed", e?.message ?? "Could not back up to Dropbox.");
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  async function finishDropboxOAuth() {
+    if (!project?.managedGit?.enabled || !dropboxOAuth || !dropboxCode.trim()) return;
+    setGitBusy("dropbox-connect");
+    try {
+      await quicClient.managedGitDropboxOAuthSubmit({
+        sessionId: dropboxOAuth.sessionId,
+        code: dropboxCode.trim(),
+      });
+      await quicClient.managedGitBackupCopy({ slug: project.slug, targetKind: "dropbox" });
+      setDropboxOAuth(null);
+      setDropboxCode("");
+      await load();
+      Alert.alert("Dropbox synced", "Yaver copied a recoverable git backup to Dropbox. Other backups and mirrors can stay enabled too.");
+    } catch (e: any) {
+      Alert.alert("Dropbox failed", e?.message ?? "Could not finish Dropbox setup.");
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  async function backupToSelectedBox() {
+    if (!project?.managedGit?.enabled) return;
+    if (!selectedDevMachine) {
+      Alert.alert("No box selected", "Pick or connect a Yaver box first.");
+      return;
+    }
+    const relayHttpUrl = quicClient.activeRelayHttpUrl;
+    if (!relayHttpUrl) {
+      Alert.alert("Relay required", "Self-hosted backup needs the relay path so this phone can move the bundle between boxes.");
+      return;
+    }
+    setGitBusy("self-hosted");
+    try {
+      const h = quicClient.getAuthHeaders();
+      const src = `${quicClient.baseUrl}/managed-git/backup/download?slug=${encodeURIComponent(project.slug)}`;
+      const bundleRes = await fetch(src, { headers: h });
+      if (!bundleRes.ok) throw new Error(`download HTTP ${bundleRes.status}`);
+      const bundle = await bundleRes.blob();
+      const dst = `${relayHttpUrl.replace(/\/$/, "")}/d/${encodeURIComponent(selectedDevMachine.id)}/managed-git/backup/receive?repoId=${encodeURIComponent(project.managedGit.repoId || project.slug)}`;
+      const put = await fetch(dst, {
+        method: "POST",
+        headers: h,
+        body: bundle,
+      });
+      if (!put.ok) throw new Error(`receive HTTP ${put.status}: ${await put.text().catch(() => "")}`);
+      await load();
+      Alert.alert("Backed up", `Yaver copied a recoverable backup to ${selectedDevMachine.name || selectedDevMachine.id}.`);
+    } catch (e: any) {
+      Alert.alert("Self-hosted backup failed", e?.message ?? "Could not copy backup to your box.");
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  async function mirrorManagedGit(provider: "github" | "gitlab") {
+    if (!project?.managedGit?.enabled) return;
+    setGitBusy(provider);
+    try {
+      const r = await quicClient.managedGitMirrorConnect({
+        slug: project.slug,
+        provider,
+        repoName: project.managedGit.repoId || project.slug,
+        visibility: project.managedGit.visibility === "public" ? "public" : "private",
+        description: project.app?.summary || project.name,
+      });
+      await load();
+      Alert.alert("Mirror ready", `${r.mirror?.fullName ?? project.slug} on ${provider}.com`);
+    } catch (e: any) {
+      Alert.alert(
+        "Mirror failed",
+        e?.message?.includes("token")
+          ? `Connect ${provider} first from Git Accounts, then try again.`
+          : e?.message ?? "Could not create mirror.",
+      );
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  async function runProjectQualityChecks() {
+    if (!project?.dir) {
+      Alert.alert("Not ready", "Move this project to a Yaver agent before running quality checks.");
+      return;
+    }
+    setGitBusy("quality");
+    try {
+      await quicClient.runAllQualityChecks(project.dir);
+      Alert.alert("Quality checks started", "Yaver is checking the project and will keep the results in the quality history.");
+    } catch (e: any) {
+      Alert.alert("Quality check failed", e?.message ?? "Could not start checks.");
+    } finally {
+      setGitBusy(null);
+    }
+  }
+
+  function costHintFor(kind: "dev-hw"): PhoneDeployCostHint | null {
+    if (!costHints) return null;
+    return costHints.hints.find((hint) => hint.targetKind === kind) ?? null;
+  }
+
+  async function confirmDeploySize(): Promise<boolean> {
+    const bytes = await phoneBundleSize(slugStr, { includeData: true });
+    const capMB = costHints?.bundleCapMB ?? 50;
+    const mb = bytes ? (bytes / (1024 * 1024)).toFixed(2) : "?";
+    const hint = costHintFor("dev-hw");
+    const sizeLine = bytes
+      ? `Uploading ~${mb} MB (cap: ${capMB} MB).`
+      : `Bundle size unknown — cap: ${capMB} MB.`;
+    if (bytes && bytes > (costHints?.bundleCapBytes ?? 50 * 1024 * 1024)) {
+      Alert.alert(
+        "Bundle too large",
+        `${mb} MB exceeds the ${capMB} MB cap. Deploy without --include-data, or drop some rows first.`,
+      );
+      return false;
+    }
+    const advice = hint?.advice ?? "";
+    const budget = hint?.free ?? "";
+    const message = [sizeLine, "", budget ? `Plan: ${budget}` : "", advice]
+      .filter(Boolean)
+      .join("\n");
+    return new Promise<boolean>((resolve) => {
+      Alert.alert(
+        `Ship to ${selectedDevMachine?.name ?? "your dev machine"}?`,
+        message,
+        [
+          { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+          { text: "Ship", style: "default", onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
+  }
+
+  async function deployToDevMachine() {
+    if (!slugStr) return;
+    if (!selectedDevMachine) {
+      if (devMachines.length === 0) {
+        Alert.alert(
+          "No dev machine paired",
+          "Install Yaver on your Mac/Linux/Pi and sign in with the same account. It'll appear here.",
+        );
+        return;
+      }
+      if (devMachines.length > 1) {
+        pickDevMachine();
+        return;
+      }
+    }
+    const target = selectedDevMachine ?? devMachines[0];
+    if (!target) return;
+    const relayHttpUrl = quicClient.activeRelayHttpUrl;
+    if (!relayHttpUrl) {
+      Alert.alert(
+        "No relay in use",
+        "Your phone is connected directly to this device. Switch to a relay-routed connection to ship to a different machine.",
+      );
+      return;
+    }
+    const ok = await confirmDeploySize();
+    if (!ok) return;
+
+    setDeploying(true);
+    try {
+      const pushTarget: PhonePushTarget = {
+        kind: "dev-hw",
+        deviceId: target.id,
+        relayHttpUrl,
+      };
+      const result: PhonePushResult = await pushPhoneProject(slugStr, pushTarget, {
+        onConflict: "overwrite",
+        includeData: true,
+        containerize: true,
+      });
+      const via = target.name || "dev machine";
+      await bindPhoneProjectToTarget(slugStr, pushTarget, result, via);
+      const rebound = await getPhoneProjectAccess(slugStr);
+      setAccess(rebound);
+      const url = result.browseUrl?.startsWith("http")
+        ? result.browseUrl
+        : deriveTargetUrl(pushTarget, result);
+      setLastDeploy({ url, via });
+      await load();
+      await loadRows();
+    } catch (e: any) {
+      Alert.alert("Ship failed", e?.message ?? "push failed");
+    } finally {
+      setDeploying(false);
+    }
+  }
+
+  function pickDevMachine() {
+    if (devMachines.length === 0) {
+      Alert.alert(
+        "No dev machines online",
+        "Install Yaver on your Mac/Linux/Pi and sign in with the same account.",
+      );
+      return;
+    }
+    Alert.alert("Pick a dev machine", "Choose the target for this deploy.", [
+      ...devMachines.map((device) => ({
+        text: `${device.name}${device.local ? " (LAN)" : ""}`,
+        onPress: () => setSelectedDevMachineId(device.id),
+      })),
+      { text: "Cancel", style: "cancel" as const },
+    ]);
+  }
+
+  async function useLocalBackend() {
+    await clearPhoneProjectBinding(slugStr);
+    const localAccess: PhoneProjectAccess = {
+      sourceSlug: slugStr,
+      slug: slugStr,
+      kind: "local",
+      label: "This phone",
+    };
+    setAccess(localAccess);
+    await load();
+    await loadRows();
+  }
+
+  function openScreenshotsTask() {
+    if (!project?.dir) {
+      Alert.alert(
+        "Screenshots unavailable",
+        "Ship this project to your dev machine first, then run screenshots from there.",
+      );
+      return;
+    }
+    router.navigate({
+      pathname: "/(tabs)/tasks" as any,
+      params: {
+        dir: project.dir,
+        prompt: `Generate App Store and Google Play screenshots for ${project.name}. Capture the key flows, save them into a screenshots/ folder in the project, and report the generated files.`,
+        title: `Screenshots ${project.name}`,
+        openNew: "1",
+      },
+    });
+  }
+
+  const rowIdKey = useMemo(() => {
+    if (!rows.length) return "id";
+    return Object.keys(rows[0]).find((key) => key === "id") ?? Object.keys(rows[0])[0];
+  }, [rows]);
+
+  if (loading) {
+    return (
+      <View style={[styles.empty, { backgroundColor: c.bg }]}>
+        <ActivityIndicator color={c.textMuted} />
+      </View>
+    );
+  }
+
+  if (!project) {
+    return (
+      <View style={[styles.empty, { backgroundColor: c.bg }]}>
+        <Text style={{ color: c.textMuted }}>{err ?? "Project not found"}</Text>
+        <AppBackButton onPress={() => router.back()} style={{ marginTop: 12 }} />
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView
+      style={{ backgroundColor: c.bg }}
+      contentContainerStyle={{ paddingTop: insets.top + 8, paddingBottom: 60 + insets.bottom }}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            void load();
+          }}
+          tintColor={c.textMuted}
+        />
+      }
+    >
+      <View style={{ paddingHorizontal: 16 }}>
+        <AppBackButton onPress={() => router.back()} style={{ marginBottom: 8 }} />
+        <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 8 }}>
+          <Pressable
+            onPress={() => router.navigate(`/phone-project/workspace/${slugStr}` as any)}
+            style={{ marginRight: 14 }}
+          >
+            <Text style={{ color: c.accent }}>Workspace ›</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.navigate(`/phone-project/code/${slugStr}` as any)}
+          >
+            <Text style={{ color: c.accent }}>Code ›</Text>
+          </Pressable>
+        </View>
+        <Text style={[styles.h1, { color: c.textPrimary }]}>{project.name}</Text>
+        <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2 }}>
+          {project.slug} · {project.template ?? "custom"}
+        </Text>
+        {project.stats ? (
+          <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 8 }}>
+            {project.stats.tableCount} table{project.stats.tableCount === 1 ? "" : "s"} ·{" "}
+            {project.stats.rowCount} row{project.stats.rowCount === 1 ? "" : "s"} ·{" "}
+            {formatBytes(project.stats.dbBytes)} on disk
+          </Text>
+        ) : null}
+
+        <View
+          style={[
+            styles.deployResult,
+            {
+              backgroundColor: c.bgCard,
+              borderColor: access?.kind === "local" ? c.border : c.accent,
+              marginTop: 10,
+            },
+          ]}
+        >
+          <Text
+            style={{
+              color: access?.kind === "local" ? c.textPrimary : c.accent,
+              fontSize: 12,
+              fontWeight: "600",
+            }}
+          >
+            Active backend: {access?.label ?? "This phone"}
+          </Text>
+          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>
+            {access?.kind === "local"
+              ? "Reads and writes stay in the local phone sandbox."
+              : access?.kind === "current-agent"
+                ? `Reads and writes go through ${access?.label}.`
+                : `Reads and writes are rebound to ${access?.label}.`}
+          </Text>
+          {access?.kind !== "local" ? (
+            <Pressable onPress={useLocalBackend} style={{ marginTop: 8 }}>
+              <Text style={{ color: c.accent, fontSize: 12, fontWeight: "600" }}>
+                Use this phone again
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+
+        {project.managedGit?.enabled ? (
+          <View
+            style={[
+              styles.deployResult,
+              {
+                backgroundColor: c.bgCard,
+                borderColor: c.border,
+                marginTop: 10,
+              },
+            ]}
+          >
+            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700" }}>
+              Saved by Yaver
+            </Text>
+            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
+              {project.managedGit.visibility} · {project.managedGit.defaultBranch}
+              {project.managedGit.lastCommit ? ` · ${project.managedGit.lastCommit.slice(0, 7)}` : ""}
+            </Text>
+            {project.managedGit.lastBackup ? (
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
+                Backup: {new Date(project.managedGit.lastBackup.createdAt).toLocaleString()}
+              </Text>
+            ) : (
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
+                No external backup yet.
+              </Text>
+            )}
+            {(project.managedGit.mirrors ?? []).length ? (
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
+                Mirrors: {(project.managedGit.mirrors ?? []).map((m) => m.fullName).join(" · ")}
+              </Text>
+            ) : null}
+            {(project.managedGit.externalBackups ?? []).length ? (
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
+                Copies: {Array.from(new Set((project.managedGit.externalBackups ?? []).map((b) => backupTargetLabel(b.targetKind)))).join(" · ")}
+              </Text>
+            ) : null}
+            <View style={[styles.syncGuide, { borderColor: c.border, backgroundColor: c.bg }]}>
+              <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "700" }}>
+                Sync copies are additive
+              </Text>
+              <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 }}>
+                Yaver keeps the repo on the main branch. Dropbox, your own storage, a self-hosted box, GitHub, and GitLab can all be turned on together for recovery or later migration.
+              </Text>
+            </View>
+            {dropboxOAuth ? (
+              <View style={[styles.syncGuide, { borderColor: c.border, backgroundColor: c.bg }]}>
+                <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "700" }}>
+                  Finish Dropbox from this phone
+                </Text>
+                <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 }}>
+                  After approving Yaver in Dropbox, paste the returned code below. Yaver will immediately upload a recoverable git bundle.
+                </Text>
+                <TextInput
+                  value={dropboxCode}
+                  onChangeText={setDropboxCode}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="Dropbox code"
+                  placeholderTextColor={c.textMuted}
+                  style={[styles.codeField, { borderColor: c.border, color: c.textPrimary }]}
+                />
+                <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                  <Pressable
+                    onPress={() => dropboxOAuth.authUrl && Linking.openURL(dropboxOAuth.authUrl).catch(() => undefined)}
+                    style={[styles.btnSecondary, { borderColor: c.border, flex: 1 }]}
+                  >
+                    <Text style={[styles.btnText, { color: c.textPrimary }]}>Open Dropbox</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={finishDropboxOAuth}
+                    disabled={!dropboxCode.trim() || !!gitBusy}
+                    style={[styles.btn, { backgroundColor: c.accent, flex: 1, opacity: !dropboxCode.trim() || gitBusy ? 0.55 : 1 }]}
+                  >
+                    <Text style={{ color: c.bg, fontWeight: "700" }}>
+                      {gitBusy === "dropbox-connect" ? "Syncing..." : "Connect & sync"}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
+              <Pressable
+                onPress={runManagedGitBackup}
+                disabled={!!gitBusy}
+                style={[styles.btnSecondary, { borderColor: c.border, flex: 1, opacity: gitBusy ? 0.65 : 1 }]}
+              >
+                <Text style={[styles.btnText, { color: c.textPrimary }]}>
+                  {gitBusy === "backup" ? "Saving..." : "Backup"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={restoreLastManagedGitBackup}
+                disabled={!!gitBusy || !project.managedGit.lastBackup}
+                style={[styles.btnSecondary, { borderColor: c.border, flex: 1, opacity: gitBusy || !project.managedGit.lastBackup ? 0.45 : 1 }]}
+              >
+                <Text style={[styles.btnText, { color: c.textPrimary }]}>
+                  {gitBusy === "restore" ? "Restoring..." : "Restore"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={backupToOwnStorage}
+                disabled={!!gitBusy}
+                style={[styles.btnSecondary, { borderColor: c.border, flex: 1, opacity: gitBusy ? 0.65 : 1 }]}
+              >
+                <Text style={[styles.btnText, { color: c.textPrimary }]}>
+                  {gitBusy === "own-storage" ? "Copying..." : "Own storage"}
+                </Text>
+              </Pressable>
+            </View>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+              <Pressable
+                onPress={runProjectQualityChecks}
+                disabled={!!gitBusy}
+                style={[styles.btnSecondary, { borderColor: c.border, flex: 1, opacity: gitBusy ? 0.65 : 1 }]}
+              >
+                <Text style={[styles.btnText, { color: c.textPrimary }]}>
+                  {gitBusy === "quality" ? "Checking..." : "Check"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={backupToDropbox}
+                disabled={!!gitBusy}
+                style={[styles.btnSecondary, { borderColor: c.border, flex: 1, opacity: gitBusy ? 0.65 : 1 }]}
+              >
+                <Text style={[styles.btnText, { color: c.textPrimary }]}>
+                  {gitBusy === "dropbox" ? "Dropbox..." : "Dropbox"}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={backupToSelectedBox}
+                disabled={!!gitBusy}
+                style={[styles.btnSecondary, { borderColor: c.border, flex: 1, opacity: gitBusy ? 0.65 : 1 }]}
+              >
+                <Text style={[styles.btnText, { color: c.textPrimary }]}>
+                  {gitBusy === "self-hosted" ? "Copying..." : "My box"}
+                </Text>
+              </Pressable>
+            </View>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+              <Pressable
+                onPress={() => mirrorManagedGit("github")}
+                disabled={!!gitBusy}
+                style={[styles.btnSecondary, { borderColor: c.border, flex: 1, opacity: gitBusy ? 0.65 : 1 }]}
+              >
+                <Text style={[styles.btnText, { color: c.textPrimary }]}>GitHub</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => mirrorManagedGit("gitlab")}
+                disabled={!!gitBusy}
+                style={[styles.btnSecondary, { borderColor: c.border, flex: 1, opacity: gitBusy ? 0.65 : 1 }]}
+              >
+                <Text style={[styles.btnText, { color: c.textPrimary }]}>GitLab</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <View
+            style={[
+              styles.deployResult,
+              {
+                backgroundColor: c.bgCard,
+                borderColor: c.border,
+                marginTop: 10,
+              },
+            ]}
+          >
+            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700" }}>
+              Code storage
+            </Text>
+            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
+              Turn on Yaver Git first, then add Dropbox, your own computer, a self-hosted box, GitHub, and GitLab as extra copies. They are mutually inclusive.
+            </Text>
+            <Pressable
+              onPress={enableManagedGit}
+              disabled={!!gitBusy}
+              style={[styles.btnSecondary, { borderColor: c.border, marginTop: 10, opacity: gitBusy ? 0.65 : 1 }]}
+            >
+              <Text style={[styles.btnText, { color: c.textPrimary }]}>
+                {gitBusy === "enable" ? "Turning on..." : "Turn on Yaver Git"}
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+          <Pressable
+            onPress={deployToDevMachine}
+            disabled={deploying}
+            style={[styles.btn, { backgroundColor: c.accent, flex: 1, opacity: deploying ? 0.7 : 1 }]}
+          >
+            <Text style={{ color: c.bg, fontWeight: "700" }}>
+              {deploying ? "Shipping..." : "Ship it"}
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={openScreenshotsTask}
+            style={[styles.btnSecondary, { borderColor: c.border, flex: 1 }]}
+          >
+            <Text style={[styles.btnText, { color: c.textPrimary }]}>Screenshots</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {project.app ? (
+        <>
+          <Text style={[styles.section, { color: c.textPrimary }]}>App plan</Text>
+          <View style={{ paddingHorizontal: 16 }}>
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+              {project.app.summary ? (
+                <Text style={{ color: c.textPrimary, fontSize: 14, lineHeight: 20 }}>
+                  {project.app.summary}
+                </Text>
+              ) : null}
+              {project.app.primaryEntity ? (
+                <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 6 }}>
+                  Primary entity: {project.app.primaryEntity}
+                </Text>
+              ) : null}
+              {(project.app.screens ?? []).map((screen) => (
+                <View key={screen.id} style={styles.appScreen}>
+                  <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "600" }}>
+                    {screen.title}
+                  </Text>
+                  <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2 }}>
+                    {screen.kind}
+                    {screen.table ? ` · ${screen.table}` : ""}
+                  </Text>
+                  {screen.emptyState ? (
+                    <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 4 }}>
+                      Empty: {screen.emptyState}
+                    </Text>
+                  ) : null}
+                  {(screen.actions ?? []).length ? (
+                    <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 6 }}>
+                      Actions:{" "}
+                      {(screen.actions ?? [])
+                        .map((action) => action.label)
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </Text>
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          </View>
+        </>
+      ) : null}
+
+      {/* Deploy-tokens onboarding entry. Opens the catalogue
+       * screen scoped to this project's slug so saved tokens land
+       * in the right vault namespace for `yaver vault env --project`
+       * to pick up at deploy time. */}
+      <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+        <Pressable
+          onPress={() => router.push(`/deploy-tokens?project=${encodeURIComponent(slug)}` as any)}
+          style={{
+            paddingVertical: 11,
+            paddingHorizontal: 14,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: c.border,
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>
+            🔐 Set up deploy tokens (vault)
+          </Text>
+        </Pressable>
+        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }}>
+          Convex, Cloudflare, npm, PyPI, TestFlight, Play Store. Stored in the agent's vault, never synced.
+        </Text>
+      </View>
+
+      <Text style={[styles.section, { color: c.textPrimary }]}>Tables</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16 }}>
+        {tables.map((table) => (
+          <Pressable
+            key={table.name}
+            onPress={() => setSelectedTable(table.name)}
+            style={[
+              styles.chip,
+              {
+                backgroundColor: selectedTable === table.name ? c.accent : c.bgCard,
+                borderColor: c.border,
+              },
+            ]}
+          >
+            <Text style={{ color: selectedTable === table.name ? c.bg : c.textPrimary, fontWeight: "500" }}>
+              {table.name}
+            </Text>
+            {typeof table.rowCount === "number" ? (
+              <Text style={{ color: selectedTable === table.name ? c.bg : c.textMuted, fontSize: 11, marginLeft: 4 }}>
+                {table.rowCount}
+              </Text>
+            ) : null}
+          </Pressable>
+        ))}
+      </ScrollView>
+
+      {selectedTable ? (
+        <View style={{ paddingHorizontal: 16, marginTop: 8 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+            <Text style={{ color: c.textMuted, fontSize: 13 }}>
+              {rows.length} row{rows.length === 1 ? "" : "s"}
+            </Text>
+            <Pressable
+              onPress={() => setShowInsert((value) => !value)}
+              style={[styles.btnSecondary, { borderColor: c.border, paddingHorizontal: 12 }]}
+            >
+              <Text style={{ color: c.textPrimary, fontWeight: "500" }}>
+                {showInsert ? "Cancel" : "+ Insert"}
+              </Text>
+            </Pressable>
+          </View>
+
+          {showInsert ? (
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 8 }]}>
+              <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 4 }}>Row JSON</Text>
+              <TextInput
+                value={insertJSON}
+                onChangeText={setInsertJSON}
+                multiline
+                style={[styles.codeInput, { color: c.textPrimary, borderColor: c.border }]}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder='{"id":"x","name":"hello"}'
+                placeholderTextColor={c.textMuted}
+              />
+              <Pressable
+                onPress={doInsert}
+                style={[styles.btn, { backgroundColor: c.accent, marginTop: 8 }]}
+              >
+                <Text style={{ color: c.bg, fontWeight: "600" }}>Insert row</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          <FlatList
+            scrollEnabled={false}
+            data={rows}
+            keyExtractor={(item, index) => String(item[rowIdKey] ?? index)}
+            ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+            renderItem={({ item }) => (
+              <Pressable
+                onLongPress={() => doDeleteRow(item[rowIdKey])}
+                style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
+              >
+                {Object.entries(item).map(([key, value]) => (
+                  <View key={key} style={styles.kv}>
+                    <Text style={[styles.k, { color: c.textMuted }]}>{key}</Text>
+                    <Text style={[styles.v, { color: c.textPrimary }]} numberOfLines={2}>
+                      {formatValue(value)}
+                    </Text>
+                  </View>
+                ))}
+              </Pressable>
+            )}
+            ListEmptyComponent={
+              <Text style={{ color: c.textMuted, textAlign: "center", marginTop: 16 }}>
+                No rows yet. Tap + Insert to add one.
+              </Text>
+            }
+            style={{ marginTop: 8 }}
+          />
+        </View>
+      ) : null}
+
+      <Text style={[styles.section, { color: c.textPrimary }]}>Ship it</Text>
+      <View style={{ paddingHorizontal: 16 }}>
+        <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 12 }}>
+          Push this project to your dev machine.
+        </Text>
+        <Pressable
+          onPress={deployToDevMachine}
+          onLongPress={pickDevMachine}
+          disabled={deploying}
+          style={[
+            styles.deployCard,
+            {
+              backgroundColor: c.accent,
+              borderColor: c.accent,
+              opacity: deploying ? 0.7 : 1,
+            },
+          ]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.deployLabel, { color: c.bg }]}>Ship to your dev machine</Text>
+            <Text style={[styles.deploySub, { color: c.bg, opacity: 0.8 }]}>
+              {selectedDevMachine
+                ? `→ ${selectedDevMachine.name}${selectedDevMachine.local ? " · LAN" : " · via relay"}`
+                : "No dev machine online. Long-press to pick one."}
+            </Text>
+            {devMachines.length > 1 ? (
+              <Text style={[styles.deploySub, { color: c.bg, opacity: 0.6, fontSize: 11 }]}>
+                Long-press to switch target ({devMachines.length} available)
+              </Text>
+            ) : null}
+          </View>
+          {deploying ? (
+            <ActivityIndicator color={c.bg} />
+          ) : (
+            <Text style={[styles.deployArrow, { color: c.bg }]}>→</Text>
+          )}
+        </Pressable>
+
+        {lastDeploy ? (
+          <Pressable
+            onPress={() => Linking.openURL(lastDeploy.url).catch(() => undefined)}
+            style={[
+              styles.deployResult,
+              { backgroundColor: c.bgCard, borderColor: c.success ?? "#22c55e" },
+            ]}
+          >
+            <Text style={{ color: c.success ?? "#22c55e", fontSize: 12, fontWeight: "600" }}>
+              ✓ Running on {lastDeploy.via ?? "dev machine"}
+            </Text>
+            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }} numberOfLines={1}>
+              {lastDeploy.url}
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </ScrollView>
+  );
+}
+
+function deriveTargetUrl(target: Extract<PhonePushTarget, { kind: "dev-hw" }>, result: PhonePushResult): string {
+  const slug = encodeURIComponent(result.slug);
+  return `${target.relayHttpUrl.replace(/\/$/, "")}/d/${target.deviceId}/phone/projects/browse?slug=${slug}`;
+}
+
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function backupTargetLabel(kind?: string): string {
+  switch (kind) {
+    case "dropbox":
+      return "Dropbox";
+    case "shared-storage":
+      return "Own storage";
+    case "local-folder":
+      return "Local folder";
+    default:
+      return kind || "Backup";
+  }
+}
+
+const styles = StyleSheet.create({
+  h1: { fontSize: 24, fontWeight: "700" },
+  section: {
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 20,
+    marginBottom: 8,
+    paddingHorizontal: 16,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginRight: 6,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  card: { borderWidth: 1, borderRadius: 10, padding: 12 },
+  appScreen: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(127,127,127,0.25)",
+  },
+  kv: { marginBottom: 4 },
+  k: { fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 },
+  v: { fontSize: 14 },
+  codeInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+    minHeight: 90,
+    fontSize: 13,
+    textAlignVertical: "top",
+  },
+  codeField: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginTop: 8,
+    fontSize: 13,
+  },
+  syncGuide: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 10,
+  },
+  btn: { paddingVertical: 12, borderRadius: 8, alignItems: "center" },
+  btnSecondary: { paddingVertical: 10, borderRadius: 8, alignItems: "center", borderWidth: 1 },
+  btnText: { fontWeight: "600", fontSize: 14 },
+  deployCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 2,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  deployLabel: { fontSize: 17, fontWeight: "700" },
+  deploySub: { fontSize: 12, marginTop: 2 },
+  deployArrow: { fontSize: 22, fontWeight: "700", marginLeft: 12 },
+  deployResult: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 10,
+  },
+  empty: { flex: 1, alignItems: "center", justifyContent: "center" },
+});

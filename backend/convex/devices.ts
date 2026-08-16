@@ -1,7 +1,568 @@
 import { v } from "convex/values";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import { validateSessionInternal } from "./auth";
-import { runnerCapabilities, runnerClass } from "./validators";
+import { aliasCollisionOutcome, agentInstanceRelation } from "./aliasShadowing";
+import {
+  resolveIdentityMerge,
+  type IdentityCandidate,
+  type SecondaryAgentRef,
+} from "./deviceIdentityMerge";
+import { relayEntitlementForUser } from "./userSettings";
+import { recommendPlacement } from "./edgePlacement";
+import { isMachineWakeable } from "./cloudMachines";
+import {
+  smartDeviceLabel,
+  smartAliasSlug,
+  uniqueAliasSlug,
+  isRawHostname,
+  type LabelSignals,
+} from "./deviceLabels";
+
+// Hard bound on the device black box (deviceFlightEvents). Mirrors
+// flightRecorderMaxEvents in desktop/agent/flightrecorder.go — the agent caps
+// its local buffer and the server caps the table, independently, so neither
+// side can be trusted into unbounded growth. Keep the two in sync.
+const FLIGHT_EVENT_CAP = 50;
+
+const recoveryPostureValidator = v.object({
+  status: v.string(),
+  mobileApprovedTransports: v.array(v.string()),
+  webApprovedTransports: v.array(v.string()),
+  hasPrivateTransport: v.boolean(),
+  hasBrowserTransport: v.boolean(),
+  publicDirectRecoveryClosed: v.boolean(),
+  summary: v.string(),
+});
+
+const connectionPreferenceValidator = v.object({
+  kind: v.union(
+    v.literal("direct-lan"),
+    v.literal("tailscale"),
+    v.literal("headscale"),
+    v.literal("own-vpn"),
+    v.literal("https-tunnel"),
+    v.literal("free-relay"),
+    v.literal("private-relay")
+  ),
+  active: v.boolean(),
+  preferred: v.boolean(),
+  source: v.union(
+    v.literal("agent-detected"),
+    v.literal("user-config"),
+    v.literal("platform-config"),
+    v.literal("relay-presence")
+  ),
+});
+
+const hardwareProfileValidator = v.object({
+  os: v.optional(v.string()),
+  osVersion: v.optional(v.string()),
+  cpu: v.optional(v.string()),
+  gpu: v.optional(v.string()),
+  ramMb: v.optional(v.number()),
+  vramMb: v.optional(v.number()),
+  numCores: v.optional(v.number()),
+  arch: v.optional(v.string()),
+  iosSimulators: v.optional(v.array(v.string())),
+  androidEmulators: v.optional(v.array(v.string())),
+  // The agent reports isWsl on WSL2 hosts. Without it in the validator, every
+  // heartbeat AND registerDevice from a WSL box hard-fails with
+  // ArgumentValidationError — the device can never come online at all.
+  isWsl: v.optional(v.boolean()),
+  // Total disk capacity — a static spec, so it rides the 24h-gated profile
+  // alongside RAM. Live free/used arrives every heartbeat in `storage`.
+  diskTotalGb: v.optional(v.number()),
+});
+
+// storageValidator is the live disk gauge the agent sends on every heartbeat.
+// Numbers only — paths and project names stay on the device (privacy contract:
+// absolute paths leak the home-dir username).
+const storageValidator = v.object({
+  totalGb: v.optional(v.number()),
+  usedGb: v.optional(v.number()),
+  freeGb: v.optional(v.number()),
+  usedPct: v.optional(v.number()),
+  reclaimableGb: v.optional(v.number()),
+  updatedAt: v.optional(v.number()),
+});
+
+// HEARTBEAT_STALE_MS: how long after the last heartbeat we still
+// trust the device's `isOnline` flag. The agent beats every 5 min
+// (see `desktop/agent/main.go::heartbeatLoop`), so 6 min is "missed
+// one beat plus 60 s of jitter" — enough to ride out network jitter,
+// GC pauses, and Convex write latency without flapping a healthy
+// device offline. Without this server-side gate, a SIGKILL'd /
+// power-cut / wifi-dropped agent looks online forever (the flag
+// never gets downgraded by the markOffline mutation that the dying
+// process can't run). Mobile / web read this derived value via the
+// listing queries and the device card stops flickering.
+//
+// Sub-minute death detection is now provided by the P2P bus
+// (`desktop/agent/bus.go`) which has its own keepalive — clients can
+// subscribe to /bus/events for live presence instead of polling
+// Convex. Keep this constant in sync with mobile/_core/constants.ts
+// and web/lib/use-devices.ts.
+// Widened from 6 min → 15 min for 100k-user cost control: the agent now
+// beats adaptively (2 min active, 10 min idle — see desktop/agent/main.go
+// heartbeatInterval), so the freshness window must cover the idle cadence
+// plus jitter. Real-time death detection comes from the relay tunnel event
+// (applyRelayPresence) and the P2P bus, so a wider Convex fallback window is
+// safe for relay/bus-connected devices; LAN-only devices trade a slower
+// offline flip for far fewer writes. Keep in sync with
+// mobile/_core/constants.ts and web/lib/use-devices.ts.
+const HEARTBEAT_STALE_MS = 900 * 1000;
+
+// HEARTBEAT_WRITE_BUCKET_MS: presence-write coalescing for cost control at
+// scale (100k+ free users). A heartbeat that changes NOTHING but "still
+// alive" must not rewrite the device row every cycle — at 100k always-on
+// devices that write is the dominant Convex cost. We persist a
+// presence-only heartbeat at most once per bucket; `lastHeartbeat` still
+// advances well within HEARTBEAT_STALE_MS so deriveIsOnline keeps working,
+// and real-time presence comes from the relay/bus regardless. Meaningful
+// changes (offline→online, runner/field changes) always write immediately.
+// Must stay < HEARTBEAT_STALE_MS.
+const HEARTBEAT_WRITE_BUCKET_MS = 8 * 60 * 1000;
+
+/**
+ * deriveIsOnline returns the user-visible online state, reconciling
+ * the explicit isOnline flag with heartbeat freshness. Use this
+ * everywhere a query returns isOnline to clients.
+ */
+// TAG_PATTERN — fleet labels are short, lower-case, URL/selector-safe.
+const TAG_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/;
+
+function normalizeTag(raw: string): string | null {
+  const t = raw.trim().toLowerCase();
+  return TAG_PATTERN.test(t) ? t : null;
+}
+
+// deriveAutoTags computes the fleet labels we seed at first registration
+// from facts the agent already reports: platform, arch, gpu presence,
+// docker, and edge/local-inference capability. Selector-friendly so a
+// brand-new box is immediately addressable as `{tags:['gpu']}` etc.
+// without the user labelling anything. Kept additive + reality-derived;
+// the user owns the array afterward via setDeviceTags.
+function deriveAutoTags(args: {
+  platform: string;
+  deviceClass?: string;
+  hardwareProfile?: Record<string, unknown> | undefined;
+  edgeProfile?: { supportsLocalInference?: boolean } | undefined;
+}): string[] {
+  const tags = new Set<string>();
+  tags.add(args.platform); // macos | windows | linux | android | ios
+  if (args.platform === "macos" || args.platform === "windows" || args.platform === "linux") {
+    tags.add("desktop-class");
+  }
+  if (args.platform === "android" || args.platform === "ios") tags.add("mobile");
+  if (args.deviceClass) tags.add(args.deviceClass); // desktop | edge-mobile | server
+
+  const hw = args.hardwareProfile ?? {};
+  const arch = String(hw.arch ?? "").toLowerCase();
+  if (arch.includes("arm") || arch.includes("aarch64")) tags.add("arm64");
+  else if (arch.includes("x86") || arch.includes("amd64") || arch.includes("x64")) tags.add("x64");
+
+  const gpu = String(hw.gpu ?? "").toLowerCase();
+  if (gpu && gpu !== "none" && gpu !== "unknown") {
+    tags.add("gpu");
+    if (gpu.includes("nvidia") || gpu.includes("geforce") || gpu.includes("rtx") || gpu.includes("cuda")) tags.add("nvidia");
+    if (gpu.includes("apple") || gpu.includes("m1") || gpu.includes("m2") || gpu.includes("m3") || gpu.includes("m4")) tags.add("apple-gpu");
+  }
+  if (typeof hw.hasDocker === "boolean" ? hw.hasDocker : false) tags.add("docker");
+
+  if (args.edgeProfile?.supportsLocalInference) tags.add("local-inference");
+
+  return [...tags].map(normalizeTag).filter((t): t is string => !!t);
+}
+
+function deriveIsOnline(d: { isOnline: boolean; lastHeartbeat: number }): boolean {
+  if (!d.isOnline) return false;
+  const age = Date.now() - d.lastHeartbeat;
+  return age < HEARTBEAT_STALE_MS;
+}
+
+type ListedDevice = {
+  deviceId: string;
+  name: string;
+  /**
+   * Optional per-user alias for this Yaver device. Set via
+   * `yaver alias set ...` or the dashboard/device UI; stored on the
+   * device row in Convex so CLI, web, and mobile all resolve the same
+   * short name.
+   */
+  alias?: string;
+  /**
+   * Spoken names — "my mac mini", "the box at maltepe". Many and
+   * natural-language, unlike `alias` (one short token you type at a shell).
+   * Set via setDeviceVoiceHints / POST /devices/voice-hints / the
+   * device_voice_hints_set MCP verb. The phone matches them fuzzily
+   * (carMachineSwitch.ts) so a driver can retarget a turn by voice on CarPlay,
+   * where Apple forbids drawing a device picker on the car screen.
+   */
+  voiceHints?: string[];
+  platform: string;
+  publicKey?: string;
+  hardwareId?: string;
+  quicHost: string;
+  localIps: string[];
+  publicEndpoints: string[];
+  quicPort: number;
+  isOnline: boolean;
+  needsAuth: boolean;
+  runnerDown: boolean;
+  runners: Doc<"devices">["runners"];
+  installedRunnerIds?: string[];
+  lastHeartbeat: number;
+  lastTunnelEvent?: Doc<"devices">["lastTunnelEvent"];
+  relayConnected?: boolean;
+  canReboot?: boolean;
+  pendingAuthCode?: string;
+  tunnelUrl?: string;
+  deviceClass?: "desktop" | "edge-mobile" | "server";
+  /** Coarse egress region (eu|us|ap|...) for the multi-vantage device picker. */
+  geoRegion?: string;
+  publishCapabilities?: string[];
+  deployCapabilities?: string[];
+  deployCapabilitiesBlocked?: string[];
+  deployCapabilitiesAt?: string;
+  edgeProfile?: Doc<"devices">["edgeProfile"];
+  recoveryPosture?: Doc<"devices">["recoveryPosture"];
+  connectionPreferences?: Doc<"devices">["connectionPreferences"];
+  hardwareProfile?: Doc<"devices">["hardwareProfile"];
+  agentVersion?: string;
+  agentVersionReportedAt?: number;
+  /**
+   * Hosting provenance for the UI badge (three tiers). "yaver-hosted" = a
+   * Yaver-managed box: a cloudMachines row that is Yaver-side (paid via
+   * LemonSqueezy or owner-adopted; origin !== "self-hosted"). "byo" = a box
+   * Yaver provisioned on the user's OWN cloud account (a byoMachines row, not
+   * deleted, linked by deviceId) — Yaver holds its snapshot/recreate path and
+   * auto scale-to-zeros it, but the user pays the provider. "self-hosted" = the
+   * user's own box with no provisioning row (Yaver never touches its power).
+   * Informational only — entitlement gates stay server-side.
+   */
+  hosting?: "yaver-hosted" | "byo" | "self-hosted";
+  managed?: boolean;
+  /** cloudMachines._id for a managed box — lets the UI drive up/down (pause/resume). */
+  machineId?: string;
+  /** cloudMachines.status (active|paused|stopped|stopping|resuming|suspended|grace|…). */
+  machineStatus?: string;
+  /**
+   * True when this box can actually be woken from a snapshot — decided by
+   * isMachineWakeable (cloudMachines.ts), the same rule wakeMachine enforces.
+   * Clients must read this rather than re-deriving it from machineStatus: a
+   * `removed` box is gone rather than asleep, and a resumable status with no
+   * snapshot cannot come back at any price.
+   */
+  machineWakeable?: boolean;
+  /**
+   * Agent instances that were collapsed AWAY into this row — same box, own
+   * deviceId/port/version. Present only when two agents were heartbeating
+   * concurrently (see deviceIdentityMerge.ts). Surfaces read it to explain why
+   * an action aimed at this machine can behave oddly, and to say WHICH other
+   * agent exists instead of silently pretending there is one row.
+   */
+  secondaryAgents?: SecondaryAgentRef[];
+};
+
+function mergeHardwareProfile(
+  a: ListedDevice["hardwareProfile"] | undefined,
+  b: ListedDevice["hardwareProfile"] | undefined,
+): ListedDevice["hardwareProfile"] | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    os: b.os || a.os,
+    osVersion: b.osVersion || a.osVersion,
+    cpu: b.cpu || a.cpu,
+    gpu: b.gpu || a.gpu,
+    ramMb: b.ramMb ?? a.ramMb,
+    vramMb: b.vramMb ?? a.vramMb,
+    numCores: b.numCores ?? a.numCores,
+    arch: b.arch || a.arch,
+    iosSimulators: (b.iosSimulators && b.iosSimulators.length > 0) ? b.iosSimulators : a.iosSimulators,
+    androidEmulators: (b.androidEmulators && b.androidEmulators.length > 0) ? b.androidEmulators : a.androidEmulators,
+  };
+}
+
+function normalizeDeviceName(name: string | undefined): string {
+  return String(name || "").trim().toLowerCase().replace(/\.local$/i, "");
+}
+
+function normalizeDeviceHost(host: string | undefined): string {
+  return String(host || "").trim().toLowerCase().replace(/\.local$/i, "");
+}
+
+function listedDeviceIdentityKey(device: ListedDevice): string {
+  if (device.hardwareId) return `hwid:${device.hardwareId}`;
+  if (device.publicKey) return `pub:${device.publicKey}`;
+  const normalizedName = normalizeDeviceName(device.name);
+  const normalizedPlatform = String(device.platform || "").trim().toLowerCase();
+  if (normalizedName && normalizedPlatform) return `host:${normalizedPlatform}:${normalizedName}`;
+  if (device.deviceId) return `id:${device.deviceId}`;
+  return `name:${device.name}`;
+}
+
+function listedDeviceAliasKey(device: ListedDevice): string | null {
+  const normalizedName = normalizeDeviceName(device.name);
+  const normalizedPlatform = String(device.platform || "").trim().toLowerCase();
+  if (!normalizedName || !normalizedPlatform) return null;
+  return `${normalizedPlatform}:${normalizedName}`;
+}
+
+function listedDeviceEndpointKey(device: ListedDevice): string | null {
+  const normalizedHost = normalizeDeviceHost(device.quicHost);
+  if (!normalizedHost) return null;
+  return `${normalizedHost}:${device.quicPort || 0}`;
+}
+
+// STALE_LAN_IP_WINDOW_MS bounds how old a row's heartbeat can be before we stop
+// trusting the localIps IT reported. Audit §1 (2026-07-19): the storm cause was
+// dead rows donating their frozen localIps snapshot forever through this merge,
+// including a Docker-bridge IP the agent had stopped reporting builds ago. The
+// heartbeat REPLACES localIps per row, but no rule prevented the READ path
+// from unioning IPs across old rows. 5 minutes matches the heartbeat cadence
+// (15s) times a slack factor and is deliberately shorter than the
+// duplicate-row detection window at devices.ts:806-834.
+const STALE_LAN_IP_WINDOW_MS = 5 * 60 * 1000;
+// Cap the union so pathological duplication (say, a hardwareId flip) cannot
+// grow the array without bound between merge passes; the mobile ladder pushes
+// each IP twice (with and without :18080) so any real device has < 8 useful
+// legs to race in parallel anyway.
+const MAX_LOCAL_IPS_PER_DEVICE = 8;
+
+// selectLocalIps is the recency-aware replacement for the naive `[...a, ...b]`
+// union that produced fault §1 in the connectivity audit. Rules:
+//   1. Prefer localIps only from a row that is online AND heartbeated within
+//      STALE_LAN_IP_WINDOW_MS. That row can vouch for its addresses.
+//   2. If neither row is fresh, keep the freshest row's IPs — the UI still
+//      needs *something* to display, but never the accumulated union.
+//   3. Cap at MAX_LOCAL_IPS_PER_DEVICE so a merge cannot manufacture a
+//      probe-storm-sized set.
+// Never unions from an offline row: an offline row's IPs are, by definition,
+// unreachable from the same network the online row proves is reachable.
+function selectLocalIps(a: ListedDevice, b: ListedDevice, now: number): string[] {
+  const isFresh = (d: ListedDevice) =>
+    !!d.isOnline && (now - (d.lastHeartbeat || 0)) < STALE_LAN_IP_WINDOW_MS;
+  const aFresh = isFresh(a);
+  const bFresh = isFresh(b);
+  const parts: string[] = [];
+  if (aFresh) parts.push(...(a.localIps || []));
+  if (bFresh) parts.push(...(b.localIps || []));
+  if (parts.length === 0) {
+    // Neither row is fresh — pick the freshest of the two by lastHeartbeat,
+    // deliberately NOT the union. If the last heartbeat was hours ago the IPs
+    // are stale but at least the caller sees a single coherent snapshot.
+    const preferred = (b.lastHeartbeat || 0) >= (a.lastHeartbeat || 0) ? b : a;
+    parts.push(...(preferred.localIps || []));
+  }
+  return [...new Set(parts.filter(Boolean))].slice(0, MAX_LOCAL_IPS_PER_DEVICE);
+}
+
+function identityCandidate(d: ListedDevice): IdentityCandidate {
+  return {
+    deviceId: d.deviceId,
+    needsAuth: !!d.needsAuth,
+    isOnline: !!d.isOnline,
+    lastHeartbeat: d.lastHeartbeat || 0,
+    port: d.quicPort,
+    agentVersion: d.agentVersion,
+    alias: d.alias,
+    publicKey: d.publicKey,
+    hardwareId: d.hardwareId,
+    relayConnected: d.relayConnected,
+    lastTunnelEvent: d.lastTunnelEvent,
+  };
+}
+
+function mergeListedDevices(a: ListedDevice, b: ListedDevice): ListedDevice {
+  const now = Date.now();
+  // HEALTH FIRST, then transport, then recency, then deviceId. The old rule was
+  // an `||` chain where a one-second-newer heartbeat outranked "this row can
+  // actually be authenticated" — see deviceIdentityMerge.ts for the incident
+  // that produced. `isOnline`/`lastHeartbeat` may still be OR'd/max'd below
+  // (the BOX is alive either way); IDENTITY may not.
+  // Two agents on one box (distinct instance, both heartbeating) is a fact the
+  // merge must not destroy: resolveIdentityMerge keeps the loser's
+  // deviceId/port/version under `secondaryAgents` so a surface can NAME it. A
+  // stale duplicate row of ONE agent is not a secondary agent and is not
+  // reported as one.
+  const { base, other, secondaryAgents } = resolveIdentityMerge(a, b, identityCandidate, {
+    relate: agentInstanceRelation,
+    readSecondaries: (row) => row.secondaryAgents,
+    now,
+  });
+  return {
+    ...other,
+    ...base,
+    secondaryAgents,
+    quicHost: base.quicHost || other.quicHost,
+    quicPort: base.quicPort || other.quicPort,
+    isOnline: base.isOnline || other.isOnline,
+    runnerDown: base.runnerDown && other.runnerDown,
+    publicKey: base.publicKey || other.publicKey,
+    hardwareId: base.hardwareId || other.hardwareId,
+    hardwareProfile: mergeHardwareProfile(other.hardwareProfile, base.hardwareProfile),
+    lastHeartbeat: Math.max(a.lastHeartbeat || 0, b.lastHeartbeat || 0),
+    lastTunnelEvent:
+      (() => {
+        const aAt = a.lastTunnelEvent?.at || 0;
+        const bAt = b.lastTunnelEvent?.at || 0;
+        if (aAt === 0) return b.lastTunnelEvent;
+        if (bAt === 0) return a.lastTunnelEvent;
+        return bAt > aAt ? b.lastTunnelEvent : a.lastTunnelEvent;
+      })(),
+    localIps: selectLocalIps(a, b, now),
+    publicEndpoints: [...new Set([...(a.publicEndpoints || []), ...(b.publicEndpoints || [])].filter(Boolean))],
+    runners: (base.runners && base.runners.length > 0) ? base.runners : other.runners,
+    installedRunnerIds:
+      (base.installedRunnerIds && base.installedRunnerIds.length > 0)
+        ? base.installedRunnerIds
+        : other.installedRunnerIds,
+  };
+}
+
+function collapseListedDevices(devices: ListedDevice[]): ListedDevice[] {
+  if (!Array.isArray(devices) || devices.length === 0) return [];
+
+  const byIdentity = new Map<string, ListedDevice>();
+  for (const device of devices) {
+    const key = listedDeviceIdentityKey(device);
+    const existing = byIdentity.get(key);
+    byIdentity.set(key, existing ? mergeListedDevices(existing, device) : device);
+  }
+
+  const byAlias = new Map<string, ListedDevice>();
+  for (const device of byIdentity.values()) {
+    const key = listedDeviceAliasKey(device);
+    if (!key) {
+      byAlias.set(`id:${device.deviceId}`, device);
+      continue;
+    }
+    const existing = byAlias.get(key);
+    if (!existing) {
+      byAlias.set(key, device);
+      continue;
+    }
+    const outcome = aliasCollisionOutcome(
+      { hardwareId: existing.hardwareId, publicKey: existing.publicKey, online: existing.isOnline, needsAuth: existing.needsAuth, port: existing.quicPort, deviceId: existing.deviceId, lastHeartbeat: existing.lastHeartbeat },
+      { hardwareId: device.hardwareId, publicKey: device.publicKey, online: device.isOnline, needsAuth: device.needsAuth, port: device.quicPort, deviceId: device.deviceId, lastHeartbeat: device.lastHeartbeat },
+    );
+    if (outcome === "merge-secondary") {
+      // TWO AGENTS ON ONE BOX. Not two machines — `keep-both` here would put
+      // the same physical machine on screen twice. Merge health-first;
+      // mergeListedDevices records the loser under `secondaryAgents` so the
+      // second instance is named rather than erased.
+      byAlias.set(key, mergeListedDevices(existing, device));
+      continue;
+    }
+    if (outcome === "keep-a") {
+      byAlias.set(key, existing);
+      continue;
+    }
+    if (outcome === "keep-b") {
+      byAlias.set(key, device);
+      continue;
+    }
+    if (outcome === "keep-both") {
+      // Two DIFFERENT machines behind one hostname (real agent + a service
+      // cell). Merging them made deviceId/name flip every heartbeat — the
+      // picker flip-flop. Re-key each by its own strong identity so both
+      // rows survive the collapse.
+      byAlias.delete(key);
+      byAlias.set(`${key}#${existing.hardwareId || existing.publicKey || existing.deviceId}`, existing);
+      byAlias.set(`${key}#${device.hardwareId || device.publicKey || device.deviceId}`, device);
+      continue;
+    }
+    byAlias.set(key, mergeListedDevices(existing, device));
+  }
+
+  const byEndpoint = new Map<string, ListedDevice>();
+  for (const device of byAlias.values()) {
+    const key = listedDeviceEndpointKey(device);
+    if (!key) {
+      byEndpoint.set(`id:${device.deviceId}`, device);
+      continue;
+    }
+    const existing = byEndpoint.get(key);
+    byEndpoint.set(key, existing ? mergeListedDevices(existing, device) : device);
+  }
+
+  return [...byEndpoint.values()];
+}
+
+function normalizeScopedList(items: string[] | undefined): string[] {
+  return Array.isArray(items)
+    ? items.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+}
+
+function mergeConnectionPreferences(
+  existing: Doc<"devices">["connectionPreferences"] | undefined,
+  incoming: Doc<"devices">["connectionPreferences"] | undefined,
+): Doc<"devices">["connectionPreferences"] | undefined {
+  if (incoming === undefined) return existing;
+  const byKind = new Map<string, NonNullable<Doc<"devices">["connectionPreferences"]>[number]>();
+  for (const pref of incoming || []) {
+    byKind.set(pref.kind, pref);
+  }
+  for (const pref of existing || []) {
+    if (pref.source !== "user-config") continue;
+    const runtime = byKind.get(pref.kind);
+    if (runtime) {
+      byKind.set(pref.kind, {
+        ...runtime,
+        active: runtime.active || pref.active,
+        preferred: runtime.preferred || pref.preferred,
+        source: "user-config",
+      });
+    } else {
+      byKind.set(pref.kind, pref);
+    }
+  }
+  return [...byKind.values()];
+}
+
+function ipKindForConnectionPreference(raw: string): "direct-lan" | "tailscale" | null {
+  const parts = String(raw || "").trim().split(".").map((p) => Number(p));
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return null;
+  const [a, b] = parts;
+  if (a === 100 && b >= 64 && b <= 127) return "tailscale";
+  if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return "direct-lan";
+  return null;
+}
+
+function inferConnectionPreferencesForDevice(
+  device: Pick<Doc<"devices">, "localIps" | "publicEndpoints" | "lastTunnelEvent" | "connectionPreferences">,
+): Doc<"devices">["connectionPreferences"] {
+  const out: NonNullable<Doc<"devices">["connectionPreferences"]> = [];
+  const push = (kind: NonNullable<Doc<"devices">["connectionPreferences"]>[number]["kind"], preferred = false, source: NonNullable<Doc<"devices">["connectionPreferences"]>[number]["source"] = "agent-detected") => {
+    if (out.some((pref) => pref.kind === kind)) return;
+    out.push({ kind, active: true, preferred, source });
+  };
+
+  const existingUserPrefs = (device.connectionPreferences || []).filter((pref) => pref.source === "user-config");
+  const forceHeadscale = existingUserPrefs.some((pref) => pref.kind === "headscale" && (pref.active || pref.preferred));
+  for (const ip of device.localIps || []) {
+    const kind = ipKindForConnectionPreference(ip);
+    if (kind === "direct-lan") push("direct-lan", true);
+    if (kind === "tailscale") push(forceHeadscale ? "headscale" : "tailscale", true);
+  }
+
+  for (const endpoint of device.publicEndpoints || []) {
+    const value = String(endpoint || "").trim().toLowerCase();
+    if (!value.startsWith("https://")) continue;
+    if (value.includes(".yaver.io/") || value.endsWith(".yaver.io")) {
+      push("free-relay", false, "relay-presence");
+    } else {
+      push("https-tunnel", false);
+    }
+  }
+  if (device.lastTunnelEvent?.online) {
+    push("free-relay", false, "relay-presence");
+  }
+  return mergeConnectionPreferences(device.connectionPreferences, out) || out;
+}
 
 /**
  * Register or update a device for peer discovery.
@@ -15,11 +576,49 @@ export const registerDevice = mutation({
     platform: v.union(
       v.literal("macos"),
       v.literal("windows"),
-      v.literal("linux")
+      v.literal("linux"),
+      v.literal("android"),
+      v.literal("ios")
     ),
+    deviceClass: v.optional(
+      v.union(
+        v.literal("desktop"),
+        v.literal("edge-mobile"),
+        v.literal("server")
+      )
+    ),
+    edgeProfile: v.optional(v.object({
+      supportsLocalInference: v.boolean(),
+      maxModelClass: v.union(
+        v.literal("none"),
+        v.literal("tiny"),
+        v.literal("small"),
+        v.literal("medium")
+      ),
+      preferredTasks: v.array(v.union(
+        v.literal("speech"),
+        v.literal("ocr"),
+        v.literal("vision"),
+        v.literal("embedding"),
+        v.literal("rerank"),
+        v.literal("automation"),
+        v.literal("small-llm")
+      )),
+      memoryMb: v.optional(v.number()),
+      batteryPct: v.optional(v.number()),
+      isCharging: v.optional(v.boolean()),
+      thermalState: v.optional(v.union(v.literal("nominal"), v.literal("warm"), v.literal("hot"))),
+    })),
     publicKey: v.optional(v.string()),
+    signPublicKey: v.optional(v.string()),
     quicHost: v.string(),
     quicPort: v.number(),
+    publicEndpoints: v.optional(v.array(v.string())),
+    hardwareId: v.optional(v.string()),
+    hardwareProfile: v.optional(hardwareProfileValidator),
+    recoveryPosture: v.optional(recoveryPostureValidator),
+    connectionPreferences: v.optional(v.array(connectionPreferenceValidator)),
+    agentVersion: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -35,35 +634,340 @@ export const registerDevice = mutation({
       if (existing.userId !== session.user._id) {
         throw new Error("Device belongs to another user");
       }
-      if (existing.deviceKind === "cloud-runner" || existing.trust === "yaver-managed") {
-        throw new Error("Managed runners require a scoped workload credential");
-      }
+      // Every register call requires a valid session (validated
+      // above) — so by definition this device is owner-authenticated
+      // and is not in needs-auth / bootstrap state anymore. Clear
+      // the flag here so it doesn't stay stuck at true after a
+      // bootstrap → owner-mode transition (which otherwise surfaces
+      // as a permanent yellow "Needs pairing" row in every client
+      // picker). Patches the existing row in place — no new
+      // heartbeat backlog, one row per device always.
       await ctx.db.patch(existing._id, {
         name: args.name,
         platform: args.platform,
+        deviceClass: args.deviceClass,
+        edgeProfile: args.edgeProfile,
         publicKey: args.publicKey,
         quicHost: args.quicHost,
         quicPort: args.quicPort,
+        publicEndpoints: args.publicEndpoints,
         isOnline: true,
+        needsAuth: false,
         lastHeartbeat: Date.now(),
+        // Only stamp the signing pubkey when the agent sent one (older agents
+        // omit it) so a re-register from an old build doesn't wipe it.
+        ...(args.signPublicKey ? { signPublicKey: args.signPublicKey } : {}),
+        ...(args.hardwareId ? { hardwareId: args.hardwareId } : {}),
+        ...(args.hardwareProfile ? { hardwareProfile: args.hardwareProfile } : {}),
+        ...(args.recoveryPosture ? { recoveryPosture: args.recoveryPosture } : {}),
+        ...(args.connectionPreferences
+          ? { connectionPreferences: mergeConnectionPreferences(existing.connectionPreferences, args.connectionPreferences) }
+          : {}),
+        // register is always an authoritative refresh — stamp version
+        // if the agent reported one (older agents omit the field).
+        ...(args.agentVersion
+          ? { agentVersion: args.agentVersion, agentVersionReportedAt: Date.now() }
+          : {}),
       });
       return existing._id;
+    }
+
+    // If this is the user's first device and they have no primary set yet,
+    // auto-mark it as primary so single-device users skip the "pick one"
+    // prompt forever. Existing multi-device users are untouched — they
+    // have to explicitly choose a primary.
+    const ownDeviceCount = (await ctx.db
+      .query("devices")
+      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+      .collect()).length;
+    if (ownDeviceCount === 0) {
+      const settings = await ctx.db
+        .query("userSettings")
+        .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+        .first();
+      if (!settings) {
+        await ctx.db.insert("userSettings", {
+          userId: session.user._id,
+          primaryDeviceId: args.deviceId,
+          moreOptionalTools: [],
+        });
+      } else if (!settings.primaryDeviceId) {
+        await ctx.db.patch(settings._id, { primaryDeviceId: args.deviceId });
+      }
+    }
+
+    // Smart auto-label + auto-seeded alias slug (deviceLabels.ts). Friendly
+    // names ("Hetzner box", "MacBook", "Linux box") and a memorable alias
+    // ("hetzner", "mac", "linux") make device pickers readable and let the
+    // on-device voice helper resolve "my hetzner box" deterministically.
+    // If this box is a managed cloud machine, pull provider/region for the
+    // best label. Cloud row is linked by deviceId once the agent registers.
+    const cloudRow = await ctx.db
+      .query("cloudMachines")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .first();
+    // Read optional hardware fields through a loose view: the validator
+    // shape varies across agent versions, so we don't want a hard compile
+    // dependency on every field being present.
+    const hw = (args.hardwareProfile ?? {}) as Record<string, unknown>;
+    const labelSignals: LabelSignals = {
+      platform: args.platform,
+      hostname: args.name,
+      cloudProvider: cloudRow?.provider,
+      cloudRegion: cloudRow?.region,
+      // hardwareProfileValidator currently has cpu/gpu (no isWsl); read
+      // defensively so newer agents that add isWsl/model still work.
+      isWsl: typeof hw.isWsl === "boolean" ? hw.isWsl : undefined,
+      hardwareModel: String(hw.cpu || hw.gpu || hw.model || "").toLowerCase(),
+    };
+    // Only replace the agent-sent name when it's a raw/uninformative
+    // hostname — a user-meaningful hostname is left untouched.
+    const smartLabel = smartDeviceLabel(labelSignals);
+    const resolvedName =
+      smartLabel && isRawHostname(args.name, args.platform) ? smartLabel : args.name;
+
+    // Auto-seed a unique alias slug if the user hasn't got one for this box
+    // yet. Collect existing aliases to avoid collisions (alias is per-user
+    // unique). Best-effort: never block registration on aliasing.
+    let autoAlias: string | undefined;
+    try {
+      const ownDevices = await ctx.db
+        .query("devices")
+        .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+        .collect();
+      const taken = new Set(
+        ownDevices.map((d) => d.alias).filter((a): a is string => !!a),
+      );
+      const slug = uniqueAliasSlug(smartAliasSlug(labelSignals), taken);
+      if (slug) autoAlias = slug;
+    } catch {
+      // aliasing is a nicety, not a requirement — ignore failures
     }
 
     return await ctx.db.insert("devices", {
       userId: session.user._id,
       deviceId: args.deviceId,
-      name: args.name,
+      name: resolvedName,
+      ...(autoAlias ? { alias: autoAlias } : {}),
+      // Auto-seed fleet labels from reported facts so the box is
+      // selector-addressable the moment it registers. User-owned after
+      // this via setDeviceTags (we only seed on first insert, never
+      // overwrite on re-register).
+      tags: deriveAutoTags({
+        platform: args.platform,
+        deviceClass: args.deviceClass,
+        hardwareProfile: hw,
+        edgeProfile: args.edgeProfile,
+      }),
       platform: args.platform,
+      deviceClass: args.deviceClass,
+      edgeProfile: args.edgeProfile,
       publicKey: args.publicKey,
+      signPublicKey: args.signPublicKey,
       quicHost: args.quicHost,
       quicPort: args.quicPort,
+      publicEndpoints: args.publicEndpoints,
       isOnline: true,
-      deviceKind: "private-agent",
-      trust: "user-managed",
       lastHeartbeat: Date.now(),
       createdAt: Date.now(),
+      hardwareId: args.hardwareId,
+      hardwareProfile: args.hardwareProfile,
+      recoveryPosture: args.recoveryPosture,
+      connectionPreferences: args.connectionPreferences,
+      agentVersion: args.agentVersion,
+      agentVersionReportedAt: args.agentVersion ? Date.now() : undefined,
     });
+  },
+});
+
+/**
+ * Look up the owner of a device by its stable hardware ID.
+ * Used by the agent's /auth/recover endpoint to verify that the
+ * caller (mobile app) is the original host of a machine that has
+ * lost its auth token. No tokenHash required — the agent calls
+ * this on behalf of the caller and the host check is what gates
+ * the recovery action.
+ */
+export const ownerByHardwareId = internalQuery({
+  args: {
+    hardwareId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_hardwareId", (q) => q.eq("hardwareId", args.hardwareId))
+      .first();
+    if (!device) return null;
+    return {
+      deviceId: device.deviceId,
+      ownerUserId: device.userId,
+      name: device.name,
+    };
+  },
+});
+
+/**
+ * Caller-aware variant of ownerByHardwareId. The plain query returns
+ * `.first()` on a non-unique index — when multiple device rows share
+ * the same hardwareId (test-fixture registrations, prior owners,
+ * re-claims), the wrong row gets returned and the agent's
+ * verifyHostToken (called by /auth/recover) reports `isOwner: false`
+ * for the legit owner. This variant `.collect()`s and prefers a row
+ * owned by the caller, falling back to first when none match.
+ *
+ * Wired into POST /devices/owner-by-hardware so the existing agent
+ * code path (auth_recover.go::verifyHostToken) starts succeeding for
+ * users whose hardwareId is shared with stale rows owned by other
+ * userIds.
+ */
+export const ownerByHardwareIdForCaller = internalQuery({
+  args: {
+    hardwareId: v.string(),
+    callerUserId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const devices = await ctx.db
+      .query("devices")
+      .withIndex("by_hardwareId", (q) => q.eq("hardwareId", args.hardwareId))
+      .collect();
+    if (devices.length === 0) return null;
+    const ownByCaller = devices.find((d) => String(d.userId) === args.callerUserId);
+    const picked = ownByCaller || devices[0];
+    return {
+      deviceId: picked.deviceId,
+      ownerUserId: picked.userId,
+      name: picked.name,
+      // Diagnostic: how many duplicate rows exist for this hardwareId.
+      // Lets the dashboard surface a "we found N rows with the same
+      // hardware fingerprint" warning so the user can clean them up.
+      duplicateCount: devices.length,
+    };
+  },
+});
+
+/**
+ * Report the agent version for a device the caller owns. Used by the
+ * dashboard to seed `agentVersion` on currently-running machines that
+ * haven't yet been upgraded to a build that sends the field in its own
+ * register/heartbeat payload. The browser probes `/info` on a device
+ * it can reach, then calls this with the observed version string.
+ *
+ * Uses the same 24h + change-detection gate as heartbeat so repeat calls
+ * are cheap.
+ */
+export const reportAgentVersion = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    agentVersion: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const trimmed = args.agentVersion.trim();
+    if (!trimmed) return;
+    const changed = trimmed !== device.agentVersion;
+    const stale =
+      !device.agentVersionReportedAt ||
+      Date.now() - device.agentVersionReportedAt > 24 * 60 * 60 * 1000;
+    if (changed || stale) {
+      await ctx.db.patch(device._id, {
+        agentVersion: trimmed,
+        agentVersionReportedAt: Date.now(),
+      });
+    }
+  },
+});
+
+/**
+ * Ask a device to update its agent, whether or not it is reachable
+ * right now.
+ *
+ * This is desired state, not a command: it sets a field the agent reads
+ * off its own heartbeat response. A box that is offline, asleep, on
+ * cellular, or behind a NAT we can't punch converges the moment it next
+ * heartbeats. Nothing here needs the caller to be able to reach the box
+ * — which is the point, and why every surface uses this. tvOS, watchOS
+ * and Wear OS have no path to the box at all (see the schema comment on
+ * desiredAgentVersion); this is the only trigger available to them.
+ *
+ * `version` is "latest" (resolve at apply time) or a concrete release
+ * like "1.99.309" to pin. The request is one-shot: the agent claims it
+ * via claimAgentUpdateRequest, which clears it. A failed update does not
+ * re-fire on the next beat — auto-update's own 6-12h cycle is the
+ * backstop, and the user can always ask again.
+ */
+export const requestAgentUpdate = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    version: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const requested = (args.version ?? "latest").trim() || "latest";
+    await ctx.db.patch(device._id, {
+      desiredAgentVersion: requested,
+      desiredAgentVersionRequestedAt: Date.now(),
+    });
+    return { ok: true, requestedVersion: requested };
+  },
+});
+
+/**
+ * Agent side of requestAgentUpdate: atomically read-and-clear the
+ * pending request.
+ *
+ * Clearing on claim (rather than on success) is deliberate, and mirrors
+ * claimNextRescueCommand. If we cleared only once the box reached the
+ * target, a request that can't succeed — GitHub rate-limiting the
+ * download, no release asset for this platform — would re-fire on every
+ * 30s heartbeat forever, and a fleet of such boxes would hammer the
+ * releases API in a loop. One claim, one attempt; the periodic
+ * auto-update check is what makes convergence eventual rather than
+ * dependent on this request landing.
+ */
+export const claimAgentUpdateRequest = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const requested = device.desiredAgentVersion;
+    if (!requested) return { version: null };
+
+    await ctx.db.patch(device._id, {
+      desiredAgentVersion: undefined,
+      desiredAgentVersionRequestedAt: undefined,
+    });
+    return { version: requested };
   },
 });
 
@@ -81,8 +985,511 @@ export const heartbeat = mutation({
       pid: v.number(),
       status: v.string(),
       title: v.string(),
+      // checkedAt — when the AGENT last looked at local state (epoch ms).
+      // Freshness of the ROW.
+      checkedAt: v.optional(v.number()),
+      installed: v.optional(v.boolean()),
+      ready: v.optional(v.boolean()),
+      authConfigured: v.optional(v.boolean()),
+      // authPresent — the runner's own CLI says a credential is on that
+      // machine. LOCAL evidence: it cannot see a server-side revocation.
+      authPresent: v.optional(v.boolean()),
+      // authVerified — the credential was EXERCISED against the provider and
+      // the provider answered (a completed turn / OAuth exchange), or was
+      // explicitly refused by it (in which case authConfigured is false).
+      //
+      // These are two fields because on 2026-07-27 they were one, and it
+      // claimed a revoked Claude token was verified. See
+      // RunnerRuntimeStatus.AuthVerified in desktop/agent/runner_auth.go.
+      authVerified: v.optional(v.boolean()),
+      // authVerifiedAt — when the PROVIDER last spoke (epoch ms). Freshness of
+      // the VERDICT, which is NOT the same as freshness of the row. Without
+      // it, persisting "authenticated" would just relocate the false green
+      // from the agent's memory into this table.
+      authVerifiedAt: v.optional(v.number()),
+      // authSource — a LABEL ("claude.ai · max", "codex login status", or a
+      // home-relative "~/.codex/auth.json"). Never an absolute path: the agent
+      // sanitizes these in sanitizeRunnerInfosForConvex because an absolute
+      // path leaks the user's home-directory username.
+      authSource: v.optional(v.string()),
+      warning: v.optional(v.string()),
+      error: v.optional(v.string()),
     }))),
+    installedRunnerIds: v.optional(v.array(v.string())),
     quicHost: v.optional(v.string()),
+    localIps: v.optional(v.array(v.string())),
+    publicEndpoints: v.optional(v.array(v.string())),
+    relayConnected: v.optional(v.boolean()),
+    canReboot: v.optional(v.boolean()),
+    pendingAuthCode: v.optional(v.string()),
+    hardwareId: v.optional(v.string()),
+    hardwareProfile: v.optional(hardwareProfileValidator),
+    deviceClass: v.optional(
+      v.union(
+        v.literal("desktop"),
+        v.literal("edge-mobile"),
+        v.literal("server")
+      )
+    ),
+    edgeProfile: v.optional(v.object({
+      supportsLocalInference: v.boolean(),
+      maxModelClass: v.union(
+        v.literal("none"),
+        v.literal("tiny"),
+        v.literal("small"),
+        v.literal("medium")
+      ),
+      preferredTasks: v.array(v.union(
+        v.literal("speech"),
+        v.literal("ocr"),
+        v.literal("vision"),
+        v.literal("embedding"),
+        v.literal("rerank"),
+        v.literal("automation"),
+        v.literal("small-llm")
+      )),
+      memoryMb: v.optional(v.number()),
+      batteryPct: v.optional(v.number()),
+      isCharging: v.optional(v.boolean()),
+      thermalState: v.optional(v.union(v.literal("nominal"), v.literal("warm"), v.literal("hot"))),
+    })),
+    recoveryPosture: v.optional(recoveryPostureValidator),
+    connectionPreferences: v.optional(v.array(connectionPreferenceValidator)),
+    agentVersion: v.optional(v.string()),
+    publishCapabilities: v.optional(v.array(v.string())),
+    // Probed deploy capability (see schema.ts). Names only.
+    connStatus: v.optional(
+      v.object({
+        intent: v.string(),
+        tier: v.optional(v.string()),
+        onTailnet: v.optional(v.boolean()),
+        meshOk: v.optional(v.boolean()),
+        nat: v.optional(v.string()),
+        at: v.optional(v.number()),
+      }),
+    ),
+    deployCapabilities: v.optional(v.array(v.string())),
+    deployCapabilitiesBlocked: v.optional(v.array(v.string())),
+    deployCapabilitiesAt: v.optional(v.string()),
+    // Coarse egress region (eu|us|ap|...) for the multi-vantage device picker.
+    // Region only — never the egress IP.
+    geoRegion: v.optional(v.string()),
+    // Resource envelope from the agent's watchdog: level + counters only —
+    // never a path, command, or process name (privacy contract).
+    resourcePressure: v.optional(
+      v.object({
+        level: v.union(v.literal("ok"), v.literal("degraded"), v.literal("critical")),
+        canFork: v.optional(v.boolean()),
+        availableMb: v.optional(v.number()),
+        swapUsedMb: v.optional(v.number()),
+        agentRssMb: v.optional(v.number()),
+        children: v.optional(v.number()),
+        reasons: v.optional(v.array(v.string())),
+        at: v.optional(v.number()),
+      }),
+    ),
+    // Optional batch of CPU/RAM samples piggybacked onto the heartbeat —
+    // replaces the standalone /devices/metrics 60s poll. Each sample carries
+    // its own capture time so 60s sparkline resolution is preserved while the
+    // whole batch is recorded + pruned inline in this one mutation (zero extra
+    // function calls). Older agents omit this and use /devices/metrics.
+    // Black box piggyback (desktop/agent/flightrecorder.go). Lifecycle events
+    // the box buffered locally while it was down, shipped on the first
+    // heartbeat after it comes back. Rare by construction (a boot, a shutdown,
+    // an unclean-stop verdict), capped at FLIGHT_EVENT_CAP server-side, and
+    // carried here rather than on their own route so a returning box costs zero
+    // extra function calls — same reasoning as metricsSamples below.
+    //
+    // Audit summary only: kind + short cause + timestamp. Never a path, LAN IP,
+    // hostname, token, or command output.
+    flightEvents: v.optional(
+      v.array(
+        v.object({
+          session: v.string(),
+          kind: v.string(),
+          detail: v.optional(v.string()),
+          atMs: v.number(),
+        })
+      )
+    ),
+    metricsSamples: v.optional(
+      v.array(
+        v.object({
+          cpuPercent: v.number(),
+          memoryUsedMb: v.number(),
+          memoryTotalMb: v.number(),
+          timestampMs: v.number(),
+          // Optional: agents older than the disk-gauge release omit it.
+          diskPercent: v.optional(v.number()),
+        })
+      )
+    ),
+    // Live disk gauge. Sent every heartbeat (unlike hardwareProfile, which is
+    // 24h-gated) because free space is the thing that changes — and the thing
+    // that stops a build at 3am.
+    storage: v.optional(storageValidator),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    let device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    let canonicalDeviceId: string | undefined;
+    let repairedDeviceIdFrom: string | undefined;
+    if (!device && args.hardwareId) {
+      // Snowball guard, 2026-07-30: a box can keep a deleted/stale
+      // config.device_id after duplicate-row cleanup. The token is valid, the
+      // hardware fingerprint is stable, and the user still owns exactly one
+      // surviving row for that hardware, so the product can repair the identity
+      // inside the existing heartbeat mutation instead of burning a new poller
+      // or making the user SSH in. This is deliberately scoped to the same
+      // authenticated user and an unambiguous hardware match; anything else is
+      // a named failure, not a guess.
+      const sameHardware = await ctx.db
+        .query("devices")
+        .withIndex("by_hardwareId", (q) => q.eq("hardwareId", args.hardwareId!))
+        .collect();
+      const ownedMatches = sameHardware.filter((d) => d.userId === session.user._id);
+      if (ownedMatches.length === 1) {
+        device = ownedMatches[0];
+        canonicalDeviceId = device.deviceId;
+        repairedDeviceIdFrom = args.deviceId;
+      } else if (ownedMatches.length > 1) {
+        throw new Error("IDENTITY_DRIFT_AMBIGUOUS: multiple owned device rows match this hardware; choose one from the dashboard before reconnecting");
+      }
+    }
+
+    if (!device) throw new Error("DEVICE_ID_STALE: device row not found and no unambiguous owned hardware match exists");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const patch: Record<string, unknown> = {
+      isOnline: true,
+      lastHeartbeat: Date.now(),
+      needsAuth: false, // valid session → not in bootstrap mode
+      runners: args.runners ?? [],
+      installedRunnerIds: args.installedRunnerIds ?? [],
+    };
+    // Version write is gated to once per 24h OR on change. Agents may
+    // send it on every heartbeat (and they do for simplicity); the
+    // cadence lives here so we don't rewrite the row every 30s for
+    // a string that hasn't moved.
+    if (args.agentVersion) {
+      const changed = args.agentVersion !== device.agentVersion;
+      const stale =
+        !device.agentVersionReportedAt ||
+        Date.now() - device.agentVersionReportedAt > 24 * 60 * 60 * 1000;
+      if (changed || stale) {
+        patch.agentVersion = args.agentVersion;
+        patch.agentVersionReportedAt = Date.now();
+      }
+    }
+    // Update stored IP if the agent reports a new one. An empty string
+    // is a deliberate clear (agent had a stale Docker-bridge address it
+    // wants to retract) — apply it instead of treating empty-string as
+    // "no opinion." Mobile reads quicHost as the direct-connect target;
+    // a stale 172.18.0.1 keeps mobile stuck CONNECTING instead of
+    // falling through to the relay.
+    if (args.quicHost !== undefined && args.quicHost !== device.quicHost) {
+      patch.quicHost = args.quicHost;
+    }
+    // Replace the full IP set on each heartbeat — interfaces come and
+    // go (Tailscale up/down, Wi-Fi switches), so a delta-merge would
+    // strand stale addresses on the record forever.
+    if (args.localIps !== undefined) {
+      patch.localIps = args.localIps;
+    }
+    if (args.publicEndpoints !== undefined) {
+      patch.publicEndpoints = args.publicEndpoints;
+    }
+    // In-place, last-value-only (no history): whether the box has a live relay
+    // tunnel right now. Powers the "online · no relay path" distinction.
+    if (
+      args.relayConnected !== undefined &&
+      args.relayConnected !== device.relayConnected
+    ) {
+      patch.relayConnected = args.relayConnected;
+    }
+    if (
+      args.canReboot !== undefined &&
+      args.canReboot !== device.canReboot
+    ) {
+      patch.canReboot = args.canReboot;
+    }
+    // The rescue code a dead-session box is offering. Stamped with its own
+    // timestamp because surfaces must expire it on their own: a box that goes
+    // fully offline stops heartbeating, so the LAST value it sent would
+    // otherwise sit on the row forever and render an Approve button for a code
+    // that died 15 minutes later. lastSeen cannot stand in for it — a healthy
+    // box heartbeats constantly with no code at all.
+    if (
+      args.pendingAuthCode !== undefined &&
+      args.pendingAuthCode !== device.pendingAuthCode
+    ) {
+      patch.pendingAuthCode = args.pendingAuthCode;
+      patch.pendingAuthCodeAt = args.pendingAuthCode ? Date.now() : undefined;
+    }
+    // Capture hardwareId on heartbeats too — older agents that
+    // were registered before the field existed will pick it up
+    // on their next heartbeat.
+    if (args.hardwareId && args.hardwareId !== device.hardwareId) {
+      patch.hardwareId = args.hardwareId;
+    }
+    if (args.hardwareProfile) {
+      patch.hardwareProfile = args.hardwareProfile;
+    }
+    if (args.storage) {
+      patch.storage = { ...args.storage, updatedAt: Date.now() };
+    }
+    if (args.deviceClass) {
+      patch.deviceClass = args.deviceClass;
+    }
+    if (args.geoRegion !== undefined && args.geoRegion !== device.geoRegion) {
+      patch.geoRegion = args.geoRegion;
+    }
+    if (args.edgeProfile) {
+      patch.edgeProfile = args.edgeProfile;
+    }
+    if (args.recoveryPosture) {
+      patch.recoveryPosture = args.recoveryPosture;
+    }
+    if (args.connectionPreferences !== undefined) {
+      patch.connectionPreferences = mergeConnectionPreferences(device.connectionPreferences, args.connectionPreferences);
+    }
+    if (args.publishCapabilities !== undefined) {
+      patch.publishCapabilities = args.publishCapabilities;
+    }
+    // Probe result rides the heartbeat but refreshes on a ~6h cadence, so
+    // most beats carry it unchanged and many carry it not at all. Only
+    // patch when present — an absent field must never blank a good result.
+    // Omitted means unchanged — the agent only sends this when it differs, so
+    // an absent field must never blank a good status.
+    if (args.connStatus !== undefined) {
+      patch.connStatus = args.connStatus;
+    }
+    if (args.resourcePressure !== undefined) {
+      patch.resourcePressure = args.resourcePressure;
+    }
+    if (args.deployCapabilities !== undefined) {
+      patch.deployCapabilities = args.deployCapabilities;
+    }
+    if (args.deployCapabilitiesBlocked !== undefined) {
+      patch.deployCapabilitiesBlocked = args.deployCapabilitiesBlocked;
+    }
+    if (args.deployCapabilitiesAt !== undefined) {
+      patch.deployCapabilitiesAt = args.deployCapabilitiesAt;
+    }
+
+    // Presence-write coalescing (100k-user cost control). Everything the
+    // conditional blocks above added to `patch` (beyond the 5 always-present
+    // presence keys) counts as a MEANINGFUL change and forces a write. A
+    // heartbeat that is presence-only AND still fresh within the bucket is
+    // skipped entirely — no row rewrite. Real-time presence still comes from
+    // the relay/bus; this only throttles the redundant "still online" writes.
+    const PRESENCE_ONLY_KEYS = new Set([
+      "isOnline",
+      "lastHeartbeat",
+      "needsAuth",
+      "runners",
+      "installedRunnerIds",
+    ]);
+    const hasFieldChange = Object.keys(patch).some((k) => !PRESENCE_ONLY_KEYS.has(k));
+    const runnersChanged =
+      JSON.stringify(args.runners ?? []) !== JSON.stringify(device.runners ?? []);
+    const installedChanged =
+      JSON.stringify(args.installedRunnerIds ?? []) !==
+      JSON.stringify(device.installedRunnerIds ?? []);
+    const meaningful =
+      !device.isOnline || // offline → online transition must persist
+      device.needsAuth === true || // clearing bootstrap flag must persist
+      runnersChanged ||
+      installedChanged ||
+      hasFieldChange;
+    const freshWithinBucket =
+      typeof device.lastHeartbeat === "number" &&
+      Date.now() - device.lastHeartbeat < HEARTBEAT_WRITE_BUCKET_MS;
+    if (meaningful || !freshWithinBucket) {
+      await ctx.db.patch(device._id, patch);
+    }
+    // else: device is already online, unchanged, and its lastHeartbeat is
+    // still fresh within the bucket — skip the write to save Convex cost.
+
+    // Best-effort: seed the managed cloudMachines row's REAL specs + available
+    // runners from the box's own heartbeat. The provisioning-time specs were a
+    // guess (e.g. 16/32/360 recorded for an actual 8/16/160 cx43), which broke
+    // resume server-type selection. Hardware/OS/runner capability is NOT
+    // P2P-sensitive, so it's allowed in Convex; it powers capacity planning,
+    // the resume server-type choice, and machine policies. Never blocks a
+    // heartbeat (wrapped best-effort).
+    try {
+      const managed = await ctx.db
+        .query("cloudMachines")
+        .withIndex("by_deviceId", (q) => q.eq("deviceId", device.deviceId))
+        .first();
+      if (managed) {
+        const cp: Record<string, unknown> = {};
+        const hw = args.hardwareProfile;
+        // Only sync onto an EXISTING specs object so the schema-required
+        // diskGb is preserved (heartbeat carries no total-disk figure).
+        if (hw && managed.specs) {
+          const specs: Record<string, unknown> = { ...(managed.specs as Record<string, unknown>) };
+          if (typeof hw.numCores === "number" && hw.numCores > 0) specs.vcpu = hw.numCores;
+          if (typeof hw.ramMb === "number" && hw.ramMb > 0) specs.ramGb = Math.max(1, Math.round(hw.ramMb / 1024));
+          if (hw.arch) specs.arch = hw.arch;
+          if (hw.os) specs.os = hw.os;
+          if (hw.osVersion) specs.distro = hw.osVersion;
+          cp.specs = specs;
+        }
+        if (args.installedRunnerIds && args.installedRunnerIds.length) {
+          const statusById = new Map<string, string>();
+          for (const r of args.runners ?? []) if (r?.runnerId) statusById.set(r.runnerId, String(r.status ?? ""));
+          cp.runnersAvailable = Array.from(new Set(args.installedRunnerIds)).map((id) => {
+            const runner = (args.runners ?? []).find((r) => r?.runnerId === id);
+            const st = statusById.get(id);
+            return {
+              id,
+              installed: runner?.installed ?? true,
+              ...(typeof runner?.authVerified === "boolean"
+                ? { authed: runner.authVerified }
+                : typeof runner?.authConfigured === "boolean"
+                  ? { authed: runner.authConfigured }
+                : st === "ready"
+                  ? { authed: true }
+                  : st === "needs-auth"
+                    ? { authed: false }
+                    : {}),
+              ...(typeof runner?.authVerified === "boolean" ? { verified: runner.authVerified } : {}),
+              ...(runner?.authSource ? { authSource: runner.authSource } : {}),
+            };
+          });
+        }
+        if (Object.keys(cp).length > 0) {
+          (cp as { updatedAt: number }).updatedAt = Date.now();
+          await ctx.db.patch(managed._id, cp);
+        }
+      }
+    } catch {
+      /* best-effort: seeding must never fail a heartbeat */
+    }
+
+    // Black box piggyback: persist the lifecycle events the box buffered while
+    // it was down (flightrecorder.go), then prune to the cap. This block only
+    // runs on a beat that actually carries events — normally just the first one
+    // after a boot — so a steady-state box pays nothing for it.
+    if (args.flightEvents && args.flightEvents.length > 0) {
+      // Bound the batch BEFORE the insert loop: flight events are rare by
+      // construction (a boot/shutdown/degraded transition), so a request
+      // carrying more than a handful is malformed or hostile. Cap at 60.
+      const incomingFlight = args.flightEvents.slice(-60);
+      const existing = await ctx.db
+        .query("deviceFlightEvents")
+        .withIndex("by_device", (q) => q.eq("deviceId", device.deviceId))
+        .collect();
+      // Dedup on the event's own identity rather than on arrival order: an
+      // agent that retries a heartbeat, or re-sends its buffer after a failed
+      // sync, must not double-record the same history.
+      const seen = new Set(existing.map((e) => `${e.session}|${e.kind}|${e.at}`));
+      for (const ev of incomingFlight) {
+        const key = `${ev.session}|${ev.kind}|${ev.atMs}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        await ctx.db.insert("deviceFlightEvents", {
+          userId: device.userId,
+          deviceId: device.deviceId,
+          session: ev.session,
+          kind: ev.kind,
+          detail: ev.detail,
+          at: ev.atMs,
+          createdAt: Date.now(),
+        });
+      }
+      // The cap is enforced HERE and never trusted to the agent: a buggy or
+      // hostile client must not be able to turn this table into a log stream.
+      // by_device_at yields ascending `at`, so the oldest rows are the prefix.
+      const all = await ctx.db
+        .query("deviceFlightEvents")
+        .withIndex("by_device_at", (q) => q.eq("deviceId", device.deviceId))
+        .collect();
+      if (all.length > FLIGHT_EVENT_CAP) {
+        for (const row of all.slice(0, all.length - FLIGHT_EVENT_CAP)) {
+          await ctx.db.delete(row._id);
+        }
+      }
+    }
+
+    // Metrics piggyback: record each buffered sample at its own capture time
+    // (mirrors deviceMetrics.report) so the mobile CPU/RAM sparkline keeps
+    // working without a separate call. Prune once per beat, not per sample.
+    if (args.metricsSamples && args.metricsSamples.length > 0) {
+      for (const m of args.metricsSamples) {
+        await ctx.db.insert("deviceMetrics", {
+          deviceId: device.deviceId,
+          timestamp: m.timestampMs,
+          cpuPercent: m.cpuPercent,
+          memoryUsedMb: m.memoryUsedMb,
+          memoryTotalMb: m.memoryTotalMb,
+          diskPercent: m.diskPercent,
+        });
+      }
+      const cutoff = Date.now() - 60 * 60 * 1000; // keep last 1h, same as before
+      const stale = await ctx.db
+        .query("deviceMetrics")
+        .withIndex("by_deviceId", (q) =>
+          q.eq("deviceId", device.deviceId).lt("timestamp", cutoff)
+        )
+        .collect();
+      for (const entry of stale) {
+        await ctx.db.delete(entry._id);
+      }
+    }
+
+    // Cheap indexed existence checks (both by_device_status → first-row read)
+    // so the agent only polls the rescue/publish claim endpoints when there's
+    // queued work, instead of firing both claim mutations every beat.
+    const pendingRescueRow = await ctx.db
+      .query("agentRescueCommands")
+      .withIndex("by_device_status", (q) =>
+        q.eq("deviceId", device.deviceId).eq("status", "pending")
+      )
+      .first();
+    const pendingPublishRow = await ctx.db
+      .query("publishJobs")
+      .withIndex("by_device_status", (q) =>
+        q.eq("deviceId", device.deviceId).eq("status", "queued")
+      )
+      .first();
+
+    return {
+      connectionPreferences: (patch.connectionPreferences as Doc<"devices">["connectionPreferences"] | undefined)
+        ?? device.connectionPreferences
+        ?? [],
+      pendingRescue: pendingRescueRow !== null,
+      pendingPublish: pendingPublishRow !== null,
+      // Same gate-then-claim shape as pendingRescue: the agent only
+      // calls claimAgentUpdateRequest when this is non-null. Carries the
+      // version rather than a boolean because it's a single field read
+      // we already have in hand — no extra query to save.
+      desiredAgentVersion: device.desiredAgentVersion ?? null,
+      canonicalDeviceId,
+      repairedDeviceIdFrom,
+    };
+  },
+});
+
+/**
+ * Store a user's explicit per-machine transport preferences in Convex.
+ * Heartbeat preserves these rows while refreshing agent-detected active
+ * state, so a user can mark "headscale preferred" once and keep that
+ * product-level intent across agent restarts.
+ */
+export const setConnectionPreferences = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    preferences: v.array(connectionPreferenceValidator),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -92,29 +1499,185 @@ export const heartbeat = mutation({
       .query("devices")
       .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
       .unique();
-
     if (!device) throw new Error("Device not found");
     if (device.userId !== session.user._id) throw new Error("Unauthorized");
-    if (device.deviceKind === "cloud-runner" || device.trust === "yaver-managed") {
-      throw new Error("Managed runners require a scoped workload credential");
+
+    const userPrefs = args.preferences.map((pref) => ({
+      ...pref,
+      source: "user-config" as const,
+    }));
+    const runtimePrefs = (device.connectionPreferences || []).filter((pref) => pref.source !== "user-config");
+    await ctx.db.patch(device._id, {
+      connectionPreferences: mergeConnectionPreferences(runtimePrefs, userPrefs),
+    });
+  },
+});
+
+/**
+ * Fleet/user backfill for existing device rows. New agents seed
+ * connectionPreferences on heartbeat, but existing offline machines may
+ * not heartbeat for days. This infers a privacy-safe best effort from
+ * already-stored localIps/publicEndpoints/relay presence. It is
+ * idempotent and preserves user-config rows.
+ */
+// internalMutation: with no tokenHash this patches the WHOLE devices table;
+// a public mutation = anon full-table read+write of every user's devices.
+export const backfillConnectionPreferences = internalMutation({
+  args: {
+    tokenHash: v.optional(v.string()),
+    dryRun: v.optional(v.boolean()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    let scopedSession: Awaited<ReturnType<typeof validateSessionInternal>> = null;
+    if (args.tokenHash) {
+      scopedSession = await validateSessionInternal(ctx, args.tokenHash);
+      if (!scopedSession) throw new Error("Unauthorized");
     }
 
+    const allDevices = scopedSession
+      ? await ctx.db
+          .query("devices")
+          .withIndex("by_userId", (q) => q.eq("userId", scopedSession!.user._id))
+          .collect()
+      : await ctx.db.query("devices").collect();
+    const devices = typeof args.limit === "number" && args.limit > 0
+      ? allDevices.slice(0, Math.floor(args.limit))
+      : allDevices;
+
+    let updated = 0;
+    let unchanged = 0;
+    let inferred = 0;
+    for (const device of devices) {
+      const next = inferConnectionPreferencesForDevice(device);
+      if (next && next.length > 0) inferred++;
+      const before = JSON.stringify(device.connectionPreferences || []);
+      const after = JSON.stringify(next || []);
+      if (before === after) {
+        unchanged++;
+        continue;
+      }
+      if (!args.dryRun) {
+        await ctx.db.patch(device._id, { connectionPreferences: next });
+      }
+      updated++;
+    }
+    return { ok: true, dryRun: !!args.dryRun, total: devices.length, inferred, updated, unchanged };
+  },
+});
+
+/**
+ * Relay-driven presence update — called only by Yaver's relay server
+ * via the /devices/presence HTTP action, which validates a shared
+ * secret before running this mutation. The mutation itself doesn't
+ * need user auth because the HTTP layer has already gated access.
+ *
+ * Flips `isOnline` immediately (no heartbeat wait) and records the
+ * last tunnel event so reactive clients can show "just disconnected"
+ * vs "offline for hours" accurately.
+ */
+export const presenceUpdate = internalMutation({
+  args: {
+    deviceId: v.string(),
+    online: v.boolean(),
+    peerAddr: v.optional(v.string()),
+    connectedAt: v.optional(v.number()),
+    durationSec: v.optional(v.number()),
+    // Relay-auto-provisioned <id>.<expose-domain> URL — pushed by
+    // the relay on tunnel-up so the dashboard sees it instantly
+    // without waiting for the agent's next 5-min heartbeat.
+    assignedUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) {
+      // Silently ignore unknown devices — the relay may have tunnels
+      // for devices that were removed from this user's account.
+      return;
+    }
     const patch: Record<string, unknown> = {
-      isOnline: true,
-      lastHeartbeat: Date.now(),
-      runners: args.runners ?? [],
+      isOnline: args.online,
+      lastTunnelEvent: {
+        online: args.online,
+        at: Date.now(),
+        peerAddr: args.peerAddr,
+        connectedAt: args.connectedAt,
+        durationSec: args.durationSec,
+      },
     };
-    // Update stored IP if the agent reports a new one
-    if (args.quicHost && args.quicHost !== device.quicHost) {
-      patch.quicHost = args.quicHost;
+    // Refresh lastHeartbeat on connect so heartbeat-staleness checks
+    // don't fight the tunnel-up signal. On disconnect leave it alone
+    // — the agent is still alive elsewhere (maybe on LAN).
+    if (args.online) {
+      patch.lastHeartbeat = Date.now();
+    }
+    // Merge the relay-assigned URL into publicEndpoints. Idempotent:
+    // if it's already there, no change. Order doesn't matter for the
+    // dashboard's transport classifier — it picks the *.yaver.io
+    // subdomain by suffix match. On disconnect we LEAVE the URL in
+    // place so the dashboard can still try it (the relay just won't
+    // route until the next reconnect; the URL itself is durable).
+    if (args.online && args.assignedUrl && /^https:\/\//.test(args.assignedUrl)) {
+      const existing = (device.publicEndpoints ?? []) as string[];
+      if (!existing.includes(args.assignedUrl)) {
+        patch.publicEndpoints = [...existing, args.assignedUrl];
+      }
     }
     await ctx.db.patch(device._id, patch);
   },
 });
 
-/**
- * List all devices belonging to the authenticated user.
- */
+// Read back a device's black box (deviceFlightEvents, written by the heartbeat
+// piggyback above from desktop/agent/flightrecorder.go).
+//
+// This is the whole point of the recorder: when a box goes silent, its last
+// records say whether it stopped gracefully or died hard. Without this query the
+// data is write-only and you would have to open the Convex dashboard by hand.
+//
+// Ownership is enforced explicitly — a device's lifecycle history is its owner's
+// alone. A missing owner check here would be the same cross-tenant read class
+// already closed in mesh.ts / userSettings.ts, so it fails closed on any
+// mismatch rather than falling back to "no rows".
+export const flightEvents = query({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    // Newest-first cap. Bounded by FLIGHT_EVENT_CAP regardless of what a caller
+    // asks for, since the table itself never holds more than that per device.
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const rows = await ctx.db
+      .query("deviceFlightEvents")
+      .withIndex("by_device_at", (q) => q.eq("deviceId", args.deviceId))
+      .collect();
+
+    // by_device_at is ascending; the useful view is newest-first.
+    const ordered = rows.slice().reverse();
+    const limit = Math.min(args.limit ?? FLIGHT_EVENT_CAP, FLIGHT_EVENT_CAP);
+    return ordered.slice(0, limit).map((r) => ({
+      session: r.session,
+      kind: r.kind,
+      detail: r.detail,
+      at: r.at,
+      createdAt: r.createdAt,
+    }));
+  },
+});
+
 export const listMyDevices = query({
   args: {
     tokenHash: v.string(),
@@ -123,168 +1686,194 @@ export const listMyDevices = query({
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
 
-    const [devices, access, workspaces] = await Promise.all([
-      ctx.db.query("devices").withIndex("by_userId", (q) => q.eq("userId", session.user._id)).collect(),
-      ctx.db.query("cloudAccess").withIndex("by_userId", (q) => q.eq("userId", session.user._id)).first(),
-      ctx.db.query("cloudWorkspaces").withIndex("by_userId", (q) => q.eq("userId", session.user._id)).collect(),
-    ]);
-    const cloudAccessActive = access?.status === "active" && (!access.validUntil || access.validUntil > Date.now());
-    const readyWorkspaceIds = new Set(workspaces.filter((workspace) => workspace.state === "ready").map((workspace) => workspace.cloudWorkspaceId));
+    // Own devices
+    const ownDevices = await ctx.db
+      .query("devices")
+      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+      .collect();
 
-    return devices.filter((device) => device.deviceKind !== "cloud-runner" || (
-      cloudAccessActive && !!device.cloudWorkspaceId && readyWorkspaceIds.has(device.cloudWorkspaceId)
-    )).map((d) => ({
+    // Hosting provenance. A device is "yaver-hosted" (managed) when it has a
+    // cloudMachines row that is Yaver-side (origin !== "self-hosted" — managed or
+    // legacy-absent per schema). Paid-via-LemonSqueezy and owner-adopted boxes both
+    // land here; plain BYO boxes have no such row ⇒ "self-hosted". Purely
+    // informational; entitlement gates stay server-side.
+    const userCloudMachines = await ctx.db
+      .query("cloudMachines")
+      .withIndex("by_user", (q) => q.eq("userId", session.user._id))
+      .collect();
+    const managedByDeviceId = new Map<
+      string,
+      { machineId: string; status: string; wakeable: boolean }
+    >();
+    for (const m of userCloudMachines) {
+      // A decommissioned row must never shadow a live one. Two rows can share a
+      // deviceId — a box that boots from a snapshot carrying a previous machine's
+      // identity registers under the OLD deviceId — and this map is last-write-
+      // wins, so a dead row could silently win on collect() order alone and
+      // report its own (unwakeable) status for a box that is very much alive.
+      // That is not hypothetical: it hid the Wake action on a parked box whose
+      // snapshot was sitting right there. Dead rows carry no lifecycle worth
+      // showing, so drop them and let a live row own the deviceId.
+      const rowStatus = typeof (m as any).status === "string" ? (m as any).status : "";
+      if (rowStatus === "removed" || rowStatus === "deleted") continue;
+      if (typeof m.deviceId === "string" && m.deviceId.trim() !== "" && m.origin !== "self-hosted") {
+        const status = typeof (m as any).status === "string" ? (m as any).status : "active";
+        managedByDeviceId.set(m.deviceId, {
+          machineId: m._id,
+          status,
+          // Computed HERE, not in each client, because "can this box be woken"
+          // has exactly one correct answer and it belongs next to the rule that
+          // enforces it (wakeMachine below). The web previously re-derived it
+          // from status alone and drifted: it offered Resume on a box with no
+          // snapshot (which wakeMachine then refused), and offered PAUSE on a
+          // box that was already removed — an action that makes no sense on a
+          // box that is gone. Keep this in lockstep with wakeMachine's gate.
+          wakeable: isMachineWakeable(m),
+        });
+      }
+    }
+
+    // Third tier: BYO. A box Yaver provisioned on the USER's own cloud account
+    // lives in byoMachines (not cloudMachines), so it isn't "yaver-hosted" — but
+    // it isn't a plain self-hosted box either: Yaver holds its snapshot/recreate
+    // path and auto scale-to-zeros it to cut the user's provider bill. Surface it
+    // as its own tier so the UI flags it separately and the agent's auto-lifecycle
+    // (hosting_tier.go) can act on it. Linked to a device only once the box
+    // self-registers its deviceId; not-deleted rows only.
+    const userByoMachines = await ctx.db
+      .query("byoMachines")
+      .withIndex("by_user", (q) => q.eq("userId", session.user._id))
+      .collect();
+    const byoDeviceIds = new Set<string>();
+    for (const b of userByoMachines) {
+      if (typeof b.deviceId === "string" && b.deviceId.trim() !== "" && b.state !== "deleted") {
+        byoDeviceIds.add(b.deviceId);
+      }
+    }
+    // managed wins over byo wins over self-hosted.
+    const hostingFor = (deviceId: string): "yaver-hosted" | "byo" | "self-hosted" =>
+      managedByDeviceId.has(deviceId) ? "yaver-hosted" : byoDeviceIds.has(deviceId) ? "byo" : "self-hosted";
+
+    const result: ListedDevice[] = ownDevices.map((d) => ({
       deviceId: d.deviceId,
       name: d.name,
+      alias: d.alias,
+      // Spoken names — the phone feeds these to carMachineSwitch.ts so a driver
+      // can say "switch to my mac mini" on CarPlay, where no picker is allowed.
+      voiceHints: d.voiceHints,
       platform: d.platform,
+      publishCapabilities: d.publishCapabilities,
+      connStatus: d.connStatus,
+      resourcePressure: d.resourcePressure,
+      deployCapabilities: d.deployCapabilities,
+      deployCapabilitiesBlocked: d.deployCapabilitiesBlocked,
+      deployCapabilitiesAt: d.deployCapabilitiesAt,
       publicKey: d.publicKey,
+      hardwareId: d.hardwareId,
+      hardwareProfile: d.hardwareProfile,
       quicHost: d.quicHost,
+      localIps: d.localIps ?? [],
+      publicEndpoints: d.publicEndpoints ?? [],
+      connectionPreferences: d.connectionPreferences,
       quicPort: d.quicPort,
-      isOnline: d.isOnline,
-      deviceKind: d.deviceKind ?? "private-agent",
-      trust: d.trust ?? "user-managed",
-      cloudWorkspaceId: d.cloudWorkspaceId,
-      runnerClass: d.runnerClass,
-      region: d.region,
-      agentVersion: d.agentVersion,
-      protocolVersion: d.protocolVersion,
-      capabilities: d.capabilities,
+      isOnline: deriveIsOnline(d),
+      needsAuth: d.needsAuth ?? false,
       runnerDown: d.runnerDown ?? false,
       runners: d.runners ?? [],
+      installedRunnerIds: d.installedRunnerIds ?? [],
       lastHeartbeat: d.lastHeartbeat,
+      lastTunnelEvent: d.lastTunnelEvent,
+      relayConnected: d.relayConnected ?? false,
+      canReboot: d.canReboot ?? false,
+      pendingAuthCode:
+        d.pendingAuthCode && d.pendingAuthCodeAt &&
+        Date.now() - d.pendingAuthCodeAt < 15 * 60 * 1000
+          ? d.pendingAuthCode
+          : undefined,
+      agentVersion: d.agentVersion,
+      agentVersionReportedAt: d.agentVersionReportedAt,
+      tunnelUrl: undefined as string | undefined,
+      deviceClass: d.deviceClass,
+      geoRegion: d.geoRegion,
+      edgeProfile: d.edgeProfile,
+      recoveryPosture: d.recoveryPosture,
+      managed: managedByDeviceId.has(d.deviceId),
+      hosting: hostingFor(d.deviceId),
+      machineId: managedByDeviceId.get(d.deviceId)?.machineId,
+      machineStatus: managedByDeviceId.get(d.deviceId)?.status,
+      // Whether this box can actually be woken from a snapshot, decided by the
+      // backend (isMachineWakeable) rather than re-derived per client. Clients
+      // must read this instead of inspecting machineStatus themselves.
+      machineWakeable: managedByDeviceId.get(d.deviceId)?.wakeable ?? false,
     }));
+
+    return collapseListedDevices(result);
   },
 });
 
-async function requireWorkload(
-  ctx: MutationCtx,
-  tokenHash: string,
-  runnerDeviceId: string,
-) {
-  const credential = await ctx.db
-    .query("workloadCredentials")
-    .withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash))
-    .unique();
-  if (!credential || credential.status !== "active" || credential.expiresAt <= Date.now()) {
-    throw new Error("Invalid workload credential");
-  }
-  if (credential.runnerDeviceId !== runnerDeviceId) throw new Error("Workload credential is bound to another runner");
-  const workspace = await ctx.db
-    .query("cloudWorkspaces")
-    .withIndex("by_workspaceId", (q) => q.eq("cloudWorkspaceId", credential.cloudWorkspaceId))
-    .unique();
-  if (!workspace || workspace.userId !== credential.userId || workspace.runnerDeviceId !== runnerDeviceId) {
-    throw new Error("Cloud Workspace scope mismatch");
-  }
-  if (workspace.state !== "provisioning" && workspace.state !== "ready") {
-    throw new Error("Cloud Workspace is not accepting runner traffic");
-  }
-  const access = await ctx.db.query("cloudAccess").withIndex("by_userId", (q) => q.eq("userId", credential.userId)).first();
-  if (!access || access.status !== "active" || (access.validUntil && access.validUntil <= Date.now())) {
-    throw new Error("Cloud access is not active");
-  }
-  return { credential, workspace };
-}
-
-/** Managed runners never register with a general user session. */
-export const registerManagedRunner = mutation({
+export const recommendTaskPlacement = query({
   args: {
     tokenHash: v.string(),
-    deviceId: v.string(),
-    name: v.string(),
-    platform: v.union(v.literal("macos"), v.literal("linux")),
-    publicKey: v.optional(v.string()),
-    quicHost: v.string(),
-    quicPort: v.number(),
-    runnerClass,
-    region: v.string(),
-    agentVersion: v.string(),
-    protocolVersion: v.number(),
-    capabilities: runnerCapabilities,
+    taskKind: v.union(
+      v.literal("speech-transcription"),
+      v.literal("ocr"),
+      v.literal("vision-labeling"),
+      v.literal("embedding"),
+      v.literal("rerank"),
+      v.literal("small-local-agent"),
+      v.literal("batch-preprocessing"),
+      v.literal("big-llm-chat"),
+      v.literal("long-context-reasoning"),
+    ),
   },
   handler: async (ctx, args) => {
-    const { credential } = await requireWorkload(ctx, args.tokenHash, args.deviceId);
-    if (args.platform !== args.runnerClass) throw new Error("Runner platform/class mismatch");
-    const existing = await ctx.db.query("devices").withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId)).unique();
-    const value = {
-      userId: credential.userId,
-      deviceId: args.deviceId,
-      name: args.name,
-      platform: args.platform,
-      publicKey: args.publicKey,
-      quicHost: args.quicHost,
-      quicPort: args.quicPort,
-      isOnline: true,
-      deviceKind: "cloud-runner" as const,
-      trust: "yaver-managed" as const,
-      cloudWorkspaceId: credential.cloudWorkspaceId,
-      runnerClass: args.runnerClass,
-      region: args.region,
-      agentVersion: args.agentVersion,
-      protocolVersion: args.protocolVersion,
-      capabilities: args.capabilities,
-      lastHeartbeat: Date.now(),
-    };
-    if (existing) {
-      if (existing.userId !== credential.userId || existing.deviceKind !== "cloud-runner") {
-        throw new Error("Runner device ID is already registered");
-      }
-      await ctx.db.patch(existing._id, value);
-      await ctx.db.patch(credential._id, { lastUsedAt: Date.now() });
-      const user = await ctx.db.get(credential.userId);
-      if (!user) throw new Error("Cloud Workspace owner not found");
-      return { deviceId: existing._id, ownerUserId: user.userId };
-    }
-    const id = await ctx.db.insert("devices", { ...value, createdAt: Date.now() });
-    await ctx.db.patch(credential._id, { lastUsedAt: Date.now() });
-    const user = await ctx.db.get(credential.userId);
-    if (!user) throw new Error("Cloud Workspace owner not found");
-    return { deviceId: id, ownerUserId: user.userId };
-  },
-});
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
 
-export const managedHeartbeat = mutation({
-  args: {
-    tokenHash: v.string(),
-    deviceId: v.string(),
-    runners: v.optional(v.array(v.object({
-      taskId: v.string(), runnerId: v.string(), model: v.optional(v.string()),
-      pid: v.number(), status: v.string(), title: v.string(),
-    }))),
-    quicHost: v.optional(v.string()),
-    agentVersion: v.string(),
-    protocolVersion: v.number(),
-    capabilities: runnerCapabilities,
-  },
-  handler: async (ctx, args) => {
-    const { credential } = await requireWorkload(ctx, args.tokenHash, args.deviceId);
-    const device = await ctx.db.query("devices").withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId)).unique();
-    if (!device || device.userId !== credential.userId || device.deviceKind !== "cloud-runner") {
-      throw new Error("Managed runner not registered");
-    }
-    await ctx.db.patch(device._id, {
-      isOnline: true,
-      lastHeartbeat: Date.now(),
-      runners: args.runners ?? [],
-      quicHost: args.quicHost ?? device.quicHost,
-      agentVersion: args.agentVersion,
-      protocolVersion: args.protocolVersion,
-      capabilities: args.capabilities,
-    });
-    await ctx.db.patch(credential._id, { lastUsedAt: Date.now() });
-  },
-});
+    const ownDevices = await ctx.db
+      .query("devices")
+      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+      .collect();
 
-export const managedOffline = mutation({
-  args: { tokenHash: v.string(), deviceId: v.string() },
-  handler: async (ctx, args) => {
-    const { credential } = await requireWorkload(ctx, args.tokenHash, args.deviceId);
-    const device = await ctx.db.query("devices").withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId)).unique();
-    if (!device || device.userId !== credential.userId || device.deviceKind !== "cloud-runner") {
-      throw new Error("Managed runner not registered");
-    }
-    await ctx.db.patch(device._id, { isOnline: false, lastHeartbeat: Date.now(), runners: [] });
-    await ctx.db.patch(credential._id, { lastUsedAt: Date.now() });
+    return recommendPlacement(
+      collapseListedDevices(
+        ownDevices.map((device) => ({
+          deviceId: device.deviceId,
+          name: device.name,
+          platform: device.platform,
+          publicKey: device.publicKey,
+          hardwareId: device.hardwareId,
+          hardwareProfile: device.hardwareProfile,
+          quicHost: device.quicHost,
+          localIps: device.localIps ?? [],
+          publicEndpoints: device.publicEndpoints ?? [],
+          quicPort: device.quicPort,
+          isOnline: deriveIsOnline(device),
+          needsAuth: device.needsAuth ?? false,
+          runnerDown: device.runnerDown ?? false,
+          runners: device.runners ?? [],
+          lastHeartbeat: device.lastHeartbeat,
+          lastTunnelEvent: device.lastTunnelEvent,
+          relayConnected: device.relayConnected ?? false,
+          deviceClass: device.deviceClass,
+          edgeProfile: device.edgeProfile,
+        })),
+      ).map((device) => ({
+        deviceId: device.deviceId,
+        name: device.name,
+        platform: device.platform,
+        // Same staleness gate as listMyDevices — placement decisions
+        // never route work to a device whose last heartbeat is older
+        // than HEARTBEAT_STALE_MS, even if its isOnline flag was
+        // never explicitly cleared.
+        isOnline: deriveIsOnline(device),
+        needsAuth: device.needsAuth,
+        runnerDown: device.runnerDown,
+        deviceClass: device.deviceClass,
+        edgeProfile: device.edgeProfile,
+      })),
+      args.taskKind,
+    );
   },
 });
 
@@ -310,9 +1899,6 @@ export const setRunnerDown = mutation({
 
     if (!device) throw new Error("Device not found");
     if (device.userId !== session.user._id) throw new Error("Unauthorized");
-    if (device.deviceKind === "cloud-runner" || device.trust === "yaver-managed") {
-      throw new Error("Managed runner state requires a workload credential");
-    }
 
     await ctx.db.patch(device._id, { runnerDown: args.runnerDown });
   },
@@ -322,6 +1908,68 @@ export const setRunnerDown = mutation({
  * Mark a device as offline.
  * Called by the desktop agent on stop/signout.
  */
+/**
+ * Mark a device as in bootstrap mode (agent running, no valid token).
+ * Authenticates on (deviceId, hardwareId, publicKey) triple — these
+ * match the existing Convex record set during the first `yaver auth`.
+ * If all three match, we update needsAuth=true + isOnline=true + heartbeat.
+ * This lets mobile/web show the device as "NEEDS AUTH" in the list so
+ * the user can push an encrypted token to re-auth it remotely.
+ */
+export const markBootstrap = internalMutation({
+  args: {
+    deviceId: v.string(),
+    hardwareId: v.string(),
+    publicKey: v.string(),
+    quicHost: v.optional(v.string()),
+    quicPort: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) throw new Error("Device not found");
+    // Identity proof: hardwareId + publicKey must match what was stored
+    // during the initial `yaver auth`. Prevents a random caller from
+    // toggling arbitrary devices into bootstrap mode.
+    if (device.hardwareId !== args.hardwareId) throw new Error("Hardware ID mismatch");
+    if (device.publicKey !== args.publicKey) throw new Error("Public key mismatch");
+    const patch: any = {
+      isOnline: true,
+      needsAuth: true,
+      lastHeartbeat: Date.now(),
+    };
+    if (args.quicHost) patch.quicHost = args.quicHost;
+    if (args.quicPort) patch.quicPort = args.quicPort;
+    await ctx.db.patch(device._id, patch);
+    return { ok: true, userId: device.userId };
+  },
+});
+
+/**
+ * Mark a device as no longer in bootstrap mode (just got a token).
+ * Authed via tokenHash. Clears needsAuth flag.
+ */
+export const clearBootstrap = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) return { ok: false };
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+    await ctx.db.patch(device._id, { needsAuth: false, lastHeartbeat: Date.now() });
+    return { ok: true };
+  },
+});
+
 export const markOffline = mutation({
   args: {
     tokenHash: v.string(),
@@ -338,9 +1986,6 @@ export const markOffline = mutation({
 
     if (!device) throw new Error("Device not found");
     if (device.userId !== session.user._id) throw new Error("Unauthorized");
-    if (device.deviceKind === "cloud-runner" || device.trust === "yaver-managed") {
-      throw new Error("Managed runner state requires a workload credential");
-    }
 
     await ctx.db.patch(device._id, {
       isOnline: false,
@@ -368,10 +2013,479 @@ export const removeDevice = mutation({
 
     if (!device) throw new Error("Device not found");
     if (device.userId !== session.user._id) throw new Error("Unauthorized");
-    if (device.deviceKind === "cloud-runner" || device.trust === "yaver-managed") {
-      throw new Error("Managed runners are removed by the Cloud Workspace controller");
+
+    const deviceSessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .collect();
+    for (const deviceSession of deviceSessions) {
+      if (deviceSession.userId === session.user._id) {
+        await ctx.db.delete(deviceSession._id);
+      }
+    }
+
+    // Cascade — every Convex row that names this deviceId becomes
+    // dangling the moment we delete the device. The orphaned sdkTokens
+    // are the security-critical case (long-lived tokens still validate
+    // for /info, /tasks, etc. until natural expiry); userProjects /
+    // userServices / userDeployments are functional dangling pointers
+    // (the dashboard still rows them as "live on <deviceId>"); the
+    // primaryDeviceId pointer breaks `yaver ssh primary` everywhere.
+    //
+    // Each cascade query is gated by the same userId match used for
+    // the device row above, so this mutation can never wipe rows the
+    // caller doesn't own (defense-in-depth — every table also has
+    // its own userId column we filter on).
+
+    const sdkTokensForDevice = await ctx.db
+      .query("sdkTokens")
+      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+      .collect();
+    for (const tok of sdkTokensForDevice) {
+      if (tok.targetDeviceId === args.deviceId) {
+        await ctx.db.delete(tok._id);
+      }
+    }
+
+    const projectsForDevice = await ctx.db
+      .query("userProjects")
+      .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
+      .collect();
+    for (const p of projectsForDevice) {
+      if (p.userId === session.user._id) {
+        await ctx.db.delete(p._id);
+      }
+    }
+
+    const servicesForDevice = await ctx.db
+      .query("userServices")
+      .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
+      .collect();
+    for (const svc of servicesForDevice) {
+      if (svc.userId === session.user._id) {
+        await ctx.db.delete(svc._id);
+      }
+    }
+
+    // userSettings.primaryDeviceId — clear it if it points at the
+    // device we're about to delete. Patch (not delete) the settings
+    // row so the user's other prefs (runner choice, relay creds,
+    // verbosity) survive.
+    const settings = await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+      .unique();
+    if (settings && settings.primaryDeviceId === args.deviceId) {
+      await ctx.db.patch(settings._id, { primaryDeviceId: undefined });
     }
 
     await ctx.db.delete(device._id);
+  },
+});
+
+/**
+ * deleteDeviceRow — internal device-row removal used by the managed-cloud
+ * decommission path (purgeMachineResources). 2026-08-10: decommissioning a
+ * cloud box removed the cloudMachines row but LEFT the device row
+ * (`cloud-<id>`), so the dashboard kept showing a phantom offline card for a
+ * decommissioned box (confusing — "is the managed cloud real?"). The public
+ * removeDevice requires a session tokenHash, which an internal action
+ * doesn't have; this is the internal equivalent, scoped to the deviceId the
+ * caller computed (internal functions are not client-callable).
+ */
+export const deleteDeviceRow = internalMutation({
+  args: { deviceId: v.string() },
+  handler: async (ctx, { deviceId }) => {
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", deviceId))
+      .unique();
+    if (device) {
+      await ctx.db.delete(device._id);
+    }
+  },
+});
+
+// ALIAS_PATTERN: a-z, 0-9, dash, underscore, dot. 1–48 chars. Lower-cased
+// before storage; we intentionally reject whitespace and uppercase so
+// `yaver ssh prod-mac` is the same identifier across CLI / web / mobile
+// without callers having to remember the original casing the user typed.
+const ALIAS_PATTERN = /^[a-z0-9._-]{1,48}$/;
+
+/**
+ * Set or clear the per-user alias for one of the caller's Yaver devices.
+ *
+ * Pass alias: "" (or omit) to clear. This writes the normalized alias
+ * onto the device's Convex row so every surface that lists devices
+ * (`yaver devices`, `yaver ssh <alias>`, web, mobile) sees the same
+ * short name. Aliases are normalized to lower case before storage and
+ * must be unique within a single user's set of devices — re-using an
+ * alias for a different device of the same user is rejected (callers
+ * should clear the old one first or pass the same deviceId to rename
+ * in place).
+ *
+ * Throws:
+ *   "Unauthorized"        — session invalid or device not owned
+ *   "Device not found"
+ *   "alias invalid"       — failed ALIAS_PATTERN
+ *   "alias already used"  — another device of this user owns it
+ */
+export const setDeviceAlias = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    alias: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const raw = (args.alias ?? "").trim().toLowerCase();
+    if (raw === "") {
+      if (device.alias !== undefined) {
+        await ctx.db.patch(device._id, { alias: undefined });
+      }
+      return { ok: true, alias: null };
+    }
+
+    if (!ALIAS_PATTERN.test(raw)) {
+      throw new Error("alias invalid: use 1-48 chars from a-z, 0-9, '.', '-', '_'");
+    }
+
+    // Per-user uniqueness — scan the caller's devices and reject if
+    // any other row already holds this alias.
+    const peers = await ctx.db
+      .query("devices")
+      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+      .collect();
+    for (const peer of peers) {
+      if (peer._id === device._id) continue;
+      if ((peer.alias ?? "").toLowerCase() === raw) {
+        throw new Error(`alias already used by device ${peer.deviceId.slice(0, 8)} (${peer.name})`);
+      }
+    }
+
+    await ctx.db.patch(device._id, { alias: raw });
+    return { ok: true, alias: raw };
+  },
+});
+
+/**
+ * Set / add / remove the SPOKEN names for a device. Owner-scoped (token-hash).
+ *
+ * These are what a driver actually says: "my mac mini", "the box at maltepe",
+ * "work laptop". They are not `alias` — alias is one short typed token for
+ * `yaver ssh`; these are many, natural-language, and never typed. They exist
+ * because CarPlay's voice category forbids drawing a device picker on the car
+ * screen, so speaking the machine's name is the ONLY way to retarget a turn
+ * while driving (carMachineSwitch.ts does the fuzzy matching on-device).
+ *
+ * Three modes, checked in order — mirrors setDeviceTags:
+ *   - `hints` present  → replace the whole list.
+ *   - `add` / `remove` → mutate the existing list.
+ *
+ * Normalized to lower-case, trimmed, deduped, ≤64 chars, max 12 per device.
+ * Invalid entries are dropped rather than failing the call: a bad hint should
+ * never block a good one. Display-only data, same privacy class as `name`.
+ */
+export const setDeviceVoiceHints = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    hints: v.optional(v.array(v.string())),
+    add: v.optional(v.array(v.string())),
+    remove: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const clean = (list: string[] | undefined): string[] =>
+      (list ?? [])
+        .map((h) => h.trim().toLowerCase().replace(/\s+/g, " "))
+        .filter((h) => h.length > 0 && h.length <= 64);
+
+    let next: string[];
+    if (args.hints !== undefined) {
+      next = clean(args.hints);
+    } else {
+      const current = device.voiceHints ?? [];
+      const removing = new Set(clean(args.remove));
+      next = [...current.filter((h) => !removing.has(h)), ...clean(args.add)];
+    }
+
+    // Dedupe, then cap. A device with 50 spoken names makes fuzzy matching
+    // ambiguous, which is worse than having none.
+    next = Array.from(new Set(next)).slice(0, 12);
+
+    await ctx.db.patch(device._id, {
+      voiceHints: next.length > 0 ? next : undefined,
+    });
+    return { ok: true, voiceHints: next };
+  },
+});
+
+/**
+ * Set / add / remove fleet tags on a device. Owner-scoped (token-hash).
+ * Three modes (checked in order):
+ *   - `tags` present → replace the whole array.
+ *   - `add` / `remove` present → mutate the existing array.
+ * Tags are normalized (lower-case, [a-z0-9._-], ≤32 chars) and deduped;
+ * invalid tags are dropped silently rather than failing the whole call.
+ * Powers `yaver tag` / the SDK `machine.tag()` and selector queries.
+ */
+export const setDeviceTags = mutation({
+  args: {
+    tokenHash: v.string(),
+    deviceId: v.string(),
+    tags: v.optional(v.array(v.string())),
+    add: v.optional(v.array(v.string())),
+    remove: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .unique();
+    if (!device) throw new Error("Device not found");
+    if (device.userId !== session.user._id) throw new Error("Unauthorized");
+
+    const norm = (xs: string[] | undefined) =>
+      (xs ?? []).map(normalizeTag).filter((t): t is string => !!t);
+
+    let next: string[];
+    if (args.tags !== undefined) {
+      next = norm(args.tags);
+    } else {
+      const removeSet = new Set(norm(args.remove));
+      next = [...(device.tags ?? []).filter((t) => !removeSet.has(t)), ...norm(args.add)];
+    }
+    // dedupe, stable order
+    next = [...new Set(next)];
+
+    await ctx.db.patch(device._id, { tags: next });
+    return { ok: true, tags: next };
+  },
+});
+
+/**
+ * Selector query for the Fleet SDK: return the caller's devices that
+ * match a tag/platform/online filter. `match` controls tag semantics:
+ *   - "all" (default): device must carry every requested tag.
+ *   - "any": device carries at least one requested tag.
+ * Empty `tags` matches all the caller's devices (subject to other
+ * filters). Returns a compact, privacy-safe projection (no paths/secrets)
+ * with derived online status — exactly what `fleet.select(...)` needs to
+ * resolve a transport per machine.
+ */
+export const selectDevices = query({
+  args: {
+    tokenHash: v.string(),
+    tags: v.optional(v.array(v.string())),
+    match: v.optional(v.union(v.literal("all"), v.literal("any"))),
+    platform: v.optional(v.string()),
+    online: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.tokenHash);
+    if (!session) throw new Error("Unauthorized");
+
+    const want = (args.tags ?? [])
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+    const match = args.match ?? "all";
+
+    const devices = await ctx.db
+      .query("devices")
+      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+      .collect();
+
+    const out = [];
+    for (const d of devices) {
+      const tags = d.tags ?? [];
+      if (want.length > 0) {
+        const has = match === "all"
+          ? want.every((t) => tags.includes(t))
+          : want.some((t) => tags.includes(t));
+        if (!has) continue;
+      }
+      if (args.platform && d.platform !== args.platform) continue;
+      const online = deriveIsOnline(d);
+      if (args.online !== undefined && online !== args.online) continue;
+      out.push({
+        deviceId: d.deviceId,
+        name: d.name,
+        alias: d.alias ?? null,
+        platform: d.platform,
+        tags,
+        online,
+        quicHost: d.quicHost,
+        quicPort: d.quicPort,
+        localIps: d.localIps ?? [],
+        publicEndpoints: d.publicEndpoints ?? [],
+      });
+    }
+    return { devices: out };
+  },
+});
+
+/**
+ * One-shot backfill: assign every device a relay-auto-provisioned
+ * <deviceId>.<exposeDomain> publicEndpoint if it doesn't already
+ * have one. Run once after wildcard DNS + cert is wired so the
+ * dashboard's transport classifier picks up the clean URL for
+ * every existing box without waiting for them all to reconnect to
+ * relay v0.1.11+.
+ *
+ * Idempotent — skips devices that already have a *.exposeDomain
+ * entry. Owner-scoped mutations require the caller's bearer to list each
+ * device under their account.
+ *
+ * Args:
+ *   exposeDomain: the relay's expose-domain ("dev.yaver.io")
+ *
+ * Run once with:
+ *   npx convex run devices:seedAutoPublicUrls --arg exposeDomain=dev.yaver.io
+ */
+export const seedAutoPublicUrls = internalMutation({
+  args: {
+    exposeDomain: v.string(),
+    tokenHash: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const domain = String(args.exposeDomain || "").trim().toLowerCase();
+    if (!domain || !/^[a-z0-9.-]+$/.test(domain)) {
+      throw new Error("invalid exposeDomain");
+    }
+
+    // If a tokenHash is provided we scope to that user's devices —
+    // safer + matches the rest of the API surface. If no hash is
+    // provided we operate fleet-wide (admin one-shot via convex
+    // CLI which inherently has admin auth).
+    let scopedSession: Awaited<ReturnType<typeof validateSessionInternal>> = null;
+    if (args.tokenHash) {
+      scopedSession = await validateSessionInternal(ctx, args.tokenHash);
+      if (!scopedSession) throw new Error("Unauthorized");
+    }
+
+    const devices = scopedSession
+      ? await ctx.db
+          .query("devices")
+          .withIndex("by_userId", (q) => q.eq("userId", scopedSession!.user._id))
+          .collect()
+      : await ctx.db.query("devices").collect();
+
+    let updated = 0;
+    let skipped = 0;
+    for (const d of devices) {
+      const deviceId = (d.deviceId || "").toLowerCase().trim();
+      if (!deviceId) {
+        skipped++;
+        continue;
+      }
+      const url = `https://${deviceId}.${domain}`;
+      const eps = (d.publicEndpoints ?? []) as string[];
+      if (eps.includes(url)) {
+        skipped++;
+        continue;
+      }
+      await ctx.db.patch(d._id, {
+        publicEndpoints: [...eps, url],
+      });
+      updated++;
+    }
+    return { ok: true, updated, skipped, total: devices.length };
+  },
+});
+
+/** resolveDeviceSig — the relay's signature-auth resolver
+ *  (docs/yaver-relay-asymmetric-auth.md). Given the SIGNER device (whose key
+ *  signed the request) and the TARGET device it wants to reach, return the
+ *  signer's ed25519 signing pubkey (so the relay can verify the signature) and
+ *  whether the signer is allowed to address the target at all.
+ *
+ *  Two ways to be allowed, and only two (resolveSigReach in access.ts):
+ *
+ *    1. same-owner   — the classic same-user mesh: my phone → my Mac.
+ *    2. Cross-account reach is always denied. Legacy access-graph rows are
+ *       retained only as inert tombstone data and never authorize relay reach.
+ *
+ *  ok=false when either device is unknown, the signer has no sign key, or no
+ *  relationship exists. Internal: the /relay/resolve-sig HTTP route
+ *  (relay-auth, no user session) calls it; it exposes only a PUBLIC key + a
+ *  userId, never a secret. */
+export const resolveDeviceSig = internalQuery({
+  args: { signerDeviceId: v.string(), targetDeviceId: v.optional(v.string()) },
+  handler: async (ctx, { signerDeviceId, targetDeviceId }) => {
+    const deny = { ok: false as const, userId: "", signerPublicKey: "", viaGrant: false };
+    const signer = await ctx.db
+      .query("devices")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", signerDeviceId))
+      .unique();
+    if (!signer || !signer.signPublicKey) return deny;
+
+    const target =
+      targetDeviceId && targetDeviceId !== signerDeviceId
+        ? await ctx.db
+            .query("devices")
+            .withIndex("by_deviceId", (q) => q.eq("deviceId", targetDeviceId))
+            .unique()
+        : signer;
+    if (!target) return deny;
+
+    const sameOwner = String(signer.userId) === String(target.userId);
+    if (!sameOwner) return deny;
+
+    // The SIGNER's billing entitlement rides along so the relay can meter
+    // (or exempt) sig-authenticated traffic the same way it does password-
+    // authenticated traffic. Derived from the Convex-env owner allowlist +
+    // subscriptions table — nothing a client can write.
+    const entitlement = await relayEntitlementForUser(ctx, signer.userId);
+
+    return {
+      ok: true as const,
+      // The caller and target are guaranteed to have the same owner.
+      userId: String(signer.userId),
+      signerPublicKey: signer.signPublicKey,
+      viaGrant: false,
+      plan: entitlement.plan,
+      isPaid: entitlement.isPaid,
+    };
+  },
+});
+
+/**
+ * purgeStaleDevicesByPrefix — internal cleanup for legacy/ephemeral device rows
+ * whose deviceId starts with a given prefix (e.g. "test-docker-" for CI docker
+ * runner VMs that registered as devices and were never reaped). Deletes in
+ * bounded batches so a single mutation stays within transaction limits; call
+ * repeatedly until { deleted: 0 }. Internal-only — never client-callable.
+ */
+export const purgeStaleDevicesByPrefix = internalMutation({
+  args: { prefix: v.string(), batch: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const batch = Math.min(args.batch ?? 200, 400);
+    const scan = await ctx.db.query("devices").take(1500);
+    const stale = scan.filter((r) => (r.deviceId ?? "").startsWith(args.prefix));
+    const toDelete = stale.slice(0, batch);
+    for (const r of toDelete) await ctx.db.delete(r._id);
+    return { deleted: toDelete.length, remainingInScan: stale.length - toDelete.length };
   },
 });

@@ -1,0 +1,1121 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		1D5AB8C5762346A0B4B4541A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F1A42E32324F83AC528F42 /* SettingsView.swift */; };
+		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
+		3F580320836047A5A407B7D3 /* YaverWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EC3461EBE4D4234BE90406F /* YaverWatchApp.swift */; };
+		413A35D852A63899F6BB9167 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = BFBCBDCEA23E250BCD12802F /* PrivacyInfo.xcprivacy */; };
+		45CC7B70DC70BA9A160F5606 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = BFBCBDCEA23E250BCD12802F /* PrivacyInfo.xcprivacy */; };
+		4A7B250A91EA8FF2C570B433 /* YaverInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2F41372579DD8DC9D6912E /* YaverInfo.swift */; };
+		4E70E3FFA81044C89A0EB687 /* YaverNativeCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6692AB12EF2E410DAEA65DE3 /* YaverNativeCatalog.swift */; };
+		4F1D3EAA672F44F384C537F2 /* YaverActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AE95D86C41D247ED97C69B16 /* YaverActivity.appex */; };
+		55C84A3C59BD3872719E3447 /* libPods-Yaver.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AC887EE616ACA6170AEBCC9F /* libPods-Yaver.a */; };
+		5BCEE7583D5E45F1918EC1D5 /* WatchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 360EC38F07C54D0CA998358C /* WatchStore.swift */; };
+		6359A7DA20FC42B3BB24782B /* YaverWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 729EC3763C19417E8973784F /* YaverWatch.app */; };
+		69C77ED934F246B3BE978195 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E9BA2DEEDD49D79DA839E5 /* Dictation.swift */; };
+		6C14694BF3B023E182EEC337 /* YaverInfo.m in Sources */ = {isa = PBXBuildFile; fileRef = 0164C4E1814C83FA4EA7EE66 /* YaverInfo.m */; };
+		6D1B73A5432ABE301C3BD5FC /* YaverHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA98858350D5EC9E2187C1EE /* YaverHTTPServer.swift */; };
+		7034A1C1706B44A19484D8AE /* YaverActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B6D3B8CC79B4516BFB9D831 /* YaverActivityAttributes.swift */; };
+		70A18B45D1C24F9BB4A10001 /* YaverGuestCrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70A18B45D1C24F9BB4A10002 /* YaverGuestCrashReporter.swift */; };
+		75096125B674AB0D29AE02AC /* YaverBundleLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97047227A457584A52C75D70 /* YaverBundleLoader.swift */; };
+		79C841CE3D8E4DEBA8E3A506 /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD4538B9D6B4A4BBD972C54 /* SignInView.swift */; };
+		7A0D5E2B0001000100010001 /* YaverSSEReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0D5E2B0001000200020002 /* YaverSSEReader.swift */; };
+		7A0D5E2B0003000100030003 /* YaverFeedbackTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0D5E2B0003000200030004 /* YaverFeedbackTranscript.swift */; };
+		7D3FFE780E7D41A193E07ACA /* Speech.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061B64971DCB4B21ADB2C84E /* Speech.swift */; };
+		848A714DCD4841BDB4201692 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97CA34DB21D745F5852594D4 /* Haptics.swift */; };
+		8CC6158B15414452A4A0891C /* SessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53AC39D5405040669F23061A /* SessionClient.swift */; };
+		8D5BA2F884CE4F64BF7ED596 /* YaverActivityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43247225160342338AE02CF2 /* YaverActivityViews.swift */; };
+		8E33859C381745CAB9454E42 /* WatchProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 415E8B35D22E4DA4A192A852 /* WatchProtocol.swift */; };
+		92972CB6ABED49C7AE778B7E /* AgentClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5CA6A1AF9AB44D0A779810F /* AgentClient.swift */; };
+		960ACAF9056747C5B1121342 /* Complications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80141A7795EF4EDB854A526F /* Complications.swift */; };
+		9F7E1A0B2C3D4E5F60A1B2C3 /* YaverFeedbackPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7E1A0B2C3D4E5F60A1B2C4 /* YaverFeedbackPane.swift */; };
+		9F7E1A0B2C3D4E5F60A1B2C5 /* YaverAgentsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7E1A0B2C3D4E5F60A1B2C6 /* YaverAgentsPane.swift */; };
+		9F7E1A0B2C3D4E5F60A1B2C7 /* YaverSettingsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7E1A0B2C3D4E5F60A1B2C8 /* YaverSettingsPane.swift */; };
+		9F7E1A0B2C3D4E5F60A1B2C9 /* YaverFloatingTrigger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7E1A0B2C3D4E5F60A1B2CA /* YaverFloatingTrigger.swift */; };
+		9F7E1A0B2C3D4E5F60A1B2DE /* YaverDeployPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7E1A0B2C3D4E5F60A1B2DF /* YaverDeployPane.swift */; };
+		A1B2C3D4E5F60001DEADBEEF /* YaverBundleValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60002DEADBEEF /* YaverBundleValidator.swift */; };
+		A1B2C3D4E5F60003C0A10001 /* YaverCarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60004C0A10002 /* YaverCarPlaySceneDelegate.swift */; };
+		A1B2C3D4E5F60005C0A10003 /* YaverSceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60006C0A10004 /* YaverSceneDelegate.swift */; };
+		A2F5DA27D039407FB594F1BC /* YaverLiveActivity.m in Sources */ = {isa = PBXBuildFile; fileRef = D203874E4A01483A90757AEF /* YaverLiveActivity.m */; };
+		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
+		C3F40E7C2219114E034B128C /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02B1D3AE60FAC95D8F162620 /* ExpoModulesProvider.swift */; };
+		C663E379084C45F9BB9251D2 /* YaverActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B6D3B8CC79B4516BFB9D831 /* YaverActivityAttributes.swift */; };
+		C7C722D679704DCDA96138C3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A042BE27882E4C9D8FB1D5B1 /* Assets.xcassets */; };
+		CE4E8C6187884FF28E6B96C6 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F7CF7F583CF4511B022ADC6 /* RootView.swift */; };
+		D0E1F2A3B4C5D6E7F8A9B0C1 /* YaverKeyboardRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E1F2A3B4C5D6E7F8A9B0C3 /* YaverKeyboardRouter.swift */; };
+		D0E1F2A3B4C5D6E7F8A9B0C2 /* YaverKeyboardRouter.m in Sources */ = {isa = PBXBuildFile; fileRef = D0E1F2A3B4C5D6E7F8A9B0C4 /* YaverKeyboardRouter.m */; };
+		D21643E74FD7470B8975CF39 /* YaverLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A180F91D4364C6F82AFB2D8 /* YaverLiveActivity.swift */; };
+		DB1FFFA1C35434307CD5FD2C /* sdk-manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = 3A027291C28B8C619D5DCBBC /* sdk-manifest.json */; };
+		DDD2C5898B6F430A8D987B3D /* BoxLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ADAB851FD3541E49AADD291 /* BoxLifecycle.swift */; };
+		DF60D00DD06F00D000000001 /* YaverDogfood.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF60D00DD06F00D000000003 /* YaverDogfood.swift */; };
+		DF60D00DD06F00D000000002 /* YaverDogfood.m in Sources */ = {isa = PBXBuildFile; fileRef = DF60D00DD06F00D000000004 /* YaverDogfood.m */; };
+		E069D90A5DB54552BE827646 /* YaverLiveActivityBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02CEFAC6D08A417F8509F485 /* YaverLiveActivityBundle.swift */; };
+		E1A2B3C4D5E6F70100000001 /* YaverWatchBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A2B3C4D5E6F70100000003 /* YaverWatchBridge.swift */; };
+		E1A2B3C4D5E6F70100000002 /* YaverWatchBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = E1A2B3C4D5E6F70100000004 /* YaverWatchBridge.m */; };
+		E2569915B4C3473591F5EB7C /* PhoneSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7AA00305AAE42C69456FAC8 /* PhoneSession.swift */; };
+		E9DCD20A034E49BC960E3BA1 /* ConfirmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CD938F23974D9C9AC33B33 /* ConfirmView.swift */; };
+		F07CE48FD595B0ACD2F8B805 /* YaverBundleLoader.m in Sources */ = {isa = PBXBuildFile; fileRef = 415536B78C32721035E86A5D /* YaverBundleLoader.m */; };
+		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
+		FCAA90D03B4E4E9F81DA0047 /* WakeProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47E06EDB37C2459087D39E09 /* WakeProgressView.swift */; };
+		FF7DDBBE80B84B9DBDBC343D /* Backend.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAE27D0C2AC344CA8EA727F7 /* Backend.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		27D792D062FE4C0698A9148D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 133BF25B97134A7DBC84014B;
+			remoteInfo = YaverWatch;
+		};
+		552E1CE13F1B4848AD555DD9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F36BFE7B20D2433A80D39433;
+			remoteInfo = YaverActivity;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		551E4D896EC449F890961DDC /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				4F1D3EAA672F44F384C537F2 /* YaverActivity.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D9A7C1EC2C834620839B1E80 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				6359A7DA20FC42B3BB24782B /* YaverWatch.app */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0164C4E1814C83FA4EA7EE66 /* YaverInfo.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = Yaver/YaverInfo.m; sourceTree = "<group>"; };
+		02B1D3AE60FAC95D8F162620 /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-Yaver/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
+		02CEFAC6D08A417F8509F485 /* YaverLiveActivityBundle.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = YaverLiveActivityBundle.swift; path = "../native-liveactivity/widget/YaverLiveActivityBundle.swift"; sourceTree = "<group>"; };
+		061B64971DCB4B21ADB2C84E /* Speech.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = Speech.swift; path = ../../watch/YaverWatch/Speech.swift; sourceTree = "<group>"; };
+		0F7CF7F583CF4511B022ADC6 /* RootView.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = RootView.swift; path = ../../watch/YaverWatch/Views/RootView.swift; sourceTree = "<group>"; };
+		13B07F961A680F5B00A75B9A /* Yaver.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Yaver.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = Yaver/Images.xcassets; sourceTree = "<group>"; };
+		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = Yaver/Info.plist; sourceTree = "<group>"; };
+		360EC38F07C54D0CA998358C /* WatchStore.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = WatchStore.swift; path = ../../watch/YaverWatch/WatchStore.swift; sourceTree = "<group>"; };
+		3A027291C28B8C619D5DCBBC /* sdk-manifest.json */ = {isa = PBXFileReference; includeInIndex = 1; path = "Yaver/sdk-manifest.json"; sourceTree = "<group>"; };
+		415536B78C32721035E86A5D /* YaverBundleLoader.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = YaverBundleLoader.m; path = Yaver/YaverBundleLoader.m; sourceTree = "<group>"; };
+		415E8B35D22E4DA4A192A852 /* WatchProtocol.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = WatchProtocol.swift; path = ../../watch/YaverWatch/WatchProtocol.swift; sourceTree = "<group>"; };
+		43247225160342338AE02CF2 /* YaverActivityViews.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = YaverActivityViews.swift; path = "../native-liveactivity/widget/YaverActivityViews.swift"; sourceTree = "<group>"; };
+		47CD938F23974D9C9AC33B33 /* ConfirmView.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = ConfirmView.swift; path = ../../watch/YaverWatch/Views/ConfirmView.swift; sourceTree = "<group>"; };
+		47E06EDB37C2459087D39E09 /* WakeProgressView.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = WakeProgressView.swift; path = ../../watch/YaverWatch/Views/WakeProgressView.swift; sourceTree = "<group>"; };
+		53AC39D5405040669F23061A /* SessionClient.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = SessionClient.swift; path = ../../watch/YaverWatch/SessionClient.swift; sourceTree = "<group>"; };
+		5ADAB851FD3541E49AADD291 /* BoxLifecycle.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = BoxLifecycle.swift; path = ../../watch/YaverWatch/BoxLifecycle.swift; sourceTree = "<group>"; };
+		5EC3461EBE4D4234BE90406F /* YaverWatchApp.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = YaverWatchApp.swift; path = ../../watch/YaverWatch/YaverWatchApp.swift; sourceTree = "<group>"; };
+		6692AB12EF2E410DAEA65DE3 /* YaverNativeCatalog.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = YaverNativeCatalog.swift; path = ../../watch/YaverWatch/YaverNativeCatalog.swift; sourceTree = "<group>"; };
+		6A2F41372579DD8DC9D6912E /* YaverInfo.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverInfo.swift; sourceTree = "<group>"; };
+		6AD4538B9D6B4A4BBD972C54 /* SignInView.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = SignInView.swift; path = ../../watch/YaverWatch/Views/SignInView.swift; sourceTree = "<group>"; };
+		70A18B45D1C24F9BB4A10002 /* YaverGuestCrashReporter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverGuestCrashReporter.swift; sourceTree = "<group>"; };
+		729EC3763C19417E8973784F /* YaverWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = YaverWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A0D5E2B0001000200020002 /* YaverSSEReader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverSSEReader.swift; sourceTree = "<group>"; };
+		7A0D5E2B0003000200030004 /* YaverFeedbackTranscript.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverFeedbackTranscript.swift; sourceTree = "<group>"; };
+		7B6D3B8CC79B4516BFB9D831 /* YaverActivityAttributes.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = YaverActivityAttributes.swift; path = "../native-liveactivity/shared/YaverActivityAttributes.swift"; sourceTree = "<group>"; };
+		80141A7795EF4EDB854A526F /* Complications.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = Complications.swift; path = ../../watch/YaverWatch/Complications.swift; sourceTree = "<group>"; };
+		8A180F91D4364C6F82AFB2D8 /* YaverLiveActivity.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = YaverLiveActivity.swift; path = "../native-liveactivity/ios/YaverLiveActivity.swift"; sourceTree = "<group>"; };
+		93F1A42E32324F83AC528F42 /* SettingsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = ../../watch/YaverWatch/Views/SettingsView.swift; sourceTree = "<group>"; };
+		97047227A457584A52C75D70 /* YaverBundleLoader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = YaverBundleLoader.swift; path = Yaver/YaverBundleLoader.swift; sourceTree = "<group>"; };
+		97CA34DB21D745F5852594D4 /* Haptics.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = Haptics.swift; path = ../../watch/YaverWatch/Haptics.swift; sourceTree = "<group>"; };
+		9B0B75DBE913487E82749716 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = text.plist.xml; name = Info.plist; path = "../native-liveactivity/widget/Info.plist"; sourceTree = "<group>"; };
+		9F7E1A0B2C3D4E5F60A1B2C4 /* YaverFeedbackPane.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverFeedbackPane.swift; sourceTree = "<group>"; };
+		9F7E1A0B2C3D4E5F60A1B2C6 /* YaverAgentsPane.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverAgentsPane.swift; sourceTree = "<group>"; };
+		9F7E1A0B2C3D4E5F60A1B2C8 /* YaverSettingsPane.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverSettingsPane.swift; sourceTree = "<group>"; };
+		9F7E1A0B2C3D4E5F60A1B2CA /* YaverFloatingTrigger.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverFloatingTrigger.swift; sourceTree = "<group>"; };
+		9F7E1A0B2C3D4E5F60A1B2DF /* YaverDeployPane.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverDeployPane.swift; sourceTree = "<group>"; };
+		A042BE27882E4C9D8FB1D5B1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = ../../watch/YaverWatch/Assets.xcassets; sourceTree = "<group>"; };
+		A1B2C3D4E5F60002DEADBEEF /* YaverBundleValidator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverBundleValidator.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60004C0A10002 /* YaverCarPlaySceneDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverCarPlaySceneDelegate.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60006C0A10004 /* YaverSceneDelegate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverSceneDelegate.swift; sourceTree = "<group>"; };
+		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = Yaver/SplashScreen.storyboard; sourceTree = "<group>"; };
+		AC887EE616ACA6170AEBCC9F /* libPods-Yaver.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-Yaver.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AE95D86C41D247ED97C69B16 /* YaverActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = YaverActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BA98858350D5EC9E2187C1EE /* YaverHTTPServer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverHTTPServer.swift; sourceTree = "<group>"; };
+		BAE27D0C2AC344CA8EA727F7 /* Backend.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = Backend.swift; path = ../../watch/YaverWatch/Backend.swift; sourceTree = "<group>"; };
+		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
+		BFBCBDCEA23E250BCD12802F /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = Yaver/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		D0E1F2A3B4C5D6E7F8A9B0C3 /* YaverKeyboardRouter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverKeyboardRouter.swift; sourceTree = "<group>"; };
+		D0E1F2A3B4C5D6E7F8A9B0C4 /* YaverKeyboardRouter.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = Yaver/YaverKeyboardRouter.m; sourceTree = "<group>"; };
+		D203874E4A01483A90757AEF /* YaverLiveActivity.m */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.objc; name = YaverLiveActivity.m; path = "../native-liveactivity/ios/YaverLiveActivity.m"; sourceTree = "<group>"; };
+		D4E9BA2DEEDD49D79DA839E5 /* Dictation.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = Dictation.swift; path = ../../watch/YaverWatch/Dictation.swift; sourceTree = "<group>"; };
+		D96B74C631188D7B5D5605EA /* Pods-Yaver.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Yaver.release.xcconfig"; path = "Target Support Files/Pods-Yaver/Pods-Yaver.release.xcconfig"; sourceTree = "<group>"; };
+		DF60D00DD06F00D000000003 /* YaverDogfood.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverDogfood.swift; sourceTree = "<group>"; };
+		DF60D00DD06F00D000000004 /* YaverDogfood.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = Yaver/YaverDogfood.m; sourceTree = "<group>"; };
+		E061AB9F0596DBAFDCA8691A /* Pods-Yaver.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Yaver.debug.xcconfig"; path = "Target Support Files/Pods-Yaver/Pods-Yaver.debug.xcconfig"; sourceTree = "<group>"; };
+		E1A2B3C4D5E6F70100000003 /* YaverWatchBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverWatchBridge.swift; sourceTree = "<group>"; };
+		E1A2B3C4D5E6F70100000004 /* YaverWatchBridge.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = Yaver/YaverWatchBridge.m; sourceTree = "<group>"; };
+		E3C8BDB6D82247B3BC7AD108 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = text.plist.xml; name = Info.plist; path = ../../watch/YaverWatch/Info.plist; sourceTree = "<group>"; };
+		E5CA6A1AF9AB44D0A779810F /* AgentClient.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = AgentClient.swift; path = ../../watch/YaverWatch/AgentClient.swift; sourceTree = "<group>"; };
+		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = Yaver/AppDelegate.swift; sourceTree = "<group>"; };
+		F11748442D0722820044C1D9 /* Yaver-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "Yaver-Bridging-Header.h"; path = "Yaver/Yaver-Bridging-Header.h"; sourceTree = "<group>"; };
+		F7AA00305AAE42C69456FAC8 /* PhoneSession.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = PhoneSession.swift; path = ../../watch/YaverWatch/PhoneSession.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		11F8B1F2B24048349B940A37 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		13B07F8C1A680F5B00A75B9A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				55C84A3C59BD3872719E3447 /* libPods-Yaver.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		61189FBB0E4C460B9BC36E18 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		13B07FAE1A68108700A75B9A /* Yaver */ = {
+			isa = PBXGroup;
+			children = (
+				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
+				F11748442D0722820044C1D9 /* Yaver-Bridging-Header.h */,
+				BB2F792B24A3F905000567C9 /* Supporting */,
+				13B07FB51A68108700A75B9A /* Images.xcassets */,
+				13B07FB61A68108700A75B9A /* Info.plist */,
+				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
+				BFBCBDCEA23E250BCD12802F /* PrivacyInfo.xcprivacy */,
+				BA98858350D5EC9E2187C1EE /* YaverHTTPServer.swift */,
+				6A2F41372579DD8DC9D6912E /* YaverInfo.swift */,
+				9F7E1A0B2C3D4E5F60A1B2C4 /* YaverFeedbackPane.swift */,
+				9F7E1A0B2C3D4E5F60A1B2C6 /* YaverAgentsPane.swift */,
+				9F7E1A0B2C3D4E5F60A1B2C8 /* YaverSettingsPane.swift */,
+				9F7E1A0B2C3D4E5F60A1B2CA /* YaverFloatingTrigger.swift */,
+				9F7E1A0B2C3D4E5F60A1B2DF /* YaverDeployPane.swift */,
+				A1B2C3D4E5F60004C0A10002 /* YaverCarPlaySceneDelegate.swift */,
+				A1B2C3D4E5F60006C0A10004 /* YaverSceneDelegate.swift */,
+				70A18B45D1C24F9BB4A10002 /* YaverGuestCrashReporter.swift */,
+				7A0D5E2B0001000200020002 /* YaverSSEReader.swift */,
+				7A0D5E2B0003000200030004 /* YaverFeedbackTranscript.swift */,
+				0164C4E1814C83FA4EA7EE66 /* YaverInfo.m */,
+				D0E1F2A3B4C5D6E7F8A9B0C3 /* YaverKeyboardRouter.swift */,
+				D0E1F2A3B4C5D6E7F8A9B0C4 /* YaverKeyboardRouter.m */,
+				DF60D00DD06F00D000000003 /* YaverDogfood.swift */,
+				DF60D00DD06F00D000000004 /* YaverDogfood.m */,
+				E1A2B3C4D5E6F70100000003 /* YaverWatchBridge.swift */,
+				E1A2B3C4D5E6F70100000004 /* YaverWatchBridge.m */,
+				3A027291C28B8C619D5DCBBC /* sdk-manifest.json */,
+				8A180F91D4364C6F82AFB2D8 /* YaverLiveActivity.swift */,
+				D203874E4A01483A90757AEF /* YaverLiveActivity.m */,
+			);
+			name = Yaver;
+			sourceTree = "<group>";
+		};
+		180012A5E2DB8D5AEDBDE67C /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				E061AB9F0596DBAFDCA8691A /* Pods-Yaver.debug.xcconfig */,
+				D96B74C631188D7B5D5605EA /* Pods-Yaver.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
+		2D16E6871FA4F8E400B85C8A /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				ED297162215061F000B7C4FE /* JavaScriptCore.framework */,
+				AC887EE616ACA6170AEBCC9F /* libPods-Yaver.a */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		832341AE1AAA6A7D00B99B32 /* Libraries */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Libraries;
+			sourceTree = "<group>";
+		};
+		83CBB9F61A601CBA00E9B192 = {
+			isa = PBXGroup;
+			children = (
+				13B07FAE1A68108700A75B9A /* Yaver */,
+				832341AE1AAA6A7D00B99B32 /* Libraries */,
+				83CBBA001A601CBA00E9B192 /* Products */,
+				2D16E6871FA4F8E400B85C8A /* Frameworks */,
+				180012A5E2DB8D5AEDBDE67C /* Pods */,
+				9A7C2F350CFDA70D88A519C7 /* ExpoModulesProviders */,
+				97047227A457584A52C75D70 /* YaverBundleLoader.swift */,
+				A1B2C3D4E5F60002DEADBEEF /* YaverBundleValidator.swift */,
+				415536B78C32721035E86A5D /* YaverBundleLoader.m */,
+				FC2DE4B434774D679543FCD2 /* YaverWatch */,
+				F9F77CEE322548DBA006E94B /* YaverActivity */,
+			);
+			indentWidth = 2;
+			sourceTree = "<group>";
+			tabWidth = 2;
+			usesTabs = 0;
+		};
+		83CBBA001A601CBA00E9B192 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				13B07F961A680F5B00A75B9A /* Yaver.app */,
+				729EC3763C19417E8973784F /* YaverWatch.app */,
+				AE95D86C41D247ED97C69B16 /* YaverActivity.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		9A7C2F350CFDA70D88A519C7 /* ExpoModulesProviders */ = {
+			isa = PBXGroup;
+			children = (
+				C8032B44E56B8F9FBB2D8F0D /* Yaver */,
+			);
+			name = ExpoModulesProviders;
+			sourceTree = "<group>";
+		};
+		BB2F792B24A3F905000567C9 /* Supporting */ = {
+			isa = PBXGroup;
+			children = (
+				BB2F792C24A3F905000567C9 /* Expo.plist */,
+			);
+			name = Supporting;
+			path = Yaver/Supporting;
+			sourceTree = "<group>";
+		};
+		C8032B44E56B8F9FBB2D8F0D /* Yaver */ = {
+			isa = PBXGroup;
+			children = (
+				02B1D3AE60FAC95D8F162620 /* ExpoModulesProvider.swift */,
+			);
+			name = Yaver;
+			sourceTree = "<group>";
+		};
+		F9F77CEE322548DBA006E94B /* YaverActivity */ = {
+			isa = PBXGroup;
+			children = (
+				02CEFAC6D08A417F8509F485 /* YaverLiveActivityBundle.swift */,
+				43247225160342338AE02CF2 /* YaverActivityViews.swift */,
+				7B6D3B8CC79B4516BFB9D831 /* YaverActivityAttributes.swift */,
+				9B0B75DBE913487E82749716 /* Info.plist */,
+			);
+			name = YaverActivity;
+			sourceTree = "<group>";
+		};
+		FC2DE4B434774D679543FCD2 /* YaverWatch */ = {
+			isa = PBXGroup;
+			children = (
+				5EC3461EBE4D4234BE90406F /* YaverWatchApp.swift */,
+				360EC38F07C54D0CA998358C /* WatchStore.swift */,
+				415E8B35D22E4DA4A192A852 /* WatchProtocol.swift */,
+				F7AA00305AAE42C69456FAC8 /* PhoneSession.swift */,
+				53AC39D5405040669F23061A /* SessionClient.swift */,
+				E5CA6A1AF9AB44D0A779810F /* AgentClient.swift */,
+				BAE27D0C2AC344CA8EA727F7 /* Backend.swift */,
+				D4E9BA2DEEDD49D79DA839E5 /* Dictation.swift */,
+				97CA34DB21D745F5852594D4 /* Haptics.swift */,
+				061B64971DCB4B21ADB2C84E /* Speech.swift */,
+				80141A7795EF4EDB854A526F /* Complications.swift */,
+				6692AB12EF2E410DAEA65DE3 /* YaverNativeCatalog.swift */,
+				0F7CF7F583CF4511B022ADC6 /* RootView.swift */,
+				47CD938F23974D9C9AC33B33 /* ConfirmView.swift */,
+				6AD4538B9D6B4A4BBD972C54 /* SignInView.swift */,
+				93F1A42E32324F83AC528F42 /* SettingsView.swift */,
+				E3C8BDB6D82247B3BC7AD108 /* Info.plist */,
+				A042BE27882E4C9D8FB1D5B1 /* Assets.xcassets */,
+				5ADAB851FD3541E49AADD291 /* BoxLifecycle.swift */,
+				47E06EDB37C2459087D39E09 /* WakeProgressView.swift */,
+			);
+			name = YaverWatch;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		133BF25B97134A7DBC84014B /* YaverWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C655147B3ED44ED9BA8F7BB2 /* Build configuration list for PBXNativeTarget "YaverWatch" */;
+			buildPhases = (
+				26259EB065494D888B52E863 /* Sources */,
+				11F8B1F2B24048349B940A37 /* Frameworks */,
+				D4F02F6146DC459CB1A3139A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = YaverWatch;
+			productName = YaverWatch;
+			productReference = 729EC3763C19417E8973784F /* YaverWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+		13B07F861A680F5B00A75B9A /* Yaver */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 13B07F931A680F5B00A75B9A /* Build configuration list for PBXNativeTarget "Yaver" */;
+			buildPhases = (
+				08A4A3CD28434E44B6B9DE2E /* [CP] Check Pods Manifest.lock */,
+				D985983CC66D891793E83C8F /* [Expo] Configure project */,
+				13B07F871A680F5B00A75B9A /* Sources */,
+				13B07F8C1A680F5B00A75B9A /* Frameworks */,
+				13B07F8E1A680F5B00A75B9A /* Resources */,
+				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
+				800E24972A6A228C8D4807E9 /* [CP] Copy Pods Resources */,
+				582D6DB4B8D26CDC5761A880 /* [CP] Embed Pods Frameworks */,
+				D9A7C1EC2C834620839B1E80 /* Embed Watch Content */,
+				551E4D896EC449F890961DDC /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D6F2A91633B840FB8FA78A3F /* PBXTargetDependency */,
+				2FE2605EB68749E68C1BB18E /* PBXTargetDependency */,
+			);
+			name = Yaver;
+			productName = Yaver;
+			productReference = 13B07F961A680F5B00A75B9A /* Yaver.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F36BFE7B20D2433A80D39433 /* YaverActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000B28FCCA7E4459B2B6582D /* Build configuration list for PBXNativeTarget "YaverActivity" */;
+			buildPhases = (
+				77C2B4AF611848E7A2368194 /* Sources */,
+				61189FBB0E4C460B9BC36E18 /* Frameworks */,
+				A972EAE0543A4C81ADAE1F36 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = YaverActivity;
+			productName = YaverActivity;
+			productReference = AE95D86C41D247ED97C69B16 /* YaverActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		83CBB9F71A601CBA00E9B192 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1130;
+				TargetAttributes = {
+					133BF25B97134A7DBC84014B = {
+						DevelopmentTeam = 5SJZ4KA39A;
+						ProvisioningStyle = Automatic;
+					};
+					13B07F861A680F5B00A75B9A = {
+						DevelopmentTeam = 5SJZ4KA39A;
+						LastSwiftMigration = 1250;
+						ProvisioningStyle = Automatic;
+					};
+					F36BFE7B20D2433A80D39433 = {
+						DevelopmentTeam = 5SJZ4KA39A;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 83CBB9FA1A601CBA00E9B192 /* Build configuration list for PBXProject "Yaver" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 83CBB9F61A601CBA00E9B192;
+			productRefGroup = 83CBBA001A601CBA00E9B192 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				13B07F861A680F5B00A75B9A /* Yaver */,
+				133BF25B97134A7DBC84014B /* YaverWatch */,
+				F36BFE7B20D2433A80D39433 /* YaverActivity */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		13B07F8E1A680F5B00A75B9A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB2F792D24A3F905000567C9 /* Expo.plist in Resources */,
+				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
+				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
+				413A35D852A63899F6BB9167 /* PrivacyInfo.xcprivacy in Resources */,
+				DB1FFFA1C35434307CD5FD2C /* sdk-manifest.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A972EAE0543A4C81ADAE1F36 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D4F02F6146DC459CB1A3139A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				45CC7B70DC70BA9A160F5606 /* PrivacyInfo.xcprivacy in Resources */,
+				C7C722D679704DCDA96138C3 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/.xcode.env",
+				"$(SRCROOT)/.xcode.env.local",
+			);
+			name = "Bundle React Native code and images";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [[ -f \"$PODS_ROOT/../.xcode.env\" ]]; then\n  source \"$PODS_ROOT/../.xcode.env\"\nfi\nif [[ -f \"$PODS_ROOT/../.xcode.env.local\" ]]; then\n  source \"$PODS_ROOT/../.xcode.env.local\"\nfi\n\n# The project root by default is one level up from the ios directory\nexport PROJECT_ROOT=\"$PROJECT_DIR\"/..\n\nif [[ \"$CONFIGURATION\" = *Debug* ]]; then\n  export SKIP_BUNDLING=1\nfi\nif [[ -z \"$ENTRY_FILE\" ]]; then\n  # Set the entry JS file using the bundler's entry resolution.\n  export ENTRY_FILE=\"$(\"$NODE_BINARY\" -e \"require('expo/scripts/resolveAppEntry')\" \"$PROJECT_ROOT\" ios absolute | tail -n 1)\"\nfi\n\nif [[ -z \"$CLI_PATH\" ]]; then\n  # Use Expo CLI\n  export CLI_PATH=\"$(\"$NODE_BINARY\" --print \"require.resolve('@expo/cli', { paths: [require.resolve('expo/package.json')] })\")\"\nfi\nif [[ -z \"$BUNDLE_COMMAND\" ]]; then\n  # Default Expo CLI command for bundling\n  export BUNDLE_COMMAND=\"export:embed\"\nfi\n\n# Source .xcode.env.updates if it exists to allow\n# SKIP_BUNDLING to be unset if needed\nif [[ -f \"$PODS_ROOT/../.xcode.env.updates\" ]]; then\n  source \"$PODS_ROOT/../.xcode.env.updates\"\nfi\n# Source local changes to allow overrides\n# if needed\nif [[ -f \"$PODS_ROOT/../.xcode.env.local\" ]]; then\n  source \"$PODS_ROOT/../.xcode.env.local\"\nfi\n\n`\"$NODE_BINARY\" --print \"require('path').dirname(require.resolve('react-native/package.json')) + '/scripts/react-native-xcode.sh'\"`\n\n";
+		};
+		08A4A3CD28434E44B6B9DE2E /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-Yaver-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+		582D6DB4B8D26CDC5761A880 /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Yaver/Pods-Yaver-frameworks.sh",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/Intercom/Intercom.framework/Intercom",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/RNAudioAPI/libavcodec.framework/libavcodec",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/RNAudioAPI/libavformat.framework/libavformat",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/RNAudioAPI/libavutil.framework/libavutil",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/RNAudioAPI/libswresample.framework/libswresample",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/React-Core-prebuilt/React.framework/React",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/ReactNativeDependencies/ReactNativeDependencies.framework/ReactNativeDependencies",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/hermes-engine/Pre-built/hermes.framework/hermes",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/whisper-rn/rnwhisper.framework/rnwhisper",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputPaths = (
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/Intercom.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libavcodec.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libavformat.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libavutil.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libswresample.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/React.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ReactNativeDependencies.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/hermes.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/rnwhisper.framework",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Yaver/Pods-Yaver-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		800E24972A6A228C8D4807E9 /* [CP] Copy Pods Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Yaver/Pods-Yaver-resources.sh",
+				"${PODS_CONFIGURATION_BUILD_DIR}/AppAuth/AppAuthCore_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/EXApplication/ExpoApplication_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/EXConstants/EXConstants.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/EXConstants/ExpoConstants_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/EXNotifications/ExpoNotifications_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/EXTaskManager/ExpoTaskManager_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/EXUpdates/EXUpdates.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/ExpoDevice/ExpoDevice_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/ExpoFileSystem/ExpoFileSystem_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/ExpoLocalization/ExpoLocalization_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/ExpoSystemUI/ExpoSystemUI_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/GTMAppAuth/GTMAppAuth_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/GTMSessionFetcher/GTMSessionFetcher_Core_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/GoogleDataTransport/GoogleDataTransport_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/GoogleSignIn/GoogleSignIn.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/GoogleToolboxForMac/GoogleToolboxForMac_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/GoogleToolboxForMac/GoogleToolboxForMac_Logger_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/GoogleUtilities/GoogleUtilities_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/MLKitTextRecognition/LatinOCRResources.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/MLKitTextRecognitionChinese/ChineseOCRResources.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/MLKitTextRecognitionDevanagari/DevanagariOCRResources.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/MLKitTextRecognitionJapanese/JapaneseOCRResources.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/MLKitTextRecognitionKorean/KoreanOCRResources.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/PromisesObjC/FBLPromises_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/PurchasesHybridCommon/PurchasesHybridCommon.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/RNCAsyncStorage/RNCAsyncStorage_resources.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/RNDeviceInfo/RNDeviceInfoPrivacyInfo.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/RNPermissions/RNPermissionsPrivacyInfo.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/RNSVG/RNSVGFilters.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/ReachabilitySwift/ReachabilitySwift.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/React-Core/React-Core_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/React-cxxreact/React-cxxreact_privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/RevenueCat/RevenueCat.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/SDWebImage/SDWebImage.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/Sentry/Sentry.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/Stripe/StripeBundle.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/StripeCore/StripeCoreBundle.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/StripeFinancialConnections/StripeFinancialConnectionsBundle.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/StripePaymentSheet/StripePaymentSheetBundle.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/StripePayments/StripePaymentsBundle.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/StripePayments/Stripe3DS2.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/StripePaymentsUI/StripePaymentsUIBundle.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/StripeUICore/StripeUICoreBundle.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/intercom-react-native/IntercomFramework.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/lottie-ios/LottiePrivacyInfo.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/lottie-react-native/Lottie_React_Native_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/nanopb/nanopb_Privacy.bundle",
+				"${PODS_CONFIGURATION_BUILD_DIR}/react-native-maps/ReactNativeMapsPrivacy.bundle",
+			);
+			name = "[CP] Copy Pods Resources";
+			outputPaths = (
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/AppAuthCore_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoApplication_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/EXConstants.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoConstants_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoNotifications_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoTaskManager_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/EXUpdates.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoDevice_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoFileSystem_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoLocalization_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoSystemUI_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GTMAppAuth_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GTMSessionFetcher_Core_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleDataTransport_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleSignIn.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleToolboxForMac_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleToolboxForMac_Logger_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleUtilities_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/LatinOCRResources.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ChineseOCRResources.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/DevanagariOCRResources.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/JapaneseOCRResources.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/KoreanOCRResources.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/FBLPromises_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/PurchasesHybridCommon.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/RNCAsyncStorage_resources.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/RNDeviceInfoPrivacyInfo.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/RNPermissionsPrivacyInfo.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/RNSVGFilters.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ReachabilitySwift.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/React-Core_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/React-cxxreact_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/RevenueCat.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/SDWebImage.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Sentry.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/StripeBundle.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/StripeCoreBundle.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/StripeFinancialConnectionsBundle.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/StripePaymentSheetBundle.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/StripePaymentsBundle.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Stripe3DS2.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/StripePaymentsUIBundle.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/StripeUICoreBundle.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/IntercomFramework.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/LottiePrivacyInfo.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Lottie_React_Native_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/nanopb_Privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ReactNativeMapsPrivacy.bundle",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Yaver/Pods-Yaver-resources.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		D985983CC66D891793E83C8F /* [Expo] Configure project */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/.xcode.env",
+				"$(SRCROOT)/.xcode.env.local",
+				"$(SRCROOT)/Yaver/Yaver.entitlements",
+				"$(SRCROOT)/Pods/Target Support Files/Pods-Yaver/expo-configure-project.sh",
+			);
+			name = "[Expo] Configure project";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Pods/Target Support Files/Pods-Yaver/ExpoModulesProvider.swift",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# This script configures Expo modules and generates the modules provider file.\nbash -l -c \"./Pods/Target\\ Support\\ Files/Pods-Yaver/expo-configure-project.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		13B07F871A680F5B00A75B9A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
+				C3F40E7C2219114E034B128C /* ExpoModulesProvider.swift in Sources */,
+				75096125B674AB0D29AE02AC /* YaverBundleLoader.swift in Sources */,
+				A1B2C3D4E5F60001DEADBEEF /* YaverBundleValidator.swift in Sources */,
+				D0E1F2A3B4C5D6E7F8A9B0C1 /* YaverKeyboardRouter.swift in Sources */,
+				D0E1F2A3B4C5D6E7F8A9B0C2 /* YaverKeyboardRouter.m in Sources */,
+				DF60D00DD06F00D000000001 /* YaverDogfood.swift in Sources */,
+				DF60D00DD06F00D000000002 /* YaverDogfood.m in Sources */,
+				F07CE48FD595B0ACD2F8B805 /* YaverBundleLoader.m in Sources */,
+				6D1B73A5432ABE301C3BD5FC /* YaverHTTPServer.swift in Sources */,
+				70A18B45D1C24F9BB4A10001 /* YaverGuestCrashReporter.swift in Sources */,
+				7A0D5E2B0001000100010001 /* YaverSSEReader.swift in Sources */,
+				7A0D5E2B0003000100030003 /* YaverFeedbackTranscript.swift in Sources */,
+				4A7B250A91EA8FF2C570B433 /* YaverInfo.swift in Sources */,
+				9F7E1A0B2C3D4E5F60A1B2C3 /* YaverFeedbackPane.swift in Sources */,
+				9F7E1A0B2C3D4E5F60A1B2C5 /* YaverAgentsPane.swift in Sources */,
+				9F7E1A0B2C3D4E5F60A1B2C7 /* YaverSettingsPane.swift in Sources */,
+				9F7E1A0B2C3D4E5F60A1B2C9 /* YaverFloatingTrigger.swift in Sources */,
+				9F7E1A0B2C3D4E5F60A1B2DE /* YaverDeployPane.swift in Sources */,
+				A1B2C3D4E5F60003C0A10001 /* YaverCarPlaySceneDelegate.swift in Sources */,
+				A1B2C3D4E5F60005C0A10003 /* YaverSceneDelegate.swift in Sources */,
+				6C14694BF3B023E182EEC337 /* YaverInfo.m in Sources */,
+				E1A2B3C4D5E6F70100000001 /* YaverWatchBridge.swift in Sources */,
+				E1A2B3C4D5E6F70100000002 /* YaverWatchBridge.m in Sources */,
+				D21643E74FD7470B8975CF39 /* YaverLiveActivity.swift in Sources */,
+				A2F5DA27D039407FB594F1BC /* YaverLiveActivity.m in Sources */,
+				C663E379084C45F9BB9251D2 /* YaverActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		26259EB065494D888B52E863 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3F580320836047A5A407B7D3 /* YaverWatchApp.swift in Sources */,
+				5BCEE7583D5E45F1918EC1D5 /* WatchStore.swift in Sources */,
+				8E33859C381745CAB9454E42 /* WatchProtocol.swift in Sources */,
+				E2569915B4C3473591F5EB7C /* PhoneSession.swift in Sources */,
+				8CC6158B15414452A4A0891C /* SessionClient.swift in Sources */,
+				92972CB6ABED49C7AE778B7E /* AgentClient.swift in Sources */,
+				FF7DDBBE80B84B9DBDBC343D /* Backend.swift in Sources */,
+				69C77ED934F246B3BE978195 /* Dictation.swift in Sources */,
+				848A714DCD4841BDB4201692 /* Haptics.swift in Sources */,
+				7D3FFE780E7D41A193E07ACA /* Speech.swift in Sources */,
+				960ACAF9056747C5B1121342 /* Complications.swift in Sources */,
+				4E70E3FFA81044C89A0EB687 /* YaverNativeCatalog.swift in Sources */,
+				CE4E8C6187884FF28E6B96C6 /* RootView.swift in Sources */,
+				E9DCD20A034E49BC960E3BA1 /* ConfirmView.swift in Sources */,
+				79C841CE3D8E4DEBA8E3A506 /* SignInView.swift in Sources */,
+				1D5AB8C5762346A0B4B4541A /* SettingsView.swift in Sources */,
+				DDD2C5898B6F430A8D987B3D /* BoxLifecycle.swift in Sources */,
+				FCAA90D03B4E4E9F81DA0047 /* WakeProgressView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		77C2B4AF611848E7A2368194 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E069D90A5DB54552BE827646 /* YaverLiveActivityBundle.swift in Sources */,
+				8D5BA2F884CE4F64BF7ED596 /* YaverActivityViews.swift in Sources */,
+				7034A1C1706B44A19484D8AE /* YaverActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		2FE2605EB68749E68C1BB18E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F36BFE7B20D2433A80D39433 /* YaverActivity */;
+			targetProxy = 552E1CE13F1B4848AD555DD9 /* PBXContainerItemProxy */;
+		};
+		D6F2A91633B840FB8FA78A3F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 133BF25B97134A7DBC84014B /* YaverWatch */;
+			targetProxy = 27D792D062FE4C0698A9148D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		13B07F941A680F5B00A75B9A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = E061AB9F0596DBAFDCA8691A /* Pods-Yaver.debug.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Yaver/Yaver.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 201;
+				DEVELOPMENT_TEAM = 5SJZ4KA39A;
+				ENABLE_BITCODE = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"FB_SONARKIT_ENABLED=1",
+				);
+				INFOPLIST_FILE = Yaver/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.18.167;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile;
+				PRODUCT_NAME = Yaver;
+				SWIFT_OBJC_BRIDGING_HEADER = "Yaver/Yaver-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		13B07F951A680F5B00A75B9A /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = D96B74C631188D7B5D5605EA /* Pods-Yaver.release.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Yaver/Yaver.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 201;
+				DEVELOPMENT_TEAM = 5SJZ4KA39A;
+				INFOPLIST_FILE = Yaver/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.18.167;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+					"-lc++",
+				);
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile;
+				PRODUCT_NAME = Yaver;
+				SWIFT_OBJC_BRIDGING_HEADER = "Yaver/Yaver-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		4F401B11088D40E6B8BD562E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5SJZ4KA39A;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ../native-liveactivity/widget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.4;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 1.18.167;
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile.activity;
+				PRODUCT_NAME = YaverActivity;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		83CBBA201A601CBA00E9B192 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				COPY_PHASE_STRIP = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_SYMBOLS_PRIVATE_EXTERN = NO;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					/usr/lib/swift,
+					"$(inherited)",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SDKROOT)/usr/lib/swift\"$(inherited)\"";
+				MTL_ENABLE_DEBUG_INFO = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				USE_HERMES = true;
+			};
+			name = Debug;
+		};
+		83CBBA211A601CBA00E9B192 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
+				COPY_PHASE_STRIP = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					/usr/lib/swift,
+					"$(inherited)",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SDKROOT)/usr/lib/swift\"$(inherited)\"";
+				MTL_ENABLE_DEBUG_INFO = NO;
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
+				SDKROOT = iphoneos;
+				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				USE_HERMES = true;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		95403CE4C783497F82AAE5C0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5SJZ4KA39A;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ../../watch/YaverWatch/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 1.18.167;
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile.watch;
+				PRODUCT_NAME = Yaver;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		AA0BAE21AA8342A5A9E3B48F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5SJZ4KA39A;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ../../watch/YaverWatch/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 1.18.167;
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile.watch;
+				PRODUCT_NAME = Yaver;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		DEF3DC530C43415383652CF0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5SJZ4KA39A;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ../native-liveactivity/widget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.4;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 1.18.167;
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile.activity;
+				PRODUCT_NAME = YaverActivity;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		000B28FCCA7E4459B2B6582D /* Build configuration list for PBXNativeTarget "YaverActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4F401B11088D40E6B8BD562E /* Debug */,
+				DEF3DC530C43415383652CF0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		13B07F931A680F5B00A75B9A /* Build configuration list for PBXNativeTarget "Yaver" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				13B07F941A680F5B00A75B9A /* Debug */,
+				13B07F951A680F5B00A75B9A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		83CBB9FA1A601CBA00E9B192 /* Build configuration list for PBXProject "Yaver" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				83CBBA201A601CBA00E9B192 /* Debug */,
+				83CBBA211A601CBA00E9B192 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C655147B3ED44ED9BA8F7BB2 /* Build configuration list for PBXNativeTarget "YaverWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0BAE21AA8342A5A9E3B48F /* Debug */,
+				95403CE4C783497F82AAE5C0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 83CBB9F71A601CBA00E9B192 /* Project object */;
+}

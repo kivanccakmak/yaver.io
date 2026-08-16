@@ -7,20 +7,257 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Platform } from "react-native";
+import { Alert, AppState, AppStateStatus, Linking, Platform } from "react-native";
 import Constants from "expo-constants";
+import { setKnownDevicePublicKeys } from "../lib/identityProof";
+import { isRelayAuthFailure } from "../lib/relayAuth";
+import { appTag } from "../lib/appVersion";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { quicClient, RelayServer } from "../lib/quic";
+import { router } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
+import { quicClient, RecoveryResult, RelayServer, TunnelServer, type OpenCodeConfigSummary } from "../lib/quic";
+import { connectionManager } from "../lib/connectionManager";
+import { planConnectionFanout, fanoutModeFromSettings, type FanoutMode } from "../lib/connectionFanout";
+import { connectGiveUpMessage } from "../lib/platformTransport";
+import { classifyRelayLimit, explainRelayDeny } from "../lib/relayDeny";
 import { useAuth } from "./AuthContext";
-import { getUserSettings, type UserSettings } from "../lib/auth";
+import { getConvexSiteUrl, getLocalSecret, getUserSettings, saveUserSettings, LOCAL_KEYS, UserSettingsUnavailableError } from "../lib/auth";
+import { approveDeviceCode } from "../lib/deviceCodeApprove";
+import { fetchPendingDeviceApprovals, pendingApprovalDeviceLabel } from "../lib/pendingApprovals";
 import { appLog } from "../lib/logger";
-import { beaconListener } from "../lib/beacon";
-import { CONVEX_SITE_URL } from "../lib/constants";
+import { sameDeviceList } from "../lib/deviceListEquality";
+import { beaconListener, type DiscoveredDevice } from "../lib/beacon";
+import { fetchPairInfo, submitPair } from "../lib/pairDevice";
+import { submitEncryptedPair } from "../lib/encryptedPair";
+import { probeMobileDeviceStatus, type MobileDeviceStatusProbe } from "../lib/deviceStatus";
+import { probeDeviceWithRepair } from "../lib/probeWithRepair";
+import { resolveSweepOutcome } from "../lib/autoConnectStatus";
+import { aliasCollisionOutcome, agentInstanceRelation } from "../lib/aliasShadowing";
+import { resolveIdentityMerge, type IdentityCandidate } from "../lib/deviceIdentityMerge";
 
+// Auto-connect probe budget. Matches the manual switch modal (4000ms) — the
+// automatic path used to run at 3000ms, so the path the user lands on by
+// default gave every box LESS time to answer than the one they reach by
+// tapping. Same ladder, same budget, both directions.
+const AUTO_CONNECT_PROBE_MS = 4000;
+
+function openCodeSnapshotFromConfig(deviceId: string, cfg: OpenCodeConfigSummary) {
+  const model = String(cfg.model || cfg.buildModel || cfg.planModel || cfg.models?.find((m) => m.isDefault)?.id || "").trim();
+  const provider = String((model.includes("/") ? model.split("/")[0] : "") || cfg.providers?.find((p) => p.hasApiKey)?.id || "").trim();
+  return {
+    deviceId,
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(cfg.defaultAgent ? { defaultAgent: cfg.defaultAgent } : {}),
+    ...(cfg.buildModel ? { buildModel: cfg.buildModel } : {}),
+    ...(cfg.planModel ? { planModel: cfg.planModel } : {}),
+    ...(cfg.models?.length ? { models: cfg.models } : {}),
+    ...(cfg.providers?.length ? {
+      providers: cfg.providers.map((p) => ({
+        id: p.id,
+        ...(p.name ? { name: p.name } : {}),
+        ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+        ...(p.hasApiKey !== undefined ? { hasApiKey: p.hasApiKey } : {}),
+        ...(p.models?.length ? { models: p.models.map((m) => m.id) } : {}),
+      })),
+    } : {}),
+    ...(cfg.agents?.length ? { agents: cfg.agents } : {}),
+    ...(cfg.diagnostics?.length ? { diagnostics: cfg.diagnostics } : {}),
+    updatedAt: Date.now(),
+  };
+}
+
+import { localBoxDeviceIfRunning } from "../lib/sandboxControl";
+import { LOCAL_BOX_DEVICE_ID } from "../lib/localBox";
+
+/** User-scoped storage key. Falls back to global key if no userId. */
+function userKey(userId: string | undefined, key: string): string {
+  return userId ? `@yaver/u/${userId}/${key}` : `@yaver/${key}`;
+}
+
+// Exported so settings screen can read/write with user scope
+export function customRelaysKey(userId?: string): string { return userKey(userId, "custom_relays"); }
+export function customTunnelsKey(userId?: string): string { return userKey(userId, "custom_tunnels"); }
+function resolvedRelaysCacheKey(userId?: string): string { return userKey(userId, "resolved_relays_cache"); }
+function relayOnboardingKey(userId?: string): string { return userKey(userId, "relay_onboarding_done"); }
+function relaySyncKey(userId?: string): string { return userKey(userId, "relay_sync_enabled"); }
+function debugLogsKey(): string { return "@yaver/debug_logs_enabled"; } // global, not per-user
+
+// Build the tunnel-server list passed to quicClient.connect for a given
+// device. Merges two sources: (a) `device.tunnelUrl` — the host-wide
+// single tunnel URL from their own userSettings, used when an owner configures
+// only one machine; (b) `device.publicEndpoints` — the agent-advertised
+// HTTPS tunnel URLs from /devices/heartbeat publicEndpoints,
+// per-device and authoritative. Deduplicated, stable order, host-wide
+// tunnel last so per-device endpoints race first.
+const DIRECT_HTTP_HOST_RE = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\.)/i;
+
+function isUnsupportedCleartextPublicEndpoint(raw: string): boolean {
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== "http:") return false;
+    return !DIRECT_HTTP_HOST_RE.test(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function tunnelServersForDevice(device: Pick<Device, "id" | "name" | "tunnelUrl" | "publicEndpoints">): TunnelServer[] | undefined {
+  const seen = new Set<string>();
+  const out: TunnelServer[] = [];
+  const add = (url: string, priority: number, label: string) => {
+    const trimmed = url.trim().replace(/\/+$/, "");
+    if (!trimmed || seen.has(trimmed)) return;
+    // The tunnel/publicEndpoint stage is for HTTPS tunnels and other
+    // browser/mobile-safe origins. Plain HTTP to public IPs is blocked
+    // by iOS ATS and Android release cleartext policy, so trying it here
+    // only delays relay fallback. LAN/tailnet HTTP still rides the
+    // direct localIps path and is intentionally allowed.
+    if (isUnsupportedCleartextPublicEndpoint(trimmed)) return;
+    seen.add(trimmed);
+    out.push({ id: `tunnel-${device.id}-${out.length}`, url: trimmed, label, priority });
+  };
+  (device.publicEndpoints ?? []).forEach((u, i) => add(u, i, `${device.name} endpoint #${i + 1}`));
+  if (device.tunnelUrl) add(device.tunnelUrl, out.length, `${device.name} shared tunnel`);
+  return out.length > 0 ? out : undefined;
+}
+
+// Legacy keys for migration
 export const CUSTOM_RELAYS_KEY = "@yaver/custom_relays";
-const IS_TV = Boolean((Platform as typeof Platform & { isTV?: boolean }).isTV);
-const PRIMARY_DEVICE_NAME = "ubuntu-4gb-hel1-1";
+export const CUSTOM_TUNNELS_KEY = "@yaver/custom_tunnels";
+const RELAY_ONBOARDING_KEY = "@yaver/relay_onboarding_done";
+
+const DETACHED_DEVICES_KEY = "@yaver/detached_devices";
+function detachedDevicesKey(userId?: string): string { return userKey(userId, "detached_devices"); }
+
+async function getDetachedDevices(userId?: string): Promise<Set<string>> {
+  try {
+    const scopedKey = detachedDevicesKey(userId);
+    const raw = await AsyncStorage.getItem(scopedKey);
+    if (raw) return new Set(JSON.parse(raw));
+    if (userId) {
+      const legacy = await AsyncStorage.getItem(DETACHED_DEVICES_KEY);
+      if (legacy) {
+        await AsyncStorage.setItem(scopedKey, legacy);
+        await AsyncStorage.removeItem(DETACHED_DEVICES_KEY);
+        return new Set(JSON.parse(legacy));
+      }
+    }
+    return new Set();
+  } catch { return new Set(); }
+}
+
+/**
+ * Ask the primary relay server which of these devices have an active QUIC
+ * tunnel right now. The relay is authoritative for tunnel state; heartbeat
+ * lags by up to ~90 s. When the relay reports a device online we flip
+ * online=true on its record immediately, which makes the auto-connect rule
+ * and the device list react to real state instead of the last heartbeat.
+ *
+ * Best-effort: any failure (no relays configured, relay down, network error)
+ * returns the input list unchanged.
+ */
+async function applyRelayPresence(list: Device[]): Promise<Device[]> {
+  if (list.length === 0) return list;
+  const relays = quicClient.relayServersSnapshot;
+  if (!relays || relays.length === 0) return list;
+  const relay = relays[0]; // highest priority
+  try {
+    const ids = list.map((d) => d.id).filter(Boolean).join(",");
+    const url = `${relay.httpUrl}/presence?ids=${encodeURIComponent(ids)}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return list;
+    const data = await res.json();
+    const table = (data && data.devices) || {};
+    return list.map((d) => {
+      const entry = table[d.id];
+      if (entry && entry.online === true) {
+        return {
+          ...d,
+          online: true,
+          lastTunnelEvent: {
+            online: true,
+            at: Date.now(),
+            connectedAt: typeof entry.connectedAt === "number" ? entry.connectedAt : undefined,
+            durationSec: typeof entry.uptimeSec === "number" ? entry.uptimeSec : undefined,
+          },
+          lastSeen: Math.max(d.lastSeen || 0, Date.now()),
+        };
+      }
+      return d;
+    });
+  } catch {
+    return list;
+  }
+}
+
+async function clearDetachedDevices(userId?: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(detachedDevicesKey(userId));
+    await AsyncStorage.removeItem(DETACHED_DEVICES_KEY);
+  } catch {
+    // best-effort only
+  }
+}
+
+async function addDetachedDevice(key: string, userId?: string): Promise<void> {
+  const detached = await getDetachedDevices(userId);
+  detached.add(key);
+  await AsyncStorage.setItem(detachedDevicesKey(userId), JSON.stringify([...detached]));
+}
+
+let _debugLogsEnabled = false;
+// Load debug preference on module init
+AsyncStorage.getItem("@yaver/debug_logs_enabled").then((val) => {
+  _debugLogsEnabled = val === "true";
+});
+
+// Default per-runner model used when the user changes runner without
+// picking a specific model. Single source of truth — keep aligned with
+// web/components/dashboard/DevicesView.tsx::DEFAULT_MODEL_BY_RUNNER and
+// the agent's RunnerConfig.Model defaults in desktop/agent/tasks.go.
+// Why hardcoded: the alternative is round-tripping
+// /agent/runners → models lookup just to render the picker, which would
+// add network latency to a UX flow that needs to feel instant.
+// opencode = deepseek-v4-flash (2026-08-09, user ask: "our default will
+// be deepseek v4 flash") — the catalogue's current default, aligned with
+// the web DEFAULT_MODEL_BY_RUNNER.opencode. A saved per-device model
+// (the user's explicit pick) still wins over this global default.
+export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
+  claude: "claude-opus-4-7",
+  codex: "gpt-5.4",
+  opencode: "deepseek-v4-flash",
+};
+
+function deviceRunnerReadyFromHeartbeat(device: Pick<Device, "runners" | "installedRunnerIds">): boolean {
+  const runnerIds = new Set(["claude", "claude-code", "codex", "opencode"]);
+  for (const runner of device.runners || []) {
+    const id = String((runner as any).runnerId || (runner as any).id || "").trim().toLowerCase();
+    const status = String((runner as any).status || "").trim().toLowerCase();
+    if (runnerIds.has(id) && (status === "ready" || status === "running" || status === "idle")) return true;
+  }
+  return false;
+}
+
+function autoConnectRank(
+  device: Device,
+  probe: MobileDeviceStatusProbe | null | undefined,
+  priorityIds: Array<string | null | undefined>,
+): number {
+  if (!probe?.reachable) return -1;
+  const priority = priorityIds.findIndex((id) => !!id && id === device.id);
+  // An EXPLICIT choice — the user's sticky pick, then the primary, then the
+  // secondary — always wins when it's reachable, regardless of whether some
+  // other box happens to look more "coding-ready". "Auto-connect to my primary"
+  // must actually land on the primary, not the flashiest neighbour.
+  if (priority >= 0) return 100_000 - priority * 1_000;
+  const codingScore = probe.codingReady || deviceRunnerReadyFromHeartbeat(device) ? 1_000 : 0;
+  return codingScore + 10;
+}
 
 const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
 const BUILD_NUMBER =
@@ -28,12 +265,25 @@ const BUILD_NUMBER =
   Constants.expoConfig?.android?.versionCode?.toString() ??
   "unknown";
 
-// Heartbeat is sent every 2 minutes; consider "recently active" if within 5 min
-const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+// Heartbeat freshness window. Re-exported from @yaver/client-core (the
+// mirror at src/_core/constants.ts) so mobile, Feedback SDK, and the
+// backend all agree on the same number. Drift here previously produced
+// "green on one, yellow on the other" UX glitches from clock skew
+// alone. See ARCHITECTURE_CLIENT_CORE.md.
+import { BUS_PRESENCE_STALE_MS, HEARTBEAT_STALE_MS } from "../_core/constants";
 
-function normalizedDeviceName(name: string): string {
-  return name.trim().toLowerCase().replace(/\.local$/, "");
-}
+/** Runner/render machine split row (userSettings.machineRolesByProject).
+ *  One shared shape across surfaces — mirrors web/lib/useMachineRoles.ts. */
+export type MachineRolesRow = {
+  projectName?: string;
+  runnerDeviceId: string;
+  secondaryRunnerDeviceId?: string;
+  renderDeviceId?: string;
+  secondaryRenderDeviceId?: string;
+  workspace?: "runner-clone" | "render-ssh";
+  autoPush?: "never" | "ask" | "always";
+  updatedAt?: number;
+};
 
 export interface RunnerInfo {
   taskId: string;
@@ -42,52 +292,692 @@ export interface RunnerInfo {
   pid: number;
   status: string;
   title: string;
+  ready?: boolean;
+}
+
+export type DeviceConnectionPreferenceKind =
+  | "direct-lan"
+  | "tailscale"
+  | "headscale"
+  | "own-vpn"
+  | "https-tunnel"
+  | "free-relay"
+  | "private-relay";
+
+export interface DeviceConnectionPreference {
+  kind: DeviceConnectionPreferenceKind;
+  active: boolean;
+  preferred: boolean;
+  source: "agent-detected" | "user-config" | "platform-config" | "relay-presence";
 }
 
 export interface Device {
   id: string;
   name: string;
+  /**
+   * Per-user short alias (lower-cased server-side, unique within the
+   * caller's own devices). Set via the inline editor on the device
+   * card or `yaver alias set ...` from the CLI. Used by
+   * `yaver ssh <alias>` and shown as "@alias" next to the name.
+   */
+  alias?: string;
+  /**
+   * Spoken names for this machine — "my mac mini", "the box at maltepe".
+   * Many, natural-language, never typed (contrast `alias`, which is one short
+   * shell token). Fed to carMachineSwitch.ts so the driver can say "switch to
+   * my mac mini" on CarPlay, where no device picker may be drawn on screen.
+   */
+  voiceHints?: string[];
   host: string;
   port: number;
   online: boolean;
   lastSeen: number;
   os: string;
   runners: RunnerInfo[];
-  deviceKind: "private-agent" | "cloud-runner";
-  trust: "user-managed" | "yaver-managed";
-  cloudWorkspaceId?: string;
-  runnerClass?: "linux" | "macos";
-  region?: string;
-  agentVersion?: string;
-  protocolVersion?: number;
-  capabilities?: Record<string, boolean>;
+  /** Durable inventory from Convex: which first-class coding CLIs are
+   * installed on this device. Presence only, no auth state. */
+  installedRunnerIds?: string[];
+  /** X25519 public key (base64) for encrypted pairing — stored in Convex */
+  publicKey?: string;
+  /** true when the agent is running in bootstrap mode (no valid token) */
+  needsAuth?: boolean;
   /** true when device is discovered via LAN beacon (same network) */
   local?: boolean;
+  /** stable hardware ID (P2P only, never sent to Convex) */
+  hwid?: string;
+  /** Agent binary version reported via heartbeat or `/info` (e.g.
+   *  "1.99.180"). Surfaced on machine-picker cards so the user can spot
+   *  a box running an old daemon — the npm install might have bumped the
+   *  on-disk symlink without the systemd unit ever picking it up. Empty
+   *  when the row is too old to carry the field. */
+  agentVersion?: string;
+  /** Epoch ms when `agentVersion` was last reported; used to decide whether
+   *  to fall back to a live `/info` probe instead of trusting the cached
+   *  Convex value. */
+  agentVersionReportedAt?: number;
+  /** best-effort cached machine + local runtime capability snapshot */
+  /** Deploy targets this box PROBED as ready. Not an OS guess — the agent ran
+   *  the toolchain. Refreshed ~6h, so show the age with it. */
+  deployCapabilities?: string[];
+  /** Targets this OS could satisfy but currently cannot. Targets the OS can
+   *  never satisfy are omitted rather than shown permanently red. */
+  deployCapabilitiesBlocked?: string[];
+  deployCapabilitiesAt?: string;
+  hardwareProfile?: {
+    os?: string;
+    osVersion?: string;
+    cpu?: string;
+    gpu?: string;
+    ramMb?: number;
+    vramMb?: number;
+    numCores?: number;
+    arch?: string;
+    iosSimulators?: string[];
+    androidEmulators?: string[];
+  };
+  /** Real-time tunnel event from the relay (optional — only populated
+   * when the relay has CONVEX_PRESENCE_URL + _SECRET wired). Mobile
+   * shows a "relay-online since X" badge when this is fresher than
+   * the last heartbeat, because it reflects tunnel state with ~2s
+   * latency vs the 30s heartbeat window. */
+  lastTunnelEvent?: {
+    online: boolean;
+    at: number;           // epoch ms
+    peerAddr?: string;
+    connectedAt?: number; // epoch ms
+    durationSec?: number; // set on disconnect
+  };
+  /** Agent's self-reported "I have a live relay tunnel right now" from its last
+   * heartbeat. When false, an "online" box has no off-LAN route — the phone
+   * shows "online · no relay path" instead of implying it's reachable. */
+  relayConnected?: boolean;
+  peerState?: "online" | "stale" | "offline";
+  peerLastSeen?: number;
+  /** every reachable IPv4 the agent broadcast in heartbeat — Wi-Fi LAN,
+   * Tailscale 100.x, Ethernet, etc. The connect path races them in
+   * parallel so the session attaches via whichever has a route from
+   * the phone right now (e.g. Tailscale on cellular, Wi-Fi on same LAN).
+   */
+  lanIps?: string[];
+  /** Hosting provenance: "yaver-hosted" = Yaver-managed box (paid/adopted); "byo" = Yaver-provisioned on your own cloud account; "self-hosted" = your own box. */
+  hosting?: 'yaver-hosted' | 'byo' | 'self-hosted';
+  managed?: boolean;
+  /** cloudMachines._id for a managed box — drives up/down (pause/resume). */
+  machineId?: string;
+  /** cloudMachines.status (active|paused|stopped|resuming|suspended|…). */
+  machineStatus?: string;
+  /**
+   * Backend verdict (isMachineWakeable): can this box actually be woken from a
+   * snapshot? Read this instead of inferring from machineStatus — a `removed`
+   * box is gone rather than asleep, and a parked box with no snapshot cannot
+   * come back at any price.
+   */
+  machineWakeable?: boolean;
+  /** scheduling / priority hint */
+  priorityMode?: string;
+  /** device-advertised tunnel hint */
+  tunnelUrl?: string;
+  /** agent-advertised Cloudflare / public tunnel URLs (from /devices/heartbeat publicEndpoints). Used as a connect fallback between direct LAN and relay. */
+  publicEndpoints?: string[];
+  /** Convex-backed privacy-safe transport summary seeded by heartbeat:
+   * free/private relay, own VPN, headscale/tailscale, LAN, HTTPS tunnel.
+   * Concrete IPs/URLs remain in lanIps/publicEndpoints/relay config.
+   */
+  connectionPreferences?: DeviceConnectionPreference[];
+  /** broad role of the node in Yaver scheduling */
+  deviceClass?: "desktop" | "edge-mobile" | "server";
+  /** edge/mobile capability hints for placement */
+  edgeProfile?: {
+    supportsLocalInference: boolean;
+    maxModelClass: "none" | "tiny" | "small" | "medium";
+    preferredTasks: Array<"speech" | "ocr" | "vision" | "embedding" | "rerank" | "automation" | "small-llm">;
+    memoryMb?: number;
+    batteryPct?: number;
+    isCharging?: boolean;
+    thermalState?: "nominal" | "warm" | "hot";
+  };
+}
+
+function normalizedDeviceName(name: string | undefined): string {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.local$/i, "");
+}
+
+function deviceSelectionHintFromURL(url: string | null | undefined): string {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    const params = parsed.searchParams;
+    return (
+      params.get("selectDevice") ||
+      params.get("deviceHint") ||
+      params.get("device") ||
+      params.get("deviceId") ||
+      ""
+    ).trim();
+  } catch {
+    const query = String(url).split("?")[1] || "";
+    const params = new URLSearchParams(query);
+    return (
+      params.get("selectDevice") ||
+      params.get("deviceHint") ||
+      params.get("device") ||
+      params.get("deviceId") ||
+      ""
+    ).trim();
+  }
+}
+
+function matchDeviceSelectionHint(devices: Device[], hint: string): Device | null {
+  const target = hint.trim();
+  if (!target) return null;
+  const lower = target.toLowerCase();
+  const normalized = normalizedDeviceName(target);
+  return devices.find((d) =>
+    d.id === target ||
+    d.hwid === target ||
+    normalizedDeviceName(d.name) === normalized ||
+    normalizedDeviceName(d.name).includes(normalized) ||
+    String(d.alias || "").trim().toLowerCase() === lower
+  ) || null;
+}
+
+function deviceAliasKey(device: Pick<Device, "name" | "os">): string | null {
+  const normalizedName = normalizedDeviceName(device.name);
+  const normalizedOs = String(device.os || "").trim().toLowerCase();
+  if (!normalizedName || !normalizedOs) return null;
+  return `${normalizedOs}:${normalizedName}`;
+}
+
+function normalizedHost(host: string | undefined): string {
+  return String(host || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\.local$/i, "");
+}
+
+function normalizedURL(url: string | undefined): string {
+  return String(url || "")
+    .trim()
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+function dedupeRelayServers(servers: RelayServer[]): RelayServer[] {
+  const seen = new Set<string>();
+  const out: RelayServer[] = [];
+  for (const server of servers) {
+    const key = normalizedURL(server.httpUrl) || `${server.id}:${server.quicAddr}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(server);
+  }
+  return out.sort((a, b) => a.priority - b.priority);
+}
+
+/// Mirror the relay password the JS client just learned about into the
+/// iOS UserDefaults that native swift panes (YaverFeedbackPane,
+/// YaverAgentsPane) read via `yaverRelayHeaders()`. The native code
+/// has no way to talk to /config or /settings on its own, so without
+/// this push their /tasks + /runner-auth requests would land at the
+/// relay without an X-Relay-Password header and 401 with
+/// "Relay password mismatch".
+///
+/// Picks the first non-empty password in priority order:
+///   1. quicClient.activeRelayPasswordValue (the in-flight value the
+///      JS task path is actively using — most authoritative)
+///   2. any per-server password attached to the resolved server list
+///   3. account-level password from /settings (only the "user
+///      customised relay" branch passes this)
+function mirrorRelayPasswordToNative(
+  servers: RelayServer[],
+  accountRelayPassword?: string,
+): void {
+  try {
+    const { NativeModules } = require("react-native");
+    const fromQuic = quicClient.activeRelayPasswordValue;
+    const fromServer = servers.find((r) => r.password)?.password;
+    const relayPw =
+      (fromQuic && fromQuic.trim()) ||
+      (fromServer && fromServer.trim()) ||
+      (accountRelayPassword && accountRelayPassword.trim()) ||
+      "";
+    NativeModules.YaverInfo?.setInheritedRelayPassword?.(relayPw);
+  } catch {
+    // Native module unavailable — non-iOS / unit-test path.
+  }
+}
+
+// The free relay is the UNIVERSAL fallback every device must be able to reach:
+// a box that registered only with the free relay (the default — most boxes have
+// `relay_servers: []` + the cached free relay) can ONLY be reached by a client
+// that also lists the free relay. Guarantee it's present as a lowest-priority
+// last resort, even when platform-config load failed and only a private relay is
+// configured — otherwise a phone on a private relay can't reach a free-relay box
+// (the exact mac-mini-unreachable case).
+const FREE_RELAY_HTTP = "https://public.yaver.io";
+function withFreeRelayFallback(list: RelayServer[], password?: string): RelayServer[] {
+  if (list.some((s) => normalizedURL(s.httpUrl) === normalizedURL(FREE_RELAY_HTTP))) return list;
+  return [
+    ...list,
+    {
+      id: "public-free",
+      // NOTE (2026-08-03): a hardcoded relay address in shipped code. It is
+      // public by design — public.yaver.io resolves here — so this is not a
+      // leak, but it IS fragile: rebuild the relay box on a new IP and every
+      // installed app carries a dead last-resort address it cannot be told
+      // about. The durable shape is to resolve it from /config like the rest.
+      // Left as-is deliberately: changing the transport fallback is not this
+      // change's business.
+      quicAddr: "46.224.110.38:4433", // infra-addr-ok: public.yaver.io resolves here
+      httpUrl: FREE_RELAY_HTTP,
+      region: "eu",
+      priority: 99, // last resort — tried only after configured relays 502/fail
+      password, // the per-user relay password authenticates the free relay too
+    },
+  ];
+}
+
+function resolveRelayServers(
+  platformServers: RelayServer[],
+  accountRelayUrl?: string,
+  accountRelayPassword?: string,
+): RelayServer[] {
+  const platform = dedupeRelayServers(platformServers || []);
+  const relayUrl = normalizedURL(accountRelayUrl);
+  if (!relayUrl) return withFreeRelayFallback(platform, accountRelayPassword);
+
+  const matched = platform.filter((server) => normalizedURL(server.httpUrl) === relayUrl);
+  if (matched.length > 0) {
+    return withFreeRelayFallback(dedupeRelayServers([
+      ...matched.map((server) => ({
+        ...server,
+        password: accountRelayPassword || server.password,
+        priority: 1,
+      })),
+      ...platform.map((server) =>
+        normalizedURL(server.httpUrl) === relayUrl
+          ? {
+              ...server,
+              password: accountRelayPassword || server.password,
+              priority: 1,
+            }
+          : server
+      ),
+    ]), accountRelayPassword);
+  }
+
+  return withFreeRelayFallback(dedupeRelayServers([
+    {
+      id: "account",
+      quicAddr: "",
+      httpUrl: accountRelayUrl!.trim(),
+      region: "account",
+      priority: 1,
+      password: accountRelayPassword,
+    },
+    ...platform,
+  ]), accountRelayPassword);
+}
+
+function parseStoredRelays(raw: string | null): RelayServer[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function sameRelayUrlSet(a: RelayServer[], b: RelayServer[]): boolean {
+  const urlsA = new Set(a.map((r) => normalizedURL(r.httpUrl)).filter(Boolean));
+  const urlsB = new Set(b.map((r) => normalizedURL(r.httpUrl)).filter(Boolean));
+  if (urlsA.size !== urlsB.size) return false;
+  for (const url of urlsA) {
+    if (!urlsB.has(url)) return false;
+  }
+  return true;
+}
+
+function looksLikeManualRelayOverride(
+  relays: RelayServer[],
+  platformServers: RelayServer[],
+  accountRelayUrl?: string,
+): boolean {
+  if (relays.length === 0) return false;
+  if (relays.some((relay) => relay.region === "custom")) return true;
+  const accountUrl = normalizedURL(accountRelayUrl);
+  if (accountUrl && relays.some((relay) => normalizedURL(relay.httpUrl) === accountUrl)) {
+    return false;
+  }
+  if (platformServers.length > 0 && sameRelayUrlSet(relays, platformServers)) {
+    return false;
+  }
+  return platformServers.length === 0;
+}
+
+// Unified relay-auth classifier (src/lib/relayAuth.ts) — the single source that
+// also catches the bare "returned HTTP 401" form the old phrase-only matcher
+// missed, which is what left the sim stuck (the refresh-retry below never fired
+// on a stale relay password). See relayAuth.ts.
+function isRelayAuthError(message: string): boolean {
+  return isRelayAuthFailure(message);
+}
+
+function deviceEndpointKey(device: Pick<Device, "host" | "port">): string | null {
+  const host = normalizedHost(device.host);
+  if (!host) return null;
+  return `${host}:${device.port || 0}`;
+}
+
+function deviceIdentityKey(device: Pick<Device, "id" | "hwid" | "publicKey" | "name" | "os">): string {
+  // Stable cryptographic identity wins. Without hwid or publicKey a
+  // A row without stable identity is a "ghost": (platform, name) used to be the
+  // fallback but it collided across fleets that share hostnames and
+  // split single boxes across renames. Mark them as their own per-id
+  // entry so reconnect can refuse to act on them.
+  if (device.hwid) return `hwid:${device.hwid}`;
+  if (device.publicKey) return `pub:${device.publicKey}`;
+  if (device.id) return `id:${device.id}`;
+  return `name:${device.name}`;
+}
+
+/** True when the device row has unstable identity (no hwid, no publicKey).
+ *  Reconnect, owner-claim, and reauth targets all need to
+ *  block on this so a stale row doesn't accidentally match a live agent. */
+export function isGhostDevice(device: Pick<Device, "hwid" | "publicKey">): boolean {
+  return !device.hwid && !device.publicKey;
+}
+
+function deviceIdentityCandidate(d: Device): IdentityCandidate {
+  return {
+    deviceId: d.id,
+    needsAuth: !!d.needsAuth,
+    isOnline: !!d.online,
+    lastHeartbeat: d.lastSeen || 0,
+    port: d.port,
+    agentVersion: d.agentVersion,
+    alias: d.alias,
+    publicKey: d.publicKey,
+    hardwareId: d.hwid,
+    // A LAN-beacon sighting is the phone's own proof it can reach this exact
+    // instance — the strongest transport evidence a phone has, so it ranks with
+    // a live relay tunnel rather than with a bare `online` claim.
+    relayConnected: !!d.local,
+  };
+}
+
+function mergeDeviceEntries(existing: Device, incoming: Device): Device {
+  // HEALTH FIRST — same shared rule as backend/convex/devices.ts and
+  // web/lib/use-devices.ts. The phone's old chain had `incoming.lastSeen >
+  // existing.lastSeen` as its SECOND clause, so on a box running two agents the
+  // needs-auth one took the row whenever it heartbeated last, and the picker
+  // flipped identities under the user's thumb. See lib/deviceIdentityMerge.ts.
+  const { base, other } = resolveIdentityMerge(existing, incoming, deviceIdentityCandidate, {
+    relate: agentInstanceRelation,
+  });
+  return {
+    ...other,
+    ...base,
+    host: base.host || other.host,
+    port: base.port || other.port,
+    online: base.online || other.online,
+    local: base.local || other.local,
+    runners: base.runners?.length ? base.runners : other.runners,
+    installedRunnerIds: base.installedRunnerIds?.length ? base.installedRunnerIds : other.installedRunnerIds,
+    publicKey: base.publicKey || other.publicKey,
+    hwid: base.hwid || other.hwid,
+    lastSeen: Math.max(existing.lastSeen || 0, incoming.lastSeen || 0),
+  };
+}
+
+function collapseAliasDevices(devices: Device[]): Device[] {
+  const byIdentity = new Map<string, Device>();
+  for (const device of devices) {
+    const key = deviceIdentityKey(device);
+    const existing = byIdentity.get(key);
+    byIdentity.set(key, existing ? mergeDeviceEntries(existing, device) : device);
+  }
+
+  const byAlias = new Map<string, Device>();
+  for (const device of byIdentity.values()) {
+    const alias = deviceAliasKey(device);
+    if (!alias) {
+      byAlias.set(`id:${device.id}`, device);
+      continue;
+    }
+    const existing = byAlias.get(alias);
+    if (!existing) {
+      byAlias.set(alias, device);
+      continue;
+    }
+    // Shared rule (aliasShadowing.ts, mirrored in backend/convex): same
+    // machine seen twice → merge; two DIFFERENT machines (strong
+    // hwid/publicKey conflict) with one dead → keep the live one; both
+    // viable → KEEP BOTH. Merging two real machines made deviceId/name
+    // flip every heartbeat — the 2026-07-26 picker flip-flop (real agent +
+    // circuit-sim cell sharing one hostname).
+    // Pass port/deviceId/lastHeartbeat too: without them the rule cannot tell
+    // "two agents running on one box" from "two machines", and it was the
+    // former all along on the box this whole incident came from.
+    const outcome = aliasCollisionOutcome(
+      { hardwareId: existing.hwid, publicKey: existing.publicKey, online: !!existing.online, needsAuth: !!existing.needsAuth, port: existing.port, deviceId: existing.id, lastHeartbeat: existing.lastSeen },
+      { hardwareId: device.hwid, publicKey: device.publicKey, online: !!device.online, needsAuth: !!device.needsAuth, port: device.port, deviceId: device.id, lastHeartbeat: device.lastSeen },
+    );
+    if (outcome === "keep-a") {
+      byAlias.set(alias, existing);
+      continue;
+    }
+    if (outcome === "keep-b") {
+      byAlias.set(alias, device);
+      continue;
+    }
+    if (outcome === "keep-both") {
+      byAlias.delete(alias);
+      byAlias.set(`${alias}#${existing.hwid || existing.publicKey || existing.id}`, existing);
+      byAlias.set(`${alias}#${device.hwid || device.publicKey || device.id}`, device);
+      continue;
+    }
+    byAlias.set(alias, mergeDeviceEntries(existing, device));
+  }
+
+  const byEndpoint = new Map<string, Device>();
+  for (const device of byAlias.values()) {
+    const endpoint = deviceEndpointKey(device);
+    if (!endpoint) {
+      byEndpoint.set(`id:${device.id}`, device);
+      continue;
+    }
+    const existing = byEndpoint.get(endpoint);
+    byEndpoint.set(endpoint, existing ? mergeDeviceEntries(existing, device) : device);
+  }
+
+  return [...byEndpoint.values()];
 }
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
-interface DeviceState {
+// PendingDeviceClaim mirrors the shape returned by /devices/pending-list.
+// Bootstrap-pending boxes that joined the user's relay but have no
+// Convex devices row yet — surfaced to the user so a freshly-installed
+// remote box becomes claimable from the phone in one tap.
+export interface PendingDeviceClaim {
+  id: string;
+  deviceId: string;
+  hardwareId: string;
+  name?: string;
+  platform?: string;
+  quicHost?: string;
+  quicPort?: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  relayLabel?: string;
+}
+
+export interface DeviceState {
   devices: Device[];
   activeDevice: Device | null;
   connectionStatus: ConnectionStatus;
   isLoadingDevices: boolean;
+  /** true once the user has ever had ≥1 device (persisted). Distinguishes a
+   *  genuine first-run empty from a transient empty (VPN/network/token drift),
+   *  so the app never regresses an existing user to first-run onboarding. */
+  everHadDevices: boolean;
   /** true when user explicitly disconnected (not a network failure) */
   userDisconnected: boolean;
   /** Last connection error message (null if no error) */
   lastError: string | null;
+  /** Last device-list fetch/filter error. Separate from transport connect errors. */
+  deviceListError: string | null;
+  /** true when agent's Convex auth session is expired (agent reachable but needs re-auth) */
+  agentAuthExpired: boolean;
+  /** Trigger phone-driven auth recovery for a device. */
+  recoverDeviceAuth: (device: Device) => Promise<RecoveryResult | null>;
+  /** Bootstrap-pending claims (boxes that joined the user's relay but
+   *  have no Convex devices row yet). Surfaced so a fresh remote
+   *  install is claimable in one tap from the phone. */
+  pendingClaims: PendingDeviceClaim[];
+  refreshPendingClaims: () => Promise<void>;
+  claimPendingDevice: (deviceId: string, name?: string) => Promise<{ ok: boolean; error?: string }>;
   selectDevice: (device: Device) => Promise<void>;
   disconnect: () => void;
   refreshDevices: () => Promise<void>;
+  detachDevice: (device: Device) => Promise<void>;
+  /** How many devices the local "Hide from this phone" list is hiding. */
+  hiddenDeviceCount: number;
+  /** Undo every local hide on this phone. */
+  unhideAllDevices: () => Promise<void>;
+  removeDevice: (device: Device) => Promise<void>;
+  /**
+   * Set or clear the per-user alias for a device. Returns the
+   * server-normalized alias on success (lower-cased). Server enforces
+   * uniqueness — surface the returned error verbatim
+   * ("alias already used …", "alias invalid …").
+   */
+  setDeviceAlias: (
+    device: Device,
+    alias: string,
+  ) => Promise<{ ok: true; alias: string | null } | { ok: false; error: string }>;
+  /**
+   * Set the SPOKEN names for a device — "my mac mini", "the box at maltepe".
+   * Unlike alias (one short typed token) these are many and natural-language:
+   * they're what a driver SAYS. Load-bearing on CarPlay, where Apple forbids
+   * drawing a device picker, so the spoken name is the only handle on a machine.
+   * Replaces the whole list; pass [] to clear. Server caps at 12.
+   */
+  setDeviceVoiceHints: (
+    device: Device,
+    hints: string[],
+  ) => Promise<{ ok: true; voiceHints: string[] } | { ok: false; error: string }>;
+  /** Device IDs the phone has failed to reach this session. Cleared on successful connect. */
+  unreachableDeviceIds: string[];
+  /** Flag a device as not reachable (e.g. after user hit Stop on a reconnect loop). */
+  markDeviceUnreachable: (deviceId: string) => void;
+  /** Devices where auto-pair has repeatedly failed; the user needs to run
+   *  `yaver auth` on that machine manually. UI can surface a soft banner. */
+  manualAuthRequiredDeviceIds: string[];
+  /** Stop the active reconnect loop, clear the active device, mark it unreachable, and refresh from Convex. */
+  stopReconnectAndBounce: () => Promise<void>;
+  /** Re-run the reachability sweep + auto-pick (primary→secondary→alphabetical
+   *  first reachable, else "Can't connect"). Wired to the Retry affordance. */
+  retryConnection: () => void;
+  /** User's preferred device for auto-connect when multiple machines exist. */
+  primaryDeviceId: string | null;
+  /** Persist the preferred device. Pass null to clear. Syncs to Convex so
+   *  other surfaces (web, desktop, MCP) honor the same choice. */
+  setPrimaryDevice: (deviceId: string | null) => Promise<void>;
+  /** Optional second elevated device. When primary is offline, the
+   *  mobile auto-connect falls back to this one before showing the
+   *  picker. `yaver ssh secondary` and the watchdog's tight 90s
+   *  staleness threshold also apply. */
+  secondaryDeviceId: string | null;
+  /** Persist the secondary device. Pass null to clear. Same sync
+   *  semantics as setPrimaryDevice. */
+  setSecondaryDevice: (deviceId: string | null) => Promise<void>;
+  /** True while an auto-connect sweep is in flight (probing/connecting to
+   *  primary, then secondary). Surfaces render "Primary (Mac mini) is online —
+   *  connecting…" instead of the alarming "No machine selected". */
+  autoConnecting: boolean;
+  /** The box the auto-connect is currently reaching for, with its role, so the
+   *  banner can name it. Null when idle or between attempts. */
+  autoConnectTarget: { id: string; name: string; role: "primary" | "secondary" | "sticky" } | null;
+  /** Per-rung narration for the in-flight auto-connect ("Pinging X…"). */
+  autoConnectStage: string | null;
+  /** Interrupt the auto-connect so the user can pick a box themselves. */
+  cancelAutoConnect: () => void;
+  /** Last-ditch connectivity recovery: re-sync this account's per-user relay
+   *  password with the platform value (POST /settings/repair-relay) and re-pull
+   *  the relay set, then reconnect. Fixes the "every box: no reachable transport"
+   *  case caused by a stale relay credential — WITHOUT a rebuild. Per-user only:
+   *  it never mints secrets and never touches other tenants on the shared free
+   *  relay. */
+  repairRelay: () => Promise<{ ok: boolean; relays: number; error?: string }>;
+  /** Per-device primary coding agent. e.g. {"<deviceId>": "codex"}. The
+   *  chat / task surfaces read this when opening a workspace and pre-
+   *  select the runner so the user doesn't have to chase the pill on
+   *  every reconnect. Mirrors the web dashboard's own dropdown. */
+  primaryRunnerByDevice: Record<string, string>;
+  /** Per-device model hint paired with the runner above. Optional.
+   *  e.g. {"<deviceId>": "claude-opus-4-7"}. The agent forwards this
+   *  to `--model` / `YAVER_CLAUDE_MODEL` / `YAVER_CODEX_MODEL` at
+   *  spawn time so users can pick Opus-for-one-device / Sonnet-for-
+   *  another without editing env vars. */
+  primaryModelByDevice: Record<string, string>;
+  /** Per-device OpenCode mode hint (`build` / `plan` / custom). */
+  primaryModeByDevice: Record<string, string>;
+  /** Per-device OpenCode provider hint (`zai`, `glm`, `ollama`, …). */
+  primaryProviderByDevice: Record<string, string>;
+  /** Persist a per-device primary coding agent + optional model/mode/provider.
+   *  runnerId=null clears the entry. model=null clears just the model
+   *  (runner stays). model=undefined leaves any existing model alone. */
+  /** When true, the tasks `+` FAB opens a device + agent picker before
+   *  the compose modal, letting one task target a non-active machine.
+   *  Stored locally on the phone (no Convex roundtrip). Default false. */
+  multiTargetMode: boolean;
+  setMultiTargetMode: (enabled: boolean) => Promise<void>;
+  /** Runner/render machine split — the account-wide favorite row from
+   *  userSettings.machineRolesByProject (same rows web edits). Null =
+   *  single-box. connectionManager.runnerClient()/renderClient() are the
+   *  routing accessors this drives. */
+  machineRoles: MachineRolesRow | null;
+  /** Persist the favorite runner/render split (null clears → single-box).
+   *  Convex-synced; every surface picks it up. */
+  setMachineRolesFavorite: (row: MachineRolesRow | null) => Promise<void>;
+  setPrimaryRunnerForDevice: (
+    deviceId: string,
+    runnerId: string | null,
+    model?: string | null,
+    mode?: string | null,
+    provider?: string | null,
+  ) => Promise<void>;
+  /** Latest published CLI/agent version (from /config). Null until
+   *  the platform-config fetch returns. Pair this with a device's
+   *  `agentVersion` to render an "outdated" badge on machine cards. */
+  latestCliVersion: string | null;
+  /** Device IDs whose pooled QuicClient is currently `isConnected`.
+   *  Includes the focused device plus any background-connected boxes
+   *  the user has previously selected this session. Drives the "N
+   *  devices connected" badge and the multi-target wizard's
+   *  "directly reachable" hint. */
+  connectedDeviceIds: string[];
+  /** Drop the pooled client for a single device without affecting
+   *  any other live connections. Use this for an explicit
+   *  "Disconnect from box X" UX — the equivalent of `disconnect()`
+   *  in single-device mode, scoped to one machine. */
+  disconnectDevice: (deviceId: string) => void;
 }
 
 const DeviceContext = createContext<DeviceState | undefined>(undefined);
 
 /** Fire-and-forget telemetry to Convex + in-app logger (best-effort, never throws). */
 function sendTelemetry(token: string | null, step: string, message: string, details?: string) {
-  const level = step.includes("fail") ? "error" : "info";
-  appLog(level as "info" | "error", `[${step}] ${message}${details ? " | " + details : ""}`);
-  fetch(`${CONVEX_SITE_URL}/mobile/log`, {
+  const level = step.includes("fail") ? "warn" : "info";
+  appLog(level as "info" | "warn", `[${step}] ${message}${details ? " | " + details : ""}`);
+  if (!_debugLogsEnabled) return;
+  fetch(`${getConvexSiteUrl()}/mobile/log`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({
@@ -101,15 +991,239 @@ function sendTelemetry(token: string | null, step: string, message: string, deta
 }
 
 export function DeviceProvider({ children }: { children: React.ReactNode }) {
-  const { token, user } = useAuth();
+  const { token, user, notifyAuthFailure } = useAuth();
+  const uid = user?.id;
+
+  // User-scoped storage keys (different user = different settings)
+  const RELAYS_KEY = customRelaysKey(uid);
+  const RELAY_CACHE_KEY = resolvedRelaysCacheKey(uid);
+  const TUNNELS_KEY = customTunnelsKey(uid);
+  const ONBOARDING_KEY = relayOnboardingKey(uid);
+  const SYNC_KEY = relaySyncKey(uid);
+
+  // Migrate legacy global keys to user-scoped on first load
+  const migrated = useRef(false);
+  useEffect(() => {
+    if (!uid || migrated.current) return;
+    migrated.current = true;
+    (async () => {
+      // Migrate relays
+      const scopedRelays = await AsyncStorage.getItem(RELAYS_KEY);
+      if (!scopedRelays) {
+        const legacy = await AsyncStorage.getItem(CUSTOM_RELAYS_KEY);
+        if (legacy) await AsyncStorage.setItem(RELAYS_KEY, legacy);
+      }
+      // Migrate tunnels
+      const scopedTunnels = await AsyncStorage.getItem(TUNNELS_KEY);
+      if (!scopedTunnels) {
+        const legacy = await AsyncStorage.getItem(CUSTOM_TUNNELS_KEY);
+        if (legacy) await AsyncStorage.setItem(TUNNELS_KEY, legacy);
+      }
+    })().catch(() => {});
+  }, [uid, RELAYS_KEY, TUNNELS_KEY]);
+
   const [devices, setDevices] = useState<Device[]>([]);
+  // Once the user has EVER had devices, a later empty result is a transient
+  // (VPN / network / token-drift) blip — NOT genuine "no devices" — so we never
+  // regress an existing user to the first-run "pair your computer" onboarding.
+  // Persisted so it survives an app restart on a flaky network (the VPN case).
+  const [everHadDevices, setEverHadDevices] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem("@yaver/ever_had_devices")
+      .then((v) => { if (v === "1") setEverHadDevices(true); })
+      .catch(() => {});
+  }, []);
   const [activeDevice, setActiveDevice] = useState<Device | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
   const [userDisconnected, setUserDisconnected] = useState(false);
   const [relaysReady, setRelaysReady] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [deviceListError, setDeviceListError] = useState<string | null>(null);
+  /** How many rows the local "Hide from this phone" list is currently hiding. */
+  const [hiddenDeviceCount, setHiddenDeviceCount] = useState(0);
+  const [agentAuthExpired, setAgentAuthExpired] = useState(false);
+  const [unreachableSet, setUnreachableSet] = useState<Set<string>>(() => new Set());
+  // Sub-minute peer presence harvested from the connected agent's
+  // P2P bus (`/bus/events`). Maps `deviceId` → unix-ms of the most
+  // recent `peer/{id}/online|ping`. Lets the device list render
+  // fresh even between Convex's 5-min `lastHeartbeat` updates: the
+  // agent rings the bus every 60 s, so a healthy peer stays "fresh"
+  // long before its Convex timestamp catches up.
+  const [busPresence, setBusPresence] = useState<Record<string, number>>({});
+  // Latest published CLI/agent version (from Convex platformConfig.cli_version
+  // via /config). Used to render "X behind" badges on machine cards so the
+  // user can spot a daemon that hasn't been restarted after npm bumped the
+  // on-disk symlink. Null when /config hasn't returned yet.
+  const [latestCliVersion, setLatestCliVersion] = useState<string | null>(null);
+  // Device IDs whose pooled per-device client currently reports
+  // `isConnected === true`. Updated whenever the connection manager
+  // notifies (focus shift, pool add/remove) and on every QUIC
+  // connection-state event from any pooled client. Surfaced so UI
+  // can render "3 devices connected" without each consumer reaching
+  // into the manager directly.
+  const [connectedDeviceIds, setConnectedDeviceIds] = useState<string[]>([]);
+  const fetchRelayServersRef = useRef<(() => Promise<number>) | null>(null);
+  // Auto-pair failure tracking. Each auto-pair path (LAN beacon / relay /
+  // direct) records per-device failures; after MAX_PAIR_ATTEMPTS we add
+  // the deviceId to `manualAuthRequiredSet` and the polling loops skip
+  // it. Reset automatically the next time we observe a successful pair.
+  const pairAttemptsRef = useRef<Map<string, number>>(new Map());
+  const [manualAuthRequiredSet, setManualAuthRequiredSet] = useState<Set<string>>(() => new Set());
+  // User-chosen "primary" machine — auto-connect target when they have more
+  // than one device. Undefined = no preference set → force manual pick for
+  // multi-device users. Loaded from Convex on mount, persisted on change.
+  const [primaryDeviceId, setPrimaryDeviceIdState] = useState<string | null>(null);
+  // Optional secondary slot. Auto-connect falls back here when primary
+  // is offline; otherwise functions identically to primary (yaver ssh
+  // secondary, tight watchdog threshold, etc).
+  const [secondaryDeviceId, setSecondaryDeviceIdState] = useState<string | null>(null);
+  // Per-device primary coding agent. Keyed by deviceId → runnerId.
+  // Loaded from userSettings.primaryRunnerByDevice on mount, persisted
+  // through saveUserSettings({primaryRunnerForDevice: …}). Empty for
+  // fresh accounts; the dashboard / mobile picker seeds suggestions
+  // and the user confirms.
+  const [primaryRunnerByDevice, setPrimaryRunnerByDeviceState] = useState<Record<string, string>>({});
+  // Per-device model hint alongside primaryRunnerByDevice. Same shape,
+  // independent state so callers that only care about the runner id
+  // don't have to re-render when the model changes and vice-versa.
+  const [primaryModelByDevice, setPrimaryModelByDeviceState] = useState<Record<string, string>>({});
+  const [primaryModeByDevice, setPrimaryModeByDeviceState] = useState<Record<string, string>>({});
+  const [primaryProviderByDevice, setPrimaryProviderByDeviceState] = useState<Record<string, string>>({});
+  // Runner/render machine split — account-wide favorite row. Null =
+  // single-box. Mirrored into connectionManager so runnerClient()/
+  // renderClient() route without per-surface copies.
+  const [machineRoles, setMachineRolesState] = useState<MachineRolesRow | null>(null);
+  // Connection fan-out preference, from the SAME userSettings payload the roles
+  // arrive in — no extra call. Unset means "all"; see connectionFanout.ts.
+  const [connectionMode, setConnectionMode] = useState<FanoutMode>("all");
+  // UI preference that follows the user across phones. Loaded from
+  // userSettings on mount (see settings-load effect below) and
+  // persisted through saveUserSettings on change.
+  const [multiTargetMode, setMultiTargetModeState] = useState(false);
+  const [settingsReady, setSettingsReady] = useState(false);
   const hasLoadedOnce = useRef(false);
+  // Tracks the device the user most recently picked via the picker /
+  // selectDevice. The split-brain auto-fallback below treats this as
+  // sticky — it won't promote a different connected pool device on
+  // top of a user's explicit selection unless the user explicitly
+  // disconnects or picks something else. Fixes the "tap Mac mini in
+  // picker, end up on yaver-test-ephemeral" bounce reported via
+  // 2026-05-10 screen recording.
+  const userSelectedDeviceIdRef = useRef<string | null>(null);
+  // Reachability-driven auto-connect (see the effect below). `nonce` is the
+  // re-trigger: the effect runs ONE ping-sweep attempt per nonce value, so it
+  // never loops on a failing connect. Bump the nonce to re-run it — done on
+  // device-set changes and on an explicit retry. `inFlight` guards against
+  // overlapping sweeps; `attemptedNonce` records the last nonce we acted on.
+  const autoConnectInFlightRef = useRef(false);
+  const autoConnectAttemptedNonceRef = useRef(-1);
+  const [autoConnectNonce, setAutoConnectNonce] = useState(0);
+  // Observable auto-connect state so the banner/empty-state can say
+  // "Primary (Mac mini) is alive — connecting…" instead of the alarming
+  // "No machine selected" while a sweep is in flight. Cleared when the sweep
+  // resolves (connected, or gave up → show the list).
+  const [autoConnecting, setAutoConnecting] = useState(false);
+  const [autoConnectTarget, setAutoConnectTarget] = useState<{
+    id: string;
+    name: string;
+    role: "primary" | "secondary" | "sticky";
+  } | null>(null);
+  // Lets the user interrupt an in-flight auto-connect ("let me pick myself").
+  const autoConnectCancelRef = useRef(false);
+  // Per-rung narration for the auto path ("Pinging X…", "Repaired — re-checking
+  // X…"). The manual switch modal has always narrated these; the automatic path
+  // showed one static sentence for its whole multi-second sweep, so a stall was
+  // indistinguishable from a hang.
+  const [autoConnectStage, setAutoConnectStage] = useState<string | null>(null);
+
+  const setMultiTargetMode = useCallback(async (enabled: boolean) => {
+    setMultiTargetModeState(enabled);
+    if (token) {
+      await saveUserSettings(token, { multiTargetMode: enabled }).catch(() => {});
+    }
+  }, [token]);
+
+  const setMachineRolesFavorite = useCallback(async (row: MachineRolesRow | null) => {
+    if (!token) throw new Error("Sign in first to change machine roles.");
+    await saveUserSettings(token, {
+      machineRolesForProject: row
+        ? { ...row, renderDeviceId: row.renderDeviceId || row.runnerDeviceId, updatedAt: Date.now() }
+        : { runnerDeviceId: null },
+    });
+    setMachineRolesState(row);
+    connectionManager.setMachineRoles(row ? {
+      runnerDeviceId: row.runnerDeviceId,
+      secondaryRunnerDeviceId: row.secondaryRunnerDeviceId,
+      renderDeviceId: row.renderDeviceId,
+      secondaryRenderDeviceId: row.secondaryRenderDeviceId,
+    } : null);
+    appLog("info", `[settings] machineRoles ${row ? `saved: run=${row.runnerDeviceId.slice(0, 8)} render=${(row.renderDeviceId || row.runnerDeviceId).slice(0, 8)}` : "cleared (single-box)"}`);
+  }, [token]);
+
+  const markDeviceUnreachable = useCallback((deviceId: string) => {
+    setUnreachableSet((prev) => {
+      if (prev.has(deviceId)) return prev;
+      const next = new Set(prev);
+      next.add(deviceId);
+      return next;
+    });
+  }, []);
+
+  const clearDeviceUnreachable = useCallback((deviceId: string) => {
+    setUnreachableSet((prev) => {
+      if (!prev.has(deviceId)) return prev;
+      const next = new Set(prev);
+      next.delete(deviceId);
+      return next;
+    });
+  }, []);
+
+  // Interrupt an in-flight auto-connect so the user can pick a box themselves.
+  // Does NOT set userDisconnected (that would suppress future auto-connect on
+  // every tab) — it just stops this sweep and drops to the machine list.
+  const cancelAutoConnect = useCallback(() => {
+    autoConnectCancelRef.current = true;
+    autoConnectInFlightRef.current = false;
+    setAutoConnecting(false);
+    setAutoConnectTarget(null);
+    setConnectionStatus((s) => (s === "connecting" ? "disconnected" : s));
+  }, []);
+
+  // Auto-pair bookkeeping — shared across the 3 auto-pair effects so
+  // failures on one path count against the overall budget for that
+  // device. 5 attempts spans LAN + relay + direct probes, which is
+  // enough to rule out transient network trouble and signal to the
+  // user that the machine genuinely needs manual `yaver auth`.
+  const MAX_AUTO_PAIR_ATTEMPTS = 5;
+  const recordAutoPairFailure = useCallback((deviceId: string) => {
+    const next = (pairAttemptsRef.current.get(deviceId) ?? 0) + 1;
+    pairAttemptsRef.current.set(deviceId, next);
+    if (next >= MAX_AUTO_PAIR_ATTEMPTS) {
+      setManualAuthRequiredSet((prev) => {
+        if (prev.has(deviceId)) return prev;
+        const updated = new Set(prev);
+        updated.add(deviceId);
+        appLog(
+          "warn",
+          `[auto-pair] Giving up on ${deviceId} after ${next} attempts — run 'yaver auth' on that machine`
+        );
+        return updated;
+      });
+    }
+  }, []);
+  const recordAutoPairSuccess = useCallback((deviceId: string) => {
+    pairAttemptsRef.current.delete(deviceId);
+    setManualAuthRequiredSet((prev) => {
+      if (!prev.has(deviceId)) return prev;
+      const updated = new Set(prev);
+      updated.delete(deviceId);
+      return updated;
+    });
+  }, []);
+  const isAutoPairBlocked = useCallback((deviceId: string) => {
+    return (pairAttemptsRef.current.get(deviceId) ?? 0) >= MAX_AUTO_PAIR_ATTEMPTS;
+  }, []);
 
   const refreshDevices = useCallback(async () => {
     if (!token) {
@@ -122,75 +1236,203 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingDevices(true);
     }
     try {
-      // Fetch devices and settings in parallel
-      const [devicesRes, settings] = await Promise.all([
-        fetch(`${CONVEX_SITE_URL}/devices/list`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        getUserSettings(token),
-      ]);
-      appLog("info", `/devices/list status: ${devicesRes.status}`);
-
-      // Apply forceRelay setting
-      if (settings.forceRelay !== undefined) {
-        quicClient.setForceRelay(IS_TV || Platform.OS === "web" ? true : settings.forceRelay);
+      // Only fetch device list — settings are loaded once on startup, not every poll
+      const convexSiteUrl = getConvexSiteUrl();
+      // RN-Android: force a fresh TCP socket and bound the wait. After
+      // OAuth deep-link bring-to-foreground, OkHttp's pool keeps sockets
+      // that the upstream (iPhone Personal Hotspot, in our test setup)
+      // has already dropped. Reusing one hangs send() forever — a 10 s
+      // abort + cache-bust + Connection: close opens a fresh socket and
+      // lets the user see a real error instead of a never-ending spinner.
+      // iOS users were unaffected because NSURLSession's pool detects
+      // dead sockets quickly; this matters most for Android.
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => controller.abort(), 10_000);
+      let devicesRes: Response;
+      try {
+        devicesRes = await fetch(`${convexSiteUrl}/devices/list?_=${Date.now()}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Cache-Control": "no-cache, no-store",
+            Connection: "close",
+          },
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(abortTimer);
       }
+      appLog("info", `/devices/list status: ${devicesRes.status} via ${convexSiteUrl}`);
 
       if (devicesRes.ok) {
         const data = await devicesRes.json();
-        const raw = data.devices || data || [];
-        appLog("info", `Found ${raw.length} device(s)`);
+        const rawAll = data.devices || data || [];
+        const raw = rawAll;
+        appLog("info", `Found ${raw.length} device(s) for ${user?.email || user?.id || "unknown-user"}`);
+        setDeviceListError(null);
+        const connectedDeviceId = quicClient.isConnected ? activeDevice?.id : null;
         const mapped: Device[] = raw.map((d: any) => {
-          const name = d.name || "Unnamed runner";
-          // Production records should carry typed Cloud Runner metadata. Keep
-          // the established primary Ubuntu box usable while older registry
-          // records are migrated so tvOS does not filter out every runner.
-          const isLegacyPrimary = !d.deviceKind && normalizedDeviceName(name) === PRIMARY_DEVICE_NAME;
+          const deviceId = d.deviceId || d.id;
+          // If we're actively connected to this device, trust our connection over stale heartbeat
+          const isActivelyConnected = connectedDeviceId === deviceId;
+          const lastTunnelEvent =
+            d.lastTunnelEvent && typeof d.lastTunnelEvent === "object"
+              ? {
+                  online: Boolean(d.lastTunnelEvent.online),
+                  at: typeof d.lastTunnelEvent.at === "number" ? d.lastTunnelEvent.at : 0,
+                  peerAddr: typeof d.lastTunnelEvent.peerAddr === "string" ? d.lastTunnelEvent.peerAddr : undefined,
+                  connectedAt: typeof d.lastTunnelEvent.connectedAt === "number" ? d.lastTunnelEvent.connectedAt : undefined,
+                  durationSec: typeof d.lastTunnelEvent.durationSec === "number" ? d.lastTunnelEvent.durationSec : undefined,
+                }
+              : undefined;
           return {
-            id: d.deviceId || d.id,
-            name,
+            id: deviceId,
+            name: d.name,
+            alias: typeof d.alias === "string" && d.alias.trim() !== "" ? d.alias : undefined,
+            voiceHints:
+              Array.isArray(d.voiceHints) && d.voiceHints.length > 0
+                ? d.voiceHints.filter((h: unknown): h is string => typeof h === "string")
+                : undefined,
             host: d.quicHost || d.host,
             port: d.quicPort || d.port,
-            online: (() => {
+            online: isActivelyConnected || (() => {
               const flag = d.isOnline ?? d.online ?? false;
               const lastSeen = d.lastHeartbeat || d.lastSeen || 0;
-              return flag && lastSeen > 0 && (Date.now() - lastSeen) < HEARTBEAT_STALE_MS;
+              const heartbeatFresh = flag && lastSeen > 0 && (Date.now() - lastSeen) < HEARTBEAT_STALE_MS;
+              const relayLive =
+                lastTunnelEvent &&
+                lastTunnelEvent.online === true &&
+                lastTunnelEvent.at > 0 &&
+                (Date.now() - lastTunnelEvent.at) < HEARTBEAT_STALE_MS;
+              return heartbeatFresh || relayLive;
             })(),
-            lastSeen: d.lastHeartbeat || d.lastSeen || 0,
+            lastSeen: isActivelyConnected ? Date.now() : (d.lastHeartbeat || d.lastSeen || 0),
             os: d.platform || d.os || "",
             runners: d.runners ?? [],
-            deviceKind: d.deviceKind ?? (isLegacyPrimary ? "cloud-runner" : "private-agent"),
-            trust: d.trust ?? (isLegacyPrimary ? "yaver-managed" : "user-managed"),
-            cloudWorkspaceId: d.cloudWorkspaceId,
-            runnerClass: d.runnerClass ?? (isLegacyPrimary ? "linux" : undefined),
-            region: d.region,
-            agentVersion: d.agentVersion,
-            protocolVersion: d.protocolVersion,
-            capabilities: d.capabilities,
+            installedRunnerIds: Array.isArray(d.installedRunnerIds) ? d.installedRunnerIds : undefined,
+            publicKey: d.publicKey,
+            hwid: d.hardwareId || d.hwid,
+            agentVersion: typeof d.agentVersion === "string" && d.agentVersion.trim() !== ""
+              ? d.agentVersion.trim()
+              : undefined,
+            agentVersionReportedAt: typeof d.agentVersionReportedAt === "number"
+              ? d.agentVersionReportedAt
+              : undefined,
+            deployCapabilities: Array.isArray(d.deployCapabilities) ? d.deployCapabilities : undefined,
+            deployCapabilitiesBlocked: Array.isArray(d.deployCapabilitiesBlocked)
+              ? d.deployCapabilitiesBlocked
+              : undefined,
+            deployCapabilitiesAt: d.deployCapabilitiesAt ?? undefined,
+            hardwareProfile: d.hardwareProfile ?? undefined,
+            lanIps: Array.isArray(d.localIps) ? d.localIps : undefined,
+            lastTunnelEvent,
+            relayConnected: typeof d.relayConnected === "boolean" ? d.relayConnected : undefined,
+            needsAuth: d.needsAuth ?? false,
+            hosting: d.hosting === "yaver-hosted" || d.hosting === "byo" || d.hosting === "self-hosted" ? d.hosting : undefined,
+            managed: typeof d.managed === "boolean" ? d.managed : undefined,
+            machineId: typeof d.machineId === "string" ? d.machineId : undefined,
+            machineStatus: typeof d.machineStatus === "string" ? d.machineStatus : undefined,
+            machineWakeable: d.machineWakeable === true,
+            tunnelUrl: d.tunnelUrl,
+            publicEndpoints: Array.isArray(d.publicEndpoints) ? d.publicEndpoints : undefined,
+            connectionPreferences: Array.isArray(d.connectionPreferences) ? d.connectionPreferences : undefined,
+            priorityMode: d.priorityMode,
+            deviceClass: d.deviceClass,
+            edgeProfile: d.edgeProfile,
           };
         });
-        // A runner ID is the stable identity; display names are not unique.
-        const seen = new Map<string, Device>();
-        for (const d of IS_TV ? mapped.filter((device) => device.deviceKind === "cloud-runner") : mapped) {
-          const existing = seen.get(d.id);
-          if (!existing || d.lastSeen > existing.lastSeen) seen.set(d.id, d);
-        }
-        const ordered = [...seen.values()].sort((a, b) => {
-          if (a.online !== b.online) return a.online ? -1 : 1;
-          if (a.deviceKind !== b.deviceKind) return a.deviceKind === "cloud-runner" ? -1 : 1;
-          return b.lastSeen - a.lastSeen;
+        // Deduplicate by stable device identity.
+        const collapsed = collapseAliasDevices(mapped);
+        // Filter out detached devices
+        const detached = await getDetachedDevices(uid);
+        let filtered = collapsed.filter(d => {
+          const key = deviceIdentityKey(d);
+          return !detached.has(key);
         });
-        setDevices(ordered);
+        if (collapsed.length > 0 && filtered.length === 0 && detached.size > 0) {
+          await clearDetachedDevices(uid);
+          filtered = collapsed;
+          setDeviceListError("Local hidden-device cache was stale; restored your device list.");
+          appLog("warn", "[devices] stale detached-device cache hid every backend device; cleared it");
+        }
+        // Surface how many rows the local hide is swallowing. Without this the
+        // hide is a one-way door: the auto-recover above only fires when EVERY
+        // device is hidden, so hiding 3 of 4 stranded them until reinstall.
+        setHiddenDeviceCount(collapsed.length - filtered.length);
+        // Real-time presence override: ask the primary relay server which
+        // devices have an active QUIC tunnel RIGHT NOW. This signal is
+        // authoritative — heartbeat can be up to ~90 s stale, but the relay
+        // knows tunnel up/down the instant it happens. If the relay says
+        // online, we flip online=true regardless of heartbeat freshness;
+        // if it says offline we leave the heartbeat-based flag alone
+        // (could still be LAN-only and not using the relay at all).
+        // Best-effort: any failure leaves the list unchanged.
+        const finalDevices = await applyRelayPresence(filtered);
+        // Surface this phone's own on-device agent (Android sandbox) as a
+        // selectable "This phone" box when it's running on loopback, so the
+        // box picker / terminal / runner toggles can target it like any
+        // remote machine. No-op (null) on iOS/web or when not started.
+        const localBox = await localBoxDeviceIfRunning();
+        const withLocalBox = localBox
+          ? [localBox, ...finalDevices.filter((d) => d.id !== LOCAL_BOX_DEVICE_ID)]
+          : finalDevices;
+        // Keep the PREVIOUS array when nothing material changed.
+        //
+        // refreshDevices runs every 30s and used to hand setDevices a freshly
+        // built array every time, so `devices` got a new identity on every tick
+        // even when the fleet was byte-identical. Every effect keyed on
+        // `devices` therefore re-ran on a 30s metronome — including the one
+        // that re-enters setFocused/clientFor/setConnectionStatus, which
+        // re-triggers the direct-candidate race for every known box.
+        //
+        // Measured consequence: ~15 candidate probes per cycle across 6
+        // devices, each with a 2.5s timeout, plus four concurrent reconnect
+        // ladders whose backoff never escaped 1s->2.1s->4.1s->8.4s because the
+        // 30s tick kept restarting them. That storm starved the connection that
+        // WAS working — relay connected at 19:07:11 and by 19:09:07 even relay
+        // failed, while another machine on the same relay saw HTTP 200
+        // throughout. The app then cold-launched, killing an in-progress
+        // sign-in.
+        //
+        // Fixed at the source rather than by re-keying one effect: any effect
+        // depending on `devices` gets the same protection, including ones added
+        // later that would otherwise reintroduce this quietly.
+        // Feed the identity-proof registry from the CONVEX list, never from the
+        // beacon: the LAN handshake compares an advertised host against a key
+        // the attacker cannot control. See lib/identityProof.ts.
+        setKnownDevicePublicKeys(withLocalBox as Array<{ id?: string; publicKey?: string }>);
+        setDevices((prev) => (sameDeviceList(prev, withLocalBox) ? prev : withLocalBox));
+        if (withLocalBox.length > 0) {
+          setEverHadDevices((prev) => {
+            if (!prev) AsyncStorage.setItem("@yaver/ever_had_devices", "1").catch(() => {});
+            return true;
+          });
+        }
       } else {
-        appLog("warn", `/devices/list failed: ${devicesRes.status}`);
+        appLog("warn", `/devices/list failed: ${devicesRes.status} via ${convexSiteUrl}`);
+        setDeviceListError(`Device list request failed: HTTP ${devicesRes.status}`);
+        // A 401/403 here means our bearer is stale/rotated/revoked — but
+        // the app still shows the cached account, so the user looks
+        // "signed in" while every device query returns nothing. That
+        // surfaces as an empty "No device connected / Disconnected"
+        // screen with no hint that re-auth is needed (this is exactly how
+        // a Mac that IS registered goes invisible on the phone). Route it
+        // through the auth recovery: it rotates the token if the server
+        // hands back a new one (next poll repopulates the list) or signs
+        // the user out to the auth screen if the session was revoked.
+        if (devicesRes.status === 401 || devicesRes.status === 403) {
+          void notifyAuthFailure();
+        }
       }
+
     } catch (e) {
       appLog("error", `refreshDevices error: ${e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      setDeviceListError(`Device list request failed: ${msg}`);
     } finally {
       hasLoadedOnce.current = true;
       setIsLoadingDevices(false);
     }
-  }, [token]);
+  }, [token, user?.email, user?.id, notifyAuthFailure]);
 
   const selectDevice = useCallback(
     async (device: Device) => {
@@ -200,75 +1442,469 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       setUserDisconnected(false);
       setLastError(null);
 
-      if (quicClient.isConnected) {
-        quicClient.disconnect();
-      }
+      // Sticky user selection — pin this device id so the
+      // split-brain auto-fallback effect (~line 1584) won't promote
+      // a different pool device on top of an explicit user pick if
+      // the picked device's connection has a brief blip mid-select.
+      // Without this, the picker on the Reload tab would silently
+      // bounce the user back to the previously-focused box: pick
+      // Mac mini → Mac mini's pool client drops in the same render
+      // window → connectionStatus flips to "error" → auto-fallback
+      // picks yaver-test-ephemeral → user's selection vanishes.
+      // Cleared by `disconnect()` and by an explicit selection of a
+      // different device.
+      userSelectedDeviceIdRef.current = device.id;
+
+      // Multi-device: previously this tore the focused QuicClient down
+      // before reconnecting it to a different deviceId, which dropped
+      // every in-flight stream and forced peer-routed calls for every
+      // non-focused box. Now we look up (or lazily create) a per-device
+      // client in the connection manager pool, leave the previously
+      // focused client alive in that pool so its tasks/streams keep
+      // running, and just shift the "focused" pointer. Any code path
+      // still using the legacy `quicClient` Proxy automatically follows
+      // the new focus.
+      const client = connectionManager.clientFor(device.id);
+      connectionManager.setFocused(device.id);
 
       setConnectionStatus("connecting");
       setActiveDevice(device);
+      setAgentAuthExpired(false);
+
+      // If the per-device client already has a live connection (the
+      // user is bouncing back to a box they recently were on), verify
+      // it is STILL live on the wire before claiming. The pre-2026-07-19
+      // behaviour trusted a pure in-memory flag set once after a single
+      // /health 200, so "Already connected" was being reported for up
+      // to 15-40s after the box actually went unreachable (audit §5).
+      // A 1.5s /health probe is cheap and eliminates the UI lie.
+      if (client.isConnected) {
+        const stillUp = await client.verifyStillConnected(1500);
+        if (stillUp) {
+          sendTelemetry(token, "connect-resume", `Already connected to ${device.name}`, JSON.stringify({
+            device: device.name, deviceId: device.id.slice(0, 8),
+            mode: client.connectionMode,
+          }));
+          setConnectionStatus("connected");
+          setLastError(null);
+          setAgentAuthExpired(client.agentAuthExpired);
+          clearDeviceUnreachable(device.id);
+          return;
+        }
+        appLog("warn", `[connect-resume] isConnected flag was stale for ${device.name}; running a fresh attempt`);
+      }
 
       try {
-        // Refresh relay configuration at connect time, matching the Web UI.
-        // Startup discovery can race auth/browser storage and otherwise leave
-        // the client with an empty or stale relay list.
-        try {
-          const [configRes, settings] = await Promise.all([
-            fetch(`${CONVEX_SITE_URL}/config`),
-            getUserSettings(token),
-          ]);
-          if (configRes.ok) {
-            const data = await configRes.json();
-            const servers: RelayServer[] = data.relayServers || [];
-            if (settings.relayPassword) {
-              for (const server of servers) {
-                if (!server.password && (!settings.relayUrl || server.httpUrl === settings.relayUrl)) {
-                  server.password = settings.relayPassword;
-                }
-              }
-            }
-            quicClient.setRelayServers(servers);
-          }
-        } catch (configError) {
-          appLog("warn", `connect relay refresh failed: ${configError instanceof Error ? configError.message : String(configError)}`);
-        }
-
         sendTelemetry(token, "connect-start", `Connecting to ${device.name}`, JSON.stringify({
           host: device.host, port: device.port, deviceId: device.id.slice(0, 8),
-          relayCount: quicClient.relayServerCount,
+          relayCount: client.relayServerCount,
         }));
-        // Race connect against a 10s timeout
-        const connectPromise = quicClient.connect(device.host, device.port, token, device.id);
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Could not connect in 10s")), 10000)
-        );
-        await Promise.race([connectPromise, timeoutPromise]);
-        sendTelemetry(token, "connect-success", `Connected via ${quicClient.connectionMode}`, JSON.stringify({
-          device: device.name, path: quicClient.connectionPath, network: quicClient.networkType, mode: quicClient.connectionMode,
+        // Race connect against a 20s timeout. Pass every reachable IP the
+        // agent has reported in heartbeat (Wi-Fi LAN, Tailscale 100.x,
+        // Ethernet) so the client can race them in parallel against the
+        // beacon and Convex-stored primary host. Goes through
+        // ensureConnected so a parallel boot-time warm-up attempt
+        // and this user-driven attempt share one QuicClient.connect
+        // call instead of trampling each other's relay/attempt state.
+        const connectParams = {
+          host: device.host,
+          port: device.port,
+          token,
+          lanIps: device.lanIps,
+          sessionTunnels: tunnelServersForDevice(device),
+          connectionPreferences: device.connectionPreferences,
+        };
+        const connectOnce = async (timeoutMs: number) => {
+          const connectPromise = connectionManager.ensureConnected(device.id, connectParams);
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Could not connect in ${Math.round(timeoutMs / 1000)}s`)), timeoutMs)
+          );
+          await Promise.race([connectPromise, timeoutPromise]);
+        };
+
+        try {
+          await connectOnce(20000);
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          if (!isRelayAuthError(errMsg)) throw e;
+          sendTelemetry(token, "connect-relay-auth-refresh", `Refreshing relay credentials for ${device.name}`, errMsg);
+          await AsyncStorage.removeItem(RELAY_CACHE_KEY).catch(() => {});
+          await fetchRelayServersRef.current?.();
+          await connectOnce(12000);
+        }
+        sendTelemetry(token, "connect-success", `Connected via ${client.connectionMode}`, JSON.stringify({
+          device: device.name, path: client.connectionPath, network: client.networkType, mode: client.connectionMode,
         }));
         setConnectionStatus("connected");
         setLastError(null);
+        setAgentAuthExpired(client.agentAuthExpired);
+        clearDeviceUnreachable(device.id);
+        // Fetch hwid from /info for dedup (P2P only, never sent to Convex)
+        try {
+          const info = await client.getInfo();
+          if (info && (info as any).hwid) {
+            const hwid = (info as any).hwid as string;
+            setActiveDevice((prev) => prev ? { ...prev, hwid } : prev);
+            setDevices((prev) => prev.map((d) => d.id === device.id ? { ...d, hwid } : d));
+          }
+        } catch {
+          // Best-effort — hwid fetch failure is not fatal
+        }
       } catch (e) {
         const errMsg = e instanceof Error ? e.message : String(e);
         sendTelemetry(token, "connect-fail", `Connection failed: ${errMsg}`, JSON.stringify({
           host: device.host, port: device.port, deviceId: device.id.slice(0, 8),
-          relayCount: quicClient.relayServerCount,
+          relayCount: client.relayServerCount,
         }));
-        // Stop any background reconnection attempts
-        quicClient.disconnect();
+        // Drop just THIS device's client. Any other clients in the pool
+        // (boxes the user previously connected to) keep their state.
+        connectionManager.disconnect(device.id);
         setConnectionStatus("disconnected");
-        setActiveDevice(null);
+        setAgentAuthExpired(false);
+        // Keep activeDevice so Retry button works — don't null it
         setLastError(errMsg);
+        // Mark this specific device as confirmed-unreachable. The UI
+        // consumes unreachableSet to show a stable "STALE / OFFLINE"
+        // badge with an explicit retry, instead of flickering between
+        // "online" (Convex says so) and "failed" (we just tried).
+        // Cleared automatically when a future connect succeeds via
+        // clearDeviceUnreachable, or when the user explicitly retries.
+        markDeviceUnreachable(device.id);
       }
     },
-    [token]
+    [RELAY_CACHE_KEY, token]
   );
 
+  const pendingDeepLinkDeviceHintRef = useRef<string | null>(null);
+  useEffect(() => {
+    const rememberHint = (url: string | null | undefined) => {
+      const hint = deviceSelectionHintFromURL(url);
+      if (!hint) return;
+      pendingDeepLinkDeviceHintRef.current = hint;
+      appLog("info", `[connect] deep-link requested device ${hint}`);
+      void refreshDevices();
+    };
+
+    Linking.getInitialURL().then(rememberHint).catch(() => {});
+    const sub = Linking.addEventListener("url", (event) => rememberHint(event.url));
+    return () => sub.remove();
+  }, [refreshDevices]);
+
+  useEffect(() => {
+    const hint = pendingDeepLinkDeviceHintRef.current;
+    if (!hint || !token || devices.length === 0) return;
+    const device = matchDeviceSelectionHint(devices, hint);
+    if (!device) return;
+    pendingDeepLinkDeviceHintRef.current = null;
+    userSelectedDeviceIdRef.current = device.id;
+    appLog("info", `[connect] deep-link selecting ${device.name}`);
+    void selectDevice(device).catch((e) => {
+      pendingDeepLinkDeviceHintRef.current = hint;
+      appLog("warn", `[connect] deep-link select failed for ${device.name}: ${e instanceof Error ? e.message : String(e)}`);
+    });
+  }, [devices, selectDevice, token]);
+
   const disconnect = useCallback(() => {
-    quicClient.disconnect();
+    // User-initiated "Stop": tear down every pooled per-device client,
+    // not just the focused one. Keeping a secondary connection alive
+    // here would let it silently retry from the background and undo
+    // the user's intent to fully disconnect. Sign-out re-enters the
+    // same path via stopReconnectAndBounce/userDisconnected.
+    connectionManager.disconnectAll();
+    // Clear sticky-pick — an explicit disconnect releases the pin so
+    // the next auto-fallback (after a re-sign-in or auto-pair) is
+    // free to land on whichever device the user picks again.
+    userSelectedDeviceIdRef.current = null;
     setActiveDevice(null);
     setConnectionStatus("disconnected");
     setUserDisconnected(true);
+    setAgentAuthExpired(false);
   }, []);
+
+  /** Drop a single device's pooled connection without affecting any
+   *  other live ones. Used when a device row goes offline or the user
+   *  explicitly removes one box from the running set. The focused
+   *  client is replaced (focus clears) only if the dropped device WAS
+   *  the focus — otherwise focus stays put. */
+  const disconnectDevice = useCallback((deviceId: string) => {
+    connectionManager.disconnect(deviceId);
+    if (activeDevice?.id === deviceId) {
+      setActiveDevice(null);
+      setConnectionStatus("disconnected");
+    }
+  }, [activeDevice?.id]);
+
+  const setPrimaryDevice = useCallback(async (deviceId: string | null) => {
+    if (!token) throw new Error("Not signed in");
+    // Optimistic local update so the UI reflects the choice immediately.
+    setPrimaryDeviceIdState(deviceId);
+    try {
+      // `null` sentinel tells Convex to clear the preference; omitting the
+      // field leaves it untouched, which is the wrong semantics here.
+      await saveUserSettings(token, { primaryDeviceId: deviceId });
+    } catch (e) {
+      // Roll back so the user sees the real state.
+      appLog("error", `[settings] setPrimaryDevice failed: ${e}`);
+      setPrimaryDeviceIdState((prev) => prev);
+      throw e;
+    }
+  }, [token]);
+
+  const setSecondaryDevice = useCallback(async (deviceId: string | null) => {
+    if (!token) throw new Error("Not signed in");
+    setSecondaryDeviceIdState(deviceId);
+    try {
+      await saveUserSettings(token, { secondaryDeviceId: deviceId });
+    } catch (e) {
+      appLog("error", `[settings] setSecondaryDevice failed: ${e}`);
+      setSecondaryDeviceIdState((prev) => prev);
+      throw e;
+    }
+  }, [token]);
+
+  const setPrimaryRunnerForDevice = useCallback(
+    async (deviceId: string, runnerId: string | null, model?: string | null, mode?: string | null, provider?: string | null) => {
+      if (!token) throw new Error("Not signed in");
+      // When the runner changes (e.g. user picks Codex while the
+      // previous pick was Claude with model "sonnet"), the stale
+      // model is no longer compatible: codex spawned with
+      // `--model sonnet` returns "The 'sonnet' model is not supported
+      // when using Codex with a ChatGPT account." Auto-fill the new
+      // runner's default model — single source of truth lives in
+      // DEFAULT_MODEL_BY_RUNNER (mirrors web/DevicesView and the
+      // agent's RunnerConfig.Model defaults). Caller can still pass
+      // an explicit model to override, or `null` to clear.
+      const previousRunner = primaryRunnerByDevice;
+      const previousModel = primaryModelByDevice;
+      const previousMode = primaryModeByDevice;
+      const previousProvider = primaryProviderByDevice;
+      const previousRunnerForThisDevice = previousRunner[deviceId] ?? "";
+      const runnerChanged =
+        !!runnerId && runnerId !== previousRunnerForThisDevice;
+      let resolvedModel: string | null | undefined = model;
+      if (resolvedModel === undefined && runnerChanged && runnerId) {
+        const fallback = DEFAULT_MODEL_BY_RUNNER[runnerId];
+        if (fallback) {
+          resolvedModel = fallback;
+          appLog(
+            "info",
+            `[settings] runner changed → ${runnerId}; auto-picking default model ${fallback}`,
+          );
+        } else {
+          // Runner has no documented default (opencode etc.) — clear
+          // any stale model so the agent falls through to the
+          // runner's own internal default rather than re-using the
+          // previous runner's incompatible model.
+          resolvedModel = null;
+        }
+      }
+      setPrimaryRunnerByDeviceState((prev) => {
+        const next = { ...prev };
+        if (runnerId) next[deviceId] = runnerId;
+        else delete next[deviceId];
+        return next;
+      });
+      setPrimaryModelByDeviceState((prev) => {
+        const next = { ...prev };
+        if (!runnerId || resolvedModel === null) {
+          delete next[deviceId];
+        } else if (
+          typeof resolvedModel === "string" &&
+          resolvedModel.length > 0
+        ) {
+          next[deviceId] = resolvedModel;
+        }
+        return next;
+      });
+      setPrimaryModeByDeviceState((prev) => {
+        const next = { ...prev };
+        if (!runnerId || mode === null) {
+          delete next[deviceId];
+        } else if (typeof mode === "string" && mode.length > 0) {
+          next[deviceId] = mode;
+        }
+        return next;
+      });
+      setPrimaryProviderByDeviceState((prev) => {
+        const next = { ...prev };
+        if (!runnerId || provider === null) {
+          delete next[deviceId];
+        } else if (typeof provider === "string" && provider.length > 0) {
+          next[deviceId] = provider;
+        }
+        return next;
+      });
+      try {
+        await saveUserSettings(token, {
+          primaryRunnerForDevice: {
+            deviceId,
+            runnerId,
+            ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
+            ...(mode !== undefined ? { mode } : {}),
+            ...(provider !== undefined ? { provider } : {}),
+          },
+        });
+      } catch (e) {
+        appLog("error", `[settings] setPrimaryRunnerForDevice failed: ${e}`);
+        setPrimaryRunnerByDeviceState(previousRunner);
+        setPrimaryModelByDeviceState(previousModel);
+        setPrimaryModeByDeviceState(previousMode);
+        setPrimaryProviderByDeviceState(previousProvider);
+        throw e;
+      }
+    },
+    [token, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice],
+  );
+
+  const stopReconnectAndBounce = useCallback(async () => {
+    const failed = activeDevice;
+    try {
+      quicClient.stopReconnect();
+    } catch {
+      // best-effort
+    }
+    if (failed) {
+      // Drop only THIS device's pooled client. Other connections the
+      // user has open to peer machines must keep running — they're not
+      // implicated in the reconnect failure.
+      connectionManager.disconnect(failed.id);
+      markDeviceUnreachable(failed.id);
+    }
+    setActiveDevice(null);
+    setConnectionStatus("disconnected");
+    setUserDisconnected(true);
+    setAgentAuthExpired(false);
+    setLastError(null);
+    try {
+      await refreshDevices();
+    } catch {
+      // refreshDevices already logs; never block the UI reset on it
+    }
+  }, [activeDevice, markDeviceUnreachable, refreshDevices]);
+
+  /**
+   * Undo every local "Hide from this phone". Mirrors the web dashboard's
+   * "N devices hidden in this browser — Show all" escape hatch; hiding is
+   * local and persistent, so it needs a way back that isn't a reinstall.
+   */
+  const handleUnhideAllDevices = useCallback(async () => {
+    await clearDetachedDevices(uid);
+    setHiddenDeviceCount(0);
+    await refreshDevices();
+  }, [uid, refreshDevices]);
+
+  const handleDetachDevice = useCallback(async (device: Device) => {
+    const key = deviceIdentityKey(device);
+    await addDetachedDevice(key, uid);
+    // If detaching the active device, disconnect ITS pool client
+    // (peer connections to other boxes stay open).
+    if (activeDevice?.id === device.id) {
+      connectionManager.disconnect(device.id);
+      setActiveDevice(null);
+      setConnectionStatus("disconnected");
+    } else {
+      // Even when not focused, the device may have a live pooled
+      // connection from a previous focus — drop it so we don't leak.
+      connectionManager.disconnect(device.id);
+    }
+    setDevices((prev) => prev.filter((d) => deviceIdentityKey(d) !== key));
+  }, [activeDevice, uid]);
+
+  const handleSetDeviceAlias = useCallback(
+    async (
+      device: Device,
+      alias: string,
+    ): Promise<{ ok: true; alias: string | null } | { ok: false; error: string }> => {
+      if (!token) return { ok: false, error: "Not signed in" };
+      try {
+        const res = await fetch(`${getConvexSiteUrl()}/devices/alias`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ deviceId: device.id, alias }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return { ok: false, error: body?.error || `HTTP ${res.status}` };
+        }
+        const next = body?.alias ?? null;
+        // Optimistically update local state so the UI re-renders without
+        // waiting for the next /devices/list poll.
+        setDevices((prev) =>
+          prev.map((d) => (d.id === device.id ? { ...d, alias: next ?? undefined } : d)),
+        );
+        return { ok: true, alias: next };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+      }
+    },
+    [token],
+  );
+
+  const handleSetDeviceVoiceHints = useCallback(
+    async (
+      device: Device,
+      hints: string[],
+    ): Promise<{ ok: true; voiceHints: string[] } | { ok: false; error: string }> => {
+      if (!token) return { ok: false, error: "Not signed in" };
+      try {
+        const res = await fetch(`${getConvexSiteUrl()}/devices/voice-hints`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ deviceId: device.id, hints }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return { ok: false, error: body?.error || `HTTP ${res.status}` };
+        }
+        const next: string[] = Array.isArray(body?.voiceHints) ? body.voiceHints : [];
+        // Optimistic local update so the car matcher can use the new name
+        // immediately, without waiting for the next /devices/list poll.
+        setDevices((prev) =>
+          prev.map((d) =>
+            d.id === device.id ? { ...d, voiceHints: next.length ? next : undefined } : d,
+          ),
+        );
+        return { ok: true, voiceHints: next };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+      }
+    },
+    [token],
+  );
+
+  const handleRemoveDevice = useCallback(async (device: Device) => {
+    if (!token) throw new Error("Not signed in");
+    const res = await fetch(`${getConvexSiteUrl()}/devices/remove`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ deviceId: device.id }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to remove device");
+    }
+    if (activeDevice?.id === device.id) {
+      connectionManager.disconnect(device.id);
+      setActiveDevice(null);
+      setConnectionStatus("disconnected");
+      setAgentAuthExpired(false);
+    } else {
+      // Drop any background connection to the removed device so it
+      // doesn't keep heartbeating to a Convex row that no longer
+      // exists. Other pooled clients are untouched.
+      connectionManager.disconnect(device.id);
+    }
+    setDevices((prev) => prev.filter((d) => d.id !== device.id));
+  }, [activeDevice, token]);
 
   // Sync DeviceContext state with QUIC client's internal state changes
   // (e.g., polling failures trigger reconnection inside the QUIC client)
@@ -280,24 +1916,81 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       if (state === "connected") {
         setConnectionStatus("connected");
         setLastError(null);
+        setAgentAuthExpired(quicClient.agentAuthExpired);
       } else if (state === "connecting") {
         setConnectionStatus("connecting");
       } else if (state === "error") {
+        const attempt = quicClient.reconnectAttempt;
+        const max = quicClient.maxReconnectAttempts;
+        // Align the give-up policy with the client's own (scheduleReconnect):
+        // a previously-reachable box keeps retrying forever with capped
+        // backoff — only a never-reached one (wrong host / typo) stops at
+        // max. The old `attempt >= max` teardown here contradicted that:
+        // connectionManager.disconnect() below also CLEARS FOCUS, so every
+        // later quicClient.* call resolved to the never-connected fallback
+        // client and threw, while the pool could still paint the box green —
+        // the "Connected · <box>" vs "not connected" split-brain.
         const gaveUp =
-          quicClient.reconnectAttempt >= quicClient.maxReconnectAttempts ||
-          quicClient.reconnectStopped;
+          quicClient.reconnectStopped ||
+          (attempt >= max && !quicClient.hadSuccessfulConnect);
         if (gaveUp) {
-          quicClient.disconnect();
+          // Only the failed device's pooled client dies — peer
+          // connections to other boxes the user is mid-session on
+          // keep their state so a single flaky machine doesn't tear
+          // down the whole multi-device experience.
+          if (activeDevice) connectionManager.disconnect(activeDevice.id);
           setConnectionStatus("disconnected");
-          setActiveDevice(null);
+          setAgentAuthExpired(false);
+          // connectGiveUpMessage carries the cause the ladder preserved
+          // through every retry (dropping it at surrender was audit gap
+          // T1) and, on RN-web, states that the native lanes are
+          // impossible rather than one-more-retry-away (gap T7 —
+          // explainNoTransport finally has a consumer).
           setLastError(
             quicClient.reconnectStopped
               ? "Reconnection stopped"
-              : "Could not connect to device"
+              // A terminal relay verdict (device_mismatch — audit R3) outranks
+              // the generic give-up: the cause is not "couldn't reach", it is
+              // "will never be allowed", and the remedy is named.
+              : explainRelayDeny(quicClient.lastTransportError) ??
+                connectGiveUpMessage(max, quicClient.lastTransportError),
           );
         } else {
           setConnectionStatus("error");
-          setLastError("Connection lost — reconnecting...");
+          // Carry the underlying transport cause so the self-heal effect
+          // (which greps for "relay password" / "invalid relay" /
+          // "sign in again to reconnect") can actually fire during a
+          // ladder. The pre-2026-07-19 behaviour overwrote lastError
+          // with a bare "Reconnecting (n/max)…" that matched no self-heal
+          // string, so a relay-token failure looped forever silently.
+          const cause = quicClient.lastTransportError || "";
+          // "device not connected to relay" is the relay's 502 for a box whose
+          // relay REGISTRATION is gone (relay restarted / box on a fallback the
+          // relay can't route) — a box-presence problem, not a phone problem.
+          // The raw string reads like the phone is being refused; say what is
+          // actually happening and what to expect instead.
+          // Terminal + limit verdicts get their names DURING the ladder too
+          // (audit R3, R13, R14): device_mismatch can never self-heal, so
+          // "Reconnecting (n/5) — <raw relay string>" was a lie of hope; and
+          // a free-tier/bandwidth verdict deserves its reset/unmetered-path
+          // statement instead of reading like a network flap.
+          const denyExplained = explainRelayDeny(cause);
+          const limitCard = classifyRelayLimit(cause);
+          const friendlyCause = denyExplained
+            ? denyExplained
+            : limitCard
+              ? `${limitCard.title} — ${limitCard.detail}`
+              : cause.toLowerCase().includes("device not connected to relay")
+                ? "your box lost its relay session — it usually re-registers within a minute; retrying"
+                : cause;
+          // Attempts can exceed max now that a previously-reachable box
+          // retries forever — clamp the display so it never reads "7/5".
+          const shownAttempt = Math.min(attempt, max);
+          setLastError(
+            friendlyCause
+              ? `Reconnecting (${shownAttempt}/${max}) — ${friendlyCause}`
+              : `Reconnecting (${shownAttempt}/${max})...`,
+          );
         }
       } else if (state === "disconnected") {
         // QUIC client fully disconnected (e.g., via disconnect() call)
@@ -307,101 +2000,811 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => unsub();
   }, [activeDevice]);
 
-  // Fetch relay servers: local AsyncStorage > Convex user settings > Convex platform config
-  // Re-runs when the token becomes available so password-protected relays from
-  // user settings are loaded (relaysFetched guards against redundant fetches).
-  const relaysFetched = useRef(false);
+  // Subscribe to the connected agent's P2P bus so the device picker
+  // sees sub-minute peer presence for the whole mesh — the bus pings
+  // every 60 s while Convex `lastHeartbeat` only refreshes every
+  // 5 min. Without this, a healthy peer would briefly look offline
+  // between every Convex beat. Subscription is foreground-only;
+  // iOS/Android kill the SSE socket within seconds of suspend, and
+  // the AppState handler triggers a reconnect on resume which
+  // re-fires this effect via `connectionStatus`.
+  useEffect(() => {
+    if (!activeDevice || connectionStatus !== "connected") {
+      setBusPresence((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+      return;
+    }
+    const unsub = quicClient.subscribeBusEvents({
+      prefix: "peer",
+      onEvent: (evt) => {
+        const segs = evt.topic.split("/");
+        if (segs.length < 3 || segs[0] !== "peer") return;
+        const peerId = segs[1];
+        const kind = segs[2];
+        if (!peerId) return;
+        if (kind === "offline") {
+          setBusPresence((prev) => {
+            if (!(peerId in prev)) return prev;
+            const next = { ...prev };
+            delete next[peerId];
+            return next;
+          });
+          return;
+        }
+        if (kind !== "online" && kind !== "ping") return;
+        const at = evt.publishedAt > 0 ? evt.publishedAt : Date.now();
+        setBusPresence((prev) => {
+          if ((prev[peerId] || 0) >= at) return prev;
+          return { ...prev, [peerId]: at };
+        });
+      },
+      onError: () => {
+        // Drop the SSE silently — the next connectionState transition
+        // re-fires this effect and re-subscribes. We deliberately do
+        // not clear `busPresence` on error: stale entries age out via
+        // the freshness window on read.
+      },
+    });
+    return () => unsub();
+  }, [activeDevice?.id, connectionStatus]);
+
+  // Mirror auth-expiry changes from the transport into React state.
+  // The QUIC client updates this flag from /health probes, but it is
+  // not itself reactive.
+  useEffect(() => {
+    if (!activeDevice) {
+      setAgentAuthExpired(false);
+      return;
+    }
+    const iv = setInterval(() => {
+      const next = quicClient.agentAuthExpired;
+      setAgentAuthExpired((prev) => (prev === next ? prev : next));
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [activeDevice?.id]);
+
+  // Mirror the active device's per-machine primary coding agent + model
+  // (Convex source of truth: userSettings.primaryRunnerByDevice) into
+  // iOS UserDefaults so the native YaverFeedbackPane reads the same
+  // values the Tasks tab does. Without this, the shake-feedback flow
+  // ignored the user's per-device pick and always defaulted to Claude
+  // — which on root-running agents (remote test box) immediately
+  // failed because Claude Code refuses --dangerously-skip-permissions
+  // under uid 0. The mirror is best-effort: if YaverInfo isn't bound
+  // (Android, simulator without the native module loaded, …) we skip
+  // silently; the agent's pickReadyVibingRunner is the second line of
+  // defense.
+  useEffect(() => {
+    try {
+      const id = activeDevice?.id;
+      const runner = id ? (primaryRunnerByDevice[id] ?? "") : "";
+      const model = id ? (primaryModelByDevice[id] ?? "") : "";
+      const { NativeModules } = require("react-native");
+      NativeModules.YaverInfo?.setInheritedPrimaryRunner?.(runner, model);
+    } catch {
+      // Native module unavailable — non-iOS / unit-test path. Same
+      // pattern as the relay-password mirror at line ~317.
+    }
+  }, [activeDevice?.id, primaryRunnerByDevice, primaryModelByDevice]);
+
+  // Auto-clear the "needs manual auth" block when the device list shows
+  // the machine is no longer in bootstrap mode — i.e. the user ran
+  // `yaver auth` on it directly. Without this the block would stick for
+  // the whole session and UI would keep showing the soft banner after
+  // the user already fixed it. Also clears the per-device attempt
+  // counter so the auto-pair path doesn't immediately re-block.
+  useEffect(() => {
+    if (manualAuthRequiredSet.size === 0) return;
+    let changed = false;
+    const next = new Set(manualAuthRequiredSet);
+    for (const blockedId of manualAuthRequiredSet) {
+      const dev = devices.find((d) => d.id === blockedId);
+      // Clear when either (a) the device is no longer in bootstrap mode
+      // per Convex heartbeat, or (b) the device has disappeared from the
+      // list entirely (removed by the user).
+      if (!dev || dev.needsAuth !== true) {
+        next.delete(blockedId);
+        pairAttemptsRef.current.delete(blockedId);
+        appLog("info", `[auto-pair] Cleared manual-auth block for ${blockedId}`);
+        changed = true;
+      }
+    }
+    if (changed) setManualAuthRequiredSet(next);
+  }, [devices, manualAuthRequiredSet]);
+
+  // Keep quicClient.token in sync with AuthContext — when Convex rotates
+  // the session token (via X-Yaver-Rotate-Token), AuthContext persists it
+  // and pushes the new value through React state. Without this hop, the
+  // QUIC client keeps using the old bearer until the next reconnect and
+  // every in-flight agent request fails 401 for ~30s until the token is
+  // observed stale and a full reconnect is forced.
   useEffect(() => {
     if (!token) return;
-    if (relaysFetched.current) return;
-    relaysFetched.current = true;
-    (async () => {
-      try {
-        // 1. Check for user-configured custom relays in local storage first
-        const customRaw = await AsyncStorage.getItem(CUSTOM_RELAYS_KEY);
-        if (customRaw) {
-          const customRelays: RelayServer[] = JSON.parse(customRaw);
-          if (customRelays.length > 0) {
-            quicClient.setRelayServers(customRelays);
-            console.log("[DeviceContext] Using", customRelays.length, "custom relay server(s)");
-            sendTelemetry(token, "relays-loaded", `Loaded ${customRelays.length} custom relay(s)`, JSON.stringify(customRelays.map(s => s.id)));
-            return;
-          }
-        }
-
-        // 2. No local relays — check Convex user settings (account-level relay config)
-        if (token) {
-          try {
-            const settings = await getUserSettings(token);
-            if (settings.relayUrl) {
-              const accountRelay: RelayServer = {
-                id: "account",
-                quicAddr: "",
-                httpUrl: settings.relayUrl,
-                region: "account",
-                priority: 1,
-                password: settings.relayPassword,
-              };
-              quicClient.setRelayServers([accountRelay]);
-              // Persist to AsyncStorage so it works offline and on next launch
-              await AsyncStorage.setItem(CUSTOM_RELAYS_KEY, JSON.stringify([accountRelay]));
-              // Also enable relay sync so future changes propagate
-              await AsyncStorage.setItem("@yaver/relay_sync_enabled", "true");
-              console.log("[DeviceContext] Loaded relay from Convex user settings:", settings.relayUrl);
-              sendTelemetry(token, "relays-loaded", "Loaded relay from account settings", settings.relayUrl);
-              return;
-            }
-          } catch {
-            // Best-effort — fall through to platform config
-          }
-        }
-
-        // 3. No account-level relay — fall back to Convex platform config
-        const res = await fetch(`${CONVEX_SITE_URL}/config`);
-        if (res.ok) {
-          const data = await res.json();
-          const servers: RelayServer[] = data.relayServers || [];
-          // Password-protected free relays need the account relay password.
-          // Attach it to matching platform relays so relay-only devices connect.
-          const settings = token
-            ? await getUserSettings(token).catch(() => ({} as UserSettings))
-            : ({} as UserSettings);
-          if (settings.relayPassword) {
-            for (const s of servers) {
-              if (s.password) continue;
-              if (!settings.relayUrl || s.httpUrl === settings.relayUrl) {
-                s.password = settings.relayPassword;
-              }
-            }
-          }
-          quicClient.setRelayServers(servers);
-          console.log("[DeviceContext] Loaded", servers.length, "relay server(s) from Convex", JSON.stringify(servers.map(s => ({ id: s.id, hasPw: !!s.password }))));
-          sendTelemetry(token, "relays-loaded", `Loaded ${servers.length} relay(s) from Convex`, JSON.stringify(servers.map(s => s.id)));
-        }
-      } catch {
-        sendTelemetry(token, "relays-failed", "Could not fetch relay config");
-      } finally {
-        setRelaysReady(true);
-      }
-    })();
+    // Fan the new bearer out to every pooled per-device client so a
+    // mid-session token rotation doesn't leave secondary connections
+    // silently 401-ing for the rest of the session. The proxied
+    // `quicClient.setToken` would only hit the focused client.
+    connectionManager.setTokenOnAll(token);
   }, [token]);
 
-  // Load user settings (forceRelay) on startup
+  // Keep `connectedDeviceIds` in step with the pool. The manager fires
+  // on focus + membership changes; we additionally poll every 4s so
+  // the badge reflects the underlying QuicClient state changes (which
+  // each client tracks via its own listener API but doesn't propagate
+  // up to the manager). Cheap — it's just a Map iteration.
+  useEffect(() => {
+    const recompute = () => {
+      const next = connectionManager.connectedDeviceIds();
+      setConnectedDeviceIds((prev) => {
+        if (prev.length === next.length && prev.every((id, i) => id === next[i])) return prev;
+        return next;
+      });
+    };
+    recompute();
+    const unsub = connectionManager.subscribe(recompute);
+    const interval = setInterval(recompute, 4000);
+    return () => {
+      unsub();
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Keep the focused device pointed at a live pooled client. Without
+  // this, the app can end up in a split-brain state: Devices shows
+  // green CONNECTED cards from the pool, but activeDevice still points
+  // at a stale box so Projects / Reload / other tabs think nothing is
+  // connected. When that happens, promote a live pooled device to the
+  // active focus immediately instead of waiting for the user to
+  // manually re-select it.
+  useEffect(() => {
+    if (!settingsReady) return;
+    if (userDisconnected || connectionStatus === "connecting") return;
+    if (connectedDeviceIds.length === 0) return;
+    if (activeDevice?.id && connectedDeviceIds.includes(activeDevice.id) && connectionStatus === "connected") return;
+
+    // Sticky user pick: when the user explicitly selected a device
+    // via the picker, don't stomp it just because that device's pool
+    // client briefly dropped or its connect retry is mid-flight.
+    // The split-brain promotion below would otherwise grab the next
+    // pool device and bounce the user out of their pick — the exact
+    // "I tap Mac mini, end up on yaver-test-ephemeral" symptom from
+    // the 2026-05-10 screen recording. Only honour stickiness while
+    // the picked device still exists in the device list (so a deletion
+    // / sign-out still allows a fallback).
+    const sticky = userSelectedDeviceIdRef.current;
+    if (sticky && devices.some((d) => d.id === sticky)) {
+      return;
+    }
+
+    const pickId =
+      (primaryDeviceId && connectedDeviceIds.includes(primaryDeviceId) ? primaryDeviceId : null) ||
+      (secondaryDeviceId && connectedDeviceIds.includes(secondaryDeviceId) ? secondaryDeviceId : null) ||
+      connectedDeviceIds[0];
+    if (!pickId) return;
+
+    const picked = devices.find((d) => d.id === pickId);
+    if (!picked) return;
+
+    connectionManager.setFocused(pickId);
+    const client = connectionManager.clientFor(pickId);
+    setActiveDevice((prev) => (prev?.id === picked.id ? prev : picked));
+    setConnectionStatus("connected");
+    setLastError(null);
+    setAgentAuthExpired(client.agentAuthExpired);
+  }, [
+    activeDevice?.id,
+    connectedDeviceIds,
+    connectionStatus,
+    devices,
+    primaryDeviceId,
+    settingsReady,
+    secondaryDeviceId,
+    userDisconnected,
+  ]);
+
+  // Focus invariant — the other half of the split-brain fix. `activeDevice`
+  // (what every screen renders) and connectionManager's focusedId (what every
+  // `quicClient.*` call resolves to) can drift apart: a reconnect give-up or
+  // a pool disconnect clears focus WITHOUT clearing activeDevice, after which
+  // the Proxy resolves to the never-connected fallback client and every call
+  // throws "no usable connection" while the header still paints the box green.
+  // Re-assert focus whenever they disagree. Depends on connectedDeviceIds /
+  // connectionStatus so it also runs right after a background
+  // ensureConnected() brings the active box's pooled client back up.
+  useEffect(() => {
+    if (!activeDevice?.id || userDisconnected) return;
+    if (connectionManager.focusedDeviceId() === activeDevice.id) return;
+    // Mint (or fetch) the pooled client first so the Proxy lands on a real
+    // per-device client — hydrated with relays + token by the manager —
+    // never on the boot-time fallback stub.
+    connectionManager.clientFor(activeDevice.id);
+    connectionManager.setFocused(activeDevice.id);
+  }, [activeDevice?.id, userDisconnected, connectedDeviceIds, connectionStatus]);
+
+  // Re-trigger auto-connect whenever the device set changes — a box that just
+  // came online (or a freshly-paired one) deserves a fresh sweep.
+  const deviceIdsKey = devices.map((d) => d.id).sort().join(",");
+  useEffect(() => {
+    setAutoConnectNonce((n) => n + 1);
+  }, [deviceIdsKey]);
+
+  // Manual retry: re-run the reachability sweep + auto-pick from scratch.
+  // Wired to the banner/Tasks "Retry" affordance so a stuck "Connecting" or a
+  // "Can't connect" can be re-attempted on demand.
+  const retryConnection = useCallback(() => {
+    setUserDisconnected(false);
+    setAutoConnectNonce((n) => n + 1);
+  }, []);
+
+  // Fetch relay servers: fresh Convex/platform config > real custom relays > cached resolved relays.
+  // Extracted so it can be called on startup AND on reconnection (when relay list is empty).
+  // Returns the number of relays ultimately loaded into the QUIC client — 0 means "no relays
+  // from any source", which the startup retry loop uses as the trigger to back off and retry.
+  const fetchRelayServers = useCallback(async (): Promise<number> => {
+    try {
+      const localRelays = parseStoredRelays(await AsyncStorage.getItem(RELAYS_KEY));
+
+      let platformServers: RelayServer[] = [];
+      try {
+        const res = await fetch(`${getConvexSiteUrl()}/config`);
+        if (res.ok) {
+          const data = await res.json();
+          platformServers = data.relayServers || [];
+          if (typeof data.cliVersion === "string" && data.cliVersion.trim() !== "") {
+            setLatestCliVersion(data.cliVersion.trim());
+          }
+        }
+      } catch {
+        // Best-effort — account relay may still work on mobile without platform config.
+      }
+
+      let settingsRelayUrl: string | undefined;
+      let settingsRelayPassword: string | undefined;
+      // Distinguish "account genuinely has no relay settings" from "we could not
+      // read them". Only the former may fall through to the password-less
+      // platform set below; the latter must keep whatever credential we already
+      // hold, because /config deliberately strips the relay password (it is
+      // per-user, not shared). Installing a password-less relay makes every
+      // relay request 401 "invalid relay password", and the reconnect loop then
+      // trips the relay's invalid-auth rate limiter — which bans the whole
+      // public IP, taking out every other device behind the same NAT.
+      let settingsUnavailable = false;
+      if (token) {
+        try {
+          const settings = await getUserSettings(token);
+          settingsRelayUrl = settings.relayUrl;
+          settingsRelayPassword = settings.relayPassword;
+          if (settings.relayUrl) {
+            const resolved = resolveRelayServers(platformServers, settings.relayUrl, settings.relayPassword);
+            connectionManager.setRelayServersOnAll(resolved);
+            // Persist the resolved fallback set so the app can reconnect offline too.
+            await AsyncStorage.setItem(RELAY_CACHE_KEY, JSON.stringify(resolved));
+            await AsyncStorage.setItem(SYNC_KEY, "true");
+            if (!looksLikeManualRelayOverride(localRelays, platformServers, settings.relayUrl)) {
+              await AsyncStorage.removeItem(RELAYS_KEY);
+            }
+            mirrorRelayPasswordToNative(resolved, settings.relayPassword);
+            console.log("[DeviceContext] Loaded", resolved.length, "relay server(s) from Convex user settings");
+            return resolved.length;
+          }
+        } catch (e) {
+          settingsUnavailable = true;
+          const unauthorized = e instanceof UserSettingsUnavailableError && e.unauthorized;
+          appLog(
+            "warn",
+            unauthorized
+              ? "[relay] session rejected by /settings — cannot read this account's relay password. Sign in again."
+              : `[relay] could not read /settings: ${e instanceof Error ? e.message : String(e)}`,
+          );
+          if (unauthorized) setLastError("Session expired — sign in again to reconnect.");
+        }
+      }
+
+      if (looksLikeManualRelayOverride(localRelays, platformServers, settingsRelayUrl)) {
+        connectionManager.setRelayServersOnAll(localRelays);
+        mirrorRelayPasswordToNative(localRelays, settingsRelayPassword);
+        console.log("[DeviceContext] Using", localRelays.length, "custom relay server(s)");
+        return localRelays.length;
+      }
+
+      // Account has no custom relayUrl but does have a per-user password: the
+      // common case. /config no longer carries a password, so attach ours to
+      // the platform servers rather than shipping them bare.
+      if (platformServers.length > 0 && settingsRelayPassword) {
+        const passworded = platformServers.map((server) => ({
+          ...server,
+          password: server.password || settingsRelayPassword,
+        }));
+        connectionManager.setRelayServersOnAll(passworded);
+        await AsyncStorage.setItem(RELAY_CACHE_KEY, JSON.stringify(passworded));
+        if (localRelays.length > 0) await AsyncStorage.removeItem(RELAYS_KEY);
+        mirrorRelayPasswordToNative(passworded, settingsRelayPassword);
+        console.log("[DeviceContext] Loaded", passworded.length, "platform relay server(s) with account password");
+        return passworded.length;
+      }
+
+      // We could not read the account's settings. Prefer the last known-good
+      // cached set (it still carries a password) over the bare platform set —
+      // and never persist the bare set over it.
+      if (settingsUnavailable) {
+        const lastKnownGood = parseStoredRelays(await AsyncStorage.getItem(RELAY_CACHE_KEY));
+        if (lastKnownGood.length > 0) {
+          connectionManager.setRelayServersOnAll(lastKnownGood);
+          mirrorRelayPasswordToNative(lastKnownGood);
+          console.log("[DeviceContext] Settings unavailable — reusing", lastKnownGood.length, "cached relay server(s)");
+          return lastKnownGood.length;
+        }
+      }
+
+      // No account-level relay at all. Only reachable when /settings was read
+      // successfully and genuinely carries no password (self-hosted,
+      // password-less relay), or when we have nothing else to try.
+      if (platformServers.length > 0) {
+        connectionManager.setRelayServersOnAll(platformServers);
+        if (!settingsUnavailable) {
+          await AsyncStorage.setItem(RELAY_CACHE_KEY, JSON.stringify(platformServers));
+          if (localRelays.length > 0) await AsyncStorage.removeItem(RELAYS_KEY);
+        }
+        mirrorRelayPasswordToNative(platformServers);
+        console.log("[DeviceContext] Loaded", platformServers.length, "relay server(s) from Convex");
+        return platformServers.length;
+      }
+
+      const cachedRelays = parseStoredRelays(await AsyncStorage.getItem(RELAY_CACHE_KEY));
+      if (cachedRelays.length > 0) {
+        connectionManager.setRelayServersOnAll(cachedRelays);
+        mirrorRelayPasswordToNative(cachedRelays, settingsRelayPassword);
+        console.log("[DeviceContext] Using", cachedRelays.length, "cached relay server(s)");
+        return cachedRelays.length;
+      }
+
+      if (localRelays.length > 0) {
+        connectionManager.setRelayServersOnAll(localRelays);
+        mirrorRelayPasswordToNative(localRelays, settingsRelayPassword);
+        console.log("[DeviceContext] Using", localRelays.length, "stored relay server(s)");
+        return localRelays.length;
+      }
+
+      connectionManager.setRelayServersOnAll([]);
+      mirrorRelayPasswordToNative([], settingsRelayPassword);
+      return 0;
+    } catch {
+      sendTelemetry(token, "relays-failed", "Could not fetch relay config");
+      return 0;
+    }
+  }, [RELAY_CACHE_KEY, RELAYS_KEY, SYNC_KEY, token]);
+
+  fetchRelayServersRef.current = fetchRelayServers;
+
+  // "Latest value" refs for the auto-connect sweep. These exist so the sweep's
+  // dep array can hold only its semantic triggers — see the dependency
+  // discipline note on the effect. Assigned during render, matching the
+  // `fetchRelayServersRef` pattern directly above.
+  const devicesRef = useRef<Device[]>(devices);
+  devicesRef.current = devices;
+  const connectedDeviceIdsRef = useRef<string[]>(connectedDeviceIds);
+  connectedDeviceIdsRef.current = connectedDeviceIds;
+  const activeDeviceRef = useRef<Device | null>(activeDevice);
+  activeDeviceRef.current = activeDevice;
+  const unreachableSetRef = useRef<Set<string>>(unreachableSet);
+  unreachableSetRef.current = unreachableSet;
+  const primaryDeviceIdRef = useRef<string | null>(primaryDeviceId);
+  primaryDeviceIdRef.current = primaryDeviceId;
+  const secondaryDeviceIdRef = useRef<string | null>(secondaryDeviceId);
+  secondaryDeviceIdRef.current = secondaryDeviceId;
+  const selectDeviceRef = useRef(selectDevice);
+  selectDeviceRef.current = selectDevice;
+  const setPrimaryDeviceRef = useRef(setPrimaryDevice);
+  setPrimaryDeviceRef.current = setPrimaryDevice;
+
+  // Last-ditch connectivity recovery. When every box reads "no reachable
+  // transport", the usual cause is a stale per-user relay password (the phone's
+  // credential drifted from what the relay expects). /settings/repair-relay
+  // re-copies the platform-managed value onto this account — it "never generates
+  // new secrets, only re-copies what every synced user has" (backend
+  // userSettings.repairRelayPassword), so it's safe on the shared free relay and
+  // can't affect other tenants. After repair we re-pull the relay set so the
+  // reconnect uses the corrected password immediately — no rebuild required.
+  const repairRelay = useCallback(async (): Promise<{ ok: boolean; relays: number; error?: string }> => {
+    if (!token) return { ok: false, relays: 0, error: "Sign in first." };
+    try {
+      const res = await fetch(`${getConvexSiteUrl()}/settings/repair-relay`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const error =
+          res.status === 401
+            ? "Session expired — sign in again to repair the relay."
+            : body?.error || `Repair failed (HTTP ${res.status}).`;
+        return { ok: false, relays: 0, error };
+      }
+      // Drop any poisoned cached relay set so the re-pull can't reuse a stale
+      // password, then reload from the freshly-repaired /settings.
+      await AsyncStorage.removeItem(RELAY_CACHE_KEY).catch(() => {});
+      const relays = await fetchRelayServers();
+      return { ok: true, relays };
+    } catch (e) {
+      return { ok: false, relays: 0, error: e instanceof Error ? e.message : "Repair failed." };
+    }
+  }, [token, RELAY_CACHE_KEY, fetchRelayServers]);
+
+  // Read by the auto-connect sweep, which no longer lists callbacks as deps.
+  const repairRelayRef = useRef(repairRelay);
+  repairRelayRef.current = repairRelay;
+  // Same "latest value" pattern for the topology-refresh rung below, whose
+  // registration effect runs once with [] deps.
+  const refreshDevicesRef = useRef(refreshDevices);
+  refreshDevicesRef.current = refreshDevices;
+
+  // Register the repair rung into every QuicClient that gets minted, so
+  // scheduleReconnect can invoke repairRelay ONCE per failure streak
+  // (audit §5c, 2026-07-19). Before this, the reconnect ladder had no
+  // repair rung at all — the manual switch modal and the auto-connect
+  // sweep did, but the code path a phone actually spends most of its time
+  // in did not.
+  useEffect(() => {
+    const hook = () => repairRelayRef.current().then(() => {});
+    connectionManager.setRelayRepairHook(hook);
+    return () => connectionManager.setRelayRepairHook(null);
+  }, []);
+
+  // Topology refresh rung for the reconnect ladder (fired by scheduleReconnect
+  // every 3rd failed attempt). The ladder itself can only retry the relay
+  // snapshot it was born with — after a relay restart it looped "device not
+  // connected to relay" for minutes and only an app relaunch (which re-reads
+  // Convex) recovered. Re-pull the relay list + device rows here so the NEXT
+  // attempt runs against fresh topology. Best-effort; failures are the
+  // ladder's problem to keep retrying.
+  useEffect(() => {
+    const hook = async () => {
+      await fetchRelayServersRef.current?.();
+      await refreshDevicesRef.current?.();
+    };
+    connectionManager.setTopologyRefreshHook(hook);
+    return () => connectionManager.setTopologyRefreshHook(null);
+  }, []);
+
+  // Seamless relay self-heal. When connections fail with a relay-auth-shaped
+  // error — the stale per-user-password symptom where every box reads "no
+  // reachable transport" — silently repair the credential ONCE per failure
+  // streak and retry, so the user never has to tap anything. Guarded by a ref so
+  // a genuine outage (dead box / relay down) can't spin a repair loop; the guard
+  // resets the moment we successfully connect. Per-user + idempotent, so it's
+  // safe on the shared free relay and never affects other tenants.
+  const relaySelfHealRef = useRef(false);
+  useEffect(() => {
+    if (connectionStatus === "connected") {
+      relaySelfHealRef.current = false; // arm a fresh streak for next time
+      return;
+    }
+    if (!token || relaySelfHealRef.current || connectionStatus !== "error") return;
+    const err = (lastError || "").toLowerCase();
+    // Audit §3 (2026-07-19): the relay now emits distinct reason codes so
+    // the client can pick the right remedy. reason=bad_password → refetch
+    // the password (repairRelay does exactly that). reason=dead_token →
+    // this device's session expired, and refetching the password is a
+    // provable no-op — the caller must re-auth. We still ROUTE both to
+    // repairRelay's auto-heal (which no-ops when it can't help), and the
+    // dead-token path also opens the re-auth affordance via the
+    // AuthContext extend-only refresh watcher.
+    const relayAuthShaped =
+      err.includes("relay password") ||
+      err.includes("invalid relay") ||
+      err.includes("no reachable transport") ||
+      err.includes("sign in again to reconnect") ||
+      err.includes("reason=bad_password") ||
+      err.includes("reason=dead_token") ||
+      err.includes("session expired") ||
+      err.includes("relay session expired");
+    if (!relayAuthShaped) return;
+    relaySelfHealRef.current = true;
+    (async () => {
+      appLog("info", "[relay] auto-heal: repairing stale relay credential…");
+      const r = await repairRelay();
+      if (r.ok && r.relays > 0) {
+        appLog("info", `[relay] auto-heal: repaired (${r.relays} relay(s)); retrying`);
+        void refreshDevices();
+      } else if (!r.ok) {
+        appLog("warn", `[relay] auto-heal failed: ${r.error ?? "unknown"}`);
+      }
+    })();
+  }, [token, connectionStatus, lastError, repairRelay, refreshDevices]);
+
+  // Initial relay fetch on mount. If we end up with zero relays (likely a
+  // transient `/config` fetch failure at boot — DNS not resolved yet,
+  // airplane-mode toggle, cold tunnel), keep retrying in the background
+  // with exponential backoff so the app recovers as soon as the network
+  // is usable. Never blocks `setRelaysReady(true)` — the app can still
+  // run on LAN-only connections while relays are being fetched.
+  const relaysFetched = useRef(false);
+  useEffect(() => {
+    if (relaysFetched.current) return;
+    relaysFetched.current = true;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const retryDelaysMs = [5_000, 10_000, 20_000, 40_000, 60_000];
+    let attempt = 0;
+
+    const tryFetch = async () => {
+      const count = await fetchRelayServers();
+      if (!cancelled) setRelaysReady(true);
+      if (cancelled) return;
+      if (count > 0) return;
+      if (attempt >= retryDelaysMs.length) {
+        console.log("[DeviceContext] No relays after retries — LAN-only connectivity");
+        return;
+      }
+      const delay = retryDelaysMs[attempt++];
+      console.log(`[DeviceContext] No relays loaded; retry in ${delay}ms`);
+      timer = setTimeout(tryFetch, delay);
+    };
+
+    tryFetch();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [fetchRelayServers]);
+
+  // Re-fetch relay config when connection is lost and relay list is empty.
+  // This handles the case where relays weren't available at startup (e.g. settings
+  // not yet seeded) but are now available after the backend created them on login.
+  useEffect(() => {
+    if (connectionStatus !== "error" && connectionStatus !== "disconnected") return;
+    if (quicClient.relayServerCount > 0) return;
+    console.log("[DeviceContext] Connection lost with no relays — re-fetching relay config");
+    fetchRelayServers();
+  }, [connectionStatus, fetchRelayServers]);
+
+  // Load all user settings once on startup (single API call instead of 3+ separate ones)
   const settingsLoaded = useRef(false);
+  // Proactive device-approval events ("mobil onay"): a TV/headset re-auth
+  // that remembers this user creates its device code with an owner hint;
+  // this poll surfaces those as a one-tap Approve with a NUMBER MATCH
+  // against the code on the device's screen. Approval requires THIS phone's
+  // authenticated session — the hint itself grants nothing, so a forged
+  // hint is just a prompt the user declines (its code won't match the TV).
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    // Once prompted (approved or ignored), a code stays quiet for this app
+    // session — a 15-min-TTL code must not re-alert every poll.
+    const prompted = new Set<string>();
+    const sweep = async () => {
+      const rows = await fetchPendingDeviceApprovals(token);
+      if (cancelled) return;
+      for (const row of rows) {
+        if (prompted.has(row.userCode)) continue;
+        prompted.add(row.userCode);
+        const name = pendingApprovalDeviceLabel(row);
+        appLog("info", `[approve] pending sign-in from ${name} (${row.userCode})`);
+        Alert.alert(
+          `Approve sign-in on ${name}?`,
+          `Its screen shows code ${row.userCode}. Approve only if the codes match — this signs it in to YOUR account.`,
+          [
+            { text: "Ignore", style: "cancel" },
+            {
+              text: "Approve",
+              onPress: () => {
+                void approveDeviceCode(row.userCode, token).then((r) => {
+                  if (r.ok) {
+                    Alert.alert("Approved", `${name} is signing in now.`);
+                  } else {
+                    Alert.alert("Approval failed", r.error || "Try scanning the QR on its screen instead.");
+                  }
+                });
+              },
+            },
+          ],
+        );
+      }
+    };
+    void sweep();
+    const id = setInterval(() => {
+      if (AppState.currentState === "active") void sweep();
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [token]);
+
   useEffect(() => {
     if (!token || settingsLoaded.current) return;
     settingsLoaded.current = true;
-    getUserSettings(token).then((s) => {
-      if (s.forceRelay !== undefined) {
-        quicClient.setForceRelay(IS_TV || Platform.OS === "web" ? true : s.forceRelay);
-        appLog("info", `[settings] forceRelay=${s.forceRelay}`);
+    (async () => {
+      try {
+        const settings = await getUserSettings(token);
+
+        // Apply forceRelay
+        if (settings.forceRelay !== undefined) {
+          connectionManager.setForceRelayOnAll(settings.forceRelay);
+          appLog("info", `[settings] forceRelay=${settings.forceRelay}`);
+        }
+
+        // Apply primary device preference (controls auto-connect when N > 1)
+        if (settings.primaryDeviceId !== undefined) {
+          setPrimaryDeviceIdState(settings.primaryDeviceId ?? null);
+          appLog("info", `[settings] primaryDeviceId=${settings.primaryDeviceId ?? "(none)"}`);
+        }
+        if (settings.secondaryDeviceId !== undefined) {
+          setSecondaryDeviceIdState(settings.secondaryDeviceId ?? null);
+          appLog("info", `[settings] secondaryDeviceId=${settings.secondaryDeviceId ?? "(none)"}`);
+        }
+
+        // Multi-target mode is a UI preference that follows the user
+        // across phones, so it lives on userSettings. undefined → off.
+        if (settings.multiTargetMode !== undefined) {
+          setMultiTargetModeState(!!settings.multiTargetMode);
+          appLog("info", `[settings] multiTargetMode=${!!settings.multiTargetMode}`);
+        }
+
+        // Apply per-device primary coding agent preference. Stored on
+        // userSettings as Array<{deviceId, runnerId}>; we fold it into
+        // a flat map for cheap lookup. The chat / task surfaces read
+        // primaryRunnerByDevice[activeDeviceId] when picking the
+        // initial runner so users don't have to chase the runner pill.
+        const rows = settings.primaryRunnerByDevice;
+        if (Array.isArray(rows)) {
+          const runners: Record<string, string> = {};
+          const models: Record<string, string> = {};
+          const modes: Record<string, string> = {};
+          const providers: Record<string, string> = {};
+          // Drop legacy / dead model identifiers when loading so a stale
+          // selection from a previous app version doesn't keep forcing
+          // the picker into a broken state. Codex CLI's old default
+          // `o3-mini` 400s on ChatGPT-account auth, `gpt-5-codex`
+          // was a transitional intermediate, and `gpt-5.3-codex`
+          // is now rejected by current Codex installs — all are stripped so
+          // preferredDefaultModelForRunner substitutes the current
+          // default (`gpt-5.4`, OpenAI's latest GPT-5 release).
+          // Probed against the real ChatGPT-account login 2026-08-02 (see
+          // backend/convex/userSettings.ts for the full measurement table).
+          const obsoleteModels = new Set(["o3-mini", "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex"]);
+          for (const row of rows as Array<{ deviceId?: string; runnerId?: string; model?: string; mode?: string; provider?: string }>) {
+            if (!row?.deviceId || !row?.runnerId) continue;
+            runners[String(row.deviceId)] = String(row.runnerId);
+            if (row.model && !obsoleteModels.has(String(row.model))) {
+              models[String(row.deviceId)] = String(row.model);
+            }
+            if (row.mode) {
+              modes[String(row.deviceId)] = String(row.mode);
+            }
+            if (row.provider) {
+              providers[String(row.deviceId)] = String(row.provider);
+            }
+          }
+          const snapshots = Array.isArray(settings.opencodeConfigByDevice)
+            ? settings.opencodeConfigByDevice
+            : [];
+          for (const snap of snapshots) {
+            const deviceId = String(snap?.deviceId || "");
+            if (!deviceId || runners[deviceId] !== "opencode") continue;
+            const model =
+              String(snap.model || "").trim() ||
+              String(snap.buildModel || "").trim() ||
+              String(snap.planModel || "").trim() ||
+              String(snap.models?.find((m: any) => m?.isDefault)?.id || "").trim();
+            if (!models[deviceId] && model) models[deviceId] = model;
+            const provider =
+              String(snap.provider || "").trim() ||
+              (model.includes("/") ? model.split("/")[0] : "");
+            if (!providers[deviceId] && provider) providers[deviceId] = provider;
+            if (!modes[deviceId] && snap.defaultAgent) modes[deviceId] = String(snap.defaultAgent);
+          }
+          setPrimaryRunnerByDeviceState(runners);
+          setPrimaryModelByDeviceState(models);
+          setPrimaryModeByDeviceState(modes);
+          setPrimaryProviderByDeviceState(providers);
+          appLog("info", `[settings] primaryRunnerByDevice=${Object.keys(runners).length} entries, models=${Object.keys(models).length}, modes=${Object.keys(modes).length}, providers=${Object.keys(providers).length}`);
+        }
+
+        // Runner/render machine split — favorite (account-wide) row. Tasks
+        // route to runnerDeviceId, previews stay on renderDeviceId, via
+        // connectionManager.runnerClient()/renderClient(). Same Convex rows
+        // the web Settings card + Vibing header edit.
+        setConnectionMode(fanoutModeFromSettings(settings));
+        const roleRows = settings.machineRolesByProject;
+        if (Array.isArray(roleRows)) {
+          const favorite = roleRows.find((r) => r && !r.projectName && r.runnerDeviceId) || null;
+          setMachineRolesState(favorite);
+          connectionManager.setMachineRoles(
+            favorite ? {
+              runnerDeviceId: favorite.runnerDeviceId,
+              secondaryRunnerDeviceId: favorite.secondaryRunnerDeviceId,
+              renderDeviceId: favorite.renderDeviceId,
+              secondaryRenderDeviceId: favorite.secondaryRenderDeviceId,
+            } : null,
+          );
+          appLog("info", `[settings] machineRoles=${favorite ? `run=${favorite.runnerDeviceId.slice(0, 8)} render=${(favorite.renderDeviceId || favorite.runnerDeviceId).slice(0, 8)}` : "(single-box)"}`);
+        }
+
+        // Apply tunnel from settings (if no local override)
+        if (settings.tunnelUrl) {
+          const customRaw = await AsyncStorage.getItem(TUNNELS_KEY);
+          if (!customRaw || JSON.parse(customRaw).length === 0) {
+            const accountTunnel: TunnelServer = {
+              id: "account",
+              url: settings.tunnelUrl,
+              priority: 1,
+            };
+            quicClient.setTunnelServers([accountTunnel]);
+            await AsyncStorage.setItem(TUNNELS_KEY, JSON.stringify([accountTunnel]));
+            console.log("[DeviceContext] Loaded tunnel from Convex user settings:", settings.tunnelUrl);
+          }
+        }
+      } catch {
+        // Best-effort — settings will use defaults
+      } finally {
+        setSettingsReady(true);
       }
-    });
-  }, [token]);
+    })();
+  }, [token, TUNNELS_KEY]);
+
+  // Backfill provider+model for opencode devices whose Convex row is
+  // half-populated (runnerId only — happens when a user taps the
+  // opencode runner pill before configuring it via OpenCodeConfigModal).
+  // Reads opencode.json over the relay so the YaverInfo native mirror
+  // (and any UI consumer) sees the device's actual model (e.g.
+  // "zai/glm-4.7") instead of an empty string. The mirror at line ~1330
+  // pushes the resolved model into iOS UserDefaults; without this
+  // backfill the shake-feedback flow falls back to Claude on devices
+  // where the user has actually configured opencode + GLM.
+  const liveOpenCodeFetchedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!quicClient.isConnected) return;
+    let cancelled = false;
+    (async () => {
+      for (const [deviceId, runnerId] of Object.entries(primaryRunnerByDevice)) {
+        if (runnerId !== "opencode") continue;
+        if (primaryProviderByDevice[deviceId] || primaryModelByDevice[deviceId]) continue;
+        if (liveOpenCodeFetchedRef.current.has(deviceId)) continue;
+        liveOpenCodeFetchedRef.current.add(deviceId);
+        try {
+          const target = activeDevice?.id === deviceId ? undefined : deviceId;
+          const cfg = await quicClient.getOpenCodeConfig(target);
+          if (cancelled) return;
+          if (cfg && token) {
+            void saveUserSettings(token, {
+              opencodeConfigForDevice: openCodeSnapshotFromConfig(deviceId, cfg),
+            }).catch(() => {});
+          }
+          const m = (cfg?.model || "").trim();
+          if (!m) continue;
+          const slash = m.indexOf("/");
+          const provider = slash > 0 ? m.slice(0, slash) : "";
+          setPrimaryModelByDeviceState((prev) =>
+            prev[deviceId] === m ? prev : { ...prev, [deviceId]: m },
+          );
+          if (provider) {
+            setPrimaryProviderByDeviceState((prev) =>
+              prev[deviceId] === provider ? prev : { ...prev, [deviceId]: provider },
+            );
+          }
+        } catch {
+          // Device unreachable / opencode not installed — allow retry
+          // on the next change tick.
+          liveOpenCodeFetchedRef.current.delete(deviceId);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [primaryRunnerByDevice, primaryProviderByDevice, primaryModelByDevice, activeDevice?.id, token]);
+
+  // One-time relay onboarding alert after first login
+  const onboardingChecked = useRef(false);
+  useEffect(() => {
+    // Relay setup is now handled in the onboarding survey — no popup needed.
+    if (!token || !relaysReady || onboardingChecked.current) return;
+    onboardingChecked.current = true;
+    AsyncStorage.setItem(ONBOARDING_KEY, "1").catch(() => {});
+  }, [token, relaysReady]);
 
   // Start/stop LAN beacon listener based on auth state
   useEffect(() => {
-    if (IS_TV) return;
     if (user?.id) {
       beaconListener.setUserId(user.id).then(() => {
         beaconListener.start();
@@ -414,7 +2817,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // Feed known device IDs to beacon listener for matching
   useEffect(() => {
-    if (IS_TV) return;
     if (devices.length > 0) {
       beaconListener.setKnownDevices(devices.map((d) => d.id));
     }
@@ -422,16 +2824,31 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // When beacon discovers/loses a device, update device list
   useEffect(() => {
-    if (IS_TV) return;
     const unsubDiscover = beaconListener.onDiscovered((discovered) => {
+      const matchedIds: string[] = [];
       setDevices((prev) =>
-        prev.map((d) => {
-          if (d.id.startsWith(discovered.deviceId)) {
-            return { ...d, host: discovered.ip, port: discovered.port, online: true, local: true };
+        collapseAliasDevices(prev.map((d) => {
+          if (
+            d.id.startsWith(discovered.deviceId) ||
+            (!!discovered.hwid && d.hwid === discovered.hwid) ||
+            normalizedDeviceName(d.name) === normalizedDeviceName(discovered.name)
+          ) {
+            matchedIds.push(d.id);
+            return { ...d, host: discovered.ip, port: discovered.port, online: true, local: true, hwid: discovered.hwid || d.hwid };
           }
           return d;
-        })
+        }))
       );
+      if (matchedIds.length > 0) {
+        setUnreachableSet((prev) => {
+          let changed = false;
+          const next = new Set(prev);
+          for (const id of matchedIds) {
+            if (next.delete(id)) changed = true;
+          }
+          return changed ? next : prev;
+        });
+      }
       sendTelemetry(token, "peer-matched", `${discovered.name} at ${discovered.ip}:${discovered.port}`, discovered.deviceId);
     });
 
@@ -450,14 +2867,794 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => { unsubDiscover(); unsubLost(); };
   }, [token]);
 
-  // Fetch devices when token becomes available + auto-poll every 3s
+  // Auto-pair bootstrap devices: when the beacon discovers a device
+  // with needsAuth=true, try to authenticate it from the phone.
+  //
+  // Encrypted path (preferred): look up the device's X25519 public
+  // key from Convex (registered during the first `yaver auth`) and
+  // encrypt the token with NaCl box before sending over HTTP. An
+  // attacker on the same WiFi cannot read the token even if they
+  // intercept the request — only the real Mac's private key can
+  // decrypt it.
+  //
+  // Passkey fallback: if the device has no public key in Convex
+  // (never authed before), fall back to the legacy passkey flow
+  // which requires the user to have run `yaver auth` at least once.
+  const autoPairedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!token || !user?.id) return;
+    const iv = setInterval(async () => {
+      const bootstraps = beaconListener.getBootstrapDevices();
+      for (const dev of bootstraps) {
+        if (autoPairedRef.current.has(dev.deviceId)) continue;
+        if (isAutoPairBlocked(dev.deviceId)) continue;
+        autoPairedRef.current.add(dev.deviceId);
+        const targetUrl = `http://${dev.ip}:${dev.port}`;
+        let paired = false;
+        try {
+          // Try encrypted path: find the device's public key from Convex.
+          // If the beacon also broadcasts a public key (dpk), verify it
+          // matches Convex — a mismatch means the device was reinstalled
+          // and we should fall back to passkey.
+          const knownDevice = devices.find(
+            (d) => d.id.startsWith(dev.deviceId) || (dev.hwid && d.hwid === dev.hwid)
+          );
+          let pubKey = knownDevice?.publicKey;
+          if (pubKey && dev.devicePublicKey && pubKey !== dev.devicePublicKey) {
+            // Key mismatch: device was reinstalled with new keys but
+            // Convex still has the old key. Skip encrypted path — the
+            // next `yaver auth` will re-sync. Fall through to passkey.
+            pubKey = undefined;
+          }
+          if (pubKey) {
+            const res = await submitEncryptedPair(targetUrl, token, pubKey, dev.bootstrapPasskey);
+            if (res.ok) {
+              appLog("info", `Encrypted auto-pair: ${dev.name || dev.deviceId} at ${dev.ip}`);
+              paired = true;
+              recordAutoPairSuccess(dev.deviceId);
+              setTimeout(() => refreshDevices(), 3000);
+              continue;
+            }
+          }
+          // SECURITY (audit 2026-07-28): the legacy plaintext-passkey fallback
+          // is GONE from the automatic path.
+          //
+          // It POSTed this phone's 1-year bearer token, in cleartext, to
+          // `http://<ip>:<port>` taken straight from a beacon — and a bootstrap
+          // beacon (`na:true`) bypasses BOTH the fingerprint check and the
+          // known-device check by design (see beacon.ts), because an unclaimed
+          // box has no identity yet. So anyone on the LAN could broadcast a
+          // forged `na:true` beacon carrying any passkey and receive the user's
+          // token, unprompted, within 3 seconds. No interaction, no prompt.
+          //
+          // It is now strictly an attacker vector: agents no longer put the
+          // passkey in the beacon at all (auth_bootstrap.go, same audit), so a
+          // beacon that still carries one is either a stale build or a forgery,
+          // and neither is a reason to hand over a credential automatically.
+          //
+          // The encrypted path above remains and is sufficient: it encrypts to
+          // the public key CONVEX holds for that device, so a spoofed host
+          // receives ciphertext it cannot read. Cryptographic proof of identity
+          // is the bar for doing this without asking the user.
+          //
+          // Pairing a genuinely new box still works — the owner reads the
+          // passkey printed on that box's console and enters it, which is a
+          // deliberate human act against a machine they can see, not an
+          // automatic reaction to a UDP packet from a stranger.
+          if (dev.bootstrapPasskey) {
+            appLog(
+              "warn",
+              `Ignoring beacon passkey from ${dev.name || dev.deviceId} at ${dev.ip}: ` +
+                `auto-pair requires a Convex-verified device key. Enter the passkey shown ` +
+                `on that machine to pair it manually.`
+            );
+          }
+          continue;
+        } catch {
+          autoPairedRef.current.delete(dev.deviceId);
+        } finally {
+          if (!paired) {
+            autoPairedRef.current.delete(dev.deviceId);
+            recordAutoPairFailure(dev.deviceId);
+          }
+        }
+      }
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [token, user?.id, devices, refreshDevices, isAutoPairBlocked, recordAutoPairFailure, recordAutoPairSuccess]);
+
+  // Relay auto-pair: probe known OFFLINE devices via relay to check
+  // if they're in bootstrap mode. The bootstrap agent connects to the
+  // relay with a placeholder token, so HTTP requests via the relay
+  // still reach it. This covers the most common case: phone on 4G,
+  // Mac at home with a wiped token.
+  useEffect(() => {
+    if (!token || !user?.id) return;
+    const relays = quicClient.getRelayServers();
+    if (relays.length === 0) return;
+
+    const probed = new Set<string>();
+    const iv = setInterval(async () => {
+      // Target:
+      //   - offline devices (may be in bootstrap but not yet re-registered)
+      //   - online devices with needsAuth=true (re-registered via /devices/bootstrap)
+      // Both need the same encrypted-pair flow via relay.
+      const offlineDevices = devices.filter(
+        (d) => (!d.online || d.needsAuth === true) && d.publicKey && !probed.has(d.id) && !autoPairedRef.current.has(d.id) && !isAutoPairBlocked(d.id)
+      );
+      for (const dev of offlineDevices) {
+        probed.add(dev.id);
+        const relayUrl = `${relays[0].httpUrl}/d/${dev.id}`;
+        try {
+          const infoRes = await fetch(`${relayUrl}/info`, { signal: AbortSignal.timeout(5000) });
+          if (!infoRes.ok) continue;
+          const info = await infoRes.json();
+          if (!info.needsAuth) continue;
+          if (!info.bootstrapPasskey) continue;
+
+          autoPairedRef.current.add(dev.id);
+          const res = await submitEncryptedPair(relayUrl, token, dev.publicKey!, info.bootstrapPasskey);
+          if (res.ok) {
+            appLog("info", `Relay encrypted auto-pair: ${dev.name} via ${relays[0].httpUrl}`);
+            recordAutoPairSuccess(dev.id);
+            setTimeout(() => refreshDevices(), 3000);
+          } else {
+            autoPairedRef.current.delete(dev.id);
+            recordAutoPairFailure(dev.id);
+          }
+        } catch {
+          // Device not reachable via relay — normal for truly offline devices.
+          // Don't count as a failure: true offline doesn't mean the device
+          // needs manual auth, it just isn't up right now.
+        }
+      }
+    }, 15000);
+    return () => clearInterval(iv);
+  }, [token, user?.id, devices, refreshDevices, isAutoPairBlocked, recordAutoPairFailure, recordAutoPairSuccess]);
+
+  // Bootstrap detection via direct connection. Covers the case where the
+  // mobile app can reach the Mac's bootstrap HTTP server directly (LAN IP
+  // known from Convex device list, no beacon needed). /info returns
+  // { needsAuth: true } — mobile pushes its token immediately.
+  // This is the catch-all for Release builds where UDP multicast may not
+  // deliver beacons to the app, and for offline→bootstrap transitions
+  // where the relay path would skip because the device appears online.
+  useEffect(() => {
+    if (!token || !user?.id || !activeDevice?.host) return;
+    if (autoPairedRef.current.has(activeDevice.id)) return;
+    if (isAutoPairBlocked(activeDevice.id)) return;
+    const iv = setInterval(async () => {
+      if (autoPairedRef.current.has(activeDevice.id)) return;
+      if (isAutoPairBlocked(activeDevice.id)) return;
+      try {
+        const url = `http://${activeDevice.host}:${activeDevice.port || 18080}/info`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) return;
+        const info = await res.json();
+        if (!info.needsAuth) return;
+        // Mark before we try so we don't retry-storm
+        autoPairedRef.current.add(activeDevice.id);
+        const targetUrl = `http://${activeDevice.host}:${activeDevice.port || 18080}`;
+        // Try encrypted pair if we have this device's pubkey in Convex
+        if (activeDevice.publicKey) {
+          const ok = await submitEncryptedPair(targetUrl, token, activeDevice.publicKey, info.bootstrapPasskey || info.passkey);
+          if (ok.ok) {
+            appLog("info", `Direct encrypted auto-pair: ${activeDevice.name} at ${activeDevice.host}`);
+            recordAutoPairSuccess(activeDevice.id);
+            setTimeout(() => refreshDevices(), 3000);
+            return;
+          }
+        }
+        // Fallback: passkey pair — need to fetch passkey from bootstrap /info response
+        const passkey = info.bootstrapPasskey || info.passkey;
+        if (!passkey) {
+          autoPairedRef.current.delete(activeDevice.id);
+          recordAutoPairFailure(activeDevice.id);
+          appLog("warn", `Bootstrap device ${activeDevice.name} has no passkey and no known pubkey — cannot auto-pair`);
+          return;
+        }
+        const pairRes = await submitPair({
+          code: passkey,
+          targetUrl,
+          token,
+          userId: user.id,
+        });
+        if (pairRes.ok) {
+          appLog("info", `Direct passkey auto-pair: ${activeDevice.name} at ${activeDevice.host}`);
+          recordAutoPairSuccess(activeDevice.id);
+          setTimeout(() => refreshDevices(), 3000);
+        } else {
+          autoPairedRef.current.delete(activeDevice.id);
+          recordAutoPairFailure(activeDevice.id);
+        }
+      } catch {
+        // Network error — will retry next tick. Do NOT count as an
+        // auto-pair failure: the device may just be momentarily
+        // unreachable, not broken.
+      }
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [token, user?.id, activeDevice?.id, activeDevice?.host, activeDevice?.port, activeDevice?.publicKey, activeDevice?.name, refreshDevices, isAutoPairBlocked, recordAutoPairFailure, recordAutoPairSuccess]);
+
+  // recoverBootstrapDevice handles the DIRECT-reach reclaim path: the agent's
+  // bootstrap HTTP server is reachable on the LAN (or any network where /info
+  // exposes its passkey), so we can run encrypted-pair or passkey-pair
+  // straight against the agent.
+  //
+  // It deliberately does NOT iterate relay targets. The bootstrap server
+  // suppresses bootstrapPasskey on /info whenever the request looks
+  // proxied — X-Forwarded-For, X-Relay-Password, or non-LAN remote IP — so
+  // the relay arm of this function would always fail at the "did not expose
+  // a passkey" branch. The relay path is owner-claim's job; recoverDeviceAuth
+  // dispatches to whichever fits the lifecycle probe.
+  //
+  // The optional `cachedInfo` lets the caller pass an already-fetched /info
+  // payload to skip the duplicate round-trip when probeMobileDeviceStatus
+  // already proved the device was direct-reachable.
+  // ── Bootstrap-pending claims ────────────────────────────────────
+  // Tracks boxes that registered themselves on the user's relay with
+  // a `bootstrap-pending` token but have no Convex devices row yet.
+  // The user's dashboard uses this to surface fresh installs that
+  // would otherwise be invisible to anyone off-LAN.
+  const [pendingClaims, setPendingClaims] = useState<PendingDeviceClaim[]>([]);
+  const refreshPendingClaims = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${getConvexSiteUrl()}/devices/pending-list`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        // Older backends without the endpoint return 404 — keep
+        // current state and try again next tick.
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      const items: PendingDeviceClaim[] = Array.isArray(data?.items) ? data.items : [];
+      setPendingClaims(items);
+    } catch {
+      // Network blip; keep prior state.
+    }
+  }, [token]);
+
+  const claimPendingDevice = useCallback(
+    async (deviceId: string, name?: string): Promise<{ ok: boolean; error?: string }> => {
+      if (!token) return { ok: false, error: "Not signed in" };
+      try {
+        const res = await fetch(`${getConvexSiteUrl()}/devices/pending-claim`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ deviceId, name }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({} as Record<string, unknown>));
+          const msg = typeof body?.error === "string" ? body.error : `HTTP ${res.status}`;
+          return { ok: false, error: msg };
+        }
+        // Pending row was deleted server-side and a real devices row
+        // was created. Refresh both lists immediately so the UI
+        // doesn't blink.
+        await Promise.all([refreshPendingClaims(), refreshDevices()]);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    [token, refreshPendingClaims, refreshDevices],
+  );
+
+  // Poll pending claims on the same cadence as devices (10s) so the
+  // pending banner appears within one tick of a fresh install joining
+  // the relay.
+  useEffect(() => {
+    if (!token) {
+      setPendingClaims([]);
+      return;
+    }
+    refreshPendingClaims();
+    const iv = setInterval(refreshPendingClaims, 10000);
+    return () => clearInterval(iv);
+  }, [token, refreshPendingClaims]);
+
+  const recoverBootstrapDevice = useCallback(async (
+    device: Device,
+    cachedInfo?: Record<string, any> | null,
+  ): Promise<{ ok: boolean; targetUrl?: string; error?: string }> => {
+    if (!token || !user?.id) return { ok: false, error: "Not signed in" };
+
+    const port = device.port || 18080;
+    const directTargets = Array.from(new Set([
+      `http://${device.host}:${port}`,
+      ...(device.lanIps || []).filter(Boolean).map((ip) => `http://${ip}:${port}`),
+    ])).filter((url) => {
+      try {
+        const parsed = new URL(url);
+        return !!parsed.hostname;
+      } catch {
+        return false;
+      }
+    });
+
+    const tryPairAtUrl = async (
+      targetUrl: string,
+      info: Record<string, any>,
+    ): Promise<{ ok: boolean; host?: string; error?: string } | { skip: true; reason: string }> => {
+      const inBootstrap = info?.needsAuth === true || info?.mode === "bootstrap"
+        || info?.lifecycleState === "bootstrap" || info?.lifecycle?.state === "bootstrap";
+      if (!inBootstrap) {
+        return { skip: true, reason: `${targetUrl} is up but not in bootstrap` };
+      }
+      const pairCode = info?.bootstrapPasskey || info?.passkey;
+      if (device.publicKey) {
+        const res = await submitEncryptedPair(targetUrl, token, device.publicKey, pairCode);
+        // Encrypted pair without a code is rejected by the agent (400).
+        // Without a passkey AND without success, fall through.
+        if (res.ok) return res;
+        if (!pairCode) return { skip: true, reason: `${targetUrl} did not expose a passkey for encrypted pair` };
+        return res;
+      }
+      if (!pairCode) {
+        return { skip: true, reason: `${targetUrl} did not expose a passkey and device has no publicKey` };
+      }
+      return await submitPair({ code: pairCode, targetUrl, token, userId: user.id });
+    };
+
+    let lastError = "bootstrap endpoint did not respond";
+
+    // First, if the caller passed a fresh /info that already shows bootstrap
+    // and a usable passkey, attempt against device.host without re-fetching.
+    if (cachedInfo) {
+      const primaryUrl = `http://${device.host}:${port}`;
+      const out = await tryPairAtUrl(primaryUrl, cachedInfo);
+      if ("ok" in out && out.ok) {
+        quicClient.agentAuthExpired = false;
+        setAgentAuthExpired(false);
+        clearDeviceUnreachable(device.id);
+        appLog("info", `Recovered bootstrap-mode Yaver auth for ${device.name} via cached /info`);
+        setTimeout(() => refreshDevices(), 1200);
+        return { ok: true, targetUrl: ("host" in out && out.host) || primaryUrl };
+      }
+      if ("skip" in out) {
+        lastError = out.reason;
+      } else if ("error" in out && out.error) {
+        lastError = out.error;
+      }
+    }
+
+    for (const targetUrl of directTargets) {
+      try {
+        const infoRes = await fetch(`${targetUrl}/info`, {
+          signal: AbortSignal.timeout(3500),
+        });
+        if (!infoRes.ok) {
+          lastError = `HTTP ${infoRes.status} from ${targetUrl}`;
+          continue;
+        }
+        const info = await infoRes.json().catch(() => ({} as any));
+        const out = await tryPairAtUrl(targetUrl, info);
+        if ("ok" in out && out.ok) {
+          quicClient.agentAuthExpired = false;
+          setAgentAuthExpired(false);
+          clearDeviceUnreachable(device.id);
+          appLog("info", `Recovered bootstrap-mode Yaver auth for ${device.name} via ${targetUrl}`);
+          setTimeout(() => refreshDevices(), 1200);
+          return { ok: true, targetUrl: ("host" in out && out.host) || targetUrl };
+        }
+        if ("skip" in out) {
+          lastError = out.reason;
+        } else if ("error" in out && out.error) {
+          lastError = out.error;
+        }
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return { ok: false, error: lastError };
+  }, [token, user?.id, refreshDevices, clearDeviceUnreachable]);
+
+  const recoverDeviceAuth = useCallback(async (device: Device): Promise<RecoveryResult | null> => {
+    if (!token || !user?.id) {
+      return { ok: false, error: "Not signed in" };
+    }
+
+    // Ghost rows lack hwid/publicKey so any reconnect attempt would be
+    // matching against unstable identity. Refuse early — let the user
+    // re-pair from the box (or rely on the bootstrap-pending flow on a
+    // truly fresh install) instead of silently hitting whatever row
+    // happens to share a hostname.
+    // A managed box is exempt: the ambiguity this guards against — matching
+    // against whatever row happens to share a hostname — cannot arise when we
+    // hold the provider-assigned address of exactly one server. Requiring
+    // hwid/publicKey here would refuse the one box that most needs recovering,
+    // since a machine whose session expired never registered and therefore has
+    // no identity to present. "Re-pair from the device" is also not advice a
+    // user can act on for a cloud box they have no other way into.
+    if (isGhostDevice(device) && !device.managed) {
+      const msg = "Cannot recover: device row is missing identity (hwid/publicKey). Re-pair from the device.";
+      appLog("warn", `${device.name}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+
+    let lifecycleProbe = await probeMobileDeviceStatus(device, token, 3500).catch(() => null);
+
+    // Fully offline? The box's agent process is down, so neither the
+    // safe-layer /auth/recover nor a direct /info probe can reach it —
+    // every transport candidate just times out. Before giving up,
+    // delegate a regular SSH recovery to an online peer: ask the
+    // currently-connected agent to `yaver ssh <target>` into the box and
+    // restart Yaver (the watchdog peer-recovery path). That ssh now
+    // resolves the box's reachable LAN/tunnel route, so a phone — which
+    // can't ssh itself — gets the "regular ssh" recovery for free. Once
+    // the box heartbeats again we fall straight through to the normal
+    // safe-layer re-auth cascade below (which is the `yaver auth
+    // --headless` equivalent over the agent transport). No-op when no
+    // online peer is connected (nothing can ssh on our behalf) or when
+    // the box was reachable all along.
+    if (!lifecycleProbe?.reachable) {
+      const peer = await quicClient
+        .recoverPeer(device.id)
+        .catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }));
+      if (peer.ok) {
+        appLog("info", `Asked an online peer to SSH-recover ${device.name}: ${peer.outcome}`);
+        // Poll for the restarted agent to come back online (~24s budget).
+        for (let i = 0; i < 8; i++) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const reprobe = await probeMobileDeviceStatus(device, token, 3500).catch(() => null);
+          if (reprobe?.reachable) {
+            lifecycleProbe = reprobe;
+            appLog("info", `${device.name} back online after peer SSH-recovery — continuing re-auth`);
+            break;
+          }
+        }
+      } else {
+        appLog("warn", `Peer SSH-recovery unavailable for ${device.name}: ${(peer as { error?: string }).error}`);
+      }
+    }
+
+    const lifecycleState = lifecycleProbe?.lifecycleState;
+    const shouldTryBootstrap =
+      lifecycleState === "bootstrap" || (!lifecycleState && device.needsAuth === true);
+
+    if (shouldTryBootstrap) {
+      // Route by transport. recoverBootstrapDevice can only succeed when
+      // /info exposed a usable passkey, which the agent suppresses on
+      // proxied requests (relay, X-Forwarded-For). When the probe found
+      // the device only over relay, jump straight to owner-claim instead
+      // of doing a round-trip we know will fail.
+      const probedDirect = lifecycleProbe?.path === "direct" && !!lifecycleProbe.info;
+      const probedRelay = lifecycleProbe?.path === "relay";
+
+      if (probedDirect) {
+        const bootstrapRecovery = await recoverBootstrapDevice(device, lifecycleProbe?.info);
+        if (bootstrapRecovery.ok) {
+          return { ok: true, targetUrl: bootstrapRecovery.targetUrl };
+        }
+        appLog("warn",
+          `Direct bootstrap recovery failed for ${device.name}: ${bootstrapRecovery.error || "unknown"} — falling through to owner-claim`);
+      }
+
+      const claimed = await quicClient.ownerClaimDevice(device.id, {
+        host: device.host,
+        port: device.port,
+        lanIps: device.lanIps,
+        tunnelUrl: device.tunnelUrl,
+        publicEndpoints: device.publicEndpoints,
+      });
+      if (claimed.ok) {
+        quicClient.agentAuthExpired = false;
+        setAgentAuthExpired(false);
+        clearDeviceUnreachable(device.id);
+        appLog("info", `Recovered bootstrap-mode Yaver auth for ${device.name} via owner claim`);
+        setTimeout(() => refreshDevices(), 800);
+        return { ok: true, targetUrl: claimed.host };
+      }
+      appLog("warn", `Owner-claim recovery failed for ${device.name}: ${claimed.error}`);
+
+      // Last resort: if probe was direct but cached attempt failed, OR
+      // probe was relay (so we never tried direct), try direct now.
+      // Catches the case where probe ran over relay first but a direct
+      // path is also reachable (e.g. LAN became available between probe
+      // and reclaim).
+      if (!probedDirect) {
+        const fallbackDirect = await recoverBootstrapDevice(device);
+        if (fallbackDirect.ok) {
+          return { ok: true, targetUrl: fallbackDirect.targetUrl };
+        }
+        if (probedRelay) {
+          appLog("warn",
+            `Relay-probed bootstrap reclaim exhausted for ${device.name}: owner-claim and direct both failed`);
+        }
+      }
+    }
+
+    quicClient.primeTarget(
+      device.host,
+      device.port,
+      token,
+      device.id,
+      device.lanIps,
+      tunnelServersForDevice(device),
+    );
+
+    if (!activeDevice || activeDevice.id !== device.id) {
+      try {
+        await selectDevice(device);
+      } catch (err) {
+        appLog("warn", `Initial connect before auth recovery failed for ${device.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Try mode=direct first — single round-trip that hands this
+    // mobile's bearer to the agent as its new token. Verified
+    // end-to-end against the remote test box from a host-authed
+    // CLI: 1 HTTP call flips lifecycleState from yaver-auth-expired
+    // to ready-to-connect with no pair session, no OAuth, no user
+    // interaction. The agent's /auth/recover requires the caller to
+    // be host-authed (verifyHostToken: caller's userId owns the
+    // device) which mobile always is when its own session is alive.
+    // If direct fails (host check rejects, or this client's session
+    // itself has died), we fall through to the pair / device-code
+    // paths below — those still cover the off-LAN / brand-new-box /
+    // multi-account scenarios.
+    const directRecovery = await quicClient.recoverAgent(undefined, "direct");
+    if (directRecovery?.ok) {
+      quicClient.agentAuthExpired = false;
+      setAgentAuthExpired(false);
+      clearDeviceUnreachable(device.id);
+      appLog("info", `Recovered ${device.name} via direct host-token push (1-call)`);
+      setTimeout(() => refreshDevices(), 800);
+      return { ok: true, targetUrl: directRecovery.targetUrl };
+    }
+    if (directRecovery?.alreadyHealthy) {
+      // Agent's session is already valid — nothing to do, just clear our
+      // stale flag and refresh. This happens when one client (auto-recovery
+      // in this same app, or the web dashboard) recovered moments ago and
+      // we're still showing the pre-recovery state.
+      quicClient.agentAuthExpired = false;
+      setAgentAuthExpired(false);
+      clearDeviceUnreachable(device.id);
+      setTimeout(() => refreshDevices(), 200);
+      return { ok: true, targetUrl: directRecovery.targetUrl };
+    }
+    if (directRecovery?.rateLimited) {
+      // Agent's per-IP recovery rate limiter (5s) just rejected us. Falling
+      // back to pair / bootstrap-secret / device-code modes hits the SAME
+      // /auth/recover endpoint and would just reproduce the 429 — the user
+      // sees "too many recovery attempts" from a single tap. Surface the
+      // signal up so the UI can show "wait a few seconds and retry"
+      // instead of failing through 4 modes for nothing.
+      appLog("warn", `Direct recovery rate-limited for ${device.name} — surface to caller`);
+      return directRecovery;
+    }
+    appLog("warn", `Direct recovery rejected for ${device.name} (${directRecovery?.error || "unknown"}) — falling back to pair-session path`);
+
+    // Direct mode failed for a non-rate-limit reason. Skip the legacy
+    // pair-session cascade — both pair and bootstrap-secret-pair hit
+    // the SAME /auth/recover endpoint and contribute another POST per
+    // mode to the agent's 5s rate window. They've also been redundant
+    // since direct host-token push landed: any caller who can pass
+    // verifyHostToken (mobile signed in as the device owner) gets a
+    // 1-call success in direct mode; if that fails, pair won't fix it.
+    // Jump straight to device-code, which is the equivalent of running
+    // `yaver primary auth` from the desktop CLI — opens a Convex OAuth
+    // page in an in-app browser for explicit re-authorization.
+    const deviceCode = await quicClient.recoverAgent(undefined, "device-code");
+    if (deviceCode?.ok && deviceCode.deviceCodeUrl) {
+      appLog("info", `Opened device-code recovery for ${device.name}: ${deviceCode.userCode || "code unavailable"}`);
+      try {
+        await WebBrowser.openBrowserAsync(deviceCode.deviceCodeUrl, {
+          // iOS: dismiss button label inside the in-app Safari sheet
+          dismissButtonStyle: "done",
+          // Match the app's tone so the sign-in sheet doesn't feel like
+          // a foreign tab.
+          controlsColor: "#8b5cf6",
+          presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+        });
+      } catch (err) {
+        // openBrowserAsync rejects on Android < API 18 / web — fall back
+        // to the system browser so the user can still complete OAuth.
+        appLog("warn", `WebBrowser open failed for ${device.name}, falling back to Linking: ${err instanceof Error ? err.message : String(err)}`);
+        Linking.openURL(deviceCode.deviceCodeUrl).catch(() => {});
+      }
+      // Background-poll /auth/recover/session until the agent reports
+      // recovered / expired / failed so the UI can flip the banner the
+      // moment Convex confirms the new token, instead of relying on two
+      // blind 1s/5s refreshes that often miss the heartbeat round-trip.
+      // The endpoint is rate-limit-free (the GET handler doesn't hit
+      // recoveryLimiter), so a 2s cadence is fine.
+      if (deviceCode.recoveryId && deviceCode.waitToken) {
+        const recoveryId = deviceCode.recoveryId;
+        const waitToken = deviceCode.waitToken;
+        const pollDeadline = Date.now() + 12 * 60 * 1000; // 12 min — device codes expire ≤10m
+        let consecutiveFailures = 0;
+        const tick = async () => {
+          if (Date.now() > pollDeadline) {
+            appLog("warn", `Device-code poll for ${device.name} timed out — falling back to refresh`);
+            refreshDevices().catch(() => {});
+            return;
+          }
+          const status = await quicClient.recoverSessionStatus(recoveryId, waitToken);
+          if (!status) {
+            // No transport available right now (agent may be flapping
+            // mid-recovery). Back off and try again.
+            consecutiveFailures += 1;
+            if (consecutiveFailures > 6) {
+              appLog("warn", `Device-code poll for ${device.name}: 6 transport failures, giving up`);
+              refreshDevices().catch(() => {});
+              return;
+            }
+            setTimeout(tick, 4000);
+            return;
+          }
+          if (!status.ok) {
+            // Agent answered but didn't recognize the session (404 etc.)
+            // — no point retrying, the session is gone.
+            appLog("warn", `Device-code poll for ${device.name}: ${status.error || "session lookup failed"}`);
+            refreshDevices().catch(() => {});
+            return;
+          }
+          consecutiveFailures = 0;
+          switch (status.state) {
+            case "recovered":
+              appLog("info", `${device.name}: device-code recovery succeeded`);
+              quicClient.agentAuthExpired = false;
+              setAgentAuthExpired(false);
+              clearDeviceUnreachable(device.id);
+              refreshDevices().catch(() => {});
+              setTimeout(() => refreshDevices().catch(() => {}), 3000);
+              return;
+            case "expired":
+            case "failed":
+              appLog("warn", `${device.name}: device-code recovery ended in ${status.state}${status.error ? ` (${status.error})` : ""}`);
+              refreshDevices().catch(() => {});
+              return;
+            default:
+              setTimeout(tick, 2000);
+          }
+        };
+        // First tick fires fast — the user may have completed sign-in
+        // on the same phone, race the WebBrowser dismissal.
+        setTimeout(tick, 1500);
+      } else {
+        // Older agent that didn't return recoveryId/waitToken — fall
+        // back to the legacy double-refresh.
+        setTimeout(() => refreshDevices().catch(() => {}), 1000);
+        setTimeout(() => refreshDevices().catch(() => {}), 5000);
+      }
+    } else {
+      appLog("warn", `Device-code recovery did not start for ${device.name}: ${deviceCode?.error || "unknown error"}`);
+    }
+    return deviceCode;
+  }, [token, user?.id, activeDevice, selectDevice, refreshDevices, clearDeviceUnreachable, recoverBootstrapDevice, setAgentAuthExpired]);
+
+  // Auth-expired recovery: the agent is still reachable, but its own
+  // Convex session is stale. Use the PHONE'S valid bearer token to
+  // authorize /auth/recover, open a one-shot pair session, then push
+  // the token back immediately. This is the critical "remote box
+  // rebooted, phone must recover it without SSH" path.
+  const recoveringAuthRef = useRef<Set<string>>(new Set());
+  // Auto-recovery fail count per device per session. After 2 failures
+  // we stop silently retrying — every state change that re-fired the
+  // effect was burning the agent's 5s rate-limit window without any
+  // user feedback, and made the manual Re-auth button race the silent
+  // retries. After cap is hit, the banner + Re-auth button is the
+  // only recovery path. Cleared on logout / app restart / successful
+  // recovery.
+  const autoRecoveryFailRef = useRef<Map<string, number>>(new Map());
+  const AUTO_RECOVERY_MAX_FAILS = 2;
+  // Set of device IDs we've already nagged about Yaver auth this
+  // session. Cleared on logout / app restart. Prevents the auto-
+  // guide Alert from re-firing on every 30s heartbeat poll.
+  const guideShownRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!token || !user?.id || !activeDevice || !agentAuthExpired) return;
+    if (recoveringAuthRef.current.has(activeDevice.id)) return;
+    // Cap reached — wait for the user to tap Re-auth manually.
+    if ((autoRecoveryFailRef.current.get(activeDevice.id) ?? 0) >= AUTO_RECOVERY_MAX_FAILS) {
+      return;
+    }
+    // Silent recovery is gated to the primary device only. Other devices
+    // require an explicit user tap. Avoids hammering the agent's rate-limit budget on devices
+    // the user isn't actively trying to use.
+    if (!primaryDeviceId || primaryDeviceId !== activeDevice.id) return;
+    // And only when the device is up — no point burning our 2-attempt
+    // budget against a box that's offline or stale.
+    const recentTunnel = activeDevice.lastTunnelEvent && activeDevice.lastTunnelEvent.online &&
+      Date.now() - activeDevice.lastTunnelEvent.at < 90_000;
+    const peerOnline = activeDevice.peerState === "online";
+    const isUp = peerOnline || recentTunnel || activeDevice.online;
+    if (!isUp) return;
+
+    let cancelled = false;
+    const tryRecover = async () => {
+      if (cancelled || recoveringAuthRef.current.has(activeDevice.id)) return;
+      recoveringAuthRef.current.add(activeDevice.id);
+      try {
+        const result = await recoverDeviceAuth(activeDevice);
+        if (result?.ok) {
+          autoRecoveryFailRef.current.delete(activeDevice.id);
+        } else {
+          // Anything not-OK (including rateLimited) counts toward the cap so
+          // the auto loop eventually yields to the user. The user's manual
+          // tap can still fire — it goes through a separate code path that
+          // doesn't read this counter.
+          const prev = autoRecoveryFailRef.current.get(activeDevice.id) ?? 0;
+          autoRecoveryFailRef.current.set(activeDevice.id, prev + 1);
+        }
+      } finally {
+        if (!cancelled) {
+          setTimeout(() => {
+            recoveringAuthRef.current.delete(activeDevice.id);
+          }, 5000);
+        }
+      }
+    };
+
+    tryRecover().catch((err) => {
+      recoveringAuthRef.current.delete(activeDevice.id);
+      // Exceptional path also counts toward the cap.
+      const prev = autoRecoveryFailRef.current.get(activeDevice.id) ?? 0;
+      autoRecoveryFailRef.current.set(activeDevice.id, prev + 1);
+      // Surface the recovery failure so the user isn't stuck with a blank
+      // "connection lost" banner — they at least know what to try next.
+      const msg = err instanceof Error ? err.message : String(err);
+      appLog("warn", `Auth recovery failed for ${activeDevice.name}: ${msg}`);
+      if (!cancelled) {
+        setLastError(`Auth recovery failed for ${activeDevice.name}: ${msg}. Sign in again from Settings or pick another device.`);
+        // Auto-guide the user to the per-device Recovery UI in Device
+        // Details. The auto-recovery loop above tried silently; if it
+        // failed, the user needs the in-Modal "Recover Yaver Auth"
+        // button (which uses the smart dispatcher and surfaces the
+        // detailed error). Only prompt once per device per session
+        // — guideShownRef prevents Alert spam if the polling loop
+        // re-detects the same auth-expired state every 30s.
+        if (!guideShownRef.current.has(activeDevice.id)) {
+          guideShownRef.current.add(activeDevice.id);
+          const dev = activeDevice;
+          setTimeout(() => {
+            if (cancelled) return;
+            Alert.alert(
+              `${dev.name} needs Yaver auth`,
+              `The agent's session expired and the auto-recovery couldn't refresh it. Open the device details to run a manual recover, or dismiss to handle later.\n\n${appTag()}`,
+              [
+                { text: "Later", style: "cancel" },
+                {
+                  text: "Open recovery",
+                  onPress: () => {
+                    router.push({
+                      pathname: "/(tabs)/devices",
+                      params: { openDetails: dev.id, focus: "recovery" },
+                    } as any);
+                  },
+                },
+              ],
+              { cancelable: true },
+            );
+          }, 800);
+        }
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user?.id, activeDevice, agentAuthExpired, recoverDeviceAuth, primaryDeviceId]);
+
+  // Fetch devices when token becomes available + poll every 30s (lightweight)
   useEffect(() => {
     if (token) {
       refreshDevices();
-      // Poll every 3s so device status changes are picked up from any screen
-      const interval = setInterval(refreshDevices, 3000);
+      // Poll every 30s — beacon handles instant LAN discovery, this is just for online status
+      const interval = setInterval(refreshDevices, 30000);
       return () => clearInterval(interval);
     } else {
+      // Token cleared = signed out. Tear down every pooled per-device
+      // client so the next user landing on this device (or the same
+      // user re-signing in) doesn't inherit live QUIC connections
+      // bound to the previous bearer.
+      connectionManager.disconnectAll();
       setDevices([]);
       setActiveDevice(null);
       setConnectionStatus("disconnected");
@@ -465,63 +3662,453 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token, refreshDevices]);
 
-  // Prefer the account's primary Ubuntu runner when it is online. tvOS still
-  // connects only to managed Cloud Runners; other clients retain the same
-  // primary-device behavior and use a sole online runner as their fallback.
-  // Wait for relaysReady so the QUIC client has relay servers before attempting connection
+  // Reachability-driven auto-connect (applies after login / relaysReady).
+  // PINGS every device once (yaver-level reachability) and connects to the
+  // best REACHABLE one in priority order — explicit sticky pick (if reachable)
+  // → primary → secondary → first reachable alphabetically. The old rule used
+  // the stale heartbeat `online` flag, which kept selecting a box that was
+  // "online" in Convex but unreachable from the phone, then hung on an
+  // optimistic "Connecting". If devices exist but NONE respond, land in a
+  // terminal "Can't connect" state instead of hanging. With no devices at all
+  // the picker/empty-state handles the "no remote device added" case. One
+  // attempt per nonce (bumped on device-set change + manual Retry) so a
+  // failing connect can't loop. The user-disconnect flag always wins.
+  //
+  // DEPENDENCY DISCIPLINE — this effect used to list `devices`,
+  // `connectedDeviceIds` and `activeDevice?.id` as deps. All three change
+  // identity constantly: `devices` is a fresh array on every 30s poll, and
+  // `connectedDeviceIds` mutates whenever the pool-warming effect below opens a
+  // background connection. React runs the PREVIOUS cleanup before re-running an
+  // effect, so each of those churns fired `cancelled = true` and killed the
+  // in-flight sweep mid-probe. The nonce had already been marked attempted on
+  // ENTRY, so the re-run then early-returned and no new sweep ever started —
+  // leaving the banner stuck on "No machine selected" until the user picked a
+  // box by hand. Observed live 2026-07-18: 23 seconds of flapping between
+  // "Connecting" and "No machine selected" with ZERO connect attempts in the
+  // log, then a manual pick that connected via relay in 1.0s.
+  //
+  // The fix is two-part and both halves are load-bearing:
+  //   1. Churny values are read through refs, so the dep array holds only the
+  //      semantic triggers (nonce, auth/settings readiness, user-disconnect).
+  //      `deviceIdsKey` already bumps the nonce when the device SET genuinely
+  //      changes, which is the real "re-sweep" signal.
+  //   2. The nonce is marked attempted on COMPLETION, not on entry, so a sweep
+  //      that IS legitimately cancelled re-arms instead of wedging.
   useEffect(() => {
-    if (!token || !relaysReady || activeDevice || connectionStatus === "connecting" || userDisconnected) return;
+    if (!settingsReady || !token || !relaysReady || userDisconnected) return;
+    const devicesNow = devicesRef.current;
+    const connectedNow = connectedDeviceIdsRef.current;
+    const activeNow = activeDeviceRef.current;
+    // Already genuinely connected to the focused device → nothing to do.
+    if (activeNow && connectedNow.includes(activeNow.id)) return;
+    if (autoConnectInFlightRef.current) return;
+    if (autoConnectAttemptedNonceRef.current === autoConnectNonce) return;
+    const candidates = devicesNow;
+    if (candidates.length === 0) return; // no devices → empty-state UI handles it
 
-    const recentDevices = devices.filter((d) => d.online && (!IS_TV || d.deviceKind === "cloud-runner"));
-    const primary = recentDevices.find((device) => normalizedDeviceName(device.name) === PRIMARY_DEVICE_NAME);
-    const target = primary ?? (recentDevices.length === 1 ? recentDevices[0] : null);
+    autoConnectInFlightRef.current = true;
+    autoConnectCancelRef.current = false;
+    let cancelled = false;
+    const isCancelled = () => cancelled || autoConnectCancelRef.current;
+    (async () => {
+      try {
+        setAutoConnecting(true);
+        setConnectionStatus("connecting");
 
-    if (target) {
-      console.log("[DeviceContext] Auto-connecting to preferred runner:", target.name);
-      sendTelemetry(token, "auto-connect", `Preferred runner: ${target.name}`, JSON.stringify({
-        relayCount: quicClient.relayServerCount, deviceId: target.id.slice(0, 8),
-      }));
-      selectDevice(target);
-    }
-    // Multiple available runners without the primary require explicit choice.
-  }, [devices, token, relaysReady, activeDevice, connectionStatus, userDisconnected, selectDevice]);
+        // The ONLY boxes we silently auto-connect to are the user's explicit
+        // sticky pick, then their primary, then their secondary — in that
+        // order. Product rule: "connect to primary if online, else secondary if
+        // it's online and primary isn't; otherwise show the list." We try them
+        // SEQUENTIALLY so the banner can narrate "Primary (Mac mini) is online —
+        // connecting…" and, on failure, "Trying secondary…".
+        const byId = new Map(candidates.map((d) => [d.id, d] as const));
+        const ordered: Array<{ device: Device; role: "sticky" | "primary" | "secondary" }> = [];
+        const pushPriority = (
+          id: string | null | undefined,
+          role: "sticky" | "primary" | "secondary",
+        ) => {
+          if (id && byId.has(id) && !ordered.some((o) => o.device.id === id)) {
+            ordered.push({ device: byId.get(id)!, role });
+          }
+        };
+        pushPriority(userSelectedDeviceIdRef.current, "sticky");
+        pushPriority(primaryDeviceIdRef.current, "primary");
+        pushPriority(secondaryDeviceIdRef.current, "secondary");
 
-  // Trigger immediate reconnection on network change (WiFi↔cellular roaming)
+        if (ordered.length > 0) {
+          for (const { device, role } of ordered) {
+            if (isCancelled()) return;
+            // Narrate the attempt BEFORE probing so the UI shows which box and
+            // role we're reaching for.
+            setAutoConnectTarget({ id: device.id, name: device.name, role });
+            // Same probe+repair ladder the manual switch modal uses. Previously
+            // this was a bare `probeMobileDeviceStatus` that never inspected
+            // `errorCode`, so a stale per-user relay password failed every
+            // auto-connect while the picker silently repaired it — the default
+            // path was strictly weaker than the manual one.
+            const { probe } = await probeDeviceWithRepair(
+              { id: device.id, name: device.name, host: device.host, port: device.port, lanIps: device.lanIps },
+              {
+                token,
+                timeoutMs: AUTO_CONNECT_PROBE_MS,
+                onStage: setAutoConnectStage,
+                repairRelay: repairRelayRef.current,
+                isCancelled,
+              },
+            );
+            if (isCancelled()) return;
+            if (!probe?.reachable) continue; // offline → fall through to the next priority
+            console.log(`[DeviceContext] Auto-connecting (${role}) to`, device.name);
+            appLog("info", `[auto-connect] ${role} ${device.name} reachable via ${probe.path} — connecting`);
+            sendTelemetry(token, "auto-connect", `${role}: ${device.name}`, "{}");
+            setAutoConnectStage(`Reachable via ${probe.path === "relay" ? "relay" : "direct"} — connecting…`);
+            await selectDeviceRef.current(device);
+            return; // connected — done
+          }
+
+          // No priority box answered the PROBE. That is not the same as "no
+          // priority box is reachable": `probeMobileDeviceStatus` only knows
+          // about relay + `host` + `lanIps`, while the real connector
+          // (quic.ts raceDirectCandidates) additionally tries the UDP-beacon
+          // IP, Cloudflare tunnels and the connection cache. A box reachable
+          // ONLY by one of those legs failed the gate and never got a connect
+          // attempt — even though tapping it by hand connected fine, because
+          // the inline picker calls selectDevice with no probe at all.
+          //
+          // So: give the highest-priority box that Convex still considers
+          // online ONE real connect attempt before dropping to the list. It is
+          // bounded by selectDevice's own 20s timeout and the user can Cancel.
+          // A box that is genuinely down is `online: false` here and skips this
+          // entirely, so a dead machine still fails fast.
+          const lastResort = ordered.find(({ device }) =>
+            device.online && !unreachableSetRef.current.has(device.id)
+          );
+          if (lastResort && !isCancelled()) {
+            const { device, role } = lastResort;
+            appLog(
+              "info",
+              `[auto-connect] probe found no route to ${device.name}; attempting direct connect anyway (beacon/tunnel/cache legs are probe-invisible)`,
+            );
+            setAutoConnectTarget({ id: device.id, name: device.name, role });
+            setAutoConnectStage(`No ping response — trying a direct connect to ${device.name}…`);
+            try {
+              await selectDeviceRef.current(device);
+              if (connectionManager.clientFor(device.id).isConnected) return; // connected — done
+            } catch (e) {
+              appLog("warn", `[auto-connect] last-resort connect to ${device.name} failed: ${e}`);
+            }
+            if (isCancelled()) return;
+          }
+
+          // Neither primary nor secondary was reachable → show the machine list
+          // (NOT a scary error; the boxes may just be asleep).
+          setAutoConnectTarget(null);
+          setConnectionStatus((s) => (s === "connecting" ? "disconnected" : s));
+          return;
+        }
+
+        // No primary/secondary/sticky configured yet (single-device or first
+        // run): keep the best-reachable behaviour so a lone box still connects,
+        // and seed it as primary so next launch narrates it by role.
+        const probes = new Map<string, MobileDeviceStatusProbe>();
+        await Promise.all(
+          candidates.map(async (d) => {
+            const probe = await probeMobileDeviceStatus(d, token, AUTO_CONNECT_PROBE_MS).catch(() => null);
+            if (probe) probes.set(d.id, probe);
+          }),
+        );
+        if (isCancelled()) return;
+        const ranked = [...candidates]
+          .map((device) => ({ device, rank: autoConnectRank(device, probes.get(device.id), []) }))
+          .filter((row) => row.rank >= 0)
+          .sort((a, b) => (b.rank !== a.rank ? b.rank - a.rank : a.device.name.localeCompare(b.device.name)));
+        const target = ranked[0]?.device;
+        if (!target) {
+          setConnectionStatus("error");
+          setLastError(
+            "Can't connect — no device responded. Make sure one is running `yaver serve` and reachable on your network or relay.",
+          );
+          return;
+        }
+        setAutoConnectTarget({ id: target.id, name: target.name, role: "primary" });
+        console.log("[DeviceContext] Auto-connecting (best-reachable) to", target.name);
+        await selectDeviceRef.current(target);
+        if (primaryDeviceId === null) {
+          setPrimaryDeviceRef.current(target.id).catch((e) => {
+            appLog("warn", `[DeviceContext] Auto-set primaryDevice failed: ${e}`);
+          });
+        }
+      } finally {
+        // Mark the nonce attempted only when the sweep actually RAN TO
+        // COMPLETION. Burning it on entry (the old behaviour) meant a sweep
+        // cancelled mid-probe could never be retried: the re-entry saw
+        // `attemptedNonce === nonce` and returned, so the user sat on "No
+        // machine selected" with no attempt ever having been made.
+        //
+        // Two kinds of cancellation, and they must NOT be treated alike:
+        //   • the user tapped "Choose a machine myself" (autoConnectCancelRef).
+        //     They asked us to stop — burn the nonce so we don't immediately
+        //     restart the sweep they just dismissed.
+        //   • effect cleanup fired because a real dep changed (`cancelled`).
+        //     Nobody asked to stop. Re-arm — and bump the nonce to actually
+        //     SCHEDULE the re-run, because the re-entrant effect already ran
+        //     synchronously and bailed on `autoConnectInFlightRef` while this
+        //     sweep was still unwinding. Without the bump the sweep re-arms but
+        //     nothing ever triggers it.
+        autoConnectInFlightRef.current = false;
+        const outcome = resolveSweepOutcome({
+          interrupted: isCancelled(),
+          userCancelled: autoConnectCancelRef.current,
+        });
+        if (outcome === "burn") {
+          autoConnectAttemptedNonceRef.current = autoConnectNonce;
+        } else {
+          appLog("warn", "[auto-connect] sweep interrupted mid-flight — re-running");
+          setAutoConnectNonce((n) => n + 1);
+        }
+        setAutoConnecting(false);
+        setAutoConnectTarget(null);
+        setAutoConnectStage(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Intentionally NOT depending on devices/connectedDeviceIds/activeDevice —
+    // see the dependency-discipline note above. Those are read via refs; the
+    // nonce is the re-sweep signal.
+  }, [autoConnectNonce, token, relaysReady, settingsReady, userDisconnected]);
+
+  // Background "warm the pool" pass. After the focused auto-connect
+  // above settles, this effect quietly opens additional connections
+  // only for the active/primary/secondary devices. Warming every online
+  // box looked useful on paper, but with stale LAN/Tailscale addresses it
+  // produced a reconnect storm across old machines and made the primary
+  // look broken even when relay had answered.
+  //
+  // Implementation: walk devices each time they refresh, pick the
+  // ones that look healthy AND aren't already pooled, and ensure
+  // their per-device QuicClient is connected. Errors swallow
+  // silently — a failed sibling shouldn't pollute lastError or take
+  // the focused connection down with it. We don't change focus; the
+  // existing focused-auto-connect logic owns that.
+  useEffect(() => {
+    if (!token || !relaysReady || userDisconnected) return;
+    // Membership and ORDER come from the shared plan (connectionFanout.ts), the
+    // same one the web dashboard uses, so the two surfaces cannot disagree about
+    // which machine should serve. It orders by the account's seeded roles —
+    // runner, render, then their secondaries — and honours the user's
+    // connectionMode preference ("single" pools just the leader).
+    //
+    // The health filter below is NOT redundant with it and must stay. The
+    // reconnect storm this comment block records came from warming machines
+    // with stale LAN/Tailscale addresses, not from warming several machines:
+    // the plan decides WHO is worth pooling, `online && !needsAuth &&
+    // !unreachable` decides who is in a state to be pooled at all. Dropping
+    // either one brings back a different bug.
+    const fanoutPlan = planConnectionFanout({
+      devices: devices.map((d) => ({ deviceId: d.id, isOnline: d.online })),
+      seed: {
+        runnerDeviceId: machineRoles?.runnerDeviceId,
+        secondaryRunnerDeviceId: machineRoles?.secondaryRunnerDeviceId,
+        renderDeviceId: machineRoles?.renderDeviceId,
+        secondaryRenderDeviceId: machineRoles?.secondaryRenderDeviceId,
+      },
+      mode: connectionMode,
+      isOwner: true,
+    });
+    const warmIds = new Set(
+      [
+        // The focused device and the account's primary/secondary always stay
+        // pooled regardless of the plan: the user is looking at one of them.
+        activeDevice?.id,
+        primaryDeviceId,
+        secondaryDeviceId,
+        ...fanoutPlan.targets.map((t) => t.deviceId),
+      ].filter((id): id is string => typeof id === "string" && id.length > 0),
+    );
+    if (warmIds.size === 0) return;
+    const candidates = devices.filter((d) =>
+      warmIds.has(d.id) &&
+      d.online &&
+      !d.needsAuth &&
+      !connectedDeviceIds.includes(d.id) &&
+      !unreachableSet.has(d.id),
+    );
+    if (candidates.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const device of candidates) {
+        if (cancelled) return;
+        try {
+          // ensureConnected dedupes against a parallel user-driven
+          // selectDevice — without it, the warm-up's connect and the
+          // user's connect would both call QuicClient.connect() and
+          // trample each other's primeTarget state, which surfaced as
+          // "Couldn't switch · Could not reach this device" on the
+          // wizard's switch path even when the box was actually live.
+          await connectionManager.ensureConnected(device.id, {
+            host: device.host,
+            port: device.port,
+            token,
+            lanIps: device.lanIps,
+            sessionTunnels: tunnelServersForDevice(device),
+            connectionPreferences: device.connectionPreferences,
+          });
+        } catch {
+          // Silent. The sibling stays unpooled; user can tap it
+          // explicitly from Devices tab if they need it later.
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, machineRoles?.runnerDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.renderDeviceId, machineRoles?.secondaryRenderDeviceId, token, relaysReady, userDisconnected, connectedDeviceIds, unreachableSet]);
+
+  // Trigger immediate reconnection on network change (WiFi↔cellular roaming,
+  // Wi-Fi → Wi-Fi roam between APs (same SSID, new IP), VPN/Tailscale toggle).
   useEffect(() => {
     let lastType: string | null = null;
+    let lastIp: string | null = null;
     const unsubscribe = NetInfo.addEventListener((state) => {
       const currentType = state.type; // "wifi", "cellular", "none", etc.
+      // NetInfo.details has ipAddress on iOS/Android for wifi+cellular; falsy for "none"/"unknown".
+      const currentIp =
+        state.details && typeof (state.details as { ipAddress?: string }).ipAddress === "string"
+          ? (state.details as { ipAddress: string }).ipAddress
+          : null;
 
       if (state.isConnected && activeDevice) {
-        // Trigger full reconnect on network type change (WiFi → cellular, cellular → WiFi)
-        // This clears stale relay URLs and re-probes all paths from scratch
+        // Type change (WiFi → cellular, cellular → WiFi) — full re-probe.
         if (lastType && lastType !== currentType) {
           console.log(`[DeviceContext] Network changed: ${lastType} → ${currentType}`);
           sendTelemetry(token, "network-change", `${lastType} → ${currentType}`);
-          quicClient.fullReconnect();
+          setUnreachableSet(new Set());
+          connectionManager.fullReconnectFocused();
+        } else if (lastType && lastType === currentType && lastIp && currentIp && lastIp !== currentIp) {
+          // Same type but IP changed — Wi-Fi roam, VPN toggle, DHCP renew.
+          // Stale tunnel will hang on the old route; reprobe.
+          console.log(`[DeviceContext] IP changed (${currentType}): ${lastIp} → ${currentIp}`);
+          sendTelemetry(token, "network-ip-change", `${currentType} ${lastIp}→${currentIp}`);
+          setUnreachableSet(new Set());
+          connectionManager.fullReconnectFocused();
         } else if (!lastType) {
           // First event after mount or reconnection — just probe to be safe
-          quicClient.triggerReconnect();
+          connectionManager.triggerReconnectFocused();
         }
       }
       lastType = currentType;
+      lastIp = currentIp;
     });
     return () => unsubscribe();
   }, [activeDevice, token]);
 
+  // When the app returns from a third-party app or the background,
+  // resume the last active machine automatically instead of forcing
+  // the user to tap the same device again. Also forwards foreground
+  // state into the QUIC client so its reconnect loop pauses while
+  // suspended (saves battery, no spurious "failed" state on resume).
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (nextState: AppStateStatus) => {
+      const prevState = appStateRef.current;
+      appStateRef.current = nextState;
+      quicClient.setForegroundState(nextState === "active");
+      if (nextState !== "active" || !prevState.match(/inactive|background/)) return;
+      if (!activeDevice || userDisconnected) return;
+      if (quicClient.connectionState === "connected" || connectionStatus === "connecting") return;
+      if (quicClient.reconnectAttempt > 0) {
+        connectionManager.triggerReconnectFocused();
+        return;
+      }
+      if (connectionStatus === "error" || connectionStatus === "disconnected") {
+        connectionManager.triggerReconnectFocused();
+        return;
+      }
+      selectDevice(activeDevice).catch(() => {});
+    });
+    return () => sub.remove();
+  }, [activeDevice, connectionStatus, selectDevice, userDisconnected]);
+
+  // Overlay sub-minute bus presence on top of the Convex-derived
+  // online flag. Convex `lastHeartbeat` only refreshes every 5 min,
+  // so a freshly-rung peer would otherwise show offline until the
+  // next polling tick. The bus pings every 60 s (see
+  // BUS_PRESENCE_STALE_MS) — when we have a recent ping we flip
+  // `online` to true. A stale bus entry naturally stops contributing
+  // because `(Date.now() - at) < BUS_PRESENCE_STALE_MS` becomes
+  // false; the 30 s polling re-runs this memo with a fresh `devices`
+  // ref so freshness drifts at most one polling interval before the
+  // UI catches up.
+  const displayDevices = useMemo<Device[]>(() => {
+    if (Object.keys(busPresence).length === 0) return devices;
+    const now = Date.now();
+    let mutated = false;
+    const next = devices.map((d) => {
+      if (d.online) return d;
+      const at = busPresence[d.id];
+      if (at && now - at < BUS_PRESENCE_STALE_MS) {
+        mutated = true;
+        return { ...d, online: true };
+      }
+      return d;
+    });
+    return mutated ? next : devices;
+  }, [devices, busPresence]);
+
   const value = useMemo<DeviceState>(
     () => ({
-      devices,
+      devices: displayDevices,
       activeDevice,
       connectionStatus,
       isLoadingDevices,
+      everHadDevices,
       userDisconnected,
       lastError,
+      deviceListError,
+      agentAuthExpired,
+      recoverDeviceAuth,
+      pendingClaims,
+      refreshPendingClaims,
+      claimPendingDevice,
       selectDevice,
       disconnect,
       refreshDevices,
+      detachDevice: handleDetachDevice,
+      hiddenDeviceCount,
+      unhideAllDevices: handleUnhideAllDevices,
+      removeDevice: handleRemoveDevice,
+      setDeviceAlias: handleSetDeviceAlias,
+      setDeviceVoiceHints: handleSetDeviceVoiceHints,
+      unreachableDeviceIds: Array.from(unreachableSet),
+      markDeviceUnreachable,
+      manualAuthRequiredDeviceIds: Array.from(manualAuthRequiredSet),
+      stopReconnectAndBounce,
+      retryConnection,
+      primaryDeviceId,
+      setPrimaryDevice,
+      secondaryDeviceId,
+      setSecondaryDevice,
+      autoConnecting,
+      autoConnectTarget,
+      autoConnectStage,
+      cancelAutoConnect,
+      repairRelay,
+      primaryRunnerByDevice,
+      primaryModelByDevice,
+      primaryModeByDevice,
+      primaryProviderByDevice,
+      multiTargetMode,
+      setMultiTargetMode,
+      machineRoles,
+      setMachineRolesFavorite,
+      setPrimaryRunnerForDevice,
+      latestCliVersion,
+      connectedDeviceIds,
+      disconnectDevice,
     }),
-    [devices, activeDevice, connectionStatus, isLoadingDevices, userDisconnected, lastError, selectDevice, disconnect, refreshDevices]
+    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, machineRoles, setMachineRolesFavorite, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
   );
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;

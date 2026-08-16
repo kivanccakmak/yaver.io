@@ -264,15 +264,15 @@ func (p *office365Provider) ReplyToEmail(emailID, body string) error {
 // Graph API helpers
 
 type graphMessage struct {
-	ID                 string `json:"id"`
-	ConversationID     string `json:"conversationId"`
-	Subject            string `json:"subject"`
-	BodyPreview        string `json:"bodyPreview"`
-	ReceivedDateTime   string `json:"receivedDateTime"`
-	IsRead             bool   `json:"isRead"`
-	HasAttachments     bool   `json:"hasAttachments"`
-	ParentFolderID     string `json:"parentFolderId"`
-	From               *struct {
+	ID               string `json:"id"`
+	ConversationID   string `json:"conversationId"`
+	Subject          string `json:"subject"`
+	BodyPreview      string `json:"bodyPreview"`
+	ReceivedDateTime string `json:"receivedDateTime"`
+	IsRead           bool   `json:"isRead"`
+	HasAttachments   bool   `json:"hasAttachments"`
+	ParentFolderID   string `json:"parentFolderId"`
+	From             *struct {
 		EmailAddress struct {
 			Address string `json:"address"`
 			Name    string `json:"name"`
@@ -607,11 +607,11 @@ func (p *gmailProvider) ReplyToEmail(emailID, body string) error {
 // Gmail helpers
 
 type gmailMessage struct {
-	ID        string `json:"id"`
-	ThreadID  string `json:"threadId"`
-	LabelIDs  []string `json:"labelIds"`
-	Snippet   string `json:"snippet"`
-	Payload   struct {
+	ID       string   `json:"id"`
+	ThreadID string   `json:"threadId"`
+	LabelIDs []string `json:"labelIds"`
+	Snippet  string   `json:"snippet"`
+	Payload  struct {
 		Headers []struct {
 			Name  string `json:"name"`
 			Value string `json:"value"`

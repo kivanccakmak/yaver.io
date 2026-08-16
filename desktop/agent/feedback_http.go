@@ -1,0 +1,506 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"path/filepath"
+	"strings"
+)
+
+const maxFeedbackUploadSize = 500 << 20 // 500 MB
+
+// handleFeedbackStream handles POST /feedback/stream — live feedback streaming.
+// The SDK streams screen chunks, voice, and events in real-time.
+// The agent processes them incrementally and can respond with fixes.
+func (s *HTTPServer) handleFeedbackStream(w http.ResponseWriter, r *http.Request) {
+	if s.feedbackMgr == nil {
+		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "feedback not available"})
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	// SSE response for bidirectional communication
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		jsonReply(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Read incoming events from the SDK (chunked JSON lines)
+	decoder := json.NewDecoder(r.Body)
+	for decoder.More() {
+		var event struct {
+			Type string `json:"type"` // "voice", "screenshot", "annotation", "end"
+			Text string `json:"text,omitempty"`
+			Data string `json:"data,omitempty"` // base64 encoded image/audio chunk
+		}
+		if err := decoder.Decode(&event); err != nil {
+			break
+		}
+
+		switch event.Type {
+		case "voice":
+			// Forward voice transcript to AI agent as incremental prompt
+			if s.taskMgr != nil && event.Text != "" {
+				// Send as SSE back to SDK: agent is processing
+				fmt.Fprintf(w, "data: {\"type\":\"processing\",\"text\":\"Analyzing: %s\"}\n\n", event.Text)
+				flusher.Flush()
+			}
+		case "screenshot":
+			fmt.Fprintf(w, "data: {\"type\":\"received\",\"text\":\"Screenshot received\"}\n\n")
+			flusher.Flush()
+		case "annotation":
+			fmt.Fprintf(w, "data: {\"type\":\"received\",\"text\":\"Note: %s\"}\n\n", event.Text)
+			flusher.Flush()
+		case "end":
+			fmt.Fprintf(w, "data: {\"type\":\"done\",\"text\":\"Feedback session complete\"}\n\n")
+			flusher.Flush()
+			return
+		}
+	}
+}
+
+// handleFeedback handles POST /feedback (upload) and GET /feedback (list).
+func (s *HTTPServer) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	if s.feedbackMgr == nil {
+		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "feedback not available"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		reports := s.feedbackMgr.ListFeedback()
+		jsonReply(w, http.StatusOK, reports)
+
+	case http.MethodPost:
+		// Multipart upload: metadata (JSON) + video + audio + screenshots
+		r.Body = http.MaxBytesReader(w, r.Body, maxFeedbackUploadSize)
+		if err := r.ParseMultipartForm(32 << 20); err != nil { // 32MB in memory
+			jsonReply(w, http.StatusBadRequest, map[string]string{"error": "invalid multipart: " + err.Error()})
+			return
+		}
+
+		// Extract metadata
+		metadataStr := r.FormValue("metadata")
+		if metadataStr == "" {
+			jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing metadata field"})
+			return
+		}
+
+		// Extract files
+		files := make(map[string][]byte)
+		for key, fileHeaders := range r.MultipartForm.File {
+			for _, fh := range fileHeaders {
+				f, err := fh.Open()
+				if err != nil {
+					continue
+				}
+				data, err := io.ReadAll(f)
+				f.Close()
+				if err != nil {
+					continue
+				}
+				// Use the form field key or original filename
+				name := fh.Filename
+				if name == "" {
+					name = key
+				}
+				files[name] = data
+			}
+		}
+
+		report, err := s.feedbackMgr.ReceiveFeedback(json.RawMessage(metadataStr), files)
+		if err != nil {
+			jsonReply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		jsonReply(w, http.StatusOK, report)
+
+	default:
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+// handleFeedbackByID handles /feedback/{id}[/video|/screenshot/name|/fix].
+func (s *HTTPServer) handleFeedbackByID(w http.ResponseWriter, r *http.Request) {
+	if s.feedbackMgr == nil {
+		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "feedback not available"})
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/feedback/")
+	parts := strings.SplitN(path, "/", 3)
+	feedbackID := parts[0]
+
+	if feedbackID == "" {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing feedback ID"})
+		return
+	}
+
+	// Sub-routes
+	if len(parts) > 1 {
+		switch parts[1] {
+		case "video":
+			s.serveFeedbackFile(w, r, feedbackID, "video")
+			return
+		case "screenshot":
+			name := ""
+			if len(parts) > 2 {
+				name = parts[2]
+			}
+			s.serveFeedbackFile(w, r, feedbackID, name)
+			return
+		case "fix":
+			s.handleFeedbackFix(w, r, feedbackID)
+			return
+		case "transcript":
+			s.handleFeedbackTranscript(w, r, feedbackID)
+			return
+		case "change-set":
+			s.handleFeedbackChangeSet(w, r, feedbackID)
+			return
+		case "review":
+			s.handleFeedbackReview(w, r, feedbackID)
+			return
+		}
+	}
+
+	// Default: GET report or DELETE
+	report, ok := s.feedbackMgr.GetFeedback(feedbackID)
+	if !ok {
+		jsonReply(w, http.StatusNotFound, map[string]string{"error": "feedback not found"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		jsonReply(w, http.StatusOK, report)
+	case http.MethodDelete:
+		if err := s.feedbackMgr.DeleteFeedback(feedbackID); err != nil {
+			jsonReply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]string{"ok": "true"})
+	default:
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+// serveFeedbackFile serves a file from a feedback report. Defense in
+// depth: even though ReceiveFeedback now sanitizes filenames, older
+// reports persisted to disk with the previous (unsafe) code may have
+// VideoPath / Screenshots[i] pointing outside fm.baseDir. We refuse
+// to serve any path that escapes the manager's base directory.
+func (s *HTTPServer) serveFeedbackFile(w http.ResponseWriter, r *http.Request, feedbackID, fileHint string) {
+	report, ok := s.feedbackMgr.GetFeedback(feedbackID)
+	if !ok {
+		jsonReply(w, http.StatusNotFound, map[string]string{"error": "feedback not found"})
+		return
+	}
+
+	var filePath string
+	if fileHint == "video" {
+		filePath = report.VideoPath
+	} else if fileHint != "" {
+		// Screenshot by name
+		for _, s := range report.Screenshots {
+			if strings.HasSuffix(s, fileHint) {
+				filePath = s
+				break
+			}
+		}
+	}
+
+	if filePath == "" {
+		jsonReply(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+		return
+	}
+
+	if !pathInsideFeedbackBaseDir(s.feedbackMgr.baseDir, filePath) {
+		log.Printf("[feedback] refusing to serve path outside baseDir: %s", filePath)
+		jsonReply(w, http.StatusForbidden, map[string]string{"error": "file not accessible"})
+		return
+	}
+
+	http.ServeFile(w, r, filePath)
+}
+
+// pathInsideFeedbackBaseDir reports whether candidate (after symlink
+// resolution where possible) lives under baseDir. Used to refuse to
+// serve any feedback artifact pointing at the host filesystem outside
+// the per-report directory tree.
+func pathInsideFeedbackBaseDir(baseDir, candidate string) bool {
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return false
+	}
+	absCand, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	// Resolve symlinks where present so a malicious symlink dropped
+	// into reportDir can't trick us into serving e.g. /etc/passwd.
+	if resolved, err := filepath.EvalSymlinks(absCand); err == nil {
+		absCand = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(absBase); err == nil {
+		absBase = resolved
+	}
+	rel, err := filepath.Rel(absBase, absCand)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, "../") && !strings.HasPrefix(rel, `..\`)
+}
+
+// handleFeedbackFix creates a task from feedback.
+// feedbackFixWorkDir picks the working directory a feedback→fix task should
+// run in for a resolved project, or "" if the project didn't resolve.
+//
+// The monorepo root wins over the app subdirectory when there is one. A
+// report is filed against the app the user was looking at, but the cause
+// frequently isn't in that app: on a monorepo the mobile screen is a view
+// over a backend that lives in a sibling directory, so a task confined to
+// mobile/ either can't reach the bug or "fixes" the symptom in the wrong
+// layer. Standalone repos have no MonorepoRoot and fall back to the project
+// path, which for them is already the repo root.
+func feedbackFixWorkDir(mp *MobileProject) string {
+	if mp == nil {
+		return ""
+	}
+	if mp.MonorepoRoot != "" {
+		return mp.MonorepoRoot
+	}
+	return mp.Path
+}
+
+func (s *HTTPServer) handleFeedbackFix(w http.ResponseWriter, r *http.Request, feedbackID string) {
+	if r.Method != http.MethodPost {
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		Mode    string `json:"mode"`
+		Comment string `json:"comment"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	prompt, err := s.feedbackMgr.GenerateFixPrompt(feedbackID)
+	if err != nil {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if req.Mode == "candidate" {
+		if _, err := s.feedbackMgr.UpdateChangeSet(feedbackID, FeedbackChangeSet{Status: "building"}); err != nil {
+			// Best effort: feedback without a change set can still proceed.
+		}
+	}
+
+	// Inject black box context if available for this device
+	if s.blackboxMgr != nil {
+		report, ok := s.feedbackMgr.GetFeedback(feedbackID)
+		if ok && report.DeviceInfo.Platform != "" {
+			// Try to find a matching black box session
+			for _, sess := range s.blackboxMgr.ListSessions() {
+				if sess["platform"] == report.DeviceInfo.Platform {
+					if session := s.blackboxMgr.GetSession(sess["deviceId"].(string)); session != nil {
+						bbCtx := session.GenerateBlackBoxContext(100)
+						if bbCtx != "" {
+							prompt = bbCtx + "\n" + prompt
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Create a task with the generated prompt
+	if s.taskMgr != nil {
+		// Feedback SDK content is untrusted even though the token is owner-minted.
+		// The task prompt is synthesized from user-controlled report content, so
+		// workdir selection must remain server-side.
+		//
+		// Workdir resolution is server-side ONLY. We deliberately ignore
+		// report.Project.ProjectPath because the report itself is uploaded
+		// by the same untrusted party — accepting client-supplied paths would
+		// let a report point the AI agent's CWD at sensitive owner files. Instead
+		// we look the project up against the host's own mobile-projects
+		// registry, keyed on identifiers the SDK reports. C-8 in
+		// security_audit.md.
+		//
+		// Bundle ID is tried first because it is the only unambiguous key.
+		// An app's display name ("Talos") does not match the name the
+		// scanner derives for it ("talos / mobile"), and one repo can hold
+		// several mobile projects that share a name prefix — name matching
+		// picks whichever lands first. Name stays as the fallback for SDKs
+		// and platforms that have no bundle id to report (e.g. web).
+		opts := TaskCreateOptions{}
+		report, _ := s.feedbackMgr.GetFeedback(feedbackID)
+		var resolvedProjectPath string
+		if report != nil {
+			if bundleID := report.Project.BundleID; bundleID != "" {
+				resolvedProjectPath = feedbackFixWorkDir(findMobileProjectByBundleID(bundleID))
+			}
+			if resolvedProjectPath == "" {
+				projectName := report.DeviceInfo.AppName
+				if projectName == "" {
+					projectName = report.Project.ProjectName
+				}
+				if projectName == "" {
+					projectName = report.Project.AppName
+				}
+				if projectName != "" {
+					resolvedProjectPath = feedbackFixWorkDir(findMobileProjectByName(projectName))
+				}
+			}
+		}
+		if resolvedProjectPath != "" {
+			opts.WorkDir = resolvedProjectPath
+		}
+		// The whole synthesized report — device rows, timeline, stack traces,
+		// black-box dump, and execution context — is a briefing for the
+		// runner and rides PromptText. What the surfaces get is the sentence
+		// the user actually said. See FeedbackManager.UserWords.
+		displayText := strings.TrimSpace(s.feedbackMgr.UserWords(feedbackID))
+		if displayText == "" {
+			displayText = "Fix the reported issue (" + feedbackID + ")"
+		}
+		opts.InitialUserPrompt = displayText
+		opts.PromptText = prompt
+		task, err := s.taskMgr.CreateTaskWithOptions(displayText, "", "", "feedback", "", "", nil, opts)
+		if err != nil {
+			jsonReply(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		var changeSet *FeedbackChangeSet
+		if req.Mode == "candidate" {
+			changeSet, _ = s.feedbackMgr.UpdateChangeSet(feedbackID, FeedbackChangeSet{
+				Status: "review_required",
+				TaskID: task.ID,
+			})
+		} else {
+			changeSet, _ = s.feedbackMgr.GetChangeSet(feedbackID)
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{
+			"ok":        true,
+			"taskId":    task.ID,
+			"prompt":    prompt,
+			"changeSet": changeSet,
+		})
+		return
+	}
+
+	// NO TASK MANAGER MEANS NO FIX HAPPENED. Do not report success for it.
+	//
+	// This is the false green CLAUDE.md names by name: `if s.taskMgr != nil`
+	// with no else, then `{"ok":true}` — so a box with no task manager answered
+	// 200 OK with a prompt and no taskId, and every surface rendered a success
+	// alert over a no-op. The user believes a coding agent is working on their
+	// feedback; nothing is.
+	//
+	// The correct shape was already two files away — task_proof_http.go answers
+	// 503 "task manager not running on this agent" — which is what makes this an
+	// omission rather than a policy.
+	//
+	// 503, not 500: the agent is healthy, this capability is simply not running
+	// here, and the distinction decides whether a client retries.
+	jsonReply(w, http.StatusServiceUnavailable, map[string]interface{}{
+		"ok":    false,
+		"error": "no task manager is running on this agent, so no fix task was created",
+		"code":  ReasonTaskManagerUnavailable,
+		// The prompt is still returned: it was genuinely generated, it is the
+		// expensive part, and a caller can dispatch it elsewhere. Returning it
+		// beside ok:false is honest; returning it beside ok:true was not.
+		"prompt": prompt,
+	})
+}
+
+// handleFeedbackTranscript saves a voice transcript.
+func (s *HTTPServer) handleFeedbackTranscript(w http.ResponseWriter, r *http.Request, feedbackID string) {
+	if r.Method != http.MethodPost {
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Transcript string `json:"transcript"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	if err := s.feedbackMgr.SaveTranscript(feedbackID, req.Transcript); err != nil {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]string{"ok": "true"})
+}
+
+func (s *HTTPServer) handleFeedbackChangeSet(w http.ResponseWriter, r *http.Request, feedbackID string) {
+	switch r.Method {
+	case http.MethodGet:
+		changeSet, err := s.feedbackMgr.GetChangeSet(feedbackID)
+		if err != nil {
+			jsonReply(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		jsonReply(w, http.StatusOK, changeSet)
+	case http.MethodPost:
+		var patch FeedbackChangeSet
+		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+			jsonReply(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		changeSet, err := s.feedbackMgr.UpdateChangeSet(feedbackID, patch)
+		if err != nil {
+			jsonReply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		jsonReply(w, http.StatusOK, changeSet)
+	default:
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *HTTPServer) handleFeedbackReview(w http.ResponseWriter, r *http.Request, feedbackID string) {
+	if r.Method != http.MethodPost {
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		Action         string `json:"action"`
+		Comment        string `json:"comment"`
+		DesiredOutcome string `json:"desiredOutcome"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if req.Action == "" {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing review action"})
+		return
+	}
+	changeSet, err := s.feedbackMgr.AddReview(feedbackID, req.Action, req.Comment, req.DesiredOutcome)
+	if err != nil {
+		jsonReply(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	jsonReply(w, http.StatusOK, changeSet)
+}

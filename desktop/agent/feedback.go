@@ -1,0 +1,714 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// FeedbackMode determines how feedback is collected.
+type FeedbackMode string
+
+const (
+	FeedbackModeLive     FeedbackMode = "live"     // stream in real-time, agent comments proactively
+	FeedbackModeNarrated FeedbackMode = "narrated" // record + narrate, send when done
+	FeedbackModeBatch    FeedbackMode = "batch"    // full dump after testing session
+)
+
+// AgentCommentaryLevel controls how proactive the agent is during live feedback.
+// 0 = silent, 5 = suggests fixes on obvious issues, 10 = comments on everything it sees.
+type AgentCommentaryLevel int
+
+// CapturedError represents an error with stack trace captured by the SDK.
+type CapturedError struct {
+	Message   string                 `json:"message"`
+	Stack     []string               `json:"stack"`
+	IsFatal   bool                   `json:"isFatal"`
+	Timestamp int64                  `json:"timestamp"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// FeedbackReport represents a visual bug report from device testing.
+type FeedbackReport struct {
+	ID          string             `json:"id"`
+	Source      string             `json:"source"` // "yaver-app" or "in-app-sdk"
+	VideoPath   string             `json:"videoPath,omitempty"`
+	AudioPath   string             `json:"audioPath,omitempty"`
+	Transcript  string             `json:"transcript,omitempty"`
+	Screenshots []string           `json:"screenshots,omitempty"`
+	Timeline    []TimelineEvent    `json:"timeline,omitempty"`
+	Errors      []CapturedError    `json:"errors,omitempty"`
+	DeviceInfo  DeviceFBInfo       `json:"deviceInfo"`
+	AppVersion  string             `json:"appVersion,omitempty"`
+	BuildID     string             `json:"buildId,omitempty"`
+	Project     FeedbackProject    `json:"project,omitempty"`
+	ChangeSet   *FeedbackChangeSet `json:"changeSet,omitempty"`
+	CreatedAt   string             `json:"createdAt"`
+}
+
+// TimelineEvent is a timestamped annotation in a feedback report.
+type TimelineEvent struct {
+	Time float64 `json:"time"` // seconds from start
+	Type string  `json:"type"` // "voice", "screenshot", "annotation", "crash"
+	Text string  `json:"text,omitempty"`
+	File string  `json:"file,omitempty"`
+}
+
+// DeviceFBInfo describes the device that sent the feedback.
+type DeviceFBInfo struct {
+	Platform  string `json:"platform"`  // ios, android
+	Model     string `json:"model"`     // iPhone 16, Pixel 8
+	OSVersion string `json:"osVersion"` // 18.2, 15
+	AppName   string `json:"appName,omitempty"`
+}
+
+type FeedbackProject struct {
+	AppName     string `json:"appName,omitempty"`
+	ProjectName string `json:"projectName,omitempty"`
+	ProjectPath string `json:"projectPath,omitempty"`
+	// BundleID is the reporting app's bundle identifier / applicationId.
+	// Unlike AppName it is unambiguous: an app's display name ("Talos")
+	// does not match the registry name the scanner derives for it
+	// ("talos / mobile"), and a single repo can hold several mobile
+	// projects sharing a name prefix. Resolved via
+	// findMobileProjectByBundleID, which checks pbxproj, build.gradle,
+	// and app.json.
+	BundleID          string   `json:"bundleId,omitempty"`
+	Surface           string   `json:"surface,omitempty"`
+	Stack             string   `json:"stack,omitempty"`
+	Stacks            []string `json:"stacks,omitempty"`
+	Surfaces          []string `json:"surfaces,omitempty"`
+	TestSurfaces      []string `json:"testSurfaces,omitempty"`
+	FeedbackSDK       string   `json:"feedbackSdk,omitempty"`
+	FeedbackTransport string   `json:"feedbackTransport,omitempty"`
+	VoiceCapabilities []string `json:"voiceCapabilities,omitempty"`
+	STTProvider       string   `json:"sttProvider,omitempty"`
+	TTSProvider       string   `json:"ttsProvider,omitempty"`
+	ReleaseChannel    string   `json:"releaseChannel,omitempty"`
+}
+
+type FeedbackCandidateMetadata struct {
+	Enabled      bool   `json:"enabled,omitempty"`
+	Label        string `json:"label,omitempty"`
+	BaseBranch   string `json:"baseBranch,omitempty"`
+	TargetBranch string `json:"targetBranch,omitempty"`
+	PreviewURL   string `json:"previewUrl,omitempty"`
+}
+
+type FeedbackReviewEntry struct {
+	ID             string `json:"id"`
+	Action         string `json:"action"`
+	Comment        string `json:"comment,omitempty"`
+	DesiredOutcome string `json:"desiredOutcome,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+}
+
+type FeedbackChangeSet struct {
+	ID             string                `json:"id"`
+	FeedbackID     string                `json:"feedbackId"`
+	ProjectName    string                `json:"projectName,omitempty"`
+	ProjectPath    string                `json:"projectPath,omitempty"`
+	Surface        string                `json:"surface,omitempty"`
+	ReleaseChannel string                `json:"releaseChannel,omitempty"`
+	Status         string                `json:"status"`
+	Summary        string                `json:"summary,omitempty"`
+	CandidateLabel string                `json:"candidateLabel,omitempty"`
+	CandidateURL   string                `json:"candidateUrl,omitempty"`
+	BaseBranch     string                `json:"baseBranch,omitempty"`
+	TargetBranch   string                `json:"targetBranch,omitempty"`
+	TaskID         string                `json:"taskId,omitempty"`
+	CreatedAt      string                `json:"createdAt"`
+	UpdatedAt      string                `json:"updatedAt"`
+	Reviews        []FeedbackReviewEntry `json:"reviews,omitempty"`
+}
+
+// FeedbackSummary is returned by list.
+type FeedbackSummary struct {
+	ID         string `json:"id"`
+	Source     string `json:"source"`
+	AppVersion string `json:"appVersion,omitempty"`
+	Platform   string `json:"platform"`
+	HasVideo   bool   `json:"hasVideo"`
+	NumScreens int    `json:"numScreenshots"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+// FeedbackManager stores and manages feedback reports.
+type FeedbackManager struct {
+	mu      sync.RWMutex
+	reports map[string]*FeedbackReport
+	baseDir string // ~/.yaver/feedback/
+}
+
+// NewFeedbackManager creates a new feedback manager.
+func NewFeedbackManager() (*FeedbackManager, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	baseDir := filepath.Join(dir, "feedback")
+	if err := os.MkdirAll(baseDir, 0700); err != nil {
+		return nil, err
+	}
+
+	fm := &FeedbackManager{
+		reports: make(map[string]*FeedbackReport),
+		baseDir: baseDir,
+	}
+
+	// Load existing reports from disk
+	fm.loadExisting()
+	return fm, nil
+}
+
+// loadExisting scans the feedback directory for existing reports.
+func (fm *FeedbackManager) loadExisting() {
+	entries, err := os.ReadDir(fm.baseDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		metaPath := filepath.Join(fm.baseDir, e.Name(), "metadata.json")
+		data, err := os.ReadFile(metaPath)
+		if err != nil {
+			continue
+		}
+		var report FeedbackReport
+		if err := json.Unmarshal(data, &report); err != nil {
+			continue
+		}
+		fm.reports[report.ID] = &report
+	}
+}
+
+// ReceiveFeedback stores a new feedback report with its files.
+func (fm *FeedbackManager) ReceiveFeedback(metadata json.RawMessage, files map[string][]byte) (*FeedbackReport, error) {
+	var report FeedbackReport
+	if err := json.Unmarshal(metadata, &report); err != nil {
+		return nil, fmt.Errorf("invalid metadata: %w", err)
+	}
+	var raw struct {
+		Project   FeedbackProject           `json:"project"`
+		Candidate FeedbackCandidateMetadata `json:"candidate"`
+		// The React Native SDK sent the device block under `device` until
+		// 0.9.2, while this struct, the Flutter SDK, and the web SDK all use
+		// `deviceInfo`. The mismatch meant every RN report's device block was
+		// silently dropped. RN now sends `deviceInfo`; this alias keeps
+		// already-shipped builds (TestFlight/Play installs we can't update)
+		// reporting a usable platform + model.
+		Device DeviceFBInfo `json:"device"`
+	}
+	_ = json.Unmarshal(metadata, &raw)
+
+	if report.DeviceInfo == (DeviceFBInfo{}) {
+		report.DeviceInfo = raw.Device
+	}
+
+	// Always overwrite the report ID with a fresh UUID, ignoring whatever
+	// the upload sent. The ID is later joined to fm.baseDir to compute
+	// the on-disk report directory; trusting client input here was the
+	// C-7 path-traversal vector ("metadata.id":"../../../tmp/x" → write
+	// outside baseDir). UUIDs are unique across reports so collisions
+	// cannot be used as an overwrite primitive either.
+	report.ID = uuid.New().String()[:8]
+	if report.CreatedAt == "" {
+		report.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if report.Project.AppName == "" {
+		report.Project = raw.Project
+	}
+	if report.DeviceInfo.AppName == "" && report.Project.AppName != "" {
+		report.DeviceInfo.AppName = report.Project.AppName
+	}
+	if report.Project.ProjectName == "" && report.DeviceInfo.AppName != "" {
+		report.Project.ProjectName = report.DeviceInfo.AppName
+	}
+	if report.Project.AppName == "" {
+		report.Project.AppName = report.Project.ProjectName
+	}
+	report.ChangeSet = buildFeedbackChangeSet(report.ID, report.Project, raw.Candidate, report.CreatedAt)
+
+	// Create report directory
+	reportDir := filepath.Join(fm.baseDir, report.ID)
+	if err := os.MkdirAll(reportDir, 0700); err != nil {
+		return nil, fmt.Errorf("create dir: %w", err)
+	}
+
+	// Save files. Each multipart Filename is sanitized to a basename and
+	// rejected if it contains a path separator, traversal segment, or
+	// hidden-file dot prefix. The previous code joined the raw multipart
+	// Filename to reportDir, letting an attacker write anywhere under
+	// the agent process's UID (~/.ssh/authorized_keys, ~/.npmrc,
+	// ~/.yaver/config.json which holds the owner bearer, etc).
+	for name, data := range files {
+		safe := sanitizeFeedbackUploadName(name)
+		if safe == "" {
+			log.Printf("[feedback] rejecting upload with unsafe filename %q", name)
+			continue
+		}
+		filePath := filepath.Join(reportDir, safe)
+		if err := os.WriteFile(filePath, data, 0600); err != nil {
+			log.Printf("[feedback] failed to write %s: %v", safe, err)
+			continue
+		}
+
+		// Update report paths
+		switch {
+		case strings.HasSuffix(safe, ".mp4") || strings.HasSuffix(safe, ".mov") ||
+			(strings.HasSuffix(safe, ".webm") && !feedbackUploadIsVoice(safe)):
+			report.VideoPath = filePath
+		case strings.HasSuffix(safe, ".m4a") || strings.HasSuffix(safe, ".aac") ||
+			strings.HasSuffix(safe, ".wav") || strings.HasSuffix(safe, ".ogg") ||
+			(strings.HasSuffix(safe, ".webm") && feedbackUploadIsVoice(safe)):
+			report.AudioPath = filePath
+		case strings.HasSuffix(safe, ".jpg") || strings.HasSuffix(safe, ".png"):
+			report.Screenshots = append(report.Screenshots, filePath)
+		}
+	}
+
+	fm.mu.Lock()
+	fm.reports[report.ID] = &report
+	fm.mu.Unlock()
+	_ = fm.writeReportMetadata(&report)
+
+	log.Printf("[feedback] Received report %s: video=%v screenshots=%d", report.ID, report.VideoPath != "", len(report.Screenshots))
+	return &report, nil
+}
+
+// feedbackUploadIsVoice disambiguates the two .webm uploads a browser sends.
+// MediaRecorder has no other universally supported container, so the web SDK
+// ships BOTH the screen recording and the mic as .webm — the extension alone
+// cannot tell them apart, only the name can. `sdk/feedback/web` names them
+// recording.webm and voice.webm (YaverFeedback.ts, P2PClient.ts); before this
+// existed the switch below matched neither, so every browser report stored the
+// bytes on disk and then reported video=false — a recording that silently
+// never reached the report it was recorded for.
+func feedbackUploadIsVoice(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, "voice") ||
+		strings.HasPrefix(lower, "audio") ||
+		strings.HasPrefix(lower, "mic")
+}
+
+func buildFeedbackChangeSet(
+	feedbackID string,
+	project FeedbackProject,
+	candidate FeedbackCandidateMetadata,
+	createdAt string,
+) *FeedbackChangeSet {
+	projectName := feedbackFirstNonEmpty(project.ProjectName, project.AppName)
+	if projectName == "" && !candidate.Enabled {
+		return nil
+	}
+	now := createdAt
+	if now == "" {
+		now = time.Now().UTC().Format(time.RFC3339)
+	}
+	status := "draft"
+	if candidate.Enabled {
+		status = "review_required"
+	}
+	label := candidate.Label
+	if label == "" && projectName != "" {
+		label = projectName + "-candidate"
+	}
+	return &FeedbackChangeSet{
+		ID:             "cs_" + uuid.New().String()[:8],
+		FeedbackID:     feedbackID,
+		ProjectName:    projectName,
+		ProjectPath:    project.ProjectPath,
+		Surface:        project.Surface,
+		ReleaseChannel: feedbackFirstNonEmpty(project.ReleaseChannel, "production"),
+		Status:         status,
+		CandidateLabel: label,
+		CandidateURL:   candidate.PreviewURL,
+		BaseBranch:     candidate.BaseBranch,
+		TargetBranch:   candidate.TargetBranch,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+}
+
+// GetFeedback returns a report by ID.
+func (fm *FeedbackManager) GetFeedback(id string) (*FeedbackReport, bool) {
+	fm.mu.RLock()
+	defer fm.mu.RUnlock()
+	r, ok := fm.reports[id]
+	return r, ok
+}
+
+// ListFeedback returns summaries of all reports.
+func (fm *FeedbackManager) ListFeedback() []FeedbackSummary {
+	fm.mu.RLock()
+	defer fm.mu.RUnlock()
+
+	result := make([]FeedbackSummary, 0, len(fm.reports))
+	for _, r := range fm.reports {
+		result = append(result, FeedbackSummary{
+			ID:         r.ID,
+			Source:     r.Source,
+			AppVersion: r.AppVersion,
+			Platform:   r.DeviceInfo.Platform,
+			HasVideo:   r.VideoPath != "",
+			NumScreens: len(r.Screenshots),
+			CreatedAt:  r.CreatedAt,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt > result[j].CreatedAt
+	})
+	return result
+}
+
+// DeleteFeedback removes a report and its files.
+func (fm *FeedbackManager) DeleteFeedback(id string) error {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+
+	if _, ok := fm.reports[id]; !ok {
+		return fmt.Errorf("feedback %q not found", id)
+	}
+
+	reportDir := filepath.Join(fm.baseDir, id)
+	os.RemoveAll(reportDir)
+	delete(fm.reports, id)
+	return nil
+}
+
+// UserWords returns the sentence the HUMAN actually contributed to a feedback
+// report — the thing they said or typed while shaking their phone — with none
+// of the device/timeline/stack-trace scaffolding GenerateFixPrompt wraps
+// around it.
+//
+// It exists because the fix task used to be NAMED by the generated prompt: a
+// user who said "the login button does nothing" got a task whose title, and
+// whose own chat bubble, was "Bug report from device testing: Device: iPhone 16
+// ios, ios 18.2 App version: … Timeline: - 0:03 — [voice] …". The report body
+// is a briefing for the runner; this is what belongs on screen.
+//
+// Returns "" when the report is pure telemetry (a crash with no annotation),
+// in which case the caller should fall back to a short human label rather than
+// to the generated prompt.
+func (fm *FeedbackManager) UserWords(id string) string {
+	fm.mu.RLock()
+	r, ok := fm.reports[id]
+	fm.mu.RUnlock()
+	if !ok {
+		return ""
+	}
+	if t := strings.TrimSpace(r.Transcript); t != "" {
+		return t
+	}
+	// Annotations are typed by the user; voice entries are their transcribed
+	// speech. Both are their words. Crash/screenshot entries are not.
+	var said []string
+	for _, e := range r.Timeline {
+		if e.Type != "annotation" && e.Type != "voice" {
+			continue
+		}
+		if txt := strings.TrimSpace(e.Text); txt != "" {
+			said = append(said, txt)
+		}
+	}
+	return strings.Join(said, " ")
+}
+
+// GenerateFixPrompt creates a structured prompt for the AI agent to fix bugs.
+func (fm *FeedbackManager) GenerateFixPrompt(id string) (string, error) {
+	fm.mu.RLock()
+	r, ok := fm.reports[id]
+	fm.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("feedback %q not found", id)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Bug report from device testing:\n\n")
+
+	// Device info
+	sb.WriteString(fmt.Sprintf("Device: %s %s, %s %s\n", r.DeviceInfo.Model, r.DeviceInfo.Platform, r.DeviceInfo.Platform, r.DeviceInfo.OSVersion))
+	if r.AppVersion != "" {
+		sb.WriteString(fmt.Sprintf("App version: %s\n", r.AppVersion))
+	}
+	if r.Project.ProjectName != "" || r.Project.Surface != "" || r.Project.ReleaseChannel != "" {
+		sb.WriteString(fmt.Sprintf(
+			"Project: %s\nSurface: %s\nCurrent lane: %s\n",
+			feedbackFirstNonEmpty(r.Project.ProjectName, r.Project.AppName),
+			feedbackFirstNonEmpty(r.Project.Surface, "unknown"),
+			feedbackFirstNonEmpty(r.Project.ReleaseChannel, "production"),
+		))
+		if r.Project.ProjectPath != "" {
+			sb.WriteString(fmt.Sprintf("Project path: %s\n", r.Project.ProjectPath))
+		}
+		if r.ChangeSet != nil {
+			sb.WriteString(fmt.Sprintf(
+				"Candidate change set: %s (%s)\n",
+				r.ChangeSet.ID,
+				feedbackFirstNonEmpty(r.ChangeSet.CandidateLabel, "candidate"),
+			))
+			if r.ChangeSet.TargetBranch != "" {
+				sb.WriteString(fmt.Sprintf("Target branch: %s\n", r.ChangeSet.TargetBranch))
+			}
+			if r.ChangeSet.CandidateURL != "" {
+				sb.WriteString(fmt.Sprintf("Candidate preview URL: %s\n", r.ChangeSet.CandidateURL))
+			}
+		}
+	}
+	sb.WriteString("\n")
+
+	// Timeline
+	if len(r.Timeline) > 0 {
+		sb.WriteString("Timeline:\n")
+		for _, e := range r.Timeline {
+			min := int(e.Time) / 60
+			sec := int(e.Time) % 60
+			switch e.Type {
+			case "voice":
+				sb.WriteString(fmt.Sprintf("- %d:%02d — [voice] \"%s\"\n", min, sec, e.Text))
+			case "screenshot":
+				sb.WriteString(fmt.Sprintf("- %d:%02d — [screenshot] %s\n", min, sec, e.File))
+			case "annotation":
+				sb.WriteString(fmt.Sprintf("- %d:%02d — [note] %s\n", min, sec, e.Text))
+			case "crash":
+				sb.WriteString(fmt.Sprintf("- %d:%02d — [CRASH] %s\n", min, sec, e.Text))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Captured errors
+	if len(r.Errors) > 0 {
+		sb.WriteString("Captured errors:\n")
+		for i, e := range r.Errors {
+			fatal := ""
+			if e.IsFatal {
+				fatal = " [FATAL]"
+			}
+			sb.WriteString(fmt.Sprintf("  Error %d%s: %s\n", i+1, fatal, e.Message))
+			for _, frame := range e.Stack {
+				sb.WriteString(fmt.Sprintf("    %s\n", frame))
+			}
+			if len(e.Metadata) > 0 {
+				metaJSON, _ := json.Marshal(e.Metadata)
+				sb.WriteString(fmt.Sprintf("    context: %s\n", string(metaJSON)))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Transcript
+	if r.Transcript != "" {
+		sb.WriteString("Voice transcript:\n")
+		sb.WriteString(r.Transcript)
+		sb.WriteString("\n\n")
+	}
+
+	// Screenshots
+	if len(r.Screenshots) > 0 {
+		sb.WriteString(fmt.Sprintf("Screenshots attached: %d files\n", len(r.Screenshots)))
+		for _, s := range r.Screenshots {
+			sb.WriteString(fmt.Sprintf("  - %s\n", filepath.Base(s)))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Video
+	if r.VideoPath != "" {
+		sb.WriteString(fmt.Sprintf("Screen recording: %s\n\n", filepath.Base(r.VideoPath)))
+	}
+
+	sb.WriteString("Please fix these issues based on the user's feedback. The user tested the app on their physical device and recorded these problems.\n")
+	sb.WriteString("Note: If a live black box stream is active for this device, the full app log context (console logs, navigation history, error traces, network requests) will be included separately.\n")
+	if r.ChangeSet != nil {
+		sb.WriteString("Important: keep this work in the candidate lane first. Do not send changes directly to main or production. Prefer Fast Refresh-safe edits for web/mobile UI work, and leave a short review summary for the user.\n")
+	}
+
+	return sb.String(), nil
+}
+
+// GetFilePath returns the full path to a feedback file.
+func (fm *FeedbackManager) GetFilePath(id, filename string) (string, error) {
+	reportDir := filepath.Join(fm.baseDir, id)
+	filePath := filepath.Join(reportDir, filename)
+
+	// Security: ensure path is within report directory
+	absDir, _ := filepath.Abs(reportDir)
+	absFile, _ := filepath.Abs(filePath)
+	if !strings.HasPrefix(absFile, absDir) {
+		return "", fmt.Errorf("invalid path")
+	}
+
+	if _, err := os.Stat(filePath); err != nil {
+		return "", fmt.Errorf("file not found: %s", filename)
+	}
+	return filePath, nil
+}
+
+// SaveTranscript saves a voice transcript (from whisper.rn STT on mobile).
+func (fm *FeedbackManager) SaveTranscript(id, transcript string) error {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+
+	r, ok := fm.reports[id]
+	if !ok {
+		return fmt.Errorf("feedback %q not found", id)
+	}
+	r.Transcript = transcript
+
+	return fm.writeReportMetadata(r)
+}
+
+func (fm *FeedbackManager) GetChangeSet(id string) (*FeedbackChangeSet, error) {
+	fm.mu.RLock()
+	defer fm.mu.RUnlock()
+	r, ok := fm.reports[id]
+	if !ok {
+		return nil, fmt.Errorf("feedback %q not found", id)
+	}
+	if r.ChangeSet == nil {
+		return nil, fmt.Errorf("feedback %q has no change set", id)
+	}
+	cp := *r.ChangeSet
+	return &cp, nil
+}
+
+func (fm *FeedbackManager) UpdateChangeSet(id string, patch FeedbackChangeSet) (*FeedbackChangeSet, error) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	r, ok := fm.reports[id]
+	if !ok {
+		return nil, fmt.Errorf("feedback %q not found", id)
+	}
+	if r.ChangeSet == nil {
+		r.ChangeSet = buildFeedbackChangeSet(id, r.Project, FeedbackCandidateMetadata{}, time.Now().UTC().Format(time.RFC3339))
+	}
+	cs := r.ChangeSet
+	if patch.Status != "" {
+		cs.Status = patch.Status
+	}
+	if patch.Summary != "" {
+		cs.Summary = patch.Summary
+	}
+	if patch.CandidateLabel != "" {
+		cs.CandidateLabel = patch.CandidateLabel
+	}
+	if patch.CandidateURL != "" {
+		cs.CandidateURL = patch.CandidateURL
+	}
+	if patch.BaseBranch != "" {
+		cs.BaseBranch = patch.BaseBranch
+	}
+	if patch.TargetBranch != "" {
+		cs.TargetBranch = patch.TargetBranch
+	}
+	if patch.TaskID != "" {
+		cs.TaskID = patch.TaskID
+	}
+	cs.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := fm.writeReportMetadata(r); err != nil {
+		return nil, err
+	}
+	cp := *cs
+	return &cp, nil
+}
+
+func (fm *FeedbackManager) AddReview(id, action, comment, desiredOutcome string) (*FeedbackChangeSet, error) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	r, ok := fm.reports[id]
+	if !ok {
+		return nil, fmt.Errorf("feedback %q not found", id)
+	}
+	if r.ChangeSet == nil {
+		r.ChangeSet = buildFeedbackChangeSet(id, r.Project, FeedbackCandidateMetadata{}, time.Now().UTC().Format(time.RFC3339))
+	}
+	entry := FeedbackReviewEntry{
+		ID:             "rv_" + uuid.New().String()[:8],
+		Action:         action,
+		Comment:        comment,
+		DesiredOutcome: desiredOutcome,
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+	}
+	r.ChangeSet.Reviews = append(r.ChangeSet.Reviews, entry)
+	switch action {
+	case "approve":
+		r.ChangeSet.Status = "approved"
+	case "revert":
+		r.ChangeSet.Status = "reverted"
+	case "change_again":
+		r.ChangeSet.Status = "review_required"
+	}
+	r.ChangeSet.UpdatedAt = entry.CreatedAt
+	if err := fm.writeReportMetadata(r); err != nil {
+		return nil, err
+	}
+	cp := *r.ChangeSet
+	return &cp, nil
+}
+
+func (fm *FeedbackManager) writeReportMetadata(report *FeedbackReport) error {
+	reportDir := filepath.Join(fm.baseDir, report.ID)
+	metaData, _ := json.MarshalIndent(report, "", "  ")
+	return os.WriteFile(filepath.Join(reportDir, "metadata.json"), metaData, 0600)
+}
+
+func feedbackFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// sanitizeFeedbackUploadName returns a basename safe to join under
+// fm.baseDir/<reportID>/. Returns "" when the input cannot be made
+// safe (path separators, traversal segments, hidden files, empty).
+//
+// An SDK client sending a multipart Filename like "../../../tmp/x" would
+// previously be joined verbatim by filepath.Join, which collapses
+// internal "../" segments but does NOT block traversal out of the
+// parent directory. This helper closes that hole by:
+//  1. Reducing the input to its basename (filepath.Base).
+//  2. Rejecting if the basename equals "." or ".." or starts with
+//     "." (no hidden-file writes).
+//  3. Rejecting if the basename still contains a path separator on
+//     either platform (defense in depth — Base usually strips them).
+func sanitizeFeedbackUploadName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	base := filepath.Base(trimmed)
+	if base == "." || base == ".." || base == "" {
+		return ""
+	}
+	if strings.HasPrefix(base, ".") {
+		return ""
+	}
+	if strings.ContainsAny(base, "/\\") {
+		return ""
+	}
+	if strings.ContainsRune(base, 0) {
+		return ""
+	}
+	if len(base) > 200 {
+		return ""
+	}
+	return base
+}
+
+// interface check
+var _ io.Reader = (*os.File)(nil)

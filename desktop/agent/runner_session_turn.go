@@ -1,0 +1,476 @@
+package main
+
+// runner_session_turn.go — one call that drives a live coding session.
+//
+//	POST /runner/session/turn  {session?, runner?, text?, choice?, waitMs?}
+//
+// This is the endpoint a WATCH, CAR, or TV speaks. Those surfaces have no
+// terminal, no PTY, and often no screen worth reading a TUI on. What they have
+// is a sentence ("keep developing this in the ubuntu session") and a need to
+// hear back one sentence. Everything below exists to make that safe.
+//
+// It is deliberately NOT /ws/runner. That endpoint hands you a raw pane and
+// assumes a terminal emulator on the other end — right for the phone's xterm,
+// useless on a wrist. Here the agent owns the terminal semantics: which session
+// you meant, whether the pane can accept a prompt at all, how a given runner
+// submits, and what came back.
+//
+// The three hazards this endpoint exists to absorb, each learned the hard way
+// against a real box (see tmux.go):
+//
+//  1. A pane showing a menu will treat your prompt's Enter as a selection.
+//     A prompt sent while codex offered "1. Update now" installed an update and
+//     killed the session. So: never type a prompt into a menu — report the
+//     options and let the caller answer.
+//  2. A menu digit confirms by itself. Appending Enter to it answers the NEXT
+//     modal, sight unseen, and claude's next modal has "No, exit" as option 1.
+//     So: choices go through `choice`, which sends the key and nothing else.
+//  3. Menus chain. Answering one reveals another, with different numbering.
+//     So: every reply carries the pane's current state, and a caller loops.
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+type runnerSessionTurnRequest struct {
+	// Session names the tmux session directly ("yaver-codex"). Optional when
+	// Runner is given, or when exactly one runner session is live.
+	Session string `json:"session"`
+	// Runner resolves to this box's canonical session for that runner.
+	Runner string `json:"runner"`
+	// Text is a prompt to type and submit. Mutually exclusive with Choice.
+	Text string `json:"text"`
+	// Choice answers a menu the pane is showing (a bare option number).
+	Choice string `json:"choice"`
+	// WaitMs is how long to let the runner react before reading the pane back.
+	// Zero picks a default; a watch wants this short, a car can wait longer.
+	WaitMs int `json:"waitMs"`
+	// Images are screenshot attachments to hand the runner alongside Text —
+	// the WhatsApp-to-a-friend path (ShareComposeModal → live Vibe session).
+	// The live session is a tmux TERMINAL, so an image cannot be typed as
+	// pixels; instead each image is saved to ~/.yaver/images/<turn>/* and the
+	// typed prompt is prefixed with the same "[Attached images — use the Read
+	// tool]" hint task_prompt_frame.go uses, so the runner (opencode/DeepSeek)
+	// sees the path and reads it through the yaver-vision plugin. Mutually
+	// exclusive with Choice (a menu answer cannot carry attachments).
+	Images []ImageAttachment `json:"images,omitempty"`
+	// WorkDir is the project a prompt is ABOUT. The tvOS/car/watch surfaces
+	// send it already (AgentClient.sendText); until now it was parsed and
+	// discarded. It scopes the per-turn DOM-element attachment: when a fresh
+	// element was selected in that project's preview, the block rides the typed
+	// prompt, so "deep audit this element" from the couch reaches the runner
+	// with the element, not a grep request. Raw runner commands never see it —
+	// this file types into a live session, which is not a task turn.
+	WorkDir string `json:"workDir,omitempty"`
+}
+
+type runnerSessionTurnResponse struct {
+	OK      bool   `json:"ok"`
+	Session string `json:"session"`
+	Runner  string `json:"runner,omitempty"`
+	// Sent reports what we actually delivered: "prompt" or "choice".
+	Sent string `json:"sent,omitempty"`
+	// AwaitingChoice is true when the pane is (still) on a menu. A caller must
+	// answer with `choice` before any prompt will be accepted.
+	AwaitingChoice bool     `json:"awaitingChoice"`
+	Options        []string `json:"options,omitempty"`
+	// Pane is the visible tail — enough for a TV to render and for a watch to
+	// summarize, without shipping a whole scrollback over a cellular link.
+	Pane string `json:"pane,omitempty"`
+	// Delivered reports what we could OBSERVE about a prompt we typed:
+	// "observed" (the pane changed, so the keystrokes landed) or "unconfirmed"
+	// (it did not change at all). tmux exiting 0 only proves send-keys was
+	// accepted, never that the runner received or submitted anything — so
+	// `ok:true` alone was an assertion we had no evidence for. Empty for a
+	// choice, which confirms itself by advancing the menu.
+	Delivered string `json:"delivered,omitempty"`
+	// DeliveryNote is the plain-language sentence for an "unconfirmed" verdict,
+	// for a surface to render or speak instead of implying the prompt ran.
+	DeliveryNote string `json:"deliveryNote,omitempty"`
+	// Available is the picker a constrained surface (car, watch) needs when the
+	// box has SEVERAL live runner sessions and the caller did not name one. It
+	// carries the session names + runners so a voice surface can read them out
+	// and the caller can retry with an explicit `session`. Absent when the
+	// request resolved cleanly.
+	Available []RunnerSessionChoice `json:"available,omitempty"`
+	// NeedsChoice is true when the request was a lifecycle intent (e.g. "close
+	// the session") but the target is ambiguous — the caller must resolve
+	// against Available before acting.
+	NeedsChoice bool   `json:"needsChoice,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// RunnerSessionChoice is one pickable live runner session for a screenless or
+// constrained surface. Identifiers + runner only — never pane content.
+type RunnerSessionChoice struct {
+	Name    string `json:"name"`
+	Runner  string `json:"runner"`
+	Index   int    `json:"index"`
+	Matched bool   `json:"matched,omitempty"` // whether it matched an explicit name/runner
+}
+
+// classifyPromptDelivery turns a before/after pane pair into an honest verdict
+// about a prompt we just typed.
+//
+// The defect it closes: this endpoint answered `200 {ok:true, sent:"prompt"}`
+// whenever `tmux send-keys` exited 0 — which proves only that tmux accepted the
+// keystrokes, never that the runner got them. A prompt typed into a pane that
+// then does nothing is the single most unfalsifiable state in the product
+// (arch doc R5): the surface shows a spinner forever and the response it is
+// spinning on already claimed success.
+//
+// We deliberately claim only what a pane diff can prove. Typing text into ANY
+// runner TUI paints it into the composer, so a pane that is byte-identical
+// after the text + Enter + settle is proof the keystrokes did not land. The
+// converse is not proof of submission — a composer holding unsubmitted text
+// also counts as "changed" — so the positive verdict is named "observed", not
+// "submitted". Overclaiming here would just relocate the original lie.
+func classifyPromptDelivery(paneBefore, paneAfter string) (verdict string, note string) {
+	if paneBefore != paneAfter {
+		return "observed", ""
+	}
+	return "unconfirmed", "The prompt was typed into the session, but the pane did not change afterwards — " +
+		"so it is not confirmed the runner received it. Open the session to check before re-sending; " +
+		"sending again could submit the same instruction twice."
+}
+
+const (
+	runnerTurnDefaultWaitMs = 6000
+	runnerTurnMaxWaitMs     = 120000
+	runnerTurnPaneLines     = 24
+)
+
+// resolveRunnerSession picks the tmux session a turn is aimed at. Explicit name
+// wins; then the runner's canonical session; then, if the box has exactly one
+// runner session live, that one — the case a voice surface actually hits, where
+// the user said "the ubuntu session" and meant "the only one".
+//
+// On failure it returns the full candidate list alongside the error so a
+// constrained surface (car, watch) can render a picker and retry with an
+// explicit `session` — erroring with a bare message forces a screenless driver
+// to guess a session name from memory.
+func resolveRunnerSession(name, runner string) (string, string, []RunnerSessionChoice, error) {
+	sessions := listRunnerPTYSessions()
+	// Only confirmed sessions are safe picker targets. An unconfirmed
+	// yaver-codex is a shell with a convincing name; offering it in a picker
+	// invites the caller to execute dictated prose as a command.
+	choices := make([]RunnerSessionChoice, 0, len(sessions))
+	for _, s := range sessions {
+		if s.Confirmed {
+			choices = append(choices, RunnerSessionChoice{Name: s.Name, Runner: s.Runner, Index: len(choices)})
+		}
+	}
+	markMatched := func(n string) {
+		for i := range choices {
+			if choices[i].Name == n || choices[i].Runner == n {
+				choices[i].Matched = true
+			}
+		}
+	}
+
+	if n := sanitizeTmuxSessionName(strings.TrimSpace(name)); n != "" {
+		markMatched(n)
+		for _, s := range sessions {
+			if s.Name == n {
+				return s.Name, s.Runner, choices, nil
+			}
+		}
+		return "", "", choices, fmt.Errorf("no live session named %q on this machine", n)
+	}
+
+	if r := normalizeRunnerID(runner); r != "" {
+		markMatched(r)
+		// Prefer a real observed runner. If only a stale named shell exists,
+		// return it so the confirmation guard below can name the shell hazard.
+		for _, s := range sessions {
+			if s.Runner == r && s.Confirmed {
+				return s.Name, s.Runner, choices, nil
+			}
+		}
+		for _, s := range sessions {
+			if s.Runner == r {
+				return s.Name, s.Runner, choices, nil
+			}
+		}
+		return "", "", choices, fmt.Errorf("no live %s session on this machine — start one with `yaver %s --machine=<this box>`", r, r)
+	}
+
+	confirmed := make([]RunnerPTYSession, 0, len(sessions))
+	for _, s := range sessions {
+		if s.Confirmed {
+			confirmed = append(confirmed, s)
+		}
+	}
+	switch len(confirmed) {
+	case 0:
+		return "", "", choices, fmt.Errorf("no confirmed live runner sessions on this machine")
+	case 1:
+		return confirmed[0].Name, confirmed[0].Runner, choices, nil
+	default:
+		names := make([]string, 0, len(confirmed))
+		for _, s := range confirmed {
+			names = append(names, s.Name)
+		}
+		return "", "", choices, fmt.Errorf("several runner sessions are live (%s) — name the one you mean", strings.Join(names, ", "))
+	}
+}
+
+// runnerSessionIsConfirmed reports whether a runner process was actually observed
+// for this session, as opposed to inferred from its name or its scrollback.
+// Unknown session → false: refusing a turn is always recoverable, typing a
+// command into someone's shell is not.
+func runnerSessionIsConfirmed(name string) bool {
+	for _, s := range listRunnerPTYSessions() {
+		if s.Name == name {
+			return s.Confirmed
+		}
+	}
+	return false
+}
+
+// capturePaneTail returns the last n non-empty lines the pane is showing.
+func capturePaneTail(sessionName string, n int) string {
+	out, err := exec.Command(tmuxCmdName(), "capture-pane", "-p", "-t", sessionName).Output()
+	if err != nil {
+		return ""
+	}
+	all := strings.Split(string(out), "\n")
+	kept := make([]string, 0, n)
+	for i := len(all) - 1; i >= 0 && len(kept) < n; i-- {
+		if line := strings.TrimRight(all[i], " \t"); strings.TrimSpace(line) != "" {
+			kept = append(kept, line)
+		}
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return strings.Join(kept, "\n")
+}
+
+func (s *HTTPServer) handleRunnerSessionTurn(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var req runnerSessionTurnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	reply, status := executeRunnerSessionTurn(req)
+	// Always return the typed reply shape. In particular, an ambiguous target
+	// carries `available` so constrained surfaces can present a picker. The old
+	// 404 path flattened this to {error:"..."}, silently discarding the only
+	// route a car/watch had to resolve the request.
+	jsonReply(w, status, reply)
+}
+
+// executeRunnerSessionTurn is the transport-agnostic core of a runner turn: it
+// drives one turn against a live tmux runner session and returns the resulting
+// state plus the HTTP status the /runner/session/turn endpoint would use. The
+// `runner_turn` ops verb (ops_runner.go) calls it too so a voice/car/watch
+// surface reaching Yaver over MCP gets exactly the same tmux hazard handling as
+// the direct HTTP callers — the three hazards documented at the top of this
+// file live here, once.
+func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnResponse, int) {
+	text := strings.TrimSpace(req.Text)
+	choice := strings.TrimSpace(req.Choice)
+	if (text == "") == (choice == "") {
+		return runnerSessionTurnResponse{Error: "send exactly one of `text` (a prompt) or `choice` (a menu option number)"}, http.StatusBadRequest
+	}
+	if len(req.Images) > 0 && choice != "" {
+		return runnerSessionTurnResponse{Error: "`images` ride a prompt; a `choice` (menu answer) cannot carry attachments"}, http.StatusBadRequest
+	}
+	if choice != "" && !isTmuxChoiceAnswer(choice) {
+		return runnerSessionTurnResponse{Error: "`choice` must be a bare option number"}, http.StatusBadRequest
+	}
+
+	// Natural-language session commands (EN + TR) are routed as lifecycle
+	// intents BEFORE they can reach a session as a typed prompt. "Start a new
+	// session" from the car must create a seat, not get submitted to Claude.
+	if text != "" {
+		if intent, ok := detectSessionIntent(text); ok {
+			return executeSessionIntent(req, *intent)
+		}
+	}
+
+	sessionName, runnerID, choices, err := resolveRunnerSession(req.Session, req.Runner)
+	if err != nil {
+		status := http.StatusNotFound
+		if strings.TrimSpace(req.Session) == "" && strings.TrimSpace(req.Runner) == "" && len(choices) > 1 {
+			status = http.StatusConflict
+		}
+		return runnerSessionTurnResponse{
+			Available:   choices,
+			NeedsChoice: status == http.StatusConflict,
+			Error:       err.Error(),
+		}, status
+	}
+
+	// Never type into a session we only GUESSED was a runner.
+	//
+	// A session keeps its name and its scrollback after its runner exits, so
+	// `yaver-codex` can be a plain interactive shell — and tmux send-keys does not
+	// know the difference. Text meant as a prompt is then a COMMAND, and the Enter
+	// that "submits" it runs it. Observed on a live box: a turn aimed at a bare
+	// `yaver-codex` session executed the text (`zsh: command not found`). A prompt
+	// like "remove the old build directory" would not have been so harmless.
+	if !runnerSessionIsConfirmed(sessionName) {
+		return runnerSessionTurnResponse{
+			Session: sessionName,
+			Runner:  runnerID,
+			Pane:    capturePaneTail(sessionName, runnerTurnPaneLines),
+			Error: fmt.Sprintf("session %q is not running a coding agent right now — its pane is at a shell, "+
+				"so a prompt would be executed as a shell command. Start one with `yaver wrap %s`.",
+				sessionName, runnerID),
+		}, http.StatusConflict
+	}
+
+	reply := runnerSessionTurnResponse{Session: sessionName, Runner: runnerID}
+	// Set only on the prompt path; a choice confirms itself by advancing the menu.
+	var paneBeforePrompt string
+	var sentPrompt bool
+
+	// Read the pane only once it has stopped redrawing. A TUI that is mid-paint
+	// can show neither the menu it is about to render nor the prompt it just
+	// cleared, and either misreading sends the wrong keystroke.
+	awaiting, options := settleAndInspectPane(sessionName)
+
+	if choice != "" {
+		// Symmetry matters as much as the prompt guard. A digit sent at a
+		// prompt is not a no-op: it is typed into the composer as literal text
+		// and silently prefixes whatever the user says next
+		// ("2reply with exactly ..."). Refuse it.
+		if !awaiting {
+			reply.Pane = capturePaneTail(sessionName, runnerTurnPaneLines)
+			reply.Error = "session is not showing a menu — send `text`, not `choice`"
+			return reply, http.StatusConflict
+		}
+		// The digit confirms on its own; no Enter, ever. See tmux.go.
+		if err := sendTmuxKey(sessionName, choice); err != nil {
+			reply.Error = err.Error()
+			return reply, http.StatusInternalServerError
+		}
+		reply.Sent = "choice"
+	} else {
+		// A prompt must never be typed into a menu: the Enter that submits it
+		// would pick whichever option is highlighted.
+		if awaiting {
+			reply.AwaitingChoice = true
+			reply.Options = options
+			reply.Pane = capturePaneTail(sessionName, runnerTurnPaneLines)
+			reply.Error = "session is waiting on a choice — answer it with `choice` before sending a prompt"
+			return reply, http.StatusConflict
+		}
+		// Snapshot the pane BEFORE typing so the response can report what was
+		// observed rather than what tmux merely accepted. See
+		// classifyPromptDelivery — we are already settled here, so this is one
+		// cheap capture, not a new wait.
+		paneBeforePrompt = capturePaneTail(sessionName, runnerTurnPaneLines)
+		sentPrompt = true
+		// The per-turn DOM element rides the prompt, sentinel-wrapped, when a
+		// fresh selection exists for the requested workDir (the tvOS "deep
+		// audit this element" path). The block is advisory context, the same
+		// block task turns get; it never replaces the user's text.
+		typedText := text
+		if d, ok := globalDomElements.Get(req.WorkDir, time.Now()); ok {
+			if block := FormatDomElementBlock(d); block != "" {
+				typedText = block + "\n" + typedText
+				log.Printf("[runner-turn %s] DOM element context attached: %s", sessionName, d.Summary())
+			}
+		}
+		// Images ride the prompt as paths, not pixels: the live session is a
+		// tmux terminal. Save each attachment, then prefix the typed text with
+		// the same Read-tool hint the task path uses — so opencode/DeepSeek
+		// (text-only) sees the file and the yaver-vision plugin gives it eyes.
+		// The 2026-08-10 gap this closes: ShareComposeModal fan-out created a
+		// NEW background task with the image, invisible to the live Vibe
+		// session — the screenshot never passed through the session the user
+		// was actually watching.
+		if len(req.Images) > 0 {
+			imgPaths := saveImages(newPendingCloudTaskID(), req.Images)
+			if len(imgPaths) > 0 {
+				typedText = attachImageHintToPrompt(text, imgPaths)
+			}
+		}
+		if err := sendTmuxLine(sessionName, typedText); err != nil {
+			reply.Error = err.Error()
+			return reply, http.StatusInternalServerError
+		}
+		reply.Sent = "prompt"
+	}
+
+	wait := req.WaitMs
+	if wait <= 0 {
+		wait = runnerTurnDefaultWaitMs
+	}
+	if wait > runnerTurnMaxWaitMs {
+		wait = runnerTurnMaxWaitMs
+	}
+	time.Sleep(time.Duration(wait) * time.Millisecond)
+
+	// Menus chain: answering one can reveal another with different numbering.
+	// Always report where the pane landed so the caller can loop rather than
+	// guess — and settle again first, because the next modal may still be
+	// painting when the wait elapses.
+	if nowAwaiting, nowOptions := settleAndInspectPane(sessionName); nowAwaiting {
+		reply.AwaitingChoice = true
+		reply.Options = nowOptions
+	}
+	reply.Pane = capturePaneTail(sessionName, runnerTurnPaneLines)
+	if sentPrompt {
+		reply.Delivered, reply.DeliveryNote = classifyPromptDelivery(paneBeforePrompt, reply.Pane)
+	}
+	reply.OK = true
+	return reply, http.StatusOK
+}
+
+// attachImageHintToPrompt prefixes a typed prompt with the same
+// "[Attached images — use the Read tool]" hint the task-prompt frame uses, so
+// a text-only runner (opencode/DeepSeek V4 Flash) sees the saved image paths
+// and reads them via the yaver-vision plugin. Pure + testable; the caller
+// (executeRunnerSessionTurn) saves the attachments and hands the paths in.
+func attachImageHintToPrompt(text string, imgPaths []string) string {
+	if len(imgPaths) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString("[Attached images — use the Read tool to examine these files]\n")
+	for i, p := range imgPaths {
+		fmt.Fprintf(&b, "Image %d: %s\n", i+1, p)
+	}
+	b.WriteString(text)
+	return b.String()
+}
+
+// settleAndInspectPane waits for the pane to stop changing, then reports
+// whether it is showing a menu.
+//
+// Without this the menu check races the runner's redraw: a modal that appears
+// 200 ms after a keypress reads as "no menu", and the next prompt gets typed
+// into it. Two identical consecutive captures is a good-enough definition of
+// settled for a TUI; the ceiling keeps a chatty spinner from stalling the turn.
+func settleAndInspectPane(sessionName string) (bool, []string) {
+	var last string
+	deadline := time.Now().Add(paneSettleCeiling)
+	for time.Now().Before(deadline) {
+		cur := capturePaneTail(sessionName, runnerTurnPaneLines)
+		if cur == last {
+			break
+		}
+		last = cur
+		time.Sleep(paneSettleInterval)
+	}
+	return tmuxPaneAwaitingChoice(sessionName)
+}
+
+const (
+	paneSettleInterval = 120 * time.Millisecond
+	paneSettleCeiling  = 1500 * time.Millisecond
+)

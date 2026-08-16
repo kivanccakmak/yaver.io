@@ -1,0 +1,669 @@
+package main
+
+// deploy_all_cmd.go — `yaver deploy all` ships the entire Yaver stack
+// in one command, in a fixed order chosen for "fail loudly on the
+// surface that's most likely to fail":
+//
+//   1. TestFlight (iOS)         — local-only (UDID keychain), most flaky
+//   2. Play Store internal      — local script, second most flaky
+//   3. Convex backend           — `npx convex deploy --yes`
+//   4. Cloudflare web           — `scripts/deploy-web.sh`
+//   5. npm CLI release          — bump version, tag `cli/vX.Y.Z`, push;
+//                                 CI (release-cli.yml) builds platform
+//                                 binaries + publishes the npm wrapper
+//
+// This is intentionally NOT `yaver deploy ship --targets ...` — that
+// command runs through the agent's HTTP API for shared-machine deploys
+// of projects with vault-supplied credentials. `deploy all` is
+// for shipping Yaver itself: it shells out to the canonical
+// scripts/*.sh files directly so the same code path that works
+// manually works here, and the output is identical to running each
+// script by hand.
+//
+// Ordering rationale: TestFlight first because its 24h rate-limit
+// failure mode is the worst — discovering it's blocked after you've
+// already pushed Convex schema changes is painful. npm last because
+// it triggers async CI and there's no point bumping a version if the
+// mobile uploads failed.
+
+import (
+	"bufio"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+)
+
+func runDeployAllCmd(args []string) {
+	fs := flag.NewFlagSet("deploy all", flag.ExitOnError)
+	skipTestflight := fs.Bool("skip-testflight", false, "Skip the TestFlight stage")
+	skipPlaystore := fs.Bool("skip-playstore", false, "Skip the Play Store internal-track stage")
+	skipConvex := fs.Bool("skip-convex", false, "Skip the Convex backend deploy")
+	skipCloudflare := fs.Bool("skip-cloudflare", false, "Skip the Cloudflare web deploy")
+	skipNpm := fs.Bool("skip-npm", false, "Skip the npm CLI release (no version bump, no tag push)")
+	skipBump := fs.Bool("skip-bump", false, "Skip the deterministic monorepo version bump (ship the versions.json that's already on disk)")
+	dryRun := fs.Bool("dry-run", false, "Print stages and the commands they'd run; don't execute")
+	keepGoing := fs.Bool("continue-on-error", false, "Don't abort the pipeline when a stage fails")
+	bump := fs.String("bump", "patch", "Version bump applied to every shipped component: patch|minor|major")
+	fs.Parse(args)
+
+	switch *bump {
+	case "patch", "minor", "major":
+	default:
+		fmt.Fprintf(os.Stderr, "deploy all: --bump must be patch|minor|major (got %q)\n", *bump)
+		os.Exit(2)
+	}
+
+	repoRoot, isYaverIo, err := findDeployRepoRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "deploy all: %v\n", err)
+		os.Exit(2)
+	}
+
+	// Any repo that isn't yaver.io (carrotbet, talos, …) runs the generic,
+	// detection-driven pipeline: resolve targets from the repo's own
+	// scripts/deploy-*.sh, bump its scattered version sites, run them. No
+	// versions.json, no cli/v* release, no commit/tag/push — the repo owner
+	// commits. See deploy_detect.go + docs/deploy-all-generic.md.
+	if !isYaverIo {
+		runGenericDeployAll(repoRoot, genericDeployOpts{
+			bump:           *bump,
+			dryRun:         *dryRun,
+			keepGoing:      *keepGoing,
+			skipBump:       *skipBump,
+			skipConvex:     *skipConvex,
+			skipCloudflare: *skipCloudflare,
+			skipTestflight: *skipTestflight,
+			skipPlaystore:  *skipPlaystore,
+		})
+		return
+	}
+
+	// The npm stage commits + tags + pushes everything `deploy all` touched
+	// (marketing bumps + build numbers + cli release) in one sweep. For that
+	// to be safe we need a clean baseline up front — otherwise the sweep
+	// would scoop up unrelated WIP (the silent-bug scenario
+	// feedback_other_sessions_prune_untested.md warns about). Check it once,
+	// here, before any stage dirties the tree. Skipped in dry-run and when
+	// the npm stage isn't running (TestFlight-only runs don't commit).
+	if !*skipNpm && !*dryRun {
+		if err := requireCleanRepoForRelease(repoRoot); err != nil {
+			fmt.Fprintf(os.Stderr, "deploy all: %v\n", err)
+			fmt.Fprintln(os.Stderr, "  (or pass --skip-npm to ship without the commit/tag/push release stage)")
+			os.Exit(1)
+		}
+	}
+
+	// Populated by the version-bump preflight (below) and consumed by the
+	// npm stage for its release commit message. Declared here so the npm
+	// stage closure captures it; the preflight runs before the stage loop.
+	deployAllBumped := map[string]string{}
+
+	stages := []deployAllStage{
+		{
+			name:    "TestFlight",
+			id:      "testflight",
+			skip:    *skipTestflight,
+			workDir: repoRoot,
+			run: func(ctx *deployAllCtx) error {
+				return ctx.runScript(filepath.Join(repoRoot, "scripts", "deploy-testflight.sh"))
+			},
+		},
+		{
+			name:    "Play Store (internal)",
+			id:      "playstore",
+			skip:    *skipPlaystore,
+			workDir: repoRoot,
+			run: func(ctx *deployAllCtx) error {
+				if err := ctx.runScript(filepath.Join(repoRoot, "scripts", "deploy-playstore.sh")); err != nil {
+					return err
+				}
+				// deploy-playstore.sh produces the AAB; upload-playstore.py
+				// pushes it to the internal track.
+				return ctx.runCmd(repoRoot, "python3", filepath.Join(repoRoot, "scripts", "upload-playstore.py"))
+			},
+		},
+		{
+			name:    "Convex backend",
+			id:      "convex",
+			skip:    *skipConvex,
+			workDir: filepath.Join(repoRoot, "backend"),
+			run: func(ctx *deployAllCtx) error {
+				return ctx.runCmd(filepath.Join(repoRoot, "backend"), "npx", "convex", "deploy", "--yes")
+			},
+		},
+		{
+			name:    "Cloudflare (web)",
+			id:      "cloudflare",
+			skip:    *skipCloudflare,
+			workDir: repoRoot,
+			run: func(ctx *deployAllCtx) error {
+				return ctx.runScript(filepath.Join(repoRoot, "scripts", "deploy-web.sh"))
+			},
+		},
+		{
+			name:    "npm CLI release",
+			id:      "npm",
+			skip:    *skipNpm,
+			workDir: repoRoot,
+			run: func(ctx *deployAllCtx) error {
+				return runNpmCliRelease(repoRoot, *bump, *dryRun, ctx, true, deployAllBumped)
+			},
+		},
+	}
+
+	lg := newDeployAllLogger(filepath.Base(repoRoot))
+	defer lg.close()
+
+	lg.println("yaver deploy all")
+	lg.println("repo:", repoRoot)
+	if lg.path != "" {
+		lg.println("log:", lg.path)
+	}
+	lg.println()
+
+	results := make([]deployAllResult, 0, len(stages)+1)
+	overallStart := time.Now()
+	failed := false
+
+	// Preflight: deterministically bump the marketing version of every
+	// component this run will ship, then propagate via sync-versions.sh. The
+	// cli/npm version is intentionally left to the npm stage (it owns the
+	// tag), so we bump only mobile/backend/web here. No LLM picks the number —
+	// it's a patch (or --bump) increment of whatever versions.json holds.
+	if !*skipBump {
+		var components []string
+		if !*skipTestflight || !*skipPlaystore {
+			components = append(components, "mobile")
+		}
+		if !*skipConvex {
+			components = append(components, "backend")
+		}
+		if !*skipCloudflare {
+			components = append(components, "web")
+		}
+
+		bumpStage := deployAllStage{name: "Version bump", id: "bump"}
+		if len(components) == 0 {
+			lg.printf("──[ %-22s ]── nothing to bump (only npm enabled — cli bumps in its own stage)\n\n", bumpStage.name)
+			results = append(results, deployAllResult{stage: bumpStage, skipped: true})
+		} else {
+			ctx := &deployAllCtx{dryRun: *dryRun, prefix: "[bump]", out: lg.out, errW: lg.errW}
+			lg.printf("──[ %-22s ]── %s-bumping %v…\n", bumpStage.name, *bump, components)
+			stageStart := time.Now()
+			changes, bumpErr := bumpMonorepoVersions(repoRoot, components, *bump, *dryRun, ctx)
+			dur := time.Since(stageStart).Round(time.Second)
+			if bumpErr != nil {
+				lg.printf("\n──[ %-22s ]── FAILED in %s: %v\n\n", bumpStage.name, dur, bumpErr)
+				results = append(results, deployAllResult{stage: bumpStage, err: bumpErr, duration: dur})
+				printDeployAllSummary(lg.out, results, time.Since(overallStart))
+				os.Exit(1)
+			}
+			for comp, change := range changes {
+				deployAllBumped[comp] = change
+			}
+			lg.printf("\n──[ %-22s ]── ok (%s)\n\n", bumpStage.name, dur)
+			results = append(results, deployAllResult{stage: bumpStage, duration: dur})
+		}
+	}
+
+	for _, st := range stages {
+		if st.skip {
+			lg.printf("──[ %-22s ]── SKIPPED (--skip-%s)\n\n", st.name, st.id)
+			results = append(results, deployAllResult{stage: st, skipped: true})
+			continue
+		}
+
+		ctx := &deployAllCtx{dryRun: *dryRun, prefix: fmt.Sprintf("[%s]", st.id), out: lg.out, errW: lg.errW}
+		lg.printf("──[ %-22s ]── starting…\n", st.name)
+		stageStart := time.Now()
+
+		runErr := st.run(ctx)
+		dur := time.Since(stageStart).Round(time.Second)
+
+		if runErr != nil {
+			lg.printf("\n──[ %-22s ]── FAILED in %s: %v\n\n", st.name, dur, runErr)
+			results = append(results, deployAllResult{stage: st, err: runErr, duration: dur})
+			failed = true
+			if !*keepGoing {
+				printDeployAllSummary(lg.out, results, time.Since(overallStart))
+				if lg.path != "" {
+					lg.println("full log:", lg.path)
+				}
+				os.Exit(1)
+			}
+			continue
+		}
+
+		lg.printf("\n──[ %-22s ]── ok (%s)\n\n", st.name, dur)
+		results = append(results, deployAllResult{stage: st, duration: dur})
+	}
+
+	printDeployAllSummary(lg.out, results, time.Since(overallStart))
+	if lg.path != "" {
+		lg.println("full log:", lg.path)
+	}
+	if failed {
+		os.Exit(1)
+	}
+}
+
+type deployAllStage struct {
+	name    string
+	id      string
+	skip    bool
+	workDir string
+	run     func(*deployAllCtx) error
+}
+
+type deployAllResult struct {
+	stage    deployAllStage
+	skipped  bool
+	err      error
+	duration time.Duration
+}
+
+type deployAllCtx struct {
+	dryRun bool
+	prefix string
+	// out/errW tee stage output to the terminal + the on-disk deploy log.
+	// nil means bare os.Stdout/os.Stderr (the path before deploy logs, and
+	// the fallback when the log file can't be opened).
+	out  io.Writer
+	errW io.Writer
+}
+
+func (c *deployAllCtx) stdout() io.Writer {
+	if c.out != nil {
+		return c.out
+	}
+	return os.Stdout
+}
+
+func (c *deployAllCtx) stderr() io.Writer {
+	if c.errW != nil {
+		return c.errW
+	}
+	return os.Stderr
+}
+
+// runScript runs a bash script with stdout/stderr streamed to the
+// caller's terminal. The script's environment inherits the parent so
+// `yaver vault env --project ...` calls inside the script keep
+// working.
+func (c *deployAllCtx) runScript(path string) error {
+	return c.runCmd(filepath.Dir(path), "bash", path)
+}
+
+func (c *deployAllCtx) runCmd(workDir, name string, args ...string) error {
+	if c.dryRun {
+		fmt.Fprintf(c.stdout(), "  %s [dry-run] cd %s && %s %s\n", c.prefix, workDir, name, strings.Join(args, " "))
+		return nil
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Dir = workDir
+	cmd.Env = os.Environ()
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", name, err)
+	}
+
+	// Drain both pipes to completion before Wait returns so no tail of
+	// stage output is lost from the log. cmd.Wait closes the pipes, which
+	// can race a still-scanning goroutine otherwise.
+	done := make(chan struct{}, 2)
+	go func() { streamLines(stdout, c.prefix, c.stdout()); done <- struct{}{} }()
+	go func() { streamLines(stderr, c.prefix, c.stderr()); done <- struct{}{} }()
+	<-done
+	<-done
+
+	if err := cmd.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func streamLines(r io.Reader, prefix string, dst io.Writer) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		fmt.Fprintf(dst, "  %s %s\n", prefix, scanner.Text())
+	}
+}
+
+// runNpmCliRelease bumps the cli version, commits the bump, tags
+// `cli/vX.Y.Z`, and pushes the tag. The actual publish happens in
+// release-cli.yml on GitHub Actions because the cross-platform binary
+// build matrix needs CI runners (macOS notarization, Linux ARM cross-
+// compile, Windows).
+//
+// Failure modes intentionally surfaced to the user rather than swallowed:
+//   - dirty working tree           → abort (would commit unrelated changes)
+//   - not on main branch           → abort (releases must come from main)
+//   - origin/main ahead of HEAD    → abort (would race the tag)
+//   - no `github` remote           → abort (CI is wired to that remote)
+//   - tag already exists locally   → abort (would re-publish same version)
+//
+// sweepAll selects how the release commit is staged:
+//   - false (standalone `yaver deploy npm`): require a clean tree and stage
+//     only the cli version files, so the release commit is exactly the bump.
+//   - true (`yaver deploy all`): the clean-tree check already ran at the start
+//     of the pipeline, so every dirty file now is something deploy all itself
+//     produced (marketing bumps, build-number bumps, the cli bump). Sweep them
+//     all into one release commit with `git add -A`.
+//
+// bumped (deploy-all only) is component → "old → new" for the commit message.
+func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, sweepAll bool, bumped map[string]string) error {
+	if !sweepAll {
+		if err := requireCleanRepoForRelease(repoRoot); err != nil {
+			return err
+		}
+	}
+
+	currentVersion, err := readCliVersion(repoRoot)
+	if err != nil {
+		return err
+	}
+
+	nextVersion, err := bumpSemver(currentVersion, bump)
+	if err != nil {
+		return err
+	}
+
+	tag := "cli/v" + nextVersion
+	fmt.Printf("  %s bumping cli version: %s → %s (tag %s)\n", ctx.prefix, currentVersion, nextVersion, tag)
+
+	// Check the tag doesn't already exist — git will reject it on
+	// push, but failing earlier is friendlier and avoids a half-state
+	// (commit landed, tag rejected).
+	checkTag := exec.Command("git", "tag", "--list", tag)
+	checkTag.Dir = repoRoot
+	out, _ := checkTag.Output()
+	if strings.TrimSpace(string(out)) == tag {
+		return fmt.Errorf("tag %s already exists locally — bump version manually or delete the tag", tag)
+	}
+
+	if dryRun {
+		fmt.Printf("  %s [dry-run] would write %s to versions.json + cli/package.json + cli/package-lock.json + cli/sdk-manifest.json\n", ctx.prefix, nextVersion)
+		fmt.Printf("  %s [dry-run] would commit, tag %s, and push to github\n", ctx.prefix, tag)
+		return nil
+	}
+
+	if err := writeCliVersionFiles(repoRoot, nextVersion); err != nil {
+		return fmt.Errorf("write version files: %w", err)
+	}
+
+	if sweepAll {
+		// Everything dirty is deploy-all's own output (clean baseline was
+		// verified at pipeline start). One commit captures the marketing
+		// bumps + build-number bumps + the cli release together.
+		if err := ctx.runCmd(repoRoot, "git", "add", "-A"); err != nil {
+			return fmt.Errorf("git add -A: %w", err)
+		}
+	} else {
+		stageFiles := []string{
+			"versions.json",
+			"cli/package.json",
+			"cli/package-lock.json",
+		}
+		// sdk-manifest.json doesn't always carry a version field — only
+		// stage it if the bump touched it.
+		manifestPath := filepath.Join(repoRoot, "cli", "sdk-manifest.json")
+		if hasVersionKey(manifestPath) {
+			stageFiles = append(stageFiles, "cli/sdk-manifest.json")
+		}
+		addArgs := append([]string{"add", "--"}, stageFiles...)
+		if err := ctx.runCmd(repoRoot, "git", addArgs...); err != nil {
+			return fmt.Errorf("git add: %w", err)
+		}
+	}
+
+	commitMsg := fmt.Sprintf("cli %s: release", nextVersion)
+	if sweepAll && len(bumped) > 0 {
+		parts := make([]string, 0, len(bumped)+1)
+		parts = append(parts, "cli "+nextVersion)
+		for _, comp := range sortedKeys(bumped) {
+			// bumped[comp] is "old → new"; take the new half for brevity.
+			parts = append(parts, comp+" "+newVersionOf(bumped[comp]))
+		}
+		commitMsg = "chore(release): " + strings.Join(parts, " + ")
+	}
+	if err := ctx.runCmd(repoRoot, "git", "commit", "-m", commitMsg); err != nil {
+		return fmt.Errorf("git commit: %w", err)
+	}
+
+	if err := ctx.runCmd(repoRoot, "git", "tag", tag); err != nil {
+		return fmt.Errorf("git tag: %w", err)
+	}
+
+	if err := ctx.runCmd(repoRoot, "git", "push", "github", "main"); err != nil {
+		return fmt.Errorf("push main: %w", err)
+	}
+
+	if err := ctx.runCmd(repoRoot, "git", "push", "github", tag); err != nil {
+		return fmt.Errorf("push tag: %w", err)
+	}
+
+	fmt.Printf("  %s tag pushed — release-cli.yml is now building binaries + publishing the npm wrapper\n", ctx.prefix)
+	fmt.Printf("  %s monitor: gh run list -w release-cli.yml -L 1\n", ctx.prefix)
+	return nil
+}
+
+func requireCleanRepoForRelease(repoRoot string) error {
+	// Must be a git repo with a `github` remote.
+	remotes := exec.Command("git", "remote")
+	remotes.Dir = repoRoot
+	out, err := remotes.Output()
+	if err != nil {
+		return fmt.Errorf("not a git repo: %w", err)
+	}
+	if !strings.Contains(string(out), "github") {
+		return fmt.Errorf("no `github` remote configured — release-cli.yml is wired to the github remote")
+	}
+
+	// Must be on main.
+	branch := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	branch.Dir = repoRoot
+	bOut, err := branch.Output()
+	if err != nil {
+		return fmt.Errorf("git rev-parse HEAD: %w", err)
+	}
+	if strings.TrimSpace(string(bOut)) != "main" {
+		return fmt.Errorf("not on main (current: %s) — releases must come from main", strings.TrimSpace(string(bOut)))
+	}
+
+	// Working tree must be clean. Otherwise the version-bump commit
+	// would also pull in unrelated WIP, which is the silent-bug
+	// scenario `feedback_other_sessions_prune_untested.md` warns
+	// about.
+	status := exec.Command("git", "status", "--porcelain")
+	status.Dir = repoRoot
+	sOut, err := status.Output()
+	if err != nil {
+		return fmt.Errorf("git status: %w", err)
+	}
+	if strings.TrimSpace(string(sOut)) != "" {
+		return fmt.Errorf("working tree not clean — commit or stash before releasing:\n%s", string(sOut))
+	}
+
+	return nil
+}
+
+func readCliVersion(repoRoot string) (string, error) {
+	pkgPath := filepath.Join(repoRoot, "cli", "package.json")
+	data, err := os.ReadFile(pkgPath)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", pkgPath, err)
+	}
+	var pkg struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return "", fmt.Errorf("parse %s: %w", pkgPath, err)
+	}
+	if pkg.Version == "" {
+		return "", fmt.Errorf("%s has no version field", pkgPath)
+	}
+	return pkg.Version, nil
+}
+
+var semverRe = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
+
+func bumpSemver(v, kind string) (string, error) {
+	m := semverRe.FindStringSubmatch(strings.TrimSpace(v))
+	if m == nil {
+		return "", fmt.Errorf("not a plain X.Y.Z semver: %q", v)
+	}
+	major, minor, patch := atoi(m[1]), atoi(m[2]), atoi(m[3])
+	switch kind {
+	case "major":
+		return fmt.Sprintf("%d.0.0", major+1), nil
+	case "minor":
+		return fmt.Sprintf("%d.%d.0", major, minor+1), nil
+	case "patch", "":
+		return fmt.Sprintf("%d.%d.%d", major, minor, patch+1), nil
+	default:
+		return "", fmt.Errorf("unknown --bump value %q (use patch|minor|major)", kind)
+	}
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+func writeCliVersionFiles(repoRoot, version string) error {
+	// versions.json — top-level cli key.
+	if err := updateJSONField(filepath.Join(repoRoot, "versions.json"), "cli", version); err != nil {
+		return err
+	}
+	// cli/package.json — top-level version.
+	if err := updateJSONField(filepath.Join(repoRoot, "cli", "package.json"), "version", version); err != nil {
+		return err
+	}
+	// cli/package-lock.json — the lockfile carries version in two
+	// places: top-level "version" and packages[""]/version.
+	if err := updatePackageLockVersion(filepath.Join(repoRoot, "cli", "package-lock.json"), version); err != nil {
+		return err
+	}
+	// cli/sdk-manifest.json — best-effort, only if it has a version key.
+	manifestPath := filepath.Join(repoRoot, "cli", "sdk-manifest.json")
+	if hasVersionKey(manifestPath) {
+		if err := updateJSONField(manifestPath, "version", version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// updateJSONField rewrites a single top-level key in a JSON file
+// using a regex so we don't reorder keys, lose comments, or normalise
+// whitespace. Worth the awkwardness because diff-quality matters here
+// (the CI workflow watches package-lock.json and reordering keys
+// triggers spurious churn).
+func updateJSONField(path, key, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	pat := regexp.MustCompile(`("` + regexp.QuoteMeta(key) + `"\s*:\s*")[^"]*(")`)
+	if !pat.Match(data) {
+		return fmt.Errorf("%s: key %q not found at top level", path, key)
+	}
+	out := pat.ReplaceAll(data, []byte(`${1}`+value+`${2}`))
+	return os.WriteFile(path, out, 0o644)
+}
+
+// updatePackageLockVersion patches both "version" occurrences in a
+// package-lock.json (the top-level one and the implicit `""` package
+// entry that npm rewrites on every install).
+func updatePackageLockVersion(path, version string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	pat := regexp.MustCompile(`("version"\s*:\s*")[^"]*(")`)
+	matches := pat.FindAllIndex(data, -1)
+	if len(matches) < 1 {
+		return fmt.Errorf("%s: no version field found", path)
+	}
+	// Replace only the first two occurrences — these are the two
+	// canonical ones npm writes. Dependency entries below them stay
+	// untouched.
+	limit := 2
+	if len(matches) < 2 {
+		limit = len(matches)
+	}
+	count := 0
+	out := pat.ReplaceAllFunc(data, func(b []byte) []byte {
+		if count >= limit {
+			return b
+		}
+		count++
+		return pat.ReplaceAll(b, []byte(`${1}`+version+`${2}`))
+	})
+	return os.WriteFile(path, out, 0o644)
+}
+
+func hasVersionKey(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return regexp.MustCompile(`"version"\s*:\s*"`).Match(data)
+}
+
+func findYaverRepoRoot() (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("`yaver deploy all` must run inside the yaver.io repo (git rev-parse --show-toplevel failed: %w)", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return "", fmt.Errorf("git returned empty repo root")
+	}
+	// Sanity-check it's actually the yaver.io repo, not just any git
+	// repo. Look for the canonical scripts dir + workspace manifest.
+	if _, err := os.Stat(filepath.Join(root, "scripts", "deploy-web.sh")); err != nil {
+		return "", fmt.Errorf("repo root %s doesn't look like yaver.io (no scripts/deploy-web.sh)", root)
+	}
+	return root, nil
+}
+
+func printDeployAllSummary(w io.Writer, results []deployAllResult, total time.Duration) {
+	if w == nil {
+		w = os.Stdout
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "── deploy all summary ──")
+	for _, r := range results {
+		switch {
+		case r.skipped:
+			fmt.Fprintf(w, "  [skip] %-22s\n", r.stage.name)
+		case r.err != nil:
+			fmt.Fprintf(w, "  [FAIL] %-22s %s — %v\n", r.stage.name, r.duration, r.err)
+		default:
+			fmt.Fprintf(w, "  [ ok ] %-22s %s\n", r.stage.name, r.duration)
+		}
+	}
+	fmt.Fprintf(w, "  total: %s\n", total.Round(time.Second))
+}

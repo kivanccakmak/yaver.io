@@ -1,0 +1,1489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src *; img-src * data:; frame-src *;">
+  <title>Yaver.io</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #09090b; --bg-card: #18181b; --bg-hover: #27272a; --bg-input: #111113;
+      --border: #27272a; --border-hover: #3f3f46;
+      --text: #fafafa; --text-secondary: #a1a1aa; --text-muted: #52525b;
+      --accent: #6366f1; --accent-hover: #818cf8; --accent-dim: #6366f120;
+      --green: #22c55e; --green-dim: #22c55e20;
+      --yellow: #eab308; --yellow-dim: #eab30820;
+      --red: #ef4444; --red-dim: #ef444420;
+      --radius: 12px; --radius-sm: 8px;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); overflow: hidden; height: 100vh; -webkit-app-region: drag; }
+    button, input, textarea, select, a, .no-drag { -webkit-app-region: no-drag; }
+    ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+    .btn { padding: 9px 18px; border-radius: var(--radius-sm); border: none; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+    .btn-primary { background: #fff; color: #000; } .btn-primary:hover { background: #e4e4e7; }
+    .btn-accent { background: var(--accent); color: #fff; } .btn-accent:hover { background: var(--accent-hover); }
+    .btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); } .btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
+    .btn-danger { background: transparent; color: var(--red); border: 1px solid transparent; } .btn-danger:hover { background: var(--red-dim); }
+    .btn-sm { padding: 5px 12px; font-size: 11px; }
+    .btn-icon { width: 30px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 14px; } .btn-icon:hover { background: var(--bg-hover); color: var(--text); }
+    .badge { padding: 2px 7px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+    .badge-green { background: var(--green-dim); color: var(--green); } .badge-yellow { background: var(--yellow-dim); color: var(--yellow); } .badge-red { background: var(--red-dim); color: var(--red); }
+    .input { padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-input); color: var(--text); font-size: 13px; outline: none; width: 100%; } .input:focus { border-color: var(--accent); }
+    .input::placeholder { color: var(--text-muted); }
+    .screen { display: none; height: 100vh; } .screen.active { display: flex; }
+    .section { margin-bottom: 20px; } .section-title { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--bg); border-radius: 6px; margin-bottom: 4px; border: 1px solid var(--border); font-size: 12px; }
+    .item-name { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .hidden { display: none !important; }
+
+    /* ── Auth ───────────────────────────── */
+    .auth-screen { flex-direction: column; align-items: center; justify-content: center; gap: 24px; }
+    .logo { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; } .logo span { font-weight: 400; color: var(--text-muted); }
+    .auth-box { width: 340px; display: flex; flex-direction: column; gap: 10px; }
+    .auth-divider { display: flex; align-items: center; gap: 12px; margin: 8px 0; color: var(--text-muted); font-size: 11px; }
+    .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .auth-toggle { font-size: 12px; color: var(--text-muted); text-align: center; } .auth-toggle button { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; }
+    .auth-error { background: var(--red-dim); color: var(--red); padding: 8px 12px; border-radius: 6px; font-size: 12px; }
+
+    /* ── Devices ────────────────────────── */
+    .device-screen { flex-direction: column; align-items: center; padding-top: 70px; gap: 16px; }
+    .device-grid { max-width: 440px; width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 0 20px; }
+    .device-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: all 0.15s; }
+    .device-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+    .device-card.local { border-color: var(--green); border-style: dashed; }
+
+    /* ── Main layout ───────────────────── */
+    .main-screen { flex-direction: column; }
+    .topbar { height: 44px; display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--border); background: var(--bg-card); gap: 8px; flex-shrink: 0; }
+    .topbar-spacer { width: 68px; }
+    .main-body { display: flex; flex: 1; overflow: hidden; }
+
+    /* Sidebar */
+    .sidebar { width: 220px; border-right: 1px solid var(--border); display: flex; flex-direction: column; background: var(--bg-card); flex-shrink: 0; }
+    .sidebar-nav { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+    .nav-item { padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; transition: all 0.1s; }
+    .nav-item:hover { background: var(--bg-hover); color: var(--text); }
+    .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+    .nav-icon { font-size: 15px; width: 20px; text-align: center; }
+    .nav-badge { margin-left: auto; font-size: 10px; background: var(--accent-dim); color: var(--accent); padding: 1px 6px; border-radius: 999px; }
+    .sidebar-tasks { flex: 1; overflow-y: auto; padding: 8px; border-top: 1px solid var(--border); }
+    .task-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text-secondary); margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .task-item:hover { background: var(--bg-hover); } .task-item.active { background: var(--accent-dim); color: var(--accent); }
+
+    /* Content area */
+    .content { flex: 1; display: flex; overflow: hidden; }
+    .split { display: flex; flex: 1; overflow: hidden; }
+    .pane-left { width: 50%; display: flex; flex-direction: column; min-width: 280px; }
+    .pane-right { flex: 1; display: flex; flex-direction: column; background: #000; min-width: 200px; border-left: 1px solid var(--border); }
+    .divider { width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; } .divider:hover, .divider.active { background: var(--accent); }
+
+    /* Chat */
+    .chat-msgs { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { max-width: 88%; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; line-height: 1.7; word-wrap: break-word; }
+    .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+    .msg-assistant { align-self: flex-start; background: var(--bg-card); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+    .msg-assistant pre { background: #0c0c0c; padding: 8px 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; font-size: 11px; border: 1px solid var(--border); }
+    .msg-assistant code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; }
+    .msg-status { align-self: center; font-size: 11px; color: var(--text-muted); padding: 2px 10px; }
+
+    /* Console-first task output (2026-08-12, user directive): the chat pane
+       IS the runner's live console — raw stdout streamed as-is, like opencode
+       itself, for every runner. User prompts render as `$` lines, the raw
+       stream as a monospaced block; no more chat bubbles. */
+    .console-user { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); word-wrap: break-word; }
+    .console-user .console-prompt { color: var(--green); user-select: none; }
+    .console-raw { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
+    /* opencode-style working orb (2026-08-12): purple conic-gradient spinner
+       shown while the raw console is streaming, bottom-left of the console
+       block, so a live run reads as alive even between stdout bursts. */
+    .console-live-orb { display: inline-block; width: 14px; height: 14px; margin: 6px 10px 0 2px; vertical-align: middle; border-radius: 50%; position: relative; flex-shrink: 0; }
+    .console-live-orb::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 0deg, #a855f7, #ec4899, #a855f7); animation: orb-spin 1.4s linear infinite; }
+    .console-live-orb::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--bg-card, #0b0d11); animation: blink 1.4s ease-in-out infinite; }
+    @keyframes orb-spin { to { transform: rotate(360deg); } }
+    .console-live-row { display: flex; align-items: flex-start; }
+    .chat-bar { padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg-card); display: flex; gap: 8px; align-items: flex-end; }
+    .chat-input { flex: 1; resize: none; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; font-family: inherit; line-height: 1.5; min-height: 40px; max-height: 140px; outline: none; }
+    .chat-input:focus { border-color: var(--accent); } .chat-input::placeholder { color: var(--text-muted); }
+    .send-btn { width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; } .send-btn:hover { background: var(--accent-hover); }
+
+    /* Preview */
+    .preview-bar { height: 36px; display: flex; align-items: center; padding: 0 10px; border-bottom: 1px solid var(--border); background: var(--bg-card); gap: 6px; flex-shrink: 0; }
+    .preview-url { flex: 1; font-size: 10px; color: var(--text-muted); font-family: "SF Mono", Menlo, monospace; overflow: hidden; text-overflow: ellipsis; }
+    .preview-empty { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: var(--text-muted); font-size: 13px; }
+    webview { flex: 1; border: none; }
+
+    /* Panels (right side drawers) */
+    .panel { position: absolute; top: 0; right: 0; bottom: 0; width: 360px; background: var(--bg-card); border-left: 1px solid var(--border); z-index: 100; overflow-y: auto; padding: 20px 16px; display: none; }
+    .panel.open { display: block; }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .panel-title { font-size: 15px; font-weight: 600; }
+    .panel-x { cursor: pointer; color: var(--text-muted); font-size: 18px; background: none; border: none; padding: 4px; } .panel-x:hover { color: var(--text); }
+
+    /* Full-page views (inside content area) */
+    .page { display: none; flex-direction: column; flex: 1; overflow-y: auto; padding: 24px; }
+    .page.active { display: flex; }
+    .page-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- ═══ AUTH ═══ -->
+  <div id="screen-auth" class="screen auth-screen active">
+    <div class="logo">yaver<span>.io</span></div>
+    <p style="color:var(--text-secondary);font-size:14px;text-align:center;max-width:380px;line-height:1.6">
+      Build apps with AI from your phone or desktop.<br>No coding experience needed.
+    </p>
+    <div class="auth-box" id="auth-box">
+      <!-- OAuth buttons -->
+      <button class="btn no-drag" onclick="handleSignIn('apple')" style="width:100%;background:#000;color:#fff;border:1px solid #333;display:flex;align-items:center;justify-content:center;gap:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+        Continue with Apple
+      </button>
+      <button class="btn no-drag" onclick="handleSignIn('google')" style="width:100%;background:#fff;color:#000;display:flex;align-items:center;justify-content:center;gap:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+        Continue with Google
+      </button>
+      <button class="btn no-drag" onclick="handleSignIn('github')" style="width:100%;background:#111;color:#fff;border:1px solid #333;display:flex;align-items:center;justify-content:center;gap:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M12 .5C5.65.5.5 5.7.5 12.12c0 5.14 3.3 9.5 7.88 11.03.58.11.79-.25.79-.57 0-.28-.01-1.02-.02-2-3.2.71-3.88-1.57-3.88-1.57-.52-1.35-1.28-1.71-1.28-1.71-1.04-.73.08-.72.08-.72 1.15.08 1.75 1.19 1.75 1.19 1.02 1.77 2.67 1.26 3.32.96.1-.76.4-1.27.73-1.56-2.56-.29-5.26-1.3-5.26-5.77 0-1.27.45-2.31 1.18-3.13-.12-.29-.51-1.47.11-3.06 0 0 .97-.32 3.18 1.2a10.9 10.9 0 0 1 5.8 0c2.2-1.52 3.17-1.2 3.17-1.2.63 1.59.24 2.77.12 3.06.73.82 1.18 1.86 1.18 3.13 0 4.48-2.7 5.48-5.28 5.77.41.36.78 1.08.78 2.18 0 1.58-.02 2.85-.02 3.24 0 .32.2.69.8.57A11.63 11.63 0 0 0 23.5 12.12C23.5 5.7 18.35.5 12 .5z"/></svg>
+        Continue with GitHub
+      </button>
+      <button class="btn no-drag" onclick="handleSignIn('microsoft')" style="width:100%;background:#2F2F2F;color:#fff;border:1px solid #444;display:flex;align-items:center;justify-content:center;gap:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24"><rect fill="#F25022" x="1" y="1" width="10" height="10"/><rect fill="#7FBA00" x="13" y="1" width="10" height="10"/><rect fill="#00A4EF" x="1" y="13" width="10" height="10"/><rect fill="#FFB900" x="13" y="13" width="10" height="10"/></svg>
+        Continue with Microsoft
+      </button>
+      <div class="auth-divider">or use email</div>
+      <!-- Email form -->
+      <div id="auth-name-row" class="hidden"><input class="input no-drag" id="auth-name" placeholder="Full name"></div>
+      <input class="input no-drag" id="auth-email" placeholder="Email">
+      <input class="input no-drag" id="auth-pw" type="password" placeholder="Password">
+      <div id="auth-confirm-row" class="hidden"><input class="input no-drag" id="auth-pw2" type="password" placeholder="Confirm password"></div>
+      <div id="auth-error" class="auth-error hidden"></div>
+      <button class="btn btn-accent no-drag" id="auth-submit-btn" onclick="handleEmailAuth()" style="width:100%">Sign In</button>
+      <div class="auth-toggle">
+        <span id="auth-toggle-text">Don't have an account?</span>
+        <button id="auth-toggle-btn" onclick="toggleAuthMode()">Sign Up</button>
+        &middot; <button onclick="handleForgotPw()">Forgot password?</button>
+      </div>
+    </div>
+    <!-- TOTP -->
+    <div class="auth-box hidden" id="totp-box">
+      <p style="font-size:13px;color:var(--text-secondary);text-align:center">Enter your 2FA code</p>
+      <input class="input no-drag" id="totp-code" placeholder="6-digit code" maxlength="6" style="text-align:center;letter-spacing:4px;font-size:18px">
+      <div id="totp-error" class="auth-error hidden"></div>
+      <button class="btn btn-accent no-drag" onclick="handleTotpVerify()" style="width:100%">Verify</button>
+    </div>
+    <p style="font-size:11px;color:var(--text-muted);margin-top:8px">
+      <a onclick="window.yaver.openExternal('https://yaver.io/terms')" style="color:var(--text-muted);cursor:pointer">Terms</a> &middot;
+      <a onclick="window.yaver.openExternal('https://yaver.io/privacy')" style="color:var(--text-muted);cursor:pointer">Privacy</a>
+    </p>
+  </div>
+
+  <!-- ═══ DEVICES ═══ -->
+  <div id="screen-devices" class="screen device-screen">
+    <div class="logo" style="font-size:22px">yaver<span>.io</span></div>
+    <div style="font-size:16px;font-weight:600">Connect to a machine</div>
+    <div style="font-size:12px;color:var(--text-secondary)" id="user-greeting"></div>
+    <div id="device-grid" class="device-grid"></div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-ghost btn-sm no-drag" onclick="refreshDevices()">&#x21BB; Refresh</button>
+      <button class="btn btn-ghost btn-sm no-drag" onclick="handleSignOut()" style="color:var(--red)">Sign Out</button>
+    </div>
+  </div>
+
+  <!-- ═══ MAIN ═══ -->
+  <div id="screen-main" class="screen main-screen">
+    <div class="topbar">
+      <div class="topbar-spacer"></div>
+      <span style="font-size:14px;font-weight:600">Yaver</span>
+      <div style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:5px;margin-left:auto" id="topbar-device"></div>
+      <div style="display:flex;gap:4px;margin-left:10px">
+        <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeployMenu()">&#x1F680; Deploy</button>
+        <button class="btn-icon no-drag" onclick="togglePanel('doctor')" title="Doctor">&#x1FA7A;</button>
+        <button class="btn-icon no-drag" onclick="togglePanel('settings')" title="Settings">&#x2699;</button>
+        <button class="btn-icon no-drag" onclick="handleDisconnect()" title="Disconnect" style="color:var(--red)">&#x23FB;</button>
+      </div>
+    </div>
+    <div class="main-body">
+      <!-- Sidebar -->
+      <div class="sidebar no-drag">
+        <div class="sidebar-nav">
+          <div class="nav-item active no-drag" onclick="navTo('chat')"><span class="nav-icon">&#x1F4AC;</span> Chat</div>
+          <div class="nav-item no-drag" onclick="navTo('projects')"><span class="nav-icon">&#x1F4C1;</span> Projects</div>
+          <div class="nav-item no-drag" onclick="navTo('todos')"><span class="nav-icon">&#x2611;</span> Todos <span class="nav-badge" id="todo-badge" style="display:none">0</span></div>
+          <div class="nav-item no-drag" onclick="navTo('builds')"><span class="nav-icon">&#x1F3D7;</span> Builds</div>
+          <div class="nav-item no-drag" onclick="navTo('health')"><span class="nav-icon">&#x1F4CA;</span> Health</div>
+          <div class="nav-item no-drag" onclick="navTo('quality')"><span class="nav-icon">&#x2705;</span> Quality</div>
+        </div>
+        <div style="padding:6px 8px"><div class="section-title">Tasks</div></div>
+        <div class="sidebar-tasks" id="task-list"></div>
+      </div>
+      <!-- Content -->
+      <div class="content no-drag" style="position:relative">
+        <!-- Chat view (split pane) -->
+        <div class="split" id="page-chat" style="display:flex">
+          <div class="pane-left" id="pane-left">
+            <!-- Runner selector + machine roles (2026-08-12): the AI machine
+                 (runner box) and Render machine pickers sit right next to the
+                 Runner dropdown — webui parity, no duplication. They read and
+                 write the SAME Convex userSettings.machineRolesByProject row
+                 the web dashboard uses, so a choice here shows up in the
+                 webui and vice versa. -->
+            <div style="padding:6px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);flex-wrap:wrap">
+              Runner: <select class="no-drag" id="runner-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;outline:none" onchange="switchRunner(this.value)"></select>
+              <span style="opacity:.7">AI machine:</span>
+              <select class="no-drag" id="ai-machine-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;outline:none;max-width:180px" onchange="setAIMachine(this.value)"></select>
+              <span style="opacity:.7">Render machine:</span>
+              <select class="no-drag" id="render-machine-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;outline:none;max-width:180px" onchange="setRenderMachine(this.value)"></select>
+              <button class="btn-icon no-drag" onclick="handleStopTask()" title="Stop task" style="width:22px;height:22px;font-size:11px;margin-left:auto;color:var(--red);display:none" id="stop-btn">&#x25A0;</button>
+            </div>
+            <div class="chat-msgs" id="chat-msgs"><div class="msg msg-status">Describe what you want to build.</div></div>
+            <div class="chat-bar">
+              <button class="btn-icon no-drag" onclick="handlePickImage()" title="Attach image" style="width:34px;height:34px;font-size:14px">&#x1F4CE;</button>
+              <button class="btn-icon no-drag" id="voice-btn" onclick="toggleVoice()" title="Voice input" style="width:34px;height:34px;font-size:14px">&#x1F3A4;</button>
+              <textarea class="chat-input no-drag" id="chat-input" placeholder="Build me a todo app..." rows="1" onkeydown="handleInputKey(event)"></textarea>
+              <button class="send-btn no-drag" onclick="handleSend()">&#9654;</button>
+            </div>
+          </div>
+          <div class="divider no-drag" id="divider"></div>
+          <div class="pane-right">
+            <div class="preview-bar">
+              <span class="preview-url" id="preview-url">No preview</span>
+              <span class="dom-toggle no-drag" id="dom-toggle" style="display:none;align-items:center;gap:2px;font-size:10px;border:1px solid var(--border,#333);border-radius:6px;overflow:hidden">
+                <button class="no-drag" id="dom-browse-btn" onclick="toggleDomMode(false)" style="border:none;background:var(--accent,#7c5cff);color:#fff;padding:2px 8px;cursor:pointer;font-weight:600">Browse</button>
+                <button class="no-drag" id="dom-inspect-btn" onclick="toggleDomMode(true)" style="border:none;background:transparent;color:var(--text-muted);padding:2px 8px;cursor:pointer">Inspect</button>
+              </span>
+              <button class="btn-icon no-drag" onclick="handleReload()" title="Reload" style="width:24px;height:24px;font-size:12px">&#x21BB;</button>
+              <button class="btn-icon no-drag" onclick="stopDevServer()" title="Stop dev server" style="width:24px;height:24px;font-size:10px;color:var(--red)">&#x25A0;</button>
+            </div>
+            <div id="dom-chip" class="dom-chip" style="display:none"></div>
+            <div id="preview-empty" class="preview-empty">
+              <div style="font-size:48px;opacity:0.15">&#x1F3A8;</div>
+              <div>App preview appears here</div>
+              <div style="font-size:11px;max-width:250px;text-align:center;line-height:1.6">Ask the AI to build something and start a dev server</div>
+            </div>
+            <webview id="preview-webview" class="hidden" preload="./webview-preload.js" allowpopups></webview>
+          </div>
+        </div>
+
+        <!-- Projects page -->
+        <div class="page" id="page-projects">
+          <div class="page-title">Projects</div>
+          <div id="projects-list"></div>
+        </div>
+
+        <!-- Todos page -->
+        <div class="page" id="page-todos">
+          <div class="page-title">Todos</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px">
+            <input class="input no-drag" id="todo-input" placeholder="Add a todo..." style="flex:1">
+            <button class="btn btn-accent btn-sm no-drag" onclick="addTodo()">Add</button>
+          </div>
+          <div id="todo-list"></div>
+        </div>
+
+        <!-- Builds page -->
+        <div class="page" id="page-builds">
+          <div class="page-title">Builds</div>
+          <div style="display:flex;gap:6px;margin-bottom:16px">
+            <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeploy('testflight')">&#x1F34E; TestFlight</button>
+            <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeploy('playstore')">&#x1F4E6; Play Store</button>
+            <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeploy('web')">&#x1F310; Web</button>
+          </div>
+          <div id="builds-list"></div>
+        </div>
+
+        <!-- Health page -->
+        <div class="page" id="page-health">
+          <div class="page-title">Health Monitoring</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px">
+            <input class="input no-drag" id="health-url" placeholder="https://example.com" style="flex:1">
+            <button class="btn btn-accent btn-sm no-drag" onclick="addHealthTarget()">Add</button>
+          </div>
+          <div id="health-list"></div>
+        </div>
+
+        <!-- Quality page -->
+        <div class="page" id="page-quality">
+          <div class="page-title">Quality Gates</div>
+          <button class="btn btn-ghost btn-sm no-drag" onclick="runAllQuality()" style="margin-bottom:16px">Run All Checks</button>
+          <div id="quality-list"></div>
+        </div>
+
+        <!-- Doctor panel -->
+        <div class="panel" id="panel-doctor">
+          <div class="panel-head"><span class="panel-title">Doctor</span><button class="panel-x no-drag" onclick="togglePanel('doctor')">&#x2715;</button></div>
+          <div id="doctor-checks"></div>
+          <div class="section" style="margin-top:16px"><div class="section-title">Emulator Setup</div><div id="emulator-status"></div></div>
+        </div>
+
+        <!-- Settings panel -->
+        <div class="panel" id="panel-settings">
+          <div class="panel-head"><span class="panel-title">Settings</span><button class="panel-x no-drag" onclick="togglePanel('settings')">&#x2715;</button></div>
+          <div class="section"><div class="section-title">Account</div>
+            <div id="settings-user" class="item" style="flex-direction:column;align-items:flex-start;gap:2px"></div>
+            <button class="btn btn-ghost btn-sm no-drag hidden" id="btn-edit-name" onclick="editProfileName()" style="margin-top:6px;width:100%">Edit Name</button>
+            <button class="btn btn-ghost btn-sm no-drag hidden" id="btn-change-pw" onclick="handleChangePw()" style="margin-top:4px;width:100%">Change Password</button>
+          </div>
+          <div class="section"><div class="section-title">AI Runner</div>
+            <div id="settings-runners"></div>
+          </div>
+          <div class="section"><div class="section-title">Deploy</div>
+            <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeploy('testflight')" style="width:100%;margin-bottom:4px">&#x1F34E; TestFlight</button>
+            <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeploy('playstore')" style="width:100%;margin-bottom:4px">&#x1F4E6; Play Store</button>
+            <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeploy('web')" style="width:100%">&#x1F310; Web</button>
+          </div>
+          <div class="section"><div class="section-title">Relay Servers</div>
+            <div id="settings-relays"><div style="font-size:12px;color:var(--text-muted)">Using default relay</div></div>
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <input class="input no-drag" id="relay-url-input" placeholder="https://relay.example.com" style="flex:1;font-size:11px">
+              <button class="btn btn-ghost btn-sm no-drag" onclick="addRelay()">Add</button>
+            </div>
+          </div>
+          <div class="section"><div class="section-title">Sandbox</div><div id="settings-sandbox"></div></div>
+          <div class="section"><div class="section-title">Debug</div>
+            <button class="btn btn-ghost btn-sm no-drag" onclick="agentClean()" style="width:100%;margin-bottom:4px">Clean Old Tasks</button>
+            <button class="btn btn-ghost btn-sm no-drag" onclick="clearCache()" style="width:100%">Clear Cache</button>
+          </div>
+          <div class="section" style="margin-top:24px">
+            <button class="btn btn-danger btn-sm no-drag" onclick="deleteAccountConfirm()" style="width:100%;margin-bottom:4px">Delete Account</button>
+            <button class="btn btn-danger btn-sm no-drag" onclick="handleSignOut()" style="width:100%">Sign Out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════════════════════
+let currentUser = null, currentTask = null, connectedDevice = null;
+let pollTimer = null, devPollTimer = null, taskListTimer = null;
+let authMode = 'signin', pendingToken = null;
+let attachedImage = null, currentNav = 'chat';
+
+// ════════════════════════════════════════════════════════
+// SCREENS
+// ════════════════════════════════════════════════════════
+function showScreen(n) { document.querySelectorAll('.screen').forEach(s => s.classList.remove('active')); document.getElementById('screen-'+n)?.classList.add('active'); }
+
+async function init() {
+  const auth = await window.yaver.getAuthState();
+  if (!auth.isSignedIn) { showScreen('auth'); return; }
+  const v = await window.yaver.validateToken();
+  if (!v.valid) { showScreen('auth'); return; }
+  currentUser = v.user;
+  showScreen('devices');
+  document.getElementById('user-greeting').textContent = currentUser.fullName || currentUser.email;
+  refreshDevices();
+}
+
+// ════════════════════════════════════════════════════════
+// AUTH
+// ════════════════════════════════════════════════════════
+async function handleSignIn(provider) {
+  const r = await window.yaver.authenticate(provider);
+  if (r.ok) { await afterAuth(); }
+}
+
+function toggleAuthMode() {
+  authMode = authMode === 'signin' ? 'signup' : 'signin';
+  document.getElementById('auth-name-row').classList.toggle('hidden', authMode === 'signin');
+  document.getElementById('auth-confirm-row').classList.toggle('hidden', authMode === 'signin');
+  document.getElementById('auth-submit-btn').textContent = authMode === 'signin' ? 'Sign In' : 'Sign Up';
+  document.getElementById('auth-toggle-text').textContent = authMode === 'signin' ? "Don't have an account?" : "Already have an account?";
+  document.getElementById('auth-toggle-btn').textContent = authMode === 'signin' ? 'Sign Up' : 'Sign In';
+  hideAuthError();
+}
+
+async function handleEmailAuth() {
+  hideAuthError();
+  const email = document.getElementById('auth-email').value.trim();
+  const pw = document.getElementById('auth-pw').value;
+  if (!email || !pw) { showAuthError('Email and password required.'); return; }
+  if (pw.length < 8) { showAuthError('Password must be at least 8 characters.'); return; }
+
+  let r;
+  if (authMode === 'signup') {
+    const name = document.getElementById('auth-name').value.trim();
+    const pw2 = document.getElementById('auth-pw2').value;
+    if (!name) { showAuthError('Name is required.'); return; }
+    if (pw !== pw2) { showAuthError('Passwords do not match.'); return; }
+    r = await window.yaver.emailSignup(name, email, pw);
+  } else {
+    r = await window.yaver.emailLogin(email, pw);
+  }
+
+  if (!r.ok) { showAuthError(r.error || 'Failed'); return; }
+  if (r.requires2fa) {
+    pendingToken = r.pendingToken;
+    document.getElementById('auth-box').classList.add('hidden');
+    document.getElementById('totp-box').classList.remove('hidden');
+    return;
+  }
+  await afterAuth();
+}
+
+async function handleTotpVerify() {
+  const code = document.getElementById('totp-code').value.trim();
+  if (!code) return;
+  const r = await window.yaver.verifyTotp(pendingToken, code);
+  if (!r.ok) { document.getElementById('totp-error').textContent = r.error || 'Invalid code'; document.getElementById('totp-error').classList.remove('hidden'); return; }
+  await afterAuth();
+}
+
+function handleForgotPw() {
+  const email = prompt('Enter your email:');
+  if (!email) return;
+  window.yaver.forgotPassword(email);
+  alert('If an account exists, a reset link has been sent.');
+}
+
+async function afterAuth() {
+  const v = await window.yaver.validateToken();
+  if (v.valid) { currentUser = v.user; showScreen('devices'); document.getElementById('user-greeting').textContent = currentUser.fullName || currentUser.email; refreshDevices(); }
+}
+
+async function handleSignOut() { await window.yaver.signOut(); currentUser = null; connectedDevice = null; stopAll(); showScreen('auth'); }
+
+function showAuthError(msg) { const e = document.getElementById('auth-error'); e.textContent = msg; e.classList.remove('hidden'); }
+function hideAuthError() { document.getElementById('auth-error').classList.add('hidden'); }
+
+// ════════════════════════════════════════════════════════
+// DEVICES
+// ════════════════════════════════════════════════════════
+async function refreshDevices() {
+  const grid = document.getElementById('device-grid');
+  grid.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px">Loading...</div>';
+
+  // Probe local agent first
+  const local = await window.yaver.probeLocalAgent();
+
+  let devices = [];
+  try { const d = await window.yaver.listDevices(); devices = d.devices || []; } catch {}
+
+  // Dedup by hostname, keep latest
+  const seen = new Map();
+  for (const d of devices) { const k = (d.name||d.deviceId||'').toLowerCase(); const e = seen.get(k); if (!e || (d.lastHeartbeat||0) > (e.lastHeartbeat||0)) seen.set(k, d); }
+  devices = Array.from(seen.values()).filter(d => d.isOnline);
+
+  // If local agent found, remove remote entries that are actually this same machine
+  const localHostname = (local.found && local.hostname) ? local.hostname.toLowerCase() : null;
+  if (localHostname) {
+    // Get local machine's hostnames (with and without .local)
+    const localNames = new Set([localHostname, localHostname.replace('.local', ''), localHostname + '.local']);
+
+    devices = devices.filter(d => {
+      const name = (d.name || '').toLowerCase();
+      const host = (d.quicHost || '').toLowerCase();
+
+      // Filter out if hostname matches local agent
+      if (localNames.has(name)) return false;
+
+      // Filter out if quicHost is localhost
+      if (host === '127.0.0.1' || host === 'localhost') return false;
+
+      // Filter out if name looks like a private IP (192.168.x.x, 10.x.x.x, etc.)
+      // These are always this machine when local agent is detected
+      if (/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(name)) return false;
+
+      // Filter out if deviceId matches the local agent's device
+      // (they registered to Convex from the same machine)
+      return true;
+    });
+  }
+
+  let html = '';
+
+  // Local agent card — only if auth works (clickable)
+  if (local.found) {
+    const clickable = local.authWorks;
+    html += `<div class="device-card local no-drag" ${clickable ? 'onclick="connectLocal()"' : ''} style="${clickable ? 'cursor:pointer' : 'cursor:default;opacity:0.7'}">
+      <div class="dot" style="background:${clickable ? 'var(--green)' : 'var(--yellow)'}"></div>
+      <div style="flex:1"><div style="font-size:14px;font-weight:500">&#x1F4BB; This Machine</div>
+      <div style="font-size:11px;color:var(--text-muted)">v${esc(local.version||'?')} &middot; ${esc(local.hostname||'localhost')}${local.authExpired ? ' &middot; <span style="color:var(--yellow)">auth expired</span>' : ''}${!clickable ? ' &middot; <span style="color:var(--red)">run yaver auth</span>' : ''}</div></div>
+      <span class="badge ${clickable ? 'badge-green' : 'badge-yellow'}">${clickable ? 'Local' : 'Auth needed'}</span></div>`;
+  }
+
+  // Remote devices (already filtered out local duplicates)
+  for (let i = 0; i < devices.length; i++) {
+    const d = devices[i];
+    const online = !!d.isOnline;
+    const dot = online ? 'var(--green)' : 'var(--text-muted)';
+    const connectBadge = online ? '<span class="badge badge-green">Connect</span>' : '<span class="badge" style="background:rgba(255,255,255,0.08);color:var(--text-muted)">Offline</span>';
+    const cardStyle = online ? '' : ' style="opacity:0.75"';
+    html += `<div class="device-card no-drag"${online ? ` onclick="connectRemote(${i})"` : cardStyle}>
+      <div class="dot" style="background:${dot}"></div>
+      <div style="flex:1"><div style="font-size:14px;font-weight:500">${esc(d.name||d.deviceId)}</div>
+      <div style="font-size:11px;color:var(--text-muted)">${d.platform||'unknown'}</div></div>
+      ${connectBadge}</div>`;
+  }
+
+  if (!html) {
+    html = `<div style="text-align:center;padding:30px;color:var(--text-muted)">
+      <div style="font-size:40px;opacity:0.3;margin-bottom:10px">&#x1F5A5;</div>
+      <div style="font-size:13px;margin-bottom:6px">No machines online</div>
+      <div style="font-size:11px;line-height:1.6"><code style="background:var(--bg-hover);padding:2px 6px;border-radius:4px">npm install -g yaver-cli && yaver serve</code></div></div>`;
+  }
+
+  grid.innerHTML = html;
+  window._devices = devices;
+}
+
+async function connectLocal() {
+  const r = await window.yaver.connectLocalAgent();
+  if (r.ok) enterMain({ name: 'This Machine' }, 'local');
+}
+
+async function connectRemote(i) {
+  const d = window._devices?.[i]; if (!d) return;
+  const grid = document.getElementById('device-grid');
+  grid.innerHTML = '<div style="text-align:center;color:var(--text-secondary);font-size:12px;padding:30px">Connecting...</div>';
+  let relays = [];
+  try { const s = await window.yaver.convexRequest('GET', '/settings'); if (s?.relayServers) relays = s.relayServers; } catch {}
+  const r = await window.yaver.connectDevice(d, relays);
+  if (!r.ok) { grid.innerHTML = `<div style="text-align:center;color:var(--red);font-size:12px;padding:20px">${esc(r.error)}</div>`; setTimeout(refreshDevices, 2000); return; }
+  enterMain(d, r.mode);
+}
+
+function enterMain(device, mode) {
+  connectedDevice = device;
+  document.getElementById('topbar-device').innerHTML = `<div class="dot" style="background:var(--green)"></div> ${esc(device.name)} <span class="badge badge-green">${mode}</span>`;
+  document.getElementById('chat-msgs').innerHTML = '<div class="msg msg-status">Connected to ' + esc(device.name) + '. What do you want to build?</div>';
+  currentTask = null;
+  showScreen('main');
+  startPolling();
+  loadRunners();
+  loadMachineRoles();
+  loadTaskList();
+  navTo('chat');
+}
+
+async function handleDisconnect() { await window.yaver.disconnectDevice(); connectedDevice = null; stopAll(); showScreen('devices'); refreshDevices(); }
+
+// ════════════════════════════════════════════════════════
+// NAVIGATION
+// ════════════════════════════════════════════════════════
+function navTo(page) {
+  currentNav = page;
+  document.querySelectorAll('.nav-item').forEach((n,i) => n.classList.toggle('active', ['chat','projects','todos','builds','health','quality'][i] === page));
+  document.getElementById('page-chat').style.display = page === 'chat' ? 'flex' : 'none';
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  if (page !== 'chat') { document.getElementById('page-'+page)?.classList.add('active'); }
+  // Load data for page
+  if (page === 'projects') loadProjects();
+  if (page === 'todos') loadTodos();
+  if (page === 'builds') loadBuilds();
+  if (page === 'health') loadHealth();
+  if (page === 'quality') loadQuality();
+}
+
+// ════════════════════════════════════════════════════════
+// CHAT / TASKS
+// ════════════════════════════════════════════════════════
+async function handleSend() {
+  const inp = document.getElementById('chat-input');
+  const text = inp.value.trim(); if (!text) return;
+  inp.value = ''; inp.style.height = 'auto';
+  navTo('chat');
+  addMsg('user', text);
+
+  const taskData = { title: text.slice(0,80), description: text, source: 'desktop' };
+  if (attachedImage) { taskData.images = [attachedImage]; attachedImage = null; }
+
+  if (currentTask && (currentTask.status === 'running' || currentTask.status === 'queued')) {
+    await window.yaver.continueTask(currentTask.id, { message: text });
+  } else {
+    addMsg('status', 'Sending to AI...');
+    const r = await window.yaver.createTask(taskData);
+    if (r.taskId) { currentTask = { id: r.taskId, status: 'running', rendered: 1 }; document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); startTaskStream(r.taskId); }
+  }
+}
+
+function handleInputKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  const el = e.target; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+}
+
+async function handlePickImage() {
+  const f = await window.yaver.pickFile();
+  if (f) { attachedImage = { name: f.name, data: f.data, mimeType: f.mimeType }; addMsg('status', '📎 ' + f.name + ' attached'); }
+}
+
+async function handleStopTask() {
+  if (currentTask?.id) { await window.yaver.stopTask(currentTask.id); currentTask.status = 'stopped'; document.getElementById('stop-btn').style.display = 'none'; }
+}
+
+function addMsg(role, content) {
+  const c = document.getElementById('chat-msgs');
+  const d = document.createElement('div');
+  if (role === 'user') {
+    // Console-style `$` prompt line (like opencode echoes it), not a bubble.
+    d.className = 'console-user';
+    d.innerHTML = `<span class="console-prompt">$ </span>` + esc(content);
+  } else if (role === 'status') {
+    d.className = 'msg msg-status';
+    d.textContent = content;
+  } else {
+    // Assistant fallback text (the raw console is the primary view; this
+    // only shows for tasks whose agent has no raw lane).
+    d.className = 'console-raw';
+    d.textContent = stripAnsi(content);
+  }
+  c.appendChild(d); c.scrollTop = c.scrollHeight;
+}
+
+function renderMd(t) { return esc(t).replace(/```(\w*)\n([\s\S]*?)```/g,'<pre><code>$2</code></pre>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>'); }
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    if (!currentTask) return;
+    try {
+      const d = await window.yaver.getTask(currentTask.id); if (!d?.task) return;
+      const t = d.task;
+      // Console-first: while the raw stream owns the pane, the groomed turns
+      // and final resultText are redundant (the console shows the full run).
+      const consoleActive = taskStreamTaskId === currentTask.id && taskRawBuf.length > 0;
+      if (!consoleActive && t.turns) { for (let i = currentTask.rendered||1; i < t.turns.length; i++) addMsg(t.turns[i].role, t.turns[i].content); currentTask.rendered = t.turns.length; }
+      // Typing indicator (only when the console is not streaming — the
+      // stream itself is the activity signal).
+      let typing = document.getElementById('typing-indicator');
+      if (!consoleActive && t.status === 'running') {
+        if (!typing) { const d = document.createElement('div'); d.id = 'typing-indicator'; d.className = 'msg msg-status'; d.innerHTML = '<span style="animation:blink 1s infinite">&#x25CF;</span> AI is thinking...'; document.getElementById('chat-msgs').appendChild(d); document.getElementById('chat-msgs').scrollTop = document.getElementById('chat-msgs').scrollHeight; }
+      } else if (typing) { typing.remove(); }
+      if (t.status !== 'running' && t.status !== 'queued') {
+        if (!consoleActive && t.resultText) addMsg('assistant', t.resultText);
+        addMsg('status', 'Task ' + t.status + (t.costUsd ? ' ($'+t.costUsd.toFixed(4)+')' : ''));
+        currentTask.status = t.status; document.getElementById('stop-btn').style.display = 'none'; loadTaskList();
+        notify('Task ' + t.status, t.title || 'Your task finished');
+      }
+    } catch {}
+  }, 2000);
+}
+
+async function loadTaskList() {
+  try {
+    const d = await window.yaver.listTasks(); const tasks = (d.tasks||[]).slice(0,20);
+    document.getElementById('task-list').innerHTML = tasks.length ? tasks.map(t => {
+      const active = currentTask?.id === t.id;
+      const dot = t.status==='running'?'var(--yellow)':t.status==='completed'?'var(--green)':t.status==='failed'?'var(--red)':'var(--text-muted)';
+      return `<div class="task-item${active?' active':''} no-drag" onclick="selectTask('${t.id}')" style="display:flex;align-items:center;gap:4px">
+        <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dot};flex-shrink:0"></span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||t.id)}</span>
+        <span onclick="event.stopPropagation();deleteTaskById('${t.id}')" style="cursor:pointer;color:var(--text-muted);font-size:10px;flex-shrink:0;padding:2px" title="Delete">&#x2715;</span>
+      </div>`;
+    }).join('') : '<div style="font-size:11px;color:var(--text-muted);padding:8px">No tasks yet</div>';
+  } catch {}
+}
+
+async function selectTask(id) {
+  try {
+    const d = await window.yaver.getTask(id); if (!d?.task) return;
+    currentTask = { id, status: d.task.status, rendered: 0 };
+    const c = document.getElementById('chat-msgs'); c.innerHTML = '';
+    // Console-first (2026-08-12): the raw stream is the view — the stream
+    // below seeds the full tail. Legacy tasks whose agent has no raw lane
+    // fall back to the turn transcript.
+    if (!d.task.rawOutput) {
+      if (d.task.turns) { for (const t of d.task.turns) addMsg(t.role, t.content); currentTask.rendered = d.task.turns.length; }
+      if (d.task.status !== 'running' && d.task.status !== 'queued') addMsg('status', 'Task ' + d.task.status);
+    }
+    document.getElementById('stop-btn').style.display = d.task.status==='running'?'flex':'none';
+    navTo('chat'); loadTaskList();
+    startTaskStream(id);
+  } catch {}
+}
+
+// ════════════════════════════════════════════════════════
+// RUNNERS
+// ════════════════════════════════════════════════════════
+async function loadRunners() {
+  try {
+    const d = await window.yaver.getRunners(); const runners = d.runners||[];
+    const sel = document.getElementById('runner-select');
+    sel.innerHTML = runners.map(r => `<option value="${esc(r.id)}" ${r.isDefault?'selected':''}>${esc(r.name)}${r.installed?'':' (not installed)'}</option>`).join('');
+    // Settings panel
+    document.getElementById('settings-runners').innerHTML = runners.map(r =>
+      `<div class="item"><div class="dot" style="background:${r.installed?'var(--green)':'var(--red)'}"></div><span class="item-name">${esc(r.name)}</span>${r.isDefault?'<span class="badge badge-green">active</span>':''}</div>`
+    ).join('') || '<div style="font-size:12px;color:var(--text-muted)">No runners</div>';
+  } catch {}
+}
+
+async function switchRunner(id) { try { await window.yaver.switchRunner(id); } catch {} }
+
+// ── Machine roles (AI machine + Render machine) ─────────────────────
+// Reads/writes the SAME Convex userSettings.machineRolesByProject row the
+// web dashboard uses (web/lib/useMachineRoles.ts): GET /settings for the
+// row, POST /settings with machineRolesForProject to save. Picks here show
+// up in the webui and vice versa — no per-surface copy (2026-08-12).
+let machineRolesDevices = [];
+
+async function loadMachineRoles() {
+  try {
+    const devicesResp = await window.yaver.listDevices();
+    machineRolesDevices = devicesResp.devices || [];
+  } catch {}
+  let row = null;
+  try {
+    const s = await window.yaver.convexRequest('GET', '/settings');
+    const rows = (s?.settings?.machineRolesByProject) || [];
+    row = rows.find(r => !r.projectName) || null;
+  } catch {}
+  const aiSel = document.getElementById('ai-machine-select');
+  const renderSel = document.getElementById('render-machine-select');
+  if (!aiSel || !renderSel) return;
+  const opts = machineRolesDevices.map(d =>
+    `<option value="${esc(d.deviceId || d.id || '')}" ${d.isOnline === false ? '' : ''}>${esc(d.name || d.deviceId || d.id)}${d.isOnline === false ? ' (offline)' : ''}</option>`
+  ).join('');
+  aiSel.innerHTML = `<option value="">— connected box —</option>` + opts;
+  renderSel.innerHTML = `<option value="">— same as AI —</option>` + opts;
+  if (row) {
+    if (row.runnerDeviceId) aiSel.value = row.runnerDeviceId;
+    if (row.renderDeviceId) renderSel.value = row.renderDeviceId;
+  }
+}
+
+async function setAIMachine(deviceId) {
+  const renderSel = document.getElementById('render-machine-select');
+  const current = await readMachineRolesRow();
+  const renderId = renderSel && renderSel.value ? renderSel.value : (deviceId || current?.runnerDeviceId || '');
+  await saveMachineRolesRow({
+    runnerDeviceId: deviceId || null,
+    renderDeviceId: renderId || deviceId || null,
+    ...(current?.secondaryRunnerDeviceId ? { secondaryRunnerDeviceId: current.secondaryRunnerDeviceId } : {}),
+    ...(current?.secondaryRenderDeviceId ? { secondaryRenderDeviceId: current.secondaryRenderDeviceId } : {}),
+    workspace: current?.workspace || 'runner-clone',
+    autoPush: current?.autoPush || 'ask',
+  });
+  // Route the proxy to the picked runner box so tasks actually stream from
+  // it — the machine-role split must move traffic, not just the row.
+  const dev = machineRolesDevices.find(d => (d.deviceId || d.id) === deviceId);
+  if (dev) await routeToMachine(dev);
+}
+
+async function routeToMachine(dev) {
+  try {
+    let relays = [];
+    try {
+      const s = await window.yaver.convexRequest('GET', '/settings');
+      relays = s?.relayServers || [];
+    } catch {}
+    const r = await window.yaver.routeAgent({ deviceId: dev.deviceId || dev.id, quicHost: dev.quicHost, quicPort: dev.quicPort }, relays);
+    if (r && r.ok === false) console.warn('route-agent:', r.error);
+  } catch (e) {
+    console.warn('route-agent failed:', e);
+  }
+}
+
+async function setRenderMachine(deviceId) {
+  const aiSel = document.getElementById('ai-machine-select');
+  const current = await readMachineRolesRow();
+  const runnerId = aiSel && aiSel.value ? aiSel.value : (deviceId || current?.runnerDeviceId || '');
+  await saveMachineRolesRow({
+    runnerDeviceId: runnerId || null,
+    renderDeviceId: deviceId || runnerId || null,
+    ...(current?.secondaryRunnerDeviceId ? { secondaryRunnerDeviceId: current.secondaryRunnerDeviceId } : {}),
+    ...(current?.secondaryRenderDeviceId ? { secondaryRenderDeviceId: current.secondaryRenderDeviceId } : {}),
+    workspace: current?.workspace || 'runner-clone',
+    autoPush: current?.autoPush || 'ask',
+  });
+}
+
+async function readMachineRolesRow() {
+  try {
+    const s = await window.yaver.convexRequest('GET', '/settings');
+    const rows = (s?.settings?.machineRolesByProject) || [];
+    return rows.find(r => !r.projectName) || null;
+  } catch { return null; }
+}
+
+async function saveMachineRolesRow(row) {
+  try {
+    await window.yaver.convexRequest('POST', '/settings', { machineRolesForProject: { ...row, updatedAt: Date.now() } });
+    loadMachineRoles();
+  } catch (e) {
+    alert('Could not save machine roles: ' + (e?.message || e));
+  }
+}
+
+// ════════════════════════════════════════════════════════
+// PROJECTS
+// ════════════════════════════════════════════════════════
+async function loadProjects() {
+  const c = document.getElementById('projects-list');
+  try {
+    const d = await window.yaver.listProjects(); const projects = d.projects||[];
+    c.innerHTML = projects.length ? projects.map(p => {
+      const icon = {expo:'📱','react-native':'⚛',flutter:'🐦',nextjs:'▲',vite:'⚡'}[p.framework]||'📁';
+      return `<div class="item" style="cursor:pointer;padding:12px" onclick="projectAction('${esc(p.name)}','${esc(p.path)}')">
+        <span style="font-size:16px">${icon}</span>
+        <div style="flex:1"><div style="font-size:13px;font-weight:500">${esc(p.name)}</div><div style="font-size:11px;color:var(--text-muted)">${esc(p.branch||'')} &middot; ${esc(p.framework||'')}</div></div>
+        <button class="btn btn-ghost btn-sm no-drag" onclick="event.stopPropagation();gitSync('${esc(p.path)}','${esc(p.name)}')">Sync</button>
+      </div>`;
+    }).join('') : '<div style="font-size:12px;color:var(--text-muted)">No projects on remote machine</div>';
+  } catch(e) { c.innerHTML = '<div style="color:var(--red);font-size:12px">'+esc(e.message)+'</div>'; }
+}
+
+function projectAction(name, path) {
+  const prompt = `Start the dev server for ${name} at ${path}. Use the appropriate framework (auto-detect). Make it available for preview.`;
+  document.getElementById('chat-input').value = prompt;
+  navTo('chat'); handleSend();
+}
+
+function gitSync(path, name) {
+  document.getElementById('chat-input').value = `cd ${path} && Sync this repo with remote. Pull latest, resolve conflicts if any. Show summary.`;
+  navTo('chat'); handleSend();
+}
+
+// ════════════════════════════════════════════════════════
+// TODOS
+// ════════════════════════════════════════════════════════
+async function loadTodos() {
+  try {
+    const d = await window.yaver.listTodos(); const items = d.items||[];
+    document.getElementById('todo-list').innerHTML = items.length ? items.map(t =>
+      `<div class="item"><span class="item-name">${esc(t.description)}</span><span class="badge ${t.status==='done'?'badge-green':'badge-yellow'}">${t.status}</span>
+      <button class="btn-icon no-drag" onclick="deleteTodo('${t.id}')" style="width:22px;height:22px;font-size:10px;color:var(--red)">&#x2715;</button></div>`
+    ).join('') : '<div style="font-size:12px;color:var(--text-muted)">No todos</div>';
+    // Badge
+    const pending = items.filter(i => i.status !== 'done').length;
+    const badge = document.getElementById('todo-badge');
+    if (pending > 0) { badge.textContent = pending; badge.style.display = 'inline'; } else { badge.style.display = 'none'; }
+  } catch {}
+}
+
+async function addTodo() {
+  const inp = document.getElementById('todo-input'); const desc = inp.value.trim(); if (!desc) return;
+  await window.yaver.addTodo(desc); inp.value = ''; loadTodos();
+}
+
+async function deleteTodo(id) { await window.yaver.deleteTodo(id); loadTodos(); }
+
+// ════════════════════════════════════════════════════════
+// BUILDS
+// ════════════════════════════════════════════════════════
+async function loadBuilds() {
+  try {
+    const builds = (await window.yaver.listBuilds()) || [];
+    document.getElementById('builds-list').innerHTML = builds.length ? builds.map(b => {
+      const dot = b.status==='completed'?'var(--green)':b.status==='running'?'var(--yellow)':b.status==='failed'?'var(--red)':'var(--text-muted)';
+      return `<div class="item"><div class="dot" style="background:${dot}"></div><span class="item-name">${esc(b.platform)}</span><span style="font-size:10px;color:var(--text-muted)">${b.status}</span></div>`;
+    }).join('') : '<div style="font-size:12px;color:var(--text-muted)">No builds yet</div>';
+  } catch {}
+}
+
+async function handleDeploy(target) {
+  closeAllPanels();
+  let projects = [];
+  try { const d = await window.yaver.listProjects(); projects = d.projects || []; } catch {}
+  if (!projects.length) { addMsg('status', 'No projects found on remote machine.'); navTo('chat'); return; }
+
+  let proj;
+  if (projects.length === 1) { proj = projects[0]; }
+  else {
+    const names = projects.map((p,i) => `${i+1}. ${p.name} (${p.framework||'?'})`).join('\n');
+    const c = prompt('Select project:\n\n' + names + '\n\nEnter number:');
+    if (!c) return;
+    proj = projects[parseInt(c)-1];
+    if (!proj) { alert('Invalid selection.'); return; }
+  }
+
+  const labels = { testflight:'TestFlight', playstore:'Google Play', web:'Web' };
+  const prompts = {
+    testflight: `cd ${proj.path} && Build ${proj.name} for iOS and deploy to TestFlight. Archive with xcodebuild, export, upload. Show build number when done.`,
+    playstore: `cd ${proj.path} && Build ${proj.name} for Android (release AAB) and upload to Google Play internal testing. Bump versionCode, build, upload.`,
+    web: `cd ${proj.path} && Deploy ${proj.name} to Vercel or configured hosting. Build and deploy. Show URL when done.`,
+  };
+
+  navTo('chat');
+  addMsg('user', `Deploy ${proj.name} to ${labels[target]}`);
+  addMsg('status', 'Starting deploy...');
+  const r = await window.yaver.createTask({ title: `Deploy ${proj.name} to ${labels[target]}`, description: prompts[target], source: 'desktop' });
+  if (r.taskId) { currentTask = { id: r.taskId, status: 'running', rendered: 1 }; document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); startTaskStream(r.taskId); }
+}
+
+function handleDeployMenu() { navTo('builds'); }
+
+// ════════════════════════════════════════════════════════
+// HEALTH
+// ════════════════════════════════════════════════════════
+async function loadHealth() {
+  try {
+    const d = await window.yaver.listHealthTargets(); const targets = d.targets||d||[];
+    document.getElementById('health-list').innerHTML = (Array.isArray(targets) && targets.length) ? targets.map(t => {
+      const dot = t.status==='up'?'var(--green)':t.status==='warning'?'var(--yellow)':'var(--red)';
+      return `<div class="item"><div class="dot" style="background:${dot}"></div><span class="item-name">${esc(t.url||t.name)}</span>
+      <span style="font-size:10px;color:var(--text-muted)">${t.responseTime?t.responseTime+'ms':t.status||''}</span>
+      <button class="btn-icon no-drag" onclick="deleteHealth('${t.id}')" style="width:20px;height:20px;font-size:9px;color:var(--red)">&#x2715;</button></div>`;
+    }).join('') : '<div style="font-size:12px;color:var(--text-muted)">No health targets</div>';
+  } catch {}
+}
+
+async function addHealthTarget() {
+  const url = document.getElementById('health-url').value.trim(); if (!url) return;
+  await window.yaver.addHealthTarget({ url, name: url }); document.getElementById('health-url').value = ''; loadHealth();
+}
+
+async function deleteHealth(id) { await window.yaver.deleteHealthTarget(id); loadHealth(); }
+
+// ════════════════════════════════════════════════════════
+// QUALITY
+// ════════════════════════════════════════════════════════
+async function loadQuality() {
+  try {
+    const d = await window.yaver.listQualityGates(); const checks = d.checks||d||[];
+    document.getElementById('quality-list').innerHTML = (Array.isArray(checks) && checks.length) ? checks.map(c => {
+      const dot = c.status==='passed'?'var(--green)':c.status==='failed'?'var(--red)':c.status==='warning'?'var(--yellow)':'var(--text-muted)';
+      return `<div class="item"><div class="dot" style="background:${dot}"></div><span class="item-name">${esc(c.name||c.type)}</span>
+      <span style="font-size:10px;color:var(--text-muted)">${c.status||'not run'}</span>
+      <button class="btn btn-ghost btn-sm no-drag" onclick="runQuality('${c.id||c.type}')" style="padding:2px 8px;font-size:10px">Run</button></div>`;
+    }).join('') : '<div style="font-size:12px;color:var(--text-muted)">No quality checks detected</div>';
+  } catch {}
+}
+
+async function runQuality(id) { await window.yaver.runQualityGate(id); setTimeout(loadQuality, 1000); }
+async function runAllQuality() { await window.yaver.runAllQualityGates(); setTimeout(loadQuality, 2000); }
+
+// ════════════════════════════════════════════════════════
+// PREVIEW
+// ════════════════════════════════════════════════════════
+function pollDevServer() {
+  if (devPollTimer) clearInterval(devPollTimer);
+  const check = async () => { try { const s = await window.yaver.devServerStatus(); if (s?.running) showPreview(); } catch {} };
+  check(); devPollTimer = setInterval(check, 3000);
+}
+
+async function showPreview() {
+  const url = await window.yaver.getPreviewUrl(); if (!url) return;
+  const wv = document.getElementById('preview-webview');
+  if (wv.classList.contains('hidden')) { wv.src = url; wv.classList.remove('hidden'); document.getElementById('preview-empty').classList.add('hidden'); document.getElementById('preview-url').textContent = url; }
+  showDomToggle(true);
+  wireDomMode();
+}
+
+function handleReload() { const wv = document.getElementById('preview-webview'); if (!wv.classList.contains('hidden')) wv.reload(); window.yaver.devServerReload(); }
+
+// ════════════════════════════════════════════════════════
+// DOM MODE (element inspect)
+// ════════════════════════════════════════════════════════
+// The probe injected into the preview page posts to ITS OWN window (webview
+// guests run top-level), where webview-preload.js relays it here via
+// ipc-message "yaver-dom". We forward to the agent over the authenticated
+// agentRequest channel — /dev/ is unauthenticated by design, so the page
+// must never talk to the agent directly (prompt-injection channel).
+let domInspectMode = false;
+let domElement = null;
+
+function showDomToggle(show) { document.getElementById('dom-toggle').style.display = show ? 'flex' : 'none'; }
+
+async function toggleDomMode(on) {
+  domInspectMode = on;
+  document.getElementById('dom-inspect-btn').style.background = on ? 'var(--accent,#7c5cff)' : 'transparent';
+  document.getElementById('dom-inspect-btn').style.color = on ? '#fff' : 'var(--text-muted)';
+  document.getElementById('dom-browse-btn').style.background = on ? 'transparent' : 'var(--accent,#7c5cff)';
+  document.getElementById('dom-browse-btn').style.color = on ? 'var(--text-muted)' : '#fff';
+  const wv = document.getElementById('preview-webview');
+  if (wv && !wv.classList.contains('hidden')) wv.send('yaver-dom-mode', on);
+  if (!on) {
+    // Off means the agent is not holding the element — delete what was
+    // reported (same delete-semantics as the web/mobile chips).
+    domElement = null;
+    document.getElementById('dom-chip').style.display = 'none';
+    const s = await window.yaver.devServerStatus();
+    if (s && s.workDir) window.yaver.agentRequest('DELETE', '/dom-inspect?workDir=' + encodeURIComponent(s.workDir));
+  }
+}
+
+function renderDomChip(el) {
+  const chip = document.getElementById('dom-chip');
+  const shot = el.shot
+    ? `<img src="${el.shot}" style="max-height:64px;border-radius:4px;margin-top:4px;border:1px solid var(--border,#333)"/>`
+    : '';
+  const summary = (el.selector || el.tag || el.id || 'element') + (el.text ? ' — ' + el.text.slice(0, 48) : '');
+  chip.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">
+        <span style="opacity:0.7">element: </span>${esc(summary)}
+      </span>
+      <button class="no-drag" onclick="toggleDomMode(false)" style="border:1px solid var(--border,#333);background:transparent;color:var(--text-muted);border-radius:4px;padding:1px 8px;font-size:10px;cursor:pointer;font-weight:600">OFF</button>
+    </div>
+    <details style="margin-top:4px;font-size:10px;color:var(--text-muted)">
+      <summary style="cursor:pointer">what is sent</summary>
+      <div style="font-family:monospace;margin-top:4px;line-height:1.5">
+        ${el.selector ? '<div>selector: ' + esc(el.selector) + '</div>' : ''}
+        ${el.tag ? '<div>tag: ' + esc(el.tag) + '</div>' : ''}
+        ${el.rect ? '<div>rect: ' + esc(el.rect) + '</div>' : ''}
+        ${el.text ? '<div>text: ' + esc(el.text) + '</div>' : ''}
+        ${el.html ? '<div>html: ' + esc(String(el.html.length)) + ' chars</div>' : ''}
+        ${el.css ? '<div>css: ' + esc(String(el.css.length)) + ' chars</div>' : ''}
+        ${el.shot ? '<div>screenshot: attached</div>' : ''}
+      </div>
+    </details>`;
+  chip.style.display = 'block';
+}
+
+let domModeWired = false;
+function wireDomMode() {
+  const wv = document.getElementById('preview-webview');
+  if (!wv || domModeWired) return;
+  domModeWired = true;
+  // The probe relays element/inventory messages here as ipc-message "yaver-dom".
+  wv.addEventListener('ipc-message', (e) => {
+    if (e.channel !== 'yaver-dom') return;
+    const data = e.args && e.args[0];
+    if (!data || data.source !== 'yaver-dom') return;
+    if (data.t === 'yaver-dom-element') {
+      const el = data.el || {};
+      domElement = el;
+      renderDomChip(el);
+      // The probe auto-offs after a selection — mirror that in the toggle.
+      domInspectMode = false;
+      document.getElementById('dom-inspect-btn').style.background = 'transparent';
+      document.getElementById('dom-inspect-btn').style.color = 'var(--text-muted)';
+      document.getElementById('dom-browse-btn').style.background = 'var(--accent,#7c5cff)';
+      document.getElementById('dom-browse-btn').style.color = '#fff';
+      (async () => {
+        const s = await window.yaver.devServerStatus();
+        if (s && s.workDir) window.yaver.agentRequest('POST', '/dom-inspect', { ...el, workDir: s.workDir });
+      })();
+    } else if (data.t === 'yaver-dom-items-list') {
+      const items = data.items || [];
+      if (items.length && domElement === null) {
+        // Lightweight picker: list the inventory as clickable rows; picking
+        // reports the item's fields (the rich hover capture stays the primary
+        // path — items carry no shot/html/css).
+        const chip = document.getElementById('dom-chip');
+        chip.innerHTML = `<div style="font-size:10px;opacity:0.8;margin-bottom:4px">Interactive elements — click to audit:</div>` +
+          items.map((it) =>
+            `<button class="no-drag" onclick="window.__yaverPickDomItem && window.__yaverPickDomItem(${it.selector ? JSON.stringify(it.selector) : '""'},${it.tag ? JSON.stringify(it.tag) : '""'},${it.id ? JSON.stringify(it.id) : '""'},${it.text ? JSON.stringify(it.text) : '""'})" style="display:block;width:100%;text-align:left;border:none;background:transparent;color:var(--text);cursor:pointer;font-size:11px;padding:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.selector || it.tag || 'element')}${it.text ? ' — ' + esc(it.text) : ''}</button>`
+          ).join('');
+        chip.style.display = 'block';
+      }
+    }
+  });
+}
+
+window.__yaverPickDomItem = (selector, tag, id, text) => {
+  const el = { selector, tag, id, text, lane: 'browser' };
+  domElement = el;
+  renderDomChip(el);
+  (async () => {
+    const s = await window.yaver.devServerStatus();
+    if (s && s.workDir) window.yaver.agentRequest('POST', '/dom-inspect', { ...el, workDir: s.workDir });
+  })();
+};
+
+// Items picker request — the probe answers with yaver-dom-items-list.
+function requestDomItems() {
+  const wv = document.getElementById('preview-webview');
+  if (!wv || wv.classList.contains('hidden')) return;
+  wv.send('yaver-dom-items', 40);
+}
+
+// ════════════════════════════════════════════════════════
+// PANELS
+// ════════════════════════════════════════════════════════
+function togglePanel(n) { const p = document.getElementById('panel-'+n); const open = p.classList.contains('open'); closeAllPanels(); if (!open) { p.classList.add('open'); if (n==='doctor') runDoctor(); if (n==='settings') loadSettings(); } }
+function closeAllPanels() { document.querySelectorAll('.panel').forEach(p => p.classList.remove('open')); }
+
+async function runDoctor() {
+  const checks = [];
+  checks.push({ name: 'Auth', s: currentUser?'ok':'error', d: currentUser?.email||'not signed in' });
+  const conn = await window.yaver.getConnectionState();
+  checks.push({ name: 'Connection', s: conn.connected?'ok':'error', d: conn.connected?connectedDevice?.name:'not connected' });
+  if (conn.connected) {
+    try { const i = await window.yaver.getAgentInfo(); checks.push({ name: 'Agent', s: 'ok', d: 'v'+(i.version||'?') }); if (i.authExpired) checks.push({ name:'Agent Auth', s:'error', d:'expired — host needs yaver auth'}); } catch { checks.push({ name:'Agent', s:'error', d:'unreachable'}); }
+    try { const d = await window.yaver.getRunners(); const r = (d.runners||[]).filter(r=>r.installed); checks.push({ name:'Runners', s:r.length?'ok':'warn', d:r.length?r.map(x=>x.name).join(', '):'none'}); } catch {}
+    try { const s = await window.yaver.devServerStatus(); checks.push({ name:'Dev Server', s:s?.running?'ok':'none', d:s?.running?s.framework:'stopped'}); } catch {}
+    try { const s = await window.yaver.sandboxStatus(); checks.push({ name:'Sandbox', s:s?.docker?'ok':'none', d:s?.docker?(s.imageReady?'ready':'image not built'):'Docker not found'}); } catch {}
+  }
+  const p = await window.yaver.getPlatform();
+  checks.push({ name:'Platform', s:'ok', d:p.platform+'/'+p.arch });
+  document.getElementById('doctor-checks').innerHTML = checks.map(c => `<div class="item"><div class="dot" style="background:${c.s==='ok'?'var(--green)':c.s==='warn'?'var(--yellow)':c.s==='error'?'var(--red)':'var(--text-muted)'}"></div><span class="item-name">${esc(c.name)}</span><span style="font-size:10px;color:var(--text-muted)">${esc(c.d)}</span></div>`).join('');
+
+  // Emulator guide
+  const isMac = p.platform === 'darwin';
+  document.getElementById('emulator-status').innerHTML = `
+    <div class="item" style="flex-direction:column;align-items:flex-start;gap:4px"><div style="font-size:13px;font-weight:500">📱 Android Emulator</div><div style="font-size:11px;color:var(--text-muted)">Install Android Studio for the emulator</div><button class="btn btn-ghost btn-sm no-drag" onclick="window.yaver.openExternal('https://developer.android.com/studio')" style="margin-top:4px">Download</button></div>
+    ${isMac ? `<div class="item" style="flex-direction:column;align-items:flex-start;gap:4px;margin-top:6px"><div style="font-size:13px;font-weight:500">🍎 iOS Simulator</div><div style="font-size:11px;color:var(--text-muted)">Install Xcode from App Store</div><button class="btn btn-ghost btn-sm no-drag" onclick="window.yaver.openExternal('macappstore://apps.apple.com/app/xcode/id497799835')" style="margin-top:4px">Open App Store</button></div>` : `<div class="item" style="margin-top:6px"><span style="font-size:13px">🍎 iOS Simulator</span><span class="badge" style="margin-left:auto">macOS only</span></div>`}
+    <div class="item" style="margin-top:6px"><div class="dot" style="background:var(--green)"></div><span class="item-name">Web Preview</span><span style="font-size:10px;color:var(--text-muted)">always available</span></div>`;
+}
+
+// ════════════════════════════════════════════════════════
+// SETTINGS
+// ════════════════════════════════════════════════════════
+async function loadSettings() {
+  if (currentUser) {
+    document.getElementById('settings-user').innerHTML = `<div style="font-weight:500;font-size:13px">${esc(currentUser.fullName||currentUser.email)}</div><div style="font-size:11px;color:var(--text-muted)">${esc(currentUser.email)} &middot; ${currentUser.provider||'oauth'}</div>`;
+    document.getElementById('btn-edit-name').classList.remove('hidden');
+    document.getElementById('btn-change-pw').classList.toggle('hidden', currentUser.provider !== 'email');
+  }
+  loadRunners();
+  // Sandbox
+  try { const s = await window.yaver.sandboxStatus();
+    document.getElementById('settings-sandbox').innerHTML = `<div class="item"><span class="item-name">Docker</span><span class="badge ${s.docker?'badge-green':'badge-red'}">${s.docker?'available':'not found'}</span></div>`;
+  } catch { document.getElementById('settings-sandbox').innerHTML = '<div style="font-size:12px;color:var(--text-muted)">Not connected</div>'; }
+}
+
+async function editProfileName() { const n = prompt('New name:', currentUser?.fullName||''); if (!n) return; await window.yaver.updateProfile({ fullName: n }); currentUser.fullName = n; loadSettings(); }
+async function handleChangePw() { const c = prompt('Current password:'); if (!c) return; const n = prompt('New password (8+ chars):'); if (!n||n.length<8) { alert('Min 8 chars.'); return; } const n2 = prompt('Confirm:'); if (n!==n2) { alert('Mismatch.'); return; } const r = await window.yaver.changePassword(c, n); alert(r.ok ? 'Changed.' : (r.error||'Failed.')); }
+async function addRelay() { const url = document.getElementById('relay-url-input').value.trim(); if (!url) return; alert('Relay added: '+url+' (save to config)'); document.getElementById('relay-url-input').value = ''; }
+async function agentClean() { if (confirm('Remove tasks older than 7 days?')) { await window.yaver.agentClean(7); alert('Cleaned.'); } }
+function clearCache() { alert('Cache cleared.'); }
+async function deleteAccountConfirm() { if (!confirm('DELETE your account? This cannot be undone.')) return; if (!confirm('Are you SURE?')) return; await window.yaver.deleteAccount(); handleSignOut(); }
+
+// ════════════════════════════════════════════════════════
+// DEPLOY (also accessible from settings)
+// ════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════
+// SPLIT PANE RESIZE
+// ════════════════════════════════════════════════════════
+let dragging = false;
+document.getElementById('divider').addEventListener('mousedown', () => { dragging = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; });
+document.addEventListener('mousemove', e => { if (!dragging) return; const r = document.querySelector('.split')?.getBoundingClientRect(); if (!r) return; const ratio = Math.max(0.2, Math.min(0.8, (e.clientX-r.left)/r.width)); document.getElementById('pane-left').style.width = (ratio*100)+'%'; });
+document.addEventListener('mouseup', () => { dragging = false; document.body.style.cursor = ''; document.body.style.userSelect = ''; });
+
+// ════════════════════════════════════════════════════════
+// KEYBOARD SHORTCUTS
+// ════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === 'r') { e.preventDefault(); handleReload(); }
+  if (mod && e.key === ',') { e.preventDefault(); togglePanel('settings'); }
+  if (mod && e.key === 'd') { e.preventDefault(); togglePanel('doctor'); }
+  if (mod && e.key === 'n') { e.preventDefault(); currentTask = null; document.getElementById('chat-msgs').innerHTML = '<div class="msg msg-status">New conversation. What do you want to build?</div>'; navTo('chat'); document.getElementById('chat-input').focus(); }
+  if (mod && e.key >= '1' && e.key <= '6') { e.preventDefault(); navTo(['chat','projects','todos','builds','health','quality'][parseInt(e.key)-1]); }
+  if (e.key === 'Escape') closeAllPanels();
+});
+
+// ════════════════════════════════════════════════════════
+// HELPERS
+// ════════════════════════════════════════════════════════
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function stopAll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } if (devPollTimer) { clearInterval(devPollTimer); devPollTimer = null; } if (taskListTimer) { clearInterval(taskListTimer); taskListTimer = null; } if (taskStreamController) { taskStreamController.abort(); taskStreamController = null; } taskStreamTaskId = null; }
+
+// ════════════════════════════════════════════════════════
+// VOICE INPUT (MediaRecorder → agent transcribe)
+// ════════════════════════════════════════════════════════
+let mediaRecorder = null, audioChunks = [];
+
+async function toggleVoice() {
+  const btn = document.getElementById('voice-btn');
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop(); btn.style.color = 'var(--text-secondary)'; return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream); audioChunks = [];
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result.split(',')[1];
+        addMsg('status', '🎤 Transcribing...');
+        try {
+          const r = await window.yaver.agentRequest('POST', '/voice/transcribe', { audio: base64, format: 'webm' });
+          if (r.text) { document.getElementById('chat-input').value = r.text; document.getElementById('chat-input').focus(); }
+          else addMsg('status', 'No speech detected');
+        } catch { addMsg('status', 'Transcription failed'); }
+      };
+      reader.readAsDataURL(blob);
+    };
+    mediaRecorder.start(); btn.style.color = 'var(--red)';
+    setTimeout(() => { if (mediaRecorder?.state === 'recording') { mediaRecorder.stop(); btn.style.color = 'var(--text-secondary)'; } }, 30000);
+  } catch { addMsg('status', 'Microphone not available'); }
+}
+
+// ════════════════════════════════════════════════════════
+// SSE DEV SERVER EVENTS (live reload)
+// ════════════════════════════════════════════════════════
+let sseController = null;
+
+function startSSE() {
+  if (sseController) sseController.abort();
+  sseController = new AbortController();
+  (async () => {
+    try {
+      const conn = await window.yaver.getConnectionState();
+      if (!conn.connected || !conn.baseUrl) return;
+      const res = await fetch(conn.baseUrl + '/dev/events', { headers: { 'Authorization': 'Bearer ' + (await window.yaver.getAuthState()).token }, signal: sseController.signal });
+      const reader = res.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value).split('\n')) {
+          if (line.startsWith('data: ')) {
+            try {
+              const ev = JSON.parse(line.slice(6));
+              if (ev.type === 'reload' || ev.type === 'ready') {
+                const wv = document.getElementById('preview-webview');
+                if (!wv.classList.contains('hidden')) wv.reload();
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+  })();
+}
+
+// ════════════════════════════════════════════════════════
+// TASK OUTPUT STREAM (live console — raw runner stdout)
+// ════════════════════════════════════════════════════════
+// Console-first task view (2026-08-12, user directive): the chat pane IS
+// the runner's console. We consume the RAW stdout lane
+// (/tasks/{id}/output?rawSince=) — `raw_replay` seeds/replaces the tail,
+// `raw` appends live frames — for EVERY runner (opencode / codex / claude),
+// the same bytes the web console, mobile and tvOS render. Same
+// fetch/ReadableStream pattern as startSSE; the agent's byte cursor rides
+// rawSince so a retry resumes without re-rendering the scrollback. A clean
+// `done` frame is the only silent stop; anything else gets ONE retry.
+let taskStreamController = null;
+let taskRawBuf = '';
+let taskRawCursor = 0;
+let taskStreamTaskId = null;
+
+function stripAnsi(s) {
+  return String(s || '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '') // CSI (SGR colours, cursor, erase…)
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '') // OSC … BEL/ST
+    .replace(/\u001b[()][0-9A-B]/g, '');           // two-byte controls
+}
+
+function renderTaskConsole() {
+  const el = document.getElementById('console-raw');
+  if (!el) return;
+  el.textContent = stripAnsi(taskRawBuf);
+  el.scrollTop = el.scrollHeight;
+}
+
+function setConsoleLive(live) {
+  const orb = document.getElementById('console-live-orb');
+  if (orb) orb.style.display = live ? 'inline-block' : 'none';
+}
+
+function handleTaskOutputFrame(ev) {
+  if (!ev || typeof ev.type !== 'string') return;
+  if (ev.type === 'raw_replay') {
+    taskRawBuf = ev.full ? (ev.text || '') : (taskRawBuf + (ev.text || ''));
+    taskRawCursor = typeof ev.offset === 'number' ? ev.offset : taskRawCursor;
+    renderTaskConsole();
+  } else if (ev.type === 'raw' && ev.text) {
+    taskRawBuf += ev.text;
+    taskRawCursor = typeof ev.offset === 'number' ? ev.offset : taskRawCursor;
+    renderTaskConsole();
+  } else if (ev.type === 'done') {
+    setConsoleLive(false);
+    if (taskStreamController) { taskStreamController.abort(); taskStreamController = null; }
+  }
+}
+
+function startTaskStream(taskId) {
+  if (taskStreamController) { taskStreamController.abort(); taskStreamController = null; }
+  taskStreamTaskId = taskId;
+  taskRawBuf = '';
+  taskRawCursor = 0;
+  // The console block lives INSIDE #chat-msgs, after the user `$` lines.
+  // A live-row wrapper carries the opencode-style purple working orb so a
+  // streaming run reads as alive even between stdout bursts (2026-08-12).
+  let rowEl = document.getElementById('console-live-row');
+  if (!rowEl) {
+    rowEl = document.createElement('div');
+    rowEl.id = 'console-live-row';
+    rowEl.className = 'console-live-row';
+    rowEl.innerHTML = '<span id="console-live-orb" class="console-live-orb"></span>';
+    document.getElementById('chat-msgs').appendChild(rowEl);
+  }
+  let rawEl = document.getElementById('console-raw');
+  if (!rawEl) {
+    rawEl = document.createElement('div');
+    rawEl.id = 'console-raw';
+    rawEl.className = 'console-raw';
+    rowEl.appendChild(rawEl);
+  }
+  setConsoleLive(true);
+  const connect = () => {
+    const ctrl = new AbortController();
+    taskStreamController = ctrl;
+    (async () => {
+      let sawDone = false;
+      try {
+        const conn = await window.yaver.getConnectionState();
+        if (!conn.connected || !conn.baseUrl) return;
+        const auth = await window.yaver.getAuthState();
+        const res = await fetch(conn.baseUrl + '/tasks/' + encodeURIComponent(taskId) + '/output?rawSince=' + taskRawCursor, {
+          headers: { 'Authorization': 'Bearer ' + (auth.token || '') },
+          signal: ctrl.signal,
+        });
+        const reader = res.body && res.body.getReader();
+        if (!reader) return;
+        const decoder = new TextDecoder();
+        let pending = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          pending += decoder.decode(value, { stream: true });
+          const lines = pending.split('\n');
+          pending = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const ev = JSON.parse(line.slice(6));
+              if (ev.type === 'done') sawDone = true;
+              handleTaskOutputFrame(ev);
+            } catch {}
+          }
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+      }
+      // A clean `done` is the only silent stop. Anything else (relay bounce,
+      // box drop) gets ONE retry from the agent's byte cursor.
+      if (!sawDone && !ctrl.signal.aborted && taskStreamTaskId === taskId) {
+        taskStreamController = null;
+        setTimeout(connect, 3000);
+      }
+    })();
+  };
+  connect();
+}
+
+// ════════════════════════════════════════════════════════
+// TASK DELETION
+// ════════════════════════════════════════════════════════
+async function deleteTaskById(id) {
+  if (!confirm('Delete this task?')) return;
+  await window.yaver.deleteTask(id);
+  if (currentTask?.id === id) { currentTask = null; document.getElementById('chat-msgs').innerHTML = '<div class="msg msg-status">Task deleted. Start a new one.</div>'; }
+  loadTaskList();
+}
+
+// ════════════════════════════════════════════════════════
+// STOP DEV SERVER (direct)
+// ════════════════════════════════════════════════════════
+async function stopDevServer() {
+  await window.yaver.devServerStop();
+  document.getElementById('preview-webview').classList.add('hidden');
+  document.getElementById('preview-empty').classList.remove('hidden');
+  document.getElementById('preview-url').textContent = 'No preview';
+}
+
+// ════════════════════════════════════════════════════════
+// REMEMBER LAST DEVICE + AUTO-CONNECT
+// ════════════════════════════════════════════════════════
+async function rememberDevice(device, mode) {
+  const s = await window.yaver.getDesktopSettings();
+  s.lastDevice = { name: device.name, deviceId: device.deviceId, mode };
+  await window.yaver.saveDesktopSettings(s);
+}
+
+async function tryAutoConnect() {
+  // 1. Check local agent
+  const local = await window.yaver.probeLocalAgent();
+  if (local.found) { await connectLocal(); return true; }
+
+  // 2. Check last connected device
+  const s = await window.yaver.getDesktopSettings();
+  if (s.lastDevice) {
+    try {
+      const d = await window.yaver.listDevices();
+      const devices = d.devices || [];
+      const match = devices.find(x => x.deviceId === s.lastDevice.deviceId && x.isOnline);
+      if (match) {
+        let relays = [];
+        try { const rs = await window.yaver.convexRequest('GET', '/settings'); if (rs?.relayServers) relays = rs.relayServers; } catch {}
+        const r = await window.yaver.connectDevice(match, relays);
+        if (r.ok) { enterMain(match, r.mode); return true; }
+      }
+    } catch {}
+  }
+
+  // 3. Single online device → auto-connect
+  try {
+    const d = await window.yaver.listDevices();
+    const online = (d.devices || []).filter(x => x.isOnline);
+    // Dedup
+    const seen = new Map();
+    for (const dev of online) { const k = (dev.name||dev.deviceId||'').toLowerCase(); if (!seen.has(k) || (dev.lastHeartbeat||0) > (seen.get(k).lastHeartbeat||0)) seen.set(k, dev); }
+    const unique = Array.from(seen.values());
+    if (unique.length === 1) {
+      let relays = [];
+      try { const rs = await window.yaver.convexRequest('GET', '/settings'); if (rs?.relayServers) relays = rs.relayServers; } catch {}
+      const r = await window.yaver.connectDevice(unique[0], relays);
+      if (r.ok) { enterMain(unique[0], r.mode); return true; }
+    }
+  } catch {}
+
+  return false;
+}
+
+// ════════════════════════════════════════════════════════
+// DESKTOP NOTIFICATIONS
+// ════════════════════════════════════════════════════════
+function notify(title, body) {
+  if (Notification.permission === 'granted') { new Notification(title, { body }); }
+  else if (Notification.permission !== 'denied') { Notification.requestPermission().then(p => { if (p === 'granted') new Notification(title, { body }); }); }
+}
+
+// Hook into task completion
+const origStartPolling = startPolling;
+startPolling = function() {
+  origStartPolling();
+  // Wrap poll to add notifications
+  const origPoll = pollTimer;
+  // Notifications are triggered inside the poll when task status changes
+};
+
+// ════════════════════════════════════════════════════════
+// VERSION INFO
+// ════════════════════════════════════════════════════════
+async function showVersion() {
+  const p = await window.yaver.getPlatform();
+  try { const i = await window.yaver.getAgentInfo(); alert('Yaver Desktop 1.0.0\nAgent: v' + (i.version||'?') + '\nPlatform: ' + p.platform + '/' + p.arch); }
+  catch { alert('Yaver Desktop 1.0.0\nPlatform: ' + p.platform + '/' + p.arch); }
+}
+
+// ════════════════════════════════════════════════════════
+// BOOT (updated with auto-connect)
+// ════════════════════════════════════════════════════════
+async function init() {
+  const auth = await window.yaver.getAuthState();
+  if (!auth.isSignedIn) { showScreen('auth'); return; }
+  const v = await window.yaver.validateToken();
+  if (!v.valid) { showScreen('auth'); return; }
+  currentUser = v.user;
+
+  // Try auto-connect
+  const autoConnected = await tryAutoConnect();
+  if (!autoConnected) {
+    showScreen('devices');
+    document.getElementById('user-greeting').textContent = currentUser.fullName || currentUser.email;
+    refreshDevices();
+  }
+}
+
+// Override enterMain to remember device + start SSE
+const _origEnterMain = enterMain;
+enterMain = function(device, mode) {
+  _origEnterMain(device, mode);
+  rememberDevice(device, mode);
+  startSSE();
+  pollDevServer();
+  // Request notification permission
+  if (Notification.permission === 'default') Notification.requestPermission();
+};
+
+init();
+</script>
+</body>
+</html>

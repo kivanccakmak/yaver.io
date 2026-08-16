@@ -1,0 +1,914 @@
+package main
+
+// remote_status_cmd.go — `yaver primary status` and `yaver runner <hint>
+// status`. Both share one read path: resolve the target device, fetch
+// /info + /agent/runners over the same direct-or-relay transport stack
+// the rest of the CLI uses, then pretty-print to stdout. JSON is
+// available for scripting via --json.
+//
+// `yaver primary status`     — runs against userSettings.primaryDeviceId
+//                              (Convex /settings).
+// `yaver runner <hint> status` — runs against any device the caller can
+//                              reach by deviceId/alias/name prefix.
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	osexec "os/exec"
+	"sort"
+	"strings"
+	"time"
+)
+
+type remoteRunnerSummary struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Installed      bool   `json:"installed"`
+	Ready          bool   `json:"ready"`
+	AuthConfigured bool   `json:"authConfigured"`
+	AuthSource     string `json:"authSource,omitempty"`
+	Warning        string `json:"warning,omitempty"`
+	Error          string `json:"error,omitempty"`
+	IsDefault      bool   `json:"isDefault"`
+	Version        string `json:"version,omitempty"`
+}
+
+// remoteAgentStatusReport is the merged shape we render at the CLI. We
+// intentionally keep it small — anything the user wants raw is a
+// `--json` flag away from the underlying /info + /agent/runners
+// payloads.
+type remoteAgentStatusReport struct {
+	DeviceID         string                 `json:"deviceId"`
+	Name             string                 `json:"name"`
+	Alias            string                 `json:"alias,omitempty"`
+	Platform         string                 `json:"platform,omitempty"`
+	Hostname         string                 `json:"hostname,omitempty"`
+	Version          string                 `json:"version,omitempty"`
+	WorkDir          string                 `json:"workDir,omitempty"`
+	LifecycleState   string                 `json:"lifecycleState,omitempty"`
+	NeedsAuth        bool                   `json:"needsAuth,omitempty"`
+	IsOnline         bool                   `json:"isOnline"`
+	SSHReachable     *bool                  `json:"sshReachable,omitempty"`
+	Transport        string                 `json:"transport,omitempty"`
+	BaseURL          string                 `json:"baseUrl,omitempty"`
+	DefaultRunner    string                 `json:"defaultRunner,omitempty"`
+	Runners          []remoteRunnerSummary  `json:"runners,omitempty"`
+	DevServer        map[string]interface{} `json:"devServer,omitempty"`
+	Sandbox          map[string]interface{} `json:"sandbox,omitempty"`
+	Project          map[string]interface{} `json:"project,omitempty"`
+	TaskStats        map[string]interface{} `json:"taskStats,omitempty"`
+	TodoCount        interface{}            `json:"todoCount,omitempty"`
+	TodoTotal        interface{}            `json:"todoTotal,omitempty"`
+	Info             map[string]interface{} `json:"info,omitempty"`
+	HTTPStatusInfo   int                    `json:"httpStatusInfo,omitempty"`
+	HTTPStatusRunner int                    `json:"httpStatusRunners,omitempty"`
+	Git              *gitStatusSummary      `json:"git,omitempty"`
+	HTTPStatusGit    int                    `json:"httpStatusGit,omitempty"`
+}
+
+func fetchRemoteAgentStatusByHint(ctx context.Context, deviceHint string) (*remoteAgentStatusReport, error) {
+	candidates, token, err := resolveRemoteAgentCandidates(deviceHint)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	devices, derr := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
+	if derr != nil {
+		return nil, fmt.Errorf("list devices: %w", derr)
+	}
+	hint := normalizeDeviceHint(deviceHint)
+	var target *DeviceInfo
+	for i := range devices {
+		d := &devices[i]
+		if strings.HasPrefix(d.DeviceID, hint) ||
+			strings.EqualFold(d.Name, hint) ||
+			strings.HasPrefix(strings.ToLower(d.Name), strings.ToLower(hint)) ||
+			(strings.TrimSpace(d.Alias) != "" && strings.EqualFold(d.Alias, hint)) ||
+			(strings.TrimSpace(d.Alias) != "" && strings.HasPrefix(strings.ToLower(d.Alias), strings.ToLower(hint))) {
+			target = d
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("device %q not found", deviceHint)
+	}
+	return fetchRemoteAgentStatus(ctx, candidates, token, target)
+}
+
+func fetchRemoteAgentStatusByDeviceID(ctx context.Context, deviceID string) (*remoteAgentStatusReport, error) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.AuthToken) == "" {
+		return nil, fmt.Errorf("not signed in — run 'yaver auth' first")
+	}
+	if strings.TrimSpace(cfg.ConvexSiteURL) == "" {
+		cfg.ConvexSiteURL = defaultConvexSiteURL
+	}
+	devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	var target *DeviceInfo
+	for i := range devices {
+		d := &devices[i]
+		if d.DeviceID == deviceID {
+			target = d
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("primary device %q is no longer in your registered devices — run 'yaver primary clear' to reset", deviceID)
+	}
+	return fetchRemoteAgentStatusForTarget(ctx, cfg, target)
+}
+
+func fetchRemoteAgentStatusForTarget(ctx context.Context, cfg *Config, target *DeviceInfo) (*remoteAgentStatusReport, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config required")
+	}
+	if target == nil {
+		return nil, fmt.Errorf("target device required")
+	}
+	if !target.IsOnline {
+		report := &remoteAgentStatusReport{
+			DeviceID: target.DeviceID,
+			Name:     target.Name,
+			Alias:    strings.TrimSpace(target.Alias),
+			Platform: target.Platform,
+			IsOnline: false,
+		}
+		// Probe SSH reachability so the renderer can distinguish
+		// "agent stopped/unauth'd but the box is up" (recommend
+		// `yaver primary auth`) from "box truly unreachable"
+		// (recommend `yaver ssh primary` so the SSH error itself
+		// surfaces). Best-effort — false negatives just downgrade
+		// the hint, never block the status output.
+		reachable := probeSSHReachable(target, 1500*time.Millisecond)
+		report.SSHReachable = &reachable
+		return report, nil
+	}
+	candidates, err := buildRemoteAgentCandidates(cfg, target)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("device %q has no reachable transport candidates", target.Name)
+	}
+	return fetchRemoteAgentStatus(ctx, candidates, cfg.AuthToken, target)
+}
+
+// fetchRemoteAgentStatus pulls /info + /agent/runners from the chosen
+// transport, distilling the result into a small render-friendly struct.
+// Failures of /agent/runners are non-fatal — the caller still sees the
+// device version, lifecycle, and dev-server state from /info.
+func fetchRemoteAgentStatus(ctx context.Context, candidates []RemoteAgentCandidate, token string, target *DeviceInfo) (*remoteAgentStatusReport, error) {
+	report := &remoteAgentStatusReport{
+		DeviceID: target.DeviceID,
+		Name:     target.Name,
+		Alias:    strings.TrimSpace(target.Alias),
+		Platform: target.Platform,
+		IsOnline: target.IsOnline,
+	}
+	infoCtx, infoCancel := context.WithTimeout(ctx, 10*time.Second)
+	chosen, status, raw, err := doRemoteAgentRequest(infoCtx, candidates, token, http.MethodGet, "/info", nil, 8*time.Second)
+	infoCancel()
+	if err != nil {
+		return nil, fmt.Errorf("/info: %w", err)
+	}
+	report.HTTPStatusInfo = status
+	report.Transport = firstNonEmpty(strings.TrimSpace(chosen.Label), chosen.Kind)
+	report.BaseURL = chosen.BaseURL
+	// Auth-expired detection fallback: /info is auth'd, so when the
+	// remote box's own Convex token is dead it cannot validate caller
+	// tokens and returns 401/403 — the very signal we need is absent
+	// from the response. /health is unauth and returns authExpired
+	// even in this state, so probe it as a side-channel.
+	if status == 401 || status == 403 {
+		healthCtx, healthCancel := context.WithTimeout(ctx, 5*time.Second)
+		_, hstatus, hraw, herr := doRemoteAgentRequest(healthCtx, candidates, "", http.MethodGet, "/health", nil, 4*time.Second)
+		healthCancel()
+		if herr == nil && hstatus >= 200 && hstatus < 300 && len(hraw) > 0 {
+			var hinfo map[string]interface{}
+			if json.Unmarshal(hraw, &hinfo) == nil {
+				if exp, ok := hinfo["authExpired"].(bool); ok && exp {
+					report.NeedsAuth = true
+				}
+				if v, ok := hinfo["lifecycleState"].(string); ok {
+					report.LifecycleState = v
+				}
+				if v, ok := hinfo["version"].(string); ok && report.Version == "" {
+					report.Version = v
+				}
+				if v, ok := hinfo["hostname"].(string); ok && report.Hostname == "" {
+					report.Hostname = v
+				}
+			}
+		}
+	}
+	if status >= 200 && status < 300 && len(raw) > 0 {
+		var info map[string]interface{}
+		if err := json.Unmarshal(raw, &info); err == nil {
+			report.Info = info
+			if v, ok := info["hostname"].(string); ok {
+				report.Hostname = v
+			}
+			if v, ok := info["version"].(string); ok {
+				report.Version = v
+			}
+			if v, ok := info["workDir"].(string); ok {
+				report.WorkDir = v
+			}
+			if v, ok := info["lifecycleState"].(string); ok {
+				report.LifecycleState = v
+			}
+			if needs, ok := info["needsAuth"].(bool); ok && needs {
+				report.NeedsAuth = true
+			}
+			if authExpired, ok := info["authExpired"].(bool); ok && authExpired {
+				report.NeedsAuth = true
+			}
+			if r, ok := info["runner"].(map[string]interface{}); ok {
+				if id, ok := r["id"].(string); ok {
+					report.DefaultRunner = id
+				}
+			}
+			if dev, ok := info["devServer"].(map[string]interface{}); ok {
+				report.DevServer = dev
+			}
+			if sb, ok := info["sandbox"].(map[string]interface{}); ok {
+				report.Sandbox = sb
+			}
+			if proj, ok := info["project"].(map[string]interface{}); ok {
+				report.Project = proj
+			}
+			if ts, ok := info["taskStats"].(map[string]interface{}); ok {
+				report.TaskStats = ts
+			}
+			if v, ok := info["todoCount"]; ok {
+				report.TodoCount = v
+			}
+			if v, ok := info["todoTotal"]; ok {
+				report.TodoTotal = v
+			}
+		}
+	}
+
+	runnerCtx, runnerCancel := context.WithTimeout(ctx, 10*time.Second)
+	_, rstatus, rraw, rerr := doRemoteAgentRequest(runnerCtx, candidates, token, http.MethodGet, "/agent/runners", nil, 8*time.Second)
+	runnerCancel()
+	report.HTTPStatusRunner = rstatus
+	if rerr == nil && rstatus >= 200 && rstatus < 300 && len(rraw) > 0 {
+		var resp struct {
+			Runners []remoteRunnerSummary `json:"runners"`
+		}
+		if err := json.Unmarshal(rraw, &resp); err == nil {
+			sort.Slice(resp.Runners, func(i, j int) bool {
+				if resp.Runners[i].IsDefault != resp.Runners[j].IsDefault {
+					return resp.Runners[i].IsDefault
+				}
+				return resp.Runners[i].ID < resp.Runners[j].ID
+			})
+			report.Runners = resp.Runners
+		}
+	}
+
+	// Pull git identity + GH/GitLab credential readiness from the same
+	// /machine/onboarding/status endpoint the mobile/web onboarding screens
+	// already use. Failure is non-fatal — older agent builds (<1.99.x)
+	// without gitConfig in the response just leave the section empty.
+	gitCtx, gitCancel := context.WithTimeout(ctx, 8*time.Second)
+	_, gstatus, graw, gerr := doRemoteAgentRequest(gitCtx, candidates, token, http.MethodGet, "/machine/onboarding/status", nil, 6*time.Second)
+	gitCancel()
+	report.HTTPStatusGit = gstatus
+	if gerr == nil && gstatus >= 200 && gstatus < 300 && len(graw) > 0 {
+		var resp struct {
+			Providers []machineOnboardingProviderStatus `json:"providers"`
+			GitConfig gitUserConfig                     `json:"gitConfig"`
+		}
+		if err := json.Unmarshal(graw, &resp); err == nil {
+			summary := gitStatusSummary{Config: resp.GitConfig}
+			for _, p := range resp.Providers {
+				if p.ID == "github" || p.ID == "gitlab" {
+					summary.Providers = append(summary.Providers, p)
+				}
+			}
+			if summary.Config.UserName != "" || summary.Config.UserEmail != "" || len(summary.Providers) > 0 {
+				report.Git = &summary
+			}
+		}
+	}
+	return report, nil
+}
+
+func renderRemoteAgentStatus(report *remoteAgentStatusReport, asJSON bool) {
+	if asJSON {
+		out, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Println(string(out))
+		return
+	}
+	if report == nil {
+		fmt.Println("(no status — no report returned)")
+		return
+	}
+	header := report.Name
+	if report.Alias != "" {
+		header += " (@" + report.Alias + ")"
+	}
+	if dID := strings.TrimSpace(report.DeviceID); dID != "" {
+		header += " [" + dID[:min(8, len(dID))] + "]"
+	}
+	fmt.Println(header)
+	if !report.IsOnline {
+		// Two sub-states share "no recent heartbeat":
+		//   - bootstrap: box reachable, agent just stopped or its
+		//     Yaver token expired → `yaver primary auth` re-auths
+		//     over SSH and brings the heartbeat back.
+		//   - fully offline: box itself unreachable → `yaver ssh
+		//     primary` surfaces the SSH error so the user can fix
+		//     the underlying network/power issue.
+		// SSHReachable is set by the offline branch of
+		// fetchRemoteAgentStatusByDeviceID via TCP probe of port 22.
+		if report.SSHReachable != nil && *report.SSHReachable {
+			fmt.Println("  status: bootstrap (no recent heartbeat — re-auth with `yaver primary auth`)")
+		} else {
+			fmt.Println("  status: offline (no recent heartbeat, SSH unreachable — try `yaver ssh primary`)")
+		}
+		return
+	}
+	if report.Hostname != "" || report.Platform != "" {
+		platformLabel := report.Platform
+		if report.Hostname != "" && report.Hostname != report.Name {
+			platformLabel = strings.TrimSpace(report.Hostname + " · " + report.Platform)
+		} else if report.Hostname != "" {
+			platformLabel = report.Hostname
+		}
+		fmt.Printf("  host:           %s\n", strings.TrimSpace(platformLabel))
+	}
+	if report.Version != "" {
+		fmt.Printf("  agent version:  %s\n", report.Version)
+	}
+	if report.LifecycleState != "" {
+		marker := report.LifecycleState
+		if report.NeedsAuth {
+			marker += " (needs reauth)"
+		}
+		fmt.Printf("  lifecycle:      %s\n", marker)
+	}
+	if report.WorkDir != "" {
+		fmt.Printf("  workdir:        %s\n", report.WorkDir)
+	}
+	if report.Transport != "" {
+		fmt.Printf("  transport:      %s\n", report.Transport)
+	}
+	// Multi-layer auth summary: yaver-level (Convex token alive on the
+	// remote box) + per-runner (claude-code, codex, etc. logged in on
+	// that box). Pre-fix this was scattered across the lifecycle line +
+	// the runners table; surfacing it as one block makes the "is this
+	// machine ready to receive work" question answerable at a glance.
+	renderAuthSummary(report)
+	if report.DefaultRunner != "" {
+		fmt.Printf("  default runner: %s\n", report.DefaultRunner)
+	}
+	if report.Project != nil {
+		if name, _ := report.Project["name"].(string); strings.TrimSpace(name) != "" {
+			path, _ := report.Project["path"].(string)
+			line := name
+			if strings.TrimSpace(path) != "" && path != name {
+				line += " (" + path + ")"
+			}
+			fmt.Printf("  project:        %s\n", line)
+		}
+	}
+	if report.DevServer != nil {
+		fw, _ := report.DevServer["framework"].(string)
+		running, _ := report.DevServer["running"].(bool)
+		port, _ := report.DevServer["port"].(float64)
+		state := "stopped"
+		if running {
+			state = "running"
+		}
+		line := fmt.Sprintf("%s — %s", strings.TrimSpace(fw), state)
+		if port > 0 {
+			line += fmt.Sprintf(" (port %d)", int(port))
+		}
+		fmt.Printf("  dev server:     %s\n", line)
+	}
+	if report.TaskStats != nil {
+		if total, ok := report.TaskStats["total"].(float64); ok {
+			running := numFromAny(report.TaskStats["running"])
+			done := numFromAny(report.TaskStats["done"])
+			failed := numFromAny(report.TaskStats["failed"])
+			fmt.Printf("  tasks:          total=%d running=%d done=%d failed=%d\n",
+				int(total), running, done, failed)
+		}
+	}
+	if report.TodoTotal != nil {
+		fmt.Printf("  todo:           pending=%v total=%v\n", report.TodoCount, report.TodoTotal)
+	}
+	if report.Git != nil {
+		renderGitStatusBlock(os.Stdout, *report.Git, "  ")
+	}
+	if len(report.Runners) > 0 {
+		fmt.Println("  runners:")
+		// Widened RUNNER column from 10 → 20 chars so synthetic
+		// provider rows (`opencode/anthropic`, `opencode/openrouter`,
+		// …) and longer aliases stay readable instead of getting
+		// truncated to ambiguous prefixes like `opencode/a`.
+		fmt.Printf("    %-22s %-9s %-9s %-6s %-22s %s\n", "RUNNER", "INSTALLED", "READY", "AUTH", "VERSION", "NOTES")
+		for _, r := range report.Runners {
+			notes := ""
+			if r.Warning != "" {
+				notes = r.Warning
+			} else if r.Error != "" {
+				notes = r.Error
+			}
+			star := " "
+			if r.IsDefault {
+				star = "★"
+			}
+			// Trim version display to keep the column tight even when
+			// some CLI prints a verbose banner (e.g. "Claude Code
+			// 2.1.126 (some-build-tag)"). Older agents (<1.99.147)
+			// don't populate Version — show "—" so the column is
+			// still visually aligned.
+			ver := strings.TrimSpace(r.Version)
+			if ver == "" {
+				ver = "—"
+			} else if len(ver) > 22 {
+				ver = ver[:21] + "…"
+			}
+			fmt.Printf("    %s %-20s %-9s %-9s %-6s %-22s %s\n",
+				star,
+				runnerTrunc(r.ID, 20),
+				yesNo(r.Installed),
+				yesNo(r.Ready),
+				yesNo(r.AuthConfigured),
+				ver,
+				notes,
+			)
+		}
+	} else if report.HTTPStatusRunner != 0 {
+		fmt.Printf("  runners:        (could not fetch — HTTP %d on /agent/runners)\n", report.HTTPStatusRunner)
+	}
+}
+
+// renderAuthSummary prints a "auth:" block summarising the auth state
+// of the remote box across all relevant layers:
+//
+//   - yaver  — is the box's own Convex session token still alive?
+//     Comes from /info.authExpired (and lifecycleState).
+//   - claude — is claude-code installed AND logged in?  From
+//     /agent/runners[id=claude-code].AuthConfigured.
+//   - codex  — same shape as claude.
+//
+// When /agent/runners returns 403 (typical when the remote box's
+// yaver auth is expired — it can't validate caller tokens), we fall
+// back to "(unknown — fix yaver auth first)" rather than silently
+// hiding the layers.
+func renderAuthSummary(report *remoteAgentStatusReport) {
+	// Yaver-level auth.
+	yaverState := "✓ active"
+	if report.NeedsAuth || report.LifecycleState == "yaver-auth-expired" {
+		yaverState = "✗ expired (run: yaver primary auth)"
+	}
+	fmt.Printf("  auth:\n")
+	fmt.Printf("    yaver:        %s\n", yaverState)
+
+	runnersByID := map[string]*remoteRunnerSummary{}
+	for i := range report.Runners {
+		runnersByID[strings.ToLower(report.Runners[i].ID)] = &report.Runners[i]
+	}
+	// We surface the two coding runners that have first-class quick
+	// flows (`yaver primary auth claude` / `yaver primary auth codex`).
+	// Other runners (aider / opencode / ollama) are visible in the
+	// detailed "runners:" table below.
+	//
+	// Agents can return the Claude Code row under either id "claude"
+	// (current shape; collectRunnerAuthStatusRows + /agent/runners both
+	// emit this) or "claude-code" (older agent versions). Look up both
+	// so a stale agent still renders correctly — without this, the
+	// auth: block printed "claude: ✗ not installed" against a remote
+	// that DID have claude installed because the lookup pinned to
+	// claude-code only.
+	type lookup struct {
+		ids   []string
+		label string
+	}
+	for _, l := range []lookup{
+		{ids: []string{"claude", "claude-code"}, label: "claude"},
+		{ids: []string{"codex"}, label: "codex"},
+	} {
+		var runner *remoteRunnerSummary
+		for _, id := range l.ids {
+			if r, ok := runnersByID[id]; ok && r != nil {
+				runner = r
+				break
+			}
+		}
+		state := authStateStringForRunner(runner, report)
+		fmt.Printf("    %-13s %s\n", l.label+":", state)
+	}
+}
+
+// authStateStringForRunner translates a single runner's installed/auth
+// shape into a one-line state string.
+func authStateStringForRunner(runner *remoteRunnerSummary, report *remoteAgentStatusReport) string {
+	if runner == nil {
+		// /agent/runners didn't return data. Distinguish "auth-expired
+		// blocked the call" from "runner genuinely not present" using
+		// the HTTP status — 403/401 → permissions, anything else →
+		// likely missing.
+		if report.HTTPStatusRunner == 401 || report.HTTPStatusRunner == 403 {
+			return "(unknown — fix yaver auth first)"
+		}
+		if report.HTTPStatusRunner == 0 {
+			return "(unknown — runners endpoint unreachable)"
+		}
+		return "✗ not installed"
+	}
+	if !runner.Installed {
+		return "✗ not installed"
+	}
+	// Compose "<base> · v<version>" when the agent gave us a version
+	// banner — keeps the auth: block scannable but still surfaces what
+	// you'd otherwise have to dig out of the runners table below.
+	suffix := ""
+	if v := strings.TrimSpace(runner.Version); v != "" {
+		suffix = " · " + v
+	}
+	if runner.AuthConfigured {
+		src := strings.TrimSpace(runner.AuthSource)
+		if src != "" {
+			return "✓ active (" + src + ")" + suffix
+		}
+		return "✓ active" + suffix
+	}
+	hint := ""
+	switch strings.ToLower(runner.ID) {
+	case "claude-code", "claude":
+		hint = " (run: yaver primary auth claude)"
+	case "codex":
+		hint = " (run: yaver primary auth codex)"
+	}
+	return "✗ not configured" + hint + suffix
+}
+
+func numFromAny(v interface{}) int {
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	case int64:
+		return int(x)
+	}
+	return 0
+}
+
+// runRemoteAgentStatusByHint is the entry point for `yaver runner
+// <hint> status`. It resolves the target by alias/deviceId/name and
+// renders the status report.
+func runRemoteAgentStatusByHint(deviceHint string, asJSON bool) {
+	if strings.TrimSpace(deviceHint) == "" {
+		fmt.Fprintln(os.Stderr, "Usage: yaver runner <deviceId|name|alias> status [--json]")
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	report, err := fetchRemoteAgentStatusByHint(ctx, deviceHint)
+	if err != nil {
+		// Resolve the deviceID for the friendly renderer; if we can't,
+		// fall through to the raw error.
+		cfg, _ := LoadConfig()
+		if cfg != nil {
+			if devices, derr := listDevices(cfg.ConvexSiteURL, cfg.AuthToken); derr == nil {
+				hint := normalizeDeviceHint(deviceHint)
+				for i := range devices {
+					d := &devices[i]
+					if strings.HasPrefix(d.DeviceID, hint) ||
+						strings.EqualFold(d.Name, hint) ||
+						strings.HasPrefix(strings.ToLower(d.Name), strings.ToLower(hint)) ||
+						(strings.TrimSpace(d.Alias) != "" && strings.EqualFold(d.Alias, hint)) {
+						renderRemoteAgentStatusError(ctx, d.DeviceID, err, asJSON)
+						os.Exit(1)
+					}
+				}
+			}
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	renderRemoteAgentStatus(report, asJSON)
+}
+
+// runPrimaryStatus is the entry point for `yaver primary status`.
+func runPrimaryStatus(ctx context.Context, asJSON bool) {
+	cfg, err := LoadConfig()
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.AuthToken) == "" {
+		fmt.Fprintln(os.Stderr, "Error: not signed in — run 'yaver auth' first")
+		os.Exit(1)
+	}
+	if strings.TrimSpace(cfg.ConvexSiteURL) == "" {
+		cfg.ConvexSiteURL = defaultConvexSiteURL
+	}
+	current, err := primaryGetCurrent(ctx, cfg.AuthToken, cfg.ConvexSiteURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to read userSettings: %v\n", err)
+		os.Exit(1)
+	}
+	devices, listErr := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
+	if listErr != nil {
+		if current == "" {
+			fmt.Fprintf(os.Stderr, "No primary device set and listing devices failed: %v\n", listErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "Listing devices failed: %v\n", listErr)
+		}
+		os.Exit(1)
+	}
+	current = strings.TrimSpace(current)
+	if current == "" {
+		// Single-device users have no primary set but the CLI should
+		// still answer — fall back to the only registered owner device.
+		owned := devices
+		if len(owned) == 0 {
+			fmt.Fprintln(os.Stderr, "No registered owner devices yet. Run `yaver serve` on a machine to register it.")
+			os.Exit(1)
+		}
+		if len(owned) > 1 {
+			fmt.Fprintln(os.Stderr, "No primary device set and you have multiple registered devices.")
+			fmt.Fprintln(os.Stderr, "Pick one with `yaver primary set <deviceId|name|alias>` and try again, or run")
+			fmt.Fprintln(os.Stderr, "`yaver runner <hint> status` for a specific device.")
+			os.Exit(1)
+		}
+		current = owned[0].DeviceID
+	}
+	var target *DeviceInfo
+	for i := range devices {
+		if devices[i].DeviceID == current {
+			target = &devices[i]
+			break
+		}
+	}
+	if target == nil {
+		fmt.Fprintf(os.Stderr, "Primary device %q is no longer in your registered devices — run 'yaver primary clear' to reset\n", current)
+		os.Exit(1)
+	}
+	report, err := fetchRemoteAgentStatusForTarget(ctx, cfg, target)
+	if err != nil {
+		renderRemoteAgentStatusError(ctx, current, err, asJSON)
+		os.Exit(1)
+	}
+	renderRemoteAgentStatus(report, asJSON)
+}
+
+// renderRemoteAgentStatusError prints a clean "primary unreachable" summary
+// when fetchRemoteAgentStatus failed across every transport candidate. The
+// raw error from doRemoteAgentRequest is a `|`-joined wall of attempt URLs +
+// reasons (Docker bridge IPs the box reported as local IPs, relay 502 because
+// the box's tunnel is down, etc.) — useful for debugging but unreadable as
+// the default output. We replace it with: device label + a one-line cause
+// classification + the most likely recovery command. Falls back to the raw
+// error for --json or when device metadata can't be loaded.
+func renderRemoteAgentStatusError(ctx context.Context, deviceID string, err error, asJSON bool) {
+	if asJSON {
+		jsonErr := map[string]interface{}{
+			"deviceId": deviceID,
+			"error":    err.Error(),
+		}
+		out, _ := json.MarshalIndent(jsonErr, "", "  ")
+		fmt.Fprintln(os.Stderr, string(out))
+		return
+	}
+	cfg, _ := LoadConfig()
+	var target *DeviceInfo
+	if cfg != nil && strings.TrimSpace(cfg.AuthToken) != "" {
+		if devices, derr := listDevices(cfg.ConvexSiteURL, cfg.AuthToken); derr == nil {
+			for i := range devices {
+				if devices[i].DeviceID == deviceID {
+					target = &devices[i]
+					break
+				}
+			}
+		}
+	}
+	label := deviceID
+	if len(label) > 8 {
+		label = label[:8]
+	}
+	hostLabel := ""
+	if target != nil {
+		alias := strings.TrimSpace(target.Alias)
+		if alias != "" {
+			label = fmt.Sprintf("%s (@%s) [%s]", target.Name, alias, label)
+		} else {
+			label = fmt.Sprintf("%s [%s]", target.Name, label)
+		}
+		hostLabel = strings.TrimSpace(target.Platform)
+	}
+	cause, hint := classifyRemoteStatusError(err, target)
+	fmt.Println(label)
+	if hostLabel != "" {
+		fmt.Printf("  host:           %s\n", hostLabel)
+	}
+	if target != nil && !target.IsOnline {
+		// Convex hasn't seen a heartbeat in 5+ minutes. Not necessarily
+		// offline-as-in-unplugged — the box could just have its agent
+		// stopped or unauth'd. We can still SSH to it.
+		fmt.Println("  status:         bootstrap (no recent heartbeat — device reachable via `yaver ssh primary`)")
+	} else {
+		// Heartbeat fresh, but the relay tunnel is down — typically
+		// auth expired on the box. Same recovery: SSH in and re-auth.
+		fmt.Println("  status:         bootstrap (online per Convex, relay tunnel unreachable from here)")
+	}
+	fmt.Printf("  cause:          %s\n", cause)
+	if hint != "" {
+		fmt.Printf("  next step:      %s\n", hint)
+	}
+}
+
+// classifyRemoteStatusError boils a verbose multi-candidate transport failure
+// down to one short cause + a recovery hint. The match patterns are intentionally
+// loose — false positives just mean the user gets the wrong hint, not a hidden
+// error (the raw error is still in --json output).
+func classifyRemoteStatusError(err error, target *DeviceInfo) (cause, hint string) {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case target != nil && !target.IsOnline:
+		return "device offline (last heartbeat too old)", "ssh into the box and run `yaver serve`, or check `systemctl --user status yaver`"
+	case strings.Contains(msg, "device not connected to relay"):
+		return "relay tunnel down (typically Yaver auth expired on the box)", "run `yaver primary auth` to re-sign in on the primary device"
+	case strings.Contains(msg, "i/o timeout") && strings.Contains(msg, "172.") || strings.Contains(msg, "i/o timeout") && strings.Contains(msg, "10."):
+		return "no LAN path + relay tunnel unavailable", "run `yaver primary auth` (re-establishes the relay tunnel) or join the same LAN as the primary"
+	case strings.Contains(msg, "i/o timeout"):
+		return "every transport timed out", "run `yaver primary auth` to refresh the relay tunnel; if you're on cellular, the LAN candidates were never going to work anyway"
+	case strings.Contains(msg, "connection refused"):
+		return "agent process not listening on its HTTP port", "ssh in and check `pgrep -af 'yaver serve'` and `journalctl --user -u yaver -n 50`"
+	case strings.Contains(msg, "401") || strings.Contains(msg, "403"):
+		return "agent rejected our auth token", "your local CLI's session may be stale — run `yaver auth` here, or `yaver primary auth` if the box is the one with bad auth"
+	default:
+		// Generic transport failure with no specific cue. The most
+		// common cause we've actually seen is auth expired on the
+		// remote (relay refuses to bridge unregistered tunnels and
+		// the agent's tunnel registration depends on a valid Convex
+		// session). `--json` is still suggested for the raw list.
+		return "every transport candidate failed", "run `yaver primary auth` to re-sign in on the primary device, or `yaver primary status --json` for the raw error list"
+	}
+}
+
+// probeSSHReachable does a quick TCP dial to port 22 against each plausible
+// host for the device, mirroring the resolution pipeline `yaver ssh primary`
+// uses: Tailscale CLI lookup, Tailscale 100.x IPs from the device row,
+// publicEndpoints (skipping yaver.io HTTP relay hostnames which never
+// speak SSH), other LAN IPs, ~/.ssh/config entries (via `ssh -G`), and
+// finally the QUIC host. Returns true on the first successful handshake.
+//
+// Used to distinguish "agent stopped or unauth'd but the box itself is up"
+// (recommend `yaver primary auth`, which SSHes in to re-auth) from "box
+// truly unreachable" (recommend `yaver ssh primary` so the SSH error
+// itself is visible to the user). False negatives just downgrade the
+// hint, never block.
+func probeSSHReachable(target *DeviceInfo, timeout time.Duration) bool {
+	if target == nil {
+		return false
+	}
+	tried := map[string]struct{}{}
+	probe := func(host, port string) bool {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			return false
+		}
+		if port == "" {
+			port = "22"
+		}
+		addr := net.JoinHostPort(host, port)
+		if _, ok := tried[addr]; ok {
+			return false
+		}
+		tried[addr] = struct{}{}
+		conn, err := net.DialTimeout("tcp", addr, timeout)
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}
+
+	// 1. Tailscale CLI lookup — handles ephemeral/roaming boxes whose
+	//    100.x IP isn't recorded on the device row but is reachable via
+	//    `tailscale ip <name>`.
+	if tsPath, err := osexec.LookPath("tailscale"); err == nil {
+		for _, name := range []string{strings.TrimSpace(target.Alias), target.Name, strings.TrimSuffix(target.Name, ".local")} {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+			out, err := osexec.CommandContext(ctx, tsPath, "ip", name).Output()
+			cancel()
+			if err != nil {
+				continue
+			}
+			if ip := firstPreferredTailscaleIP(string(out)); ip != "" {
+				if probe(ip, "22") {
+					return true
+				}
+			}
+		}
+	}
+
+	// 2. Tailscale 100.x IPs from the device row.
+	for _, ip := range target.LocalIps {
+		if strings.HasPrefix(ip, "100.") && strings.Contains(ip, ".") {
+			if probe(ip, "22") {
+				return true
+			}
+		}
+	}
+
+	// 3. Public endpoints — skip yaver.io HTTP relay gateways, which
+	//    terminate HTTPS only and never speak SSH.
+	for _, raw := range target.PublicEndpoints {
+		ep := strings.TrimPrefix(raw, "https://")
+		ep = strings.TrimPrefix(ep, "http://")
+		ep = strings.TrimSuffix(ep, "/")
+		if isYaverHTTPRelayHost(ep) {
+			continue
+		}
+		if probe(ep, "22") {
+			return true
+		}
+	}
+
+	// 4. Other LAN IPs.
+	for _, ip := range target.LocalIps {
+		if ip == "" || strings.HasPrefix(ip, "127.") || ip == "::1" || isLikelyDockerBridgeIP(ip) {
+			continue
+		}
+		if probe(ip, "22") {
+			return true
+		}
+	}
+
+	// 5. ~/.ssh/config — `ssh -G <hint>` returns the merged config
+	//    (HostName + Port) without connecting. This is the path
+	//    `yaver ssh primary` uses as its final fallback when the
+	//    device row has nothing routable, and it's how a user with
+	//    `Host yaver-test-ephemeral 157.180.114.179` reaches the box.
+	if sshPath, err := osexec.LookPath("ssh"); err == nil {
+		for _, hint := range []string{strings.TrimSpace(target.Alias), target.Name, target.DeviceID} {
+			hint = strings.TrimSpace(hint)
+			if hint == "" {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+			out, err := osexec.CommandContext(ctx, sshPath, "-G", hint).Output()
+			cancel()
+			if err != nil {
+				continue
+			}
+			host, port := parseSSHGOutput(string(out))
+			// ssh -G echoes the input as `hostname` when no Host
+			// stanza matches — only act on it if it's not literally
+			// the input we already exhausted via the device row.
+			if host == "" || strings.EqualFold(host, hint) {
+				continue
+			}
+			if probe(host, port) {
+				return true
+			}
+		}
+	}
+
+	// 6. QUIC host as a last resort — usually a public IP the agent
+	//    registered when it bound its QUIC server.
+	if target.QuicHost != "" && target.QuicHost != "0.0.0.0" && !isLikelyDockerBridgeIP(target.QuicHost) {
+		if probe(target.QuicHost, "22") {
+			return true
+		}
+	}
+	return false
+}
+
+// parseSSHGOutput pulls the resolved hostname + port out of `ssh -G <hint>`
+// output. The output is `key value` lines; we only need `hostname` and
+// `port`. Empty strings on missing keys.
+func parseSSHGOutput(out string) (host, port string) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "hostname ") {
+			host = strings.TrimSpace(strings.TrimPrefix(line, "hostname "))
+		} else if strings.HasPrefix(line, "port ") {
+			port = strings.TrimSpace(strings.TrimPrefix(line, "port "))
+		}
+	}
+	return host, port
+}

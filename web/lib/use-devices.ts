@@ -2,27 +2,591 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { CONVEX_URL } from "@/lib/constants";
+import type { RuntimeProjectSeed } from "@/lib/runtimeProjectSettings";
+import {
+  resolveIdentityMerge,
+  type IdentityCandidate,
+  type SecondaryAgentRef,
+} from "@/lib/deviceIdentityMerge";
+import { aliasCollisionOutcome, agentInstanceRelation } from "@/lib/aliasShadowing";
+
+/** DeviceStorage is the live disk gauge the agent sends on every heartbeat. */
+export interface DeviceStorage {
+  totalGb?: number;
+  usedGb?: number;
+  freeGb?: number;
+  usedPct?: number;
+  /** Aggregate reclaimable bytes, present only when the box has a warm scan.
+   *  It's what turns "92% full" from alarming into actionable. */
+  reclaimableGb?: number;
+  updatedAt?: number;
+}
 
 export interface Device {
-  deviceId: string;
   id: string;
   name: string;
+  /**
+   * Per-user short alias. Set via `yaver alias set ...` on the CLI or
+   * the inline editor in the dashboard. Lower-cased on the server,
+   * unique within a single user's set of devices, used by
+   * `yaver ssh <alias>` and as the display label whenever it's set.
+   */
+  alias?: string;
   platform: string;
   host: string;
   port: number;
   lastSeen: string;
   online: boolean;
-  runnerDown?: boolean;
-  runners?: Array<{ taskId: string; runnerId: string; status: string; title: string }>;
+  publicKey?: string;
+  /**
+   * A short-lived sign-in code this machine is offering, present ONLY while its
+   * own session is dead — which is precisely when no other channel to it works.
+   *
+   * The box publishes it on its heartbeat (outbound HTTPS, no relay, no inbound
+   * port, no reachability), because the alternative it shipped with was logging
+   * the code to a machine nobody can reach. Surfaces render it as an Approve
+   * button; approving mints a fresh session and the box signs itself back in.
+   *
+   * Not a credential: authorizeDeviceCode derives the account from the
+   * APPROVER's bearer token, so holding this code without already being signed
+   * in as the owner authorizes nothing. Convex expires it at 15 minutes, so a
+   * surface never has to decide whether it is still live.
+   */
+  pendingAuthCode?: string;
+  hardwareId?: string;
+  hardwareProfile?: {
+    os?: string;
+    osVersion?: string;
+    cpu?: string;
+    gpu?: string;
+    ramMb?: number;
+    vramMb?: number;
+    numCores?: number;
+    arch?: string;
+    /** True when the agent is running inside Windows Subsystem for
+     *  Linux (detected via WSL_DISTRO_NAME / /proc/version on the
+     *  host). Replaces the old IP-shape heuristic that false-
+     *  positived on Linux boxes with Docker bridges. */
+    isWsl?: boolean;
+    /** Total capacity of the volume holding $HOME. A static spec like RAM, so
+     *  it rides the 24h-gated hardware profile; live free/used is in `storage`. */
+    diskTotalGb?: number;
+    iosSimulators?: string[];
+    androidEmulators?: string[];
+  };
+  /** Live disk gauge, refreshed on every heartbeat. Numbers only — the agent
+   *  knows which project's caches are fat, but paths and project names stay on
+   *  the device (they'd leak the home-dir username into Convex). */
+  storage?: DeviceStorage;
+  /** Resource envelope from the agent's in-process watchdog
+   *  (desktop/agent/resource_warden.go): the box says "I'm starving"
+   *  BEFORE it goes dark. Level + counters only. */
+  resourcePressure?: {
+    level: "ok" | "degraded" | "critical";
+    canFork?: boolean;
+    availableMb?: number;
+    agentRssMb?: number;
+    children?: number;
+    reasons?: string[];
+    at?: number;
+  };
+  localIps?: string[];
+  /** Deploy targets this box PROBED as ready ("npm","testflight","convex",…).
+   *  Distinct from a platform guess: the agent ran the toolchain. Refreshed
+   *  every ~6h, so always render `deployCapabilitiesAt` alongside it — a stale
+   *  green is the failure mode this whole field exists to replace. */
+  deployCapabilities?: string[];
+  /** Targets this OS could satisfy but currently cannot. Targets the OS can
+   *  never satisfy are omitted, not listed red. */
+  deployCapabilitiesBlocked?: string[];
+  /** RFC3339 timestamp of the last probe. Absent until the box's first probe. */
+  deployCapabilitiesAt?: string;
+  deviceClass?: "desktop" | "edge-mobile" | "server";
+  edgeProfile?: {
+    supportsLocalInference: boolean;
+    maxModelClass: "none" | "tiny" | "small" | "medium";
+    preferredTasks: string[];
+    memoryMb?: number;
+    batteryPct?: number;
+    isCharging?: boolean;
+    thermalState?: "nominal" | "warm" | "hot";
+  };
+  /**
+   * True when the agent's session token is revoked or expired. The agent
+   * itself flips this on the device row via /devices/bootstrap when its
+   * heartbeat 401s, so the dashboard can surface a "needs re-auth" UI
+   * without the user having to attempt a connect first.
+   */
+  needsAuth?: boolean;
+  tunnelUrl?: string;
+  publicEndpoints?: string[];
+  runners?: Array<{
+    runnerId?: string;
+    status?: string;
+    ready?: boolean;
+    installed?: boolean;
+    authConfigured?: boolean;
+    /** Local evidence only — cannot see a server-side revocation. */
+    authPresent?: boolean;
+    /** The provider actually answered (or refused). */
+    authVerified?: boolean;
+    /** Epoch ms the provider last spoke — freshness of the VERDICT. */
+    authVerifiedAt?: number;
+    authSource?: string;
+    /** Epoch ms the agent last looked — freshness of the ROW. */
+    checkedAt?: number;
+    warning?: string;
+    error?: string;
+  }>;
+  installedRunnerIds?: string[];
+  /**
+   * Other `yaver serve` instances running on the SAME physical box that were
+   * collapsed into this row (same hardwareId, own deviceId/port/version). Set
+   * by the identity merge — see lib/deviceIdentityMerge.ts. Empty/undefined is
+   * the normal case; a non-empty list is what lets a surface say "this machine
+   * also runs a second agent on :18090 with no relay tunnel" instead of
+   * handing the user a button that can only 502.
+   */
+  secondaryAgents?: SecondaryAgentRef[];
+  lastTunnelEvent?: {
+    online: boolean;
+    at: number;
+    peerAddr?: string;
+    connectedAt?: number;
+    durationSec?: number;
+  };
+  peerState?: "online" | "stale" | "offline";
+  peerLastSeen?: string;
+  workspaceLive?: boolean;
+  probeState?: "ok" | "auth-expired" | "unreachable";
+  probePath?: "relay" | "tunnel" | "direct";
+  probeCheckedAt?: string;
+  probeError?: string;
+  probeInfo?: {
+    hostname?: string;
+    version?: string;
+    platform?: string;
+    workDir?: string;
+    mode?: string;
+    autoStart?: string;
+    authExpired?: boolean;
+    lifecycleState?: "bootstrap" | "yaver-auth-expired" | "ready-to-connect";
+    lifecycle?: {
+      state?: "bootstrap" | "yaver-auth-expired" | "ready-to-connect";
+      usable?: boolean;
+      recoverable?: boolean;
+      recoveryMode?: string;
+      supportsOwnerClaim?: boolean;
+      ownerClaimReady?: boolean;
+      requiresFirstPair?: boolean;
+    };
+    runtime?: Record<string, unknown>;
+    system?: Record<string, unknown>;
+  } | null;
+  /**
+   * Go-agent binary version reported by the device on register + heartbeat.
+   * Absent when the device has never reported (older agent, or never registered
+   * since the field was introduced). Surfaces as "no version info" in the UI.
+   */
+  agentVersion?: string;
+  /** Epoch ms of the last server-side write of agentVersion. */
+  agentVersionReportedAt?: number;
+  /**
+   * Hosting provenance from listMyDevices. "yaver-hosted" = a Yaver-managed box
+   * (paid via LemonSqueezy or owner-adopted); "byo" = Yaver-provisioned on the
+   * user's own cloud account; "self-hosted" = the user's own box.
+   */
+  hosting?: "yaver-hosted" | "byo" | "self-hosted";
+  managed?: boolean;
+  /** Privacy-safe cached runtime projects for this machine. Project/repo names
+   * only; no absolute local paths. */
+  runtimeProjectCatalog?: RuntimeProjectSeed[];
+  defaultRuntimeProject?: RuntimeProjectSeed;
+  /** Managed-cloud machine id + status — needed to Pause (snapshot+delete) or
+   *  Resume a Yaver-hosted box from the web dashboard, same as mobile does. */
+  machineId?: string;
+  machineStatus?: string;
+  /** Backend verdict (isMachineWakeable): can this box actually be woken from a snapshot? */
+  machineWakeable?: boolean;
+  /**
+   * True when this row lacks both hardwareId and publicKey. Such rows have
+   * unstable identity — a rename or platform
+   * change splits them, and two unrelated boxes can collapse onto the
+   * same (platform, name) key. We never use them as a reconnect target;
+   * the UI surfaces a "re-pair from the box" warning instead.
+   */
+  ghost?: boolean;
 }
 
 interface DevicesState {
   devices: Device[];
   refreshDevices: () => Promise<void>;
+  /** True until the first fetch settles. Distinct from "no devices". */
+  loading: boolean;
+  /** Set when the last fetch failed. Distinct from "no devices". */
+  error: string | null;
+  /** When the last SUCCESSFUL fetch landed (ms epoch), or null. */
+  lastFetchedAt: number | null;
 }
 
-export function useDevices(token: string | null): DevicesState {
+// Mirrors backend/convex/devices.ts:112 and mobile/_core/constants.ts.
+// 15 min. The agent beats every 2 min with runners attached, every 10 min idle
+// (desktop/agent/main.go:9898), so one missed idle beat leaves ~5 min of margin.
+// Several comments in this repo still say "5 min" — they are wrong; see
+// docs/architecture/DEVICE_TRUTH.md §1.
+const HEARTBEAT_STALE_MS = 900_000;
+/**
+ * Does this device need the user to DO something? These sort to the top.
+ *
+ * Deliberately not "is it broken" — an offline laptop is not a task. What
+ * qualifies is a device that is reporting in (so the user is likely to want it)
+ * but cannot be used until they act: it needs pairing, its session expired, or
+ * it is a managed box parked mid-lifecycle.
+ */
+function needsAttention(d: Pick<Device, "needsAuth" | "online" | "peerState" | "machineStatus">): boolean {
+  if (d.needsAuth && (d.online || d.peerState === "online")) return true;
+  const ms = String(d.machineStatus || "");
+  if (ms === "error" || ms === "resuming" || ms === "stopping") return true;
+  return false;
+}
+
+let relayPresenceUrlPromise: Promise<string | null> | null = null;
+
+async function getPrimaryRelayPresenceUrl(): Promise<string | null> {
+  if (!relayPresenceUrlPromise) {
+    relayPresenceUrlPromise = (async () => {
+      try {
+        const res = await fetch(`${CONVEX_URL}/config`);
+        if (!res.ok) return null;
+        const data = await res.json().catch(() => ({}));
+        const relays = Array.isArray(data?.relayServers) ? data.relayServers : [];
+        const primary = relays
+          .filter((relay: any) => typeof relay?.httpUrl === "string" && relay.httpUrl.trim() !== "")
+          .sort((a: any, b: any) => Number(a?.priority ?? 9999) - Number(b?.priority ?? 9999))[0];
+        return primary?.httpUrl ? String(primary.httpUrl).replace(/\/+$/, "") : null;
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return relayPresenceUrlPromise;
+}
+
+async function applyRelayPresence(devices: Device[]): Promise<Device[]> {
+  if (devices.length === 0) return devices;
+  const relayUrl = await getPrimaryRelayPresenceUrl();
+  if (!relayUrl) return devices;
+  try {
+    const ids = devices.map((device) => device.id).filter(Boolean).join(",");
+    if (!ids) return devices;
+    const res = await fetch(`${relayUrl}/presence?ids=${encodeURIComponent(ids)}`);
+    if (!res.ok) return devices;
+    const data = await res.json().catch(() => ({}));
+    const table = data?.devices && typeof data.devices === "object" ? data.devices : {};
+    return devices.map((device) => {
+      const entry = table[device.id];
+      if (entry?.online === true) {
+        // Bus-overrides-Convex: if the relay's presence endpoint
+        // reports the agent has a live tunnel right now, we know
+        // the host's session token is valid (the agent can't keep
+        // its QUIC tunnel registered without one). Convex's
+        // needsAuth flag goes stale between 5-minute heartbeats and
+        // can flicker yellow even on a perfectly healthy agent —
+        // this is the false-positive flicker users keep reporting.
+        // Trust the live signal over the cached row.
+        return {
+          ...device,
+          online: true,
+          needsAuth: false,
+          lastTunnelEvent: {
+            online: true,
+            at: Date.now(),
+            connectedAt: typeof entry.connectedAt === "number" ? entry.connectedAt : undefined,
+            durationSec: typeof entry.uptimeSec === "number" ? entry.uptimeSec : undefined,
+          },
+        };
+      }
+      return device;
+    });
+  } catch {
+    return devices;
+  }
+}
+
+function normalizedName(name: string | undefined): string {
+  return String(name || "").trim().toLowerCase().replace(/\.local$/i, "");
+}
+
+function normalizedHost(host: string | undefined): string {
+  return String(host || "").trim().toLowerCase().replace(/\.local$/i, "");
+}
+
+function deviceIdentityKey(device: Device): string {
+  // Stable cryptographic identity wins. hardwareId is the most stable
+  // (survives renames and reinstalls); publicKey survives renames but
+  // rotates on factory reset.
+  if (device.hardwareId) return `hwid:${device.hardwareId}`;
+  if (device.publicKey) return `pub:${device.publicKey}`;
+  // No stable identity. The previous fallback to `host:platform:name`
+  // was a footgun: it merged unrelated boxes that happened to share a
+  // hostname (common in fleets) and split a single box across renames.
+  // Keep the row addressable per-deviceId — the `ghost` flag in
+  // refreshDevices marks it so the UI can warn the user.
+  if (device.id) return `id:${device.id}`;
+  return `name:${device.name}`;
+}
+
+function deviceAliasKey(device: Device): string | null {
+  const name = normalizedName(device.name);
+  const platform = String(device.platform || "").trim().toLowerCase();
+  if (!name || !platform) return null;
+  return `${platform}:${name}`;
+}
+
+function deviceEndpointKey(device: Device): string | null {
+  const host = normalizedHost(device.host);
+  if (!host) return null;
+  return `${host}:${device.port || 0}`;
+}
+
+function mergeIpLists(a?: string[], b?: string[]): string[] | undefined {
+  const merged = new Set<string>();
+  for (const ip of a || []) if (ip) merged.add(ip);
+  for (const ip of b || []) if (ip) merged.add(ip);
+  return merged.size > 0 ? [...merged] : undefined;
+}
+
+function deviceIdentityCandidate(d: Device): IdentityCandidate {
+  return {
+    deviceId: d.id,
+    needsAuth: !!d.needsAuth,
+    isOnline: !!d.online || d.peerState === "online",
+    lastHeartbeat: Date.parse(d.lastSeen || "") || 0,
+    port: d.port,
+    agentVersion: d.agentVersion,
+    alias: d.alias,
+    publicKey: d.publicKey,
+    hardwareId: d.hardwareId,
+    lastTunnelEvent: d.lastTunnelEvent,
+  };
+}
+
+function mergeDeviceEntries(existing: Device, incoming: Device): Device {
+  // HEALTH FIRST — identical rule to backend/convex/devices.ts, from the same
+  // shared module. The old rule here was even weaker than the server's: it had
+  // no needsAuth clause at all, so a needs-auth loopback agent that heartbeated
+  // one second later took over the row's deviceId, needsAuth and port, and
+  // every action (RECLAIM, connect, recycle, power) routed to an id the relay
+  // has no tunnel for. See lib/deviceIdentityMerge.ts for the incident.
+  const { base, other, secondaryAgents } = resolveIdentityMerge(existing, incoming, deviceIdentityCandidate, {
+    relate: agentInstanceRelation,
+    readSecondaries: (row) => row.secondaryAgents,
+  });
+  return {
+    ...other,
+    ...base,
+    secondaryAgents,
+    host: base.host || other.host,
+    port: base.port || other.port,
+    online: base.online || other.online,
+    publicKey: base.publicKey || other.publicKey,
+    hardwareId: base.hardwareId || other.hardwareId,
+    // Either half may carry the rescue code; losing it in the merge would drop
+    // the only route back to a box nothing else can reach.
+    pendingAuthCode: base.pendingAuthCode || other.pendingAuthCode,
+    hardwareProfile: base.hardwareProfile || other.hardwareProfile,
+    lastTunnelEvent: (() => {
+      const baseAt = base.lastTunnelEvent?.at || 0;
+      const otherAt = other.lastTunnelEvent?.at || 0;
+      if (baseAt === 0) return other.lastTunnelEvent;
+      if (otherAt === 0) return base.lastTunnelEvent;
+      return baseAt >= otherAt ? base.lastTunnelEvent : other.lastTunnelEvent;
+    })(),
+    localIps: mergeIpLists(base.localIps, other.localIps),
+    publicEndpoints: (() => {
+      const merged = new Set<string>();
+      for (const endpoint of base.publicEndpoints || []) if (endpoint) merged.add(endpoint);
+      for (const endpoint of other.publicEndpoints || []) if (endpoint) merged.add(endpoint);
+      return merged.size > 0 ? [...merged] : undefined;
+    })(),
+    runners:
+      Array.isArray(base.runners) && base.runners.length > 0
+        ? base.runners
+        : other.runners,
+    installedRunnerIds:
+      Array.isArray(base.installedRunnerIds) && base.installedRunnerIds.length > 0
+        ? base.installedRunnerIds
+        : other.installedRunnerIds,
+    lastSeen: (() => {
+      const next = Math.max(Date.parse(existing.lastSeen || "") || 0, Date.parse(incoming.lastSeen || "") || 0);
+      return next > 0 ? new Date(next).toISOString() : base.lastSeen || other.lastSeen;
+    })(),
+  };
+}
+
+function collapseDevices(devices: Device[]): Device[] {
+  const byIdentity = new Map<string, Device>();
+  for (const device of devices) {
+    const key = deviceIdentityKey(device);
+    const prev = byIdentity.get(key);
+    byIdentity.set(key, prev ? mergeDeviceEntries(prev, device) : device);
+  }
+
+  const byAlias = new Map<string, Device>();
+  for (const device of byIdentity.values()) {
+    const key = deviceAliasKey(device);
+    if (!key) {
+      byAlias.set(`id:${device.id}`, device);
+      continue;
+    }
+    const prev = byAlias.get(key);
+    if (!prev) {
+      byAlias.set(key, device);
+      continue;
+    }
+    // Was an inline `strongConflict` boolean — the third hand-copy of a rule
+    // that already had one home. Web was also the only surface missing
+    // `keep-both`, so two DIFFERENT machines behind one hostname were merged
+    // into one flip-flopping row here even after the server stopped doing it.
+    const outcome = aliasCollisionOutcome(
+      { hardwareId: prev.hardwareId, publicKey: prev.publicKey, online: prev.online, needsAuth: !!prev.needsAuth, port: prev.port, deviceId: prev.id, lastHeartbeat: Date.parse(prev.lastSeen || "") || 0 },
+      { hardwareId: device.hardwareId, publicKey: device.publicKey, online: device.online, needsAuth: !!device.needsAuth, port: device.port, deviceId: device.id, lastHeartbeat: Date.parse(device.lastSeen || "") || 0 },
+    );
+    if (outcome === "keep-a") {
+      byAlias.set(key, prev);
+      continue;
+    }
+    if (outcome === "keep-b") {
+      byAlias.set(key, device);
+      continue;
+    }
+    if (outcome === "keep-both") {
+      byAlias.delete(key);
+      byAlias.set(`${key}#${prev.hardwareId || prev.publicKey || prev.id}`, prev);
+      byAlias.set(`${key}#${device.hardwareId || device.publicKey || device.id}`, device);
+      continue;
+    }
+    // "merge" and "merge-secondary" are both ONE machine — merge health-first.
+    // mergeDeviceEntries records the collapsed-away instance under
+    // `secondaryAgents` when (and only when) it is a second RUNNING agent.
+    byAlias.set(key, mergeDeviceEntries(prev, device));
+  }
+
+  const byEndpoint = new Map<string, Device>();
+  for (const device of byAlias.values()) {
+    const key = deviceEndpointKey(device);
+    if (!key) {
+      byEndpoint.set(`id:${device.id}`, device);
+      continue;
+    }
+    const prev = byEndpoint.get(key);
+    byEndpoint.set(key, prev ? mergeDeviceEntries(prev, device) : device);
+  }
+
+  return [...byEndpoint.values()];
+}
+
+const HIDDEN_KEY = "yaver_hidden_device_ids";
+
+function readHiddenIds(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr.filter((x: any) => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeHiddenIds(ids: Set<string>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(HIDDEN_KEY, JSON.stringify([...ids]));
+  } catch {
+    // quota / private-mode — just drop
+  }
+}
+
+export function hideDevice(id: string): void {
+  const ids = readHiddenIds();
+  ids.add(id);
+  writeHiddenIds(ids);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("yaver-hidden-devices-changed"));
+  }
+}
+
+export function unhideDevice(id: string): void {
+  const ids = readHiddenIds();
+  ids.delete(id);
+  writeHiddenIds(ids);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("yaver-hidden-devices-changed"));
+  }
+}
+
+/**
+ * Set or clear the per-user alias for a device. Pass alias="" (or
+ * undefined) to clear. Server enforces per-user uniqueness — callers
+ * surface the returned error verbatim ("alias already used …",
+ * "alias invalid …") so the user knows what to fix.
+ */
+export async function setDeviceAlias(
+  token: string,
+  deviceId: string,
+  alias: string,
+): Promise<{ ok: true; alias: string | null } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`${CONVEX_URL}/devices/alias`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ deviceId, alias }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: body?.error || `HTTP ${res.status}` };
+    }
+    return { ok: true, alias: body?.alias ?? null };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export function unhideAll(): void {
+  writeHiddenIds(new Set());
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("yaver-hidden-devices-changed"));
+  }
+}
+
+export function useDevices(token: string | null): DevicesState & { hiddenIds: Set<string> } {
   const [devices, setDevices] = useState<Device[]>([]);
+  // `devices === []` used to mean any of: still loading, network down, backend
+  // 500, token rejected, or genuinely zero devices — and the UI rendered "No
+  // devices registered. Install the Yaver CLI…" for all five, telling a user
+  // whose backend was erroring that their machines don't exist. These three
+  // fields exist to keep those cases apart. See DEVICE_TRUTH.md F1.
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => readHiddenIds());
+
+  // Re-read hidden set whenever hide/unhide fires (same tab) or the user hit
+  // storage in another tab.
+  useEffect(() => {
+    const onChange = () => setHiddenIds(readHiddenIds());
+    window.addEventListener("yaver-hidden-devices-changed", onChange);
+    window.addEventListener("storage", onChange);
+    return () => {
+      window.removeEventListener("yaver-hidden-devices-changed", onChange);
+      window.removeEventListener("storage", onChange);
+    };
+  }, []);
 
   const refreshDevices = useCallback(async () => {
     if (!token) return;
@@ -31,32 +595,314 @@ export function useDevices(token: string | null): DevicesState {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) return;
-      const data = (await res.json()) as { devices?: Array<Record<string, unknown>> };
-      setDevices((data.devices ?? []).map((device) => ({
-        deviceId: String(device.deviceId ?? device.id ?? ""),
-        id: String(device.deviceId ?? device.id ?? ""),
-        name: String(device.name ?? "Unnamed device"),
-        platform: String(device.platform ?? "unknown"),
-        host: String(device.quicHost ?? device.host ?? "127.0.0.1"),
-        port: Number(device.quicPort ?? device.port ?? 18080),
-        lastSeen: String(device.lastHeartbeat ?? device.lastSeen ?? ""),
-        online: Boolean(device.isOnline ?? device.online),
-        runnerDown: Boolean(device.runnerDown),
-        runners: Array.isArray(device.runners) ? device.runners as Device["runners"] : [],
-      })));
-    } catch {
-      // Silently fail -- devices list is non-critical.
+      if (!res.ok) {
+        setError(
+          res.status === 401
+            ? "Your session expired. Sign in again to see your machines."
+            : `Couldn't load your machines (server said ${res.status}).`,
+        );
+        setLoading(false);
+        return;
+      }
+      const raw = await res.json();
+      const rawDevices = Array.isArray(raw) ? raw : (raw.devices ?? []);
+      const arr = rawDevices;
+
+      // Map API fields to Device interface
+      const mapped: Device[] = arr.map((d: any) => {
+        const deviceId = d.deviceId || d.id || "";
+        const rawHeartbeat = d.lastHeartbeat || d.lastSeen || 0;
+        const heartbeatMs =
+          typeof rawHeartbeat === "number"
+            ? rawHeartbeat
+            : rawHeartbeat
+              ? Date.parse(String(rawHeartbeat))
+              : 0;
+        const online =
+          (() => {
+            const heartbeatFresh =
+              Boolean(d.isOnline ?? d.online ?? false) &&
+              heartbeatMs > 0 &&
+              Date.now() - heartbeatMs < HEARTBEAT_STALE_MS;
+            const tunnelEvent = d.lastTunnelEvent;
+            const relayLive =
+              tunnelEvent &&
+              tunnelEvent.online === true &&
+              typeof tunnelEvent.at === "number" &&
+              Date.now() - tunnelEvent.at < HEARTBEAT_STALE_MS;
+            return heartbeatFresh || relayLive;
+          })();
+        return {
+        id: deviceId,
+        name: d.name || d.hostname || "",
+        alias: typeof d.alias === "string" && d.alias.trim() !== "" ? d.alias : undefined,
+        platform: d.platform || "",
+        host: d.quicHost || d.host || "",
+        port: d.quicPort || d.port || 18080,
+        lastSeen: heartbeatMs > 0 ? new Date(heartbeatMs).toISOString() : "",
+        online,
+        publicKey: d.publicKey,
+        // The rescue code, when this box is offering one. Convex has already
+        // expired anything older than 15 minutes, so a truthy value here is a
+        // code that can still be approved right now.
+        pendingAuthCode:
+          typeof d.pendingAuthCode === "string" && d.pendingAuthCode
+            ? d.pendingAuthCode
+            : undefined,
+        hardwareId: d.hardwareId ?? d.hwid,
+        hardwareProfile: d.hardwareProfile ?? undefined,
+        resourcePressure: d.resourcePressure ?? undefined,
+        localIps: Array.isArray(d.localIps) ? d.localIps : undefined,
+        deployCapabilities: Array.isArray(d.deployCapabilities) ? d.deployCapabilities : undefined,
+        deployCapabilitiesBlocked: Array.isArray(d.deployCapabilitiesBlocked)
+          ? d.deployCapabilitiesBlocked
+          : undefined,
+        deployCapabilitiesAt: d.deployCapabilitiesAt ?? undefined,
+        deviceClass: d.deviceClass,
+        edgeProfile: d.edgeProfile,
+        needsAuth: Boolean(d.needsAuth ?? false),
+        tunnelUrl: d.tunnelUrl,
+        publicEndpoints: Array.isArray(d.publicEndpoints) ? d.publicEndpoints : undefined,
+        runners: Array.isArray(d.runners) ? d.runners : undefined,
+        installedRunnerIds: Array.isArray(d.installedRunnerIds) ? d.installedRunnerIds : undefined,
+        // Server-side collapse already found these (backend/convex/devices.ts).
+        // Carry them through so the client merge below adds to the list rather
+        // than starting a second, disagreeing one.
+        secondaryAgents: Array.isArray(d.secondaryAgents) ? d.secondaryAgents : undefined,
+        lastTunnelEvent:
+          d.lastTunnelEvent && typeof d.lastTunnelEvent === "object"
+            ? {
+                online: Boolean(d.lastTunnelEvent.online),
+                at: typeof d.lastTunnelEvent.at === "number" ? d.lastTunnelEvent.at : 0,
+                peerAddr: typeof d.lastTunnelEvent.peerAddr === "string" ? d.lastTunnelEvent.peerAddr : undefined,
+                connectedAt: typeof d.lastTunnelEvent.connectedAt === "number" ? d.lastTunnelEvent.connectedAt : undefined,
+                durationSec: typeof d.lastTunnelEvent.durationSec === "number" ? d.lastTunnelEvent.durationSec : undefined,
+              }
+            : undefined,
+        agentVersion: typeof d.agentVersion === "string" ? d.agentVersion : undefined,
+        agentVersionReportedAt:
+          typeof d.agentVersionReportedAt === "number" ? d.agentVersionReportedAt : undefined,
+        hosting:
+          d.hosting === "yaver-hosted" || d.hosting === "byo" || d.hosting === "self-hosted"
+            ? d.hosting
+            : undefined,
+        managed: typeof d.managed === "boolean" ? d.managed : undefined,
+        runtimeProjectCatalog: Array.isArray(d.runtimeProjectCatalog) ? d.runtimeProjectCatalog : undefined,
+        defaultRuntimeProject:
+          d.defaultRuntimeProject && typeof d.defaultRuntimeProject === "object" ? d.defaultRuntimeProject : undefined,
+        machineId: typeof d.machineId === "string" ? d.machineId : undefined,
+        machineStatus: typeof d.machineStatus === "string" ? d.machineStatus : undefined,
+        machineWakeable: d.machineWakeable === true,
+        // Ghost: row lacking both stable identifiers. Cannot
+        // be reliably reconnect-targeted. Surfaced in the UI so the
+        // user knows to re-pair from the device.
+        ghost: !(d.hardwareId || d.hwid) && !d.publicKey,
+      }});
+
+      const collapsed = collapseDevices(mapped);
+      const withRelayPresence = await applyRelayPresence(collapsed);
+
+      // Stable order: preserve the previous ordering whenever the set
+      // of device IDs hasn't changed. Devices only re-sort when one
+      // appears or disappears — not every 10s poll, which would shuffle
+      // the sidebar under the user's cursor as lastSeen timestamps tick.
+      //
+      // EXCEPT when a device starts or stops needing the user's attention.
+      // The old rule froze order on membership alone, and the only sort key
+      // was `online` — so every device that needs action (signed out, needs
+      // pairing, asleep) sorted BENEATH every healthy one and then stayed
+      // there. With >10 devices the sidebar slices to 10 and the broken box
+      // was invisible in both places. Attention is now the primary sort key,
+      // and a change in attention is allowed to re-sort. See DEVICE_TRUTH.md F15.
+      setDevices((prev) => {
+        const prevIds = prev.map((d) => d.id);
+        const nextIds = withRelayPresence.map((d) => d.id);
+        const nextSet = new Set(nextIds);
+        const prevAttention = new Map(prev.map((d) => [d.id, needsAttention(d)] as const));
+        const attentionChanged = withRelayPresence.some(
+          (d) => prevAttention.has(d.id) && prevAttention.get(d.id) !== needsAttention(d),
+        );
+        const sameMembership =
+          prevIds.length === nextIds.length &&
+          prevIds.every((id) => nextSet.has(id));
+
+        if (sameMembership && prevIds.length > 0 && !attentionChanged) {
+          // Membership unchanged → keep the existing order, just merge
+          // the fresh fields (online, lastSeen, peerState, …).
+          const byId = new Map(withRelayPresence.map((d) => [d.id, d]));
+          return prevIds
+            .map((id) => byId.get(id))
+            .filter((d): d is typeof withRelayPresence[number] => Boolean(d));
+        }
+
+        // Membership changed → sort once, freezing the new order until
+        // the next add/remove. Pre-existing devices keep their place;
+        // new devices land at the top of their online/offline bucket.
+        const indexBefore = new Map(prevIds.map((id, i) => [id, i] as const));
+        return [...withRelayPresence].sort((a, b) => {
+          // Devices needing action first — they are the reason you opened this
+          // page. Then online, then the previous position, then recency.
+          const aAttn = needsAttention(a);
+          const bAttn = needsAttention(b);
+          if (aAttn !== bAttn) return aAttn ? -1 : 1;
+          if (a.online !== b.online) return a.online ? -1 : 1;
+          const ai = indexBefore.has(a.id) ? indexBefore.get(a.id)! : -1;
+          const bi = indexBefore.has(b.id) ? indexBefore.get(b.id)! : -1;
+          if (ai !== -1 && bi !== -1) return ai - bi;
+          if (ai !== -1) return -1;
+          if (bi !== -1) return 1;
+          return b.lastSeen.localeCompare(a.lastSeen);
+        });
+      });
+      setError(null);
+      setLastFetchedAt(Date.now());
+    } catch (e: any) {
+      // Never swallow: a silent failure here renders as "you have no devices".
+      setError(
+        typeof navigator !== "undefined" && navigator.onLine === false
+          ? "You're offline — showing the last known state of your machines."
+          : `Couldn't reach Yaver to load your machines${e?.message ? `: ${e.message}` : "."}`,
+      );
+    } finally {
+      setLoading(false);
     }
   }, [token]);
 
-  // Auto-refresh on mount
-  useEffect(() => {
-    refreshDevices();
-  }, [refreshDevices]);
+  // Poll every 30s while the tab is visible, paused when backgrounded. Was a
+  // flat 10s interval that ran even in a forgotten background tab — the single
+  // biggest client-side Convex driver. Live peer presence still comes from the
+  // relay in near-real-time; this poll only refreshes the durable device list.
+  useVisiblePolling(refreshDevices, 30000);
 
-  return {
-    devices,
-    refreshDevices,
-  };
+  // Filter out hidden devices on the consumer side. We keep them in the raw
+  // fetch so the "X hidden — show all" toggle can restore them instantly
+  // without waiting for the next poll.
+  const visible = devices.filter((d) => !hiddenIds.has(d.id));
+
+  return { devices: visible, refreshDevices, hiddenIds, loading, error, lastFetchedAt };
+}
+
+// useVisiblePolling calls `fn` every `intervalMs` while the tab is visible,
+// pauses entirely when the tab is hidden (a backgrounded dashboard shouldn't
+// keep polling Convex forever), and does one immediate refresh on regaining
+// visibility so the UI is fresh the moment you switch back. Passing a changed
+// intervalMs resets the cadence — callers use that for adaptive polling.
+function useVisiblePolling(fn: () => void, intervalMs: number) {
+  useEffect(() => {
+    let iv: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (iv) {
+        clearInterval(iv);
+        iv = null;
+      }
+    };
+    const start = () => {
+      if (!iv) iv = setInterval(fn, intervalMs);
+    };
+    const hidden = () =>
+      typeof document !== "undefined" && document.hidden;
+    const onVisibility = () => {
+      if (hidden()) {
+        stop();
+      } else {
+        fn(); // immediate refresh on return to foreground
+        start();
+      }
+    };
+    fn(); // initial fetch
+    if (!hidden()) start();
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibility);
+    }
+    return () => {
+      stop();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibility);
+      }
+    };
+  }, [fn, intervalMs]);
+}
+
+// PendingDeviceClaim mirrors the row shape returned by
+// /devices/pending-list. A pending claim is a bootstrap-mode box that
+// joined the user's relay but has no Convex devices row yet — the
+// dashboard surfaces it with a "Claim" CTA so a freshly-installed
+// remote box becomes attached in one tap.
+export interface PendingDeviceClaim {
+  id: string;
+  deviceId: string;
+  hardwareId: string;
+  name?: string;
+  platform?: string;
+  quicHost?: string;
+  quicPort?: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  relayLabel?: string;
+}
+
+export function usePendingClaims(token: string | null): {
+  pending: PendingDeviceClaim[];
+  refreshPending: () => Promise<void>;
+  claimPending: (deviceId: string, name?: string) => Promise<{ ok: boolean; error?: string }>;
+} {
+  const [pending, setPending] = useState<PendingDeviceClaim[]>([]);
+
+  const refreshPending = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${CONVEX_URL}/devices/pending-list`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        // Silent — endpoint not deployed yet on older backends shouldn't
+        // wedge the dashboard.
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      const items: PendingDeviceClaim[] = Array.isArray(data?.items) ? data.items : [];
+      setPending(items);
+    } catch {
+      // Network blip — keep prior list, retry next tick.
+    }
+  }, [token]);
+
+  const claimPending = useCallback(
+    async (deviceId: string, name?: string): Promise<{ ok: boolean; error?: string }> => {
+      if (!token) return { ok: false, error: "Not signed in" };
+      try {
+        const res = await fetch(`${CONVEX_URL}/devices/pending-claim`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ deviceId, name }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          return { ok: false, error: body?.error || `HTTP ${res.status}` };
+        }
+        // Refresh both lists. The pending row was deleted server-side
+        // and a real devices row was created; the next /devices/list
+        // poll will pick it up.
+        await refreshPending();
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [token, refreshPending],
+  );
+
+  // Adaptive + visibility-aware. A pending row means a bootstrap box is
+  // waiting to be claimed, so poll fast (10s) to keep the Claim CTA snappy.
+  // When there's nothing pending — the overwhelmingly common case — drop to
+  // 60s; a freshly-installed remote box then appears within a minute, which
+  // is plenty for the device inventory.
+  const hasPending = pending.length > 0;
+  useVisiblePolling(refreshPending, hasPending ? 10000 : 60000);
+
+  return { pending, refreshPending, claimPending };
 }

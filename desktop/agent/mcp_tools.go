@@ -6,7 +6,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		// --- Task Management ---
 		{
 			"name":        "create_task",
-			"description": "Create a new coding task. The AI runner will execute this task on the connected development machine.",
+			"description": "Create a new coding task. By default it runs on this agent's machine; pass device_id to run it on another owned Yaver machine over the same relay/direct device routing used by the CLI. Returns a structured task object when accepted; when video recording is enabled and a clip exists, the task includes videoClipId/videoStatus/videoClipUrl/videoPosterUrl so MCP clients can render a watch link or inline player for demos recorded on the producing machine.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"prompt"},
@@ -15,24 +15,88 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 						"type":        "string",
 						"description": "The task prompt describing what the AI should do",
 					},
-					"model": map[string]interface{}{
-						"type":        "string",
-						"description": "Model override for the runner (e.g. sonnet, opus)",
+					"verbosity": map[string]interface{}{
+						"type":        "integer",
+						"description": "Response detail level 0-10. 0=minimal ('done, no issues'), 5=moderate (key changes + reasoning), 10=full (all diffs, reasoning, alternatives). Default: 10.",
+						"minimum":     0,
+						"maximum":     10,
 					},
 					"runner": map[string]interface{}{
 						"type":        "string",
-						"description": "Runner ID (claude, codex, opencode, aider) — empty uses default",
+						"enum":        []string{"", "claude", "codex", "opencode"},
+						"description": "Runner ID — claude / codex / opencode. Empty = agent default.",
+					},
+					"model": map[string]interface{}{
+						"type":        "string",
+						"description": "Model id forwarded to the runner (e.g. claude-opus-4-7, gpt-5-codex, or any opencode-configured provider/model). Empty = runner default.",
+					},
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional owned Yaver device id/name/alias to create the task on. Empty runs on the local MCP host.",
 					},
 					"mode": map[string]interface{}{
 						"type":        "string",
-						"description": "Agent mode for the runner (opencode: build, plan, or any custom agent from opencode.json)",
+						"description": "Runner-specific subcommand. Currently honored by opencode where it maps to `--agent <mode>` — typically 'build' or 'plan', or any custom agent defined in the user's opencode.json. Other runners ignore it.",
+					},
+					"goal": map[string]interface{}{
+						"type":        "string",
+						"description": "Yaver goal-mode objective (opencode goal plugin). When set, the task runs as a persistent goal the opencode runner keeps working toward across turns (create_goal + idle auto-continue) until complete with evidence, blocked, or a safety limit. Empty = one-shot task. Requires the opencode-goal-plugin to be installed on the runner machine.",
+					},
+					"video_enabled": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Toggle the post-completion video summary. When true, after the task finishes the agent records a short MP4 demonstrating the running result via vibe-preview (sim/emulator MP4 for mobile, browser frame burst for web). The mobile + web task views render a '▶ Watch demo' button. Default false.",
+					},
+					"video_source": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"browser", "sim-ios", "sim-android", "phone"},
+						"description": "Override the auto-detected recorder. Empty = let the agent infer from the task's workDir (e.g. RN/Expo with ios/ → sim-ios; web → browser).",
+					},
+					"ask_freely": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Default false. When true, the new task is exempt from yaver's no-questions preamble + soft-question fallback — the runner may emit clarifying questions in prose. Only enable for audits or risky-change reviews where the user wants explicit confirmation. When false, the runner is told to pick sensible defaults and stop only via the yaver_ask_user MCP tool.",
+					},
+					"ask_mode": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Default false. When true, the task runs as a grounded deep question-answer (askModePreamble: file:line citations, explain-first, confirm gate) instead of a work run — the 'deep audit' frame. Works on the local machine and, with device_id, on a remote box.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "yaver_ask",
+			"description": "Ask a natural-language QUESTION about this repository / machine and get a deep, grounded answer instead of just running work. Use this for 'how do I test STT/TTS?', 'where does auth get wired?', 'why does the relay fall back?' — anything where the user wants understanding, not a change. It spawns a coding agent that reads the actual code (greps, opens files, follows the wiring), answers with file:line citations, automatically escalates from a shallow scan to a wider cross-checked read when the question is broad or architectural, and explains FIRST — it only modifies the working tree / deploys / touches git after confirming with the user via yaver_ask_user. Returns a task object; stream it with the task's /output SSE or poll get_task for the answer. Prefer this over create_task whenever the intent is to explain rather than to build.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"question"},
+				"properties": map[string]interface{}{
+					"question": map[string]interface{}{
+						"type":        "string",
+						"description": "The natural-language question to answer against this repo / machine.",
+					},
+					"runner": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"", "claude", "codex", "opencode"},
+						"description": "Runner ID — claude / codex / opencode. Empty = agent default.",
+					},
+					"model": map[string]interface{}{
+						"type":        "string",
+						"description": "Model id forwarded to the runner. Empty = runner default.",
+					},
+					"work_dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional project directory to scope the analysis to. Empty = the agent's default workdir / auto-detected from the question.",
+					},
+					"depth": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"", "auto", "single", "deep"},
+						"description": "How hard to analyze. 'single' = one read-only agent (fast). 'deep' = a multi-agent graph (investigate → answer → verify) for broad/architectural questions. 'auto' (default, same as empty) = single agent for narrow lookups, auto-escalate to the graph when the question is broad. The response includes the resulting task (single) or graph (deep) so you can stream it.",
 					},
 				},
 			},
 		},
 		{
 			"name":        "list_tasks",
-			"description": "List all tasks and their current status (queued, running, completed, failed, stopped).",
+			"description": "List all tasks and their current status (queued, running, completed, failed, stopped). Each task may also expose remote demo video artifacts via videoClipId/videoStatus/videoClipUrl/videoPosterUrl.",
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
@@ -40,7 +104,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "get_task",
-			"description": "Get detailed information about a specific task, including its full output.",
+			"description": "Get detailed information about a specific task, including its full output. If the task recorded a remote demo clip, the response includes videoClipId/videoStatus/videoClipUrl/videoPosterUrl for playback.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"task_id"},
@@ -68,7 +132,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "continue_task",
-			"description": "Continue a stopped task with additional input/instructions.",
+			"description": "Continue a stopped or running task with additional input/instructions. Pass device_id to inject the follow-up into a task running on another device's daemon.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"task_id", "input"},
@@ -81,9 +145,253 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 						"type":        "string",
 						"description": "Follow-up instructions for the task",
 					},
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional: target device whose daemon runs the task (omit for the local machine)",
+					},
+				},
+			},
+		},
+		{
+			"name":        "yaver_ask_user",
+			"description": "Ask the human running this Yaver task a single structured question (Claude-Code-style: short 'header' chip + 2-4 'choices', optional multi-select, free-text 'Other' is always offered by the surface). The question is delivered to whichever Yaver surface the user is on (mobile app, web dashboard, CLI); the answer string is returned as the tool result. Blocks until answered or until the timeout (default 5 min, max 30). DEFAULT TO NOT CALLING THIS. Asking is the slow path — the user is on a phone and may have walked away, so an unanswered question stalls the whole run until it times out. Before calling, you must have already: (1) checked the project files / git log / vault for the answer, and (2) confirmed no sensible default exists. Only ask for genuinely irreversible actions, value judgements, or production / billing / customer-visible state. For everything else pick the most reasonable default, state the assumption in one line, and proceed — a reversible wrong guess is cheaper than a stalled run. Result on timeout / cancel: {cancelled:true} — handle it by taking the safest default and continuing, never by re-asking. Requires the agent to be running inside a Yaver task (YAVER_TASK_ID env var must be set by the spawning daemon).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"prompt"},
+				"properties": map[string]interface{}{
+					"prompt": map[string]interface{}{
+						"type":        "string",
+						"description": "The question to show the user. Be specific and brief — the user is on a phone or laptop and may have walked away. Include the consequence of each option if asking for a choice.",
+					},
+					"header": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional short tag (≤12 chars, e.g. 'Auth method', 'DB', 'Deploy target') rendered as a chip above the prompt — the Claude-Code AskUserQuestion style. Omit for a plain question.",
+					},
+					"kind": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"text", "choice", "secret"},
+						"description": "How to render the input on the user's surface. 'text' = free-form text input (default). 'choice' = pick from the choices array (the surface ALWAYS also offers a free-text 'Other…' so you never need to add one). 'secret' = password-style input; the answer is NOT echoed in any SSE event so neighbouring devices can't see it. The runner still receives it in the tool result.",
+					},
+					"choices": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Required when kind=choice. Each entry is one option label. Keep to 2-4 short, mutually-exclusive options (a free-text 'Other…' is appended automatically). Put your recommended option first.",
+					},
+					"multi": map[string]interface{}{
+						"type":        "boolean",
+						"description": "kind=choice only. true = the user may select multiple options; the answer comes back as the picked labels joined by '; '. Default false (single pick).",
+					},
+					"vault_hint": map[string]interface{}{
+						"type":        "string",
+						"description": "When asking for a credential, set to the vault entry name you'd ideally read instead. The mobile/web sheet renders a 'Use stored value' shortcut so the user doesn't have to retype. Combine with kind=secret.",
+					},
+					"screenshot": map[string]interface{}{
+						"type":        "string",
+						"description": "F3 handoff: base64 PNG of the relevant page region (e.g. from browser_screenshot) to show ABOVE the prompt so the human sees exactly what they're acting on — the login form, the 2FA field, the captcha. Crop to the relevant area; the surface renders it as an image card.",
+					},
+					"step": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"login", "two_factor", "captcha", "kyc_upload", "payment_confirm", "region_confirm", "tap_relay"},
+						"description": "F3 handoff step type — drives how the surface renders the card (e.g. two_factor => OTP keypad, payment_confirm => approve/deny, captcha => tap-on-image). Omit for a plain question. Pair with screenshot for a true human-in-the-loop handoff.",
+					},
+					"timeout_sec": map[string]interface{}{
+						"type":        "integer",
+						"minimum":     30,
+						"maximum":     1800,
+						"description": "Seconds to wait for an answer before the tool returns {cancelled:true}. Default 300, max 1800.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "access_policy_check",
+			"description": "F5 Access-Layer Policy Guard. Call BEFORE automating a gated source to check whether an {action} on a {source} is permitted from a {jurisdiction}. Returns {decision: allow|warn|block, reason, category}. It BLOCKS jurisdiction-illegal funding/betting (e.g. foreign sportsbooks from Turkey), WARNS on account actions (login/signup) in such jurisdictions, and ALLOWS public-data reading everywhere. Unknown sources => allow (it does not over-block legitimate automation). You MUST honor a 'block' (do not place/fund bets) and surface a 'warn' to the user. This is the boundary that keeps remote-hands legitimate.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"source", "action"},
+				"properties": map[string]interface{}{
+					"source":       map[string]interface{}{"type": "string", "description": "Domain or service name, e.g. 'betfair.com', 'misli.com', 'superbet.rs'."},
+					"action":       map[string]interface{}{"type": "string", "description": "data|read|observe|scrape (always allowed) | login|signup|register | bet|place_bet|deposit|withdraw (funding/placing)."},
+					"jurisdiction": map[string]interface{}{"type": "string", "description": "ISO-ish code for where the user physically is, e.g. 'TR','US','RS'. Omit if unknown (a gambling source + unknown jurisdiction returns 'warn')."},
+				},
+			},
+		},
+		{
+			"name":        "wire_detect",
+			"description": "List USB-cable-attached iPhones/iPads (xcrun devicectl, falls back to xctrace) plus Android devices (adb devices -l) on the agent's host machine. Skips simulators/emulators and WiFi-paired devices. Returns {devices:[{udid,name,platform,os}], count, hint}. Useful before calling wire_push to know which device IDs you can target. Same data the CLI's `yaver wire detect --json` returns.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "wire_push",
+			"description": "Build a self-contained native binary (xcodebuild Release / gradle installRelease) and install it on a USB-attached phone via the agent's host machine. No Metro / dev server is involved — JS is bundled into the .app/.apk at build time. Auto-detects the framework (Expo, React Native, Flutter, native iOS, native Android) and walks into common subdirs (mobile/, app/, apps/*, packages/*) when the path itself isn't a mobile project. Long-running (5-30 min); captures stdout/stderr to ~/.yaver/logs/wire-push-*.log and returns the path + last 30 lines so you can grep for errors. Returns {ok, exit_code, device, platform, stack, log_path, log_tail, elapsed_sec}.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "Project path. Empty = the AI session's working directory (the dir Claude Code / Codex / opencode was started in) — typically what you want. Walks one level into mobile/, app/, apps/*, packages/* if the given path isn't a mobile project itself.",
+					},
+					"device": map[string]interface{}{
+						"type":        "string",
+						"description": "Specific device UDID (iOS) or serial (Android). Empty = first attached. Run wire_detect first to see your options.",
+					},
+					"platform": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"", "ios", "android"},
+						"description": "Force a platform when the project supports both. Empty = auto-pick (native projects pick by stack; cross-platform projects pick ios on macOS, android elsewhere).",
+					},
+					"config": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"", "Debug", "Release"},
+						"description": "Build configuration. Default Release (self-contained binary, no Metro). Pass Debug only when iterating with a running Metro dev server.",
+					},
+					"no_launch": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Install the app but don't launch it after. Default false.",
+					},
+					"timeout_sec": map[string]interface{}{
+						"type":        "integer",
+						"description": "Hard timeout in seconds. Default 1800 (30 min). Cold-cache xcodebuild + pod install + hermesc compile easily hits 20+ min on first run.",
+						"minimum":     60,
+					},
+				},
+			},
+		},
+		{
+			"name":        "wireless_detect",
+			"description": "List WiFi-paired iPhones/iPads (xcrun devicectl over network) AND Android devices (adb devices), PLUS Android devices that are visible on the local network via mDNS but haven't been adb-paired with this machine yet. Each entry has a status field: 'paired' (ready for wireless_push) or 'visible-unpaired' (call wireless_setup_android first). Use this BEFORE wireless_push to confirm the target is paired; if you see visible-unpaired entries, prompt the user via yaver_ask_user to tap 'Pair device with pairing code' on the phone, then call wireless_setup_android with the 6-digit code.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "wireless_setup_android",
+			"description": "First-time Android wireless pairing for AI agents. Prerequisite: the user has tapped 'Pair device with pairing code' on the phone (Settings → Developer options → Wireless debugging) and read off the 6-digit code. This tool polls mDNS for the pairing service, runs `adb pair`, then auto-resolves the matching connect endpoint and runs `adb connect`. Returns the post-setup device list so you can verify pairing in one round trip. Use yaver_ask_user to collect the code BEFORE calling this — never make up a code.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"code"},
+				"properties": map[string]interface{}{
+					"code": map[string]interface{}{
+						"type":        "string",
+						"description": "The 6-digit pairing code shown on the phone's 'Pair device with pairing code' screen.",
+					},
+					"poll_seconds": map[string]interface{}{
+						"type":        "integer",
+						"description": "How long to wait for the pairing service to appear in mDNS. Default 120, max 300.",
+						"minimum":     10,
+						"maximum":     300,
+					},
+				},
+			},
+		},
+		{
+			"name":        "wireless_pair_android",
+			"description": "Manual one-shot Android wireless pair when you already know the pair host:port (e.g. user typed it from the phone screen). Prefer wireless_setup_android when you don't have the host:port yet — it auto-discovers via mDNS. The pair port is DIFFERENT from the connect port shown on the main Wireless debugging screen. With auto_connect=true (default), this tool also resolves the matching connect entry and runs adb connect immediately, returning a single ready-to-use paired device.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"ip_port", "code"},
+				"properties": map[string]interface{}{
+					"ip_port": map[string]interface{}{
+						"type":        "string",
+						"description": "The PAIR host:port from the phone's 'Pair device with pairing code' screen — NOT the connect port from the main Wireless debugging screen.",
+					},
+					"code": map[string]interface{}{
+						"type":        "string",
+						"description": "The 6-digit pairing code shown next to the pair host:port on the phone.",
+					},
+					"auto_connect": map[string]interface{}{
+						"type":        "boolean",
+						"description": "After pairing, auto-resolve the connect endpoint via mDNS and run adb connect. Default true.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "wireless_connect_android",
+			"description": "Reconnect a previously-paired Android phone over WiFi. Use this when wireless_detect shows the phone as visible-unpaired but it was paired in a past session (e.g. after a phone reboot). Empty ip_port = auto-discover via mDNS.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"ip_port": map[string]interface{}{
+						"type":        "string",
+						"description": "Connect host:port from the phone's main Wireless debugging screen. Empty = auto-discover via mDNS.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "wireless_push",
+			"description": "Build a self-contained native binary (xcodebuild Release / gradle installRelease) and install it on a WIFI-paired phone via the agent's host machine. Same long-running build pipeline as wire_push, but routes through the wireless device picker. If no paired wireless device is found, the error includes a count of visible-unpaired devices so you can chain wireless_setup_android. Returns {ok, exit_code, device, platform, transport, stack, log_path, log_tail, elapsed_sec}.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "Project path. Empty = the AI session's working directory (the dir Claude Code / Codex / opencode was started in) — typically what you want when iterating inside the app repo. Walks one level into mobile/, app/, apps/*, packages/* if the given path isn't a mobile project itself.",
+					},
+					"device": map[string]interface{}{
+						"type":        "string",
+						"description": "Specific device UDID (iOS) or wireless serial like '192.168.1.42:5555' (Android). Empty = first paired wireless device for the platform. Run wireless_detect first to see your options.",
+					},
+					"platform": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"", "ios", "android"},
+						"description": "Force a platform when the project supports both. Empty = auto-pick.",
+					},
+					"config": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"", "Debug", "Release"},
+						"description": "Build configuration. Default Release.",
+					},
+					"no_launch": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Install but don't launch. Default false.",
+					},
+					"timeout_sec": map[string]interface{}{
+						"type":        "integer",
+						"description": "Hard timeout in seconds. Default 1800 (30 min).",
+						"minimum":     60,
+					},
+				},
+			},
+		},
+		{
+			"name":        "fork_task",
+			"description": "Switch the coding agent (claude/codex/opencode) for an existing task. Creates a NEW child task running on the requested runner with a bounded recent-context handoff (last few turns + assistant tail) — the parent task stays immutable. Use this instead of continue_task when the user wants a different runner/model/mode mid-conversation. Claude/Codex/OpenCode don't share session formats, so an in-place runner swap would corrupt session state. Returns the child task ID + runner + how many words of context were carried.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id", "runner", "input"},
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The parent task ID to fork from.",
+					},
+					"runner": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"claude", "codex", "opencode"},
+						"description": "Target runner for the child task.",
+					},
+					"model": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional model id. Empty = runner default.",
+					},
 					"mode": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional agent-mode override for this continuation (opencode: build, plan, custom)",
+						"description": "Optional opencode mode: 'build', 'plan', or any custom agent in the user's opencode.json. Empty = opencode defaultAgent. Other runners ignore.",
+					},
+					"input": map[string]interface{}{
+						"type":        "string",
+						"description": "User's new prompt for the forked agent.",
+					},
+					"context_words": map[string]interface{}{
+						"type":        "integer",
+						"description": "Word budget for the recent-context handoff. Default 1200. Clamped to [100, 5000].",
+						"minimum":     100,
+						"maximum":     5000,
 					},
 				},
 			},
@@ -94,6 +402,19 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_auth_factory_reset",
+			"description": "Reset local Yaver auth state on this machine, then restart sign-in from the canonical hosted backend. Useful when browser OAuth succeeded but the local agent kept validating against stale auth state or an old backend.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"headless": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Use device-code auth after reset instead of browser auth.",
+					},
+				},
 			},
 		},
 		// --- Runner Management ---
@@ -107,14 +428,15 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "switch_runner",
-			"description": "Switch the active AI runner. Available: claude, codex, opencode, aider.",
+			"description": "Switch the active AI runner. Available: claude, codex, aider.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"runner_id"},
 				"properties": map[string]interface{}{
 					"runner_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Runner ID (claude, codex, opencode, aider)",
+						"enum":        []string{"claude", "codex", "opencode"},
+						"description": "Runner ID — claude, codex, or opencode.",
 					},
 				},
 			},
@@ -126,6 +448,19 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "web_search",
+			"description": "Search the web. Use this for current information: competitor research, market gaps, library docs, error messages, news. Provider defaults to DuckDuckGo (free, no key); set provider=google or provider=bing to use paid backends if GOOGLE_CSE_KEY+GOOGLE_CSE_CX or BING_API_KEY are configured. Returns title/url/snippet for each hit.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"query"},
+				"properties": map[string]interface{}{
+					"query":    map[string]interface{}{"type": "string", "description": "The search query"},
+					"provider": map[string]interface{}{"type": "string", "description": "duckduckgo (default) | google | bing | auto", "default": "duckduckgo"},
+					"limit":    map[string]interface{}{"type": "integer", "description": "Max results (default 10, max 25)"},
+				},
 			},
 		},
 		{
@@ -159,11 +494,150 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			},
 		},
 		{
-			"name":        "refresh_projects",
-			"description": "Rescan the machine for git projects and return the current project list.",
+			"name":        "publish_config_get",
+			"description": "Load a project's Yaver publish config (.yaver/publish.yaml). Returns the existing config or a scaffold preview if none exists yet.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Project directory. Defaults to the agent work dir.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "publish_run",
+			"description": "Run a publish target from .yaver/publish.yaml. Local/self-hosted execution is primary; GitHub fallback is used only when allowed and requested.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Project directory. Defaults to the agent work dir.",
+					},
+					"target": map[string]interface{}{
+						"type":        "string",
+						"description": "Target ID from .yaver/publish.yaml. Defaults to defaultTarget.",
+					},
+					"allow_github_fallback": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Allow explicit GitHub workflow_dispatch fallback if the target/project permits it.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "publish_submit",
+			"description": "Alias of publish_run. Uses Yaver's uploader/register flow first, then the local submitter, then GitHub fallback only when allowed.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Project directory. Defaults to the agent work dir.",
+					},
+					"target": map[string]interface{}{
+						"type":        "string",
+						"description": "Target ID from .yaver/publish.yaml. Defaults to defaultTarget.",
+					},
+					"allow_github_fallback": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Allow explicit GitHub workflow_dispatch fallback if the target/project permits it.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "publish_upload",
+			"description": "Alias of publish_run for MCP clients that think in terms of an uploader. The target still archives/registers through Yaver first, then submits locally.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Project directory. Defaults to the agent work dir.",
+					},
+					"target": map[string]interface{}{
+						"type":        "string",
+						"description": "Target ID from .yaver/publish.yaml. Defaults to defaultTarget.",
+					},
+					"allow_github_fallback": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Allow explicit GitHub workflow_dispatch fallback if the target/project permits it.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "publish_ci_dispatch",
+			"description": "Alias of publish_run for CI-oriented clients. Use allow_github_fallback=true when you want GitHub dispatch as the fallback path after Yaver/local execution fails.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"dir": map[string]interface{}{
+						"type":        "string",
+						"description": "Project directory. Defaults to the agent work dir.",
+					},
+					"target": map[string]interface{}{
+						"type":        "string",
+						"description": "Target ID from .yaver/publish.yaml. Defaults to defaultTarget.",
+					},
+					"allow_github_fallback": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Allow explicit GitHub workflow_dispatch fallback if the target/project permits it.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "publish_list",
+			"description": "List recent publish runs started by this agent.",
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "publish_status",
+			"description": "Get the full status of one publish run.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"run_id"},
+				"properties": map[string]interface{}{
+					"run_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Publish run ID.",
+					},
+				},
+			},
+		},
+		// --- iOS Install Method ---
+		{
+			"name":        "get_ios_install_method",
+			"description": "Get the current iOS install method. Returns 'auto' (detect platform), 'native' (xcodebuild+xcrun), or 'bundle' (Hermes push to super-host). Auto resolves to native on macOS with Xcode, bundle otherwise.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "set_ios_install_method",
+			"description": "Set the iOS install method. 'auto' = detect platform (native on macOS+Xcode, bundle otherwise), 'native' = always xcodebuild+xcrun devicectl, 'bundle' = always Hermes bytecode push to super-host container.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"method"},
+				"properties": map[string]interface{}{
+					"method": map[string]interface{}{
+						"type":        "string",
+						"description": "Install method: auto, native, or bundle",
+						"enum":        []string{"auto", "native", "bundle"},
+					},
+					"persist": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Save to config for future sessions (default: true)",
+					},
+				},
 			},
 		},
 		// --- Relay Management ---
@@ -231,18 +705,6 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 				"type": "object",
 				"properties": map[string]interface{}{
 					"path": map[string]interface{}{"type": "string", "description": "Directory path (default: work dir)"},
-				},
-			},
-		},
-		{
-			"name":        "search_files",
-			"description": "Search for files by name pattern (glob) or content (grep).",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"pattern": map[string]interface{}{"type": "string", "description": "File name glob pattern (e.g. '*.go')"},
-					"content": map[string]interface{}{"type": "string", "description": "Search within file contents"},
-					"path":    map[string]interface{}{"type": "string", "description": "Search root (default: work dir)"},
 				},
 			},
 		},
@@ -370,6 +832,4229 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			},
 		},
 	}
+
+	// --- Tmux Session Management ---
+	tmuxTools := []map[string]interface{}{
+		{
+			"name":        "tmux_list_sessions",
+			"description": "List all tmux sessions on this machine with agent detection (claude, codex, aider, etc.) and their relationship to Yaver (adopted, forked-by-yaver, unrelated).",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "tmux_adopt_session",
+			"description": "Adopt an existing tmux PANE as a Yaver task. The session continues running and the pane's output is streamed as task output. Useful for bringing pre-existing agent sessions under Yaver management. One session split across several panes is several agents and therefore several tasks — pass `pane` to pick which one; without it the session's currently-active pane is adopted, which on a split window may not be the agent you meant.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_name"},
+				"properties": map[string]interface{}{
+					"session_name": map[string]interface{}{
+						"type":        "string",
+						"description": "Name of the tmux session to adopt",
+					},
+					"pane": map[string]interface{}{
+						"type":        "string",
+						"description": "tmux pane id to adopt, e.g. \"%37\" (from tmux_list_sessions). Omit to adopt the session's active pane.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "tmux_detach_session",
+			"description": "Detach (stop monitoring) an adopted tmux session. The tmux session keeps running but Yaver stops tracking it. The task is marked as stopped.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id"},
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The Yaver task ID of the adopted session",
+					},
+				},
+			},
+		},
+		{
+			"name":        "tmux_close_sessions",
+			"description": "Kill tmux sessions, closing live Claude/Codex/OpenCode/shell sessions. By default acts on this machine. Pass device_id for one owned remote machine, or all_machines=true to fan out to all online owned machines.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional remote device ID/alias. Empty means this machine.",
+					},
+					"all_machines": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Close tmux sessions on all online owned machines.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "tmux_send_input",
+			"description": "Send keyboard input to an adopted tmux session (e.g. type into a live Claude Code session running in a pane). The input is sent via tmux send-keys followed by Enter. Pass device_id to target a pane on another device.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id", "input"},
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The Yaver task ID of the adopted session",
+					},
+					"input": map[string]interface{}{
+						"type":        "string",
+						"description": "The text to send to the tmux session",
+					},
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional: target device whose daemon owns the tmux pane (omit for the local machine)",
+					},
+					"allow_shell": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Allow sending into a pane with NO coding agent running, where the text is EXECUTED as a shell command rather than read as a prompt. Defaults to false, which refuses such panes — leave it off unless you mean to run a command.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "tmux_stream",
+			"description": "Return a bounded snapshot of live tmux pane state (working / awaiting-input / idle / dead / no-agent). Pass session, pane (like %37), or leave empty for all panes. MCP calls are request/response; native/web clients needing continuous updates use the authenticated GET /tmux/stream SSE route.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"session": map[string]interface{}{"type": "string", "description": "Optional tmux session name to watch (its active pane)."},
+					"pane":    map[string]interface{}{"type": "string", "description": "Optional tmux pane id (e.g. %37) to watch."},
+				},
+			},
+		},
+		{
+			"name":        "git_sync_remote",
+			"description": "Deterministic safe sync of a remote repo: git pull --rebase --autostash against origin/<branch>, then an explicit non-force push to that origin branch. Active rebase conflicts are aborted and reported. If restoring the autostash conflicts after Git exits 0, nothing is pushed and the retained recovery stash + conflicted files are reported honestly. Pass work_dir for the repo to sync (defaults to the agent work dir).",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"work_dir": map[string]interface{}{"type": "string", "description": "Optional repo directory to sync (default: agent work dir)."},
+				},
+			},
+		},
+		{
+			"name":        "session_intent",
+			"description": "Classify a natural-language utterance as a session-lifecycle intent (English or Turkish) — 'start a new session', 'close the session', 'which sessions are running', 'switch to codex', 'yeni bir oturum başlat', 'tüm oturumları kapat'. Returns the parsed intent {action, runner?, sessionName?, needsChoice?, reason?} or nothing when the text is a coding prompt (which should be sent to a session via runner_turn). Use this from a voice/car/watch surface before routing speech to a runner, so lifecycle commands never get typed as prompts.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"text"},
+				"properties": map[string]interface{}{
+					"text": map[string]interface{}{"type": "string", "description": "The spoken or typed utterance to classify (English or Turkish)."},
+				},
+			},
+		},
+	}
+	tools = append(tools, tmuxTools...)
+
+	// --- Diagnostics & Status ---
+	diagnosticTools := []map[string]interface{}{
+		{
+			"name":        "yaver_doctor",
+			"description": "Run a comprehensive system health check — auth, agent, runners, relay servers, tunnels, network, tmux sessions. Like 'yaver doctor' on the CLI.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_status",
+			"description": "Show auth status, agent info, current runner, relay servers, and connection details. Like 'yaver status' on the CLI.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_devices",
+			"description": "List all registered devices across your account (dev machines, laptops, servers) with online/offline status.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_logs",
+			"description": "View the last N lines of the agent log file.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"lines": map[string]interface{}{
+						"type":        "integer",
+						"description": "Number of log lines to return (default 50, max 500)",
+					},
+				},
+			},
+		},
+		{
+			"name":        "yaver_clear_logs",
+			"description": "Clear the agent log file.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_help",
+			"description": "Answer 'how do I do X with Yaver?' questions. Call this whenever the user wonders what Yaver can do, which feature replaces which SaaS, or how to set something up. Accepts a topic keyword. Topics include: overview, solo-stack (costs + savings summary), forms, newsletter, jobs, image, pdf, oauth, mail, shortener, waitlist, docs, meetings, wizard, tmux, relay, tunnel, mobile, mcp, runners, tasks, auth.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"topic": map[string]interface{}{
+						"type":        "string",
+						"description": "Topic keyword (e.g. 'newsletter', 'solo-stack', 'meetings'). Pass empty string for an overview.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "yaver_onboard",
+			"description": "Drive the first-run onboarding flow for a fresh Yaver install. Returns the ordered checklist of steps the user still needs to complete (auth, bootstrap secret, tunnel, runner, etc.) based on the current config state. Call this before doing any setup work so you know where to start.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "yaver_self_host_onboarding",
+			"description": "High-level guided MCP flow for setting up Yaver on the user's own machine/VPS. Returns normie-friendly next steps for auth, serve, phone pairing, repo selection, runner setup, GitHub/GitLab credentials, and optional cloud upgrade. Can start GitHub/GitLab Device Flow when start_git_oauth=true.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"repo_query":        map[string]interface{}{"type": "string", "description": "Optional app/repo name the user wants to use"},
+					"runner":            map[string]interface{}{"type": "string", "description": "Preferred coding runner: codex, claude-code, opencode"},
+					"git_provider":      map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab", "auto"}, "description": "Provider for optional Device Flow"},
+					"start_git_oauth":   map[string]interface{}{"type": "boolean", "description": "Start GitHub/GitLab Device Flow now; user approves in browser"},
+					"include_cloud_cta": map[string]interface{}{"type": "boolean", "description": "Include the managed-cloud upgrade path in the response"},
+				},
+			},
+		},
+		{
+			"name":        "yaver_managed_cloud_onboarding",
+			"description": "High-level guided MCP flow for buying and onboarding a Yaver managed cloud machine. Always returns status and post-purchase repo/credential sync steps. Only creates a checkout URL when confirm_checkout=true AND accept_cost=true, after explicit user approval.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"repo_query":       map[string]interface{}{"type": "string", "description": "Optional app/repo name to deploy after the cloud machine is ready"},
+					"machine_type":     map[string]interface{}{"type": "string", "enum": []string{"cpu", "gpu"}, "description": "cpu default; gpu for heavier/model workloads"},
+					"region":           map[string]interface{}{"type": "string", "description": "eu default"},
+					"confirm_checkout": map[string]interface{}{"type": "boolean", "description": "Set true only after the user asks to buy/start checkout"},
+					"accept_cost":      map[string]interface{}{"type": "boolean", "description": "Must be true with confirm_checkout after explicit user approval of billable managed cloud"},
+					"start_git_oauth":  map[string]interface{}{"type": "boolean", "description": "Optionally start GitHub/GitLab Device Flow while preparing cloud onboarding"},
+					"git_provider":     map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab", "auto"}},
+				},
+			},
+		},
+		{
+			"name":        "yaver_ping",
+			"description": "Ping the agent to verify it's alive and measure round-trip time.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "machine_doctor",
+			"description": "Deep remote-machine connectivity doctor. For a deviceId/name/alias, checks Convex heartbeat freshness, local+target Tailscale state, raw ICMP ping per candidate, Yaver HTTP /info reachability, relay/tunnel/LAN candidate verdicts, runner auth, and CPU/RAM/disk. Use this when a remote box is online in Convex but not reachable from PC/mobile, or when Tailscale hides a relay/free-relay failure.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Device ID, unique prefix, alias, or exact/partial device name. Omit or pass local for this machine.",
+					},
+					"deviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Camel-case alias for mobile callers.",
+					},
+					"device": map[string]interface{}{
+						"type":        "string",
+						"description": "Device selector alias.",
+					},
+					"timeout_ms": map[string]interface{}{
+						"type":        "integer",
+						"description": "Per-candidate probe timeout. Default 4000. Candidates run concurrently.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "machine_roles_doctor",
+			"description": "Validate the saved runner/render split before dispatching work. Reads userSettings.machineRolesByProject, probes the configured AI runner and renderer with bounded transport checks, and returns a stable ready/code verdict so previews do not wait silently on an unreachable render box.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"projectName": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional project-scoped role row. Empty uses the account-wide favorite.",
+					},
+					"timeout_ms": map[string]interface{}{
+						"type":        "integer",
+						"description": "Per-candidate probe timeout. Default 4000. Runner and renderer checks are bounded.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "machine_roles",
+			"description": "Read, set, or clear the user's primary AI runner and primary renderer. Writes the same machineRolesForProject setting used by web/mobile, so Claude Code, Codex, task chats, and MCP clients share one runner/render routing source.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"action": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"get", "set", "clear"},
+						"description": "get current split, set runner/render, or clear back to single-box.",
+					},
+					"runner": map[string]interface{}{
+						"type":        "string",
+						"description": "Runner selector: deviceId, unique prefix, name, or alias.",
+					},
+					"runnerDeviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Runner device selector.",
+					},
+					"render": map[string]interface{}{
+						"type":        "string",
+						"description": "Renderer selector. Defaults to runner.",
+					},
+					"renderDeviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Renderer device selector.",
+					},
+					"secondaryRunner": map[string]interface{}{"type": "string"},
+					"secondaryRender": map[string]interface{}{"type": "string"},
+					"projectName":     map[string]interface{}{"type": "string"},
+					"workspace":       map[string]interface{}{"type": "string", "enum": []string{"runner-clone", "render-ssh"}},
+					"autoPush":        map[string]interface{}{"type": "string", "enum": []string{"never", "ask", "always"}},
+				},
+			},
+		},
+		{
+			"name":        "machine_repair",
+			"description": "Deterministically repair an owned machine. restart_agent asks this connected watchdog agent to use Yaver's backup SSH/mesh channel to restart the target's Yaver agent, then callers should re-run machine_doctor or machine_roles_doctor.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"deviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Target device ID, alias, or name.",
+					},
+					"device": map[string]interface{}{
+						"type":        "string",
+						"description": "Alias or name for the target device.",
+					},
+					"action": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"restart_agent"},
+						"description": "restart_agent is currently the only supported repair.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "agent_shutdown",
+			"description": "Gracefully shut down the Yaver agent. All running tasks will be stopped.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"confirm": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Must be true to confirm shutdown",
+					},
+				},
+				"required": []string{"confirm"},
+			},
+		},
+		{
+			"name":        "infra_summary",
+			"description": "Return the managed infra summary for this device: machine profile, services, relays, networking, sharing posture, and control capabilities.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "infra_service_action",
+			"description": "Start, stop, restart, or inspect a managed service. Scope can be dev (.yaver/services.yaml) or system (systemd/brew services).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"scope", "name", "action"},
+				"properties": map[string]interface{}{
+					"scope":  map[string]interface{}{"type": "string", "description": "dev or system"},
+					"name":   map[string]interface{}{"type": "string", "description": "Service name"},
+					"action": map[string]interface{}{"type": "string", "description": "start, stop, restart, or status"},
+				},
+			},
+		},
+		{
+			"name": "infra_power",
+			"description": "Run a managed power action. ALWAYS call action=report first: it is a read-only dry run " +
+				"that says which power actions this machine can actually perform, what each would really do " +
+				"(a container 'reboot' is not a host reboot), the exact command, and the recovery ETA. " +
+				"report needs no confirm; host_reboot, agent_restart and agent_shutdown all require confirm=true.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]interface{}{
+					"action": map[string]interface{}{
+						"type": "string",
+						"enum": []string{"report", "host_reboot", "agent_restart", "agent_shutdown"},
+						"description": "report = read-only capability dry run. host_reboot = power-cycle the machine. " +
+							"agent_restart = restart just the Yaver agent, machine stays up. agent_shutdown = stop the agent.",
+					},
+					"confirm": map[string]interface{}{"type": "boolean", "description": "Must be true for every action except report"},
+				},
+			},
+		},
+		{
+			"name":        "machine_remove",
+			"description": "Permanently remove Yaver from this owned host machine: unregister the device, remove auto-start service, wipe ~/.yaver, then shut the agent down. Requires confirm=true and phrase='delete my machine'.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"confirm", "phrase"},
+				"properties": map[string]interface{}{
+					"confirm": map[string]interface{}{"type": "boolean", "description": "Must be true to confirm permanent machine removal"},
+					"phrase":  map[string]interface{}{"type": "string", "description": "Must equal 'delete my machine'"},
+				},
+			},
+		},
+	}
+	tools = append(tools, diagnosticTools...)
+
+	// --- Config Management ---
+	configTools := []map[string]interface{}{
+		{
+			"name":        "config_set",
+			"description": "Set a Yaver configuration value. Keys: auto-start, auto-update, headless-keep-awake, require-private-recovery.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"key", "value"},
+				"properties": map[string]interface{}{
+					"key":   map[string]interface{}{"type": "string", "description": "Config key (auto-start, auto-update, headless-keep-awake, require-private-recovery)"},
+					"value": map[string]interface{}{"type": "string", "description": "Config value"},
+				},
+			},
+		},
+		{
+			"name":        "relay_test",
+			"description": "Test connectivity and latency to configured relay servers (or a specific URL).",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]interface{}{"type": "string", "description": "Optional: specific relay URL to test. If omitted, tests all configured relays."},
+				},
+			},
+		},
+		{
+			"name":        "relay_set_password",
+			"description": "Set the default relay server password used for all relay connections.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"password"},
+				"properties": map[string]interface{}{
+					"password": map[string]interface{}{"type": "string", "description": "The relay password"},
+				},
+			},
+		},
+		{
+			"name":        "relay_clear_password",
+			"description": "Remove the default relay server password.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+	}
+	tools = append(tools, configTools...)
+
+	// --- Tunnel Management ---
+	tunnelTools := []map[string]interface{}{
+		{
+			"name":        "tunnel_list",
+			"description": "List configured Cloudflare Tunnels.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "tunnel_add",
+			"description": "Add a Cloudflare Tunnel endpoint for NAT traversal.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"url"},
+				"properties": map[string]interface{}{
+					"url":              map[string]interface{}{"type": "string", "description": "Tunnel URL (e.g. https://my-tunnel.example.com)"},
+					"cf_client_id":     map[string]interface{}{"type": "string", "description": "CF Access Service Token Client ID (optional)"},
+					"cf_client_secret": map[string]interface{}{"type": "string", "description": "CF Access Service Token Client Secret (optional)"},
+					"label":            map[string]interface{}{"type": "string", "description": "Human-readable label (optional)"},
+				},
+			},
+		},
+		{
+			"name":        "tunnel_remove",
+			"description": "Remove a Cloudflare Tunnel by ID or URL.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"tunnel_id"},
+				"properties": map[string]interface{}{
+					"tunnel_id": map[string]interface{}{"type": "string", "description": "Tunnel ID or URL to remove"},
+				},
+			},
+		},
+		{
+			"name":        "tunnel_test",
+			"description": "Test connectivity to configured Cloudflare Tunnels (or a specific URL).",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url": map[string]interface{}{"type": "string", "description": "Optional: specific tunnel URL to test. If omitted, tests all configured tunnels."},
+				},
+			},
+		},
+	}
+	tools = append(tools, tunnelTools...)
+
+	// --- Session Transfer ---
+	sessionTools := []map[string]interface{}{
+		{
+			"name":        "session_list",
+			"description": "List AI agent sessions that can be transferred to another machine. Shows task ID, agent type, title, status, and whether the session is resumable.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "session_export",
+			"description": "Export an AI agent session as a portable bundle. The bundle contains conversation history, agent-specific session files, and optionally workspace info (git patch or tar). Use this to prepare a session for transfer to another machine.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id"},
+				"properties": map[string]interface{}{
+					"task_id":           map[string]interface{}{"type": "string", "description": "The task ID of the session to export"},
+					"include_workspace": map[string]interface{}{"type": "boolean", "description": "Include workspace files in the bundle (default: false)"},
+					"workspace_mode":    map[string]interface{}{"type": "string", "description": "How to include workspace: 'none', 'git' (git patch), or 'tar'. Default: 'git' if git repo, else 'none'."},
+				},
+			},
+		},
+		{
+			"name":        "session_import",
+			"description": "Import a session bundle that was exported from another machine. Creates a new task with the transferred session state. Supports Claude Code, Aider, Codex, Goose, Amp, OpenCode, and custom agents.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"bundle_json"},
+				"properties": map[string]interface{}{
+					"bundle_json": map[string]interface{}{"type": "string", "description": "The JSON string of the transfer bundle"},
+					"work_dir":    map[string]interface{}{"type": "string", "description": "Target working directory (default: agent's work dir)"},
+					"git_clone":   map[string]interface{}{"type": "boolean", "description": "Clone the git repo from the bundle's remote URL (default: false)"},
+				},
+			},
+		},
+		{
+			"name":        "session_transfer",
+			"description": "Transfer an AI agent session from THIS machine to another device in one step. The session (conversation history, agent state, optionally workspace) is packaged, sent to the target device, and imported there. The user can then continue working from the target device via mobile or desktop. Supports Claude Code, Aider, Codex, Goose, Amp, OpenCode sessions.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"task_id", "target_device"},
+				"properties": map[string]interface{}{
+					"task_id":           map[string]interface{}{"type": "string", "description": "The task ID of the session to transfer"},
+					"target_device":     map[string]interface{}{"type": "string", "description": "Target device ID or hostname prefix (from your registered devices)"},
+					"include_workspace": map[string]interface{}{"type": "boolean", "description": "Include workspace files (default: false)"},
+					"workspace_mode":    map[string]interface{}{"type": "string", "description": "How to transfer workspace: 'none', 'git', or 'tar'. Default: 'git'."},
+				},
+			},
+		},
+	}
+	tools = append(tools, sessionTools...)
+
+	// --- Exec (Remote Command Execution) ---
+	execTools := []map[string]interface{}{
+		{
+			"name":        "exec_command",
+			"description": "Execute a shell command on this machine or an owned remote Yaver device and return the output. Commands are validated through the sandbox (dangerous patterns like rm -rf / are blocked). Use this for quick commands — for long-running tasks, use create_task instead.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"command"},
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias to run on, e.g. a self-hosted dev box."},
+					"command":   map[string]interface{}{"type": "string", "description": "Shell command to execute"},
+					"work_dir":  map[string]interface{}{"type": "string", "description": "Working directory (default: agent's work dir)"},
+					"timeout":   map[string]interface{}{"type": "integer", "description": "Timeout in seconds (default: 300, max: 3600)"},
+				},
+			},
+		},
+	}
+	tools = append(tools, execTools...)
+
+	// --- Notifications ---
+	notifTools := []map[string]interface{}{
+		{
+			"name":        "notify",
+			"description": "Send a notification message to configured channels (Telegram, Discord, Slack, Teams). Useful for alerting yourself about task completions, deployments, or any important events.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"message"},
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{"type": "string", "description": "Message to send"},
+					"channel": map[string]interface{}{"type": "string", "description": "Specific channel: 'telegram', 'discord', 'slack', 'teams'. Omit to send to all."},
+				},
+			},
+		},
+		{
+			"name":        "integrations_list",
+			"description": "List all configured notification and developer integrations (Telegram, Discord, Slack, Teams, Linear, Jira, PagerDuty, Opsgenie, Email). Shows which are enabled and their settings.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "integrations_set",
+			"description": "Configure a notification or developer integration. Saves to config and activates immediately. Channels: telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"channel", "config"},
+				"properties": map[string]interface{}{
+					"channel": map[string]interface{}{"type": "string", "description": "Integration channel name (telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email)"},
+					"config":  map[string]interface{}{"type": "object", "description": "Channel-specific config. Examples: {\"webhookUrl\":\"...\",\"enabled\":true} for Discord/Slack/Teams, {\"apiKey\":\"...\",\"teamId\":\"...\",\"enabled\":true} for Linear, {\"routingKey\":\"...\",\"enabled\":true,\"onFailOnly\":true} for PagerDuty"},
+				},
+			},
+		},
+		{
+			"name":        "integrations_test",
+			"description": "Send a test notification to verify an integration is working. Specify a channel or omit to test all.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"channel": map[string]interface{}{"type": "string", "description": "Channel to test (telegram, discord, slack, teams, linear, jira, pagerduty, opsgenie, email). Omit to test all."},
+				},
+			},
+		},
+	}
+	tools = append(tools, notifTools...)
+
+	// --- Task Scheduling ---
+	scheduleTools := []map[string]interface{}{
+		{
+			"name":        "schedule_task",
+			"description": "Schedule a task to run at a specific time or on a recurring basis. Supports one-shot (runAt), interval-based (repeatInterval in minutes), and cron expressions.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"title"},
+				"properties": map[string]interface{}{
+					"title":           map[string]interface{}{"type": "string", "description": "Task prompt"},
+					"run_at":          map[string]interface{}{"type": "string", "description": "ISO8601 datetime for one-shot execution (e.g. '2026-03-22T15:00:00Z')"},
+					"repeat_interval": map[string]interface{}{"type": "integer", "description": "Repeat every N minutes"},
+					"cron":            map[string]interface{}{"type": "string", "description": "Cron expression (minute hour day month weekday), e.g. '0 9 * * 1-5' for weekdays at 9am"},
+					"max_runs":        map[string]interface{}{"type": "integer", "description": "Maximum number of runs (0 = unlimited)"},
+					"runner":          map[string]interface{}{"type": "string", "description": "Runner ID (claude, codex, aider, etc.)"},
+				},
+			},
+		},
+		{
+			"name":        "list_schedules",
+			"description": "List all scheduled and recurring tasks with their status, next run time, and history.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "cancel_schedule",
+			"description": "Cancel/remove a scheduled task by ID.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"schedule_id"},
+				"properties": map[string]interface{}{
+					"schedule_id": map[string]interface{}{"type": "string", "description": "Schedule ID to cancel"},
+				},
+			},
+		},
+	}
+	tools = append(tools, scheduleTools...)
+
+	// --- Routines (MCP-only Verb-mode schedules) ---
+	// Same Scheduler under the hood as schedule_task, but each routine
+	// targets an ops verb on any machine instead of a TaskManager
+	// task. Surface is intentionally MCP-only (no CLI / mobile / web /
+	// docs) — see routines_mcp.go header for rationale.
+	tools = append(tools, routineToolSchemas()...)
+
+	// schedule_self — runner-agnostic "future work" tool. Any runner calls
+	// it to schedule a continuation of its own work (the portable analog of
+	// a harness wake-up); creates a Task-mode schedule with the runner
+	// pinned and a carry-memo for continuity. See routines_mcp.go.
+	tools = append(tools, scheduleSelfToolSchema())
+
+	// --- Utility Tools ---
+	utilTools := []map[string]interface{}{
+		{
+			"name":        "search_files",
+			"description": "Search for files by name pattern in a directory. Uses glob patterns (e.g. '*.go', 'test_*.py'). Skips node_modules, .git, vendor, etc.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"pattern"},
+				"properties": map[string]interface{}{
+					"pattern":     map[string]interface{}{"type": "string", "description": "Glob pattern to match filenames (e.g. '*.go', 'README*', '*.test.ts')"},
+					"directory":   map[string]interface{}{"type": "string", "description": "Directory to search in (default: agent work dir)"},
+					"max_results": map[string]interface{}{"type": "integer", "description": "Max results (default: 50)"},
+				},
+			},
+		},
+		{
+			"name":        "search_content",
+			"description": "Search for text content inside files (like grep/ripgrep). Returns matching lines with file paths and line numbers.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"query"},
+				"properties": map[string]interface{}{
+					"query":       map[string]interface{}{"type": "string", "description": "Text or regex to search for"},
+					"directory":   map[string]interface{}{"type": "string", "description": "Directory to search in (default: agent work dir)"},
+					"max_results": map[string]interface{}{"type": "integer", "description": "Max results (default: 30)"},
+				},
+			},
+		},
+		{
+			"name":        "screenshot",
+			"description": "Take a screenshot of the current screen. Returns base64-encoded PNG. Works on macOS, Linux (with gnome-screenshot/scrot), and Windows.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		// --- Vision (runner-aware) ---
+		// Tools that turn pixels into text. For text-only clients (e.g. opencode
+		// + deepseek-v4-flash) the server ALSO auto-rewrites image-block results
+		// from screenshot tools into these text analyses — no vision model needed
+		// for OCR, and a configured provider (MISTRAL/OPENAI/ANTHROPIC key) adds
+		// a semantic verdict. See mcp_vision.go.
+		{
+			"name":        "vision_analyze_image",
+			"description": "Analyze an image and return TEXT (dims + on-device OCR + optional vision-LLM verdict). Accepts a file path, base64:..., data:image/...;base64,.., or http(s) URL as `source`, or a `session_id` of an open browser session for its current screenshot. `tier`: free (OCR only, $0) | fast (default) | quality (vision LLM). Optional `provider` (mistral|openai|anthropic) and `model` override the configured default. Use this when the user pastes a screenshot, a crash log image, or a UI failure and you cannot see pixels.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"source"},
+				"properties": map[string]interface{}{
+					"source":     map[string]interface{}{"type": "string", "description": "Image: file path, base64:..., data:image/...;base64,..., or http(s) URL. Or omit and pass session_id for a browser screenshot."},
+					"session_id": map[string]interface{}{"type": "string", "description": "Browser session whose current screenshot to analyze (alternative to source)."},
+					"question":   map[string]interface{}{"type": "string", "description": "What to look for. Defaults to a UI-inspection prompt."},
+					"tier":       map[string]interface{}{"type": "string", "enum": []string{"free", "fast", "quality"}, "description": "free = OCR only ($0, no LLM). fast/quality = OCR + vision LLM verdict."},
+					"provider":   map[string]interface{}{"type": "string", "enum": []string{"", "mistral", "openai", "anthropic"}, "description": "Vision provider override (default: configured/auto)."},
+					"model":      map[string]interface{}{"type": "string", "description": "Vision model override (e.g. pixtral-12b-2409, gpt-4o-mini)."},
+				},
+			},
+		},
+		{
+			"name":        "ui_inspect",
+			"description": "One-call per-surface UI inspection: capture the screen of a surface (browser | selenium | droid | simulator | mac) and return the full TEXT report (dimensions + on-device OCR + optional vision-LLM verdict). The optimized tool for 'is my UI broken?' loops on mobile and web development.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"surface"},
+				"properties": map[string]interface{}{
+					"surface":    map[string]interface{}{"type": "string", "enum": []string{"browser", "selenium", "droid", "simulator", "mac"}},
+					"session_id": map[string]interface{}{"type": "string", "description": "Browser or Selenium session id (required for browser/selenium)."},
+					"device":     map[string]interface{}{"type": "string", "description": "Android serial or iOS simulator device (optional)."},
+					"question":   map[string]interface{}{"type": "string", "description": "What to look for."},
+					"provider":   map[string]interface{}{"type": "string", "enum": []string{"", "mistral", "openai", "anthropic"}},
+					"model":      map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "testkit_visual_check",
+			"description": "Run the QA vision inspector on a Selenium session (or an image) and return PASS/WARN/FAIL + issues. The visual-assertion step for automated browser tests: start → navigate → snapshot (DOM/accessibility) → testkit_visual_check (pixel judgment). Requires a vision provider (MISTRAL/OPENAI/ANTHROPIC key) or an explicit provider/model.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Selenium session id to screenshot and judge."},
+					"image":      map[string]interface{}{"type": "string", "description": "Alternative to session_id: path / base64: / data: / URL."},
+					"question":   map[string]interface{}{"type": "string", "description": "Test-specific visual question. Defaults to a regression prompt."},
+					"provider":   map[string]interface{}{"type": "string", "enum": []string{"", "mistral", "openai", "anthropic"}},
+					"model":      map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "vision_pdf_extract",
+			"description": "Extract text from a PDF (crash logs, reports, docs). On macOS uses PDFKit (free, on-device); elsewhere requires pdftotext on PATH. Scanned/image-only PDFs return no text — OCR the pages with vision_analyze_image instead.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"source"},
+				"properties": map[string]interface{}{
+					"source": map[string]interface{}{"type": "string", "description": "PDF file path, base64:, data:, or http(s) URL."},
+				},
+			},
+		},
+		{
+			"name":        "vision_diff",
+			"description": "Pixel-diff two images (pure Go, $0): returns changed-pixel count, change ratio, and the bounding box of the changed region. Accepts paths, base64:, data:, or URLs. Use it to confirm a screenshot changed after an edit or that two renders are identical.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"source_a", "source_b"},
+				"properties": map[string]interface{}{
+					"source_a": map[string]interface{}{"type": "string", "description": "Image A (path / base64: / data: / URL)."},
+					"source_b": map[string]interface{}{"type": "string", "description": "Image B."},
+				},
+			},
+		},
+		{
+			"name":        "mac_ui_snapshot",
+			"description": "Dump the frontmost macOS app's UI element tree (role: title/value) via the Accessibility API — the Mac equivalent of droid_ui_texts / DOM. Free structural vision for the host screen. Requires Accessibility permission for the hosting terminal app.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "system_info",
+			"description": "Get system information: hostname, OS, CPU count, disk usage, memory, load average. Useful for monitoring headless machines.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "git_info",
+			"description": "Get git repository information. Operations: status (changed files), diff (diff stats), log (last 20 commits), branch (all branches), remote (remote URLs).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"operation"},
+				"properties": map[string]interface{}{
+					"operation": map[string]interface{}{"type": "string", "description": "Git operation: status, diff, log, branch, remote"},
+					"directory": map[string]interface{}{"type": "string", "description": "Git repo directory (default: agent work dir)"},
+				},
+			},
+		},
+	}
+	tools = append(tools, utilTools...)
+
+	// --- Developer Tools ---
+	devTools := []map[string]interface{}{
+		// Docker
+		{"name": "docker_ps", "description": "List running Docker containers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_logs", "description": "Get logs from a Docker container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string", "description": "Container name or ID"}, "tail": map[string]interface{}{"type": "integer", "description": "Number of lines (default: 100)"}}}},
+		{"name": "docker_exec", "description": "Execute a command inside a Docker container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container", "command"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string", "description": "Container name or ID"}, "command": map[string]interface{}{"type": "string", "description": "Command to execute"}}}},
+		{"name": "docker_images", "description": "List Docker images on the machine.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_compose", "description": "Run docker compose actions (up, down, ps, logs, restart).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "Action: up, down, ps, logs, restart"}, "directory": map[string]interface{}{"type": "string", "description": "Directory with docker-compose.yml"}}}},
+		// Test runner
+		{"name": "run_tests", "description": "Run the project's test suite. Auto-detects framework (go test, jest, vitest, pytest, cargo test, make test) or accepts a custom command.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"command": map[string]interface{}{"type": "string", "description": "Custom test command (auto-detected if empty)"}, "directory": map[string]interface{}{"type": "string", "description": "Project directory (default: agent work dir)"}}}},
+		// HTTP client
+		{"name": "http_request", "description": "Make an HTTP request (like curl). Returns status code and response body.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{"url": map[string]interface{}{"type": "string", "description": "Request URL"}, "method": map[string]interface{}{"type": "string", "description": "HTTP method (default: GET)"}, "headers": map[string]interface{}{"type": "object", "description": "Request headers as key-value pairs"}, "body": map[string]interface{}{"type": "string", "description": "Request body"}}}},
+		// Log tail
+		{"name": "tail_logs", "description": "Tail log files or system logs (journalctl on Linux, system.log on macOS).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "Log file path (default: system logs)"}, "lines": map[string]interface{}{"type": "integer", "description": "Number of lines (default: 100)"}}}},
+		// Clipboard
+		{"name": "clipboard_read", "description": "Read the system clipboard contents.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "clipboard_write", "description": "Write text to the system clipboard.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"content"}, "properties": map[string]interface{}{"content": map[string]interface{}{"type": "string", "description": "Text to copy to clipboard"}}}},
+		// Process management
+		{"name": "process_list", "description": "List running processes. Optionally filter by name.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"filter": map[string]interface{}{"type": "string", "description": "Filter processes by name"}}}},
+		{"name": "process_kill", "description": "Kill a process by PID.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pid"}, "properties": map[string]interface{}{"pid": map[string]interface{}{"type": "integer", "description": "Process ID"}, "signal": map[string]interface{}{"type": "string", "description": "Signal (default: TERM)"}}}},
+		{"name": "port_check", "description": "Check what process is using a specific port.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"port"}, "properties": map[string]interface{}{"port": map[string]interface{}{"type": "integer", "description": "Port number to check"}}}},
+		// Code quality
+		{"name": "lint", "description": "Run linter on the project. Auto-detects: go vet, eslint, ruff/flake8, clippy.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Project directory"}, "tool": map[string]interface{}{"type": "string", "description": "Custom lint command (auto-detected if empty)"}}}},
+		{"name": "format_code", "description": "Format code in the project. Auto-detects: gofmt, prettier, ruff/black, cargo fmt.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Project directory"}, "tool": map[string]interface{}{"type": "string", "description": "Custom format command (auto-detected if empty)"}}}},
+		{"name": "type_check", "description": "Run type checker. Auto-detects: tsc, go build, mypy/pyright.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Project directory"}, "tool": map[string]interface{}{"type": "string", "description": "Custom type check command (auto-detected if empty)"}}}},
+		// Package dependencies
+		{"name": "deps_outdated", "description": "Check for outdated dependencies. Auto-detects: npm, yarn, pnpm, pip, cargo, go.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Project directory"}, "manager": map[string]interface{}{"type": "string", "description": "Package manager (auto-detected if empty)"}}}},
+		{"name": "deps_audit", "description": "Audit dependencies for security vulnerabilities.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Project directory"}, "manager": map[string]interface{}{"type": "string", "description": "Package manager (auto-detected if empty)"}}}},
+		{"name": "deps_list", "description": "List installed project dependencies.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Project directory"}, "manager": map[string]interface{}{"type": "string", "description": "Package manager (auto-detected if empty)"}}}},
+		{"name": "mobile_project_actions_audit", "description": "Snowball guard for the mobile Projects surface: verifies every discovered mobile-capable project card has at least one supported operation (Hot Reload, Remote Runtime, or build). Catches the false-green class where inventory says a project exists but tapping it produces no runnable action. Optional directory restricts the audit to that path/prefix.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Optional project/workspace directory to audit. Empty = all discovered mobile projects."}}}},
+		{"name": "mobile_project_status", "description": "Inspect whether a React Native / Expo project on this machine or an owned remote Yaver device is ready for Yaver iPhone/Android testing. Reports package manager, missing local tools, dependency-install state, Hermes compiler availability, and whether Hermes has been built before.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias to inspect."}, "directory": map[string]interface{}{"type": "string", "description": "Project directory (default: agent work dir)"}}}},
+		{"name": "mobile_project_prepare", "description": "Prepare a fresh React Native / Expo clone on this machine or an owned remote Yaver device by auto-installing project dependencies when the machine has the right package manager available. Returns readiness fields after the install attempt.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias to prepare."}, "directory": map[string]interface{}{"type": "string", "description": "Project directory (default: agent work dir)"}}}},
+		{"name": "mobile_test_open", "description": "Open the Yaver mobile app (RN-web) for testing at a REAL mobile viewport. mode=open (default) launches a headed Chromium window at iPhone 13 viewport with touch + a persistent profile so a human can sign in and test; mode=verify runs the headless closed-loop assertion that the task-detail LiveConsoleSection rendered the streamed opencode console (e2e/verify_live_console.mjs). Ensures Metro is up first. Never substitute a narrowed desktop Chrome window for the mobile app — RN-web renders a different component tree without the device context (AGENTS.md viewport rule).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"mode": map[string]interface{}{"type": "string", "enum": []string{"open", "verify"}, "description": "open = headed window for a human (default). verify = headless closed-loop assertion."}, "profile": map[string]interface{}{"type": "string", "description": "Persistent profile for mode=open. Default ~/.yaver-e2e-profile; use a fresh one when the default is locked by another Chromium instance."}, "url": map[string]interface{}{"type": "string", "description": "Mobile web URL. Default http://localhost:8081 (Metro)."}, "timeout_sec": map[string]interface{}{"type": "integer", "description": "Max seconds to wait (verify mode, and Metro start in open mode). Default 180."}}}},
+		{
+			"name":        "sandbox_run",
+			"description": "Run the Mobile Sandbox edit loop from a headless MCP client. Ships a phone-style React Native / Expo source tree to this machine or an owned remote Yaver device, runs OpenCode with GLM there, and returns an EditPlan-shaped diff. The GLM key stays on the machine that runs the tool; configure it with runner_auth_set/runner_auth_setup or ZAI_API_KEY/GLM_API_KEY.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"prompt", "files"},
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias to run OpenCode/GLM on. Empty = this machine."},
+					"prompt":    map[string]interface{}{"type": "string", "description": "Requested change to make in the sandbox source tree."},
+					"files": map[string]interface{}{
+						"type":        "array",
+						"description": "Phone sandbox files as {path, content}. Paths are posix-relative and may not escape the project root.",
+						"items": map[string]interface{}{
+							"type":     "object",
+							"required": []string{"path", "content"},
+							"properties": map[string]interface{}{
+								"path":    map[string]interface{}{"type": "string"},
+								"content": map[string]interface{}{"type": "string"},
+							},
+						},
+					},
+					"framework": map[string]interface{}{"type": "string", "description": "Framework label for prompting, default React Native (Expo)."},
+					"schema":    map[string]interface{}{"type": "object", "description": "Optional phone-project backend schema context."},
+					"runner":    map[string]interface{}{"type": "string", "description": "Only opencode is currently supported."},
+					"timeoutMs": map[string]interface{}{"type": "integer", "description": "Runner timeout in milliseconds, default 180000, max 600000."},
+				},
+			},
+		},
+		{
+			"name":        "mobile_hermes_doctor",
+			"description": "Agent-friendly doctor for the common React Native / Expo phone reload path. Resolves the mobile project inside a monorepo, checks local tools, dependency install state, Hermes compiler readiness, prior bundle state, and native-module compatibility, then returns the exact MCP next actions to prepare/build before reloading in Yaver mobile.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional owned Yaver agent device id/name/alias that should run the diagnosis. Hermes doctoring inspects a CHECKOUT, so the honest answer comes from the machine holding the project — use this to diagnose a remote worker's copy instead of this one. Omitted = diagnose locally.",
+					},
+					"directory": map[string]interface{}{"type": "string", "description": "Project or monorepo directory (default: agent work dir)"},
+					"availableModules": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Optional native module names reported by the paired Yaver mobile runtime",
+					},
+					"availableModuleMap": map[string]interface{}{
+						"type":                 "object",
+						"additionalProperties": map[string]interface{}{"type": "string"},
+						"description":          "Optional native module name to version map from the paired Yaver mobile runtime",
+					},
+				},
+			},
+		},
+		{"name": "mobile_project_build", "description": "Start the project's dev server if needed and build the Hermes bundle that Yaver loads on the phone. Works locally or on an owned remote Yaver device. This is the MCP path for a contributor on WSL/Linux/macOS to prepare a fresh Expo / React Native clone for real iPhone/Android testing without TestFlight.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias to build on."}, "directory": map[string]interface{}{"type": "string", "description": "Project directory (default: agent work dir)"}, "framework": map[string]interface{}{"type": "string", "description": "Optional framework override (expo or react-native)"}, "platform": map[string]interface{}{"type": "string", "description": "Target platform (default: ios)"}}}},
+		{
+			"name":        "device_broadcast_command",
+			"description": "Push a BlackBox command directly to a paired SDK device (or broadcast to all) without needing an active dev-server. This is the Path-C/8 fallback for the cross-device reload workflow: Phone A drives, Phone B receives, no Metro bundler involved — both phones just share a Yaver agent (managed-cloud, self-hosted, or local). Examples of useful commands: \"reload\", \"reload_bundle\", \"open_app\". Returns { ok, mode: \"scoped\"|\"broadcast\"|\"no_blackbox\", targetDeviceId?, reachedSession? }.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"command"},
+				"properties": map[string]interface{}{
+					"command":          map[string]interface{}{"type": "string", "description": "BlackBox command name — what the SDK listener acts on (e.g. \"reload\", \"reload_bundle\", \"open_app\")."},
+					"data":             map[string]interface{}{"type": "object", "description": "Optional command payload passed through verbatim to the SDK listener."},
+					"target_device_id": map[string]interface{}{"type": "string", "description": "When set, scoped to that one SDK session. Empty/omitted = broadcast to all subscribed devices."},
+				},
+			},
+		},
+		{
+			"name":        "mobile_hermes_reload",
+			"description": "Trigger a Hermes hot-reload of the React Native / Expo app currently under test. Thin wrapper over POST /dev/reload — computes a native-fingerprint delta against the dev-server baseline and broadcasts a `hot_reload` (or `native_rebuild_required`) command via the BlackBox SSE channel to all connected SDK devices. Use this when an MCP client (Claude Code, glass-terminal vibe chip, ChatGPT) wants the app reloaded without an LLM round-trip. Returns { ok, changeClass: \"js_only\"|\"native_rebuild_required\"|\"unknown\", nativeChanges?, nativeChangesDetected }.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"target_device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional SDK device id to scope the broadcast to. Empty/omitted = broadcast to ALL subscribed devices. Used by the Path-C cross-device flow where Phone A drives a reload on Phone B.",
+					},
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional owned Yaver agent device id/name/alias that should perform the reload. Use this for remote boxes; target_device_id is only the receiving mobile SDK session.",
+					},
+					"mode": map[string]interface{}{
+						"type":        "string",
+						"description": "Reload mode: \"dev\" (Metro fast-refresh, default) or \"bundle\" (push pre-built bundle).",
+					},
+				},
+			},
+		},
+		{
+			"name":        "mobile_deploy_to_phone",
+			"description": "One-shot \"put my app on my phone\": take the React Native / Expo app in this directory and get it running inside the Yaver app on the paired phone — no TestFlight, no Xcode, no native install. Chains the whole Hermes flow in order: checks the project (mobile_project_status), installs dependencies if missing (mobile_project_prepare), diagnoses blockers and native-module compatibility (mobile_hermes_doctor), compiles the Hermes bundle (mobile_project_build), and reloads it onto the phone (mobile_hermes_reload). Stops at the first blocker and returns a single next_action sentence plus a per-step trace. This is the verb to call when a human says \"deploy/preview my app on my phone\" — prefer it over calling the five mobile_* tools by hand. The phone must have the Yaver app open and signed in with the same account. Returns { ok, done, steps[], blockers?, next_actions?, next_action }.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"directory": map[string]interface{}{
+						"type":        "string",
+						"description": "Project directory (default: agent work dir). Should be a React Native / Expo app or a monorepo containing one (apps/mobile, mobile/, …).",
+					},
+					"device_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional owned Yaver device id/name/alias to build on. Empty = this machine (the common case: agent, project, and daemon all local).",
+					},
+					"platform": map[string]interface{}{
+						"type":        "string",
+						"description": "Target platform for the Hermes bundle: \"ios\" (default) or \"android\".",
+					},
+					"framework": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional framework override (expo or react-native); auto-detected when omitted.",
+					},
+					"mode": map[string]interface{}{
+						"type":        "string",
+						"description": "Reload mode passed to the final step: \"dev\" (Metro fast-refresh, default) or \"bundle\".",
+					},
+					"plan_only": map[string]interface{}{
+						"type":        "boolean",
+						"description": "When true, run only the fast checks (status/prepare/doctor) and return the ordered remaining steps instead of running the slow build + reload. Use when your tool-call timeout is short.",
+					},
+				},
+			},
+		},
+		// Yaver plan billing (buyer-side — buy/manage Yaver's OWN Relay Pro /
+		// Cloud Workspace products from the terminal; distinct from the
+		// seller-side lemonsqueezy_* tools)
+		{"name": "yaver_billing_status", "description": "Check the user's current Yaver plan: Free, Relay Pro, or Cloud Workspace; included Cloud Workspace active-hours left, and managed-inference flag if present. Call this first to know if they've already purchased before offering a checkout.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "yaver_billing_checkout", "description": "Get a payment link to subscribe to a Yaver plan. plan=\"relay\" = Relay Pro ($9/mo private relay). plan=\"workspace\" = Cloud Workspace ($29/mo saved cloud workspace, Relay Pro included, BYO Claude/Codex/OpenCode). The buyer MUST pay with the same email they signed into Yaver with. Call yaver_billing_status first to avoid offering a plan they already have.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"plan": map[string]interface{}{"type": "string", "description": "\"relay\" ($9/mo Relay Pro) or \"workspace\" ($29/mo Cloud Workspace). Default: relay."}}}},
+		{"name": "yaver_billing_manage", "description": "Get the link to manage an existing Yaver subscription — update payment, change plan, or cancel. Returns the Yaver dashboard billing URL (LemonSqueezy receipt emails also link to the customer portal for cancellation).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "git_prs", "description": "List pull requests or merge requests from the current repo via a neutral git surface. Payload {provider?: auto|github|gitlab, directory?, state?}.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "auto, github, or gitlab"}, "directory": map[string]interface{}{"type": "string", "description": "Repo directory"}, "state": map[string]interface{}{"type": "string", "description": "open/opened, closed, merged, or all"}, "limit": map[string]interface{}{"type": "integer", "description": "Advisory limit (max 50)"}}}},
+		{"name": "git_issues", "description": "List issues from the current repo via a neutral git surface. Payload {provider?: auto|github|gitlab, directory?, state?}.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "auto, github, or gitlab"}, "directory": map[string]interface{}{"type": "string", "description": "Repo directory"}, "state": map[string]interface{}{"type": "string", "description": "open/opened, closed, or all"}, "limit": map[string]interface{}{"type": "integer", "description": "Advisory limit (max 50)"}}}},
+		{"name": "git_ci_status", "description": "Show recent CI status from the current repo via a neutral git surface. Payload {provider?: auto|github|gitlab, directory?}.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "auto, github, or gitlab"}, "directory": map[string]interface{}{"type": "string", "description": "Repo directory"}}}},
+		// GitHub
+		{"name": "github_prs", "description": "List pull requests from the current repo (requires gh CLI).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Repo directory"}, "state": map[string]interface{}{"type": "string", "description": "Filter: open, closed, merged, all (default: open)"}}}},
+		{"name": "github_issues", "description": "List issues from the current repo (requires gh CLI).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Repo directory"}, "state": map[string]interface{}{"type": "string", "description": "Filter: open, closed, all (default: open)"}}}},
+		{"name": "github_ci_status", "description": "Show recent GitHub Actions workflow runs and their status (requires gh CLI).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Repo directory"}}}},
+	}
+	tools = append(tools, devTools...)
+
+	// --- Developer Tools 2 ---
+	devTools2 := []map[string]interface{}{
+		// Database
+		{"name": "db_query", "description": "Execute a database query via CLI (sqlite3, psql, mysql, redis-cli). For adapter-routed queries use data_query.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"driver", "query"}, "properties": map[string]interface{}{"driver": map[string]interface{}{"type": "string", "description": "Database: sqlite, postgres, mysql, redis"}, "dsn": map[string]interface{}{"type": "string", "description": "Connection string (or path for SQLite). Uses DATABASE_URL env if empty for postgres."}, "query": map[string]interface{}{"type": "string", "description": "SQL query or Redis command"}}}},
+		{"name": "db_schema", "description": "Show database schema/tables.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"driver"}, "properties": map[string]interface{}{"driver": map[string]interface{}{"type": "string", "description": "Database: sqlite, postgres, mysql"}, "dsn": map[string]interface{}{"type": "string", "description": "Connection string"}}}},
+		// Network diagnostics
+		{"name": "dns_lookup", "description": "DNS lookup for a hostname.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string", "description": "Hostname to lookup"}, "type": map[string]interface{}{"type": "string", "description": "Record type: A, AAAA, MX, CNAME, TXT (default: A)"}}}},
+		{"name": "ping", "description": "Ping a host.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string", "description": "Host to ping"}, "count": map[string]interface{}{"type": "integer", "description": "Number of pings (default: 4)"}}}},
+		{"name": "ssl_check", "description": "Check SSL/TLS certificate for a domain — expiry, issuer, SANs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string", "description": "Domain to check (e.g. yaver.io)"}}}},
+		{"name": "http_timing", "description": "Measure HTTP response time and get basic info.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{"url": map[string]interface{}{"type": "string", "description": "URL to measure"}}}},
+		// Data tools
+		{"name": "base64", "description": "Base64 encode or decode text.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action", "input"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "encode or decode"}, "input": map[string]interface{}{"type": "string", "description": "Text to encode/decode"}}}},
+		{"name": "hash", "description": "Hash text with MD5 or SHA256.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"input"}, "properties": map[string]interface{}{"input": map[string]interface{}{"type": "string", "description": "Text to hash"}, "algorithm": map[string]interface{}{"type": "string", "description": "md5 or sha256 (default: sha256)"}}}},
+		{"name": "uuid", "description": "Generate a new UUID v4.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "jq", "description": "Query/transform JSON with jq expressions.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"expression", "input"}, "properties": map[string]interface{}{"expression": map[string]interface{}{"type": "string", "description": "jq expression (e.g. '.data[] | .name')"}, "input": map[string]interface{}{"type": "string", "description": "JSON input"}}}},
+		{"name": "regex_test", "description": "Test a regex pattern against input text.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pattern", "input"}, "properties": map[string]interface{}{"pattern": map[string]interface{}{"type": "string", "description": "Regex pattern"}, "input": map[string]interface{}{"type": "string", "description": "Text to match against"}}}},
+		// Archive
+		{"name": "archive_create", "description": "Create a zip or tar.gz archive.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"source"}, "properties": map[string]interface{}{"source": map[string]interface{}{"type": "string", "description": "File or directory to archive"}, "output": map[string]interface{}{"type": "string", "description": "Output filename (auto-generated if empty)"}, "format": map[string]interface{}{"type": "string", "description": "zip or tar.gz (default: tar.gz)"}}}},
+		{"name": "archive_extract", "description": "Extract a zip or tar.gz archive.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"path"}, "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "Archive file path"}, "destination": map[string]interface{}{"type": "string", "description": "Extraction directory (default: current)"}}}},
+		// System services
+		{"name": "service_status", "description": "Check status of a system service (systemd on Linux, brew services on macOS).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string", "description": "Service name (e.g. nginx, postgresql, docker)"}}}},
+		{"name": "service_action", "description": "Start, stop, restart, enable, or disable a system service.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name", "action"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string", "description": "Service name"}, "action": map[string]interface{}{"type": "string", "description": "start, stop, restart, enable, disable"}}}},
+		{"name": "service_list", "description": "List system services and their status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Benchmark
+		{"name": "benchmark", "description": "Run project benchmarks. Auto-detects: go bench, cargo bench, npm bench.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"command": map[string]interface{}{"type": "string", "description": "Custom benchmark command (auto-detected if empty)"}, "directory": map[string]interface{}{"type": "string", "description": "Project directory"}}}},
+		// Diff
+		{"name": "diff", "description": "Compare two files and show differences.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"path_a", "path_b"}, "properties": map[string]interface{}{"path_a": map[string]interface{}{"type": "string", "description": "First file path"}, "path_b": map[string]interface{}{"type": "string", "description": "Second file path"}}}},
+		// Environment
+		{"name": "env_list", "description": "List environment variables (secrets are masked).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"filter": map[string]interface{}{"type": "string", "description": "Filter by name (case-insensitive)"}}}},
+		{"name": "env_read", "description": "Read a .env file (secrets are masked).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "Path to .env file (default: .env)"}}}},
+		// Crontab
+		{"name": "crontab", "description": "List or add system crontab entries.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list or add (default: list)"}, "entry": map[string]interface{}{"type": "string", "description": "Cron entry to add (required for 'add')"}}}},
+		// Cloud CLI
+		{"name": "cloud_cli", "description": "Run AWS, GCP, or Azure CLI commands.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider", "args"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "aws, gcloud, or az"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "CLI arguments (e.g. ['s3', 'ls'])"}}}},
+	}
+	tools = append(tools, devTools2...)
+
+	// --- Lifestyle & Home Automation ---
+	lifestyleTools := []map[string]interface{}{
+		// Home Assistant
+		{"name": "ha_states", "description": "Get Home Assistant entity states. Control Xiaomi, Philips Hue, or any HA-connected device. Filter by entity type (light, switch, vacuum, climate, sensor, etc.).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"filter": map[string]interface{}{"type": "string", "description": "Filter entities (e.g. 'light', 'vacuum', 'switch', 'climate', 'sensor')"}, "url": map[string]interface{}{"type": "string", "description": "HA URL (default: http://homeassistant.local:8123)"}, "token": map[string]interface{}{"type": "string", "description": "HA long-lived access token"}}}},
+		{"name": "ha_service", "description": "Call a Home Assistant service — turn on/off lights, start vacuum, set thermostat, trigger scenes. Works with Xiaomi, Hue, IKEA, and all HA integrations.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"domain", "service"}, "properties": map[string]interface{}{"domain": map[string]interface{}{"type": "string", "description": "Service domain (e.g. light, switch, vacuum, climate, scene, automation)"}, "service": map[string]interface{}{"type": "string", "description": "Service name (e.g. turn_on, turn_off, start, set_temperature, toggle)"}, "data": map[string]interface{}{"type": "object", "description": "Service data (e.g. {\"entity_id\": \"vacuum.xiaomi\", \"brightness\": 255})"}, "url": map[string]interface{}{"type": "string", "description": "HA URL"}, "token": map[string]interface{}{"type": "string", "description": "HA token"}}}},
+		{"name": "ha_toggle", "description": "Toggle a Home Assistant entity on/off (light, switch, vacuum, etc.).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"entity_id"}, "properties": map[string]interface{}{"entity_id": map[string]interface{}{"type": "string", "description": "Entity ID (e.g. vacuum.xiaomi_roborock, light.living_room, switch.desk_lamp)"}, "url": map[string]interface{}{"type": "string", "description": "HA URL"}, "token": map[string]interface{}{"type": "string", "description": "HA token"}}}},
+		// MQTT
+		{"name": "mqtt_publish", "description": "Publish an MQTT message (for IoT devices, home automation).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"topic", "message"}, "properties": map[string]interface{}{"topic": map[string]interface{}{"type": "string", "description": "MQTT topic"}, "message": map[string]interface{}{"type": "string", "description": "Message payload"}, "broker": map[string]interface{}{"type": "string", "description": "MQTT broker (default: localhost)"}}}},
+		// Desktop control
+		{"name": "notify", "description": "Send a desktop notification.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"title", "message"}, "properties": map[string]interface{}{"title": map[string]interface{}{"type": "string", "description": "Notification title"}, "message": map[string]interface{}{"type": "string", "description": "Notification body"}}}},
+		{"name": "open_url", "description": "Open a URL in the default browser.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{"url": map[string]interface{}{"type": "string", "description": "URL to open"}}}},
+		{"name": "volume", "description": "Get or set system volume.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "get, set, mute, or unmute"}, "level": map[string]interface{}{"type": "integer", "description": "Volume level 0-100 (for set)"}}}},
+		{"name": "screen_lock", "description": "Lock the screen.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "say", "description": "Text-to-speech — speak text aloud.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"text"}, "properties": map[string]interface{}{"text": map[string]interface{}{"type": "string", "description": "Text to speak"}}}},
+		{"name": "brightness", "description": "Get or set screen brightness (macOS).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "get or set"}, "level": map[string]interface{}{"type": "integer", "description": "Brightness 0-100 (for set)"}}}},
+		// Music
+		{"name": "music", "description": "Control music playback (Spotify on macOS, playerctl on Linux).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "play, pause, next, previous, now_playing"}}}},
+		// Weather
+		{"name": "weather", "description": "Get current weather for a location.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"location": map[string]interface{}{"type": "string", "description": "City name (default: auto-detect)"}}}},
+		// System extras
+		{"name": "battery", "description": "Get battery status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "disk_usage", "description": "Show disk usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "Path to check (default: /)"}}}},
+		{"name": "disk_manage", "description": "Manage disk space safely (allowlist-only reclaim of known-regenerable artifacts: go-build cache, opencode /tmp runtime files, superseded agent versions, stale yaver-* tmp dirs). scan = read-only inventory of what is reclaimable. clear = delete the named classes (dryRun defaults to true — pass dryRun:false to actually delete). sweep = threshold-gated clear (only acts at/above the used-percent threshold, default 85). Never touches secrets, keys, git work trees, or anything outside the allowlist. This is the fix for 'no space left on device' mid-build — the deploy preflight now fails fast naming this tool as the route to fix.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "enum": []string{"scan", "clear", "sweep"}, "description": "scan (read-only) | clear (explicit classes, dryRun-first) | sweep (threshold-gated)"}, "path": map[string]interface{}{"type": "string", "description": "Filesystem path to check (default: /)"}, "classes": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Classes to clear (clear only): opencode-tmp-so, yaver-old-agents, yaver-tmp-dirs, go-build-cache"}, "dryRun": map[string]interface{}{"type": "boolean", "description": "clear: preview without deleting (default true). sweep: default false (threshold crossing is the opt-in)."}, "thresholdPercent": map[string]interface{}{"type": "integer", "description": "sweep: used-percent at/above which deletion is allowed (default 85)"}, "minAgeMinutes": map[string]interface{}{"type": "integer", "description": "Only consider artifacts idle for at least this long (default 60)"}}}},
+		{"name": "wifi_info", "description": "Get WiFi network information.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "public_ip", "description": "Get public IP address.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "uptime", "description": "Show system uptime.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "speed_test", "description": "Run an internet speed test.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "site_check", "description": "Check if a website is up and measure latency.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{"url": map[string]interface{}{"type": "string", "description": "URL to check"}}}},
+		// Utilities
+		{"name": "password_gen", "description": "Generate a secure random password.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"length": map[string]interface{}{"type": "integer", "description": "Password length (default: 24)"}, "no_symbols": map[string]interface{}{"type": "boolean", "description": "Omit special characters"}}}},
+		{"name": "qr_code", "description": "Generate a QR code from text.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"text"}, "properties": map[string]interface{}{"text": map[string]interface{}{"type": "string", "description": "Text to encode"}}}},
+		{"name": "timer", "description": "Set a timer with desktop notification when done.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"seconds"}, "properties": map[string]interface{}{"seconds": map[string]interface{}{"type": "integer", "description": "Timer duration in seconds"}, "label": map[string]interface{}{"type": "string", "description": "Timer label"}}}},
+		{"name": "calculate", "description": "Evaluate a math expression.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"expression"}, "properties": map[string]interface{}{"expression": map[string]interface{}{"type": "string", "description": "Math expression (e.g. '2^10', 'sqrt(144)', '3.14 * 5^2')"}}}},
+		{"name": "world_clock", "description": "Show current time in multiple timezones.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"timezones": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Timezone names (default: UTC, New York, London, Istanbul, Tokyo)"}}}},
+		{"name": "countdown", "description": "Count down to a specific date.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"date"}, "properties": map[string]interface{}{"date": map[string]interface{}{"type": "string", "description": "Target date (e.g. 2026-04-01)"}}}},
+		{"name": "convert_units", "description": "Convert between units (temperature, distance, weight, data sizes).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"value", "from", "to"}, "properties": map[string]interface{}{"value": map[string]interface{}{"type": "number", "description": "Value to convert"}, "from": map[string]interface{}{"type": "string", "description": "Source unit (c, f, km, mi, kg, lb, gb, mb, bytes)"}, "to": map[string]interface{}{"type": "string", "description": "Target unit"}}}},
+	}
+	tools = append(tools, lifestyleTools...)
+
+	// --- IoT & Smart Devices ---
+	iotTools := []map[string]interface{}{
+		// Philips Hue (local bridge, no cloud)
+		{"name": "hue_lights", "description": "List all Philips Hue lights on your bridge.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bridge_ip", "api_key"}, "properties": map[string]interface{}{"bridge_ip": map[string]interface{}{"type": "string", "description": "Hue bridge IP"}, "api_key": map[string]interface{}{"type": "string", "description": "Hue API key"}}}},
+		{"name": "hue_control", "description": "Control a Philips Hue light — on, off, toggle, brightness, color.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bridge_ip", "api_key", "light_id", "action"}, "properties": map[string]interface{}{"bridge_ip": map[string]interface{}{"type": "string"}, "api_key": map[string]interface{}{"type": "string"}, "light_id": map[string]interface{}{"type": "string", "description": "Light number (e.g. '1')"}, "action": map[string]interface{}{"type": "string", "description": "on, off, toggle, brightness, color"}, "brightness": map[string]interface{}{"type": "integer", "description": "0-254 for brightness, 0-65535 for color hue"}}}},
+		{"name": "hue_scenes", "description": "List Hue scenes.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bridge_ip", "api_key"}, "properties": map[string]interface{}{"bridge_ip": map[string]interface{}{"type": "string"}, "api_key": map[string]interface{}{"type": "string"}}}},
+		// Shelly (local HTTP, no hub)
+		{"name": "shelly_status", "description": "Get Shelly device status (smart plug, relay, light).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string", "description": "Shelly device IP"}}}},
+		{"name": "shelly_control", "description": "Control a Shelly relay/plug — on, off, toggle.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip", "action"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}, "action": map[string]interface{}{"type": "string", "description": "on, off, toggle"}, "channel": map[string]interface{}{"type": "integer", "description": "Relay channel (default: 0)"}}}},
+		{"name": "shelly_power", "description": "Get power consumption from a Shelly device.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}}}},
+		// Elgato Key Light
+		{"name": "elgato_status", "description": "Get Elgato Key Light status (for streaming/video calls).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string", "description": "Key Light IP (default: elgato-key-light.local)"}}}},
+		{"name": "elgato_control", "description": "Control Elgato Key Light — on/off, brightness, color temperature.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}, "on": map[string]interface{}{"type": "boolean", "description": "Turn on/off"}, "brightness": map[string]interface{}{"type": "integer", "description": "Brightness 0-100"}, "temperature": map[string]interface{}{"type": "integer", "description": "Color temp 143-344 (warm to cool)"}}}},
+		// Nanoleaf
+		{"name": "nanoleaf", "description": "Control Nanoleaf light panels — on, off, brightness, effects.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip", "token", "action"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}, "token": map[string]interface{}{"type": "string", "description": "Nanoleaf auth token"}, "action": map[string]interface{}{"type": "string", "description": "on, off, brightness, effects, status"}, "brightness": map[string]interface{}{"type": "integer"}}}},
+		// Tasmota
+		{"name": "tasmota", "description": "Send commands to Tasmota-flashed devices (smart plugs, relays).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip", "command"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string"}, "command": map[string]interface{}{"type": "string", "description": "Tasmota command (e.g. Power ON, Status, Power TOGGLE)"}}}},
+		// Govee LED strips
+		{"name": "govee_devices", "description": "List Govee devices (LED strips, lights).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"api_key"}, "properties": map[string]interface{}{"api_key": map[string]interface{}{"type": "string", "description": "Govee API key"}}}},
+		{"name": "govee_control", "description": "Control Govee lights/LED strips — on, off, brightness, color.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"api_key", "device", "model", "action"}, "properties": map[string]interface{}{"api_key": map[string]interface{}{"type": "string"}, "device": map[string]interface{}{"type": "string", "description": "Device address"}, "model": map[string]interface{}{"type": "string", "description": "Device model"}, "action": map[string]interface{}{"type": "string", "description": "on, off, brightness, color"}, "brightness": map[string]interface{}{"type": "integer"}, "color": map[string]interface{}{"type": "object", "description": "{r: 255, g: 0, b: 0}"}}}},
+		// Wake on LAN
+		{"name": "wake_on_lan", "description": "Send a Wake-on-LAN magic packet to wake up a machine.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"mac"}, "properties": map[string]interface{}{"mac": map[string]interface{}{"type": "string", "description": "MAC address (e.g. AA:BB:CC:DD:EE:FF)"}}}},
+		// Apple Shortcuts
+		{"name": "run_shortcut", "description": "Run an Apple Shortcut (macOS only).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string", "description": "Shortcut name"}, "input": map[string]interface{}{"type": "string", "description": "Input text"}}}},
+		{"name": "list_shortcuts", "description": "List available Apple Shortcuts (macOS only).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// ADB (Android)
+		{"name": "adb_devices", "description": "List connected Android devices/emulators.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "adb_command", "description": "Run a command on an Android device via ADB.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"command"}, "properties": map[string]interface{}{"command": map[string]interface{}{"type": "string", "description": "Shell command"}, "device": map[string]interface{}{"type": "string", "description": "Device serial (optional)"}}}},
+		{"name": "adb_screenshot", "description": "Take a screenshot from an Android device.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device": map[string]interface{}{"type": "string"}}}},
+		// Sonos
+		{"name": "sonos_discover", "description": "Discover Sonos speakers on the network.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "sonos_control", "description": "Control a Sonos speaker — play, pause, next, previous, volume.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"ip", "action"}, "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string", "description": "Sonos speaker IP"}, "action": map[string]interface{}{"type": "string", "description": "play, pause, next, previous, volume_up, volume_down, status"}}}},
+	}
+	tools = append(tools, iotTools...)
+
+	// --- Productivity & Sharing ---
+	prodTools := []map[string]interface{}{
+		{"name": "standup", "description": "Generate a daily standup from recent git commits. Shows what you did, files changed — ready to paste in Slack.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "days": map[string]interface{}{"type": "integer", "description": "Days to look back (default: 1)"}}}},
+		{"name": "create_gist", "description": "Create a GitHub Gist to share code snippets.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"content"}, "properties": map[string]interface{}{"content": map[string]interface{}{"type": "string", "description": "Code/text content"}, "filename": map[string]interface{}{"type": "string", "description": "Filename (default: snippet.txt)"}, "description": map[string]interface{}{"type": "string"}, "public": map[string]interface{}{"type": "boolean", "description": "Public gist (default: false)"}}}},
+		{"name": "changelog", "description": "Generate a changelog from git history between two refs/tags.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "from": map[string]interface{}{"type": "string", "description": "Start ref/tag (default: previous tag)"}, "to": map[string]interface{}{"type": "string", "description": "End ref (default: HEAD)"}}}},
+		{"name": "commit_message", "description": "Get the current git diff to help generate a conventional commit message.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "gitignore", "description": "Generate a .gitignore file for specified languages/frameworks.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"languages"}, "properties": map[string]interface{}{"languages": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Languages (e.g. go, node, python, rust, java)"}}}},
+		{"name": "license", "description": "Generate a license file (MIT, Apache, GPL).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"type"}, "properties": map[string]interface{}{"type": map[string]interface{}{"type": "string", "description": "mit, apache, gpl"}, "author": map[string]interface{}{"type": "string"}, "year": map[string]interface{}{"type": "integer"}}}},
+		{"name": "color", "description": "Convert colors between hex, RGB, and HSL.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"input"}, "properties": map[string]interface{}{"input": map[string]interface{}{"type": "string", "description": "Color as hex (#ff0000), shorthand (#f00), or name (red)"}}}},
+		{"name": "figlet", "description": "Generate ASCII art text banners.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"text"}, "properties": map[string]interface{}{"text": map[string]interface{}{"type": "string"}}}},
+		{"name": "lorem_ipsum", "description": "Generate placeholder text.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"paragraphs": map[string]interface{}{"type": "integer", "description": "Number of paragraphs (default: 1)"}}}},
+		{"name": "tldr", "description": "Quick command reference (like man pages but shorter).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"command"}, "properties": map[string]interface{}{"command": map[string]interface{}{"type": "string", "description": "Command to look up"}}}},
+		{"name": "github_badge", "description": "Generate GitHub badges (CI, stars, license, release) for your README.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "invite", "description": "Share Yaver with a colleague — copies invite link, opens email, or generates a Slack message.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"method": map[string]interface{}{"type": "string", "description": "clipboard, email, or slack"}, "recipient": map[string]interface{}{"type": "string", "description": "Email address (for email method)"}}}},
+		{"name": "git_stats", "description": "Show your git contribution stats — commits, lines, top files, languages.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "days": map[string]interface{}{"type": "integer", "description": "Days to analyze (default: 30)"}}}},
+	}
+	tools = append(tools, prodTools...)
+
+	// --- Location & Lifestyle ---
+	locationTools := []map[string]interface{}{
+		{"name": "ev_charging", "description": "Find EV charging stations nearby. Filter by network (Tesla, IONITY, Trugo, ChargePoint, etc.), connector type, country, and minimum power. Covers Turkey (Trugo/Togg, Eşarj, ZES, Sharz.net), US (Tesla, Electrify America, ChargePoint, EVgo), and Europe (IONITY, Fastned, Shell, BP Pulse).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"lat", "lon"}, "properties": map[string]interface{}{"lat": map[string]interface{}{"type": "number"}, "lon": map[string]interface{}{"type": "number"}, "radius": map[string]interface{}{"type": "integer", "description": "Search radius in km (default: 10)"}, "connector_type": map[string]interface{}{"type": "string", "description": "Connector type ID (use ev_connector_types to see list)"}, "network": map[string]interface{}{"type": "string", "description": "Network filter: tesla, ionity, chargepoint, evgo, shell, bp"}, "country": map[string]interface{}{"type": "string", "description": "Country code or name (e.g. TR, turkey, US, DE)"}, "min_power_kw": map[string]interface{}{"type": "integer", "description": "Minimum charging power in kW (e.g. 50 for DC fast only)"}}}},
+		{"name": "ev_networks", "description": "List EV charging networks by country — Turkey (Trugo/Togg, Eşarj, ZES, Sharz.net, Voltrun), US (Tesla, Electrify America, ChargePoint, EVgo), Europe (IONITY, Fastned, Shell, BP Pulse).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"country": map[string]interface{}{"type": "string", "description": "TR/turkey, US/usa, EU/europe (all if empty)"}}}},
+		{"name": "ev_connector_types", "description": "Reference: EV connector types (CCS2, Type 2, CHAdeMO, Tesla NACS, etc.) with regions and max power.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "gateway_query", "description": "Personal Agent Gateway: read state from one of YOUR credentialed apps/services (your wired connectors) as a structured answer. READ-ONLY — no writes/actions. Credentials live in your vault; nothing is sent to Convex. Use the connector + capability ids from your connector registry.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"connector", "capability"}, "properties": map[string]interface{}{"connector": map[string]interface{}{"type": "string", "description": "Connector id (e.g. 'google')"}, "capability": map[string]interface{}{"type": "string", "description": "Read capability id on that connector (e.g. 'next_event')"}, "params": map[string]interface{}{"type": "object", "description": "Optional string params substituted into the capability flow ({key} placeholders)", "additionalProperties": map[string]interface{}{"type": "string"}}}}},
+		{"name": "gateway_connect", "description": "Personal Agent Gateway: AUTHOR a new OAuth (engine 'api', authorization-code + PKCE) connector for one of YOUR credentialed services. Starts the one-time consent flow and returns an auth_url to open in a browser plus a connect_id. On the same machine a loopback callback completes automatically; otherwise call gateway_connect_finish with the pasted code. The client secret (if any) is stored ONLY in your vault, NEVER in the manifest. READ-ONLY: only GET capabilities may be authored.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id", "surface", "authUrl", "tokenUrl", "capabilities"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string", "description": "Connector id (e.g. 'google')"}, "surface": map[string]interface{}{"type": "string", "description": "API base URL the capabilities call (e.g. 'https://www.googleapis.com')"}, "authUrl": map[string]interface{}{"type": "string", "description": "OAuth2 authorization endpoint"}, "tokenUrl": map[string]interface{}{"type": "string", "description": "OAuth2 token endpoint"}, "scopes": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "OAuth scopes to request"}, "clientId": map[string]interface{}{"type": "string", "description": "OAuth client id (public)"}, "clientSecret": map[string]interface{}{"type": "string", "description": "OAuth client secret for confidential clients — stored in your vault, never in the manifest. Omit for public PKCE clients."}, "capabilities": map[string]interface{}{"type": "array", "description": "Read capabilities to expose. Each: {id, verb:'get', flow:{type:'api', method:'GET', path}, answerSchema}", "items": map[string]interface{}{"type": "object"}}}}},
+		{"name": "gateway_connect_finish", "description": "Personal Agent Gateway: complete a pending OAuth connector authoring (from gateway_connect). With no code it waits for the browser loopback callback; otherwise pass the pasted authorization code (headless boxes). Exchanges the code for tokens, stores them in your vault, and registers the connector.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"connect_id"}, "properties": map[string]interface{}{"connect_id": map[string]interface{}{"type": "string", "description": "The connect_id returned by gateway_connect"}, "code": map[string]interface{}{"type": "string", "description": "Authorization code to paste (headless fallback). Omit to wait for the loopback callback."}}}},
+		{"name": "gateway_connectors", "description": "Personal Agent Gateway: list YOUR registered connectors with public metadata only — id, engine, auth method, capability ids. No tokens or secrets.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "gateway_capabilities", "description": "Personal Agent Gateway: list one connector's read capabilities — id, verb, expected params, and answerSchema — so you know what gateway_query can call on it. No secrets.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"connector"}, "properties": map[string]interface{}{"connector": map[string]interface{}{"type": "string", "description": "Connector id"}}}},
+		{"name": "gateway_node_apps", "description": "Personal Agent Gateway: list the DESIRED app-set for a device node (redroid or a real phone) plus which of those apps are currently installed. The desired set is local-only (~/.yaver/nodes/<node>/apps.json) — never Convex. Provisioning only: install ≠ logged in.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"node"}, "properties": map[string]interface{}{"node": map[string]interface{}{"type": "string", "description": "Device node id (the adb serial of the redroid/phone)"}}}},
+		{"name": "gateway_node_sync", "description": "Personal Agent Gateway: PROVISION a device node — list the apps you want once and Yaver installs them all (no one-by-one). Reconciles the desired app-set onto the node: already-present apps are skipped, missing apps are installed Play-sourced (NEVER a sideloaded APK), Play blocks/region-locks are recorded as 'unavailable' and STOPPED on (never evaded). Returns per-app status. install ≠ logged in — authorize each app via the gateway login broker separately afterwards.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"node"}, "properties": map[string]interface{}{"node": map[string]interface{}{"type": "string", "description": "Device node id (adb serial)"}, "apps": map[string]interface{}{"type": "array", "description": "Desired apps to set + sync. Each: {packageId, required?}. Omit to reconcile the node's stored desired set.", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"packageId": map[string]interface{}{"type": "string"}, "required": map[string]interface{}{"type": "boolean"}}}}, "mode": map[string]interface{}{"type": "string", "description": "Install path: 'play_ui' (default, drives the Play Store UI) or 'device_owner' (silent install — needs the node enrolled as a managed device)."}}}},
+		{"name": "gateway_node_install", "description": "Personal Agent Gateway: install ONE Play app on a device node (manual one-off on top of gateway_node_sync). Adds it to the node's desired set so a later sync keeps it provisioned. Play-sourced only — never a sideloaded APK. install ≠ logged in.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"node", "package"}, "properties": map[string]interface{}{"node": map[string]interface{}{"type": "string", "description": "Device node id (adb serial)"}, "package": map[string]interface{}{"type": "string", "description": "Android package id to install"}, "mode": map[string]interface{}{"type": "string", "description": "'play_ui' (default) or 'device_owner'"}}}},
+		{"name": "gateway_phone_inventory_report", "description": "Personal Agent Gateway: the user's OWN phone REPORTS its installed (launchable) apps so the agent can mirror them onto a clone. Stored local-only (~/.yaver/nodes/<device>/inventory.json) — never Convex; package ids + labels only, no secrets. Android only (iOS cannot enumerate installed apps). This is the push the Yaver mobile app makes; pair it with gateway_clone_from_phone.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device", "apps"}, "properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "The reporting phone's device id (the key the inventory is stored under)"}, "apps": map[string]interface{}{"type": "array", "description": "Installed apps. Each: {packageName|packageId, label?, system?}.", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"packageName": map[string]interface{}{"type": "string"}, "packageId": map[string]interface{}{"type": "string"}, "label": map[string]interface{}{"type": "string"}, "system": map[string]interface{}{"type": "boolean"}}}}}}},
+		{"name": "gateway_phone_inventory", "description": "Personal Agent Gateway: read back the app inventory a phone last reported (via gateway_phone_inventory_report). Local-only, no secrets.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device"}, "properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "The phone's device id"}}}},
+		{"name": "gateway_consent", "description": "Personal Agent Gateway: read the user's consent state for the sensitive phone-clone capabilities (share app list / auto-forward one-time codes / let a clone read its own SMS). All are opt-in and OFF by default. Peer-to-peer, open source, local-first: grants live on the user's device (never our backend) and are revocable. Returns plain-language descriptions so you can explain a capability before asking to enable it.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "gateway_consent_set", "description": "Personal Agent Gateway: grant or revoke ONE phone-clone capability (feature: 'share_app_inventory' | 'auto_relay_otp' | 'read_device_sms'). Recorded locally + audited, never our backend. Ask the user before granting; revoke with enabled:false.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"feature", "enabled"}, "properties": map[string]interface{}{"feature": map[string]interface{}{"type": "string", "description": "share_app_inventory | auto_relay_otp | read_device_sms"}, "enabled": map[string]interface{}{"type": "boolean", "description": "true to grant, false to revoke"}}}},
+		{"name": "gateway_provide_otp", "description": "Personal Agent Gateway: the user's OWN phone forwards an OTP/2FA code to the remote box so a redroid/device login that's blocked waiting for a code completes seamlessly — no gate id needed, no typing into a remote view. Matches the code to the oldest pending enter_code gate for that connector; a code with no waiting login is a safe no-op. Does NOT bypass 2FA — it relays a code the user legitimately received; nothing is stored.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"connector", "code"}, "properties": map[string]interface{}{"connector": map[string]interface{}{"type": "string", "description": "Connector id the code is for (e.g. 'misli')"}, "code": map[string]interface{}{"type": "string", "description": "The OTP/2FA code the phone received"}}}},
+		{"name": "gateway_clone_from_phone", "description": "Personal Agent Gateway: MIRROR the apps from the user's phone onto a clone node (redroid or a second-hand phone) in one step. Derives the clone's desired app-set from the phone's reported inventory (system apps are never mirrored), writes it, and — with sync:true — installs them all Play-sourced. install ≠ logged in (authorize each app via the gateway login broker afterwards).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"phone", "clone"}, "properties": map[string]interface{}{"phone": map[string]interface{}{"type": "string", "description": "Source phone device id (must have reported an inventory)"}, "clone": map[string]interface{}{"type": "string", "description": "Target clone node id (redroid/phone adb serial)"}, "connector_only": map[string]interface{}{"type": "boolean", "description": "Mirror only apps that back a gateway connector (default false = mirror every non-system app)"}, "mode": map[string]interface{}{"type": "string", "description": "Install path when sync=true: 'play_ui' (default) or 'device_owner'"}, "sync": map[string]interface{}{"type": "boolean", "description": "Install now (true) or just write the desired set (false, default)"}}}},
+		{"name": "gateway_act", "description": "Personal Agent Gateway: perform an ACTION (write) as you on one of YOUR connectors — start a charge, buy a ticket, place an order, pay. By DEFAULT (execute omitted/false) this is a DRY-RUN: it returns a preview (method+endpoint or app steps) + the Policy Guard verdict + an act_id, and changes NOTHING. To run it, either set execute:true (low-risk acts may confirm inline via params.confirm='yes'; high/financial acts still require a tapped approval on your phone), or call gateway_act_confirm with the act_id. Credentials live in your vault; the act is recorded in a local audit ledger (never Convex).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"connector", "capability"}, "properties": map[string]interface{}{"connector": map[string]interface{}{"type": "string", "description": "Connector id"}, "capability": map[string]interface{}{"type": "string", "description": "Act capability id (a write verb on that connector)"}, "params": map[string]interface{}{"type": "object", "description": "String params substituted into the act flow ({key} placeholders). 'confirm':'yes' inline-confirms a low-risk act; '__jurisdiction' sets the Policy Guard region.", "additionalProperties": map[string]interface{}{"type": "string"}}, "execute": map[string]interface{}{"type": "boolean", "description": "false/omitted = dry-run (default, safe). true = run the pipeline now."}}}},
+		{"name": "gateway_act_confirm", "description": "Personal Agent Gateway: confirm + execute a previously previewed act (from gateway_act dry-run). The confirm call IS the second key: answer 'approve' to execute, anything else declines. High/financial acts may additionally block on a tapped approval on your phone.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"act_id"}, "properties": map[string]interface{}{"act_id": map[string]interface{}{"type": "string", "description": "The act_id returned by gateway_act"}, "answer": map[string]interface{}{"type": "string", "description": "'approve' to execute; anything else declines"}}}},
+		{"name": "gateway_intent", "description": "Personal Agent Gateway: route a natural-language utterance to the right engine — a coding task (runner), a gateway READ (runs it, returns the answer), or a gateway ACT (returns a dry-run preview + act_id, never auto-executes). This is the single entry point a voice/watch surface uses so the user need not name a connector.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"utterance"}, "properties": map[string]interface{}{"utterance": map[string]interface{}{"type": "string", "description": "What the user said (e.g. 'top up my transit card by 100')"}}}},
+		{"name": "gateway_audit", "description": "Personal Agent Gateway: list recent ACTIONS Yaver took as you, from the LOCAL audit ledger (never synced to Convex) — connector, capability, outcome, time. No secrets or tokens.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer", "description": "Max entries (default 50, newest first)"}}}},
+		{"name": "nobetci_eczane", "description": "Find on-duty pharmacies (nöbetçi eczane) in Turkish cities.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"city"}, "properties": map[string]interface{}{"city": map[string]interface{}{"type": "string", "description": "City name (e.g. istanbul, ankara, izmir, bursa)"}, "district": map[string]interface{}{"type": "string", "description": "District/ilçe (e.g. kadıköy, beşiktaş, çankaya)"}}}},
+		{"name": "eczane_nearby", "description": "Find pharmacies near a location (worldwide, OpenStreetMap).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"lat", "lon"}, "properties": map[string]interface{}{"lat": map[string]interface{}{"type": "number"}, "lon": map[string]interface{}{"type": "number"}, "radius": map[string]interface{}{"type": "integer", "description": "Radius in meters (default: 2000)"}}}},
+		{"name": "places_search", "description": "Search for places, addresses, businesses (OpenStreetMap, free).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string", "description": "Search query (e.g. 'coffee shop Istanbul')"}, "lat": map[string]interface{}{"type": "number", "description": "Center latitude"}, "lon": map[string]interface{}{"type": "number", "description": "Center longitude"}}}},
+		{"name": "restaurants", "description": "Find restaurants nearby (OpenStreetMap, free).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"lat", "lon"}, "properties": map[string]interface{}{"lat": map[string]interface{}{"type": "number"}, "lon": map[string]interface{}{"type": "number"}, "radius": map[string]interface{}{"type": "integer", "description": "Radius in meters (default: 1000)"}, "cuisine": map[string]interface{}{"type": "string", "description": "Cuisine filter (e.g. italian, turkish, sushi)"}}}},
+		{"name": "hotels", "description": "Find hotels and accommodation nearby (OpenStreetMap, free).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"lat", "lon"}, "properties": map[string]interface{}{"lat": map[string]interface{}{"type": "number"}, "lon": map[string]interface{}{"type": "number"}, "radius": map[string]interface{}{"type": "integer", "description": "Radius in meters (default: 2000)"}}}},
+		{"name": "geocode", "description": "Get coordinates from an address.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"address"}, "properties": map[string]interface{}{"address": map[string]interface{}{"type": "string", "description": "Address to geocode"}}}},
+		{"name": "directions", "description": "Get driving directions and distance between two points.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"from_lat", "from_lon", "to_lat", "to_lon"}, "properties": map[string]interface{}{"from_lat": map[string]interface{}{"type": "number"}, "from_lon": map[string]interface{}{"type": "number"}, "to_lat": map[string]interface{}{"type": "number"}, "to_lon": map[string]interface{}{"type": "number"}}}},
+		{"name": "news", "description": "Get latest tech news from HackerNews, Lobsters, dev.to, TechCrunch, or any RSS feed.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"source"}, "properties": map[string]interface{}{"source": map[string]interface{}{"type": "string", "description": "hackernews, lobsters, devto, techcrunch, verge, ars, reddit_prog, or any RSS URL"}}}},
+		{"name": "stock_price", "description": "Get current stock price (Yahoo Finance, free).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"symbol"}, "properties": map[string]interface{}{"symbol": map[string]interface{}{"type": "string", "description": "Stock symbol (e.g. AAPL, TSLA, GOOGL)"}}}},
+		{"name": "translate", "description": "Translate text between languages (LibreTranslate, free).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"text"}, "properties": map[string]interface{}{"text": map[string]interface{}{"type": "string"}, "from": map[string]interface{}{"type": "string", "description": "Source language (default: auto)"}, "to": map[string]interface{}{"type": "string", "description": "Target language (default: en)"}, "api_url": map[string]interface{}{"type": "string", "description": "Custom LibreTranslate URL"}}}},
+	}
+	tools = append(tools, locationTools...)
+	tools = append(tools, healthAgentTools()...)
+
+	// Personal Agent Gateway — per-capability dynamic tools (M-G6). Each wired
+	// connector's READ capabilities surface as their own gw_<connector>_<capability>
+	// tool on top of the static gateway_query dispatcher above, so a host AI sees
+	// "your apps as tools". The registry is loaded the same way gateway_query's deps
+	// are; if it can't load (e.g. not authed, no connectors) we append nothing —
+	// never error the whole tools list. gateway_dynamic_tools.go.
+	if reg, err := NewConnectorRegistry(); err == nil {
+		tools = append(tools, dynamicGatewayTools(reg)...)
+	}
+
+	// --- Daily Dev Tools ---
+	dailyTools := []map[string]interface{}{
+		{"name": "crypto_price", "description": "Get cryptocurrency prices (CoinGecko, free).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"coins": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Coin IDs (default: bitcoin, ethereum). Use: bitcoin, ethereum, solana, cardano, dogecoin, etc."}}}},
+		{"name": "currency_exchange", "description": "Convert currency (ECB rates, free).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"amount"}, "properties": map[string]interface{}{"amount": map[string]interface{}{"type": "number"}, "from": map[string]interface{}{"type": "string", "description": "Source currency (default: USD)"}, "to": map[string]interface{}{"type": "string", "description": "Target currency (default: EUR)"}}}},
+		{"name": "npm_info", "description": "Get npm package info — version, downloads, description.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string", "description": "npm package name"}}}},
+		{"name": "jwt_decode", "description": "Decode a JWT token — shows header, payload, expiry.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"token"}, "properties": map[string]interface{}{"token": map[string]interface{}{"type": "string", "description": "JWT token string"}}}},
+		{"name": "epoch", "description": "Convert between Unix timestamps and human-readable dates.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"input": map[string]interface{}{"type": "string", "description": "Unix timestamp, date string, or 'now'"}}}},
+		{"name": "cron_explain", "description": "Explain a cron expression in plain English.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"expression"}, "properties": map[string]interface{}{"expression": map[string]interface{}{"type": "string", "description": "Cron expression (5 fields: min hour dom month dow)"}}}},
+		{"name": "http_status", "description": "Look up what an HTTP status code means.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"code"}, "properties": map[string]interface{}{"code": map[string]interface{}{"type": "integer", "description": "HTTP status code (e.g. 418)"}}}},
+		{"name": "whois", "description": "Look up domain registration info.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"domain"}, "properties": map[string]interface{}{"domain": map[string]interface{}{"type": "string"}}}},
+		{"name": "ip_geo", "description": "Geolocate an IP address — city, country, ISP, coordinates.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"ip": map[string]interface{}{"type": "string", "description": "IP address (default: your public IP)"}}}},
+		{"name": "subnet_calc", "description": "Calculate subnet details from CIDR notation.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"cidr"}, "properties": map[string]interface{}{"cidr": map[string]interface{}{"type": "string", "description": "CIDR (e.g. 192.168.1.0/24)"}}}},
+		{"name": "fake_data", "description": "Generate fake test data — users, emails, addresses, credit cards.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"type": map[string]interface{}{"type": "string", "description": "user, email, address, uuid, credit_card (default: user)"}, "count": map[string]interface{}{"type": "integer", "description": "Number of records (max: 20)"}}}},
+		{"name": "domain_check", "description": "Check if a domain is available or registered.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"domain"}, "properties": map[string]interface{}{"domain": map[string]interface{}{"type": "string", "description": "Domain to check (e.g. myapp.dev)"}}}},
+	}
+	tools = append(tools, dailyTools...)
+
+	// --- Infrastructure & SaaS ---
+	infraTools := []map[string]interface{}{
+		// Kubernetes
+		{"name": "k8s_pods", "description": "List Kubernetes pods.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_logs", "description": "Get logs from a Kubernetes pod.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pod"}, "properties": map[string]interface{}{"pod": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}, "container": map[string]interface{}{"type": "string"}, "tail": map[string]interface{}{"type": "integer"}}}},
+		{"name": "k8s_describe", "description": "Describe a Kubernetes resource.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"resource", "name"}, "properties": map[string]interface{}{"resource": map[string]interface{}{"type": "string", "description": "pod, service, deployment, etc."}, "name": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_get", "description": "Get Kubernetes resources (pods, services, deployments, etc.).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"resource"}, "properties": map[string]interface{}{"resource": map[string]interface{}{"type": "string", "description": "pods, services, deployments, ingress, configmaps, secrets, nodes, etc."}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_apply", "description": "Apply a Kubernetes manifest file.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string", "description": "Path to YAML manifest"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_exec", "description": "Execute a command in a Kubernetes pod.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pod", "command"}, "properties": map[string]interface{}{"pod": map[string]interface{}{"type": "string"}, "command": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}, "container": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_contexts", "description": "List available Kubernetes contexts.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "k8s_namespaces", "description": "List Kubernetes namespaces.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_top", "description": "Show resource usage (CPU/memory) for pods or nodes.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"resource"}, "properties": map[string]interface{}{"resource": map[string]interface{}{"type": "string", "description": "pods or nodes"}, "namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		{"name": "k8s_events", "description": "Show recent Kubernetes events (warnings, errors).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"namespace": map[string]interface{}{"type": "string"}, "context": map[string]interface{}{"type": "string"}}}},
+		// Terraform
+		{"name": "tf_plan", "description": "Run terraform plan.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "tf_apply", "description": "Run terraform apply.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "auto_approve": map[string]interface{}{"type": "boolean", "description": "Auto-approve (default: false)"}}}},
+		{"name": "tf_state", "description": "List terraform state resources.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "tf_output", "description": "Show terraform outputs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "tf_init", "description": "Initialize terraform.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "tf_validate", "description": "Validate terraform configuration.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Serverless
+		{"name": "lambda_list", "description": "List AWS Lambda functions.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lambda_invoke", "description": "Invoke an AWS Lambda function.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "payload": map[string]interface{}{"type": "string", "description": "JSON payload"}}}},
+		{"name": "lambda_logs", "description": "Get AWS Lambda function logs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "minutes": map[string]interface{}{"type": "integer", "description": "Minutes of logs (default: 30)"}}}},
+		// Vercel
+		{"name": "vercel_status", "description": "Show Vercel deployments.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "vercel_logs", "description": "Get Vercel deployment logs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{"url": map[string]interface{}{"type": "string", "description": "Deployment URL"}}}},
+		{"name": "vercel_env", "description": "List Vercel environment variables.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Netlify
+		{"name": "netlify_status", "description": "Show Netlify site status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Sentry
+		{"name": "sentry_issues", "description": "List recent Sentry errors.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"org", "project"}, "properties": map[string]interface{}{"org": map[string]interface{}{"type": "string"}, "project": map[string]interface{}{"type": "string"}}}},
+		// Linear
+		{"name": "linear_issues", "description": "List Linear issues.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"api_key"}, "properties": map[string]interface{}{"api_key": map[string]interface{}{"type": "string", "description": "Linear API key"}, "team": map[string]interface{}{"type": "string", "description": "Team key filter"}}}},
+		// Notion
+		{"name": "notion_search", "description": "Search Notion pages and databases.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"api_key", "query"}, "properties": map[string]interface{}{"api_key": map[string]interface{}{"type": "string", "description": "Notion integration token"}, "query": map[string]interface{}{"type": "string"}}}},
+		// 1Password
+		{"name": "op_get", "description": "Look up a 1Password item (passwords masked).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"item"}, "properties": map[string]interface{}{"item": map[string]interface{}{"type": "string", "description": "Item name or ID"}, "vault": map[string]interface{}{"type": "string"}}}},
+		{"name": "op_list", "description": "List 1Password items.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"vault": map[string]interface{}{"type": "string"}}}},
+		// Raycast
+		{"name": "raycast", "description": "Trigger a Raycast extension (macOS).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"command"}, "properties": map[string]interface{}{"command": map[string]interface{}{"type": "string", "description": "Raycast command path"}}}},
+	}
+	tools = append(tools, infraTools...)
+
+	// --- App Development (iOS/Android) ---
+	appDevTools := []map[string]interface{}{
+		// App Store Connect
+		{"name": "appstore_status", "description": "Check App Store Connect app status (review state, builds). Requires APP_STORE_API_KEY_ID and APP_STORE_API_ISSUER env vars.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"bundle_id": map[string]interface{}{"type": "string", "description": "Bundle ID (e.g. io.yaver.mobile)"}}}},
+		{"name": "testflight_builds", "description": "List TestFlight builds for an app.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bundle_id"}, "properties": map[string]interface{}{"bundle_id": map[string]interface{}{"type": "string"}}}},
+		{"name": "xcode_build", "description": "Build an Xcode project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "scheme": map[string]interface{}{"type": "string"}, "destination": map[string]interface{}{"type": "string", "description": "Build destination (default: generic/platform=iOS)"}}}},
+		{"name": "xcode_test", "description": "Run Xcode tests.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"scheme"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "scheme": map[string]interface{}{"type": "string"}, "destination": map[string]interface{}{"type": "string", "description": "Simulator destination"}}}},
+		{"name": "simulators", "description": "List iOS simulators.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "simulator_boot", "description": "Boot an iOS simulator.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device"}, "properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "Device name or UUID"}}}},
+		{"name": "simulator_screenshot", "description": "Take a screenshot from iOS simulator.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "Device ID (default: booted)"}}}},
+		// Google Play
+		{"name": "playstore_status", "description": "Check Google Play Console status for an app.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string", "description": "Package name (e.g. io.yaver.mobile)"}}}},
+		{"name": "playstore_track", "description": "Check Play Store track status (production, beta, alpha).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}, "track": map[string]interface{}{"type": "string", "description": "Track: production, beta, alpha, internal (default: production)"}}}},
+		{"name": "gradle_build", "description": "Run a Gradle build task.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "task": map[string]interface{}{"type": "string", "description": "Gradle task (default: assembleDebug)"}}}},
+		{"name": "gradle_test", "description": "Run Android unit tests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "android_lint", "description": "Run Android lint checks.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "emulators", "description": "List Android emulators (AVDs).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Firebase
+		{"name": "firebase_projects", "description": "List Firebase projects.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "firebase_deploy", "description": "Deploy to Firebase (hosting, functions, etc.).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "only": map[string]interface{}{"type": "string", "description": "Deploy only: hosting, functions, firestore, etc."}}}},
+		{"name": "firebase_crashlytics", "description": "Get Crashlytics issues for a Firebase project.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"project_id"}, "properties": map[string]interface{}{"project_id": map[string]interface{}{"type": "string"}}}},
+		// React Native / Expo
+		{"name": "expo_status", "description": "Show Expo project config.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "eas_build", "description": "Start an EAS Build (Expo).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "platform": map[string]interface{}{"type": "string", "description": "ios or android"}}}},
+		{"name": "eas_submit", "description": "Submit to App Store / Play Store via EAS.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "platform": map[string]interface{}{"type": "string"}}}},
+		// Flutter
+		{"name": "flutter_doctor", "description": "Run flutter doctor to check environment.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "flutter_build", "description": "Build a Flutter app.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "platform": map[string]interface{}{"type": "string", "description": "apk, appbundle, ios, web, macos, linux, windows"}}}},
+		{"name": "flutter_test", "description": "Run Flutter tests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// CocoaPods
+		{"name": "pod_install", "description": "Run pod install.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "pod_outdated", "description": "Check for outdated CocoaPods dependencies.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Review guidelines
+		{"name": "app_review_check", "description": "Get App Store / Play Store review guidelines, common rejection reasons, and pre-submission checklist.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"platform": map[string]interface{}{"type": "string", "description": "ios or android (both if empty)"}}}},
+	}
+	tools = append(tools, appDevTools...)
+
+	// --- Package Registries ---
+	registryTools := []map[string]interface{}{
+		{"name": "dockerhub_search", "description": "Search Docker Hub for images.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "dockerhub_tags", "description": "List tags for a Docker Hub image.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string", "description": "e.g. nginx, library/node, kivanccakmak/yaver-cli"}, "limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "pypi_info", "description": "Get Python package info from PyPI.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "pypi_versions", "description": "List available versions of a PyPI package.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "npm_search", "description": "Search npm registry.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "npm_versions", "description": "List versions of an npm package.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "crates_info", "description": "Get Rust crate info from crates.io.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"crate"}, "properties": map[string]interface{}{"crate": map[string]interface{}{"type": "string"}}}},
+		{"name": "crates_search", "description": "Search crates.io (Rust packages).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "go_module_info", "description": "Get Go module info from proxy.golang.org.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string", "description": "e.g. github.com/gin-gonic/gin"}}}},
+		{"name": "go_module_versions", "description": "List Go module versions.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string"}}}},
+		{"name": "pubdev_info", "description": "Get Dart/Flutter package info from pub.dev.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "pubdev_search", "description": "Search pub.dev (Dart/Flutter packages).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "brew_info", "description": "Get Homebrew formula info.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"formula"}, "properties": map[string]interface{}{"formula": map[string]interface{}{"type": "string"}}}},
+		{"name": "brew_search", "description": "Search Homebrew formulae.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "gem_info", "description": "Get Ruby gem info from rubygems.org.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"gem"}, "properties": map[string]interface{}{"gem": map[string]interface{}{"type": "string"}}}},
+		{"name": "gem_search", "description": "Search rubygems.org.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "maven_search", "description": "Search Maven Central (Java/Kotlin).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "nuget_search", "description": "Search NuGet (.NET packages).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "apt_search", "description": "Search apt packages (Debian/Ubuntu).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "apt_show", "description": "Show apt package details.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "pip_show", "description": "Show installed pip package details.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package"}, "properties": map[string]interface{}{"package": map[string]interface{}{"type": "string"}}}},
+		{"name": "pip_list", "description": "List installed pip packages.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "cargo_search", "description": "Search crates via cargo CLI.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "pkg_install", "description": "Install a package via any package manager (npm, pip, cargo, go, brew, gem, apt, dart).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"manager", "package"}, "properties": map[string]interface{}{"manager": map[string]interface{}{"type": "string", "description": "npm, pip, cargo, go, brew, gem, apt, dart"}, "package": map[string]interface{}{"type": "string"}, "global": map[string]interface{}{"type": "boolean", "description": "Install globally (npm -g)"}}}},
+	}
+	tools = append(tools, registryTools...)
+
+	// --- Platforms & BaaS ---
+	platformTools := []map[string]interface{}{
+		// Supabase
+		{"name": "supabase_status", "description": "Show Supabase project status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "supabase_db", "description": "Execute SQL on Supabase database.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "query": map[string]interface{}{"type": "string"}}}},
+		{"name": "supabase_migrations", "description": "List Supabase migrations.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "supabase_functions", "description": "List Supabase Edge Functions.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "supabase_deploy", "description": "Deploy Supabase (db push or function deploy).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "function": map[string]interface{}{"type": "string", "description": "Function name (deploys DB if empty)"}}}},
+		// Convex
+		{"name": "convex_deploy", "description": "Deploy Convex functions.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_logs", "description": "Show Convex function logs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_run", "description": "Run a Convex function.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"function"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "function": map[string]interface{}{"type": "string", "description": "Function path (e.g. tasks:list)"}, "args": map[string]interface{}{"type": "string", "description": "JSON args"}}}},
+		{"name": "convex_local_status", "description": "Check if the local self-hosted Convex backend is running (port 3210).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_tables", "description": "List tables in the local Convex backend (requires yaver_admin.ts helper).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_browse", "description": "Browse documents in a Convex table.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"table"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "table": map[string]interface{}{"type": "string"}, "cursor": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "number"}}}},
+		{"name": "convex_query", "description": "Run a Convex query via admin HTTP API (no CLI).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"function"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "function": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "string", "description": "JSON args"}}}},
+		{"name": "convex_mutate", "description": "Run a Convex mutation via admin HTTP API.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"function"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "function": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_action", "description": "Run a Convex action via admin HTTP API.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"function"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "function": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_schema", "description": "Show the Convex schema.ts for a project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_export", "description": "Export all data from the local Convex backend (streaming_export).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "convex_install_helper", "description": "Write convex/yaver_admin.ts helper functions into a project so the Yaver dashboard can introspect it.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"directory"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Universal backend (adapter-based)
+		{"name": "backend_status", "description": "Show health + URL of whichever backend the project uses (Convex, Postgres, Supabase, PocketBase, Appwrite, SQLite).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "data_tables", "description": "List tables/collections across any supported backend.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "data_browse", "description": "Browse rows/documents with pagination across any backend.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"table"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "table": map[string]interface{}{"type": "string"}, "cursor": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "number"}}}},
+		{"name": "data_query", "description": "Run a query (SQL for Postgres/Supabase/SQLite, function path for Convex, REST path for PocketBase/Appwrite).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "query": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "string", "description": "JSON args"}}}},
+		{"name": "data_insert", "description": "Insert a record (adapter-routed).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"table", "doc"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "table": map[string]interface{}{"type": "string"}, "doc": map[string]interface{}{"type": "string", "description": "JSON document"}}}},
+		{"name": "data_update", "description": "Update a record by id.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"table", "id", "fields"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "table": map[string]interface{}{"type": "string"}, "id": map[string]interface{}{"type": "string"}, "fields": map[string]interface{}{"type": "string", "description": "JSON"}}}},
+		{"name": "data_delete", "description": "Delete a record by id.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"table", "id"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "table": map[string]interface{}{"type": "string"}, "id": map[string]interface{}{"type": "string"}}}},
+		// Cloud emulators (aws/gcp/azure)
+		{"name": "cloud_emu_start", "description": "Start local cloud emulators. Provider: aws (MinIO/DynamoDB/ElasticMQ), azure (Azurite), gcp (Firebase Emulator Suite).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "provider": map[string]interface{}{"type": "string"}, "services": map[string]interface{}{"type": "string", "description": "Comma-separated service list (s3,dynamodb,sqs,blob,queue,firestore,...)"}}}},
+		{"name": "cloud_emu_stop", "description": "Stop local cloud emulators.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "provider": map[string]interface{}{"type": "string"}, "services": map[string]interface{}{"type": "string"}}}},
+		{"name": "cloud_emu_status", "description": "Show running cloud emulators across all providers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cloud_emu_config", "description": "Output SDK config snippets for connecting to local emulators.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string"}}}},
+		// Switch engine (backend/host switching with snapshots + rollback)
+		{"name": "switch_targets", "description": "List every backend/host target you can switch to.", "inputSchema": map[string]interface{}{"type": "object"}},
+		{"name": "switch_plan", "description": "Plan a backend/host switch. Assesses complexity (trivial/easy/medium/hard) and generates ordered steps across 7 layers (data/code/env/infra/network/integrations/verify). Persists the plan — use switch_run to execute.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"target"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "target": map[string]interface{}{"type": "string"}, "dryRun": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "switch_run", "description": "Execute a previously-planned switch. HARD switches emit a rewrite prompt for the AI agent instead of running inline.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "id": map[string]interface{}{"type": "string"}}}},
+		{"name": "switch_rollback", "description": "Roll back a switch (git branch + env + data restore). Only valid within the 7-day TTL.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "id": map[string]interface{}{"type": "string"}}}},
+		{"name": "switch_history", "description": "Show all switches for this project, newest first.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "switch_cleanup", "description": "Delete expired snapshots and pre-switch branches.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "project_runtime", "description": "Summarize project runtime placement, export targets, provider requirements, and machine resolution for the current monorepo or project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "project_runtime_apply", "description": "Merge runtime/provider updates into .yaver/project.yaml, optionally connect provider accounts, run manifest apply, and plan or run mobile sandbox promotions. Supports either a project directory or a phoneSlug for phone-first sandboxes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "phoneSlug": map[string]interface{}{"type": "string"}, "name": map[string]interface{}{"type": "string"}, "backend": map[string]interface{}{"type": "string"}, "stack": map[string]interface{}{"type": "string"}, "auth": map[string]interface{}{"type": "string"}, "runtime": map[string]interface{}{"type": "object"}, "placement": map[string]interface{}{"type": "object"}, "jobs": map[string]interface{}{"type": "array"}, "domains": map[string]interface{}{"type": "array"}, "env": map[string]interface{}{"type": "object"}, "providers": map[string]interface{}{"type": "array"}, "phonePromotions": map[string]interface{}{"type": "array"}, "runManifestApply": map[string]interface{}{"type": "boolean"}, "dryRun": map[string]interface{}{"type": "boolean"}}}},
+		// Accounts manager
+		{"name": "account_list", "description": "List all cloud providers and their connection state.", "inputSchema": map[string]interface{}{"type": "object"}},
+		{"name": "account_connect", "description": "Store credentials for a cloud provider (encrypted at rest).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider", "fields"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string"}, "label": map[string]interface{}{"type": "string"}, "fields": map[string]interface{}{"type": "string", "description": "JSON: {\"token\":\"...\"} or {\"accessKey\":\"...\",\"secretKey\":\"...\"}"}}}},
+		{"name": "account_disconnect", "description": "Remove stored credentials for a provider.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string"}}}},
+		{"name": "account_status", "description": "Show connection state for a provider.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string"}}}},
+		// --- Yaver sign-in (headless OAuth for remote/WSL/Linux/macOS) ---
+		// These tools let a coding agent (Claude Code remote over SSH, Codex,
+		// Cursor, Windsurf, Zed) sign the user into Yaver itself — not a
+		// cloud provider. The flow is device-code / browserless: start →
+		// user opens URL on any device → poll/wait until authorized.
+		{"name": "yaver_auth_status", "description": "Report Yaver's own sign-in state on this machine: whether a valid Apple/GitHub/Google/Microsoft/email-password Yaver token is present, which user it belongs to, and whether the environment looks headless. Safe to call before signing in.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "yaver_auth_capabilities", "description": "Report deployment auth capabilities, including whether owner/test email-password sign-in is currently enabled. Does not accept or expose passwords; raw automation passwords belong in local keychain/.env or GitHub Secrets.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"convex_url": map[string]interface{}{"type": "string", "description": "Optional override for the Convex backend URL (defaults to the stored or hosted endpoint)."}}}},
+		{"name": "yaver_auth_start", "description": "Start a headless device-code sign-in for Yaver (Apple / GitHub / Google / Microsoft OAuth, passkey, or email-password if enabled on the deployment). Returns {url, user_code, device_code, qr_ascii, expires_at_ms}. Render the URL + QR to the user; they open it on their phone or laptop browser, sign in, and confirm the code. Then call yaver_auth_wait (or loop yaver_auth_poll) with the device_code to finish. Non-blocking — this tool does not wait for the user.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"convex_url": map[string]interface{}{"type": "string", "description": "Optional override for the Convex backend URL (defaults to the stored or hosted endpoint)."}}}},
+		{"name": "yaver_auth_poll", "description": "Run one poll of the device-code authorization. Returns status = pending | authorized | expired. On authorized, the token is saved to ~/.yaver/config.json, the daemon is started in the background, and Yaver is auto-registered as an MCP server in every installed editor. Use this when you want full control over polling cadence.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device_code"}, "properties": map[string]interface{}{"device_code": map[string]interface{}{"type": "string", "description": "Opaque device code returned by yaver_auth_start."}, "convex_url": map[string]interface{}{"type": "string"}}}},
+		{"name": "yaver_auth_wait", "description": "Block until the device code is authorized, expires, or the timeout fires. Preferred over yaver_auth_poll for coding agents that can accept a ~2-minute tool call. On authorized: saves token, starts daemon, registers MCP in editors. Default timeout 120s, poll interval 3s — both tunable.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device_code"}, "properties": map[string]interface{}{"device_code": map[string]interface{}{"type": "string"}, "convex_url": map[string]interface{}{"type": "string"}, "timeout_seconds": map[string]interface{}{"type": "integer", "description": "Max seconds to block (default 120, max 300)."}, "poll_interval_seconds": map[string]interface{}{"type": "integer", "description": "Seconds between polls (default 3)."}}}},
+		{"name": "yaver_auth_logout", "description": "Clear the saved Yaver auth token from ~/.yaver/config.json on this machine. Daemon is left running — call agent_shutdown separately if you want to stop it.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "yaver_lazy_setup", "description": "One-shot install + auth + mobile-app handoff for a non-developer user being walked through setup by an AI agent. Call this FIRST instead of wiring up auth_status/start/wait manually. Returns a structured plan: whether yaver-cli is installed, whether the user is signed in, a sign-in URL (if needed) the AI should surface to the human, mobile app install links (TestFlight + Play), and a single `next_action` string the AI can speak verbatim. Idempotent: safe to call repeatedly while the user finishes steps on their phone — on each call it picks up where the last one left off. The ideal orchestration loop for a coding agent: (1) call yaver_lazy_setup → show the returned url to the human; (2) wait a bit; (3) call yaver_lazy_setup again — if status is now \"signed_in\", you're done.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"wait_seconds": map[string]interface{}{"type": "integer", "description": "If >0, block up to this many seconds (max 180) waiting for sign-in to complete in-call. Default 0 = return immediately. 120 is a reasonable value for agents that can afford a 2-minute tool call."}}}},
+		// --- Account linking (connect additional OAuth providers, unlink, merge two accounts) ---
+		{"name": "yaver_auth_list_identities", "description": "List every sign-in identity (Apple / GitHub / GitLab / Google / Microsoft / email-password) linked to the currently signed-in Yaver account. Returns each provider's email and which one is primary. Safe to call any time.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "yaver_auth_link_start", "description": "Connect an ADDITIONAL OAuth provider to the currently signed-in account — e.g., user signed up with Apple but wants to also sign in with GitHub, GitLab, Google, or Microsoft. Returns {url, qr_ascii, link_token, expires_at_ms}. Render the URL + QR; the user opens it, signs in with that provider, and Yaver binds the provider to the existing account. Call yaver_auth_link_wait afterwards to confirm.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "Provider to link: apple | github | gitlab | google | microsoft"}}}},
+		{"name": "yaver_auth_link_wait", "description": "Poll the account's linked identities until the requested provider appears (or timeout). Preferred over manual polling after yaver_auth_link_start. Default timeout 120s.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "The provider passed to yaver_auth_link_start"}, "timeout_seconds": map[string]interface{}{"type": "integer"}, "poll_interval_seconds": map[string]interface{}{"type": "integer"}}}},
+		{"name": "yaver_auth_unlink", "description": "Remove an OAuth provider from the currently signed-in account. Refuses if it is the ONLY sign-in method (would lock the user out). If the unlinked provider was the primary one, another linked provider is promoted automatically. If 2FA is enabled, pass totp_code.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "apple | github | gitlab | google | microsoft | email"}, "totp_code": map[string]interface{}{"type": "string", "description": "Optional 6-digit TOTP code for 2FA-protected accounts"}}}},
+		{"name": "yaver_auth_merge_start", "description": "Start a MANUAL account-merge: someone accidentally created two Yaver accounts and wants to fold one into the current one. Returns {merge_token, approval_url, qr_ascii, expires_at_ms, target_email}. The user opens the URL on a browser where the OTHER account is signed in, confirms, and the merge completes. Call yaver_auth_merge_wait to watch for completion. The currently signed-in account is the one that will be KEPT. If 2FA is enabled on the target account, pass totp_code.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"totp_code": map[string]interface{}{"type": "string", "description": "Optional 6-digit TOTP code for 2FA-protected accounts"}}}},
+		{"name": "yaver_auth_merge_wait", "description": "Poll a merge intent's status until it completes, is cancelled, or expires. Default timeout 180s.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"merge_token"}, "properties": map[string]interface{}{"merge_token": map[string]interface{}{"type": "string", "description": "Token returned by yaver_auth_merge_start"}, "timeout_seconds": map[string]interface{}{"type": "integer"}, "poll_interval_seconds": map[string]interface{}{"type": "integer"}}}},
+		{"name": "recovery_transport_status", "description": "Report this machine's auth-recovery exposure and readiness: whether direct public HTTP recovery is open, whether Tailscale/private relay/HTTPS tunnel paths exist, and whether a bootstrap secret is configured.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "recovery_target_status", "description": "Probe a specific remote Yaver base URL without relying on local Yaver sign-in. For security, public HTTP targets are refused unless you pass relay_password or allow_public_direct_http=true. Returns whether the box looks offline, bootstrap-reachable, auth-required, or generally reachable.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"target_url"}, "properties": map[string]interface{}{"target_url": map[string]interface{}{"type": "string", "description": "Exact remote base URL, e.g. https://edge.example.com or https://relay.example/d/device-id"}, "relay_password": map[string]interface{}{"type": "string", "description": "Optional relay password for private relay access."}, "allow_public_direct_http": map[string]interface{}{"type": "boolean", "description": "Unsafe override for plain public HTTP targets. Default false."}}}},
+		{"name": "recovery_target_start", "description": "Start auth recovery against an explicit remote Yaver base URL when the caller is not signed into Yaver locally. Requires either bootstrap_secret or bearer_token. direct/device-code require bearer_token. Public HTTP targets are refused unless relay_password is provided or allow_public_direct_http=true.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"target_url"}, "properties": map[string]interface{}{"target_url": map[string]interface{}{"type": "string", "description": "Exact remote base URL, e.g. https://edge.example.com or https://relay.example/d/device-id"}, "mode": map[string]interface{}{"type": "string", "description": "auto (default), direct, pair, or device-code."}, "bootstrap_secret": map[string]interface{}{"type": "string", "description": "Bootstrap secret previously configured on the remote machine."}, "bearer_token": map[string]interface{}{"type": "string", "description": "Host Yaver bearer token to use for direct or device-code recovery."}, "relay_password": map[string]interface{}{"type": "string", "description": "Optional relay password for private relay access."}, "allow_public_direct_http": map[string]interface{}{"type": "boolean", "description": "Unsafe override for plain public HTTP targets. Default false."}}}},
+		{"name": "recovery_target_wait", "description": "Poll a previously-started explicit-target recovery session until it completes, fails, or times out. Requires target_url plus the recovery_id/wait_token returned by recovery_target_start.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"target_url", "recovery_id", "wait_token"}, "properties": map[string]interface{}{"target_url": map[string]interface{}{"type": "string"}, "recovery_id": map[string]interface{}{"type": "string"}, "wait_token": map[string]interface{}{"type": "string"}, "relay_password": map[string]interface{}{"type": "string"}, "allow_public_direct_http": map[string]interface{}{"type": "boolean"}, "timeout_seconds": map[string]interface{}{"type": "integer", "description": "Default 120, max 300."}, "poll_interval_seconds": map[string]interface{}{"type": "integer", "description": "Default 3."}}}},
+		{"name": "device_reauth_status", "description": "Inspect an owned remote Yaver machine's recovery state. Distinguishes healthy, bootstrap, auth-expired, unreachable, and offline cases so coding agents can decide whether to wait, reconnect, or start re-auth.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device_id"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Owned Yaver device ID, unique prefix, or exact device name."}}}},
+		{"name": "device_reauth_start", "description": "Start Yaver re-auth on an owned remote machine through the existing /auth/recover path. auto picks the safest mode for the detected state: typically direct for auth-expired, pair for bootstrap.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device_id"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Owned Yaver device ID, unique prefix, or exact device name."}, "mode": map[string]interface{}{"type": "string", "description": "auto (default), direct, pair, or device-code."}, "bootstrap_secret": map[string]interface{}{"type": "string", "description": "Optional legacy bootstrap secret for secret-based recovery when host-token recovery is not enough."}}}},
+		{"name": "device_reauth_wait", "description": "Wait for remote Yaver auth recovery to complete. Preferred usage is recovery_id + wait_token from device_reauth_start; device_id-only fallback still probes machine health for older callers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Owned device selector. Required for remote-session waits; optional only when waiting on a local session."}, "recovery_id": map[string]interface{}{"type": "string"}, "wait_token": map[string]interface{}{"type": "string"}, "timeout_seconds": map[string]interface{}{"type": "integer", "description": "Default 120, max 300."}, "poll_interval_seconds": map[string]interface{}{"type": "integer", "description": "Default 3."}}}},
+		// --- Runner/provider auth bootstrapping (vault-backed, local or remote) ---
+		{"name": "runner_model_probe", "description": "Probe which models the installed runner's LOGIN can actually run, by attempting a real generation for each. Use this instead of assuming from a model id — a subscription login refuses models an API key allows, and the set changes without notice. Returns usable/rejected verdicts plus a recommended default.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"runner": map[string]interface{}{"type": "string", "description": "Runner to probe (codex today)"}, "models": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Model ids to probe; omit for the built-in candidate set"}}}},
+		{"name": "runner_auth_status", "description": "Show whether Claude Code, Codex, and OpenCode are installed and authenticated. Check this before prompting OAuth; if a remote runner is already signed in, constrained surfaces can attach to tmux/control sessions instead of asking again. Optional device_id inspects another owned Yaver machine.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}}}},
+		{"name": "runner_auth_set", "description": "Legacy vault-backed provider auth for OpenCode/GLM provider configuration only. Claude Code and Codex use subscription OAuth through runner_auth_browser_start or runner_auth_credentials_import. Optional device_id writes to another owned Yaver machine.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"runner"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "runner": map[string]interface{}{"type": "string", "enum": []string{"opencode", "glm"}}, "openai_api_key": map[string]interface{}{"type": "string", "description": "OpenCode provider credential."}, "anthropic_api_key": map[string]interface{}{"type": "string", "description": "OpenCode provider credential."}, "glm_api_key": map[string]interface{}{"type": "string", "description": "OpenCode/GLM provider credential."}, "zai_api_key": map[string]interface{}{"type": "string", "description": "OpenCode/GLM provider credential."}, "notes": map[string]interface{}{"type": "string"}}}},
+		{"name": "runner_auth_setup", "description": "High-level runner bootstrap for a local or remote Yaver machine: install the runner if missing, report whether subscription OAuth is still pending, and register Yaver as an MCP server inside the runner when supported. For Claude Code/Codex, finish auth with runner_auth_browser_start or runner_auth_credentials_import. Provider credentials here are for OpenCode/GLM only.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"runner"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "runner": map[string]interface{}{"type": "string", "enum": []string{"claude", "claude-code", "codex", "opencode"}}, "openai_api_key": map[string]interface{}{"type": "string", "description": "OpenCode provider credential only."}, "anthropic_api_key": map[string]interface{}{"type": "string", "description": "OpenCode provider credential only."}, "glm_api_key": map[string]interface{}{"type": "string", "description": "OpenCode/GLM provider credential."}, "zai_api_key": map[string]interface{}{"type": "string", "description": "OpenCode/GLM provider credential."}, "notes": map[string]interface{}{"type": "string"}, "install_if_missing": map[string]interface{}{"type": "boolean", "description": "Default true."}, "codex_login": map[string]interface{}{"type": "boolean", "description": "Default true for Codex; use browser auth for ChatGPT Plus/Pro OAuth."}, "setup_mcp": map[string]interface{}{"type": "boolean", "description": "Default true. Registers Yaver as an MCP server inside the runner when supported."}, "allow_install_only": map[string]interface{}{"type": "boolean", "description": "Return a soft success when the CLI is installed but auth is still pending."}}}},
+		{"name": "runner_auth_browser_start", "description": "Start the interactive plan-OAuth browser/device-auth login flow for Claude Code or Codex on the local or a remote Yaver machine. Uses the user's Claude Pro/Max or ChatGPT Plus/Pro account on their own device; no API key is requested.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"runner"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "runner": map[string]interface{}{"type": "string", "enum": []string{"claude", "claude-code", "codex"}}}}},
+		{"name": "runner_auth_browser_status", "description": "Read the live state of a previously-started runner browser-auth session on the local or a remote machine.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"session_id"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "session_id": map[string]interface{}{"type": "string"}}}},
+		{"name": "runner_auth_browser_submit_code", "description": "Submit a copied authentication code/token back into a running runner browser-auth session.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"session_id", "code"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "session_id": map[string]interface{}{"type": "string"}, "code": map[string]interface{}{"type": "string"}}}},
+		{"name": "runner_auth_browser_submit_callback", "description": "Deliver a localhost OAuth callback URL (http://localhost:<port>/callback?...) into a running runner browser-auth session on the local or a remote machine. Use when the user finished the sign-in in a browser on a DIFFERENT device than the runner: the browser lands on that device's localhost and the runner CLI never sees the code — this verb replays the pasted URL to the runner's waiting loopback listener. The URL must match the session's observed callback port; validation is identical to the web/mobile Deliver-callback lane.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"session_id", "callback_url"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "session_id": map[string]interface{}{"type": "string"}, "callback_url": map[string]interface{}{"type": "string", "description": "Full localhost callback URL copied from the browser address bar."}}}},
+		{"name": "runner_auth_browser_cancel", "description": "Cancel a running runner browser-auth session on the local or a remote machine.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"session_id"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "session_id": map[string]interface{}{"type": "string"}}}},
+		{"name": "runner_auth_credentials_import", "description": "Copy a runner subscription token (Claude Max / Pro, or ChatGPT Plus / Pro for codex) from an already-signed-in machine to a remote one. Yaver is a single-user wrapper, so this is the preferred path when the user already has working subscription auth locally — it avoids re-running OAuth on every box (which hits the SSH-launched-daemon Keychain wall on macOS). Subscription only; never use API keys.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"runner", "credentials_json"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID. When omitted, writes to the local agent."}, "runner": map[string]interface{}{"type": "string", "enum": []string{"claude", "claude-code", "codex"}}, "credentials_json": map[string]interface{}{"type": "string", "description": "The full credentials JSON blob — for claude on macOS this is the 'Claude Code-credentials' Keychain entry contents (or ~/.claude/.credentials.json on Linux); for codex this is ~/.codex/auth.json."}}}},
+		{
+			"name":        "code_config_get",
+			"description": "Read the machine-aware `yaver code` control-plane state. Returns the persisted code config (runner, model, provider, base URL, attached machine, repo/work-mode, orchestration mode), plus best-effort current target info/context and the OpenCode config summary when the runner is opencode. Optional device_id reads another owned Yaver machine's code config.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"},
+				},
+			},
+		},
+		{
+			"name":        "code_config_set",
+			"description": "Update the machine-aware `yaver code` control-plane state on the local or a remote owned Yaver machine. Supports runner/model/orchestration/work-mode/attached machine/repo fields and an optional BYOK block for OpenCode-backed coding (OpenRouter, custom OpenAI-compatible providers, remote Ollama). Returns the updated code summary.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id":            map[string]interface{}{"type": "string", "description": "Optional remote device ID"},
+					"runner":               map[string]interface{}{"type": "string", "description": "Runner override such as claude, codex, or opencode"},
+					"model":                map[string]interface{}{"type": "string", "description": "Model id for the selected runner"},
+					"provider":             map[string]interface{}{"type": "string", "description": "Preferred provider id for opencode-backed BYOK flows, e.g. openrouter"},
+					"base_url":             map[string]interface{}{"type": "string", "description": "Provider base URL such as https://openrouter.ai/api/v1"},
+					"orchestration_mode":   map[string]interface{}{"type": "string", "enum": []string{"manual", "auto"}},
+					"work_mode":            map[string]interface{}{"type": "string", "enum": []string{"local", "attached"}},
+					"attached_device_id":   map[string]interface{}{"type": "string"},
+					"attached_device_name": map[string]interface{}{"type": "string"},
+					"repo_path":            map[string]interface{}{"type": "string", "description": "Set the effective repo/workdir for the current local or attached target"},
+					"repo_remote":          map[string]interface{}{"type": "boolean"},
+					"byok_provider":        map[string]interface{}{"type": "string", "description": "High-level BYOK provider id, e.g. openrouter"},
+					"byok_api_key":         map[string]interface{}{"type": "string"},
+					"small_model":          map[string]interface{}{"type": "string"},
+					"plan_model":           map[string]interface{}{"type": "string"},
+					"build_model":          map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "code_status",
+			"description": "Return the shared `yaver code` control-plane status: current code config, target context, online machines, OpenCode summary when relevant, recent graph runs, and the current auto-orchestration policy. Optional device_id inspects another owned Yaver machine.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"},
+				},
+			},
+		},
+		{
+			"name":        "code_attach",
+			"description": "Attach `yaver code` to a machine so the repo/files and coding context live there while the terminal stays local. Returns the selected machine, runner summary, target context, and updated code config. Optional device_id mutates another owned Yaver machine's code control plane instead of this one.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"target"},
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID whose local code-control plane should be updated"},
+					"target":    map[string]interface{}{"type": "string", "description": "Device ID or machine name to attach to"},
+				},
+			},
+		},
+		{
+			"name":        "code_detach",
+			"description": "Detach `yaver code` back to the local machine. Optional device_id detaches another owned Yaver machine's code control plane.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"},
+				},
+			},
+		},
+		{
+			"name":        "code_repos",
+			"description": "List candidate repos/projects for the current `yaver code` target. On local mode it reads local discovered projects; on attached mode it lists projects from the attached remote machine. Optional device_id queries another owned Yaver machine.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"},
+				},
+			},
+		},
+		{
+			"name":        "code_repo_set",
+			"description": "Switch the active repo/workdir for `yaver code` on the local or attached target. Accepts a project name, slug, or absolute path. Optional device_id updates another owned Yaver machine.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"query"},
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"},
+					"query":     map[string]interface{}{"type": "string", "description": "Repo/project selector or absolute path"},
+				},
+			},
+		},
+		{
+			"name":        "code_dev",
+			"description": "Run a dev-loop action against the current `yaver code` target. Supported actions today: `status`, `reload`. Optional device_id targets another owned Yaver machine's code control plane.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"action"},
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"},
+					"action":    map[string]interface{}{"type": "string", "enum": []string{"status", "reload"}},
+				},
+			},
+		},
+		{
+			"name":        "code_deploy",
+			"description": "Run a deployment from the current `yaver code` target or from an explicitly selected repo/machine. Supports direct host deploys to TestFlight, Play internal testing, Convex, Cloudflare, or combined `all`, plus optional GitHub/GitLab CI fallback. `machine=auto` asks Yaver to choose the best machine for the target; `distribute=true` lets multi-target deploys fan out across different machines to reduce CI cost and load hot spots.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id":   map[string]interface{}{"type": "string", "description": "Optional remote device ID"},
+					"app":         map[string]interface{}{"type": "string", "description": "Optional explicit app/project name override"},
+					"surface":     map[string]interface{}{"type": "string", "enum": []string{"mobile", "backend", "frontend", "all", "testflight", "playstore", "convex", "cloudflare"}},
+					"targets":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional explicit deploy target list; overrides surface"},
+					"repo_query":  map[string]interface{}{"type": "string", "description": "Optional repo/project selector to deploy instead of the current code repo"},
+					"repo_path":   map[string]interface{}{"type": "string", "description": "Optional explicit repo path on the selected machine"},
+					"machine":     map[string]interface{}{"type": "string", "description": "Optional executor machine: local, auto, or a device id/name"},
+					"distribute":  map[string]interface{}{"type": "boolean", "description": "When true, multi-target deploys may choose different machines per target"},
+					"ci_provider": map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab"}, "description": "Optional CI fallback instead of direct host deploy"},
+					"ci_repo":     map[string]interface{}{"type": "string", "description": "Optional CI repo identifier; auto-detected from git when omitted"},
+					"workflow":    map[string]interface{}{"type": "string", "description": "GitHub Actions workflow filename when ci_provider=github"},
+					"branch":      map[string]interface{}{"type": "string", "description": "CI branch (default main)"},
+					"tag":         map[string]interface{}{"type": "string", "description": "GitHub release tag for artifact upload mode"},
+					"file":        map[string]interface{}{"type": "string", "description": "Optional artifact path for CI upload/release mode"},
+				},
+			},
+		},
+		// --- OpenCode config (build/plan agents, providers, models) ---
+		{"name": "opencode_config_get", "description": "Read the OpenCode config (~/.config/opencode/opencode.json or env-overridden path). Returns the resolved path, default agent, top-level model + small_model, plus the per-agent build/plan models, all configured providers (with baseURL — useful for OpenRouter, remote Tailscale Ollama, or other BYOK OpenAI-compatible backends), and a flat list of model identifiers. Optional device_id reads another owned Yaver machine's config.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}}}},
+		{"name": "opencode_config_set", "description": "Patch the OpenCode config on the local or a remote Yaver machine. Each top-level field is optional; pass empty string to clear. defaultAgent picks the agent invoked when no --agent flag is given. model is the top-level default model id. smallModel is used for cheap helper calls. buildModel and planModel set the model under agent.build / agent.plan in opencode.json. providers is an optional list of provider upserts — each entry creates or merges a provider entry by id. Common cases: BYOK OpenRouter via {id:'openrouter', baseUrl:'https://openrouter.ai/api/v1', apiKey:'...'} or pointing a remote machine's opencode at a Tailscale-reachable Ollama via {id:'ollama', baseUrl:'http://100.x.x.x:11434'}. Pass delete:true on a provider entry to remove it. Other config keys (custom agents, MCP servers) stay untouched. Returns the new config summary.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "default_agent": map[string]interface{}{"type": "string", "description": "Default agent name (e.g. build, plan, or any custom agent)"}, "model": map[string]interface{}{"type": "string", "description": "Top-level default model id"}, "small_model": map[string]interface{}{"type": "string", "description": "Cheap-helper model id"}, "build_model": map[string]interface{}{"type": "string", "description": "Model for agent.build"}, "plan_model": map[string]interface{}{"type": "string", "description": "Model for agent.plan"}, "providers": map[string]interface{}{"type": "array", "description": "Optional list of provider upserts — each {id, name?, baseUrl?, apiKey?, models?, delete?}.", "items": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string", "description": "Provider id (e.g. ollama, anthropic, openai, openrouter)"}, "name": map[string]interface{}{"type": "string"}, "baseUrl": map[string]interface{}{"type": "string", "description": "e.g. https://openrouter.ai/api/v1 or http://100.x.x.x:11434 for a Tailscale Ollama"}, "apiKey": map[string]interface{}{"type": "string"}, "models": map[string]interface{}{"type": "object", "description": "Map of model id → metadata. Optional."}, "delete": map[string]interface{}{"type": "boolean", "description": "Remove the provider entry entirely."}}}}}}},
+		{"name": "machine_onboarding_status", "description": "Show whether OpenAI, GitHub, and GitLab are configured on this machine or on one or more owned Yaver machines. Reports OpenAI API key readiness plus Git clone and CI/deploy token state.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "device_ids": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional list of owned remote device IDs"}}}},
+		{"name": "machine_onboarding_apply", "description": "Configure OpenAI, GitHub, and GitLab onboarding on the local machine or on one or more owned Yaver machines. Stores OpenAI in vault, and for GitHub/GitLab can write clone credentials plus CI/deploy tokens.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "device_ids": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional list of owned remote device IDs"}, "openai_api_key": map[string]interface{}{"type": "string"}, "github_token": map[string]interface{}{"type": "string"}, "gitlab_token": map[string]interface{}{"type": "string"}, "gitlab_host": map[string]interface{}{"type": "string", "description": "Defaults to gitlab.com"}, "apply_clone": map[string]interface{}{"type": "boolean", "description": "Write clone/pull credentials (default true)"}, "apply_ci_token": map[string]interface{}{"type": "boolean", "description": "Write CI/deploy vault token (default true)"}, "notes": map[string]interface{}{"type": "string"}}}},
+		{"name": "machine_onboarding_remove", "description": "Remove GitHub/GitLab onboarding from the local machine or from one or more owned Yaver machines. Can remove clone credentials, CI/deploy vault tokens, or both.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID"}, "device_ids": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional list of owned remote device IDs"}, "providers": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab"}}, "description": "Providers to remove"}, "gitlab_host": map[string]interface{}{"type": "string", "description": "Optional specific GitLab host to clear"}, "remove_clone": map[string]interface{}{"type": "boolean", "description": "Remove clone/pull credentials and provider config (default true)"}, "remove_ci_token": map[string]interface{}{"type": "boolean", "description": "Remove CI/deploy vault token (default true)"}}}},
+		{"name": "git_push_creds", "description": "Forward locally detected GitHub/GitLab tokens (gh CLI, env vars, git credential helper, vault) to one or more owned remote Yaver machines via the same /machine/onboarding/apply endpoint as the dashboard. Lets a fresh remote box (Hetzner runner, managed cloud, …) get clone-pull creds plus CI/deploy vault tokens without re-pasting a PAT. Self is always excluded — use machine_onboarding_apply or vault tools for the local machine. Tokens never reach Convex.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Single owned remote device ID or alias"}, "device_ids": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Multiple owned remote device IDs/aliases"}, "all": map[string]interface{}{"type": "boolean", "description": "Fan out to every owned online peer (excludes this machine)"}, "provider": map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab", "all"}, "description": "Which provider(s) to push (default all)"}, "gitlab_host": map[string]interface{}{"type": "string", "description": "Defaults to gitlab.com"}, "github_token": map[string]interface{}{"type": "string", "description": "Override auto-detection (omit to detect locally)"}, "gitlab_token": map[string]interface{}{"type": "string", "description": "Override auto-detection (omit to detect locally)"}, "apply_clone": map[string]interface{}{"type": "boolean", "description": "Write clone/pull credentials on each target (default true)"}, "apply_ci_token": map[string]interface{}{"type": "boolean", "description": "Write CI/deploy vault token on each target (default true)"}, "notes": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_oauth_start", "description": "Start a GitHub or GitLab Device Flow (RFC 8628) authorization on the local machine or a remote owned peer. Returns a short user_code + verification_uri the user opens in any browser to approve. The agent polls in the background and persists the resulting OAuth access token to ~/.yaver/git-credentials.json, provider metadata, and the local vault for CI/deploy use, exactly like /git/provider/setup. Token never reaches Convex. Poll git_oauth_status to learn when approval completes. Requires a registered Device Flow OAuth Client ID — see error message for setup if not configured.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab"}}, "host": map[string]interface{}{"type": "string", "description": "Defaults to github.com / gitlab.com"}, "device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID/alias — runs the flow on that peer"}}}},
+		{"name": "git_oauth_status", "description": "Poll the state of an in-flight GitHub/GitLab Device Flow session started via git_oauth_start. Returns state ∈ {pending, done, error, expired, unknown} plus the username on success. Safe to call repeatedly at the interval the start call returned.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"session_id"}, "properties": map[string]interface{}{"session_id": map[string]interface{}{"type": "string"}, "device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID/alias — checks the session on that peer"}}}},
+		// Cloud provisioning
+		{"name": "cloud_provision", "description": "Provision a resource on a cloud provider using stored credentials. Hosts: neon, supabase-cloud, turso, cloudflare-d1, vercel, hetzner, railway.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host", "name"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string"}, "name": map[string]interface{}{"type": "string"}, "opts": map[string]interface{}{"type": "string", "description": "JSON options"}}}},
+		{"name": "cloud_destroy", "description": "Snapshot then delete a managed cloud box (host=hetzner). Vault-backed token, never from payload. Requires opts JSON with confirm=\"true\"; always snapshots first unless opts skipSnapshot=\"true\".", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host", "id"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string"}, "id": map[string]interface{}{"type": "string", "description": "provider numeric server id"}, "opts": map[string]interface{}{"type": "string", "description": "JSON options incl. confirm"}}}},
+		// Studio proxy + store-compliance proofs
+		{"name": "studio_list", "description": "List native DB dashboards (Drizzle, Supabase, Convex, PocketBase, MinIO, Mailpit, Firebase) with live-probe.", "inputSchema": map[string]interface{}{"type": "object"}},
+		{"name": "studio_permission_prose", "description": "Analyze AndroidManifest.xml for a permission and generate Play Console prose plus a video shot-list. Good for FOREGROUND_SERVICE_SPECIAL_USE and third-party app permissions. Optional device_id runs on another owned Yaver machine that has the repo.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"permission"}, "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias whose agent has the repo."}, "permission": map[string]interface{}{"type": "string", "description": "Permission or FGS type, e.g. FOREGROUND_SERVICE_SPECIAL_USE."}, "path": map[string]interface{}{"type": "string", "description": "Repo/app root on the target machine. Defaults to agent cwd."}, "manifest": map[string]interface{}{"type": "string", "description": "Explicit AndroidManifest.xml path."}, "app": map[string]interface{}{"type": "string", "description": "App display name for generated prose."}, "what": map[string]interface{}{"type": "string", "description": "Plain-language use case."}, "useCase": map[string]interface{}{"type": "boolean", "description": "Generate narrative prose for a real background task use case."}, "whatRuns": map[string]interface{}{"type": "string"}, "progressText": map[string]interface{}{"type": "string"}, "completionText": map[string]interface{}{"type": "string"}}}},
+		{"name": "studio_permission_video", "description": "Start a Redroid-backed Google Play permission-justification video job. Defaults to a narrative proof: start real work, show it running, background the app, show completion notification, stop. Optional device_id runs on a remote Yaver machine with Docker/Redroid. Poll studio_job_status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias hosting the Redroid surface."}, "permission": map[string]interface{}{"type": "string", "description": "Default FOREGROUND_SERVICE_SPECIAL_USE."}, "apk": map[string]interface{}{"type": "string", "description": "APK path on the target machine, built for the Redroid architecture."}, "package": map[string]interface{}{"type": "string", "description": "Android package id, e.g. io.yaver.mobile."}, "activity": map[string]interface{}{"type": "string", "description": "Launch activity, default .MainActivity."}, "manifest": map[string]interface{}{"type": "string", "description": "AndroidManifest.xml path for static analysis."}, "path": map[string]interface{}{"type": "string", "description": "Repo/app root on the target machine."}, "app": map[string]interface{}{"type": "string", "description": "App display name."}, "what": map[string]interface{}{"type": "string", "description": "Use case summary."}, "startAction": map[string]interface{}{"type": "string", "description": "Optional Android service/action to start the use case."}, "hostWorkDir": map[string]interface{}{"type": "string", "description": "Host directory bind-mounted to Redroid /data."}, "sshHost": map[string]interface{}{"type": "string", "description": "Optional on-prem Redroid host reachable from the target machine."}, "sshOpts": map[string]interface{}{"type": "string"}, "image": map[string]interface{}{"type": "string"}, "maxSec": map[string]interface{}{"type": "number"}, "mechanical": map[string]interface{}{"type": "boolean", "description": "Use bare start-notification-stop proof instead of narrative task proof."}, "useCase": map[string]interface{}{"type": "object", "description": "Narrative driver config: {whatRuns,startButtonText,stopButtonText,progressText,completionText,taskActions[]}."}}}},
+		{"name": "studio_job_status", "description": "Poll a Studio job such as studio_permission_video. Omit jobId to list jobs. Optional device_id polls a remote Yaver machine.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias."}, "jobId": map[string]interface{}{"type": "string"}}}},
+		// Cost comparison
+		{"name": "switch_cost", "description": "Estimate monthly cost across all switch targets based on current project usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Direct init (assembles services.yaml + config.yaml + minimal scaffold)
+		{"name": "init_project", "description": "Scaffold a new project directly (without the interactive wizard). Picks services.yaml presets + writes .yaver/config.yaml + kicks off create-next-app in the background.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"opts"}, "properties": map[string]interface{}{"opts": map[string]interface{}{"type": "string", "description": "JSON: {name, parentDir, stack, db, auth, payments, template, orm, services}"}}}},
+		// Schema + storage + logs
+		{"name": "backend_schema", "description": "Show schema (tables + columns + mermaid ERD) for the project's backend.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "storage_list", "description": "List files across Convex Storage / Supabase Storage / local uploads/.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "bucket": map[string]interface{}{"type": "string"}}}},
+		{"name": "managed_git_status", "description": "Show Yaver Managed Git status for a project: main branch, latest commit, local backup, external backups, and GitHub/GitLab mirrors. Uses Yaver auth; no provider token is exposed.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}, "work_dir": map[string]interface{}{"type": "string"}}}},
+		{"name": "managed_git_enable", "description": "Turn on Yaver Managed Git for an existing project. Creates a private managed repo on main by default and records it in project metadata.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}, "work_dir": map[string]interface{}{"type": "string"}, "name": map[string]interface{}{"type": "string"}, "visibility": map[string]interface{}{"type": "string", "enum": []string{"private", "unlisted", "public"}}}}},
+		{"name": "managed_git_checkpoint", "description": "Commit all current project changes to Yaver Managed Git and push to the managed main branch. Good before/after AI changes, deploys, or quality runs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}, "work_dir": map[string]interface{}{"type": "string"}, "message": map[string]interface{}{"type": "string"}}}},
+		{"name": "managed_git_backup", "description": "Create a recoverable git bundle backup. Optionally copy it to Dropbox, a user-controlled local folder, or a shared-storage profile for own-PC/NAS style backup.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}, "work_dir": map[string]interface{}{"type": "string"}, "target_kind": map[string]interface{}{"type": "string", "enum": []string{"", "local-folder", "shared-storage", "dropbox"}}, "target_id": map[string]interface{}{"type": "string"}, "dest_path": map[string]interface{}{"type": "string"}}}},
+		{"name": "managed_git_restore", "description": "Restore a Yaver Managed Git bundle onto the managed main branch. Use only after explicit user approval.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"bundle_path"}, "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}, "work_dir": map[string]interface{}{"type": "string"}, "bundle_path": map[string]interface{}{"type": "string"}}}},
+		{"name": "managed_git_mirror", "description": "Create or update a GitHub/GitLab mirror from the Yaver Managed Git repo. Provider auth must already be connected on this machine; tokens are never written into the tenant worktree.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}, "work_dir": map[string]interface{}{"type": "string"}, "provider": map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab"}}, "host": map[string]interface{}{"type": "string"}, "repo_name": map[string]interface{}{"type": "string"}, "visibility": map[string]interface{}{"type": "string", "enum": []string{"private", "public"}}, "description": map[string]interface{}{"type": "string"}}}},
+		{"name": "managed_quality_run", "description": "Run Yaver quality checks for the project on this Yaver CPU (tests/lint/typecheck/format when detected). Presents as quality checks for normies, not raw CI.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"work_dir": map[string]interface{}{"type": "string"}}}},
+		{"name": "shared_storage_profiles", "description": "List machine-level shared storage profiles (NAS/SMB/WebDAV/Storage Box/S3) available to Yaver clients.", "inputSchema": map[string]interface{}{"type": "object"}},
+		{"name": "shared_storage_upsert", "description": "Create or update a shared storage profile. Profile is JSON with fields like {name,type,path|mount_path|endpoint,bucket,...}.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"profile"}, "properties": map[string]interface{}{"profile": map[string]interface{}{"type": "string", "description": "JSON shared storage profile"}}}},
+		{"name": "shared_storage_delete", "description": "Delete a shared storage profile.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}}},
+		{"name": "shared_storage_list", "description": "Browse a configured shared storage profile.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}, "path": map[string]interface{}{"type": "string"}}}},
+		{"name": "shared_storage_search", "description": "Search names and text documents inside a configured shared storage profile.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id", "query"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}, "query": map[string]interface{}{"type": "string"}, "path": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "number"}}}},
+		{"name": "cron_list", "description": "List scheduled/cron jobs across backends (Convex scheduled functions, pg_cron).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "console_machines", "description": "List every machine running a Yaver agent (local Mac/Linux/Windows + Hetzner, AWS, GCP VPSes). Hybrid view across own-hardware and cloud.", "inputSchema": map[string]interface{}{"type": "object"}},
+		// Deploy pipeline
+		{"name": "mobile_platform_matrix", "description": "Return the source-of-truth platform surface matrix for mobile, TV, watch, car, and AR/VR deployability across Apple and Android. Includes what is ready, build-only, bundled into another artifact, blocked by entitlement/review work, and which release validation drivers are supported, including deep-build-doctor and autotest-selenium/WebDriver.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Repo root. Empty = current yaver repo or current working directory."}}}},
+		{"name": "mobile_platform_deploy", "description": "Build/verify/upload Yaver or third-party platform-specific mobile releases from the given repo. Supports iOS/TestFlight, Android/Play, Android Auto, CarPlay-as-iOS, Wear OS, watchOS, Android TV, tvOS, Apple Vision Pro/visionOS, Android XR/VR, and combined TV. Pass validate_driver=selenium to run the existing yaver autotest WebDriver/Selenium gate before upload; validate_driver=cdp uses the default Chrome CDP gate. Use mobile_platform_matrix first for car/watch/AR-VR readiness, validation support, and portal actions. Use dry_run=true to inspect the exact script and validation plan. For build-only verification, pass upload=false.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"target"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string", "description": "Repo root for Yaver or a third-party app. Empty = auto-detected deploy repo/current working directory."}, "target": map[string]interface{}{"type": "string", "enum": []string{"ios", "testflight", "android", "playstore", "android-auto", "carplay", "tv", "android-tv", "tvos", "wear-os", "watchos", "visionos", "android-xr"}, "description": "Executable platform surface target."}, "upload": map[string]interface{}{"type": "boolean", "description": "When true, submit store upload after build/verification. Default false for MCP safety."}, "dry_run": map[string]interface{}{"type": "boolean", "description": "Return the plan without running validation or the deploy script."}, "timeout_sec": map[string]interface{}{"type": "integer", "minimum": 60, "maximum": 7200, "description": "Execution timeout including validation. Default 1800 seconds."}, "validate_driver": map[string]interface{}{"type": "string", "enum": []string{"", "none", "cdp", "chrome", "chrome-cdp", "selenium", "webdriver"}, "description": "Optional release validation driver. selenium/webdriver runs yaver autotest through the Selenium/WebDriver backend before the release script."}, "validate_scope": map[string]interface{}{"type": "string", "description": "Optional autotest scope. Default full for third-party compatibility; examples: full, changed, screen:checkout."}, "validate_viewport": map[string]interface{}{"type": "string", "description": "Optional autotest viewport. Defaults by target: iphone15 for iOS, pixel7 for Android/watch, ipad11-landscape for TV and AR/VR."}, "validate_max_flows": map[string]interface{}{"type": "integer", "minimum": 0, "description": "Optional maximum number of autotest flows to run before release. 0 = all."}, "validate_max_wall_clock_sec": map[string]interface{}{"type": "integer", "minimum": 0, "description": "Optional autotest wall-clock cap in seconds. 0 = no separate autotest cap beyond timeout_sec."}}}},
+		{"name": "deploy_run", "description": "Run a deploy: git pull → build → swap containers → healthcheck → auto-rollback on failure.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "deploy_list", "description": "List deploy history for a project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "deploy_rollback", "description": "Roll back to a prior deploy's commit.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "id": map[string]interface{}{"type": "string"}}}},
+		// Env clone + log search
+		{"name": "clone_env", "description": "Clone one project's backend data into another (same backend family). Source snapshot → target restore.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"source", "target"}, "properties": map[string]interface{}{"source": map[string]interface{}{"type": "string"}, "target": map[string]interface{}{"type": "string"}, "subsetRows": map[string]interface{}{"type": "number"}}}},
+		{"name": "log_search", "description": "Search all indexed container logs via SQLite FTS5.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"q"}, "properties": map[string]interface{}{"q": map[string]interface{}{"type": "string"}, "services": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "number"}}}},
+		// Cloudflare
+		{"name": "cf_workers", "description": "List Cloudflare Worker deployments.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_deploy", "description": "Deploy Cloudflare Worker.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_pages", "description": "List Cloudflare Pages deployments.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_r2", "description": "Manage Cloudflare R2 storage (list buckets/objects).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "buckets or list"}, "bucket": map[string]interface{}{"type": "string"}, "key": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_d1", "description": "Query Cloudflare D1 database.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list or query"}, "database": map[string]interface{}{"type": "string"}, "query": map[string]interface{}{"type": "string"}}}},
+		{"name": "cf_kv", "description": "Manage Cloudflare KV store.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list, keys, get, put"}, "namespace": map[string]interface{}{"type": "string"}, "key": map[string]interface{}{"type": "string"}, "value": map[string]interface{}{"type": "string"}}}},
+		// GitLab
+		{"name": "gitlab_mrs", "description": "List GitLab merge requests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "state": map[string]interface{}{"type": "string", "description": "opened, merged, closed"}}}},
+		{"name": "gitlab_issues", "description": "List GitLab issues.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "state": map[string]interface{}{"type": "string"}}}},
+		{"name": "gitlab_pipelines", "description": "List GitLab CI/CD pipelines.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "gitlab_ci", "description": "Show current GitLab CI status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// GitHub extras
+		{"name": "github_repo_info", "description": "Get current repo info (stars, forks, language, license).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "github_releases", "description": "List GitHub releases.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "github_stars", "description": "Get star count for any repo.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"repo"}, "properties": map[string]interface{}{"repo": map[string]interface{}{"type": "string", "description": "owner/repo"}}}},
+		{"name": "git_members", "description": "List who has access to a GitHub or GitLab repo. Resolves explicit repo > directory > cwd and reports whether the call used CLI transport or direct REST.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"repo": map[string]interface{}{"type": "string", "description": "Repo slug (`owner/repo`, `group/subgroup/project`) or full clone URL."}, "directory": map[string]interface{}{"type": "string", "description": "Repo directory; used when repo is omitted."}, "host": map[string]interface{}{"type": "string", "description": "Forge host override (e.g. ghe.example.com or gitlab.example.com)."}, "kind": map[string]interface{}{"type": "string", "description": "github or gitlab when the host is ambiguous."}}}},
+		{"name": "git_member_invite", "description": "Invite a collaborator to a GitHub or GitLab repo using the neutral forge seam, and report whether the call used CLI transport or direct REST.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"user"}, "properties": map[string]interface{}{"user": map[string]interface{}{"type": "string", "description": "GitHub username, GitLab username, or email (GitLab only)."}, "role": map[string]interface{}{"type": "string", "description": "read, triage, write, maintain, or admin. Default: write."}, "repo": map[string]interface{}{"type": "string", "description": "Repo slug (`owner/repo`, `group/subgroup/project`) or full clone URL."}, "directory": map[string]interface{}{"type": "string", "description": "Repo directory; used when repo is omitted."}, "host": map[string]interface{}{"type": "string", "description": "Forge host override."}, "kind": map[string]interface{}{"type": "string", "description": "github or gitlab when the host is ambiguous."}}}},
+		{"name": "git_member_remove", "description": "Remove a collaborator from a GitHub or GitLab repo and report whether the call used CLI transport or direct REST.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"user"}, "properties": map[string]interface{}{"user": map[string]interface{}{"type": "string", "description": "GitHub or GitLab username to remove."}, "repo": map[string]interface{}{"type": "string", "description": "Repo slug (`owner/repo`, `group/subgroup/project`) or full clone URL."}, "directory": map[string]interface{}{"type": "string", "description": "Repo directory; used when repo is omitted."}, "host": map[string]interface{}{"type": "string", "description": "Forge host override."}, "kind": map[string]interface{}{"type": "string", "description": "github or gitlab when the host is ambiguous."}}}},
+		// gh / glab — generic passthrough + opinionated write ops
+		{"name": "gh_run", "description": "Run any `gh` (GitHub CLI) subcommand. Pass the args as a list (no leading `gh`). Pre-flights install + auth state, blocks credential-printing subcommands, and requires confirm:true for destructive commands such as `repo delete` or `gh api -X DELETE`.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"args"}, "properties": map[string]interface{}{"args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "subcommand + flags, e.g. [\"repo\", \"view\", \"--json\", \"description\"]"}, "directory": map[string]interface{}{"type": "string", "description": "Working directory; defaults to agent cwd"}, "confirm": map[string]interface{}{"type": "boolean", "description": "Required for destructive commands such as `gh repo delete` or `gh api -X DELETE`."}}}},
+		{"name": "glab_run", "description": "Run any `glab` (GitLab CLI) subcommand. Same shape as gh_run. Blocks credential-printing subcommands and requires confirm:true for destructive commands such as `repo delete` or `glab api --method DELETE`.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"args"}, "properties": map[string]interface{}{"args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "subcommand + flags, e.g. [\"mr\", \"view\", \"42\"]"}, "directory": map[string]interface{}{"type": "string"}, "confirm": map[string]interface{}{"type": "boolean", "description": "Required for destructive commands such as `glab repo delete` or `glab api --method DELETE`."}}}},
+		{"name": "github_pr_create", "description": "Create a GitHub pull request from the current branch.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"title"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "title": map[string]interface{}{"type": "string"}, "body": map[string]interface{}{"type": "string"}, "base": map[string]interface{}{"type": "string", "description": "Target branch (default: repo default branch)"}, "head": map[string]interface{}{"type": "string", "description": "Source branch (default: current)"}, "draft": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "github_issue_create", "description": "Open a GitHub issue.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"title"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "title": map[string]interface{}{"type": "string"}, "body": map[string]interface{}{"type": "string"}, "labels": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}}}},
+		{"name": "github_workflow_run", "description": "Trigger a GitHub Actions workflow_dispatch run.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"workflow"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "workflow": map[string]interface{}{"type": "string", "description": "Filename (ci.yml) or workflow display name"}, "ref": map[string]interface{}{"type": "string", "description": "Branch/tag/SHA to run against"}, "inputs": map[string]interface{}{"type": "object", "additionalProperties": map[string]interface{}{"type": "string"}}}}},
+		{"name": "gitlab_mr_create", "description": "Open a GitLab merge request.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"title"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "title": map[string]interface{}{"type": "string"}, "description": map[string]interface{}{"type": "string"}, "sourceBranch": map[string]interface{}{"type": "string"}, "targetBranch": map[string]interface{}{"type": "string"}, "draft": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "gitlab_issue_create", "description": "Open a GitLab issue.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"title"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "title": map[string]interface{}{"type": "string"}, "description": map[string]interface{}{"type": "string"}, "labels": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}}}},
+		// PlanetScale
+		{"name": "pscale_branches", "description": "List PlanetScale database branches.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"database"}, "properties": map[string]interface{}{"database": map[string]interface{}{"type": "string"}}}},
+		{"name": "pscale_deploy", "description": "Create PlanetScale deploy request.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"database", "branch"}, "properties": map[string]interface{}{"database": map[string]interface{}{"type": "string"}, "branch": map[string]interface{}{"type": "string"}}}},
+		// Prisma
+		{"name": "prisma_status", "description": "Show Prisma migration status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "prisma_generate", "description": "Run prisma generate.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "prisma_push", "description": "Run prisma db push.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Drizzle
+		{"name": "drizzle_push", "description": "Run drizzle-kit push.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "drizzle_generate", "description": "Run drizzle-kit generate.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Fly.io
+		{"name": "fly_status", "description": "Show Fly.io app status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "fly_deploy", "description": "Deploy to Fly.io.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "fly_logs", "description": "Get Fly.io app logs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"app"}, "properties": map[string]interface{}{"app": map[string]interface{}{"type": "string"}}}},
+		// Railway
+		{"name": "railway_status", "description": "Show Railway project status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "railway_deploy", "description": "Deploy to Railway.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, platformTools...)
+	tools = append(tools, devEnvironmentCloneMCPTools()...)
+
+	// --- Docker Extended ---
+	dockerExtTools := []map[string]interface{}{
+		{"name": "docker_prune", "description": "Prune Docker resources (containers, images, volumes, networks, or all).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"what"}, "properties": map[string]interface{}{"what": map[string]interface{}{"type": "string", "description": "containers, images, volumes, networks, or all"}}}},
+		{"name": "docker_disk_usage", "description": "Show Docker disk usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_networks", "description": "List Docker networks.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_volumes", "description": "List Docker volumes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_inspect", "description": "Inspect a Docker container or image (detailed JSON).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"target"}, "properties": map[string]interface{}{"target": map[string]interface{}{"type": "string", "description": "Container or image name/ID"}}}},
+		{"name": "docker_stats", "description": "Show live resource usage of all containers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docker_build", "description": "Build a Docker image from Dockerfile.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "tag": map[string]interface{}{"type": "string", "description": "Image tag"}, "dockerfile": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_pull", "description": "Pull a Docker image.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_push", "description": "Push a Docker image to registry.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_stop", "description": "Stop a running container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_start", "description": "Start a stopped container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_restart", "description": "Restart a container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_rm", "description": "Remove a container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}, "force": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "docker_rmi", "description": "Remove an image.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string"}, "force": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "docker_top", "description": "Show processes in a container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_port", "description": "Show port mappings.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"container"}, "properties": map[string]interface{}{"container": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_cp", "description": "Copy files between host and container.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"source", "destination"}, "properties": map[string]interface{}{"source": map[string]interface{}{"type": "string"}, "destination": map[string]interface{}{"type": "string"}}}},
+		{"name": "docker_history", "description": "Show image layer history.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"image"}, "properties": map[string]interface{}{"image": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, dockerExtTools...)
+
+	// --- Git Extended ---
+	gitExtTools := []map[string]interface{}{
+		{"name": "git_stash", "description": "Manage git stashes (list, save, pop, apply, drop).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list, save, pop, apply, drop"}, "message": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_blame_file", "description": "Show line-by-line blame.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}, "lines": map[string]interface{}{"type": "string", "description": "Line range (e.g. 10,20)"}}}},
+		{"name": "git_log_advanced", "description": "Advanced git log with filters.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "author": map[string]interface{}{"type": "string"}, "since": map[string]interface{}{"type": "string"}, "until": map[string]interface{}{"type": "string"}, "path": map[string]interface{}{"type": "string"}, "count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "git_branches", "description": "List branches sorted by recent activity.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"device_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional owned Yaver agent device id/name/alias whose checkout to inspect. The /git/* routes exist on every agent, so this reads the REMOTE repository — use it to inspect a worker's clone without hopping through this machine. Omitted = this machine.",
+			}, "directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_tags", "description": "List tags.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_remotes", "description": "List remotes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "git_reflog", "description": "Show reflog (undo history).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "git_shortlog", "description": "Show commit count by author.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, gitExtTools...)
+
+	// --- Helm ---
+	helmTools := []map[string]interface{}{
+		{"name": "helm_list", "description": "List Helm releases.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"namespace": map[string]interface{}{"type": "string"}}}},
+		{"name": "helm_status", "description": "Show Helm release status.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"release"}, "properties": map[string]interface{}{"release": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}}}},
+		{"name": "helm_values", "description": "Show Helm release values.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"release"}, "properties": map[string]interface{}{"release": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}}}},
+		{"name": "helm_search", "description": "Search Helm charts.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"query"}, "properties": map[string]interface{}{"query": map[string]interface{}{"type": "string"}}}},
+		{"name": "helm_repos", "description": "List Helm repos.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "helm_history", "description": "Show release history.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"release"}, "properties": map[string]interface{}{"release": map[string]interface{}{"type": "string"}, "namespace": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, helmTools...)
+
+	// --- System Extended ---
+	sysExtTools := []map[string]interface{}{
+		{"name": "free_memory", "description": "Show memory/swap usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "listen_ports", "description": "Show listening ports and owning processes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "find_large_files", "description": "Find large files.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "size_mb": map[string]interface{}{"type": "integer", "description": "Min size in MB (default: 100)"}}}},
+		{"name": "tree_dir", "description": "Show directory tree.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "depth": map[string]interface{}{"type": "integer"}}}},
+		{"name": "lines_of_code", "description": "Count lines of code by language.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+	}
+	tools = append(tools, sysExtTools...)
+
+	// --- Network & Packet Capture ---
+	netTools := []map[string]interface{}{
+		{"name": "tcpdump", "description": "Capture network packets with tcpdump.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"interface": map[string]interface{}{"type": "string", "description": "Network interface (default: any)"}, "count": map[string]interface{}{"type": "integer", "description": "Packets to capture (default: 20)"}, "filter": map[string]interface{}{"type": "string", "description": "BPF filter (e.g. 'tcp port 80', 'host 10.0.0.1')"}}}},
+		{"name": "tcpdump_http", "description": "Capture HTTP/HTTPS packets.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"interface": map[string]interface{}{"type": "string"}, "count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "tcpdump_dns", "description": "Capture DNS packets.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"interface": map[string]interface{}{"type": "string"}, "count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "tshark", "description": "Capture and analyze packets with tshark (Wireshark CLI).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"interface": map[string]interface{}{"type": "string"}, "count": map[string]interface{}{"type": "integer"}, "filter": map[string]interface{}{"type": "string", "description": "Display filter (e.g. 'http', 'dns', 'tcp.port==443')"}, "fields": map[string]interface{}{"type": "string", "description": "Comma-separated fields (e.g. 'ip.src,ip.dst,tcp.port')"}}}},
+		{"name": "pcap_analyze", "description": "Analyze a pcap file.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string", "description": "Path to .pcap file"}, "filter": map[string]interface{}{"type": "string"}}}},
+		{"name": "pcap_stats", "description": "Show pcap file statistics (capinfos).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}}}},
+		{"name": "netcat", "description": "TCP connection test or send data (nc).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host", "port"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string"}, "port": map[string]interface{}{"type": "integer"}, "data": map[string]interface{}{"type": "string", "description": "Data to send (empty = just test connection)"}}}},
+		{"name": "port_scan", "description": "Scan common ports on a host (pure Go, no nmap needed).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string"}, "ports": map[string]interface{}{"type": "string", "description": "Comma-separated ports (default: common ports)"}}}},
+		{"name": "arp_table", "description": "Show ARP table (IP → MAC mappings).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "arp_scan", "description": "Discover all devices on local network.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"subnet": map[string]interface{}{"type": "string", "description": "Subnet (default: 192.168.1.0/24)"}}}},
+		{"name": "nmap_scan", "description": "Scan with nmap (quick, services, os, full, udp, ping).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"target"}, "properties": map[string]interface{}{"target": map[string]interface{}{"type": "string"}, "type": map[string]interface{}{"type": "string", "description": "quick, services, os, full, udp, ping"}, "ports": map[string]interface{}{"type": "string", "description": "Port range (e.g. '1-1000', '22,80,443')"}}}},
+		{"name": "traceroute_host", "description": "Trace network route to host.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string"}, "max_hops": map[string]interface{}{"type": "integer"}}}},
+		{"name": "mtr_report", "description": "Network diagnostic combining ping and traceroute.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string"}, "count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "network_interfaces", "description": "List all network interfaces with IPs and MACs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "ip_route", "description": "Show routing table.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "network_connections", "description": "Show active network connections.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"state": map[string]interface{}{"type": "string", "description": "Filter by state: established, listen, time-wait"}}}},
+		{"name": "bandwidth_test", "description": "Test bandwidth to an iperf3 server.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"host"}, "properties": map[string]interface{}{"host": map[string]interface{}{"type": "string", "description": "iperf3 server address"}}}},
+		{"name": "curl_timings", "description": "Detailed HTTP timing breakdown (DNS, connect, TLS, TTFB, total).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{"url": map[string]interface{}{"type": "string"}}}},
+		{"name": "net_doctor", "description": "Deep internet-connectivity troubleshooting. Walks the whole stack in order — interface/DHCP, gateway, internet-by-IP, DNS, captive portal, HTTPS/TLS, quality, Yaver reachability — and returns the FIRST failing layer as the root cause plus plain-English remediation. Detects self-assigned IP (DHCP failure), Wi-Fi vs ethernet vs iPhone/Android hotspot, captive portals, and DNS-only outages (\"connected but nothing loads\"). Use this instead of running ping/dns_lookup/wifi_info one by one when asked why the internet is broken or slow.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"throughput": map[string]interface{}{"type": "boolean", "description": "Also measure download throughput (slower)."}, "target": map[string]interface{}{"type": "string", "description": "Optional host to verify end-to-end, e.g. github.com"}}}},
+	}
+	tools = append(tools, netTools...)
+
+	// --- Linux System ---
+	linuxTools := []map[string]interface{}{
+		// Kernel & modules
+		{"name": "dmesg", "description": "Show kernel messages. Filter by level (emerg, alert, crit, err, warn, info, debug).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"level": map[string]interface{}{"type": "string", "description": "Log level filter: emerg, alert, crit, err, warn, info, debug"}, "lines": map[string]interface{}{"type": "integer", "description": "Number of lines (default: 100)"}}}},
+		{"name": "lsmod", "description": "List loaded kernel modules.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "modinfo", "description": "Show kernel module info.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string"}}}},
+		{"name": "insmod", "description": "Load a kernel module (modprobe).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string"}}}},
+		{"name": "rmmod", "description": "Unload a kernel module.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"module": map[string]interface{}{"type": "string"}}}},
+		{"name": "uname", "description": "Show kernel, architecture, hostname info.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "sysctl", "description": "Read kernel parameters. Pass a key or leave empty for all.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"key": map[string]interface{}{"type": "string", "description": "Sysctl key (e.g. net.ipv4.ip_forward)"}}}},
+		// Processes
+		{"name": "top_snapshot", "description": "Top processes snapshot sorted by CPU.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "ps_aux", "description": "List processes. Sort by cpu/mem, or filter by name.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"sort": map[string]interface{}{"type": "string", "description": "cpu or mem"}, "filter": map[string]interface{}{"type": "string", "description": "Filter by process name"}}}},
+		{"name": "ps_tree", "description": "Show process tree.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "load_average", "description": "Show system load average and CPU count.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Memory
+		{"name": "vmstat", "description": "Virtual memory statistics.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"count": map[string]interface{}{"type": "integer", "description": "Samples (default: 5)"}}}},
+		{"name": "swap_info", "description": "Show swap usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Disk
+		{"name": "df", "description": "Show disk space usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}}}},
+		{"name": "du", "description": "Show directory disk usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}, "depth": map[string]interface{}{"type": "integer", "description": "Max depth (default: 1)"}}}},
+		{"name": "lsblk", "description": "List block devices (disks, partitions).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "fdisk_list", "description": "List disk partitions.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "mounts", "description": "Show mounted filesystems.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "iostat", "description": "Show I/O statistics per device.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Tree
+		{"name": "tree", "description": "Show directory tree (auto-excludes node_modules, .git, etc.).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}, "depth": map[string]interface{}{"type": "integer", "description": "Max depth (default: 3)"}, "all": map[string]interface{}{"type": "boolean", "description": "Show hidden files"}, "dirs_only": map[string]interface{}{"type": "boolean"}}}},
+		// Hardware
+		{"name": "cpu_info", "description": "Show CPU info (brand, cores, architecture).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lspci", "description": "List PCI devices (GPUs, NICs, etc.).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lsusb", "description": "List USB devices.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "sensors", "description": "Show hardware sensors (CPU temp, fan speed).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Firewall
+		{"name": "ufw", "description": "Manage UFW firewall (status, allow, deny, delete).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "status, allow, deny, delete"}, "rule": map[string]interface{}{"type": "string", "description": "Port/service (e.g. 80, 443/tcp, ssh)"}}}},
+		{"name": "iptables_list", "description": "List iptables rules with line numbers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Users & sessions
+		{"name": "who_is_logged_in", "description": "Show who is logged in and what they're doing.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "last_logins", "description": "Show recent login history.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"count": map[string]interface{}{"type": "integer"}}}},
+		{"name": "timedate_info", "description": "Show system time, timezone, NTP status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "hostname_info", "description": "Show hostname and OS info.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+	}
+	tools = append(tools, linuxTools...)
+
+	// --- Compilers & Language Suites ---
+	compilerTools := []map[string]interface{}{
+		// Make
+		{"name": "make_targets", "description": "List Makefile targets.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "make_run", "description": "Run a Make target.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "target": map[string]interface{}{"type": "string"}}}},
+		{"name": "make_clean", "description": "Run make clean.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// CMake
+		{"name": "cmake_configure", "description": "Configure CMake project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "build_dir": map[string]interface{}{"type": "string", "description": "Build directory (default: build)"}, "generator": map[string]interface{}{"type": "string", "description": "e.g. Ninja, Unix Makefiles"}}}},
+		{"name": "cmake_build", "description": "Build CMake project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "build_dir": map[string]interface{}{"type": "string"}, "parallel": map[string]interface{}{"type": "integer"}}}},
+		{"name": "cmake_test", "description": "Run CMake/CTest tests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "build_dir": map[string]interface{}{"type": "string"}}}},
+		{"name": "cmake_install", "description": "Install CMake project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "build_dir": map[string]interface{}{"type": "string"}}}},
+		// GCC/Clang/LLVM
+		{"name": "gcc_compile", "description": "Compile C/C++ with GCC.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}, "output": map[string]interface{}{"type": "string"}, "flags": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "e.g. [\"-Wall\", \"-O2\", \"-std=c17\"]"}}}},
+		{"name": "clang_compile", "description": "Compile C/C++ with Clang.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}, "output": map[string]interface{}{"type": "string"}, "flags": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}}}},
+		{"name": "clang_tidy_check", "description": "Run clang-tidy static analysis.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}, "directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "clang_format_file", "description": "Format C/C++ with clang-format.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}, "in_place": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "objdump", "description": "Disassemble a binary.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}}}},
+		{"name": "binary_size", "description": "Show binary section sizes.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}}}},
+		{"name": "nm_symbols", "description": "List symbols in a binary.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}}}},
+		{"name": "compiler_version", "description": "Show compiler version (gcc, clang, rustc, go, etc.).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"compiler"}, "properties": map[string]interface{}{"compiler": map[string]interface{}{"type": "string", "description": "gcc, clang, rustc, go, javac, etc."}}}},
+		// Cargo (Rust full suite)
+		{"name": "cargo_build", "description": "Build Rust project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "release": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "cargo_test_suite", "description": "Run Rust tests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "test_name": map[string]interface{}{"type": "string", "description": "Specific test name filter"}}}},
+		{"name": "cargo_clippy", "description": "Lint Rust with Clippy (pedantic).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cargo_fmt", "description": "Format Rust code.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "check": map[string]interface{}{"type": "boolean", "description": "Check only, don't modify"}}}},
+		{"name": "cargo_doc", "description": "Build Rust docs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "open": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "cargo_bench_suite", "description": "Run Rust benchmarks.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "bench": map[string]interface{}{"type": "string"}}}},
+		{"name": "cargo_tree_deps", "description": "Show Rust dependency tree.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "depth": map[string]interface{}{"type": "integer"}}}},
+		{"name": "cargo_update_deps", "description": "Update Rust dependencies.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cargo_audit_deps", "description": "Audit Rust deps for vulnerabilities.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cargo_check_only", "description": "Check Rust without building.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cargo_clean", "description": "Clean Rust build artifacts.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "cargo_add_crate", "description": "Add a Rust dependency.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"crate"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "crate": map[string]interface{}{"type": "string"}}}},
+		{"name": "cargo_remove_crate", "description": "Remove a Rust dependency.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"crate"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "crate": map[string]interface{}{"type": "string"}}}},
+		// Go (full suite)
+		{"name": "go_build", "description": "Build Go project.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "output": map[string]interface{}{"type": "string"}}}},
+		{"name": "go_test_suite", "description": "Run Go tests.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "verbose": map[string]interface{}{"type": "boolean"}, "race": map[string]interface{}{"type": "boolean"}, "cover": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "go_vet_check", "description": "Run Go vet.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "go_mod_tidy", "description": "Tidy Go modules.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "go_mod_graph", "description": "Show Go module dependency graph.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "go_mod_why", "description": "Explain why a Go module is needed.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"module"}, "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "module": map[string]interface{}{"type": "string"}}}},
+		{"name": "go_generate", "description": "Run Go generate.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "go_fmt_check", "description": "Check Go formatting.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "go_staticcheck", "description": "Run staticcheck.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "go_vulncheck", "description": "Check Go deps for vulnerabilities.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Python (full suite)
+		{"name": "pytest_suite", "description": "Run Python tests with pytest.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "verbose": map[string]interface{}{"type": "boolean"}, "coverage": map[string]interface{}{"type": "boolean"}, "marker": map[string]interface{}{"type": "string", "description": "Test marker filter"}}}},
+		{"name": "ruff_suite", "description": "Run Ruff (check, format, or fix).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "action": map[string]interface{}{"type": "string", "description": "check, format, fix"}}}},
+		{"name": "mypy_check", "description": "Type-check Python with mypy.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "black_format", "description": "Format Python with Black.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "check": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "pip_compile", "description": "Compile pip requirements.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		{"name": "uv_install", "description": "Install with uv.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}}}},
+		// Node.js/TypeScript
+		{"name": "npm_run_script", "description": "Run an npm script (or list all scripts).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "script": map[string]interface{}{"type": "string", "description": "Script name (empty = list all)"}}}},
+		{"name": "tsc_check", "description": "TypeScript type checking.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "no_emit": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "eslint_check", "description": "ESLint check (with optional --fix).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "fix": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "prettier_check", "description": "Prettier format check or write.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "check": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "biome_suite", "description": "Biome check, format, or lint.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "action": map[string]interface{}{"type": "string", "description": "check, format, lint"}}}},
+	}
+	tools = append(tools, compilerTools...)
+
+	// --- Static Analysis, Profiling & Debugging, Code Metrics ---
+	analysisTools := []map[string]interface{}{
+		// Static Analysis
+		{"name": "cppcheck", "description": "Run cppcheck C/C++ static analysis.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "file": map[string]interface{}{"type": "string", "description": "Specific file to check"}, "severity": map[string]interface{}{"type": "string", "description": "Enable checks: warning, style, performance, portability, information, all"}, "enable_all": map[string]interface{}{"type": "boolean", "description": "Enable all checks"}}}},
+		{"name": "shellcheck", "description": "Run ShellCheck on shell scripts.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"file"}, "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string"}, "shell": map[string]interface{}{"type": "string", "description": "Shell dialect: sh, bash, dash, ksh"}, "severity": map[string]interface{}{"type": "string", "description": "Minimum severity: error, warning, info, style"}}}},
+		{"name": "hadolint", "description": "Lint a Dockerfile with Hadolint.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string", "description": "Dockerfile path (default: Dockerfile)"}, "trusted_registries": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Trusted Docker registries"}}}},
+		{"name": "semgrep", "description": "Run Semgrep multi-language static analysis.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "config": map[string]interface{}{"type": "string", "description": "Semgrep config/rules (e.g. p/security-audit, p/owasp-top-ten, auto)"}, "auto_config": map[string]interface{}{"type": "boolean", "description": "Use auto config"}}}},
+		{"name": "sonarscanner", "description": "Run SonarQube/SonarCloud scanner.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "project_key": map[string]interface{}{"type": "string"}, "host_url": map[string]interface{}{"type": "string", "description": "SonarQube server URL"}, "token": map[string]interface{}{"type": "string", "description": "Auth token"}}}},
+		{"name": "bandit", "description": "Run Bandit Python security analysis.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "file": map[string]interface{}{"type": "string", "description": "Specific file to scan"}, "severity": map[string]interface{}{"type": "string", "description": "Minimum severity filter (l=low, ll=medium, lll=high)"}}}},
+		{"name": "gosec", "description": "Run gosec Go security analysis.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "no_fail": map[string]interface{}{"type": "boolean", "description": "Don't return error exit code on findings"}}}},
+		{"name": "brakeman", "description": "Run Brakeman Ruby/Rails security scanner.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "confidence": map[string]interface{}{"type": "integer", "description": "Minimum confidence level (1=high, 2=medium, 3=weak)"}}}},
+		{"name": "safety_check", "description": "Check Python dependencies for known vulnerabilities.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "file": map[string]interface{}{"type": "string", "description": "Requirements file path"}}}},
+		{"name": "trivy_fs_scan", "description": "Run Trivy filesystem vulnerability scan.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "severity": map[string]interface{}{"type": "string", "description": "Severities to report: CRITICAL,HIGH,MEDIUM,LOW"}}}},
+		// Profiling & Debugging
+		{"name": "valgrind_memcheck", "description": "Run Valgrind memcheck for memory leak detection.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"binary"}, "properties": map[string]interface{}{"binary": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Arguments to pass to the binary"}}}},
+		{"name": "valgrind_callgrind", "description": "Run Valgrind callgrind for call graph profiling.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"binary"}, "properties": map[string]interface{}{"binary": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}, "output_file": map[string]interface{}{"type": "string", "description": "Output file (default: callgrind.out)"}}}},
+		{"name": "valgrind_massif", "description": "Run Valgrind massif for heap profiling.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"binary"}, "properties": map[string]interface{}{"binary": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}, "output_file": map[string]interface{}{"type": "string", "description": "Output file (default: massif.out)"}}}},
+		{"name": "gdb_backtrace", "description": "Get backtrace from a running process or binary using GDB.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"pid": map[string]interface{}{"type": "integer", "description": "Process ID to attach to"}, "binary": map[string]interface{}{"type": "string", "description": "Binary to run and get backtrace from"}}}},
+		{"name": "lldb_backtrace", "description": "Get backtrace from a running process or binary using LLDB.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"pid": map[string]interface{}{"type": "integer", "description": "Process ID to attach to"}, "binary": map[string]interface{}{"type": "string", "description": "Binary to run and get backtrace from"}}}},
+		{"name": "strace_trace", "description": "Trace system calls of a process (Linux).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"pid": map[string]interface{}{"type": "integer", "description": "Process ID to trace"}, "binary": map[string]interface{}{"type": "string", "description": "Binary to run and trace"}, "syscall_filter": map[string]interface{}{"type": "string", "description": "Syscall filter (e.g. open,read,write,network,file)"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}}}},
+		{"name": "ltrace_trace", "description": "Trace library calls of a process (Linux).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"pid": map[string]interface{}{"type": "integer", "description": "Process ID to trace"}, "binary": map[string]interface{}{"type": "string", "description": "Binary to run and trace"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}}}},
+		{"name": "perf_record", "description": "Record performance data using Linux perf.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"binary"}, "properties": map[string]interface{}{"binary": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}, "duration": map[string]interface{}{"type": "integer", "description": "Duration in seconds"}, "output_file": map[string]interface{}{"type": "string", "description": "Output file (default: perf.data)"}}}},
+		{"name": "perf_stat", "description": "Collect performance counters using Linux perf.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"binary"}, "properties": map[string]interface{}{"binary": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}, "events": map[string]interface{}{"type": "string", "description": "Events to measure (e.g. cache-misses,instructions,cycles)"}}}},
+		{"name": "go_pprof_cpu", "description": "Run Go CPU profiling via test benchmarks or pprof URL.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "duration": map[string]interface{}{"type": "integer", "description": "Profiling duration in seconds (default: 30)"}, "binary": map[string]interface{}{"type": "string", "description": "URL or binary to profile (e.g. http://localhost:6060)"}}}},
+		{"name": "go_pprof_heap", "description": "Run Go heap profiling.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "url": map[string]interface{}{"type": "string", "description": "Running service URL (e.g. http://localhost:6060)"}}}},
+		{"name": "heaptrack", "description": "Run heaptrack for heap allocation profiling (Linux).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"binary"}, "properties": map[string]interface{}{"binary": map[string]interface{}{"type": "string"}, "args": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}}}}},
+		// Code Metrics
+		{"name": "cyclomatic_complexity", "description": "Measure cyclomatic complexity (radon for Python, gocyclo for Go).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "language": map[string]interface{}{"type": "string", "description": "Language: python, go, js, ts (auto-detected if empty)"}}}},
+		{"name": "lizard", "description": "Run lizard code complexity analysis (supports 20+ languages).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "threshold": map[string]interface{}{"type": "integer", "description": "Cyclomatic complexity threshold"}, "languages": map[string]interface{}{"type": "string", "description": "Comma-separated languages to analyze"}}}},
+		{"name": "loc_count", "description": "Count lines of code (uses tokei/scc/cloc with fallbacks).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"directory": map[string]interface{}{"type": "string"}, "tool": map[string]interface{}{"type": "string", "description": "Preferred tool: tokei, scc, cloc"}}}},
+	}
+	tools = append(tools, analysisTools...)
+
+	// --- System Logs & Debugging ---
+	sysLogTools := []map[string]interface{}{
+		{"name": "journalctl", "description": "Query systemd journal logs with unit, priority, boot, and time filters.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"unit": map[string]interface{}{"type": "string", "description": "Service unit (e.g. nginx, docker, sshd)"}, "priority": map[string]interface{}{"type": "string", "description": "emerg, alert, crit, err, warning, notice, info, debug"}, "lines": map[string]interface{}{"type": "integer"}, "boot": map[string]interface{}{"type": "boolean"}, "since": map[string]interface{}{"type": "string", "description": "e.g. '1 hour ago', '2024-01-01'"}}}},
+		{"name": "journalctl_errors", "description": "Show error-level entries from current boot.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "journalctl_disk_usage", "description": "Show journal disk usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "systemctl", "description": "Manage systemd services (status, start, stop, restart, enable, disable, list, failed, timers).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "status, start, stop, restart, enable, disable, list, failed, timers"}, "unit": map[string]interface{}{"type": "string"}}}},
+		{"name": "gdb_attach", "description": "Attach GDB to a running process and get backtrace/registers.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pid"}, "properties": map[string]interface{}{"pid": map[string]interface{}{"type": "integer"}, "commands": map[string]interface{}{"type": "string", "description": "GDB commands (default: bt + threads + registers)"}}}},
+		{"name": "gdb_core_dump", "description": "Analyze a core dump file.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"binary", "corefile"}, "properties": map[string]interface{}{"binary": map[string]interface{}{"type": "string"}, "corefile": map[string]interface{}{"type": "string"}}}},
+		{"name": "lldb_attach", "description": "Attach LLDB to a running process.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pid"}, "properties": map[string]interface{}{"pid": map[string]interface{}{"type": "integer"}, "commands": map[string]interface{}{"type": "string"}}}},
+		{"name": "coredump_list", "description": "List core dumps.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "coredump_info", "description": "Show core dump details.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"pid"}, "properties": map[string]interface{}{"pid": map[string]interface{}{"type": "string"}}}},
+		{"name": "syslog", "description": "Read system log files with optional grep filter.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string", "description": "Log file path (auto-detect if empty)"}, "lines": map[string]interface{}{"type": "integer"}, "filter": map[string]interface{}{"type": "string"}}}},
+		{"name": "auth_log", "description": "Show authentication/SSH logs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"lines": map[string]interface{}{"type": "integer"}}}},
+	}
+	tools = append(tools, sysLogTools...)
+
+	// --- Project wizard (fullstack generator) ---
+	wizardTools := []map[string]interface{}{
+		{
+			"name":        "project_wizard_start",
+			"description": "Start a new fullstack project wizard session. Returns sessionId + first question. Call project_wizard_answer repeatedly, then project_wizard_generate.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		},
+		{
+			"name":        "project_wizard_answer",
+			"description": "Submit an answer to the current wizard question. Returns the next question (or 'done' kind when complete).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId", "questionId", "answer"},
+				"properties": map[string]interface{}{
+					"sessionId":  map[string]interface{}{"type": "string"},
+					"questionId": map[string]interface{}{"type": "string"},
+					"answer":     map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "project_new_quick",
+			"description": "One-shot fullstack project scaffold. Skips the interactive wizard and creates a self-hosted-first monorepo (apps/{web,landing,mobile}, packages/shared, backend/) at parentDir/<slug>. Defaults are built for first-capture with Claude Code/Codex over MCP: local/dev Convex backend that can deploy to hosted Convex, Next.js web on Cloudflare, static landing on Cloudflare Pages, Expo React Native mobile for iOS + Android, Apple/Google/email auth, native builds (xcodebuild + gradle, no EAS). Auto-inits git and pushes to GitHub/GitLab when gitProvider is set.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"name", "slug", "description"},
+				"properties": map[string]interface{}{
+					"name":           map[string]interface{}{"type": "string", "description": "Brand name (shown in README, landing page, metadata)"},
+					"slug":           map[string]interface{}{"type": "string", "description": "URL-safe slug used for folder + package names"},
+					"description":    map[string]interface{}{"type": "string", "description": "One-paragraph description — goes into README, landing hero, AI context"},
+					"tagline":        map[string]interface{}{"type": "string"},
+					"appTemplate":    map[string]interface{}{"type": "string", "description": "Product template, e.g. saas-dashboard, consumer-social, commerce, dev-tool"},
+					"audienceType":   map[string]interface{}{"type": "string", "description": "consumers, developers, creators, internal-team, etc."},
+					"problem":        map[string]interface{}{"type": "string", "description": "One-sentence user problem; defaults to description"},
+					"uniqueAngle":    map[string]interface{}{"type": "string", "description": "What makes this different"},
+					"monetization":   map[string]interface{}{"type": "string", "description": "free, freemium, subscription, one-time-purchase, etc."},
+					"launchTimeline": map[string]interface{}{"type": "string", "description": "weekend, 1-2-weeks, 1-month, 3-months"},
+					"domain":         map[string]interface{}{"type": "string"},
+					"primaryColor":   map[string]interface{}{"type": "string", "description": "Hex e.g. #4F46E5"},
+					"secondaryColor": map[string]interface{}{"type": "string"},
+					"accentColor":    map[string]interface{}{"type": "string"},
+					"surfaceColor":   map[string]interface{}{"type": "string"},
+					"includeWeb":     map[string]interface{}{"type": "boolean", "description": "Default true"},
+					"includeLanding": map[string]interface{}{"type": "boolean", "description": "Default true"},
+					"includeMobile":  map[string]interface{}{"type": "boolean", "description": "Default true"},
+					"includeBackend": map[string]interface{}{"type": "boolean", "description": "Default true"},
+					"webHost":        map[string]interface{}{"type": "string", "enum": []string{"cloudflare", "vercel", "netlify", "self-host"}},
+					"backend":        map[string]interface{}{"type": "string", "enum": []string{"sqlite", "postgres", "supabase", "convex", "pocketbase", "appwrite", "none"}},
+					"oauthApple":     map[string]interface{}{"type": "boolean"},
+					"oauthGoogle":    map[string]interface{}{"type": "boolean"},
+					"oauthMicrosoft": map[string]interface{}{"type": "boolean"},
+					"iosBundleId":    map[string]interface{}{"type": "string"},
+					"androidPackage": map[string]interface{}{"type": "string"},
+					"gitProvider":    map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab", "none"}},
+					"gitVisibility":  map[string]interface{}{"type": "string", "enum": []string{"private", "public"}},
+					"gitOrg":         map[string]interface{}{"type": "string"},
+					"parentDir":      map[string]interface{}{"type": "string", "description": "Default: agent working dir"},
+				},
+			},
+		},
+		{
+			"name":        "project_self_host_create",
+			"description": "First-capture MCP tool for a new Yaver user: create the default self-hosted monorepo without asking them to touch npm/yaver CLI. This is an alias of project_new_quick with the intended product defaults: Convex local/dev backend (cloud-deployable later), Next.js Cloudflare web UI, Cloudflare landing page, Expo React Native iOS/Android app, shared package, legal/store-review scaffolds, and next steps for Yaver phone testing. Use this before suggesting hourly Yaver Managed Cloud.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"name", "slug", "description"},
+				"properties": map[string]interface{}{
+					"name":           map[string]interface{}{"type": "string"},
+					"slug":           map[string]interface{}{"type": "string"},
+					"description":    map[string]interface{}{"type": "string"},
+					"tagline":        map[string]interface{}{"type": "string"},
+					"appTemplate":    map[string]interface{}{"type": "string"},
+					"audienceType":   map[string]interface{}{"type": "string"},
+					"problem":        map[string]interface{}{"type": "string"},
+					"uniqueAngle":    map[string]interface{}{"type": "string"},
+					"monetization":   map[string]interface{}{"type": "string"},
+					"launchTimeline": map[string]interface{}{"type": "string"},
+					"domain":         map[string]interface{}{"type": "string"},
+					"primaryColor":   map[string]interface{}{"type": "string"},
+					"secondaryColor": map[string]interface{}{"type": "string"},
+					"accentColor":    map[string]interface{}{"type": "string"},
+					"surfaceColor":   map[string]interface{}{"type": "string"},
+					"iosBundleId":    map[string]interface{}{"type": "string"},
+					"androidPackage": map[string]interface{}{"type": "string"},
+					"gitProvider":    map[string]interface{}{"type": "string", "enum": []string{"github", "gitlab", "none"}},
+					"gitVisibility":  map[string]interface{}{"type": "string", "enum": []string{"private", "public"}},
+					"gitOrg":         map[string]interface{}{"type": "string"},
+					"parentDir":      map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "project_wizard_generate",
+			"description": "Materialise the scaffold for a completed wizard session. Returns the target directory + next-step checklist. Project folder is created at parentDir/<slug>.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId"},
+				"properties": map[string]interface{}{
+					"sessionId": map[string]interface{}{"type": "string"},
+					"parentDir": map[string]interface{}{"type": "string", "description": "Parent directory for the new project (default: agent cwd)"},
+				},
+			},
+		},
+	}
+	tools = append(tools, wizardTools...)
+
+	// --- Self-hosted SaaS replacements ---
+	//
+	// Every tool below replaces a paid SaaS the solo dev would
+	// otherwise be paying monthly for. They all run on the dev's
+	// own machine (no Convex, no vendor) and follow the same
+	// shape: one tool per common action, always returning
+	// structured JSON so other agents can chain them.
+	soloStackTools := []map[string]interface{}{
+		// Forms
+		{"name": "form_list", "description": "List all self-hosted forms with submission counts.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "form_create", "description": "Create a new form. Returns the form ID + a public /forms/:id/submit URL to paste into a landing page <form action=...>.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{
+			"name":             map[string]interface{}{"type": "string"},
+			"notifyEmail":      map[string]interface{}{"type": "string"},
+			"honeypotField":    map[string]interface{}{"type": "string", "description": "Field name that real humans will leave blank; bots will fill."},
+			"rateLimitPerHour": map[string]interface{}{"type": "integer"},
+			"successRedirect":  map[string]interface{}{"type": "string"},
+		}}},
+		{"name": "form_submissions", "description": "Tail the most recent submissions for a form.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}}},
+		{"name": "form_delete", "description": "Delete a form and its submission log.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}}},
+
+		// Newsletter
+		{"name": "newsletter_subscribers", "description": "List newsletter subscribers + status counts (confirmed / pending / unsubscribed).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "newsletter_create", "description": "Create a newsletter campaign draft.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"subject"}, "properties": map[string]interface{}{
+			"subject":  map[string]interface{}{"type": "string"},
+			"body":     map[string]interface{}{"type": "string"},
+			"htmlBody": map[string]interface{}{"type": "string"},
+		}}},
+		{"name": "newsletter_send", "description": "Broadcast a newsletter campaign to all confirmed subscribers via the SMTP relay. This is irreversible.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}}},
+		{"name": "newsletter_compose_from_git", "description": "Walk git log + gh/glab PRs and issues for a repo + window and draft a weekly recap newsletter. Optionally pipe through the AI runner for tone polish, and optionally save as a campaign draft.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"repo"}, "properties": map[string]interface{}{
+			"repo":          map[string]interface{}{"type": "string", "description": "Absolute repo path"},
+			"sinceDays":     map[string]interface{}{"type": "integer", "description": "Default 7"},
+			"includePrs":    map[string]interface{}{"type": "boolean"},
+			"includeIssues": map[string]interface{}{"type": "boolean"},
+			"subject":       map[string]interface{}{"type": "string"},
+			"instructions":  map[string]interface{}{"type": "string", "description": "Tone notes for the AI polish pass"},
+			"execute":       map[string]interface{}{"type": "boolean", "description": "Pipe through runner for polish"},
+			"saveDraft":     map[string]interface{}{"type": "boolean"},
+		}}},
+
+		// Job queue
+		{"name": "jobs_list", "description": "List pending queue + dead-letter jobs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "jobs_enqueue", "description": "Enqueue a new background job. Handlers are registered at agent boot; common ones: newsletter.send, form.notify, pdf.render.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"handler"}, "properties": map[string]interface{}{
+			"handler":     map[string]interface{}{"type": "string"},
+			"payload":     map[string]interface{}{"type": "object"},
+			"delaySec":    map[string]interface{}{"type": "integer"},
+			"maxAttempts": map[string]interface{}{"type": "integer"},
+			"backoffSec":  map[string]interface{}{"type": "integer"},
+		}}},
+		{"name": "jobs_retry", "description": "Requeue a DLQ job.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}}},
+		{"name": "jobs_cancel", "description": "Drop a pending queue job.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}}},
+
+		// Image optimizer + PDF
+		{"name": "img_optimize", "description": "Return a URL that resizes + reencodes an image on demand. Output is disk-cached.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"src"}, "properties": map[string]interface{}{
+			"src":  map[string]interface{}{"type": "string"},
+			"root": map[string]interface{}{"type": "string", "description": "Optional project root ID"},
+			"w":    map[string]interface{}{"type": "integer"},
+			"h":    map[string]interface{}{"type": "integer"},
+			"fmt":  map[string]interface{}{"type": "string", "enum": []string{"webp", "jpeg", "png"}},
+			"q":    map[string]interface{}{"type": "integer", "description": "Quality 1..100"},
+		}}},
+		{"name": "pdf_render", "description": "Render HTML or a URL to PDF via the embedded Chromium. Returns the PDF as base64. Use for invoices, receipts, reports.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"html":            map[string]interface{}{"type": "string"},
+			"url":             map[string]interface{}{"type": "string"},
+			"format":          map[string]interface{}{"type": "string", "description": "A4 | Letter | Legal | Tabloid | A3 | A5"},
+			"landscape":       map[string]interface{}{"type": "boolean"},
+			"printBackground": map[string]interface{}{"type": "boolean"},
+		}}},
+
+		// OAuth provider
+		{"name": "oauth_client_list", "description": "List registered OAuth clients for the self-hosted identity provider.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "oauth_client_create", "description": "Register a new OAuth client. The returned client_secret is only shown once — save it immediately.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name", "redirectUris"}, "properties": map[string]interface{}{
+			"name":         map[string]interface{}{"type": "string"},
+			"redirectUris": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+			"scopes":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+		}}},
+		{"name": "oauth_user_list", "description": "List registered OAuth users (email + id only, never hashes).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "oauth_user_create", "description": "Create a new OAuth user with a scrypt-hashed password.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"email", "password"}, "properties": map[string]interface{}{
+			"email":    map[string]interface{}{"type": "string"},
+			"name":     map[string]interface{}{"type": "string"},
+			"password": map[string]interface{}{"type": "string"},
+		}}},
+
+		// Mail (Gmail / O365 fetch + AI draft)
+		{"name": "mail_inbox", "description": "Fetch the solo dev's inbox from Gmail or Microsoft 365. The classifier tags each message as personal / transactional / marketing / bulk using thread replies + List-Unsubscribe + Precedence + sender history — stricter than Gmail's Promotions tab. Returns normalised MailMessage objects.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"provider":     map[string]interface{}{"type": "string", "enum": []string{"gmail", "o365", "auto"}},
+			"folder":       map[string]interface{}{"type": "string", "enum": []string{"inbox", "sent"}},
+			"query":        map[string]interface{}{"type": "string", "description": "Gmail search syntax or Graph $search value"},
+			"limit":        map[string]interface{}{"type": "integer"},
+			"onlyPersonal": map[string]interface{}{"type": "boolean"},
+		}}},
+		{"name": "mail_search", "description": "Provider-neutral email search/fetch for car/watch/TV/mobile/MCP. Uses configured Gmail or Microsoft 365 OAuth and returns short message summaries.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"provider":     map[string]interface{}{"type": "string", "enum": []string{"gmail", "o365", "auto"}},
+			"folder":       map[string]interface{}{"type": "string", "enum": []string{"inbox", "sent", "all"}},
+			"query":        map[string]interface{}{"type": "string"},
+			"limit":        map[string]interface{}{"type": "integer"},
+			"onlyPersonal": map[string]interface{}{"type": "boolean"},
+		}}},
+		{"name": "mail_unread", "description": "Driving/watch-safe summary of recent inbox messages from Gmail or Microsoft 365.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"provider":     map[string]interface{}{"type": "string", "enum": []string{"gmail", "o365", "auto"}},
+			"limit":        map[string]interface{}{"type": "integer"},
+			"onlyPersonal": map[string]interface{}{"type": "boolean"},
+		}}},
+		{"name": "mail_send", "description": "Send email through Yaver's configured SMTP relay. Dry-run by default; execute=true requires confirm:'send'.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"to", "subject", "body"}, "properties": map[string]interface{}{
+			"to":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+			"cc":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+			"bcc":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+			"subject": map[string]interface{}{"type": "string"},
+			"body":    map[string]interface{}{"type": "string"},
+			"html":    map[string]interface{}{"type": "string"},
+			"execute": map[string]interface{}{"type": "boolean"},
+			"confirm": map[string]interface{}{"type": "string", "description": "Must be 'send' when execute=true."},
+			"surface": map[string]interface{}{"type": "string", "description": "car, watch, tv, mobile, mcp, cli"},
+		}}},
+		{"name": "mail_draft", "description": "Draft a reply to a message. Pulls the thread + recent sent-folder mail for tone, then pipes through the configured AI runner when execute=true and returns the draft text. Otherwise returns the prompt the caller can execute manually.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{
+			"id":           map[string]interface{}{"type": "string"},
+			"provider":     map[string]interface{}{"type": "string"},
+			"instructions": map[string]interface{}{"type": "string"},
+			"execute":      map[string]interface{}{"type": "boolean"},
+			"runner":       map[string]interface{}{"type": "string", "enum": []string{"", "claude", "codex", "opencode"}, "description": "Override default runner (claude / codex / opencode)."},
+		}}},
+
+		// URL shortener
+		{"name": "short_list", "description": "List short URLs with click counts.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "short_create", "description": "Create a short URL. Auto-generates a 6-char code if not provided.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{
+			"url":   map[string]interface{}{"type": "string"},
+			"code":  map[string]interface{}{"type": "string"},
+			"label": map[string]interface{}{"type": "string"},
+		}}},
+		{"name": "short_clicks", "description": "Tail the last 500 click rows, optionally filtered by code.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"code": map[string]interface{}{"type": "string"}}}},
+		{"name": "short_delete", "description": "Delete a short URL.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"code"}, "properties": map[string]interface{}{"code": map[string]interface{}{"type": "string"}}}},
+
+		// Waitlist
+		{"name": "waitlist_list", "description": "List all waitlist entries (owner-only, includes emails).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "waitlist_leaderboard", "description": "Top referrers (redacted — no emails). Safe to surface publicly.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "waitlist_delete", "description": "Remove a waitlist entry by email.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"email"}, "properties": map[string]interface{}{"email": map[string]interface{}{"type": "string"}}}},
+
+		// Docs site
+		{"name": "docs_config", "description": "Point the docs site at a markdown folder, set title / theme / logo.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"path":    map[string]interface{}{"type": "string"},
+			"title":   map[string]interface{}{"type": "string"},
+			"theme":   map[string]interface{}{"type": "string", "enum": []string{"light", "dark"}},
+			"logoUrl": map[string]interface{}{"type": "string"},
+		}}},
+		{"name": "docs_list", "description": "Return the docs site sidebar tree.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "docs_search", "description": "Substring search across all doc pages.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"q"}, "properties": map[string]interface{}{"q": map[string]interface{}{"type": "string"}}}},
+
+		// Meetings (Calendly-lite)
+		{"name": "meeting_create", "description": "Create a new bookable event type. Uses Google Calendar (auto-creates Meet links) or Microsoft Graph (auto-creates Teams meetings) via the existing EmailConfig OAuth creds.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"slug", "title", "provider"}, "properties": map[string]interface{}{
+			"slug":         map[string]interface{}{"type": "string"},
+			"title":        map[string]interface{}{"type": "string"},
+			"durationMin":  map[string]interface{}{"type": "integer"},
+			"description":  map[string]interface{}{"type": "string"},
+			"provider":     map[string]interface{}{"type": "string", "enum": []string{"google", "o365"}},
+			"hosting":      map[string]interface{}{"type": "string", "enum": []string{"meet", "teams", "none"}},
+			"daysAhead":    map[string]interface{}{"type": "integer"},
+			"bufferMin":    map[string]interface{}{"type": "integer"},
+			"availability": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object"}},
+		}}},
+		{"name": "meeting_list", "description": "List all bookable event types.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "meeting_bookings", "description": "List confirmed bookings across all event types.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "meeting_next", "description": "Find the next meeting from local Yaver bookings or configured Google/O365 calendar. Returns a provider-neutral join plan for car/watch/TV/mobile/MCP.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"provider":       map[string]interface{}{"type": "string", "description": "auto, local, google, o365, teams, zoom"},
+			"withinHours":    map[string]interface{}{"type": "integer", "description": "Lookahead window; default 24, max 168."},
+			"includePastMin": map[string]interface{}{"type": "integer", "description": "Treat already-started meetings as joinable for this many minutes; default 5."},
+		}}},
+		{"name": "meeting_join_next", "description": "Find the next meeting and optionally open its official Teams/Meet/Zoom/Yaver link on this runtime host. Use open=false for car/watch confirmation, open=true after approval. openMode=browser/automation/selenium opens a controlled runtime browser profile; default system uses the OS/default app.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"provider":       map[string]interface{}{"type": "string", "description": "auto, local, google, o365, teams, zoom"},
+			"open":           map[string]interface{}{"type": "boolean", "description": "Actually open the URL on this Yaver runtime host."},
+			"openMode":       map[string]interface{}{"type": "string", "enum": []string{"system", "browser", "automation", "selenium"}, "description": "system opens the provider/default app; browser/automation/selenium opens a Yaver-controlled Chrome automation session."},
+			"surface":        map[string]interface{}{"type": "string", "description": "car, watch, tv, mobile, mcp, cli"},
+			"withinHours":    map[string]interface{}{"type": "integer"},
+			"includePastMin": map[string]interface{}{"type": "integer"},
+		}}},
+		{"name": "meeting_open_url", "description": "Classify and optionally open a known meeting URL on this runtime host. Supports Teams, Google Meet, Zoom, and Yaver call links. openMode=browser/automation/selenium opens a controlled runtime browser profile; default system uses the OS/default app.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"url"}, "properties": map[string]interface{}{
+			"url":      map[string]interface{}{"type": "string"},
+			"open":     map[string]interface{}{"type": "boolean"},
+			"openMode": map[string]interface{}{"type": "string", "enum": []string{"system", "browser", "automation", "selenium"}, "description": "system opens the provider/default app; browser/automation/selenium opens a Yaver-controlled Chrome automation session."},
+			"surface":  map[string]interface{}{"type": "string", "description": "car, watch, tv, mobile, mcp, cli"},
+		}}},
+
+		// --- Studio modules (clips, chat, A/B, invoices, affiliates, asciinema) ---
+
+		// A/B experiments on top of flags
+		{"name": "ab_experiment_create", "description": "Create or update an A/B experiment. Variants are weighted (summed, normalised); bucketing is sticky per userId via SHA256. Metric is the event name that counts as a conversion.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"key", "variants"}, "properties": map[string]interface{}{
+			"key":      map[string]interface{}{"type": "string"},
+			"name":     map[string]interface{}{"type": "string"},
+			"variants": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "weight": map[string]interface{}{"type": "integer"}}}},
+			"metric":   map[string]interface{}{"type": "string"},
+		}}},
+		{"name": "ab_experiment_list", "description": "List all A/B experiments.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "ab_assign", "description": "Deterministically assign a userId to a variant. Returns the variant name; empty if the experiment is not running. Logs an exposure event.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"key", "userId"}, "properties": map[string]interface{}{"key": map[string]interface{}{"type": "string"}, "userId": map[string]interface{}{"type": "string"}}}},
+		{"name": "ab_event", "description": "Log an A/B exposure or conversion event. Use kind='conversion' when the tracked metric fires.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"key", "variant", "userId", "kind"}, "properties": map[string]interface{}{"key": map[string]interface{}{"type": "string"}, "variant": map[string]interface{}{"type": "string"}, "userId": map[string]interface{}{"type": "string"}, "kind": map[string]interface{}{"type": "string", "enum": []string{"exposure", "conversion"}}}}},
+		{"name": "ab_results", "description": "Return exposure + conversion counts and conversion rate per variant.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"key"}, "properties": map[string]interface{}{"key": map[string]interface{}{"type": "string"}}}},
+
+		// Clips (screen recording)
+		{"name": "clip_start", "description": "Start a local screen recording on the agent's Mac or Linux box via ffmpeg. Returns the session id; call clip_stop to finalise.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"title": map[string]interface{}{"type": "string"}, "description": map[string]interface{}{"type": "string"}}}},
+		{"name": "clip_stop", "description": "Stop the active screen recording. Finalises the mp4 with a flushed moov atom.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "clip_list", "description": "List recorded clip sessions with titles + durations.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+
+		// screenlog — local-only "screen as a stream of images" black box.
+		// Periodic de-duplicated screenshots on Windows/macOS/Linux/WSL.
+		// Frames live under ~/.yaver/screenlog/ and NEVER leave the machine.
+		{"name": "screenlog_drivers", "description": "Report whether local screen-frame capture works on this host and which driver is used (macOS screencapture / Linux scrot-or-gnome / Windows PowerShell / WSL→Windows interop). Run before screenlog_start to confirm capture is possible.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "screenlog_start", "description": "Start a LOCAL-ONLY screen-frame recording (the talos PC-monitor 'screen as images', local-only). Periodically screenshots every display, perceptually de-duplicates near-identical frames, and writes them under ~/.yaver/screenlog/. Nothing is uploaded. Returns a session id + local viewUrl. Call screenlog_stop to finish.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"title":          map[string]interface{}{"type": "string"},
+			"interval_sec":   map[string]interface{}{"type": "integer", "description": "seconds between captures (default 2)"},
+			"format":         map[string]interface{}{"type": "string", "enum": []string{"png", "jpg"}, "description": "frame format (default png, higher fidelity)"},
+			"max_width":      map[string]interface{}{"type": "integer", "description": "downscale cap in px; 0 = full resolution (default)"},
+			"displays":       map[string]interface{}{"type": "string", "enum": []string{"all", "primary"}},
+			"max_disk_mb":    map[string]interface{}{"type": "integer", "description": "disk-budget ring buffer in MB; oldest frames evicted first (default 4096)"},
+			"retention_days": map[string]interface{}{"type": "integer", "description": "prune sessions older than N days on start (default 7)"},
+			"dedup":          map[string]interface{}{"type": "boolean", "description": "perceptual de-dup of unchanged frames (default true)"},
+			"tag_window":     map[string]interface{}{"type": "boolean", "description": "best-effort active app/window-title tag per frame (default true)"},
+			"wsl_target":     map[string]interface{}{"type": "string", "enum": []string{"auto", "host", "wslg"}, "description": "in WSL, capture the Windows host desktop (host), the Linux WSLg surface (wslg), or auto-detect (default)"},
+			"persist":        map[string]interface{}{"type": "boolean", "description": "keep recording across reboots/sign-out — the agent auto-resumes on start with NO auth/internet dependency (set-and-forget black box)"},
+			"ephemeral":      map[string]interface{}{"type": "boolean", "description": "temporary screenshots: derive label+hash+interval per frame then DISCARD the image — keep only the activity trace (storage-light, privacy-friendly)"},
+			"capture_input":  map[string]interface{}{"type": "boolean", "description": "also record the keystroke/mouse companion stream (requires screenlog_policy allowInputCapture=true; OFF by default — keylogging is sensitive)"},
+			"allow_raw_text": map[string]interface{}{"type": "boolean", "description": "store typed characters verbatim instead of redacting them (default: redact — keeps action structure without secrets)"},
+		}}},
+		{"name": "screenlog_stop", "description": "Stop the active screenlog recording. Returns the session id, kept-frame count, and local viewUrl.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "screenlog_kill", "description": "PANIC STOP for the screen black box: stops the live session, disarms reboot auto-resume, AND flips the master kill-switch so nothing (local/remote/mesh/autostart) can record again until the owner re-enables. Optional purge wipes all captured data. Never gated — stopping surveillance is always allowed.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"purge": map[string]interface{}{"type": "boolean", "description": "also delete all captured session frames/events off disk"}}}},
+		{"name": "screenlog_live", "description": "Near-real-time LIVE view: returns whether recording is active + the newest captured frame (security-cam style). The image bytes are at /screenlog/live; poll it for a live feed at the capture cadence. Works remotely over relay/mesh.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "screenlog_process_model", "description": "GHOST ANALYSIS: returns a deterministic skeleton of task EPISODES (segmented from a recorded session) + a runner prompt. Fill the per-episode semantics (intent/fields/decision-rules/exceptions) and machinery[] from the keyframes (screenlog_frames sample:N), then call screenlog_process_model_save. Produces the 'what the operator did / how machinery is used' ProcessModel.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string", "description": "session id"}}, "required": []string{"id"}}},
+		{"name": "screenlog_process_model_save", "description": "Save a runner-completed ProcessModel for a session (episodes with intent/fields/decision-rules + machinery[] + role/system/summary). Stored locally at ~/.yaver/screenlog/<id>/process_model.json.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}, "model": map[string]interface{}{"type": "object", "description": "the completed ProcessModel"}}, "required": []string{"id", "model"}}},
+		{"name": "screenlog_process_model_get", "description": "Return the saved ProcessModel for a session (the structured 'what they did / how machinery is used' analysis).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}, "required": []string{"id"}}},
+		{"name": "screenlog_status", "description": "Live counters for the running screenlog session (kept frames, dropped duplicates, bytes, elapsed).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "screenlog_list", "description": "List local screenlog sessions (newest first) with frame counts.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "screenlog_frames", "description": "Return frames for a screenlog session. Default: metadata only (idx, capturedAt, display, file, active app/window) — cheap, agent-readable, answers 'what was on screen at <time>'. With sample=N, also attach N evenly-spaced frames as INLINE IMAGES so a vision-capable runner can see representative moments. Full images live at /screenlog/<id>/<file>.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer", "description": "return only the last N frames' metadata"}, "sample": map[string]interface{}{"type": "integer", "description": "attach N evenly-spaced frames as inline images for vision analysis"}}, "required": []string{"id"}}},
+		{"name": "screenlog_analyze", "description": "Analyze a screenlog session into a deterministic activity report: time-by-app (most first), active vs idle, top window titles, hourly histogram. This is how you answer 'what did this machine / person spend the most time on'. Returns structured numbers + a runner-ready narrativePrompt for prose. No LLM needed for the breakdown — the numbers are exact.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}, "idle_gap_sec": map[string]interface{}{"type": "integer", "description": "a gap larger than this with no kept frame counts as idle (default 120)"}, "max_attribute_sec": map[string]interface{}{"type": "integer", "description": "max time one frame may represent (default interval×4)"}}, "required": []string{"id"}}},
+		{"name": "screenlog_policy_get", "description": "Get this machine's screenlog consent policy: enabled (master kill-switch), allowRemoteControl (may a non-local caller start/stop), requireMeshGrant, allowedPeers, notifyOnStart. Screen recording is privacy-sensitive — this is the owner's control surface.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "screenlog_policy_set", "description": "Update this machine's screenlog consent policy. Use enabled=false to hard-disable all recording, allow_remote_control to gate remote (same-account) start/stop, allow_input_capture to permit the keystroke/mouse companion stream (separate stronger gate — keylogging is sensitive), and allow_peer/revoke_peer to grant or remove a yaver-mesh peer's screen access (a mesh peering does NOT implicitly grant screen access).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"enabled": map[string]interface{}{"type": "boolean"}, "allow_remote_control": map[string]interface{}{"type": "boolean"}, "require_mesh_grant": map[string]interface{}{"type": "boolean"}, "notify_on_start": map[string]interface{}{"type": "boolean"}, "allow_input_capture": map[string]interface{}{"type": "boolean"}, "allow_peer": map[string]interface{}{"type": "string", "description": "mesh peer/device id to grant screen access"}, "revoke_peer": map[string]interface{}{"type": "string"}}}},
+		{"name": "screenlog_audit", "description": "Return the local screenlog audit trail (start/stop/deny/policy events with caller remoteness + peer id). Lets the recorded machine's owner see who started recording and when.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "screenlog_autostart", "description": "Get or set the reboot-durable 'keep recording' intent. With set=true + enabled, the agent auto-resumes screenlog on every start — local, auth/internet-independent — so a rebooted or offline box keeps logging if that was its last state. set=false+enabled=false disarms it.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"set": map[string]interface{}{"type": "boolean"}, "enabled": map[string]interface{}{"type": "boolean"}}}},
+		{"name": "screenlog_events", "description": "Read the input-event companion stream (keystrokes + mouse clicks/scroll) for a session, plus deterministic stats (clicks, keys, actions/min). Events follow a standard AI-training schema (t,type,x,y,button,key,...) and pair 1:1 with frames as a {screenshot,action} trace. Producers POST events to /screenlog/<id>/events (works without the built-in agent loop).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}, "required": []string{"id"}}},
+		{"name": "screenlog_export", "description": "Get the bulk-pull URL for a screenlog session (a tar.gz of index.json + every frame image + events.jsonl). Use this to pull a remote machine's recording down locally; or run `yaver screenlog pull <id>`.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}, "required": []string{"id"}}},
+
+		// Invoices + Stripe / LemonSqueezy
+		{"name": "customer_create", "description": "Add a billing customer (name, email, address). Required before creating an invoice for them.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name", "email"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "email": map[string]interface{}{"type": "string"}, "address": map[string]interface{}{"type": "string"}, "taxId": map[string]interface{}{"type": "string"}}}},
+		{"name": "customer_list", "description": "List billing customers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "invoice_create", "description": "Create a draft invoice with line items. Invoice number is assigned sequentially (INV-001, ...).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"customerId", "lineItems"}, "properties": map[string]interface{}{
+			"customerId": map[string]interface{}{"type": "string"},
+			"currency":   map[string]interface{}{"type": "string"},
+			"dueAt":      map[string]interface{}{"type": "string", "description": "YYYY-MM-DD"},
+			"taxPercent": map[string]interface{}{"type": "number"},
+			"notes":      map[string]interface{}{"type": "string"},
+			"lineItems":  map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"description": map[string]interface{}{"type": "string"}, "quantity": map[string]interface{}{"type": "number"}, "unitPrice": map[string]interface{}{"type": "number"}}}},
+		}}},
+		{"name": "invoice_list", "description": "List invoices (draft / sent / paid).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "invoice_render_pdf", "description": "Render an invoice to PDF via the embedded Chromium. Returns base64 bytes.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string", "description": "Invoice ID or number (INV-001)"}}}},
+		{"name": "invoice_payment_link", "description": "Mint a Stripe or LemonSqueezy hosted checkout URL for an invoice. Pass the dev's API key (never stored). Writes the resulting link onto the invoice.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id", "provider", "apiKey"}, "properties": map[string]interface{}{
+			"id":       map[string]interface{}{"type": "string"},
+			"provider": map[string]interface{}{"type": "string", "enum": []string{"stripe", "lemonsqueezy"}},
+			"apiKey":   map[string]interface{}{"type": "string"},
+		}}},
+		{"name": "invoice_send", "description": "Mark an invoice sent and email it to the customer with the payment link via the SMTP relay.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}}},
+
+		// Affiliates
+		{"name": "affiliate_create", "description": "Register an affiliate with a commission percentage. Returns the referral code (same space as /s/:code short links).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"email"}, "properties": map[string]interface{}{
+			"email":             map[string]interface{}{"type": "string"},
+			"name":              map[string]interface{}{"type": "string"},
+			"commissionPercent": map[string]interface{}{"type": "number"},
+		}}},
+		{"name": "affiliate_list", "description": "List affiliates with owed / paid totals.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "affiliate_conversion", "description": "Record a sale attributed to an affiliate. Commission is computed from the affiliate's percentage.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id", "amount"}, "properties": map[string]interface{}{
+			"id":        map[string]interface{}{"type": "string", "description": "Affiliate ID or code"},
+			"amount":    map[string]interface{}{"type": "number"},
+			"currency":  map[string]interface{}{"type": "string"},
+			"sourceRef": map[string]interface{}{"type": "string"},
+		}}},
+		{"name": "affiliate_payout", "description": "Record that a payout was sent to an affiliate. Decrements totalOwed, increments totalPaid.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id", "amount"}, "properties": map[string]interface{}{
+			"id":       map[string]interface{}{"type": "string"},
+			"amount":   map[string]interface{}{"type": "number"},
+			"currency": map[string]interface{}{"type": "string"},
+			"method":   map[string]interface{}{"type": "string"},
+			"note":     map[string]interface{}{"type": "string"},
+		}}},
+
+		// Asciinema-lite
+		{"name": "cast_list", "description": "List recorded terminal casts (asciicast v2).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "cast_start", "description": "Start an agent-side terminal recording. Wraps the given command via the asciinema CLI. Only one recording at a time.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"title": map[string]interface{}{"type": "string"}, "command": map[string]interface{}{"type": "string"}}}},
+		{"name": "cast_stop", "description": "Stop the active terminal recording and save it to the cast index.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+
+		// Copilot-lite (local Ollama)
+		{"name": "copilot_complete", "description": "Generate a code completion via the dev's local Ollama model. Supports fill-in-the-middle via prefix+suffix for Qwen2.5-Coder / StarCoder / DeepSeek. Replaces GitHub Copilot / Cursor for solo devs running Ollama.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"prefix"}, "properties": map[string]interface{}{
+			"prefix":      map[string]interface{}{"type": "string", "description": "Text before the cursor"},
+			"suffix":      map[string]interface{}{"type": "string", "description": "Text after the cursor for FIM"},
+			"language":    map[string]interface{}{"type": "string"},
+			"file":        map[string]interface{}{"type": "string"},
+			"maxTokens":   map[string]interface{}{"type": "integer"},
+			"model":       map[string]interface{}{"type": "string", "description": "Ollama tag, default qwen2.5-coder:7b"},
+			"temperature": map[string]interface{}{"type": "number"},
+		}}},
+		{"name": "copilot_models", "description": "List the Ollama models the dev has pulled locally. Handy before calling copilot_complete.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+	}
+	tools = append(tools, soloStackTools...)
+
+	// --- Company AI policy resolver (headless/MCP entry to the runtime resolver) ---
+	companyAITools := []map[string]interface{}{
+		{
+			"name":        "company_ai_resolve",
+			"description": "Resolve the policy-bound runtime for a unit of work on a team: which device, runner, model, and model provider are permitted, plus required MCP servers, approvals, and next-setup actions. Mirrors what web/mobile/desktop call before starting a job. Returns no secrets. Use before dispatching a task so the agent picks a runner/provider the company policy allows.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"teamId": map[string]interface{}{
+						"type":        "string",
+						"description": "Team/company id the work runs under.",
+					},
+					"workKind": map[string]interface{}{
+						"type":        "string",
+						"description": "App-defined work-kind key (e.g. app-code, convex, web-ui, harness-cad, openscad-cad, or any kind the team's app profile registers).",
+					},
+					"requestedRunner": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional preferred runner (claude/codex/opencode/…). Honored only if policy allows the override.",
+					},
+					"requestedModel": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional preferred model. Honored only if policy allows the override.",
+					},
+					"requestedProvider": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional preferred model provider (openrouter/gemini/ollama/salad/on-prem id). Honored only if policy allows it.",
+					},
+					"requestedDeviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional target device; defaults to the team's bound runtime device.",
+					},
+				},
+				"required": []interface{}{"teamId", "workKind"},
+			},
+		},
+	}
+	tools = append(tools, companyAITools...)
+
+	// --- Primary-device preference (auto-connect) ---
+	primaryTools := []map[string]interface{}{
+		{
+			"name":        "device_primary_get",
+			"description": "Get the user's preferred device for auto-connect. Mobile, web, and the CLI use this when the user has multiple machines registered — single-device users auto-connect regardless.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "device_voice_hints_set",
+			"description": "Set the SPOKEN names for a device — the names a user says out loud, e.g. \"my mac mini\", \"the box at maltepe\", \"work laptop\". Distinct from alias (one short token typed at a shell): hints are many and natural-language. They are what lets a driver say \"switch to my mac mini\" on CarPlay, where no device picker may be shown on screen. Pass hints[] to replace the whole list, or add[]/remove[] to mutate it. Max 12 per device.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"deviceId"},
+				"properties": map[string]interface{}{
+					"deviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Full deviceId of the machine to name.",
+					},
+					"hints": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Replace the whole list. Pass [] to clear.",
+					},
+					"add": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Add these spoken names, keeping existing ones.",
+					},
+					"remove": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Remove these spoken names.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "device_primary_set",
+			"description": "Mark a device as the primary (auto-connect) target. Accepts a deviceId or unique prefix. Pass clear:true instead to unset the preference.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"deviceId": map[string]interface{}{
+						"type":        "string",
+						"description": "Full deviceId or unique prefix. Ignored when clear=true.",
+					},
+					"clear": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Unset the preference instead of picking a device.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "primary_auth",
+			"description": "Re-auth on the user's primary remote device. With runner empty (default) this refreshes the Yaver session token via the existing /auth/recover flow (same as `yaver primary auth`). With runner=claude or codex, it kicks off the runner's browser/device-code login flow on the primary box (same as `yaver primary auth claude` / `yaver primary auth codex`); the response carries the URL/code the user opens to finish. Resolves the primary deviceId automatically — no need to look it up first.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"runner": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"", "claude", "claude-code", "codex"},
+						"description": "Empty (default) for Yaver-level reauth; claude/claude-code or codex to start that runner's login flow on the primary device.",
+					},
+				},
+			},
+		},
+		{
+			"name":        "primary_status",
+			"description": "Live status of the user's primary remote device — agent version, lifecycle (healthy / ready-to-connect / yaver-auth-expired / bootstrap), runners, dev-server, project, transport. Same data as `yaver primary status --json`. Resolves the primary deviceId automatically.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "primary_ping",
+			"description": "Short reachability + auth check against the user's primary remote device. Returns transport, latency-class info, agent version, lifecycle, ownerEmail, and whether the box's owner matches the caller. Same shape as `yaver primary ping --json`.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "primary_projects",
+			"description": "List projects discovered by the agent's filesystem scanner on the user's primary remote device. Pass mobile_only=true to filter to mobile-capable projects only (Expo / React Native / Flutter / Swift / Kotlin) — same as `yaver primary mobiles`. Discovery runs without any coding-agent installed on the box.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"mobile_only": map[string]interface{}{
+						"type":        "boolean",
+						"description": "When true, return only mobile-capable projects (mobile + Flutter + Swift + Kotlin).",
+					},
+				},
+			},
+		},
+	}
+	tools = append(tools, primaryTools...)
+
+	// --- Grand MCP: ops + ops_plan + ops_verbs ---
+	// Unified verb-based API (see YAVER_MCP_COVERAGE.md). Agents that
+	// want one schema instead of 744 specialist tools call `ops`; they
+	// discover available verbs via `ops_verbs`. The specialist tools
+	// stay — ops is additive, not a replacement.
+	opsTools := []map[string]interface{}{
+		{
+			"name":        "ops",
+			"description": "Run one verb on one machine. Single API for every Yaver capability (info, run, build, test, deploy, push, reload, logs, status, env, session, scale, provision, destroy, ...). Discover available verbs via `ops_verbs`.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"verb"},
+				"properties": map[string]interface{}{
+					"machine": map[string]interface{}{
+						"type":        "string",
+						"description": "Target: \"local\", \"auto\", \"primary\", or a deviceId / alias. Cross-machine routing is supported; \"auto\" uses project-aware placement for deploy/reload and otherwise prefers the primary device before falling back to local.",
+						"default":     "local",
+					},
+					"verb": map[string]interface{}{
+						"type":        "string",
+						"description": "Verb name. Call ops_verbs for the registered list + each verb's payload schema.",
+					},
+					"payload": map[string]interface{}{
+						"type":        "object",
+						"description": "Verb-specific payload. Shape depends on verb.",
+					},
+				},
+				"additionalProperties": false,
+			},
+		},
+		{
+			"name":        "ops_plan",
+			"description": "Resolve the execution plan for one ops verb without running it. Returns project context, machine placement, and caller access policy so agents can inspect deploy/reload routing and signed-companion constraints ahead of time.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"verb"},
+				"properties": map[string]interface{}{
+					"machine": map[string]interface{}{
+						"type":        "string",
+						"description": "Target: \"local\", \"auto\", \"primary\", or a deviceId / alias. Same semantics as `ops`.",
+						"default":     "local",
+					},
+					"verb": map[string]interface{}{
+						"type":        "string",
+						"description": "Verb name to plan for.",
+					},
+					"payload": map[string]interface{}{
+						"type":        "object",
+						"description": "Verb-specific payload used for workDir / target / placement inference.",
+					},
+				},
+				"additionalProperties": false,
+			},
+		},
+		{
+			"name":        "ops_verbs",
+			"description": "List every registered ops verb with its description, payload schema, and streaming behavior. Call this once to populate the agent's knowledge of the ops API.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "robot_camera",
+			"description": "Capture the current frame from a robot/machine cell's camera and return it as a VIEWABLE image, so you (the host model) can SEE the workspace and do vision-in-the-loop robotics development: write code → move the robot (ops robot_move/robot_jog) → look → fix. Targets any device on the mesh via `machine` (e.g. an Android phone wired next to an Ender/Fairino). The cell needs a camera: local /dev/video0, an http(s):// snapshot URL, or an \"external\" push buffer the box fills with its OWN camera. For the box's on-device vision model instead, use ops verb robot_look.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"machine": map[string]interface{}{
+						"type":        "string",
+						"description": "Target cell: \"local\", \"primary\", or a deviceId / alias. Default \"local\".",
+						"default":     "local",
+					},
+				},
+				"additionalProperties": false,
+			},
+		},
+		{
+			"name":        "appletv_now_playing",
+			"description": "Fetch the Apple TV's now-playing state and return the album/show ARTWORK as a VIEWABLE image plus the metadata (title/artist/app/state/position). Targets the Pi (or any mesh device) running the appletv engine via `machine`. For control (keys, transport, power, launch, pair) use the `ops` tool with the appletv_* verbs. Capturing the user's OWN non-protected HDMI source is a separate capability (ops capture_* verbs + /capture/stream).",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"machine": map[string]interface{}{
+						"type":        "string",
+						"description": "Target device running the Apple TV engine: \"local\", \"primary\", or a deviceId / alias. Default \"local\".",
+						"default":     "local",
+					},
+					"device": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional paired-Apple-TV identifier or name; default uses the configured default TV.",
+					},
+				},
+				"additionalProperties": false,
+			},
+		},
+		{
+			"name":        "circuit_plot",
+			"description": "Simulate the loaded electrical circuit and return the waveform as a VIEWABLE PNG, so you (the host model) can SEE the response and do circuit design in the loop: edit the netlist (ops circuit_import) → simulate → look at the curve → fix. Import a SPICE/KiCad/EPLAN design first via ops verb circuit_import. Picks the analysis from `type` (op→transient, tran, ac for a Bode plot, dc sweep); `signals` filters which node traces to draw. For raw numbers instead of a picture use ops verbs circuit_simulate / circuit_measure / circuit_erc. Targets any mesh device via `machine`.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"machine": map[string]interface{}{
+						"type":        "string",
+						"description": "Target cell: \"local\", \"primary\", or a deviceId / alias. Default \"local\".",
+						"default":     "local",
+					},
+					"type": map[string]interface{}{
+						"type":        "string",
+						"description": "Analysis: \"tran\" (time), \"ac\" (Bode), \"dc\" (sweep). Default transient.",
+					},
+					"signals": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Optional signal names to plot, e.g. [\"V(out)\"]. Default: all node traces.",
+					},
+				},
+				"additionalProperties": false,
+			},
+		},
+	}
+	tools = append(tools, opsTools...)
+
+	// --- SDK-token lifecycle (MCP) ---
+	// CLI has `yaver sdk-token create` with scopes / CIDRs / expiry;
+	// wiring the same through MCP lets an agent rotate its own scoped
+	// tokens without shelling out. The raw token is returned ONCE —
+	// same contract as the CLI — and is never re-fetchable.
+	sdkTokenTools := []map[string]interface{}{
+		{
+			"name":        "sdk_token_create",
+			"description": "Mint a new SDK token (scoped, IP-bound, optional expiry). The raw token is returned exactly once — store it immediately. Defaults: scopes=[\"feedback\",\"blackbox\"], no CIDR, 1-year expiry.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"label":        map[string]interface{}{"type": "string", "description": "Human-readable name shown in the dashboard."},
+					"scopes":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "e.g. [\"feedback\",\"blackbox\",\"voice\",\"builds\"]. Omit for defaults."},
+					"allowedCIDRs": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "CIDR allowlist (IPv4/IPv6)."},
+					"expiresInMs":  map[string]interface{}{"type": "integer", "description": "Lifetime in milliseconds. Default: 1 year."},
+				},
+			},
+		},
+	}
+	tools = append(tools, sdkTokenTools...)
+
+	// --- Feedback SDK (MCP) ---
+	// Covers the "attach a bug report from an agent" path. CLI already
+	// has `yaver feedback list/show/fix/delete` — this MCP parity
+	// means a vibe coder in Cursor can act on an SDK-captured crash
+	// without leaving their chat window.
+	feedbackTools := []map[string]interface{}{
+		{
+			"name":        "feedback_list",
+			"description": "List recent feedback reports captured from the Feedback SDK (React Native / Flutter / Web). Includes crash logs, screenshots, black-box ring buffers.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"limit": map[string]interface{}{"type": "integer", "description": "Max items to return. Default 20."},
+				},
+			},
+		},
+		{
+			"name":        "feedback_show",
+			"description": "Return the full feedback report for one id: error metadata, stack, screenshots (absolute on-disk FILE PATHS — read them with vision_analyze_image to see the crash/UI state), and a recent-events snapshot from the BlackBox.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "feedback_fix",
+			"description": "Create a task that asks the wrapped AI runner to fix the issue captured in this feedback report. Pulls in the stack trace + BlackBox context automatically.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]interface{}{
+					"id":     map[string]interface{}{"type": "string"},
+					"runner": map[string]interface{}{"type": "string", "description": "Optional runner override (claude-code / codex / aider / ...)."},
+				},
+			},
+		},
+		{
+			"name":        "feedback_delete",
+			"description": "Remove a feedback report. Destructive.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+	tools = append(tools, feedbackTools...)
+
+	// --- Remote runtime (MCP keystone, P1) ---
+	// Exposes the HTTP-only remote-runtime lane as MCP so a runner can
+	// create + observe + drive any bootable simulator/emulator without
+	// the dashboard. Pattern: proxy to the local /remote-runtime/*
+	// handler via remoteRuntimeHTTPMCP; runtime_frame returns a
+	// first-class MCP image (image/jpeg), the rest return JSON strings.
+	runtimeRuntimeTools := []map[string]interface{}{
+		{
+			"name":        "runtime_targets",
+			"description": "List remote-runtime targets for a project (iOS/iPadOS/watchOS/tvOS/visionOS sims, Android emu/device, browser-window). Returns each target's id, surface badge, enabled/disabled state, and presentation hints such as displaySurface + viewport; agents must use those hints when browser-window is rendering a mobile web build.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"framework", "workDir"},
+				"properties": map[string]interface{}{
+					"framework": map[string]interface{}{"type": "string", "description": "expo, react-native, swift, kotlin, flutter, browser"},
+					"workDir":   map[string]interface{}{"type": "string", "description": "Project root the target list is computed for."},
+				},
+			},
+		},
+		{
+			"name":        "runtime_create",
+			"description": "Create a remote-runtime session (boot the sim/emulator and hold it addressable). Returns the session id + selected target + first-frame availability.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"framework", "workDir", "targetId"},
+				"properties": map[string]interface{}{
+					"framework":     map[string]interface{}{"type": "string"},
+					"workDir":       map[string]interface{}{"type": "string"},
+					"targetId":      map[string]interface{}{"type": "string", "description": "e.g. ios-simulator, watchos-simulator, android-emulator, browser-window."},
+					"transportMode": map[string]interface{}{"type": "string", "description": "direct-webrtc (default) or relay-jpeg-poll."},
+				},
+			},
+		},
+		{
+			"name":        "runtime_list",
+			"description": "List all remote-runtime sessions currently held by this agent.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		},
+		{
+			"name":        "runtime_control",
+			"description": "Send a control action (tap/swipe/pinch/navigate/text/key) to a remote-runtime session — the seam a runner uses to browse the app, not just the code.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId", "action"},
+				"properties": map[string]interface{}{
+					"sessionId":  map[string]interface{}{"type": "string"},
+					"action":     map[string]interface{}{"type": "string", "description": "tap | swipe | pinch | zoom | navigate | text | key"},
+					"x":          map[string]interface{}{"type": "integer"},
+					"y":          map[string]interface{}{"type": "integer"},
+					"x2":         map[string]interface{}{"type": "integer", "description": "Swipe end-point x."},
+					"y2":         map[string]interface{}{"type": "integer", "description": "Swipe end-point y."},
+					"durationMs": map[string]interface{}{"type": "integer", "description": "Swipe or pinch duration in ms."},
+					"scale":      map[string]interface{}{"type": "number", "description": "Pinch scale centred on x,y: >1 zooms in (fingers apart), <1 zooms out. Only used by action=pinch|zoom."},
+					"text":       map[string]interface{}{"type": "string"},
+					"key":        map[string]interface{}{"type": "string"},
+					"url":        map[string]interface{}{"type": "string", "description": "Target URL for action=navigate. http/https only. For browser-window this is the ONLY way to show content — the window opens at about:blank."},
+				},
+			},
+		},
+		{
+			"name":        "runtime_command",
+			"description": "Run a session-level command (boot re-attach, run-guest rerender/relaunch, launch-app, launch-feedback). run-guest rebuilds and relaunches the selected RN/Expo guest into the active simulator/emulator stream, including tvOS when available; launch-app requires bundleId; boot is idempotent.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId", "command"},
+				"properties": map[string]interface{}{
+					"sessionId": map[string]interface{}{"type": "string"},
+					"command":   map[string]interface{}{"type": "string", "description": "boot | run-guest | launch-app | launch-feedback"},
+					"bundleId":  map[string]interface{}{"type": "string", "description": "iOS/Android app bundle id for launch-app."},
+					"workDir":   map[string]interface{}{"type": "string", "description": "Project root for run-guest when the session does not already carry workDir."},
+					"source":    map[string]interface{}{"type": "string", "description": "Optional trigger source label (e.g. shake, tap-menu)."},
+				},
+			},
+		},
+		{
+			"name":        "runtime_frame",
+			"description": "Return a live JPEG frame from a remote-runtime session as a first-class MCP image (image/jpeg). Same shape as droid_frame — a runner can 'launch app + look at the screen' end-to-end.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId"},
+				"properties": map[string]interface{}{
+					"sessionId": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "runtime_stop",
+			"description": "Delete a remote-runtime session (shuts down the local live state; the sim itself stays booted for reuse).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId"},
+				"properties": map[string]interface{}{
+					"sessionId": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+	tools = append(tools, runtimeRuntimeTools...)
+
+	// --- develop_for orchestration (P2) ---
+	developForTools := []map[string]interface{}{
+		{
+			"name":        "develop_for",
+			"description": "One-verb dev loop: resolve machine → gate on authed runner → pick mechanism per (framework, surface, platform) → create+boot a remote-runtime session on the resolved target → launch app → return sessionId + first frame. Composes runtime_* + runner_auth + mechanism resolver; no new transport.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project", "surface"},
+				"properties": map[string]interface{}{
+					"project":   map[string]interface{}{"type": "string", "description": "Project alias or workdir path — e.g. talos, yaver, sfmg, or a repo path."},
+					"framework": map[string]interface{}{"type": "string", "description": "expo|react-native|swift|kotlin|flutter|next|vite|browser. Auto-detected from project name / workDir extension when omitted."},
+					"surface":   map[string]interface{}{"type": "string", "description": "phone|tablet|watch|tv|vision|car|web"},
+					"platform":  map[string]interface{}{"type": "string", "description": "ios|android — defaults per-surface."},
+					"machine":   map[string]interface{}{"type": "string", "description": "Optional deviceId; empty = local mini."},
+					"renderOn":  map[string]interface{}{"type": "string", "description": "Optional Axis-3 sink deviceId (e.g. render on my phone from the car). Full cast routing lands in P5; surfaced here so a sibling can attach."},
+					"bundleId":  map[string]interface{}{"type": "string", "description": "Optional bundle id — launch-app runs after boot when set."},
+					"workDir":   map[string]interface{}{"type": "string", "description": "Optional project workdir override."},
+				},
+			},
+		},
+	}
+	tools = append(tools, developForTools...)
+
+	// --- Voice everywhere (P3) ---
+	// Runner-driven STT/TTS onto a *named* surface. Both verbs ride
+	// the same BlackBoxCommand pipe device_broadcast_command uses so
+	// clients only need a single SDK listener + adapters.
+	voiceTools := []map[string]interface{}{
+		{
+			"name":        "voice_listen_start",
+			"description": "Ask a specific device to start streaming STT (mic capture → transcription). Directed only — empty device errors. Client SDK must bind AudioCaptureAdapter (RN core is ready; native bridges pending).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"device"},
+				"properties": map[string]interface{}{
+					"device":    map[string]interface{}{"type": "string", "description": "Target deviceId."},
+					"provider":  map[string]interface{}{"type": "string", "description": "Optional STT backend hint (whisper, expo-speech-recognition, web-speech-api)."},
+					"sessionId": map[string]interface{}{"type": "string", "description": "Optional runtime session to tie the mic to — voice intents can then drive runtime_control on the same target."},
+				},
+			},
+		},
+		{
+			"name":        "voice_speak",
+			"description": "Cast TTS to a named device (or broadcast when device is empty). Accepts renderOn for Axis-3 routing (`speak on phone even though I'm on the car`). Client sinks decide how to render.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"text"},
+				"properties": map[string]interface{}{
+					"device":   map[string]interface{}{"type": "string", "description": "Optional deviceId; empty broadcasts to every subscribed SDK session."},
+					"text":     map[string]interface{}{"type": "string"},
+					"voice":    map[string]interface{}{"type": "string", "description": "Optional TTS voice hint."},
+					"rate":     map[string]interface{}{"type": "number", "description": "Optional speaking rate (engine default when 0)."},
+					"renderOn": map[string]interface{}{"type": "string", "description": "Axis-3 sink deviceId; the target client may forward the audio there."},
+				},
+			},
+		},
+	}
+	tools = append(tools, voiceTools...)
+
+	// --- Feedback n2n (P4) ---
+	feedbackP4Tools := []map[string]interface{}{
+		{
+			"name":        "feedback_create",
+			"description": "Mint a FeedbackReport programmatically. Optional screenshotSessionId auto-attaches a runtime_frame JPEG. surface must be one of phone/tablet/watch/tv/vision/car/web/feedback-sdk.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"surface"},
+				"properties": map[string]interface{}{
+					"surface":             map[string]interface{}{"type": "string"},
+					"transcript":          map[string]interface{}{"type": "string", "description": "What the reporter said or the runner captured."},
+					"source":              map[string]interface{}{"type": "string", "description": "yaver-app | in-app-sdk | mcp (default mcp)."},
+					"appName":             map[string]interface{}{"type": "string"},
+					"platform":            map[string]interface{}{"type": "string"},
+					"osVersion":           map[string]interface{}{"type": "string"},
+					"model":               map[string]interface{}{"type": "string"},
+					"appVersion":          map[string]interface{}{"type": "string"},
+					"buildId":             map[string]interface{}{"type": "string"},
+					"screenshotSessionId": map[string]interface{}{"type": "string", "description": "Optional runtime session — its current /frame becomes the report screenshot."},
+				},
+			},
+		},
+		{
+			"name":        "feedback_speak",
+			"description": "TTS-summarise the feedback queue via voice_speak. Empty id → summary of the last N reports; id set → read that one report. maxItems defaults to 3.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id":       map[string]interface{}{"type": "string"},
+					"device":   map[string]interface{}{"type": "string", "description": "Optional target deviceId; empty broadcasts."},
+					"maxItems": map[string]interface{}{"type": "integer"},
+				},
+			},
+		},
+	}
+	tools = append(tools, feedbackP4Tools...)
+
+	// --- Concurrency arbitration (P5) ---
+	// Single-writer control lease so `phone + TV at once` doesn't turn
+	// into a tap war. Any client can take when it's free / stale, the
+	// holder releases when done, and everyone can see who's driving.
+	leaseTools := []map[string]interface{}{
+		{
+			"name":        "runtime_take_control",
+			"description": "Claim the control lease on a remote-runtime session. Fails cleanly when another client holds it unless force=true. Also succeeds when the current holder is idle beyond the lease timeout.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId", "clientId"},
+				"properties": map[string]interface{}{
+					"sessionId":   map[string]interface{}{"type": "string"},
+					"clientId":    map[string]interface{}{"type": "string", "description": "Stable per-surface id (e.g. mobile-1234, web-tab-A)."},
+					"clientLabel": map[string]interface{}{"type": "string", "description": "Human-readable label surfaced to other viewers (\"TV\", \"Kivanc's phone\")."},
+					"force":       map[string]interface{}{"type": "boolean"},
+				},
+			},
+		},
+		{
+			"name":        "runtime_release_control",
+			"description": "Release the control lease. Matching clientId is required unless force=true.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId", "clientId"},
+				"properties": map[string]interface{}{
+					"sessionId": map[string]interface{}{"type": "string"},
+					"clientId":  map[string]interface{}{"type": "string"},
+					"force":     map[string]interface{}{"type": "boolean"},
+				},
+			},
+		},
+		{
+			"name":        "runtime_lease_status",
+			"description": "Report the current control lease holder + last activity for a session.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionId"},
+				"properties": map[string]interface{}{
+					"sessionId": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+	tools = append(tools, leaseTools...)
+
+	// --- Runner keeper (P7) — same-session continuation supervisor ---
+	// Runner-agnostic (claude / codex / opencode / glm), single-instance,
+	// own-machine/own-subscription. NEVER forks a new runner process.
+	// See runner_keeper.go for the compliance block.
+	runnerKeeperTools := []map[string]interface{}{
+		{
+			"name":        "runner_attach",
+			"description": "Attach to a live runner tmux session — flip it into user-driven mode so the keeper does NOT nudge while you're vibing.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionName"},
+				"properties": map[string]interface{}{
+					"sessionName": map[string]interface{}{"type": "string"},
+					"machine":     map[string]interface{}{"type": "string", "description": "Reserved for future remote-attach routing (empty = local)."},
+				},
+			},
+		},
+		{
+			"name":        "runner_detach",
+			"description": "Detach the terminal AND flip the session into autorun mode (default). Pass autorun=false to leave the session dormant.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionName"},
+				"properties": map[string]interface{}{
+					"sessionName": map[string]interface{}{"type": "string"},
+					"autorun":     map[string]interface{}{"type": "boolean", "description": "Default true — after detach, the keeper drains the queue."},
+				},
+			},
+		},
+		{
+			"name":        "runner_autorun",
+			"description": "Force a session's keeper mode to on|off explicitly (bypasses attach/detach).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionName", "mode"},
+				"properties": map[string]interface{}{
+					"sessionName": map[string]interface{}{"type": "string"},
+					"mode":        map[string]interface{}{"type": "string", "description": "on|off"},
+				},
+			},
+		},
+		{
+			"name":        "runner_queue_add",
+			"description": "Enqueue a prompt for a named runner session. The keeper drains the queue one prompt at a time when the pane goes idle.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"sessionName", "prompt"},
+				"properties": map[string]interface{}{
+					"sessionName": map[string]interface{}{"type": "string"},
+					"prompt":      map[string]interface{}{"type": "string"},
+					"source":      map[string]interface{}{"type": "string", "description": "phone / mcp / cli — recorded for audit."},
+				},
+			},
+		},
+		{
+			"name":        "runner_queue_list",
+			"description": "List queued prompts. sessionName filters; empty returns every session.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"sessionName": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "runner_queue_clear",
+			"description": "Drop queued prompts (one session or all). Destructive.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"sessionName": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "runner_status",
+			"description": "Human-readable status for a named autorun task: phases done/current/remaining, [auto-runner] commits with metadata (phase/machine/alias/work-window/mode), current mode, keeper health, last-activity, ETA, per-runner attribution (claude/codex/opencode/glm) with time + tokens where recorded.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"sessionName": map[string]interface{}{"type": "string"},
+					"task":        map[string]interface{}{"type": "string", "description": "e.g. n2n — used to parse the matching progress log."},
+					"machine":     map[string]interface{}{"type": "string", "description": "Reserved for remote status."},
+				},
+			},
+		},
+	}
+	tools = append(tools, runnerKeeperTools...)
+
+	// --- Deep health (P8) — install + self-healing visibility ---
+	healthDeepTools := []map[string]interface{}{
+		{
+			"name":        "yaver_health_deep",
+			"description": "Per-subsystem actionable health: agent HTTP mux, tmux availability, runner keeper + per-session status (idle / stalled / draining), remote-runtime sessions + WebRTC pump liveness. Returns graduated recovery hints so callers can decide the escalation.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		},
+	}
+	tools = append(tools, healthDeepTools...)
+
+	// --- deploy_all (P9) — full fan-out to beta/internal channels + infra ---
+	deployAllTools := []map[string]interface{}{
+		{
+			"name":        "deploy_all",
+			"description": "Owner-only full deploy fan-out, equivalent to the canonical `./deploy/deploy.sh all` path: Convex backend, Cloudflare web, npm CLI, TestFlight (iOS embeds watch/tv/vision), Play internal (Android + Wear/AndroidTV/Auto). Beta/internal channels ONLY — NEVER App Store or Play production. Preflight (go build) hard-gates the run; force=true bypasses. dryRun lists steps without invoking them. Writes ~/n2n_deploy_report.md.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"dryRun":  map[string]interface{}{"type": "boolean"},
+					"only":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Run only the named steps (convex, web-cloudflare, cli-npm, testflight-ios, playstore-android)."},
+					"exclude": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+					"force":   map[string]interface{}{"type": "boolean", "description": "Bypass a red preflight gate. Use with care."},
+				},
+			},
+		},
+	}
+	tools = append(tools, deployAllTools...)
+
+	// --- Source maps (MCP) ---
+	// Table-stakes coverage gap: the CLI has `yaver sourcemaps`
+	// upload/list/delete/resolve. Agents that drive mobile releases
+	// want to upload a Hermes sourcemap right after a build so crash
+	// reports in the Errors dashboard symbolicate. Maps stay on the
+	// agent's disk (~/.yaver/sourcemaps/) — never shipped to Convex.
+	sourcemapTools := []map[string]interface{}{
+		{
+			"name":        "sourcemaps_list",
+			"description": "List uploaded source maps — returns {app: [versions]}. Maps are stored locally on the agent.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "sourcemaps_delete",
+			"description": "Remove the source map for a specific app + version tuple. Destructive.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"app", "version"},
+				"properties": map[string]interface{}{
+					"app":     map[string]interface{}{"type": "string"},
+					"version": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "sourcemaps_resolve",
+			"description": "Resolve a compiled line:col against the stored source map for app+version. Returns {source, line, column, name} or an error when the map is missing.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"app", "version", "line", "column"},
+				"properties": map[string]interface{}{
+					"app":     map[string]interface{}{"type": "string"},
+					"version": map[string]interface{}{"type": "string"},
+					"line":    map[string]interface{}{"type": "integer"},
+					"column":  map[string]interface{}{"type": "integer"},
+				},
+			},
+		},
+	}
+	tools = append(tools, sourcemapTools...)
+
+	// --- Monorepo workspace manifest ---
+	monorepoWorkspaceTools := []map[string]interface{}{
+		{
+			"name":        "workspace_init",
+			"description": "Wire every app declared in yaver.workspace.yaml: scaffold init.md, env-check, per-app setup. Call workspace_scaffold first if no manifest exists. Idempotent — re-runs skip already-initialised apps unless force=true.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"root":           map[string]interface{}{"type": "string", "description": "Repo root. Defaults to agent CWD."},
+					"force":          map[string]interface{}{"type": "boolean", "description": "Overwrite existing init.md files."},
+					"dryRun":         map[string]interface{}{"type": "boolean"},
+					"onlyApp":        map[string]interface{}{"type": "string", "description": "Restrict to a single app name."},
+					"autoinitPrompt": map[string]interface{}{"type": "boolean", "description": "Include per-app `yaver autoinit` hints in the result."},
+				},
+			},
+		},
+		{
+			"name":        "workspace_list",
+			"description": "Return apps declared in yaver.workspace.yaml, ordered by dependency (leaf-first).",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"root": map[string]interface{}{"type": "string"}},
+			},
+		},
+		{
+			"name":        "workspace_status",
+			"description": "Per-app runtime status: on-disk presence, init.md freshness, missing env vars. Read-only.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"root": map[string]interface{}{"type": "string"}},
+			},
+		},
+		{
+			"name":        "workspace_scaffold",
+			"description": "Detect apps in the current directory and return a starter yaver.workspace.yaml. Does NOT write the file — caller decides (keeps the tool side-effect-free for agents that want to review first).",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"root": map[string]interface{}{"type": "string"}},
+			},
+		},
+		{
+			"name":        "workspace_web_apps",
+			"description": "Return workspace apps whose stack maps to a web surface (nextjs, vite, flutter, react-native-expo). Used by the Web Reload dashboard tab to populate its app picker.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"root": map[string]interface{}{"type": "string", "description": "Repo root. Defaults to agent CWD."},
+					"kind": map[string]interface{}{"type": "string", "description": "Comma-separated kinds to keep (web,hybrid,mobile). Defaults to web,hybrid."},
+				},
+			},
+		},
+		{
+			"name":        "web_preview_start",
+			"description": "Start a web dev server (Next.js, Vite, Flutter Web, Expo Web) for a named workspace app. Returns the iframe URL to embed.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"app":     map[string]interface{}{"type": "string", "description": "workspace app name"},
+					"workDir": map[string]interface{}{"type": "string", "description": "absolute project path (when app is empty)"},
+					"root":    map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "web_preview_reload",
+			"description": "Trigger a hot reload on the active web dev server.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "web_preview_stop",
+			"description": "Stop serving the active web preview.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "preview_stop_serving",
+			"description": "Stop serving the active preview/dev server, regardless of whether it is Expo Web, Vite, Next.js, Flutter Web, or another active preview surface.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "project_context",
+			"description": "Fetch the repo's agent-guidance files (CLAUDE.md, AGENTS.md, AI_ARCH.md, REMOTE_WORKER.md) plus the project's init.md. Every result is prefixed with a stale-docs warning. Use this at the start of a task for context, but remember: the docs may be out of date — always grep the code to verify claims before acting on them.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"workDir": map[string]interface{}{"type": "string", "description": "Project root (defaults to the agent's active work-dir)."},
+				},
+			},
+		},
+		{
+			"name":        "screen_context",
+			"description": "Read the screen the user is CURRENTLY LOOKING AT in the live preview: route, title, heading, and the visible interactive control labels. Use it whenever the user says \"this screen\", \"it\", \"this button\", or names a label you cannot place — it tells you which screen they mean so you can open the file that renders it instead of grepping the repo. Returns present=false when no preview is open or the last observation aged out; do not guess in that case, ask. Labels only — never the text a user has typed into a field.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"workDir": map[string]interface{}{"type": "string", "description": "Project root (defaults to the agent's active work-dir)."},
+				},
+			},
+		},
+		{
+			"name":        "diagnose",
+			"description": "Run the yaver self-check (binary paths, running procs, ports, auth state, workspace manifest, systemd unit, runtime deps). Returns the event list and final summary. Equivalent to `yaver diagnose`.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"only": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+					"skip": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+					"fix":  map[string]interface{}{"type": "boolean", "default": false},
+				},
+			},
+		},
+	}
+	tools = append(tools, monorepoWorkspaceTools...)
+
+	// --- Managed / self-hosted toggle (per subsystem) ---
+	// Single-checkbox UX across every Yaver surface: each subsystem
+	// (relay, dns, analytics, storage, email, ci, voice, llm) runs
+	// either against Yaver-hosted infra or against user-provided
+	// credentials. Default is neither — subsystems retain their
+	// legacy behaviour until the user explicitly opts in.
+	managedTools := []map[string]interface{}{
+		{
+			"name":        "managed_get",
+			"description": "Read the per-subsystem managed:true|false toggle. Returns {subsystem: value?} — missing keys mean \"not set\" → legacy behaviour.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "managed_set",
+			"description": "Set one subsystem's managed-flag. `managed:true` = use Yaver-hosted infra for this subsystem; `managed:false` = user-hosted; `managed:null` = clear the preference (revert to default). Valid subsystems: relay, dns, analytics, storage, email, ci, voice, llm.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"subsystem"},
+				"properties": map[string]interface{}{
+					"subsystem": map[string]interface{}{"type": "string", "enum": []string{"relay", "dns", "analytics", "storage", "email", "ci", "voice", "llm"}},
+					"managed":   map[string]interface{}{"description": "true | false | null"},
+				},
+			},
+		},
+	}
+	tools = append(tools, managedTools...)
+
+	// --- Container Sandbox ---
+	sandboxTools := []map[string]interface{}{
+		{
+			"name":        "sandbox_status",
+			"description": "Check Docker container sandbox status (available, image ready, containerization settings).",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "sandbox_config",
+			"description": "Enable/disable container isolation for owner tasks. Configure resource limits and network mode. Changes are persisted to config file.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"containerize_host": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Run host tasks in Docker containers",
+					},
+					"cpu_limit": map[string]interface{}{
+						"type":        "string",
+						"description": "CPU limit (e.g. '2.0')",
+					},
+					"memory_limit": map[string]interface{}{
+						"type":        "string",
+						"description": "Memory limit (e.g. '4g')",
+					},
+					"network_mode": map[string]interface{}{
+						"type":        "string",
+						"description": "Network mode: 'host', 'bridge', or 'none'",
+						"enum":        []string{"host", "bridge", "none"},
+					},
+					"read_only": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Read-only root filesystem (writes only to /workspace, /tmp)",
+					},
+				},
+			},
+		},
+		{
+			"name":        "sandbox_quickstart",
+			"description": "One-step containerization setup for Yaver owner tasks. Persists the setting and optionally starts building the yaver-sandbox image.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"mode": map[string]interface{}{
+						"type":        "string",
+						"description": "Quickstart mode; only 'host' is supported",
+						"enum":        []string{"host"},
+					},
+					"build_image": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Start building the sandbox image immediately (default true)",
+					},
+				},
+			},
+		},
+	}
+	tools = append(tools, sandboxTools...)
+
+	// --- Password Management ---
+	passwordTools := []map[string]interface{}{
+		{
+			"name":        "forgot_password",
+			"description": "Send a password reset email to an email-authenticated Yaver user. The reset link expires in 1 hour. Rate-limited to 5 requests per email per day.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"email"},
+				"properties": map[string]interface{}{
+					"email": map[string]interface{}{
+						"type":        "string",
+						"description": "Email address of the account to reset",
+					},
+				},
+			},
+		},
+		{
+			"name":        "change_password",
+			"description": "Change the password of the currently authenticated email user. Requires the current password and a new password (min 8 characters).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"current_password", "new_password"},
+				"properties": map[string]interface{}{
+					"current_password": map[string]interface{}{
+						"type":        "string",
+						"description": "The current password",
+					},
+					"new_password": map[string]interface{}{
+						"type":        "string",
+						"description": "The new password (minimum 8 characters)",
+					},
+				},
+			},
+		},
+	}
+	tools = append(tools, passwordTools...)
+
+	// --- yaver-test-sdk: local CI runner ---
+	// Exposes the embedded test runner over MCP so any AI tool the dev
+	// is already using (Claude Code, Cursor, Aider, Codex) can list
+	// specs, kick off runs, read failures, and propose patches without
+	// any custom integration. Same Go agent process, same data, no
+	// cloud round trip.
+	testkitTools := []map[string]interface{}{
+		{
+			"name":        "testkit_list_specs",
+			"description": "List the yaver-test-sdk specs in the current project (yaver-tests/**/*.test.yaml). Returns name, path, target, step count.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"root": map[string]interface{}{
+						"type":        "string",
+						"description": "Spec root directory (default: yaver-tests)",
+					},
+				},
+			},
+		},
+		{
+			"name":        "testkit_run",
+			"description": "Run the yaver-test-sdk specs end-to-end on the dev's machine via the embedded chromedp runner. Returns suite results inline. Use this to drive a 'fix → test → fix' loop without spawning Playwright.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"root":        map[string]interface{}{"type": "string", "description": "Spec root (default: yaver-tests)"},
+					"only":        map[string]interface{}{"type": "string", "description": "Only run a single spec by name"},
+					"concurrency": map[string]interface{}{"type": "integer", "description": "Parallel workers (default 1)"},
+					"retries":     map[string]interface{}{"type": "integer", "description": "Flake retries (default 0)"},
+					"headful":     map[string]interface{}{"type": "boolean", "description": "Show the browser visibly"},
+					"video":       map[string]interface{}{"type": "boolean", "description": "Force screencast capture for every spec (overrides per-spec artifacts.video). Frames flush to the run's artifact dir on both pass + fail so the workspace clip player can scrub the full timeline."},
+				},
+			},
+		},
+		{
+			"name":        "testkit_last_failure",
+			"description": "Read the most recent failed run from local history. Returns the spec name, the failing step, the screenshot path, and the error — exactly what an AI agent needs to propose a patch.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"root": map[string]interface{}{"type": "string", "description": "Spec root (default: yaver-tests)"},
+				},
+			},
+		},
+		{
+			"name":        "testkit_flake_report",
+			"description": "Per-spec failure ratios over the last 100 runs. Use to identify chronically broken or flaky specs that need attention.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"root": map[string]interface{}{"type": "string", "description": "Spec root (default: yaver-tests)"},
+				},
+			},
+		},
+		{
+			"name":        "testkit_self_heal_selector",
+			"description": "Given a CSS selector that no longer matches and a DOM HTML snapshot, ask the user's vision/text LLM to propose a new selector. Returns the suggested replacement plus the model's reasoning. Used by the autonomous test-fix loop.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"failed_selector", "dom_html"},
+				"properties": map[string]interface{}{
+					"failed_selector": map[string]interface{}{"type": "string", "description": "The CSS selector that failed"},
+					"dom_html":        map[string]interface{}{"type": "string", "description": "The current page HTML"},
+					"intent":          map[string]interface{}{"type": "string", "description": "Optional: what the selector was supposed to find"},
+				},
+			},
+		},
+	}
+	tools = append(tools, testkitTools...)
+
+	// --- Monitor tools (errors / flags / releases / uptime / analytics) ---
+	monitorTools := []map[string]interface{}{
+		{
+			"name":        "error_list",
+			"description": "List cross-device error records aggregated from every SDK session. Each record has a fingerprint, message, count, device list, and recent samples.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"include_resolved": map[string]interface{}{"type": "boolean", "description": "Include resolved errors in the list"},
+				},
+			},
+		},
+		{
+			"name":        "error_resolve",
+			"description": "Mark an error as resolved with an optional note. The record stays in the ledger but drops off the open-errors view.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"fingerprint"},
+				"properties": map[string]interface{}{
+					"fingerprint": map[string]interface{}{"type": "string"},
+					"note":        map[string]interface{}{"type": "string", "description": "One-liner on what fixed it"},
+				},
+			},
+		},
+		{
+			"name":        "flag_list",
+			"description": "List every self-hosted feature flag with default, rollout percent, and overrides.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		},
+		{
+			"name":        "flag_set",
+			"description": "Create or update a feature flag. Use this to flip a kill switch, start a rollout, or add a new flag.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"key"},
+				"properties": map[string]interface{}{
+					"key":            map[string]interface{}{"type": "string"},
+					"type":           map[string]interface{}{"type": "string", "enum": []string{"bool", "string"}},
+					"defaultBool":    map[string]interface{}{"type": "boolean"},
+					"defaultString":  map[string]interface{}{"type": "string"},
+					"rolloutPercent": map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 100},
+					"description":    map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "flag_evaluate",
+			"description": "Evaluate every flag for a specific userId. Useful for debugging rollout bucketing.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"userId"},
+				"properties": map[string]interface{}{
+					"userId": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "release_list",
+			"description": "List releases in a self-hosted OTA channel (default: production). Shows latest pointer, rollout percent, and every historical bundle.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"channel": map[string]interface{}{"type": "string", "description": "Channel name, default production"},
+				},
+			},
+		},
+		{
+			"name":        "release_rollout",
+			"description": "Set the rollout percentage for a release channel (0..100).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"channel", "percent"},
+				"properties": map[string]interface{}{
+					"channel": map[string]interface{}{"type": "string"},
+					"percent": map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 100},
+				},
+			},
+		},
+		{
+			"name":        "release_rollback",
+			"description": "Roll a channel's latest pointer back to a previously published semver.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"channel", "semver"},
+				"properties": map[string]interface{}{
+					"channel": map[string]interface{}{"type": "string"},
+					"semver":  map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "monitor_list",
+			"description": "List every uptime monitor with state, streak, interval, and last-check timestamp.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		},
+		{
+			"name":        "monitor_add",
+			"description": "Register a new uptime monitor for a URL. The agent probes every interval; three consecutive failures fire a push alert.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"url"},
+				"properties": map[string]interface{}{
+					"url":      map[string]interface{}{"type": "string"},
+					"name":     map[string]interface{}{"type": "string"},
+					"interval": map[string]interface{}{"type": "string", "description": "Go duration, e.g. 60s, 5m"},
+					"method":   map[string]interface{}{"type": "string", "description": "HTTP method, default GET"},
+				},
+			},
+		},
+		{
+			"name":        "monitor_remove",
+			"description": "Delete an uptime monitor by id or name.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "analytics_events",
+			"description": "Read recent business-event records from the analytics ledger (BlackBox track() channel). Returns the tail since a unix-ms timestamp.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"since": map[string]interface{}{"type": "integer", "description": "Unix ms filter — only return events newer than this"},
+					"limit": map[string]interface{}{"type": "integer", "description": "Max events to return, default 100"},
+				},
+			},
+		},
+	}
+	tools = append(tools, monitorTools...)
+
+	autodevTools := []map[string]interface{}{
+		{
+			"name":        "autoinit_start",
+			"description": "Bootstrap a project init.md (cached project context for autonomous yaver runs). Drastically cuts the per-kick token + wall-clock cost of autoideas because runners read init.md instead of re-grepping the project on every kick. Idempotent — re-runs replace only the AI-generated section, preserving any human-edited prose between markers.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"work_dir"},
+				"properties": map[string]interface{}{
+					"project":  map[string]interface{}{"type": "string"},
+					"work_dir": map[string]interface{}{"type": "string"},
+					"prompt":   map[string]interface{}{"type": "string", "description": "extra context to bias the description"},
+					"engine":   map[string]interface{}{"type": "string", "enum": []string{"claude", "codex"}},
+					"output":   map[string]interface{}{"type": "string", "description": "default init.md"},
+					"force":    map[string]interface{}{"type": "boolean", "description": "regenerate even if init.md already has a generated section"},
+				},
+			},
+		},
+		{
+			"name":        "autoinit_status",
+			"description": "Quick `is init done?` check for a project. Returns {done, path, bytes, updated_at, has_generated_section, has_history_section}. Mobile / web call this to show a green check or a 'Run autoinit' button.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"work_dir"},
+				"properties": map[string]interface{}{
+					"work_dir": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			"name":        "autoideas_start",
+			"description": "Start a yaver autoideas run on a local project. Long-lived loop that asks the AI for fresh single-PR-sized ideas every tick and appends them as `- [ ] <title>` lines to ideas.md (or --output). Mobile/web renders them as checkboxes the user can use as a prompt source for /tasks runs.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"work_dir"},
+				"properties": map[string]interface{}{
+					"project":     map[string]interface{}{"type": "string"},
+					"work_dir":    map[string]interface{}{"type": "string"},
+					"hours":       map[string]interface{}{"type": "string"},
+					"load":        map[string]interface{}{"type": "string", "enum": []string{"lite", "high"}},
+					"prompt":      map[string]interface{}{"type": "string"},
+					"harden":      map[string]interface{}{"type": "string", "enum": []string{"", "security", "memory", "perf", "quality", "all"}},
+					"engine":      map[string]interface{}{"type": "string", "enum": []string{"claude", "codex"}},
+					"output":      map[string]interface{}{"type": "string", "description": "default ideas.md"},
+					"max_batches": map[string]interface{}{"type": "integer"},
+					"tick":        map[string]interface{}{"type": "integer"},
+				},
+			},
+		},
+		{
+			"name":        "autoideas_file",
+			"description": "Read the current ideas file as a structured list of {line, checked, title}.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"work_dir"},
+				"properties": map[string]interface{}{
+					"work_dir": map[string]interface{}{"type": "string"},
+					"output":   map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+	tools = append(tools, autodevTools...)
+
+	agentTools := []map[string]interface{}{
+		{
+			"name":        "list_machines",
+			"description": "List Yaver mesh machines with online state, hardware slots, runner readiness, and machine profile signatures. Compatibility alias for agent_machine_inventory.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "agent_machine_inventory",
+			"description": "List Yaver mesh machines with online state, hardware slots, runner readiness, and machine profile signatures so an MCP client can choose a machine pool.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "agent_graph_start",
+			"description": "Start a dependency-aware agent graph. Pass allowed_devices to choose the Yaver mesh pool and allowed_runners to constrain which runners remote nodes may use. Custom nodes can request self-hosted resource modes like build, deploy, browser, sim-ios, sim-android, phone, proof-video, or video-summary and carry prior machine/runner affinity into placement.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"prompt"},
+				"properties": map[string]interface{}{
+					"name":             map[string]interface{}{"type": "string", "description": "Optional graph name"},
+					"work_dir":         map[string]interface{}{"type": "string", "description": "Absolute work directory. Defaults to the current agent work dir."},
+					"prompt":           map[string]interface{}{"type": "string", "description": "Goal for the graph."},
+					"template":         map[string]interface{}{"type": "string", "description": "Graph template: full or ship"},
+					"runner":           map[string]interface{}{"type": "string", "description": "Optional forced runner"},
+					"model":            map[string]interface{}{"type": "string", "description": "Optional forced model"},
+					"max_parallel":     map[string]interface{}{"type": "integer", "description": "Maximum concurrently running nodes"},
+					"preferred_device": map[string]interface{}{"type": "string", "description": "Optional preferred machine id or name"},
+					"allowed_devices": map[string]interface{}{
+						"type":        "array",
+						"description": "Optional machine ids or names to form the execution pool",
+						"items":       map[string]interface{}{"type": "string"},
+					},
+					"allowed_runners": map[string]interface{}{
+						"type":        "array",
+						"description": "Optional runner IDs to allow for graph nodes, e.g. ollama, opencode, codex",
+						"items":       map[string]interface{}{"type": "string"},
+					},
+					"nodes": map[string]interface{}{
+						"type":        "array",
+						"description": "Optional explicit node list. If omitted, Yaver builds a template graph from prompt/template. Node resource_modes can request self-hosted build, deploy, browser, simulator, phone, and proof-video resources.",
+						"items": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"id":                   map[string]interface{}{"type": "string"},
+								"title":                map[string]interface{}{"type": "string"},
+								"kind":                 map[string]interface{}{"type": "string", "description": "chat | autodev | autoideas | autotest"},
+								"prompt":               map[string]interface{}{"type": "string"},
+								"depends_on":           map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"runner":               map[string]interface{}{"type": "string"},
+								"model":                map[string]interface{}{"type": "string"},
+								"engine":               map[string]interface{}{"type": "string"},
+								"work_dir":             map[string]interface{}{"type": "string"},
+								"project":              map[string]interface{}{"type": "string"},
+								"target":               map[string]interface{}{"type": "string"},
+								"load":                 map[string]interface{}{"type": "string"},
+								"hours":                map[string]interface{}{"type": "string"},
+								"max_iterations":       map[string]interface{}{"type": "integer"},
+								"no_autotest":          map[string]interface{}{"type": "boolean"},
+								"preferred_device":     map[string]interface{}{"type": "string"},
+								"allowed_devices":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"allowed_runners":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"prior_device":         map[string]interface{}{"type": "string", "description": "Bias placement toward the machine that handled earlier rounds for this node."},
+								"prior_runner":         map[string]interface{}{"type": "string", "description": "Bias placement toward the runner that handled earlier rounds for this node."},
+								"sticky_device":        map[string]interface{}{"type": "boolean", "description": "Strongly prefer prior_device when possible."},
+								"sticky_runner":        map[string]interface{}{"type": "boolean", "description": "Strongly prefer prior_runner when possible."},
+								"resource_modes":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Self-hosted resource hints like build, deploy, browser, sim-ios, sim-android, phone, proof-video, video-summary, test-video, or custom labels."},
+								"preferred_video_mode": map[string]interface{}{"type": "string", "description": "Preferred capture target when resource_modes request proof-video/video-summary: browser, sim-ios, sim-android, phone."},
+								"toughness":            map[string]interface{}{"type": "number", "description": "Relative difficulty / decomposition pressure for the node."},
+								"design_points":        map[string]interface{}{"type": "number", "description": "Weight toward design/planning oriented runners."},
+								"build_points":         map[string]interface{}{"type": "number", "description": "Weight toward build/implementation oriented runners and hosts."},
+								"verify_points":        map[string]interface{}{"type": "number", "description": "Weight toward verification/proof resources and runners."},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			"name":        "agent_graph_list",
+			"description": "List agent graphs with node status, placement, and summaries.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "agent_graph_show",
+			"description": "Show one agent graph with node placements and placement reasons.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"graph_id"},
+				"properties": map[string]interface{}{
+					"graph_id": map[string]interface{}{"type": "string", "description": "Agent graph id"},
+				},
+			},
+		},
+		{
+			"name":        "agent_graph_stop",
+			"description": "Stop a running agent graph.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"graph_id"},
+				"properties": map[string]interface{}{
+					"graph_id": map[string]interface{}{"type": "string", "description": "Agent graph id"},
+				},
+			},
+		},
+		{
+			"name":        "totp_status",
+			"description": "Show whether two-factor authentication is enabled for the signed-in Yaver user. 2FA is optional and gates only session issuance — in-flight QUIC/relay traffic is never affected.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "totp_enable_begin",
+			"description": "Start two-factor enrollment. Returns a base32 secret and an otpauth:// URL the user can scan into Microsoft Authenticator, Google Authenticator, 1Password, or any RFC 6238 TOTP app. After scanning, the user must confirm by running totp_enable_confirm with a 6-digit code from the app.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "totp_enable_confirm",
+			"description": "Confirm two-factor enrollment with a 6-digit code from the authenticator app, enabling 2FA for the account. Returns 8 one-time recovery codes — show them to the user once and instruct them to save somewhere safe.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"code"},
+				"properties": map[string]interface{}{
+					"code": map[string]interface{}{"type": "string", "description": "Current 6-digit TOTP code from the authenticator"},
+				},
+			},
+		},
+		{
+			"name":        "totp_disable",
+			"description": "Disable two-factor authentication. Requires a current 6-digit code from the authenticator (recovery codes are intentionally NOT accepted for disable, to stop an attacker with only leaked recovery codes from turning 2FA off).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"code"},
+				"properties": map[string]interface{}{
+					"code": map[string]interface{}{"type": "string", "description": "Current 6-digit TOTP code from the authenticator"},
+				},
+			},
+		},
+		{
+			"name":        "code_mesh_start",
+			"description": "Start a `yaver code --mesh` run: plan → implement → verify chat chain across the owner's available machine pool. Thin wrapper over agent_graph_start with defaults matching the yaver code CLI (template=full, max_parallel=2). Owner-fleet infrastructure is automatically considered by the placement planner; use allowed_runners when a target machine only permits local runners like ollama. Optional custom nodes can request build, deploy, browser, simulator, phone, proof-video, and video-summary self-hosted resources.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"prompt"},
+				"properties": map[string]interface{}{
+					"prompt":          map[string]interface{}{"type": "string", "description": "What you want built."},
+					"name":            map[string]interface{}{"type": "string", "description": "Optional session name"},
+					"work_dir":        map[string]interface{}{"type": "string", "description": "Absolute work directory. Defaults to the current agent work dir."},
+					"max_parallel":    map[string]interface{}{"type": "integer", "description": "Maximum concurrently running nodes (default 2)"},
+					"allowed_devices": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional machine ids or names to form the execution pool"},
+					"allowed_runners": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Optional runner IDs to allow (e.g. ollama,opencode,codex)"},
+					"nodes": map[string]interface{}{
+						"type":        "array",
+						"description": "Optional explicit nodes. If omitted, the standard plan → implement → verify template is used.",
+						"items": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"id":                   map[string]interface{}{"type": "string"},
+								"title":                map[string]interface{}{"type": "string"},
+								"kind":                 map[string]interface{}{"type": "string", "description": "chat | autodev | autoideas | autotest"},
+								"prompt":               map[string]interface{}{"type": "string"},
+								"depends_on":           map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"runner":               map[string]interface{}{"type": "string"},
+								"model":                map[string]interface{}{"type": "string"},
+								"work_dir":             map[string]interface{}{"type": "string"},
+								"preferred_device":     map[string]interface{}{"type": "string"},
+								"allowed_devices":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"allowed_runners":      map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"prior_device":         map[string]interface{}{"type": "string"},
+								"prior_runner":         map[string]interface{}{"type": "string"},
+								"sticky_device":        map[string]interface{}{"type": "boolean"},
+								"sticky_runner":        map[string]interface{}{"type": "boolean"},
+								"resource_modes":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"preferred_video_mode": map[string]interface{}{"type": "string"},
+								"toughness":            map[string]interface{}{"type": "number"},
+								"design_points":        map[string]interface{}{"type": "number"},
+								"build_points":         map[string]interface{}{"type": "number"},
+								"verify_points":        map[string]interface{}{"type": "number"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	tools = append(tools, agentTools...)
+
+	// Browser automation tools — AI-driven browser control on the dev machine.
+	browserTools := []map[string]interface{}{
+		{
+			"name":        "browser_open",
+			"description": "Open a new Chrome browser session on the dev machine. Returns a session_id to use in subsequent browser_* calls. Sessions persist across tool calls — cookies, auth state, and current URL survive between steps. Pass proxy_url to egress through a chosen vantage (a proxy or peer the user is entitled to use); the source then sees that egress IP, not this machine's.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"session_id":     map[string]interface{}{"type": "string", "description": "Custom session ID (auto-generated if omitted)"},
+					"headful":        map[string]interface{}{"type": "boolean", "description": "Show browser window visibly (default: false, headless)"},
+					"proxy_url":      map[string]interface{}{"type": "string", "description": "Egress proxy for this session's vantage, e.g. http://host:8080 or socks5://host:1080. Omit for machine-native egress. Only use proxies/peers the user owns or is entitled to; never to defeat a geo/IP block."},
+					"profile":        map[string]interface{}{"type": "string", "description": "F2 persistent profile (name or absolute path). Reuses a user-data-dir so cookies + Cloudflare clearance PERSIST across runs. Pass the SAME profile name to browser_interactive_start: a human solves the challenge once in the visible co-browse window, then this (often headless) session reuses that saved clearance. Omit for a throwaway session."},
+					"record":         map[string]interface{}{"type": "boolean", "description": "Record this session to an MP4 video of everything the agent does in it (headless-safe). The response returns clip_id + clip_url; the clip finalizes on browser_close and is served (Range-enabled) at /vibing/preview/clip/<clip_id>. Requires ffmpeg on PATH. Use this to return a video of a web task run."},
+					"record_seconds": map[string]interface{}{"type": "number", "description": "Optional safety cap (seconds) for recording; defaults to a 600s cap. Recording normally stops at browser_close, not this cap."},
+				},
+			},
+		},
+		{
+			"name":        "browser_close",
+			"description": "Close a browser session and release the Chrome process.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session to close"},
+				},
+			},
+		},
+		{
+			"name":        "browser_sessions",
+			"description": "List all active browser sessions with their current URL, title, and age.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "browser_navigate",
+			"description": "Navigate to a URL. Returns a screenshot of the page after navigation plus the page title. Use this as the first step after browser_open.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id", "url"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"url":        map[string]interface{}{"type": "string", "description": "URL to navigate to"},
+				},
+			},
+		},
+		{
+			"name":        "browser_click",
+			"description": "Click an element by CSS selector. Returns a screenshot after clicking. Wait for any animations/navigation to settle.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id", "selector"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"selector":   map[string]interface{}{"type": "string", "description": "CSS selector of element to click"},
+				},
+			},
+		},
+		{
+			"name":        "browser_type",
+			"description": "Type text into an input field by CSS selector. Returns a screenshot after typing. Set clear=true to clear existing text first.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id", "selector", "text"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"selector":   map[string]interface{}{"type": "string", "description": "CSS selector of input field"},
+					"text":       map[string]interface{}{"type": "string", "description": "Text to type"},
+					"clear":      map[string]interface{}{"type": "boolean", "description": "Clear field before typing (default: false)"},
+				},
+			},
+		},
+		{
+			"name":        "browser_select",
+			"description": "Select a value in a <select> dropdown by CSS selector. Returns a screenshot after selection.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id", "selector", "value"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"selector":   map[string]interface{}{"type": "string", "description": "CSS selector of <select> element"},
+					"value":      map[string]interface{}{"type": "string", "description": "Option value to select"},
+				},
+			},
+		},
+		{
+			"name":        "browser_scroll",
+			"description": "Scroll the page by pixel offsets. Returns a screenshot after scrolling.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"x":          map[string]interface{}{"type": "integer", "description": "Horizontal scroll pixels (default: 0)"},
+					"y":          map[string]interface{}{"type": "integer", "description": "Vertical scroll pixels (default: 300)"},
+				},
+			},
+		},
+		{
+			"name":        "browser_wait",
+			"description": "Wait for a CSS selector to become visible on the page. Use before clicking/typing elements that load dynamically.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id", "selector"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"selector":   map[string]interface{}{"type": "string", "description": "CSS selector to wait for"},
+					"timeout_ms": map[string]interface{}{"type": "integer", "description": "Timeout in milliseconds (default: 10000)"},
+				},
+			},
+		},
+		{
+			"name":        "browser_wait_navigation",
+			"description": "Wait for the page URL to change (e.g., after a form submission or OAuth redirect).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"timeout_ms": map[string]interface{}{"type": "integer", "description": "Timeout in milliseconds (default: 10000)"},
+				},
+			},
+		},
+		{
+			"name":        "browser_screenshot",
+			"description": "Capture a screenshot of the current page. Returns base64 PNG. Most action tools (navigate, click, type) already return screenshots — use this only when you need an extra screenshot without performing an action.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+				},
+			},
+		},
+		{
+			"name":        "browser_extract_text",
+			"description": "Extract visible text content from an element. Useful for reading API keys, status messages, form values, etc.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"selector":   map[string]interface{}{"type": "string", "description": "CSS selector (default: body)"},
+				},
+			},
+		},
+		{
+			"name":        "browser_extract_attribute",
+			"description": "Extract an HTML attribute value from an element (e.g., href, src, value, data-*).",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id", "selector", "attribute"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"selector":   map[string]interface{}{"type": "string", "description": "CSS selector"},
+					"attribute":  map[string]interface{}{"type": "string", "description": "Attribute name (e.g., href, value, data-id)"},
+				},
+			},
+		},
+		{
+			"name":        "browser_get_dom",
+			"description": "Get the full page HTML (truncated to 50KB). Use to understand page structure when screenshots aren't enough — find element selectors, form fields, buttons, etc.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+				},
+			},
+		},
+		{
+			"name":        "browser_evaluate",
+			"description": "Execute JavaScript in the browser and return the result. Use for complex interactions, reading localStorage/cookies, or extracting data that CSS selectors can't reach.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id", "javascript"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Session ID"},
+					"javascript": map[string]interface{}{"type": "string", "description": "JavaScript code to execute. Return value is sent back as JSON."},
+				},
+			},
+		},
+		{
+			"name":        "browser_interactive_start",
+			"description": "Start a GENERIC human-in-the-loop co-browse: opens a headful browser with a persistent profile, navigates to a URL, and returns frame/input HTTP paths so a human can solve a captcha or log in remotely. Automation resumes on the SAME session (cookies/auth persist on disk) afterward. The remote UI polls frame_path for JPEG frames and POSTs {type:click|key|scroll,...} to input_path.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"url"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Custom session ID (auto-generated if omitted)"},
+					"url":        map[string]interface{}{"type": "string", "description": "URL to open for the human to interact with"},
+					"profile":    map[string]interface{}{"type": "string", "description": "Persistent user-data-dir (default: ~/.yaver/browser-profiles/<session_id>)"},
+					"width":      map[string]interface{}{"type": "integer", "description": "Viewport width (default: 1280)"},
+					"height":     map[string]interface{}{"type": "integer", "description": "Viewport height (default: 800)"},
+					"prefill": map[string]interface{}{
+						"type":        "array",
+						"description": "Optional fields to prefill before handing control to the human",
+						"items": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"selector": map[string]interface{}{"type": "string", "description": "CSS selector"},
+								"value":    map[string]interface{}{"type": "string", "description": "Value to type"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			"name":        "browser_interactive_status",
+			"description": "Get the current URL and title of an interactive co-browse session — poll this to detect when the human has finished logging in / solving the captcha.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Interactive session ID"},
+				},
+			},
+		},
+		{
+			"name":        "browser_interactive_stop",
+			"description": "Stop an interactive co-browse session. The on-disk profile (cookies/auth) persists so later automation can reuse it.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"session_id"},
+				"properties": map[string]interface{}{
+					"session_id": map[string]interface{}{"type": "string", "description": "Interactive session ID"},
+				},
+			},
+		},
+	}
+	tools = append(tools, browserTools...)
+	tools = append(tools, seleniumMCPTools()...)
+
+	// --- Droid interactive (generic human-in-the-loop Android device control) ---
+	// Mirrors the browser_interactive_* tools but for a paired Android phone over
+	// adb: stream the screen + relay tap/text/key/swipe so a human can enter an
+	// SMS OTP / log in, after which automation drives the same device. GENERIC —
+	// no knowledge of any specific app.
+	droidTools := []map[string]interface{}{
+		{
+			"name":        "droid_status",
+			"description": "Status of the paired Android device for human-in-the-loop control: serial, screen width/height, focused activity, and the HTTP frame/input paths a remote UI uses. Returns {device:null} when no device is attached. Poll the focus/UI to detect when a human has finished logging in.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "adb serial (default: first attached device)"}},
+			},
+		},
+		{
+			"name":        "droid_frame",
+			"description": "Capture the current Android screen and return it as a base64 PNG image (via adb exec-out screencap). Use to see what the human/device is looking at.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "adb serial (default: first attached device)"}},
+			},
+		},
+		{
+			"name":        "droid_input",
+			"description": "Relay a single input event to the Android device via adb: tap (x,y), text (types a string), key (keyevent keycode, e.g. 66=ENTER/67=DEL/4=BACK), or swipe (x1,y1→x2,y2 over dur ms). Lets automation drive the device, or a human-built UI forward taps/keystrokes.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"type"},
+				"properties": map[string]interface{}{
+					"type":    map[string]interface{}{"type": "string", "enum": []string{"tap", "text", "key", "swipe"}},
+					"x":       map[string]interface{}{"type": "integer", "description": "tap X"},
+					"y":       map[string]interface{}{"type": "integer", "description": "tap Y"},
+					"text":    map[string]interface{}{"type": "string", "description": "text to type (spaces handled)"},
+					"keycode": map[string]interface{}{"type": "integer", "description": "Android keyevent code"},
+					"x1":      map[string]interface{}{"type": "integer", "description": "swipe start X"},
+					"y1":      map[string]interface{}{"type": "integer", "description": "swipe start Y"},
+					"x2":      map[string]interface{}{"type": "integer", "description": "swipe end X"},
+					"y2":      map[string]interface{}{"type": "integer", "description": "swipe end Y"},
+					"dur":     map[string]interface{}{"type": "integer", "description": "swipe duration ms (default 300)"},
+					"device":  map[string]interface{}{"type": "string", "description": "adb serial (default: first attached device)"},
+				},
+			},
+		},
+		{
+			"name":        "droid_ui_texts",
+			"description": "Dump the current Android view hierarchy (uiautomator) and return the on-screen text values — useful for reading login fields / labels / OTP prompts without OCR.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"device": map[string]interface{}{"type": "string", "description": "adb serial (default: first attached device)"}},
+			},
+		},
+		{
+			"name":        "droid_launch",
+			"description": "Launch an installed Android app whose package id contains the given substring, via its LAUNCHER intent (adb monkey). Returns the resolved package name.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"package"},
+				"properties": map[string]interface{}{
+					"package": map[string]interface{}{"type": "string", "description": "Package id or substring to match (e.g. 'misli')"},
+					"device":  map[string]interface{}{"type": "string", "description": "adb serial (default: first attached device)"},
+				},
+			},
+		},
+	}
+	tools = append(tools, droidTools...)
+
+	redroidAppProps := map[string]interface{}{
+		"device_id":     map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias whose agent hosts the Redroid surface."},
+		"package_name":  map[string]interface{}{"type": "string", "description": "Android package id, e.g. com.example.app."},
+		"host_work_dir": map[string]interface{}{"type": "string", "description": "Optional host dir bind-mounted to Redroid /data. Default ~/.yaver/redroid-app-sync."},
+		"image":         map[string]interface{}{"type": "string", "description": "Optional Redroid image. Default redroid/redroid:13.0.0-latest."},
+		"container":     map[string]interface{}{"type": "string", "description": "Optional Redroid container name. Default yaver-app-sync-redroid."},
+	}
+	redroidInstallProps := map[string]interface{}{}
+	for k, v := range redroidAppProps {
+		redroidInstallProps[k] = v
+	}
+	redroidInstallProps["apk_path"] = map[string]interface{}{"type": "string", "description": "Local APK path on the target agent machine."}
+	redroidInstallProps["source"] = map[string]interface{}{"type": "string", "enum": []string{"", "apk", "yaver-build", "manual", "play"}, "description": "Install source. play currently returns unsupported unless a store integration is added."}
+	redroidQueryProps := map[string]interface{}{}
+	for k, v := range redroidAppProps {
+		redroidQueryProps[k] = v
+	}
+	redroidQueryProps["query"] = map[string]interface{}{"type": "string", "description": "Text to look for in the UIAutomator view tree after launch."}
+	redroidQueryProps["wait_text"] = map[string]interface{}{"type": "string", "description": "Optional text to wait for briefly before collecting UI text."}
+	redroidQueryProps["text"] = map[string]interface{}{"type": "string", "description": "Optional text to type after launch."}
+	redroidQueryProps["key"] = map[string]interface{}{"type": "string", "description": "Optional Android keyevent alias/code after typing, e.g. ENTER, BACK."}
+	androidAppSyncTools := []map[string]interface{}{
+		{"name": "android_app_status", "description": "Check whether an Android package is installed in a user-owned Redroid app-sync surface. Does not read phone keychain or app data.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package_name"}, "properties": redroidAppProps}},
+		{"name": "android_app_install", "description": "Install a selected Android app APK into Redroid. Arbitrary Play Store restore is intentionally not faked; provide apk_path or install manually.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package_name"}, "properties": redroidInstallProps}},
+		{"name": "android_app_launch", "description": "Launch an installed package in Redroid and return visible UI text plus whether it appears installed.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package_name"}, "properties": redroidAppProps}},
+		{"name": "android_app_query", "description": "Launch/query a package in Redroid and report whether visible UI contains query text, plus a needsUser hint for login/OTP handoff screens.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"package_name"}, "properties": redroidQueryProps}},
+	}
+	tools = append(tools, androidAppSyncTools...)
+
+	// --- Vibe Preview ---
+	// Lets the AI runner check what its own visual change looked like
+	// after a kick — closes the loop "I edited the nav, did it land?"
+	// without the runner having to re-read its own screenshots.
+	vibePreviewTools := []map[string]interface{}{
+		{
+			"name":        "vibe_preview_start",
+			"description": "Start a vibe-preview session: headless Chrome captures the dev server URL at adaptive FPS. The mobile app + web dashboard see the same SSE stream you do. Returns the session metadata.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project", "target_url"},
+				"properties": map[string]interface{}{
+					"project":    map[string]interface{}{"type": "string", "description": "Project name (used as session key)"},
+					"target_url": map[string]interface{}{"type": "string", "description": "Dev server URL to capture (e.g. http://127.0.0.1:3000)"},
+					"mode":       map[string]interface{}{"type": "string", "enum": []string{"live", "change-only", "summary-only"}, "description": "Capture cadence; default live"},
+					"profile":    map[string]interface{}{"type": "string", "description": "Optional profile override: live-direct | live-relay-wifi | live-relay-cell | change-only | summary-only"},
+				},
+			},
+		},
+		{
+			"name":        "vibe_preview_stop",
+			"description": "Stop a vibe-preview session by project. Idempotent.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project"},
+				"properties": map[string]interface{}{
+					"project": map[string]interface{}{"type": "string", "description": "Project name"},
+				},
+			},
+		},
+		{
+			"name":        "vibe_preview_status",
+			"description": "List active vibe-preview sessions: project, profile, FPS, mode, frame count, error count.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "vibe_preview_release",
+			"description": "Answer 'could a new preview session for this project be claimed right now?' — reports the still-active session and any capture loop still winding down, with named blockers. Poll this after vibe_preview_stop instead of sleeping.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project"},
+				"properties": map[string]interface{}{
+					"project": map[string]interface{}{"type": "string", "description": "Project name"},
+				},
+			},
+		},
+		{
+			"name":        "vibe_preview_snapshot",
+			"description": "Force one capture against an active session. Returns the new frame's seq + content hash. Pair with vibe_preview_summarize to ask Claude what changed.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project"},
+				"properties": map[string]interface{}{
+					"project": map[string]interface{}{"type": "string", "description": "Project name"},
+				},
+			},
+		},
+		{
+			"name":        "vibe_preview_clip_record",
+			"description": "Record a short MP4 demo clip from a booted simulator/emulator while the running app is exercised by Maestro (Phase 7). source: 'sim-ios' uses xcrun simctl, 'sim-android' uses adb screenrecord. Returns the clip metadata; poll vibe_preview_clips to see when status flips to ready.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project"},
+				"properties": map[string]interface{}{
+					"project":          map[string]interface{}{"type": "string", "description": "Project name"},
+					"source":           map[string]interface{}{"type": "string", "enum": []string{"sim-ios", "sim-android", "phone", "browser"}, "description": "Capture source (auto-detect if omitted)"},
+					"duration_max_sec": map[string]interface{}{"type": "integer", "description": "Recording duration cap (default 12, max 30)"},
+				},
+			},
+		},
+		{
+			"name":        "vibe_preview_clips",
+			"description": "List recent clips for a project, newest first. Each clip has id, source, status (recording|ready|failed), durationSec, sizeBytes.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project"},
+				"properties": map[string]interface{}{
+					"project": map[string]interface{}{"type": "string", "description": "Project name"},
+				},
+			},
+		},
+		{
+			"name":        "vibe_preview_summaries",
+			"description": "Read recent text summaries for a project (Phase 4). Each entry is a one-sentence description of what visibly changed between two frames, with before/after hashes. Default returns last 50; use limit to widen.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"project"},
+				"properties": map[string]interface{}{
+					"project": map[string]interface{}{"type": "string", "description": "Project name"},
+					"limit":   map[string]interface{}{"type": "integer", "description": "Max entries (default 50, cap 500)"},
+				},
+			},
+		},
+	}
+	tools = append(tools, vibePreviewTools...)
+
+	// --- Workspace features: pipeline, analytics, auth, mail, expose, stripe, monitor, models, lemonsqueezy ---
+	workspaceTools := []map[string]interface{}{
+		// Pipeline
+		{"name": "pipeline_run", "description": "Run a local CI/CD pipeline from GitHub Actions or GitLab CI YAML. Executes on the dev machine — no cloud runner needed. Hardware-aware, supports matrix builds, Docker services, caching, and artifacts.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"file": map[string]interface{}{"type": "string", "description": "YAML file path (auto-detects from .github/workflows/ or .gitlab-ci.yml if empty)"}, "job": map[string]interface{}{"type": "string", "description": "Specific job name (runs all if empty)"}, "dry_run": map[string]interface{}{"type": "boolean", "description": "Print steps without executing"}}}},
+		{"name": "pipeline_status", "description": "Show status of current or last pipeline run with per-step results, durations, and hardware profile.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "pipeline_list", "description": "List available CI/CD pipelines (both GitHub Actions and GitLab CI).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"dir": map[string]interface{}{"type": "string", "description": "Project directory (default: current work dir)"}}}},
+		{"name": "pipeline_stop", "description": "Cancel a running pipeline.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "pipeline_cancel_cloud", "description": "Cancel running GitHub Actions or GitLab CI for the current commit to save cloud CI costs.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "CI provider: github or gitlab"}}}},
+		{"name": "pipeline_hardware", "description": "Detect hardware profile: CPU, RAM, disk, GPU, Docker availability. Shows recommended parallel job count.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Analytics
+		{"name": "analytics_start", "description": "Start a self-hosted analytics stack via Docker. Replaces PostHog Cloud ($0-450/mo), Mixpanel, Plausible.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"engine": map[string]interface{}{"type": "string", "description": "Analytics engine: plausible (default, light), umami (simplest), or posthog (most features)"}}}},
+		{"name": "analytics_stop", "description": "Stop the analytics Docker stack.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "analytics_status", "description": "Show analytics engine status: running, port, memory usage, URL.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "analytics_selfhost_events", "description": "Query recent analytics events from self-hosted engine.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"event": map[string]interface{}{"type": "string", "description": "Event name filter"}, "person_id": map[string]interface{}{"type": "string", "description": "Person/user filter"}, "last": map[string]interface{}{"type": "string", "description": "Time window: 24h, 7d, 30d"}}}},
+		{"name": "analytics_dashboard", "description": "Get key analytics metrics: pageviews, visitors, top pages, top events.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "analytics_setup", "description": "Get integration code snippet for your frontend framework.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"framework": map[string]interface{}{"type": "string", "description": "Framework: next, react, vue, html (auto-detects if empty)"}}}},
+		// Auth dev server
+		{"name": "auth_dev_start", "description": "Start a local auth server for development. Replaces Clerk ($25/mo), Auth0, WorkOS.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"engine": map[string]interface{}{"type": "string", "description": "Auth engine: logto (default) or keycloak"}}}},
+		{"name": "auth_dev_stop", "description": "Stop the local auth server.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "auth_dev_status", "description": "Show auth server status: running, port, user count.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "auth_dev_users", "description": "Manage test users in the local auth server.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "list, create, or delete"}, "email": map[string]interface{}{"type": "string"}, "password": map[string]interface{}{"type": "string"}, "role": map[string]interface{}{"type": "string"}}}},
+		{"name": "auth_dev_setup", "description": "Get auth integration code for your frontend framework.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"framework": map[string]interface{}{"type": "string", "description": "nextjs, react, or generic"}}}},
+		{"name": "auth_dev_tokens", "description": "Generate or inspect JWT tokens for API testing.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"action"}, "properties": map[string]interface{}{"action": map[string]interface{}{"type": "string", "description": "generate or inspect"}, "email": map[string]interface{}{"type": "string", "description": "User email (for generate)"}, "token": map[string]interface{}{"type": "string", "description": "JWT token (for inspect)"}}}},
+		// Mail dev server
+		{"name": "mail_dev_start", "description": "Start local SMTP catch-all server (mailpit). Replaces Resend ($10-30/mo), Mailtrap. Catches all outgoing email for testing.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "mail_dev_stop", "description": "Stop the local mail server.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "mail_dev_status", "description": "Show mail server status and message count.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "mail_dev_inbox", "description": "List caught emails.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"to": map[string]interface{}{"type": "string", "description": "Filter by recipient"}, "subject": map[string]interface{}{"type": "string", "description": "Search subject"}, "limit": map[string]interface{}{"type": "integer", "description": "Max results (default 25)"}}}},
+		{"name": "mail_dev_read", "description": "Read a specific caught email by ID.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"id"}, "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string", "description": "Message ID"}}}},
+		{"name": "mail_dev_clear", "description": "Delete all caught emails.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "mail_dev_config", "description": "Get SMTP config to add to your app (host, port, user, pass).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Expose (localhost tunnels)
+		{"name": "expose_start", "description": "Expose a local port to the internet. Replaces ngrok ($10/mo). Uses Cloudflare Quick Tunnel (free, zero config).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"port"}, "properties": map[string]interface{}{"port": map[string]interface{}{"type": "integer", "description": "Local port to expose"}, "subdomain": map[string]interface{}{"type": "string", "description": "Preferred subdomain (best-effort)"}}}},
+		{"name": "expose_stop", "description": "Stop a tunnel.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"port": map[string]interface{}{"type": "integer", "description": "Port to stop (0 = stop all)"}}}},
+		{"name": "expose_list", "description": "List active tunnels with their public URLs.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Stripe dev tools
+		{"name": "stripe_listen", "description": "Start Stripe webhook listener for local development. Forwards webhooks to localhost.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"port": map[string]interface{}{"type": "integer", "description": "Local port (default 3000)"}, "path": map[string]interface{}{"type": "string", "description": "Webhook path (default /api/webhooks/stripe)"}, "events": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Event filter (e.g. payment_intent.succeeded)"}}}},
+		{"name": "stripe_stop", "description": "Stop the Stripe webhook listener.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "stripe_trigger", "description": "Trigger a test Stripe webhook event.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"event"}, "properties": map[string]interface{}{"event": map[string]interface{}{"type": "string", "description": "Event type (e.g. payment_intent.succeeded, checkout.session.completed)"}}}},
+		{"name": "stripe_status", "description": "Show Stripe webhook listener status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Uptime monitor
+		{"name": "uptime_monitor_add", "description": "Add a URL to uptime monitoring. Replaces BetterStack ($10-25/mo). Alerts via Telegram/Discord/Slack.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name", "url"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "url": map[string]interface{}{"type": "string"}, "interval_sec": map[string]interface{}{"type": "integer", "description": "Check interval in seconds (default 60)"}, "expected_status": map[string]interface{}{"type": "integer", "description": "Expected HTTP status (default 200)"}}}},
+		{"name": "uptime_monitor_remove", "description": "Remove a URL from monitoring.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}}}},
+		{"name": "uptime_monitor_list", "description": "List all monitored URLs with current status, uptime %, latency.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "uptime_monitor_status", "description": "Quick overview: how many up/down, any active alerts.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "uptime_monitor_history", "description": "Show check history for a monitored URL.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer", "description": "Max checks to return (default 50)"}}}},
+		// Models (Ollama)
+		{"name": "models_list", "description": "List installed Ollama models with sizes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "models_pull", "description": "Download an Ollama model.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string", "description": "Model name (e.g. llama3.2, codellama, nomic-embed-text)"}}}},
+		{"name": "models_remove", "description": "Remove an Ollama model to free disk space.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}}}},
+		{"name": "models_run", "description": "Quick inference with a local model.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"model", "prompt"}, "properties": map[string]interface{}{"model": map[string]interface{}{"type": "string"}, "prompt": map[string]interface{}{"type": "string"}, "system": map[string]interface{}{"type": "string", "description": "System prompt (optional)"}}}},
+		{"name": "models_serve", "description": "Start Ollama server if not running.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "models_ps", "description": "Show currently loaded models and their memory usage.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "models_recommend", "description": "Recommend models based on your hardware (RAM, GPU).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "models_status", "description": "Check Ollama status: running, port, GPU, model count.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		// Lemon Squeezy
+		{"name": "lemonsqueezy_status", "description": "Check Lemon Squeezy API connectivity and store info.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lemonsqueezy_products", "description": "List Lemon Squeezy products with prices.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer", "description": "Max results (default 25)"}}}},
+		{"name": "lemonsqueezy_orders", "description": "List orders, optionally filtered by email.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer"}, "email": map[string]interface{}{"type": "string"}}}},
+		{"name": "lemonsqueezy_subscriptions", "description": "List subscriptions, optionally filtered by status.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer"}, "status": map[string]interface{}{"type": "string", "description": "active, cancelled, expired, past_due"}}}},
+		{"name": "lemonsqueezy_customers", "description": "List customers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer"}, "email": map[string]interface{}{"type": "string"}}}},
+		{"name": "lemonsqueezy_revenue", "description": "Revenue dashboard: total revenue, MRR, active subs, order count.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lemonsqueezy_discounts", "description": "List discount codes.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"limit": map[string]interface{}{"type": "integer"}}}},
+		{"name": "lemonsqueezy_create_discount", "description": "Create a discount code.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name", "code", "amount", "amount_type"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "code": map[string]interface{}{"type": "string"}, "amount": map[string]interface{}{"type": "integer", "description": "Amount (percentage or cents)"}, "amount_type": map[string]interface{}{"type": "string", "description": "percent or fixed"}, "product_id": map[string]interface{}{"type": "string"}}}},
+		{"name": "lemonsqueezy_webhook_listen", "description": "Start local webhook listener for Lemon Squeezy events.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"port": map[string]interface{}{"type": "integer", "description": "Port (default 9090)"}, "path": map[string]interface{}{"type": "string", "description": "Path (default /webhooks/lemonsqueezy)"}}}},
+		{"name": "lemonsqueezy_webhook_stop", "description": "Stop the Lemon Squeezy webhook listener.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+		{"name": "lemonsqueezy_setup", "description": "Get Next.js integration code for Lemon Squeezy (webhook handler + checkout).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
+	}
+	tools = append(tools, workspaceTools...)
+	tools = append(tools, getWorkspaceMCPTools()...)
+
+	// Phone-first mini backend — desktop/agent/phone_backend.go
+	tools = append(tools, phoneProjectMCPTools()...)
+
+	// Companion compute (crons + workers for serverless projects) — companion.go
+	tools = append(tools, companionMCPTools()...)
+	tools = append(tools, microserviceMCPTools()...)
+
+	// Native build & deploy (iosNative / androidNative / flutter) — native_build.go
+	tools = append(tools, nativeBuildMCPTools()...)
+
+	// Monorepo detection — desktop/agent/monorepo_detect.go
+	tools = append(tools, monorepoMCPTools()...)
+
+	// DNS provisioning + Let's Encrypt — desktop/agent/dns_mcp.go
+	tools = append(tools, dnsMCPTools()...)
+
+	// User-registered external MCP servers (namespaced "<server>__<tool>"). These
+	// are fetched live (cached) so the mobile/web client and the LLM see them.
+	tools = append(tools, externalMCPToolDefs()...)
+
+	// Owner-only experimental hardware cells (robot/arm/circuit/printer/
+	// appletv/capture) are hidden from non-owners so the default product
+	// surface stays the AI coding/preview/deploy loop. See mcp_owner_gate.go.
+	tools = filterOwnerOnlyTools(tools, currentUserIsOwner())
+
+	// HN-LAUNCH-HIDE-PAID: drop Yaver's own paid-plan buyer tools at launch.
+	tools = filterPaidToolsAtLaunch(tools)
+
+	// Lean "core" profile: trim peripheral families for non-owners so a fresh
+	// user's agent sees the dev/hermes/runner/deploy wedge. Owners + explicit
+	// YAVER_MCP_PROFILE=full see everything. See mcp_core_profile.go.
+	tools = filterToCoreProfile(tools)
+
+	// Wedge allowlist: keep the surface pointed at remote-runtime mobile/UI
+	// development (connect → runner auth → project → vibe → render → build →
+	// ship). An allowlist, so a NEW family is out by default — the denylist
+	// above is what let the surface reach 1135 tools. See mcp_wedge_profile.go.
+	tools = filterToWedgeProfile(tools)
+
+	// Hard provider cap, last: a family filter cannot guarantee a COUNT, and
+	// z.ai/GLM rejects any request advertising more than 1000 tools. See
+	// applyMCPToolBudget — it names what it dropped rather than truncating
+	// silently.
+	tools = applyMCPToolBudget(tools, mcpToolBudget())
 
 	return map[string]interface{}{
 		"tools": tools,

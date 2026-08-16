@@ -43,6 +43,19 @@ function Divider() {
   return <div className="h-px bg-surface-800/60" />;
 }
 
+function FlowSteps({ steps }: { steps: React.ReactNode[] }) {
+  return (
+    <div className="space-y-2 text-sm text-surface-300">
+      {steps.map((step, index) => (
+        <div key={index} className="flex gap-3">
+          <span className="w-5 flex-none text-surface-500">{index + 1}.</span>
+          <div>{step}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SectionHeading({
   id,
   children,
@@ -111,6 +124,14 @@ export default function DevelopersPage() {
           </h3>
           <nav className="space-y-2 text-sm">
             {[
+              ["whats-new", "What's New"],
+              ["remote-windows-box", "Remote Windows AI Box"],
+              ["four-parts", "Architecture"],
+              ["iot-fix-architecture", "AI + IoT Fix Architecture"],
+              ["push-to-device", "Push to Device (yaver-cli)"],
+              ["direct-device-install", "Direct Device Install (iOS WiFi)"],
+              ["hot-reload", "Hot Reload — Dev Server to Phone"],
+              ["git-providers", "Git Providers — Clone from Phone"],
               ["project-structure", "Project Structure"],
               ["software-stack", "Software Stack"],
               ["network-stack", "Network Stack"],
@@ -118,9 +139,19 @@ export default function DevelopersPage() {
               ["backend-api", "Backend API Reference"],
               ["data-model", "What's Stored in Convex"],
               ["relay-protocol", "Relay Server Protocol"],
+              ["relay-hot-reload", "Relay Hot-Reload & Health"],
+              ["token-refresh", "Token Refresh & Re-Auth"],
+              ["doctor", "System Health Check (yaver doctor)"],
               ["running-tests", "Running Tests"],
               ["integration-test-suite", "Integration Test Suite"],
+              ["session-transfer", "Session Transfer"],
               ["pr-rules", "Pull Request Rules"],
+              ["feedback-sdk", "Feedback SDK & Test Loop"],
+              ["unity", "Unity Developer Cases"],
+              ["sdk-token-security", "SDK Token Security"],
+              ["sdk", "SDK — Embed Yaver"],
+              ["project-wizard", "Project Wizard & SaaS Starter"],
+              ["demo-app", "Demo App (Bento)"],
               ["contributing", "Contributing"],
             ].map(([id, label]) => (
               <a
@@ -133,6 +164,560 @@ export default function DevelopersPage() {
             ))}
           </nav>
         </div>
+
+        {/* ─── What's New ─── */}
+        <section className="mb-20">
+          <SectionHeading id="whats-new">{"What's New"}</SectionHeading>
+          <Prose>
+            Latest features in Go Agent v1.93.0 and mobile v1.17.5.
+          </Prose>
+          <div className="space-y-4">
+            {[
+              {
+                title: "Push to Device (yaver-cli)",
+                desc: "New npm package (yaver-cli) lets third-party RN developers push their existing projects to the yaver.io app for real-device testing. Like Expo Go but for any existing project. 41 native modules, Hermes bytecode validated, watch mode.",
+              },
+              {
+                title: "Hot Reload to Phone",
+                desc: "Start Expo, Flutter, Vite, or Next.js dev servers and preview your app on your phone in real time through the P2P channel. Works on any network.",
+              },
+              {
+                title: "Git Provider Auto-Detection",
+                desc: "Yaver detects GitHub and GitLab credentials on your dev machine (gh CLI, glab, macOS Keychain, env vars). Browse repos and clone to headless servers from the mobile app — no SSH, no manual setup.",
+              },
+              {
+                title: "Smart Expo Dev Client",
+                desc: "Auto-prebuild if no native build exists. Dev client mode (--dev-client) for full native modules (camera, BLE, QR). Expo Go deep links for quick iteration.",
+              },
+              {
+                title: "Mobile Project Scanner",
+                desc: "Dedicated /projects/mobile endpoint recursively walks $HOME to find all Flutter, Expo, and React Native projects. Monorepo-aware with subdirectory detection.",
+              },
+              {
+                title: "Async Dev Server Start",
+                desc: "Dev server starts return immediately. Mobile polls for readiness and shows a \"Starting...\" card. No more blocking waits.",
+              },
+              {
+                title: "Dynamic Project Switching",
+                desc: "Say \"fix login in my-app\" and the agent auto-switches to the right project directory using brute-force word matching against discovered projects.",
+              },
+              {
+                title: "Unity feedback/build loop",
+                desc: "Unity projects are now detected by yaver doctor, Unity feedback SDK injection exists, and the agent can run Unity tests, trigger project-defined builds, and relaunch desktop players.",
+              },
+            ].map((item) => (
+              <div
+                key={item.title}
+                className="rounded-lg border border-surface-800 bg-surface-900/50 p-4"
+              >
+                <p className="text-sm font-semibold text-surface-200">
+                  {item.title}
+                </p>
+                <p className="mt-1 text-xs text-surface-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="mb-20">
+          <SectionHeading id="unity">Unity Developer Cases</SectionHeading>
+          <Prose>
+            Unity is now a real Yaver lane. The right mental model is not “Hermes for games.”
+            The right model is self-hosted feedback, content refresh, tests, builds, relaunches,
+            and remote supervision for Unity mobile and desktop projects.
+          </Prose>
+          <div className="space-y-4">
+            {[
+              {
+                title: "Unity mobile",
+                desc: "Use the SDK for in-game feedback, screenshots, crashes, logs, black-box capture, content refresh, scene reload, and redeploy requests.",
+              },
+              {
+                title: "Unity desktop",
+                desc: "Use the same SDK for overlay-driven feedback, EditMode/PlayMode tests, desktop builds, and relaunch loops from the agent machine.",
+              },
+              {
+                title: "Solo and studio",
+                desc: "The same package works for a solo developer on a home machine or a studio using a shared runner, VPN, or GPU VPS.",
+              },
+            ].map((item) => (
+              <div
+                key={item.title}
+                className="rounded-lg border border-surface-800 bg-surface-900/50 p-4"
+              >
+                <p className="text-sm font-semibold text-surface-200">{item.title}</p>
+                <p className="mt-1 text-xs text-surface-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="mb-20">
+          <SectionHeading id="remote-windows-box">Remote Windows AI Box</SectionHeading>
+          <Prose>
+            A practical supported setup is a MacBook as the control surface and a stronger Windows
+            machine as the always-on coding box. The box should expose OpenSSH, stay awake on AC,
+            use Yaver Relay for remote task control, and run the local model or coding agent.
+          </Prose>
+          <div className="space-y-4">
+            {[
+              {
+                title: "Transport first",
+                desc: "Make plain SSH from macOS work before adding editor-specific remote workflows. Key-based auth is the baseline.",
+              },
+              {
+                title: "Always-on settings",
+                desc: "Disable sleep and hibernation on AC for boxes intended to host long-running agent or Ollama sessions.",
+              },
+              {
+                title: "Stable network path",
+                desc: "Use LAN addresses for admin SSH at home and Yaver Relay for phone-to-box task control away from the local network.",
+              },
+              {
+                title: "Continue, not the native picker",
+                desc: "For Antigravity on macOS, use Continue inside the editor for remote Ollama models. The built-in Antigravity cloud model picker is a different path.",
+              },
+              {
+                title: "Model sizing",
+                desc: "For a 32 GB Windows host, qwen2.5-coder:14b is the conservative default. It is a better trade than oversizing the model and thrashing memory.",
+              },
+              {
+                title: "Config schema matters",
+                desc: "On the validated setup, Continue required a top-level version field in config.yaml. Without it, the model picker stayed empty even though the LAN endpoint was reachable.",
+              },
+            ].map((item) => (
+              <div
+                key={item.title}
+                className="rounded-lg border border-surface-800 bg-surface-900/50 p-4"
+              >
+                <p className="text-sm font-semibold text-surface-200">{item.title}</p>
+                <p className="mt-1 text-xs text-surface-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+          <Prose>
+            The full walkthrough is in{" "}
+            <Link href="/manuals/windows-ssh-coding-box" className="underline hover:text-surface-200">
+              MacBook to Windows AI Box over SSH
+            </Link>
+            .
+          </Prose>
+        </section>
+
+        {/* ─── Four-Part Architecture ─── */}
+        <section className="mb-20">
+          <SectionHeading id="four-parts">Five-Part Architecture</SectionHeading>
+          <Prose>
+            Yaver has five distinct components. Each serves a different purpose
+            and can be used independently.
+          </Prose>
+          <div className="space-y-4">
+            {[
+              {
+                title: "1. Mobile App (yaver.io)",
+                install: "App Store / Play Store",
+                desc: "Native container app for testing third-party RN apps. Controls AI agents from your phone (tasks, feedback, hot reload). Direct LAN + relay connections for your own devices.",
+              },
+              {
+                title: "2. Go Agent (yaver)",
+                install: "npm install -g yaver-cli",
+                desc: "Native `yaver` command for AI agent connectivity (P2P, relay, MCP). Hot reload dev servers (Expo, Flutter, Vite, Next.js). Session transfer, tasks, builds, deploys. Also bridges `yaver push` through npm when Node is available.",
+              },
+              {
+                title: "3. Desktop App (Yaver.io)",
+                install: "Download from yaver.io/download",
+                desc: "Electron app for vibe coding. Split-pane: AI chat on the left, app preview (WebView) on the right. Connects to remote dev machine via relay or local agent via IPC. Deploy to TestFlight/Play Store with one click. macOS, Windows, Linux.",
+              },
+              {
+                title: "4. Web Dashboard (yaver.io/dashboard)",
+                install: "No install — open in browser",
+                desc: "Browser-based workspace. Same features as the desktop app but runs entirely in the browser. Always connects via relay because browsers cannot use the native LAN beacon.",
+              },
+              {
+                title: "5. Feedback SDK",
+                install: "npm install yaver-feedback-react-native",
+                desc: "Drop-in SDK for React Native, Flutter, and Web apps. Visual bug reports with screenshots, voice notes, BlackBox streaming, and remote hot reload — all connected to the AI agent for automatic fixes.",
+              },
+              {
+                title: "6. Unified npm bootstrap (yaver-cli)",
+                install: "npm install -g yaver-cli",
+                desc: "Single install that provides the `yaver` command. Use `yaver serve` for the Go agent and `yaver push` for existing React Native projects.",
+              },
+            ].map((item) => (
+              <div key={item.title} className="rounded-lg border border-surface-800 bg-surface-900/50 p-4">
+                <p className="text-sm font-semibold text-surface-200">{item.title}</p>
+                <p className="mt-1 text-xs text-surface-500">
+                  <InlineCode>{item.install}</InlineCode>
+                </p>
+                <p className="mt-2 text-xs text-surface-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+          <Prose>
+            <strong className="text-surface-200">Key distinction:</strong>{" "}
+            <InlineCode>yaver-cli</InlineCode> is now the npm distribution name for the unified bootstrap
+            package. It installs the <InlineCode>yaver</InlineCode> command, which covers both the Go
+            agent workflow and the RN push-to-device flow. This npm install is the supported path for
+            the Go agent too.
+          </Prose>
+          <Prose>
+            <strong className="text-surface-200">Platform support boundary:</strong>{" "}
+            native Linux and macOS are the primary always-on agent targets. WSL is supported for
+            headless auth, MCP, and the React Native Hermes loop into the Yaver mobile app, but it
+            does not get the same native auto-start and reboot-persistence guarantees as a real
+            Linux or macOS host. Yaver can install a WSL startup helper, but that is still a helper
+            path rather than native systemd support.
+          </Prose>
+        </section>
+
+        {/* ─── Push to Device ─── */}
+        <section className="mb-20">
+          <SectionHeading id="push-to-device">Push to Device (Unified npm install)</SectionHeading>
+          <Prose>
+            The yaver.io mobile app doubles as a native container (like Expo Go) for existing
+            React Native projects. Install `yaver-cli` once, get a `yaver` command, and use the
+            same install for both `yaver serve` and `yaver push` for real-device QA. No project
+            modifications needed.
+          </Prose>
+          <Terminal title="push-to-device">
+            <Comment># One npm install for agent + push-to-device</Comment>
+            <Cmd>npm install -g yaver-cli</Cmd>
+            <Comment># Start the agent on your dev machine (same install)</Comment>
+            <Cmd>yaver serve</Cmd>
+            <Comment># Analyze your project</Comment>
+            <Cmd>cd my-app && yaver push init</Cmd>
+            <Output>React Native: 0.81.5 ✅ (yaver supports 0.81.x)</Output>
+            <Output>15/16 native modules available ✅</Output>
+            <Output>Created yaver.json</Output>
+            <Comment># Push to your phone</Comment>
+            <Cmd>yaver push</Cmd>
+            <Output>📡 Found: iPhone 15 (192.168.1.42)</Output>
+            <Output>🔨 Bundling → ⚡ Hermes → 📤 Push 847 KB</Output>
+            <Output>🚀 Done in 4.1s — app loading on device</Output>
+          </Terminal>
+          <SubHeading>CLI Commands</SubHeading>
+          <div className="mb-6 overflow-x-auto">
+            <table className="w-full text-xs">
+              <tbody className="divide-y divide-surface-800">
+                {[
+                  ["yaver push init", "Analyze project, create yaver.json"],
+                  ["yaver push", "Bundle + validate + push to device"],
+                  ["yaver push --watch", "Watch mode — re-push on file save"],
+                  ["yaver push --ignore-missing", "Push despite missing native modules"],
+                  ["yaver push doctor", "Deep compatibility report with fix suggestions"],
+                  ["yaver push devices", "List discovered devices on network"],
+                  ["yaver push modules", "List all host native modules"],
+                  ["yaver push reset", "Clear pushed bundle, restore default UI"],
+                  ["yaver push status", "Device + project status"],
+                ].map(([cmd, desc]) => (
+                  <tr key={cmd}>
+                    <td className="py-2 pr-4 font-mono text-surface-200">{cmd}</td>
+                    <td className="py-2 text-surface-500">{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <SubHeading>QA Testing Workflow</SubHeading>
+          <Prose>
+            Combine push-to-device with the Feedback SDK for a complete QA loop:
+            push → test on real phone → shake to report bug → AI fixes it → re-push → verify.
+            No TestFlight queues. No Play Store reviews. Real-device testing in seconds.
+          </Prose>
+        </section>
+
+        <section className="mb-20">
+          <SectionHeading id="iot-fix-architecture">AI + IoT Fix Architecture</SectionHeading>
+          <Prose>
+            The same Yaver control-plane shape also fits an AI-driven IoT troubleshooting product.
+            The right model is not “put an LLM on a router.” The right model is a four-layer loop:
+            mobile operator surface, cloud brain, LLM reasoning layer, and a small device-side
+            runtime that executes bounded work.
+          </Prose>
+          <Prose>
+            In plain language: the LLM writes code for the current case, the toolchain compiles it,
+            the firmware already contains c-agent, the device dynamically loads and runs the module,
+            and the loop keeps iterating until the problem is fixed or the attempt budget is exhausted.
+          </Prose>
+          <Terminal title="iot-fix-architecture">
+            <Output>operator on phone</Output>
+            <Output>  -&gt; mobile orchestrator</Output>
+            <Output>  -&gt; cloud brain</Output>
+            <Output>  -&gt; LLM coordinator + retrieval + build/sign</Output>
+            <Output>  -&gt; c-agent runtime on device</Output>
+            <Output>  -&gt; built-in probe / wasm module / bounded fix</Output>
+            <Output>  -&gt; result stream + audit trail back to phone</Output>
+          </Terminal>
+          <SubHeading>Role of each layer</SubHeading>
+          <div className="mb-6 space-y-3">
+            {[
+              {
+                title: "Mobile orchestrator",
+                desc: "Human control surface for incident intake, approvals, iteration status, and the final explanation.",
+              },
+              {
+                title: "Cloud brain",
+                desc: "Durable coordinator that owns the incident graph, routing, artifact registry, signing, and replayable audit history.",
+              },
+              {
+                title: "LLM coordinator",
+                desc: "Reasoning layer that decides what probe, question, or bounded fix should run next for this specific failure case.",
+              },
+              {
+                title: "c-agent runtime",
+                desc: "Small device-side runtime that verifies artifacts, exposes capability-scoped host imports, runs built-in probes first, and later wasm/eBPF modules.",
+              },
+            ].map((item) => (
+              <div key={item.title} className="rounded-lg border border-surface-800 bg-surface-900/50 p-4">
+                <p className="text-sm font-semibold text-surface-200">{item.title}</p>
+                <p className="mt-1 text-xs text-surface-400">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+          <SubHeading>Why this is different from a static tool catalog</SubHeading>
+          <Prose>
+            Real embedded failures do not line up neatly with a fixed set of tools. One Klipper
+            incident wants Moonraker state, another wants Wi-Fi station data, another wants a
+            heater-history extraction, another wants a config diff. The architecture only becomes
+            useful when the brain can author an incident-specific probe, sign it, ship it, run it
+            in a bounded runtime, and iterate.
+          </Prose>
+          <SubHeading>The firmware already needs the runtime</SubHeading>
+          <Prose>
+            This only works if the firmware or host stack was designed for it up front. The LLM has
+            to be writing code for a runtime that already exists on the device. In our case, that is
+            c-agent. Without that embedded runtime boundary, the model can suggest fixes but it cannot
+            actively keep trying compiled modules on the real hardware.
+          </Prose>
+          <SubHeading>Designing AI-fixable hardware</SubHeading>
+          <Prose>
+            The device architecture itself should cooperate with this loop. Replaceable subsystems
+            should not assume that any dependency failure means &ldquo;crash the whole process.&rdquo; A better
+            design is to let a component enter a bounded stuck or degraded mode, quiesce its work,
+            preserve state, and explicitly wait for a replacement module or dependency implementation
+            to be inserted.
+          </Prose>
+          <Prose>
+            That is why the c-agent host/runtime model uses quiesce, pause, resume, replace, and
+            queued invokes. The target shape is a device that can keep the larger system alive while
+            one module is idle or being swapped, so the LLM can keep trying the next fix, instead of
+            forcing a full-device crash on every local fault.
+          </Prose>
+          <SubHeading>Representative fix loop</SubHeading>
+          <FlowSteps
+            steps={[
+              <>Operator reports the issue from the phone, for example: “my printer starts under-extruding after 20 minutes.”</>,
+              <>The cloud brain creates an incident, retrieves similar cases, and asks the LLM coordinator for the next bounded step.</>,
+              <>The coordinator chooses a built-in probe first or authors a small new probe if the current surface is insufficient.</>,
+              <>The build/sign pipeline produces an immutable artifact.</>,
+              <>The c-agent verifies the artifact, binds only the declared capabilities, runs it, and streams partial output back.</>,
+              <>The brain refines its hypothesis and either asks another question, runs another probe, or proposes a fix.</>,
+              <>If the fix is high-risk, the phone approval surface signs off before execution.</>,
+            ]}
+          />
+          <Prose>
+            That is the design behind the `embedded/c-agent/` work and the architecture documents
+            under <InlineCode>docs/c-agent-architecture.md</InlineCode>, <InlineCode>docs/c-agent-domains.md</InlineCode>,
+            and <InlineCode>docs/c-agent-vendor-modules.md</InlineCode>.
+          </Prose>
+        </section>
+
+        {/* ─── Direct Device Install ─── */}
+        <section className="mb-20">
+          <SectionHeading id="direct-device-install">
+            Direct Device Install (iOS WiFi)
+          </SectionHeading>
+          <Prose>
+            When your iPhone is on the same WiFi as your Mac, Yaver can build and install
+            your app directly on the device &mdash; just like Xcode, but triggered from
+            your phone. No TestFlight, no waiting for processing. The app launches
+            immediately after install.
+          </Prose>
+
+          <SubHeading>How it works</SubHeading>
+          <Prose>
+            The mobile app detects whether it has a direct LAN connection or is going
+            through the relay. When direct:
+          </Prose>
+          <ol className="mb-6 list-decimal pl-6 space-y-2 text-sm text-surface-400">
+            <li>Mobile sends <InlineCode>POST /builds</InlineCode> with <InlineCode>installOnDevice: true</InlineCode></li>
+            <li>Agent builds with <InlineCode>xcodebuild</InlineCode> (Release config, automatic signing)</li>
+            <li>Agent detects the connected iOS device via <InlineCode>xcrun xctrace list devices</InlineCode></li>
+            <li>Agent installs the .app directly via <InlineCode>xcrun devicectl device install app</InlineCode></li>
+            <li>App launches on device &mdash; full production build, all native modules</li>
+          </ol>
+
+          <SubHeading>Connection-based routing</SubHeading>
+          <div className="mb-6 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-surface-800">
+                  <th className="px-4 py-2.5 text-left font-medium text-surface-300">Connection</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-surface-300">Platform</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-surface-300">Install Method</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-800">
+                {[
+                  ["Direct (WiFi/LAN)", "iOS", "xcodebuild + xcrun devicectl (instant) OR Hermes bundle push into Yaver container"],
+                  ["Relay (4G/remote)", "iOS", "Hermes bytecode push (always) — bundled + loaded into the Yaver native container via yaver-cli push"],
+                  ["Direct (WiFi/LAN)", "Android", "Gradle APK OR Hermes bundle push into Yaver container"],
+                  ["Relay (4G/remote)", "Android", "Hermes bytecode push (always) — same Hermes bundle, same native bridge, same story"],
+                ].map((row) => (
+                  <tr key={row.join()}>
+                    <td className="px-4 py-2.5 text-surface-400">{row[0]}</td>
+                    <td className="px-4 py-2.5 text-surface-400">{row[1]}</td>
+                    <td className="px-4 py-2.5 text-surface-400">{row[2]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <SubHeading>Requirements</SubHeading>
+          <ul className="mb-6 list-disc pl-6 space-y-1 text-sm text-surface-400">
+            <li>Xcode 15+ installed on the Mac</li>
+            <li>Device paired with the Mac (USB or WiFi pairing in Xcode)</li>
+            <li>Valid Apple Developer signing identity (free or paid)</li>
+            <li>Device UDID registered in provisioning profile (automatic signing handles this)</li>
+          </ul>
+
+          <SubHeading>Key files</SubHeading>
+          <div className="mb-6 overflow-x-auto">
+            <table className="w-full text-xs">
+              <tbody className="divide-y divide-surface-800">
+                {[
+                  ["desktop/agent/device_install.go", "installAppOnDevice(), isDirectConnection(), device detection"],
+                  ["desktop/agent/builds.go", "PlatformXcodeDeviceInstall, post-build install hook"],
+                  ["desktop/agent/build_http.go", "installOnDevice request field, LAN validation"],
+                  ["mobile/src/lib/quic.ts", "startBuildForMyPlatform() auto-detects direct + iOS"],
+                  ["mobile/src/lib/builds.ts", "BuildInfo with installStatus, installError, deviceUDID"],
+                ].map(([file, purpose]) => (
+                  <tr key={file}>
+                    <td className="whitespace-nowrap px-4 py-2.5 font-medium text-surface-200">{file}</td>
+                    <td className="px-4 py-2.5 text-surface-400">{purpose}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* ─── Hot Reload ─── */}
+        <section className="mb-20">
+          <SectionHeading id="hot-reload">
+            Hot Reload &mdash; Dev Server to Phone
+          </SectionHeading>
+          <Prose>
+            Start a dev server on your machine and preview the app on your phone
+            in real time &mdash; all through the P2P channel. Works on any
+            network (Wi-Fi, 4G, behind NAT). The agent proxies the dev server
+            through the relay so your phone loads the app in a full-screen
+            WebView.
+          </Prose>
+
+          <SubHeading>How it works</SubHeading>
+          <Terminal title="hot-reload-flow">
+            <FlowSteps
+              steps={[
+                <>The phone loads the preview inside the Yaver app WebView.</>,
+                <>If needed, traffic goes through the QUIC relay as a pass-through tunnel.</>,
+                <>The agent exposes a <InlineCode>/dev/*</InlineCode> proxy on port <InlineCode>18080</InlineCode>.</>,
+                <>That proxy forwards requests to your local dev server such as Metro, Vite, or Flutter.</>,
+              ]}
+            />
+          </Terminal>
+
+          <SubHeading>Supported frameworks</SubHeading>
+          <div className="mb-6 overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-surface-800 text-surface-400">
+                  <th className="pb-2 pr-4">Framework</th>
+                  <th className="pb-2 pr-4">Dev Server</th>
+                  <th className="pb-2">Hot Reload</th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-300">
+                {[
+                  ["Expo / React Native", "Metro (npx expo start)", "Auto (Metro watches files)"],
+                  ["Flutter", "flutter run -d web", "Auto (r keystroke)"],
+                  ["Vite", "npx vite", "Auto (Vite HMR)"],
+                  ["Next.js", "npx next dev", "Auto (Fast Refresh)"],
+                ].map(([fw, dev, hr]) => (
+                  <tr key={fw} className="border-b border-surface-800/50">
+                    <td className="py-2 pr-4 font-medium text-surface-200">{fw}</td>
+                    <td className="py-2 pr-4"><InlineCode>{dev}</InlineCode></td>
+                    <td className="py-2">{hr}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <SubHeading>Expo modes</SubHeading>
+          <Prose>
+            Three modes depending on what you need: <strong>Web preview</strong>{" "}
+            (default, works everywhere), <strong>Expo Go</strong> deep link
+            (exp:// URL for full native hot reload with camera, BLE, QR), or{" "}
+            <strong>Dev client</strong> (custom native build with all native
+            modules, auto-prebuild if needed).
+          </Prose>
+
+          <SubHeading>Key files</SubHeading>
+          <div className="mb-6 space-y-1 font-mono text-xs text-surface-400">
+            <div><InlineCode>desktop/agent/devserver.go</InlineCode> &mdash; DevServer interface, framework implementations</div>
+            <div><InlineCode>desktop/agent/devserver_http.go</InlineCode> &mdash; HTTP handlers: /dev/start, /dev/stop, /dev/* proxy</div>
+            <div><InlineCode>mobile/src/components/DevPreview.tsx</InlineCode> &mdash; Banner + WebView + SSE auto-reload</div>
+            <div><InlineCode>mobile/src/lib/quic.ts</InlineCode> &mdash; getDevServerStatus(), startDevServer()</div>
+          </div>
+        </section>
+
+        {/* ─── Git Providers ─── */}
+        <section className="mb-20">
+          <SectionHeading id="git-providers">
+            Git Providers &mdash; Clone Repos from Your Phone
+          </SectionHeading>
+          <Prose>
+            Yaver auto-detects GitHub and GitLab credentials already on your dev
+            machine &mdash; from <InlineCode>gh</InlineCode> CLI,{" "}
+            <InlineCode>glab</InlineCode> CLI, macOS Keychain, git credential
+            helpers, or environment variables. Credentials never leave the
+            machine. You can browse your repos from the mobile app and clone to a
+            headless server without SSH or manual git setup.
+          </Prose>
+
+          <SubHeading>How it works</SubHeading>
+          <Terminal title="git-clone-flow">
+            <FlowSteps
+              steps={[
+                <>From the phone, browse repositories with <InlineCode>GET /git/repos</InlineCode>.</>,
+                <>The agent queries GitHub or GitLab using credentials already present on the dev machine.</>,
+                <>The repo list comes back to the app for browsing and selection.</>,
+                <>When you tap clone, the app sends <InlineCode>POST /git/clone</InlineCode> and the machine runs <InlineCode>git clone</InlineCode> locally.</>,
+              ]}
+            />
+          </Terminal>
+
+          <SubHeading>Credential detection order</SubHeading>
+          <div className="mb-6 space-y-1 font-mono text-xs text-surface-400">
+            <div><strong className="text-surface-200">GitHub:</strong> gh auth token → GITHUB_TOKEN / GH_TOKEN → git credential fill → git-credentials.json</div>
+            <div><strong className="text-surface-200">GitLab:</strong> GITLAB_TOKEN / GITLAB_PRIVATE_TOKEN → glab config → git credential fill → git-credentials.json</div>
+          </div>
+
+          <Prose>
+            This is especially useful for headless dev machines (cloud VPS, Mac
+            Mini) where you haven&apos;t cloned a repo yet. Pick a repo from the
+            app, tap clone, and the dev machine pulls it using its own git
+            credentials. Then start coding from your phone immediately.
+          </Prose>
+
+          <SubHeading>Key files</SubHeading>
+          <div className="mb-6 space-y-1 font-mono text-xs text-surface-400">
+            <div><InlineCode>desktop/agent/git_provider.go</InlineCode> &mdash; Auto-detect, verify, save providers; SSH keygen; repo browser; clone</div>
+            <div><InlineCode>desktop/agent/repos_http.go</InlineCode> &mdash; Git credential storage</div>
+          </div>
+        </section>
 
         {/* ─── Section 1: Project Structure ─── */}
         <section className="mb-20">
@@ -190,7 +775,7 @@ export default function DevelopersPage() {
               </h4>
               <p className="text-sm leading-relaxed text-surface-400">
                 Lightweight QUIC relay server in Go. Pass-through proxy for NAT
-                traversal &mdash; stores nothing. Deployed to Hetzner VPS via
+                traversal &mdash; stores nothing. Deployed to a standard VPS via
                 Docker.
               </p>
             </div>
@@ -211,9 +796,9 @@ export default function DevelopersPage() {
                 web/
               </h4>
               <p className="text-sm leading-relaxed text-surface-400">
-                Next.js 15 landing page deployed on Vercel at{" "}
+                Next.js 15 landing page at{" "}
                 <InlineCode>yaver.io</InlineCode>. Handles OAuth callbacks for
-                desktop CLI auth flow.
+                Go agent auth flow.
               </p>
             </div>
           </div>
@@ -230,15 +815,15 @@ export default function DevelopersPage() {
           <div className="mb-8">
             <Terminal title="stack-overview">
               <pre className="text-surface-300">
-                {`┌─────────────────────────────────────────────────────┐
-│                    User Layer                        │
-│                                                     │
-│  Mobile App          CLI Agent         Web Dashboard │
-│  (React Native)      (Go binary)       (Next.js)    │
-│  iOS + Android       macOS/Linux/Win   Vercel        │
-└─────────────┬────────────┬────────────┬──────────────┘
-              │            │            │
-              ▼            ▼            ▼`}
+                {`┌───────────────────────────────────────────────────────┐
+│                      User Layer                       │
+│                                                       │
+│  Mobile App          CLI Agent          Web Dashboard  │
+│  (React Native)      (Go binary)        (Next.js)     │
+│  iOS + Android       macOS/Linux/Win    yaver.io       │
+└──────────────┬─────────────┬─────────────┬────────────┘
+               │             │             │
+               ▼             ▼             ▼`}
               </pre>
             </Terminal>
           </div>
@@ -317,7 +902,7 @@ export default function DevelopersPage() {
                   <InlineCode>surface-*</InlineCode> color palette
                 </li>
                 <li>Client-side auth (tokens in localStorage + cookies)</li>
-                <li>Deployed on Vercel (static + serverless API routes)</li>
+                <li>Deployed at yaver.io (static + serverless API routes)</li>
                 <li>
                   API routes handle OAuth flow (Google, Apple, Microsoft)
                 </li>
@@ -487,15 +1072,15 @@ export default function DevelopersPage() {
           <div className="mb-8">
             <Terminal title="connection-priority">
               <pre className="text-surface-300">
-                {`┌─────────────────────────────────────────────────────────────────────┐
-│                    CONNECTION PRIORITY                               │
-│                                                                     │
-│  1. LAN Beacon (direct)  ──  ~5ms   ── same WiFi, instant discovery│
-│  2. Convex IP (direct)   ──  ~5ms   ── known IP from device registry│
-│  3. QUIC Relay (proxied) ──  ~50ms  ── roaming, NAT traversal      │
-│                                                                     │
-│  Silent roaming: transitions between layers are invisible to user   │
-└─────────────────────────────────────────────────────────────────────┘`}
+                {`┌──────────────────────────────────────────────────────────────────────┐
+│                    CONNECTION PRIORITY                                │
+│                                                                      │
+│  1. LAN Beacon (direct)  ──  ~5ms   ── same WiFi, instant discovery  │
+│  2. Convex IP (direct)   ──  ~5ms   ── known IP from device registry │
+│  3. QUIC Relay (proxied) ──  ~50ms  ── roaming, NAT traversal        │
+│                                                                      │
+│  Silent roaming: transitions between layers are invisible to user    │
+└──────────────────────────────────────────────────────────────────────┘`}
               </pre>
             </Terminal>
           </div>
@@ -507,20 +1092,20 @@ export default function DevelopersPage() {
             </h4>
             <Terminal title="lan-beacon-protocol">
               <pre className="text-surface-300">
-                {`CLI Agent                                    Mobile App
-    │                                            │
-    ├── Every 3s: UDP broadcast ──────────────►  │
-    │   dst: 255.255.255.255:19837               │
-    │   payload: {"v":1,"id":"dcbfdc50",         │
-    │             "p":18080,"n":"MacBook",        │
-    │             "th":"a1b2c3d4"}                │
-    │                                            │
-    │   Mobile matches:                          │
-    │   1. beacon.id ∈ Convex device list        │
-    │   2. beacon.th == SHA256(userId)[:8]        │
-    │                                            │
-    │   If match → direct HTTP to beacon IP:port │
-    └────────────────────────────────────────────┘`}
+                {`CLI Agent                                     Mobile App
+    │                                                 │
+    ├── Every 3s: UDP broadcast ──────────────────►   │
+    │   dst: 255.255.255.255:19837                    │
+    │   payload: {"v":1,"id":"dcbfdc50",              │
+    │             "p":18080,"n":"MacBook",             │
+    │             "th":"a1b2c3d4"}                     │
+    │                                                 │
+    │   Mobile matches:                               │
+    │   1. beacon.id ∈ Convex device list             │
+    │   2. beacon.th == SHA256(userId)[:8]             │
+    │                                                 │
+    │   If match → direct HTTP to beacon IP:port      │
+    └─────────────────────────────────────────────────┘`}
               </pre>
             </Terminal>
             <div className="mt-3 space-y-1 text-sm text-surface-400">
@@ -547,20 +1132,20 @@ export default function DevelopersPage() {
             <Terminal title="convex-device-registry">
               <pre className="text-surface-300">
                 {`CLI Agent                 Convex                  Mobile App
-    │                       │                        │
-    ├── POST /devices/register ──►│                  │
-    │   {deviceId, hostname,      │                  │
-    │    platform, localIP, port} │                  │
-    │                             │                  │
-    ├── POST /devices/heartbeat ──►│ (every 2min)   │
-    │   {localIP, ...}            │                  │
-    │                             │                  │
-    │                             │◄── GET /devices ─┤ (every 3s)
-    │                             │──► device list ──►│
-    │                             │                   │
-    │   Mobile checks: isOnline && lastHeartbeat < 5min
-    │   If private IP → try direct HTTP connection   │
-    └─────────────────────────────────────────────────┘`}
+    │                         │                          │
+    ├── POST /devices/register ──►│                      │
+    │   {deviceId, hostname,      │                      │
+    │    platform, localIP, port} │                      │
+    │                             │                      │
+    ├── POST /devices/heartbeat ──►│ (every 2min)        │
+    │   {localIP, ...}            │                      │
+    │                             │                      │
+    │                             │◄── GET /devices ─────┤
+    │                             │──► device list ──────►│
+    │                             │                      │
+    │   Mobile checks: isOnline && lastHeartbeat < 5min  │
+    │   If private IP → try direct HTTP connection       │
+    └────────────────────────────────────────────────────┘`}
               </pre>
             </Terminal>
           </div>
@@ -572,23 +1157,23 @@ export default function DevelopersPage() {
             </h4>
             <Terminal title="relay-tunnel-protocol">
               <pre className="text-surface-300">
-                {`CLI Agent              Relay Server              Mobile App
-    │                       │                        │
-    │── QUIC connect ──────►│                        │
-    │   (outbound, UDP 4433)│                        │
-    │                       │                        │
-    │── RegisterMsg ───────►│                        │
-    │   {deviceId, token,   │                        │
-    │    password}           │                        │
-    │                       │◄── HTTP request ───────┤
-    │                       │    GET /d/{id}/health   │
-    │                       │    X-Relay-Password: .. │
-    │                       │                        │
-    │◄── QUIC stream ──────┤    (proxied)            │
-    │    TunnelRequest      │                        │
-    │                       │                        │
-    │── TunnelResponse ────►│──── HTTP response ────►│
-    └───────────────────────┘────────────────────────┘`}
+                {`CLI Agent               Relay Server               Mobile App
+    │                        │                             │
+    │── QUIC connect ───────►│                             │
+    │   (outbound, UDP 4433) │                             │
+    │                        │                             │
+    │── RegisterMsg ────────►│                             │
+    │   {deviceId, token,    │                             │
+    │    password}            │                             │
+    │                        │◄── HTTP request ────────────┤
+    │                        │    GET /d/{id}/health        │
+    │                        │    X-Relay-Password: ..      │
+    │                        │                             │
+    │◄── QUIC stream ───────┤    (proxied)                 │
+    │    TunnelRequest       │                             │
+    │                        │                             │
+    │── TunnelResponse ─────►│──── HTTP response ─────────►│
+    └────────────────────────┘─────────────────────────────┘`}
               </pre>
             </Terminal>
           </div>
@@ -624,37 +1209,37 @@ CLI Agent ◄──QUIC──────────────── Relay (:
           <div className="mb-8">
             <Terminal title="connection-state-machine">
               <pre className="text-surface-300">
-                {`            ┌──────────────┐
-            │ DISCONNECTED │
-            └──────┬───────┘
-                   │ connect()
-                   ▼
-            ┌──────────────┐
-            │  CONNECTING  │
-            └──────┬───────┘
-                   │
-          ┌────────┼─────────┐
-          ▼        ▼         ▼
-     ┌────────┐ ┌──────┐ ┌───────┐
-     │  LAN   │ │  IP  │ │ RELAY │
-     │ beacon │ │direct│ │       │
-     │ probe  │ │ (2s) │ │ try   │
-     │  (2s)  │ │      │ │ each  │
-     └───┬────┘ └──┬───┘ └──┬────┘
-         │         │        │
-         ▼         ▼        ▼
-     ┌────────────────────────────┐
-     │        CONNECTED           │
-     │   mode: direct | relay     │
-     └─────────────┬──────────────┘
-                   │ network change
-                   │ or disconnect
-                   ▼
-     ┌────────────────────────────┐
-     │      RECONNECTING          │
-     │   exponential backoff      │
-     │   1s → 2s → 4s → 30s max  │
-     └────────────────────────────┘`}
+                {`           ┌──────────────┐
+           │ DISCONNECTED │
+           └──────┬───────┘
+                  │ connect()
+                  ▼
+           ┌──────────────┐
+           │  CONNECTING  │
+           └──────┬───────┘
+                  │
+        ┌─────────┼──────────┐
+        ▼         ▼          ▼
+   ┌────────┐ ┌────────┐ ┌────────┐
+   │  LAN   │ │   IP   │ │ RELAY  │
+   │ beacon │ │ direct │ │        │
+   │ probe  │ │  (2s)  │ │  try   │
+   │  (2s)  │ │        │ │  each  │
+   └───┬────┘ └───┬────┘ └───┬────┘
+       │          │          │
+       ▼          ▼          ▼
+   ┌──────────────────────────────┐
+   │          CONNECTED           │
+   │     mode: direct | relay     │
+   └──────────────┬───────────────┘
+                  │ network change
+                  │ or disconnect
+                  ▼
+   ┌──────────────────────────────┐
+   │        RECONNECTING          │
+   │     exponential backoff      │
+   │     1s → 2s → 4s → 30s max  │
+   └──────────────────────────────┘`}
               </pre>
             </Terminal>
           </div>
@@ -869,6 +1454,22 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               code, or AI output is stored. If you deploy your own, update the{" "}
               <InlineCode>CONVEX_SITE_URL</InlineCode> environment variable in
               the web and mobile projects to point to your instance.
+            </p>
+          </div>
+
+          <div className="mt-6 rounded-xl border border-surface-800 bg-surface-900 p-6">
+            <h4 className="mb-2 text-sm font-medium text-surface-200">
+              Note on the Raspberry Pi image lane
+            </h4>
+            <p className="text-sm leading-relaxed text-surface-400">
+              The Pi image is a hybrid appliance image, not a giant fully preloaded
+              snapshot of every tool. The raw <InlineCode>.img.xz</InlineCode> bakes in
+              the base Ubuntu image, the <InlineCode>yaver</InlineCode> binary,
+              cloud-init, first-boot provisioning scripts, and the systemd services.
+              On first boot, <InlineCode>yaver install pi-dev-node</InlineCode> installs
+              the heavier AI/dev/backend stack automatically, including Ollama,
+              Aider, OpenCode, the TDD toolchain, and the promoted backend tools such
+              as SQLite, Vercel, Convex, PostgreSQL, Redis, Supabase, and MQTT.
             </p>
           </div>
         </section>
@@ -1259,7 +1860,7 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                     <InlineCode>/downloads/list</InlineCode>
                   </td>
                   <td className="py-3 pr-4">No</td>
-                  <td className="py-3">List all available CLI downloads</td>
+                  <td className="py-3">List all public downloads and artifacts, including CLI binaries and the Raspberry Pi image</td>
                 </tr>
                 <tr className="border-b border-surface-800/50">
                   <td className="py-3 pr-4">
@@ -1296,7 +1897,6 @@ CLI Agent ◄──QUIC──────────────── Relay (:
             code, no AI output, no logs are stored. Everything AI-related flows
             peer-to-peer between mobile and desktop agent.
           </Prose>
-
           <div className="space-y-4">
             <div className="card">
               <h4 className="mb-2 text-sm font-medium text-surface-200">
@@ -1306,7 +1906,7 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                 User accounts. Fields: <InlineCode>email</InlineCode>,{" "}
                 <InlineCode>fullName</InlineCode>,{" "}
                 <InlineCode>provider</InlineCode> (google / apple / microsoft /
-                email), <InlineCode>providerId</InlineCode>,{" "}
+                github / gitlab / email), <InlineCode>providerId</InlineCode>,{" "}
                 <InlineCode>passwordHash</InlineCode> (email auth only),{" "}
                 <InlineCode>avatarUrl</InlineCode>.
               </p>
@@ -1425,16 +2025,16 @@ CLI Agent ◄──QUIC──────────────── Relay (:
           <div className="mb-8">
             <Terminal title="relay-protocol">
               <pre className="text-surface-300">
-                {`Desktop Agent                  Relay Server                  Mobile App
-     │                              │                              │
-     │── QUIC connect (outbound) ──►│                              │
-     │── RegisterMsg ──────────────►│                              │
-     │   { deviceId, token, pass }  │                              │
-     │                              │◄── HTTP request ─────────────│
-     │                              │    GET /d/{deviceId}/health   │
-     │◄── forward via QUIC tunnel ──│                              │
-     │── response ─────────────────►│── forward HTTP response ────►│
-     │                              │                              │`}
+                {`Go Agent                       Relay Server                   Mobile App
+     │                              │                               │
+     │── QUIC connect (outbound) ──►│                               │
+     │── RegisterMsg ──────────────►│                               │
+     │   { deviceId, token, pass }  │                               │
+     │                              │◄── HTTP request ──────────────│
+     │                              │    GET /d/{deviceId}/health    │
+     │◄── forward via QUIC tunnel ──│                               │
+     │── response ─────────────────►│── forward HTTP response ─────►│
+     │                              │                               │`}
               </pre>
             </Terminal>
           </div>
@@ -1504,6 +2104,76 @@ CLI Agent ◄──QUIC──────────────── Relay (:
           </div>
         </section>
 
+        {/* ─── Relay Hot-Reload & Health ─── */}
+        <section className="mb-20">
+          <SectionHeading id="relay-hot-reload">Relay Hot-Reload &amp; Health Monitoring</SectionHeading>
+          <Prose>
+            Relay servers can be added, removed, or updated while the agent is running &mdash; no restart needed.
+            The CLI sends <InlineCode>SIGHUP</InlineCode> to the running agent, which reloads config instantly.
+            A background poll every 30s serves as a safety net.
+          </Prose>
+          <Terminal title="relay management">
+            <Cmd>yaver relay add https://relay.example.com --password secret --label &quot;My VPS&quot;</Cmd>
+            <Output>Agent notified — relay will connect within seconds.</Output>
+            <Cmd>yaver relay list</Cmd>
+            <Cmd>yaver relay test</Cmd>
+          </Terminal>
+          <SubHeading>Health Monitoring</SubHeading>
+          <Prose>
+            The agent pings each relay&apos;s <InlineCode>/health</InlineCode> endpoint every 60 seconds.
+            Results are cached in <InlineCode>~/.yaver/relay-health.json</InlineCode> and shown
+            instantly in <InlineCode>yaver status</InlineCode> (no HTTP probes at display time).
+            The mobile app also tracks relay health every 60s and uses it for automatic fallback.
+          </Prose>
+          <SubHeading>Mobile Auto-Fallback</SubHeading>
+          <Prose>
+            The mobile app runs a health heartbeat every 15 seconds. On 2 consecutive failures,
+            it automatically tries relay servers even if <InlineCode>forceRelay</InlineCode> is off.
+            This means: direct on WiFi, automatic relay failover when the path breaks &mdash; no user action needed.
+          </Prose>
+        </section>
+
+        {/* ─── Token Refresh & Re-Auth ─── */}
+        <section className="mb-20">
+          <SectionHeading id="token-refresh">Token Refresh &amp; Re-Auth</SectionHeading>
+          <Prose>
+            Sessions last 30 days and auto-refresh across all layers:
+          </Prose>
+          <ul className="mb-6 space-y-2 text-sm text-surface-400">
+            <li><strong className="text-surface-200">CLI agent:</strong> Refreshes token on startup + weekly. Detects 401 in heartbeat → attempts refresh → warns user if truly expired.</li>
+            <li><strong className="text-surface-200">Mobile app:</strong> Refreshes on launch + every foreground resume. Auto-logouts if token is expired (forces re-login).</li>
+            <li><strong className="text-surface-200">Backend:</strong> <InlineCode>POST /auth/refresh</InlineCode> extends session by 30 more days.</li>
+          </ul>
+          <Prose>
+            Settings (relay servers, advanced endpoints, preferences) are preserved across sign-out/sign-in
+            on both CLI and mobile. Mobile settings are user-scoped &mdash; different accounts on the
+            same device get isolated settings.
+          </Prose>
+        </section>
+
+        {/* ─── System Health Check ─── */}
+        <section className="mb-20">
+          <SectionHeading id="doctor">System Health Check</SectionHeading>
+          <Prose>
+            <InlineCode>yaver doctor</InlineCode> performs a comprehensive system check similar
+            to <InlineCode>flutter doctor</InlineCode>. It verifies auth, AI runners, relay
+            servers, and network connectivity:
+          </Prose>
+          <Terminal title="yaver doctor">
+            <Cmd>yaver doctor</Cmd>
+            <Output>── Authentication ──</Output>
+            <Output>  Auth token                     ✓ Present</Output>
+            <Output>  Token validation               ✓ Valid</Output>
+            <Output>── AI Runners ──</Output>
+            <Output>  Claude Code (claude)           ✓ /usr/local/bin/claude (2.1.80)</Output>
+            <Output>  OpenCode (opencode)            ✓ /usr/local/bin/opencode (0.4.1)</Output>
+            <Output>  Codex (codex)                  ✓ /usr/local/bin/codex (1.2.0)</Output>
+            <Output>── Relay Servers ──</Output>
+            <Output>  Relay: My VPS                  ✓ OK (89ms, password set)</Output>
+            <Output>Doctor summary: 12 passed, 3 warnings, 0 failures</Output>
+          </Terminal>
+        </section>
+
         {/* ─── Section 6: Running Tests ─── */}
         <section className="mb-20">
           <SectionHeading id="running-tests">Running Tests</SectionHeading>
@@ -1560,7 +2230,7 @@ CLI Agent ◄──QUIC──────────────── Relay (:
           <Prose>
             The full integration test suite verifies CLI-to-CLI connections across
             every transport mode &mdash; LAN, relay server (local + remote Docker + remote
-            binary), Tailscale, and Cloudflare Tunnel. It also builds all
+            binary), and remote relay deployments. It also builds all
             components and validates MCP protocol compliance.
           </Prose>
 
@@ -1576,8 +2246,6 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               <Cmd>./scripts/test-suite.sh --relay</Cmd>
               <Cmd>./scripts/test-suite.sh --relay-docker</Cmd>
               <Cmd>./scripts/test-suite.sh --relay-binary</Cmd>
-              <Cmd>./scripts/test-suite.sh --tailscale</Cmd>
-              <Cmd>./scripts/test-suite.sh --cloudflare</Cmd>
               <Divider />
               <Comment># Combine flags</Comment>
               <Cmd>./scripts/test-suite.sh --unit --lan --relay</Cmd>
@@ -1624,16 +2292,6 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                   <td className="py-3 pr-4">Deploy relay as native binary to remote server, test, teardown</td>
                   <td className="py-3">Remote server + SSH</td>
                 </tr>
-                <tr className="border-b border-surface-800/50">
-                  <td className="py-3 pr-4"><InlineCode>--tailscale</InlineCode></td>
-                  <td className="py-3 pr-4">Deploy agent to remote server, connect via Tailscale IPs</td>
-                  <td className="py-3">Tailscale on both machines</td>
-                </tr>
-                <tr>
-                  <td className="py-3 pr-4"><InlineCode>--cloudflare</InlineCode></td>
-                  <td className="py-3 pr-4">Quick tunnel + optional named tunnel with CF Access</td>
-                  <td className="py-3"><InlineCode>cloudflared</InlineCode></td>
-                </tr>
               </tbody>
             </table>
           </div>
@@ -1657,8 +2315,8 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               </h4>
               <p className="mb-3 text-sm text-surface-400">
                 <InlineCode>--relay-docker</InlineCode>, <InlineCode>--relay-binary</InlineCode>,
-                and <InlineCode>--tailscale</InlineCode> SSH into a remote Linux server
-                (e.g. Hetzner VPS), deploy binaries, test cross-network connectivity,
+                and related remote relay checks SSH into a remote Linux server,
+                deploy binaries, test relay connectivity,
                 then tear everything down. Auto-detects CPU architecture (amd64 vs arm64).
               </p>
               <Terminal title="credentials setup">
@@ -1681,6 +2339,41 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                 Credentials are stored as GitHub Actions secrets.
                 See <InlineCode>.github/workflows/test-suite.yml</InlineCode>.
               </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Session Transfer ─── */}
+        <section className="mb-20">
+          <SectionHeading id="session-transfer">Session Transfer</SectionHeading>
+          <Prose>
+            Transfer AI agent sessions between machines. Move a Claude Code, Aider,
+            Codex, Goose, or any other agent session from your laptop to a headless
+            server &mdash; and keep working from your phone.
+          </Prose>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">CLI Usage</h4>
+              <Terminal title="session transfer">
+                <Cmd>yaver session list</Cmd>
+                <Cmd>yaver session transfer abc12345 --to my-server</Cmd>
+                <Cmd>yaver session export abc12345 --output bundle.json</Cmd>
+                <Cmd>yaver session import --input bundle.json</Cmd>
+              </Terminal>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">MCP Support</h4>
+              <Prose>
+                Session transfer is also available as MCP tools &mdash; use it directly
+                from within Claude Code without leaving your terminal.
+              </Prose>
+              <Terminal title="MCP usage">
+                <Comment># From Claude Code, just ask:</Comment>
+                <Output>&quot;Transfer this session to my server&quot;</Output>
+                <Comment># Claude Code will use the session_transfer MCP tool automatically</Comment>
+              </Terminal>
             </div>
           </div>
         </section>
@@ -1760,7 +2453,8 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               </h4>
               <p className="mb-3 text-sm text-surface-400">
                 Every component has its own version in <InlineCode>versions.json</InlineCode>.
-                CI enforces that changed components have their version bumped.
+                CI enforces that changed components have their version bumped, including the
+                Raspberry Pi image lane under <InlineCode>pi-image/</InlineCode>.
               </p>
               <Terminal title="version bump">
                 <Comment># Edit versions.json, then sync everywhere</Comment>
@@ -1778,13 +2472,29 @@ CLI Agent ◄──QUIC──────────────── Relay (:
               <ul className="space-y-2 text-sm text-surface-400">
                 <li>
                   &bull; <span className="text-surface-200">Tags trigger releases</span>:
-                  push <InlineCode>cli/v1.30.0</InlineCode> to build + publish CLI binaries,
-                  update Homebrew/Scoop
+                  push <InlineCode>cli/v1.30.0</InlineCode> to build + publish the npm CLI release
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Package publishes can be local-first</span>:
+                  configure <InlineCode>.yaver/publish.yaml</InlineCode> and run{" "}
+                  <InlineCode>yaver publish run --target ...</InlineCode> from CLI, web,
+                  mobile, or MCP.
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Yaver dogfoods its uploader</span>:
+                  publish artifacts are uploaded/registered into Yaver&apos;s own blob/build
+                  surfaces before any external store or CI fallback path is used.
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">GitHub fallback is explicit</span>:
+                  <InlineCode>.github/workflows/yaver-publish.yml</InlineCode> is only used when
+                  the project enables GitHub fallback and the user opts into it for that run.
                 </li>
                 <li>
                   &bull; <span className="text-surface-200">Tag format</span>:
                   <InlineCode>cli/vX.Y.Z</InlineCode>, <InlineCode>relay/vX.Y.Z</InlineCode>,
-                  <InlineCode>mobile/vX.Y.Z</InlineCode>, <InlineCode>web/vX.Y.Z</InlineCode>
+                  <InlineCode>mobile/vX.Y.Z</InlineCode>, <InlineCode>web/vX.Y.Z</InlineCode>,
+                  <InlineCode>pi-image/vX.Y.Z</InlineCode>
                 </li>
                 <li>
                   &bull; <span className="text-surface-200">Production deploys</span> require
@@ -1792,11 +2502,588 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                 </li>
                 <li>
                   &bull; <span className="text-surface-200">Web deploys</span> are manual:
-                  <InlineCode>./scripts/deploy-vercel.sh</InlineCode> (auto-deploy is disabled)
+                  <InlineCode>./scripts/deploy-web.sh</InlineCode> (builds with
+                  <InlineCode>@opennextjs/cloudflare</InlineCode> and pushes via{" "}
+                  <InlineCode>wrangler deploy</InlineCode>; auto-deploy is disabled)
                 </li>
               </ul>
             </div>
+
+            <div className="card">
+              <h4 className="mb-2 text-sm font-medium text-surface-200">
+                Secrets hardening (public repo)
+              </h4>
+              <p className="mb-3 text-sm text-surface-400">
+                The repo is public, but production secrets (npm, TestFlight, Play Store,
+                Cloudflare, PyPI, Convex) stay out of fork PRs by design. Five layers:
+              </p>
+              <ul className="space-y-1.5 text-sm text-surface-400">
+                <li>
+                  &bull; <span className="text-surface-200">Production environment gate</span> —
+                  every deploy job waits for explicit owner approval before running.
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Environment branch/tag allowlist</span> —
+                  only <InlineCode>main</InlineCode> and release tag patterns can deploy.
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Tag ruleset</span> —
+                  only admins can create release tags (<InlineCode>cli/v*</InlineCode>,
+                  <InlineCode> mobile/v*</InlineCode>, etc.).
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200"><InlineCode>CODEOWNERS</InlineCode></span> —
+                  PRs touching <InlineCode>.github/</InlineCode>, <InlineCode>scripts/</InlineCode>,
+                  auth / vault / TLS / SDK-token / licensing code need explicit owner review.
+                </li>
+                <li>
+                  &bull; <span className="text-surface-200">Main branch ruleset</span> — no force-push,
+                  no deletion, linear history, signed commits required.
+                </li>
+              </ul>
+              <p className="mt-3 text-sm text-surface-400">
+                Full policy + vulnerability disclosure details in{" "}
+                <Link
+                  href="https://github.com/kivanccakmak/yaver.io/blob/main/docs/security/SECURITY.md"
+                  className="text-surface-200 underline"
+                >
+                  SECURITY.md
+                </Link>.
+              </p>
+              <p className="mt-3 text-sm text-surface-400">
+                Publish runners read secrets from the local Yaver vault first, then fall back to
+                process environment variables already injected by self-hosted GitHub runners
+                (<InlineCode>NPM_TOKEN</InlineCode>, <InlineCode>PYPI_TOKEN</InlineCode>,{" "}
+                <InlineCode>PUB_TOKEN</InlineCode>, store creds, etc.).
+              </p>
+              <p className="mt-3 text-sm text-surface-400">
+                MCP clients can treat the same flow as uploader/submitter/CI operations through{" "}
+                <InlineCode>publish_upload</InlineCode>, <InlineCode>publish_submit</InlineCode>,
+                and <InlineCode>publish_ci_dispatch</InlineCode>.
+              </p>
+            </div>
           </div>
+        </section>
+
+        {/* ─── SDK ─── */}
+        <section className="mb-20">
+          <SectionHeading id="feedback-sdk">Feedback SDK &amp; Test Loop</SectionHeading>
+          <Prose>
+            The Feedback SDK turns your mobile app into a live testing tool that talks
+            directly to the AI agent on your dev machine. Drop it into your React Native,
+            Flutter, or web app and get a floating debug button that only you (the developer)
+            can see. From it you can report bugs with auto-screenshots, send voice notes,
+            trigger hot reload, and build/deploy to TestFlight or Play Store &mdash; all
+            without leaving the app.
+          </Prose>
+
+          <SubHeading>The Loop</SubHeading>
+          <Prose>
+            The Feedback SDK creates a closed loop between your app and the AI agent:
+            you use the app, hit a bug, tap the floating button to report it (with screenshot,
+            voice, and error context attached), and the agent receives everything it needs to
+            write a fix. Once the agent pushes the fix, you tap Hot Reload in the SDK
+            to pull the latest code, verify the fix, and continue testing. No context switching,
+            no copy-pasting stack traces, no typing bug reports.
+          </Prose>
+
+          <div className="mb-8">
+            <Terminal title="feedback-loop">
+              <div className="text-surface-300">{"1. Use your app → find a bug"}</div>
+              <div className="text-surface-300">{"2. Tap floating button → report with screenshot + voice"}</div>
+              <div className="text-surface-300">{"3. Agent receives: screenshot, error logs, BlackBox flight recorder, your description"}</div>
+              <div className="text-surface-300">{"4. Agent writes a fix → pushes code"}</div>
+              <div className="text-surface-300">{"5. Tap Hot Reload in SDK → app reloads with the fix"}</div>
+              <div className="text-surface-300">{"6. Verify → continue testing → repeat"}</div>
+            </Terminal>
+          </div>
+
+          <SubHeading>BlackBox (Flight Recorder)</SubHeading>
+          <Prose>
+            The SDK continuously streams all app events to the agent like a flight recorder:
+            console logs, errors, navigation events, lifecycle changes, network requests,
+            state changes, and render timings. The agent keeps the last 1000 events per device
+            in a ring buffer. When a bug is reported, the agent has full context &mdash;
+            not just the error, but everything that led up to it.
+          </Prose>
+
+          <SubHeading>Error Capture (No Conflicts)</SubHeading>
+          <Prose>
+            The SDK never hijacks global error handlers. It plays nicely with Sentry,
+            Crashlytics, Bugsnag, or any other tool you already use.
+            Use <InlineCode>wrapErrorHandler(existing)</InlineCode> for the handler chain
+            or <InlineCode>attachError(err, metadata)</InlineCode> for manual capture
+            in catch blocks. Fatal crashes auto-create fix tasks for the agent.
+          </Prose>
+
+          <SubHeading>Installation</SubHeading>
+          <div className="space-y-4 mb-8">
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">React Native</h4>
+              <Terminal title="install">
+                <Cmd>npm install -g yaver-cli</Cmd>
+                <Cmd>cd your-app &amp;&amp; yaver feedback setup</Cmd>
+              </Terminal>
+            </div>
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Flutter</h4>
+              <Terminal title="install">
+                <Cmd>npm install -g yaver-cli</Cmd>
+                <Cmd>cd your-app &amp;&amp; yaver feedback setup --platform flutter</Cmd>
+              </Terminal>
+            </div>
+          </div>
+
+          <Prose>
+            See the full{" "}
+            <Link
+              href="/docs/feedback-sdk"
+              className="text-surface-200 underline underline-offset-2 hover:text-surface-50"
+            >
+              Feedback SDK docs
+            </Link>{" "}
+            for quick start, API reference, agent integration, and configuration options.
+          </Prose>
+        </section>
+
+        {/* ─── SDK Token Security ─── */}
+        <section className="mb-20">
+          <SectionHeading id="sdk-token-security">SDK Token Security</SectionHeading>
+          <Prose>
+            The Feedback SDK uses a dedicated token system with 6 defense-in-depth
+            security layers. SDK tokens are independent from CLI session tokens
+            &mdash; CLI reauth does not invalidate them, and they are scoped to
+            only access feedback-related endpoints.
+          </Prose>
+
+          <SubHeading>Token Types</SubHeading>
+          <div className="overflow-x-auto mb-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-surface-500">
+                  <th className="pb-2">Type</th>
+                  <th className="pb-2">Scope</th>
+                  <th className="pb-2">Lifetime</th>
+                  <th className="pb-2">Created by</th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-300">
+                <tr className="border-t border-surface-800">
+                  <td className="py-2">CLI session</td>
+                  <td className="py-2">Full agent access</td>
+                  <td className="py-2">1 year (auto-refreshed)</td>
+                  <td className="py-2"><InlineCode>yaver auth</InlineCode></td>
+                </tr>
+                <tr className="border-t border-surface-800">
+                  <td className="py-2">SDK token</td>
+                  <td className="py-2">feedback, blackbox, voice, builds</td>
+                  <td className="py-2">Custom (default 1 year)</td>
+                  <td className="py-2"><InlineCode>yaver sdk-token create</InlineCode></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <SubHeading>Security Layers</SubHeading>
+          <div className="space-y-4 mb-8">
+            {[
+              { n: "1", title: "Scope Restriction", desc: "SDK tokens only access /feedback, /blackbox/*, /voice/*, /builds. Cannot reach /tasks, /exec, /vault, /agent/*." },
+              { n: "2", title: "IP Binding", desc: "Restrict tokens to specific CIDRs with --allowed-ips. Requests from non-matching IPs get 403." },
+              { n: "3", title: "Agent IP Allowlist", desc: "yaver serve --allow-ips blocks all requests before auth. Only matching IPs reach the agent." },
+              { n: "4", title: "Token Rotation", desc: "POST /sdk/token/rotate issues a new token. Old token has 5-minute grace period for in-flight requests." },
+              { n: "5", title: "New Device Alerts", desc: "First-seen IPs trigger security events in Convex. Query via GET /security/events." },
+              { n: "6", title: "HTTPS on LAN", desc: "Auto-generated self-signed TLS cert with IP SANs. Serves HTTPS on :18443. Fingerprint in /health and beacon." },
+            ].map((layer) => (
+              <div key={layer.n} className="card">
+                <h4 className="mb-2 text-sm font-medium text-surface-200">
+                  {layer.n}. {layer.title}
+                </h4>
+                <p className="text-sm leading-relaxed text-surface-400">
+                  {layer.desc}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <SubHeading>Auth Middleware</SubHeading>
+          <Prose>
+            The agent has two auth middlewares: <InlineCode>auth()</InlineCode>{" "}
+            for full-access endpoints (rejects SDK tokens) and{" "}
+            <InlineCode>authSDK()</InlineCode> for SDK-accessible endpoints
+            (checks scope + IP binding). An outer{" "}
+            <InlineCode>ipAllowlist()</InlineCode> middleware runs before both.
+          </Prose>
+
+          <Terminal title="CLI examples">
+            <Comment># Create SDK token with defaults (1 year, all SDK scopes)</Comment>
+            <Cmd>yaver sdk-token create --label &quot;BentoApp dev&quot;</Cmd>
+            <Divider />
+            <Comment># Narrow scopes + IP binding + short expiry</Comment>
+            <Cmd>yaver sdk-token create --scopes feedback,blackbox --allowed-ips 192.168.1.0/24 --expires 7d</Cmd>
+            <Divider />
+            <Comment># Agent IP allowlist</Comment>
+            <Cmd>yaver serve --allow-ips 192.168.1.0/24,10.0.0.0/8</Cmd>
+            <Divider />
+            <Comment># Disable HTTPS</Comment>
+            <Cmd>yaver serve --no-tls</Cmd>
+          </Terminal>
+
+          <SubHeading>Key Files</SubHeading>
+          <div className="overflow-x-auto mb-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-surface-500">
+                  <th className="pb-2">File</th>
+                  <th className="pb-2">Purpose</th>
+                </tr>
+              </thead>
+              <tbody className="text-surface-300">
+                {[
+                  ["backend/convex/schema.ts", "sdkTokens + securityEvents tables"],
+                  ["backend/convex/auth.ts", "createSdkToken, validateSdkToken, rotateSdkToken"],
+                  ["backend/convex/http.ts", "/sdk/token/*, /security/* endpoints"],
+                  ["desktop/agent/httpserver.go", "auth(), authSDK(), ipAllowlist() middlewares"],
+                  ["desktop/agent/auth.go", "ValidateSdkTokenFull(), CreateSdkToken()"],
+                  ["desktop/agent/sdk_token.go", "yaver sdk-token CLI commands"],
+                  ["desktop/agent/tls.go", "Self-signed TLS cert generation"],
+                  ["desktop/agent/sdk_token_test.go", "25+ security tests"],
+                ].map(([file, purpose]) => (
+                  <tr key={file} className="border-t border-surface-800">
+                    <td className="py-2"><InlineCode>{file}</InlineCode></td>
+                    <td className="py-2 text-surface-400">{purpose}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <SubHeading>Tests</SubHeading>
+          <Terminal title="Run security tests">
+            <Comment># All 25+ security tests</Comment>
+            <Cmd>cd desktop/agent &amp;&amp; go test -v -run &quot;TestSDK|TestIP|TestTLS|TestParse|TestPath&quot;</Cmd>
+            <Divider />
+            <Comment># TypeScript SDK token tests</Comment>
+            <Cmd>cd sdk/feedback/react-native &amp;&amp; npm test -- SDKToken</Cmd>
+          </Terminal>
+        </section>
+
+        {/* ─── SDK — Embed Yaver ─── */}
+        <section className="mb-20">
+          <SectionHeading id="sdk">SDK — Embed Yaver in Your App</SectionHeading>
+          <Prose>
+            Yaver provides embeddable SDKs so you can integrate P2P AI agent
+            connectivity into your own applications. Available for Go, Python,
+            JavaScript/TypeScript, Flutter/Dart, and C/C++ (via shared library).
+          </Prose>
+
+          <div className="space-y-4">
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Go</h4>
+              <Terminal title="Go SDK">
+                <Comment># Import the SDK</Comment>
+                <div className="text-surface-300">{`import yaver "github.com/kivanccakmak/yaver.io/sdk/go/yaver"`}</div>
+                <div className="text-surface-300 mt-2">{`client := yaver.NewClient("http://localhost:18080", token)`}</div>
+                <div className="text-surface-300">{`task, _ := client.CreateTask("Fix the bug", nil)`}</div>
+                <div className="text-surface-300">{`for chunk := range client.StreamOutput(task.ID, 0) {`}</div>
+                <div className="text-surface-300">{`    fmt.Print(chunk)`}</div>
+                <div className="text-surface-300">{`}`}</div>
+              </Terminal>
+              <p className="mt-3 text-xs text-surface-500">
+                Also includes: AuthClient (token validation, device listing), Transcriber (STT), Config (load/save), Speak (TTS).
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Python</h4>
+              <Terminal title="Python SDK">
+                <Comment># npm install -g yaver-cli</Comment>
+                <Comment># cd your-project && yaver sdk add core --platform python</Comment>
+                <div className="text-surface-300">{`from yaver import YaverClient`}</div>
+                <div className="text-surface-300 mt-2">{`client = YaverClient("http://localhost:18080", token)`}</div>
+                <div className="text-surface-300">{`task = client.create_task("Fix the bug")`}</div>
+                <div className="text-surface-300">{`for chunk in client.stream_output(task["id"]):`}</div>
+                <div className="text-surface-300">{`    print(chunk, end="")`}</div>
+              </Terminal>
+              <p className="mt-3 text-xs text-surface-500">
+                Zero dependencies (stdlib only). HTTP mode works everywhere. Native mode uses ctypes + the C shared library for direct bindings.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">JavaScript / TypeScript</h4>
+              <Terminal title="JS/TS SDK">
+                <Comment># npm install -g yaver-cli</Comment>
+                <Comment># cd your-project && yaver sdk add core --platform js</Comment>
+                <div className="text-surface-300">{`import { YaverClient } from 'yaver-sdk';`}</div>
+                <div className="text-surface-300 mt-2">{`const client = new YaverClient('http://localhost:18080', token);`}</div>
+                <div className="text-surface-300">{`const task = await client.createTask('Fix the bug');`}</div>
+                <div className="text-surface-300">{`for await (const chunk of client.streamOutput(task.id)) {`}</div>
+                <div className="text-surface-300">{`  process.stdout.write(chunk);`}</div>
+                <div className="text-surface-300">{`}`}</div>
+              </Terminal>
+              <p className="mt-3 text-xs text-surface-500">
+                Works in React Native, Node.js, and browsers. Full TypeScript types. Includes auth client and speech transcription.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Flutter / Dart</h4>
+              <Terminal title="Flutter SDK">
+                <Comment># npm install -g yaver-cli</Comment>
+                <Comment># cd your-project && yaver sdk add core --platform flutter</Comment>
+                <div className="text-surface-300">{`import 'package:yaver/yaver.dart';`}</div>
+                <div className="text-surface-300 mt-2">{`final client = YaverClient('http://localhost:18080', token);`}</div>
+                <div className="text-surface-300">{`final task = await client.createTask('Fix the bug');`}</div>
+                <div className="text-surface-300">{`await for (final chunk in client.streamOutput(task.id)) {`}</div>
+                <div className="text-surface-300">{`  stdout.write(chunk);`}</div>
+                <div className="text-surface-300">{`}`}</div>
+              </Terminal>
+              <p className="mt-3 text-xs text-surface-500">
+                Works on iOS, Android, Web, and Desktop. Full type-safe models. Includes auth client, speech transcription, and image attachments.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">C / C++ (shared library)</h4>
+              <Terminal title="Build & link">
+                <Cmd>cd sdk/go/clib</Cmd>
+                <Cmd>go build -buildmode=c-shared -o libyaver.so .</Cmd>
+                <Comment># Generates libyaver.so + libyaver.h</Comment>
+              </Terminal>
+              <pre className="mt-3 rounded-lg bg-surface-950 p-3 text-xs text-surface-300 overflow-x-auto">{`#include "libyaver.h"
+int client = YaverNewClient("http://localhost:18080", token);
+char* result = YaverCreateTask(client, "Fix the bug", NULL);
+// Parse result as JSON
+YaverFreeString(result);
+YaverFreeClient(client);`}</pre>
+              <p className="mt-3 text-xs text-surface-500">
+                Works with any language that supports C FFI: Rust (bindgen), Ruby (ffi gem), Java (JNI), C# (P/Invoke), etc.
+              </p>
+            </div>
+
+            <div className="card">
+              <h4 className="mb-3 text-sm font-medium text-surface-200">Testing SDKs</h4>
+              <Terminal title="Test suite">
+                <Cmd>./scripts/test-suite.sh --sdk</Cmd>
+                <Output>✓ Go SDK tests passed</Output>
+                <Output>✓ C shared library built</Output>
+                <Output>✓ Python SDK tests passed</Output>
+                <Output>✓ JS/TS SDK typecheck passed</Output>
+                <Output>✓ JS/TS SDK built</Output>
+                <Output>✓ Flutter/Dart SDK analysis passed</Output>
+              </Terminal>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Project Wizard & SaaS Starter ─── */}
+        <section className="mb-20">
+          <SectionHeading id="project-wizard">Project Wizard &amp; SaaS Starter</SectionHeading>
+          <Prose>
+            <InlineCode>yaver new</InlineCode> is a one-shot scaffold generator
+            for full-stack side projects. Pick a template, answer a handful of
+            questions (or hand it a JSON file), and the agent materialises a
+            monorepo on disk &mdash; Next.js on Cloudflare, Expo for mobile,
+            Convex backend, Better Auth, Stripe, CI workflows. It then starts
+            the local backend services (Convex, Mailpit, MinIO) via Docker so
+            the project is live at <InlineCode>localhost:3000</InlineCode> the
+            moment generation finishes. No config, no boilerplate, no missing
+            pieces.
+          </Prose>
+
+          <SubHeading>Interactive vs one-shot</SubHeading>
+          <div className="mb-6">
+            <Terminal title="terminal">
+              <Comment># Interactive (prompts for every answer)</Comment>
+              <Cmd>yaver new</Cmd>
+              <Comment># One-shot with a prefilled JSON (what the mobile app calls)</Comment>
+              <Cmd>yaver new --quick answers.json /path/to/parent</Cmd>
+              <Output>{`{
+  "ok": true,
+  "directory": "/path/to/parent/bento",
+  "files": ["package.json", "apps/mobile/App.tsx", ...],
+  "servicesStarted": true
+}`}</Output>
+            </Terminal>
+          </div>
+
+          <SubHeading>Templates</SubHeading>
+          <div className="mb-6 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-surface-800">
+                  <th className="px-4 py-2.5 text-left font-medium text-surface-300">Template</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-surface-300">What you get</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-800">
+                {[
+                  ["saas-complete", "Next.js + Expo + Convex + Better Auth + Stripe + landing page"],
+                  ["indie-hacker", "Next.js + Convex + Better Auth + Stripe (no mobile)"],
+                  ["api-first", "Convex backend only, no frontend"],
+                  ["content-site", "Next.js + MDX + Cloudflare Pages, no backend"],
+                ].map(([name, desc]) => (
+                  <tr key={name}>
+                    <td className="whitespace-nowrap px-4 py-2.5 font-medium text-surface-200">{name}</td>
+                    <td className="px-4 py-2.5 text-surface-400">{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <SubHeading>Auto-started services</SubHeading>
+          <Prose>
+            The wizard writes <InlineCode>.yaver/services.yaml</InlineCode>{" "}
+            alongside the scaffold. When <InlineCode>backend=convex</InlineCode>
+            {" "}it pre-wires <InlineCode>convex-backend</InlineCode> (port
+            3210) plus <InlineCode>convex-dashboard</InlineCode> (port 6791),
+            and adds Mailpit (email), MinIO (S3), or Redis on request. After
+            generation, <InlineCode>ServicesManager.Start()</InlineCode> boots
+            the containers via Docker Compose. If Docker isn&apos;t running,
+            the response surfaces <InlineCode>servicesError</InlineCode> so the
+            mobile app can prompt the user to start it.
+          </Prose>
+
+          <SubHeading>HTTP surface (what the mobile wizard calls)</SubHeading>
+          <div className="mb-6 overflow-x-auto">
+            <table className="w-full text-xs">
+              <tbody className="divide-y divide-surface-800">
+                {[
+                  ["POST /project/wizard/start", "Begin a session, returns sessionId + first question"],
+                  ["POST /project/wizard/answer", "Submit an answer, returns next question or Done"],
+                  ["POST /project/wizard/generate", "Materialise the scaffold + start services"],
+                  ["GET /project/wizard/session", "Resume an in-flight session"],
+                ].map(([route, purpose]) => (
+                  <tr key={route}>
+                    <td className="whitespace-nowrap px-4 py-2.5 font-mono text-surface-200">{route}</td>
+                    <td className="px-4 py-2.5 text-surface-400">{purpose}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <SubHeading>Key files</SubHeading>
+          <div className="mb-6 overflow-x-auto">
+            <table className="w-full text-xs">
+              <tbody className="divide-y divide-surface-800">
+                {[
+                  ["desktop/agent/project_wizard.go", "Question catalog, session state machine, file generation"],
+                  ["desktop/agent/project_wizard_cmd.go", "yaver new + yaver new --quick CLI"],
+                  ["desktop/agent/project_wizard_http.go", "/project/wizard/* HTTP handlers"],
+                  ["desktop/agent/project_wizard_yaver.go", "Writes .yaver/config.yaml + services.yaml"],
+                  ["desktop/agent/template.go", "Template catalog (saas-complete / indie-hacker / api-first / content-site)"],
+                  ["mobile/app/(tabs)/newproject.tsx", "Mobile wizard UI that drives the HTTP surface"],
+                ].map(([file, purpose]) => (
+                  <tr key={file}>
+                    <td className="whitespace-nowrap px-4 py-2.5 font-medium text-surface-200">{file}</td>
+                    <td className="px-4 py-2.5 text-surface-400">{purpose}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* ─── Demo App (Bento) ─── */}
+        <section className="mb-20">
+          <SectionHeading id="demo-app">Demo App (Bento)</SectionHeading>
+          <Prose>
+            The <InlineCode>demos/bento</InlineCode> directory is the literal
+            output of <InlineCode>yaver new --quick</InlineCode> with the
+            answers file at{" "}
+            <InlineCode>demos/bento/.yaver-wizard-answers.json</InlineCode> &mdash;
+            a meal-prep / recipe app (Expo RN + Convex backend) we use to
+            shoot the landing-page videos and as the target for the
+            {" "}<InlineCode>TestBentoE2E_MobileFlow</InlineCode> integration
+            test. The scaffold is regenerable bit-for-bit; the committed copy
+            is the version with screens, navigation, and 3{" "}
+            <em>intentional</em> runtime bugs baked in.
+          </Prose>
+
+          <SubHeading>Why this particular app?</SubHeading>
+          <Prose>
+            Recipe apps are visually rich (food photos sell the demo), span
+            the full stack (database, auth, storage, timers), and give us
+            natural bug surfaces: null ingredient prices, null image URLs,
+            missing step durations. The 3 bugs are runtime-only (they pass{" "}
+            <InlineCode>tsc</InlineCode> because they&apos;re type-cast past
+            the checker) so Metro bundles cleanly and the crashes fire the
+            moment a user taps into the right screen &mdash; which is what
+            the Video 2 (shake-to-report) and Video 3 (auto-test) shoots
+            exercise live.
+          </Prose>
+
+          <SubHeading>What it demonstrates</SubHeading>
+          <div className="mb-6 space-y-2 text-sm text-surface-400">
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 text-surface-500">1.</span>
+              <span><strong className="text-surface-200">Wizard end-to-end</strong> &mdash; the committed scaffold is reproducible via <InlineCode>yaver new --quick demos/bento/.yaver-wizard-answers.json</InlineCode>. If the wizard regresses, the diff shows it.</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 text-surface-500">2.</span>
+              <span><strong className="text-surface-200">Hermes bytecode pipeline</strong> &mdash; <InlineCode>npx expo export --platform ios</InlineCode> produces a 3.76 MB <InlineCode>.hbc</InlineCode> bundle. That same bundle ships via <InlineCode>yaver-cli push</InlineCode> to the Yaver native container. No WebView anywhere in the guest-app path.</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 text-surface-500">3.</span>
+              <span><strong className="text-surface-200">3 intentional bugs</strong> &mdash; null-imageUrl (Overnight Oats hero), null-price (Honey / Olive Oil / Chili Flakes), missing step duration (&ldquo;Refrigerate overnight&rdquo;). All tagged <InlineCode>// INTENTIONAL</InlineCode> so nobody accidentally fixes them.</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 text-surface-500">4.</span>
+              <span><strong className="text-surface-200">CI reproducibility</strong> &mdash; the <InlineCode>bento-e2e.yml</InlineCode> workflow rebuilds the scaffold from the answers file on every PR, asserts the 3 bug markers survive, and runs <InlineCode>TestBentoE2E_MobileFlow</InlineCode> against the agent HTTP API.</span>
+            </div>
+          </div>
+
+          <SubHeading>Project structure</SubHeading>
+          <div className="mb-6">
+            <Terminal title="demos/bento">
+              <pre className="text-surface-300">
+                {`demos/bento/
+├── .yaver/
+│   ├── config.yaml            # backend=convex, brand palette
+│   └── services.yaml           # convex-backend, convex-dashboard (auto-started)
+├── .yaver-wizard-answers.json  # Reproducible input to 'yaver new --quick'
+├── apps/mobile/
+│   ├── App.tsx                 # Expo Router root
+│   ├── app/(tabs)/
+│   │   ├── index.tsx           # Home: recipe grid
+│   │   └── grocery.tsx         # BUG: null i.price crash
+│   ├── app/recipe/[id].tsx      # BUG: null imageUrl
+│   ├── app/cook/[id].tsx
+│   └── app/components/
+│       ├── CookTimer.tsx        # BUG: step.duration undefined
+│       └── GroceryTotal.tsx     # BUG: i.price! non-null assert
+├── backend/convex/
+│   ├── schema.ts               # users, sessions, recipes, favorites, groceryItems
+│   └── seed.ts                 # 8 recipes, 3 with intentional null fields
+├── BENTO_BUILD_QUEUE.md        # 13-task backlog fed to the runner
+└── scripts/build-bento.sh      # Pipes the queue into yaver serve`}
+              </pre>
+            </Terminal>
+          </div>
+
+          <SubHeading>Running it</SubHeading>
+          <div className="mb-6">
+            <Terminal title="terminal">
+              <Cmd>cd demos/bento/apps/mobile</Cmd>
+              <Cmd>npm install --legacy-peer-deps</Cmd>
+              <Cmd>npx expo run:ios</Cmd>
+              <Comment># Or regenerate from scratch to verify the wizard hasn't regressed</Comment>
+              <Cmd>yaver new --quick demos/bento/.yaver-wizard-answers.json /tmp/fresh</Cmd>
+              <Output>{`{"ok":true, "directory":"/tmp/fresh/bento", "files":[...19 paths...], "servicesStarted":true}`}</Output>
+            </Terminal>
+          </div>
+
+          <Prose>
+            The Feedback SDK integration happens via the same pipeline: drop
+            {" "}<InlineCode>yaver-feedback-react-native</InlineCode> into{" "}
+            <InlineCode>apps/mobile/app/_layout.tsx</InlineCode>,{" "}
+            <InlineCode>BlackBox.start()</InlineCode> on mount, and the
+            floating button appears in dev builds. See the shooting script at
+            {" "}<InlineCode>VIDEOS_REMAINED.md</InlineCode> for the full
+            beat-by-beat of how Bento drives the three landing-page videos.
+          </Prose>
         </section>
 
         {/* ─── Contributing ─── */}
@@ -1896,10 +3183,10 @@ CLI Agent ◄──QUIC──────────────── Relay (:
             </a>{" "}
             or email{" "}
             <a
-              href="mailto:support@yaver.io"
+              href="mailto:kivanc.cakmak@simkab.com"
               className="text-surface-200 underline underline-offset-2 hover:text-surface-50"
             >
-              support@yaver.io
+              kivanc.cakmak@simkab.com
             </a>
           </p>
         </div>

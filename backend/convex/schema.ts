@@ -1,21 +1,95 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import {
-  cloudAccessStatus,
-  cloudWorkspaceState,
-  deviceKind,
-  deviceTrust,
-  gitConnectionStatus,
-  runnerCapabilities,
-  runnerClass,
-} from "./validators";
+
+const recoveryPosture = v.object({
+  status: v.string(),
+  mobileApprovedTransports: v.array(v.string()),
+  webApprovedTransports: v.array(v.string()),
+  hasPrivateTransport: v.boolean(),
+  hasBrowserTransport: v.boolean(),
+  publicDirectRecoveryClosed: v.boolean(),
+  summary: v.string(),
+});
+
+const connectionPreference = v.object({
+  kind: v.union(
+    v.literal("direct-lan"),
+    v.literal("tailscale"),
+    v.literal("headscale"),
+    v.literal("own-vpn"),
+    v.literal("https-tunnel"),
+    v.literal("free-relay"),
+    v.literal("private-relay")
+  ),
+  active: v.boolean(),
+  preferred: v.boolean(),
+  source: v.union(
+    v.literal("agent-detected"),
+    v.literal("user-config"),
+    v.literal("platform-config"),
+    v.literal("relay-presence")
+  ),
+});
+
+const hardwareProfile = v.object({
+  os: v.optional(v.string()),
+  osVersion: v.optional(v.string()),
+  cpu: v.optional(v.string()),
+  gpu: v.optional(v.string()),
+  ramMb: v.optional(v.number()),
+  vramMb: v.optional(v.number()),
+  numCores: v.optional(v.number()),
+  arch: v.optional(v.string()),
+  iosSimulators: v.optional(v.array(v.string())),
+  androidEmulators: v.optional(v.array(v.string())),
+  // isWsl was in the mutation's arg validator and patched through verbatim,
+  // but missing here — so a heartbeat from a WSL box (the only case where the
+  // agent sends it, since Go tags it omitempty) failed table validation on
+  // write. Adding it closes that.
+  isWsl: v.optional(v.boolean()),
+  // Total disk capacity. Belongs with the other static specs: it changes only
+  // when the hardware does, so it rides the same 24h-gated profile. Live
+  // free/used lives in `storage` below, which every heartbeat refreshes.
+  diskTotalGb: v.optional(v.number()),
+});
+
+// storageSnapshot is the live disk gauge, refreshed on every heartbeat.
+//
+// Numbers ONLY. The agent knows exactly which project's DerivedData is eating
+// 12 GB, but that detail — paths, project names — stays P2P and never lands
+// here: absolute paths leak the user's home-dir username, and the privacy
+// contract forbids them in Convex. What Convex needs is enough to render a
+// gauge and decide "this box is nearly full", which is a handful of floats.
+const storageSnapshot = v.object({
+  totalGb: v.optional(v.number()),
+  usedGb: v.optional(v.number()),
+  freeGb: v.optional(v.number()),
+  usedPct: v.optional(v.number()),
+  // reclaimableGb is the aggregate the scanner found — the number that makes
+  // "92% full" actionable rather than merely alarming.
+  reclaimableGb: v.optional(v.number()),
+  updatedAt: v.optional(v.number()),
+});
 
 export default defineSchema({
   users: defineTable({
     userId: v.string(),
     email: v.string(),
     fullName: v.string(),
-    provider: v.union(v.literal("google"), v.literal("microsoft"), v.literal("apple"), v.literal("email"), v.literal("github"), v.literal("gitlab")),
+    provider: v.union(
+      v.literal("google"),
+      v.literal("microsoft"),
+      v.literal("apple"),
+      v.literal("github"),
+      v.literal("gitlab"),
+      v.literal("email"),
+      v.literal("passkey"),
+      // "oidc" is org-configured SSO via the generic OIDC handler in
+      // http.ts (/auth/oidc/*). Distinct from individual provider
+      // OAuth so the admin can enforce "OIDC only" and tell at a
+      // glance which users came in via SSO.
+      v.literal("oidc"),
+    ),
     passwordHash: v.optional(v.string()),
     surveyCompleted: v.optional(v.boolean()),
     providerId: v.string(),
@@ -23,10 +97,91 @@ export default defineSchema({
     totpSecret: v.optional(v.string()),
     totpEnabled: v.optional(v.boolean()),
     totpRecoveryCodes: v.optional(v.string()),
+    // emailVerified gates email-keyed auto-linking. OAuth-signup users
+    // are verified-by-construction (the IdP attested the address).
+    // Email + passkey signups start unverified and graduate to true
+    // once the user clicks the verify-email link. Backfill is a
+    // best-effort scan based on provider; see migrations.
+    emailVerified: v.optional(v.boolean()),
+    emailVerifiedAt: v.optional(v.number()),
     createdAt: v.number(),
+    // Org-wide admin role. The first user is bootstrapped via the
+    // env-var owner allowlist (ownerAllowlist.ts) which keeps
+    // working as a fall-back; this field is the authoritative gate
+    // for everyone promoted via the admin console afterwards.
+    platformRole: v.optional(v.union(v.literal("admin"))),
   })
     .index("by_email", ["email"])
-    .index("by_provider", ["provider", "providerId"]),
+    .index("by_provider", ["provider", "providerId"])
+    .index("by_platformRole", ["platformRole"]),
+
+  authIdentities: defineTable({
+    userId: v.id("users"),
+    provider: v.union(
+      v.literal("google"),
+      v.literal("microsoft"),
+      v.literal("apple"),
+      v.literal("github"),
+      v.literal("gitlab"),
+      v.literal("email"),
+      v.literal("passkey"),
+      v.literal("oidc"),
+    ),
+    providerId: v.string(),
+    email: v.optional(v.string()),
+    createdAt: v.number(),
+    lastUsedAt: v.number(),
+  })
+    .index("by_provider", ["provider", "providerId"])
+    .index("by_userId", ["userId"]),
+
+  oauthLinkIntents: defineTable({
+    token: v.string(),
+    userId: v.id("users"),
+    provider: v.union(
+      v.literal("google"),
+      v.literal("microsoft"),
+      v.literal("apple"),
+      v.literal("github"),
+      v.literal("gitlab"),
+    ),
+    client: v.optional(v.string()),
+    returnTo: v.optional(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_userId", ["userId"]),
+
+  // accountMergeIntents let a signed-in user request that another of their
+  // accounts be merged INTO the current one. The target (currently signed
+  // in) creates an intent and gets a short-lived token. Someone signed
+  // into the SOURCE account then exchanges that token + their own session
+  // to complete the merge — merging is irreversible so we require the
+  // source user to actively consent by signing in on the approval URL.
+  accountMergeIntents: defineTable({
+    token: v.string(),           // short random token carried in URL
+    targetUserId: v.id("users"), // account that stays; receives source's data
+    targetEmail: v.string(),     // cached for approval-page UX
+    status: v.union(v.literal("pending"), v.literal("completed"), v.literal("cancelled")),
+    client: v.optional(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_token", ["token"])
+    .index("by_targetUserId", ["targetUserId"]),
+
+  passwordResets: defineTable({
+    tokenHash: v.string(),          // SHA-256 of the reset token
+    email: v.string(),              // email this reset is for
+    userId: v.id("users"),
+    expiresAt: v.number(),          // 1 hour TTL
+    usedAt: v.optional(v.number()), // set when token is consumed
+    createdAt: v.number(),
+  })
+    .index("by_tokenHash", ["tokenHash"])
+    .index("by_email", ["email"]),
 
   pendingAuth: defineTable({
     pendingToken: v.string(),
@@ -37,36 +192,269 @@ export default defineSchema({
   })
     .index("by_pendingToken", ["pendingToken"]),
 
+  // WebAuthn / passkey credentials. Strictly additive to the existing
+  // password + OAuth flows: a user can have N passkeys attached to a
+  // single users row alongside any other identity. Public-key only —
+  // private material lives on the user's device / iCloud Keychain.
+  // credentialId is base64url; counter monotonically increases on each
+  // assertion to detect cloned authenticators (informational; iCloud-
+  // synced passkeys legitimately keep counter=0).
+  passkeys: defineTable({
+    userId: v.id("users"),
+    credentialId: v.string(),       // base64url; unique per credential
+    publicKey: v.string(),          // base64url COSE public key
+    counter: v.number(),
+    transports: v.optional(v.array(v.string())), // "internal" | "hybrid" | ...
+    deviceLabel: v.optional(v.string()),         // user-supplied nickname
+    backedUp: v.optional(v.boolean()),           // synced via iCloud / Google
+    createdAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+  })
+    .index("by_credentialId", ["credentialId"])
+    .index("by_userId", ["userId"]),
+
+  // Short-lived WebAuthn challenges. Issued by registerStart / loginStart
+  // and consumed by the Finish steps. Two flavours so a stolen-but-still-
+  // valid challenge can't be cross-used between flows. Anonymous challenges
+  // (login without a known userId) carry email==null and are matched by
+  // challenge value alone — login completes against whichever user owns
+  // the credential the browser produced.
+  passkeyChallenges: defineTable({
+    challenge: v.string(),         // base64url, ~32 random bytes
+    purpose: v.union(v.literal("register"), v.literal("login"), v.literal("signup")),
+    userId: v.optional(v.id("users")),  // null for anonymous login start
+    expiresAt: v.number(),         // ~5 minutes from issuance
+    createdAt: v.number(),
+  })
+    .index("by_challenge", ["challenge"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  // Email verification tokens — issued at email/passkey signup and on
+  // explicit re-send from settings. Click the link → users.emailVerified
+  // flips true → email-keyed auto-link unlocks. Tokens are single-use,
+  // 24-hour TTL, scoped to a specific email + userId so a token leaked
+  // from one inbox can't be redeemed against a different account.
+  emailVerifications: defineTable({
+    token: v.string(),
+    userId: v.id("users"),
+    email: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    consumedAt: v.optional(v.number()),
+  })
+    .index("by_token", ["token"])
+    .index("by_userId", ["userId"])
+    .index("by_expiresAt", ["expiresAt"]),
+
   sessions: defineTable({
     tokenHash: v.string(),
     userId: v.id("users"),
+    deviceId: v.optional(v.string()),
     expiresAt: v.number(),
     createdAt: v.number(),
+    // Auth SCOPE (machine-asymmetric-auth-design.md Phase 0). Undefined ⇒
+    // "full" (a normal owner login — every existing session is unaffected).
+    // "machine" = a managed-cloud box's token: it may heartbeat, report its own
+    // state, and pull its OWN resources, but account-level + destructive ops
+    // (spend, provision, act on OTHER devices) must reject it. Companion scopes
+    // are constrained long-lived tokens for lean-back / tiny / headset surfaces.
+    // Undefined remains "full" for backwards compatibility.
+    scope: v.optional(v.union(
+      v.literal("full"),
+      v.literal("machine"),
+      v.literal("tv"),
+      v.literal("watch"),
+      v.literal("vision"),
+      v.literal("spatial"),
+    )),
+    // Rotation grace: when a token is rotated (X-Yaver-Rotate-Token),
+    // the immediately-previous tokenHash stays valid until this time
+    // (~2 min). Token rotation is otherwise instant-and-permanent, so
+    // any client that rotates fire-and-forget (mobile has several
+    // independent triggers) could strand an in-flight/concurrent
+    // request on the now-dead token → blanket 401. This window lets
+    // the new token propagate without the old one dying mid-flight.
+    prevTokenHash: v.optional(v.string()),
+    prevTokenValidUntil: v.optional(v.number()),
   })
     .index("by_tokenHash", ["tokenHash"])
-    .index("by_userId", ["userId"]),
+    .index("by_userId", ["userId"])
+    .index("by_deviceId", ["deviceId"])
+    .index("by_prevTokenHash", ["prevTokenHash"])
+    // Lets the daily cleanup cron prune long-expired sessions without
+    // scanning the whole table (see cleanup.pruneExpiredSessions).
+    .index("by_expiresAt", ["expiresAt"]),
 
   devices: defineTable({
     userId: v.id("users"),
     deviceId: v.string(),
     name: v.string(),
+    // User-set short alias used by `yaver ssh <alias>`, the dashboard,
+    // and the mobile app. Per-user uniqueness is enforced in the
+    // setDeviceAlias mutation. Lower-cased and trimmed before storage
+    // so lookups don't have to re-normalize.
+    alias: v.optional(v.string()),
+    // Free-form spoken names for this machine — "my mac mini", "the box at
+    // maltepe", "work laptop". Unlike `alias` (one, short, unique, typed at a
+    // shell) these are MANY, natural, and never typed: they exist so a driver
+    // can say "switch to my mac mini" on CarPlay, where no device picker is
+    // allowed on screen. Matched fuzzily on-device (carMachineSwitch.ts), so
+    // STT mangling is tolerated. Display/label data only — same privacy class
+    // as `alias` and `name`; never a path, IP, or secret.
+    voiceHints: v.optional(v.array(v.string())),
+    // Fleet labels for selector-based ops ("run on all gpu/arm64/edge
+    // machines"). Auto-seeded at first registration from platform +
+    // hardware (os, arch, gpu, docker, edge); thereafter user-owned via
+    // setDeviceTags. Lower-cased, deduped. Powers Fleet.select({tags}) in
+    // the yaver SDK and selectDevices below. Privacy-safe: static
+    // capability/affinity labels, never a path or secret.
+    tags: v.optional(v.array(v.string())),
+    // Coarse egress region (eu|us|ap|na|sa|af|oc) — the region a source sees for
+    // this box's outbound traffic, for the multi-vantage device picker. Privacy:
+    // COARSE region only, never the egress IP (which stays local). Same class as
+    // cloudMachines.region; populated from the agent's cached egress identity.
+    geoRegion: v.optional(v.string()),
     platform: v.union(
       v.literal("macos"),
       v.literal("windows"),
-      v.literal("linux")
+      v.literal("linux"),
+      v.literal("android"),
+      v.literal("ios")
     ),
+    deviceClass: v.optional(
+      v.union(
+        v.literal("desktop"),
+        v.literal("edge-mobile"),
+        v.literal("server")
+      )
+    ),
+    edgeProfile: v.optional(v.object({
+      supportsLocalInference: v.boolean(),
+      maxModelClass: v.union(
+        v.literal("none"),
+        v.literal("tiny"),
+        v.literal("small"),
+        v.literal("medium")
+      ),
+      preferredTasks: v.array(v.union(
+        v.literal("speech"),
+        v.literal("ocr"),
+        v.literal("vision"),
+        v.literal("embedding"),
+        v.literal("rerank"),
+        v.literal("automation"),
+        v.literal("small-llm")
+      )),
+      memoryMb: v.optional(v.number()),
+      batteryPct: v.optional(v.number()),
+      isCharging: v.optional(v.boolean()),
+      thermalState: v.optional(
+        v.union(
+          v.literal("nominal"),
+          v.literal("warm"),
+          v.literal("hot")
+        )
+      ),
+    })),
+    // Which app stores this device can build+publish to, e.g.
+    // ["ios","android"] on macOS, ["android"] on Linux. A device that
+    // advertises any of these IS a publish-farm node — there is no
+    // separate farmNodes table for self-hosted machines (the device
+    // row is the registration). Privacy-safe: a static capability
+    // list, never a path or secret.
+    publishCapabilities: v.optional(v.array(v.string())),
+    // PROBED deploy capability — which deploy targets this box can actually
+    // ship to right now ("testflight", "playstore", "convex", "cloudflare",
+    // "npm", …). The honest counterpart to publishCapabilities above, which is
+    // a pure OS switch and will claim any Mac can publish iOS even with no
+    // Xcode, no signing identity and a keychain that cannot be unlocked
+    // headlessly. These lists come from ComputeDeployCapability, which runs the
+    // toolchain rather than looking for it.
+    //
+    // `Blocked` holds only targets this OS COULD satisfy but currently cannot —
+    // a Linux box does not report TestFlight as blocked, it reports nothing,
+    // because a wall of permanent red says nothing.
+    //
+    // Privacy: target NAMES only, same class as publishCapabilities. Never tool
+    // paths (they carry the home-dir username), versions, secret names, or
+    // reason strings. The detail lives behind the device's own P2P
+    // GET /deploy/capabilities and never reaches our servers.
+    runtimeProjectCatalog: v.optional(v.array(v.object({
+      projectName: v.string(),
+      repoName: v.optional(v.string()),
+      gitProvider: v.optional(v.string()),
+      gitRemote: v.optional(v.string()),
+      branch: v.optional(v.string()),
+      framework: v.optional(v.string()),
+      updatedAt: v.number(),
+    }))),
+    defaultRuntimeProject: v.optional(v.object({
+      projectName: v.string(),
+      repoName: v.optional(v.string()),
+      gitProvider: v.optional(v.string()),
+      gitRemote: v.optional(v.string()),
+      branch: v.optional(v.string()),
+      framework: v.optional(v.string()),
+      updatedAt: v.number(),
+    })),
+    // Connectivity shape + intent, published only on CHANGE (see
+    // desktop/agent/conn_status.go). Scalars only — endpoints and candidate
+    // addresses are volatile AND forbidden here; they travel peer-to-peer over
+    // the relay. This is the SHAPE of the network, never its addresses.
+    connStatus: v.optional(
+      v.object({
+        intent: v.string(),
+        tier: v.optional(v.string()),
+        onTailnet: v.optional(v.boolean()),
+        meshOk: v.optional(v.boolean()),
+        nat: v.optional(v.string()),
+        at: v.optional(v.number()),
+      }),
+    ),
+    // Resource envelope from the agent's in-process watchdog
+    // (desktop/agent/resource_warden.go): pressure level + counters only —
+    // never a path, command, or process name. Lets every surface say "this
+    // box is starving" BEFORE it goes dark instead of after (2026-07-27
+    // fork-exhaustion + OOM double box-death).
+    resourcePressure: v.optional(
+      v.object({
+        level: v.union(v.literal("ok"), v.literal("degraded"), v.literal("critical")),
+        canFork: v.optional(v.boolean()),
+        availableMb: v.optional(v.number()),
+        swapUsedMb: v.optional(v.number()),
+        agentRssMb: v.optional(v.number()),
+        children: v.optional(v.number()),
+        reasons: v.optional(v.array(v.string())),
+        at: v.optional(v.number()),
+      }),
+    ),
+    deployCapabilities: v.optional(v.array(v.string())),
+    deployCapabilitiesBlocked: v.optional(v.array(v.string())),
+    // RFC3339, when the probe last ran. Refreshed every ~6h, so the UI must
+    // show the age rather than implying this is live.
+    deployCapabilitiesAt: v.optional(v.string()),
     publicKey: v.optional(v.string()),
+    // ed25519 signing public key (base64), distinct from `publicKey` (X25519
+    // box, encryption-only). Published so the relay can verify per-device
+    // request signatures holding only public material — no shared secret on the
+    // relay. See docs/yaver-relay-asymmetric-auth.md.
+    signPublicKey: v.optional(v.string()),
     quicHost: v.string(),
+    // Every reachable IPv4 address the agent has — preferred outbound
+    // first, then any additional LAN/Tailscale/Ethernet/VPN address it
+    // is bound to. Mobile clients race them in parallel during connect
+    // so the session attaches via whichever path actually has a route
+    // from the phone (Tailscale on cellular, Wi-Fi on same LAN, etc.).
+    // Optional for backwards-compat with agents that haven't upgraded.
+    localIps: v.optional(v.array(v.string())),
+    // Public HTTPS origins that can reach this specific device, such as
+    // Cloudflare Tunnel front doors or other reverse-proxy endpoints.
+    // Optional and device-scoped so the transport resolver can treat them
+    // as first-class runtime candidates instead of guessing from account
+    // level tunnel settings.
+    publicEndpoints: v.optional(v.array(v.string())),
     quicPort: v.number(),
     isOnline: v.boolean(),
-    deviceKind: v.optional(deviceKind),
-    trust: v.optional(deviceTrust),
-    cloudWorkspaceId: v.optional(v.string()),
-    runnerClass: v.optional(runnerClass),
-    region: v.optional(v.string()),
-    agentVersion: v.optional(v.string()),
-    protocolVersion: v.optional(v.number()),
-    capabilities: v.optional(runnerCapabilities),
     runnerDown: v.optional(v.boolean()),  // true when runner crashed and all retries exhausted
     runners: v.optional(v.array(v.object({
       taskId: v.string(),
@@ -75,12 +463,368 @@ export default defineSchema({
       pid: v.number(),
       status: v.string(),
       title: v.string(),
+      // checkedAt — when the AGENT last looked at local state (epoch ms).
+      // Freshness of the ROW.
+      checkedAt: v.optional(v.number()),
+      installed: v.optional(v.boolean()),
+      ready: v.optional(v.boolean()),
+      authConfigured: v.optional(v.boolean()),
+      // authPresent — the runner's own CLI says a credential is on that
+      // machine. LOCAL evidence: it cannot see a server-side revocation.
+      authPresent: v.optional(v.boolean()),
+      // authVerified — the credential was EXERCISED against the provider and
+      // the provider answered (a completed turn / OAuth exchange), or was
+      // explicitly refused by it (in which case authConfigured is false).
+      //
+      // These are two fields because on 2026-07-27 they were one, and it
+      // claimed a revoked Claude token was verified. See
+      // RunnerRuntimeStatus.AuthVerified in desktop/agent/runner_auth.go.
+      authVerified: v.optional(v.boolean()),
+      // authVerifiedAt — when the PROVIDER last spoke (epoch ms). Freshness of
+      // the VERDICT, which is NOT the same as freshness of the row. Without
+      // it, persisting "authenticated" would just relocate the false green
+      // from the agent's memory into this table.
+      authVerifiedAt: v.optional(v.number()),
+      // authSource — a LABEL ("claude.ai · max", "codex login status", or a
+      // home-relative "~/.codex/auth.json"). Never an absolute path: the agent
+      // sanitizes these in sanitizeRunnerInfosForConvex because an absolute
+      // path leaks the user's home-directory username.
+      authSource: v.optional(v.string()),
+      warning: v.optional(v.string()),
+      error: v.optional(v.string()),
     }))),
+    // Durable device capability inventory: which first-class coding CLIs
+    // are installed on this machine. Intentionally narrow: presence only,
+    // never auth state or credentials.
+    installedRunnerIds: v.optional(v.array(v.string())),
     lastHeartbeat: v.number(),
+    // Real-time tunnel state pushed by the relay server when an
+    // agent's QUIC tunnel registers / deregisters. Optional because
+    // only deployments with CONVEX_PRESENCE_URL + _SECRET wired on
+    // the relay populate it. When present, clients show tunnel
+    // connect/disconnect within ~2s end-to-end.
+    lastTunnelEvent: v.optional(v.object({
+      online:      v.boolean(),
+      at:          v.number(),                     // epoch ms
+      peerAddr:    v.optional(v.string()),         // relay-observed source
+      connectedAt: v.optional(v.number()),         // epoch ms; matches the connect event
+      durationSec: v.optional(v.number()),         // populated on disconnect
+    })),
+    // Self-reported by the agent on every heartbeat: does this box currently
+    // have a LIVE relay tunnel (registered + serving)? Distinct from
+    // lastTunnelEvent (relay-pushed, opt-in). Lets clients show "online · no
+    // relay path" instead of a bare "online" that 502s when the phone is
+    // off-LAN. Stored in-place (last value only, no history).
+    relayConnected: v.optional(v.boolean()),
+    // Can this agent actually reboot its host? Verified on the box (root, or
+    // passwordless sudo) — NOT inferred from the OS. Published so every surface
+    // can say "reboot unavailable — no permission on this machine" without
+    // probing the box, and offer the opt-in grant instead of a dead button.
+    // A boolean capability: no paths, no secrets (privacy contract).
+    canReboot: v.optional(v.boolean()),
+    // Short-lived device code this box is offering so an owner who is already
+    // signed in elsewhere can sign it back in with one tap. Present only while
+    // the box's own session is dead, which is precisely when no other channel
+    // to it works. An invitation, not a credential: redeeming it requires the
+    // approver's bearer token, so publishing it grants a stranger nothing.
+    pendingAuthCode: v.optional(v.string()),
+    pendingAuthCodeAt: v.optional(v.number()),
     createdAt: v.number(),
+    // Bootstrap state: true when agent is running without a valid token.
+    // Clients show a "NEEDS AUTH" badge and can auto-pair via relay.
+    needsAuth: v.optional(v.boolean()),
+    // hardwareId is a stable per-machine fingerprint reported by
+    // the agent on registration and every heartbeat. Used by the
+    // remote-OAuth-trigger flow: when an agent loses its token
+    // and re-enters bootstrap mode, the original host can call
+    // /auth/recover with their Convex token and we look up the
+    // device by hardwareId to confirm they own it.
+    hardwareId: v.optional(v.string()),
+    hardwareProfile: v.optional(hardwareProfile),
+    // Live disk gauge, refreshed every heartbeat. Lets any surface show
+    // "this box is 92% full" without first connecting to the agent.
+    storage: v.optional(storageSnapshot),
+    recoveryPosture: v.optional(recoveryPosture),
+    // First-class connection policy/state for this machine. This is a
+    // privacy-safe control-plane summary: transport kind + active/preferred,
+    // never relay hostnames, VPN IPs, or secrets. Heartbeat seeds it from
+    // current config/detection so clients do not have to infer whether
+    // "100.x" means Tailscale, Headscale, or an arbitrary CGNAT address.
+    connectionPreferences: v.optional(v.array(connectionPreference)),
+    // Version string of the Go agent binary currently running on this
+    // device (e.g. "1.99.36"). Reported on register and refreshed at
+    // most once every 24 hours via heartbeat — the mutation side is
+    // what enforces the cadence so older agents that send on every
+    // heartbeat still don't generate unnecessary writes. Missing =
+    // "no version info" in the dashboard.
+    agentVersion: v.optional(v.string()),
+    agentVersionReportedAt: v.optional(v.number()),
+
+    // Desired-state update request. Set by any surface that wants this
+    // box on a newer agent; the agent reads it back off its own
+    // heartbeat response and self-updates, then clears it by reporting
+    // the new agentVersion.
+    //
+    // Why a field on the row rather than agentRescueCommands, which
+    // already has a `reinstall-latest` command: that queue carries a
+    // 5-minute TTL (a deliberate replay-window cap on a shell-adjacent
+    // channel) and its executor is Linux/.deb-only. A box that is
+    // offline for six minutes — the whole case this exists for — would
+    // never see the command. Desired state has no expiry: whenever the
+    // box comes back, it converges. The two are different lifetimes,
+    // not duplicates: rescue is "do this now, while I'm watching",
+    // this is "be on this version whenever you next wake up".
+    //
+    // This is also the ONLY update trigger that works from tvOS,
+    // watchOS and Wear OS. Those surfaces can reach Convex but cannot
+    // reach the box (tvOS is direct-LAN with no relay; the watches hold
+    // no box host at all when phone-paired), so the POST /agent/update
+    // path web and mobile use is unavailable to them.
+    //
+    // Empty string is not a valid value — absent means "nothing
+    // requested". "latest" means "whatever GitHub says is newest at the
+    // time you read this", which is what every surface sends today; a
+    // concrete "1.99.309" pins a specific release.
+    desiredAgentVersion: v.optional(v.string()),
+    desiredAgentVersionRequestedAt: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
-    .index("by_deviceId", ["deviceId"]),
+    .index("by_deviceId", ["deviceId"])
+    .index("by_hardwareId", ["hardwareId"]),
+
+  // Pending device claims — bootstrap-mode boxes that registered a relay
+  // tunnel but have no Convex row yet. Created when a fresh agent runs
+  // `yaver serve` with no token AND no prior Convex device record:
+  // /devices/bootstrap returns "Device not found", and the agent retries
+  // against /devices/bootstrap-pending with its relay password. The
+  // password's SHA-256 hash is the only per-user signal we have without
+  // a session token — it lets the user's dashboard list "boxes that just
+  // joined my relay but I haven't claimed yet" and convert them into
+  // owned `devices` rows with one tap.
+  //
+  // Why a separate table instead of allowing devices.userId to be optional:
+  //   - keeps every devices.userId-scoped query (the vast majority) free
+  //     of "is this row actually mine" branching;
+  //   - the row only lives until the user claims it OR the cron sweeps
+  //     stale entries — short-lived state, not real device state;
+  //   - mismatch between agent-supplied identity (deviceId/hardwareId/
+  //     publicKey) and an existing devices row is a hard rejection
+  //     instead of an accidental ownership flip.
+  //
+  // Lifecycle: created on bootstrap-pending; refreshed on every retry;
+  // deleted on claimPendingDevice or by stale-claim sweep (>24h since
+  // lastSeenAt with no claim).
+  pendingDeviceClaims: defineTable({
+    deviceId: v.string(),
+    hardwareId: v.string(),
+    publicKey: v.string(),
+    name: v.optional(v.string()),
+    platform: v.optional(v.string()),
+    quicHost: v.optional(v.string()),
+    quicPort: v.optional(v.number()),
+    // SHA-256 hex of the relay password the agent registered with.
+    // We never store the plaintext — the user's managedRelays.password
+    // gets hashed for the same comparison.
+    relayPasswordHash: v.string(),
+    firstSeenAt: v.number(),
+    lastSeenAt: v.number(),
+    // Best-effort label populated when we can resolve the hash to a
+    // managedRelay (helps the UI explain "this came in via your relay
+    // 'home-mac'"). Optional: self-hosted shared-password setups won't
+    // have it.
+    relayLabel: v.optional(v.string()),
+  })
+    .index("by_relayPasswordHash", ["relayPasswordHash"])
+    .index("by_deviceId", ["deviceId"])
+    .index("by_hardwareId", ["hardwareId"])
+    .index("by_lastSeenAt", ["lastSeenAt"]),
+
+  // deviceProducts — the manufacturer/3rd-party registry for zero-touch
+  // (DPP-style) provisioned hardware. A "product" is a SKU/model that a
+  // builder (Talos, or any third party shipping Yaver-powered boxes)
+  // mints device identities under: "Talos Edge Node", "yaver blackbox",
+  // etc. Owned by the builder's user account; surfaced in the claim UI so
+  // an end user scanning a QR sees a friendly model name instead of a raw
+  // deviceId. Privacy-safe: a slug + display strings, no secrets, no paths.
+  //
+  // The flow this enables: builder runs `yaver provision mint --model
+  // <productId>` at flash time, which generates a per-device Ed25519
+  // bootstrap keypair, prints the PUBLIC key + a one-time claimSecret as a
+  // QR on the label, and registers a provisionedDevices row here. End user
+  // scans the QR (device still powered off) → claimProvisionedDevice binds
+  // the device to them → the box attests with its private key on first
+  // boot and self-credentials. See provisioning.ts.
+  deviceProducts: defineTable({
+    // Stable slug, unique per builder account (e.g. "talos-edge-v1").
+    productId: v.string(),
+    // The builder/manufacturer account that owns this product line and is
+    // authorized to mint devices under it.
+    ownerUserId: v.id("users"),
+    // Human-facing model name shown in the claim UI ("Talos Edge Node").
+    name: v.string(),
+    vendor: v.optional(v.string()),
+    // Informational list of services the image auto-starts post-claim
+    // (companion/onboarding wires the actual execution). Display only.
+    defaultServices: v.optional(v.array(v.string())),
+    createdAt: v.number(),
+  })
+    .index("by_productId", ["productId"])
+    .index("by_owner", ["ownerUserId"]),
+
+  // provisionedDevices — the pre-claim holding + attestation table for
+  // zero-touch hardware. This is the DPP "bootstrapping public key" store:
+  // the device's Ed25519 PUBLIC key and a hash of its one-time claimSecret
+  // are registered here at flash/mint time, before the device has ever
+  // powered on. Convex never sees the private key (it lives only on the SD
+  // seed) nor the raw claimSecret (only its SHA-256, like relay passwords).
+  //
+  // Lifecycle / status:
+  //   minted   — keypair registered, nobody owns it yet. A booting device
+  //              attesting here gets {awaiting-claim} and keeps polling.
+  //   claimed  — an end user scanned the QR and bound ownership; the next
+  //              successful attestation mints them a session token.
+  //   active   — device has attested and is credentialed (devices row
+  //              created via the normal registerDevice path).
+  //   revoked  — ownership reset (re-flash / factory reset / admin).
+  //
+  // Why separate from pendingDeviceClaims: that table is relay-password-
+  // scoped and requires the box to already be online; this one is
+  // cryptographic (pre-shared public key + claimSecret) and works
+  // scan-before-boot, through NAT, on any network. Different trust model.
+  provisionedDevices: defineTable({
+    deviceId: v.string(),
+    // Ed25519 bootstrap public key (base64 std), minted at flash time and
+    // printed in the QR. Attestation signatures are verified against this.
+    publicKey: v.string(),
+    // SHA-256 hex of the one-time claimSecret. Proves possession of the
+    // physical QR/label at claim time and the SD seed at attest time.
+    // Plaintext secret never stored (privacy contract, mirrors relay pw).
+    claimSecretHash: v.string(),
+    productId: v.optional(v.string()),
+    // Denormalized model name for the claim UI without a join.
+    model: v.optional(v.string()),
+    // Null until an end user claims via scanning the QR. First-claim-wins.
+    ownerUserId: v.optional(v.id("users")),
+    status: v.union(
+      v.literal("minted"),
+      v.literal("claimed"),
+      v.literal("active"),
+      v.literal("revoked")
+    ),
+    name: v.optional(v.string()),
+    platform: v.optional(v.string()),
+    mintedAt: v.number(),
+    claimedAt: v.optional(v.number()),
+    activatedAt: v.optional(v.number()),
+    // Last time the device attempted attestation — lets the claim UI show
+    // "device is waiting to be claimed (last seen 2m ago)".
+    lastAttestAt: v.optional(v.number()),
+  })
+    .index("by_deviceId", ["deviceId"])
+    .index("by_owner", ["ownerUserId"])
+    .index("by_publicKey", ["publicKey"]),
+
+  // Rescue command queue — the *only* control channel that survives a
+  // broken relay tunnel. The agent's heartbeat (independent network
+  // path from the relay) polls here for pending commands and executes
+  // them. Web UI / mobile / CLI write into this table when a device
+  // is wedged and the normal /agent/* endpoints aren't reachable.
+  //
+  // Security: command is a strict enum (no arbitrary shell), only the
+  // device's owner can queue (enforced in agentRescue.ts), 5-minute
+  // TTL caps the replay window, single-claim semantics enforced via
+  // status transition. Every queue/claim/result row is mirrored into
+  // securityEvents for the audit trail.
+  agentRescueCommands: defineTable({
+    deviceId: v.string(),
+    ownerUserId: v.id("users"),
+    // Strict enum so a compromised UI cannot inject arbitrary shell.
+    // Add new variants here AND in the agent's rescue.go dispatch.
+    command: v.union(
+      v.literal("restart"),
+      v.literal("reinstall-latest"),
+      v.literal("tunnel-reset"),
+      v.literal("auth-reset"),
+    ),
+    // Per-command params. `version` is for `reinstall-latest`.
+    // Empty for `restart`, `tunnel-reset`, `auth-reset`.
+    params: v.optional(v.object({
+      version: v.optional(v.string()),
+    })),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("claimed"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("expired"),
+    ),
+    result: v.optional(v.string()),       // stdout tail or error
+    createdAt: v.number(),
+    claimedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    expiresAt: v.number(),                // createdAt + 5*60*1000
+    sourceSurface: v.optional(v.string()), // "web" | "mobile" | "cli" — for audit
+  })
+    .index("by_device_status", ["deviceId", "status"])
+    .index("by_owner", ["ownerUserId"]),
+
+  // Publish-job queue — the async "tap Publish, close the app, come
+  // back to a green check" channel. Same 3-tier shape as
+  // agentRescueCommands (queue → claim → report) but the work is a
+  // /deploy/ship run on a Mac-farm node the owner owns.
+  //
+  // Privacy contract (enforced by convex_privacy_test.go): this table
+  // MUST NOT carry the project's absolute path, build logs, or
+  // secrets. Only app NAME + targets + stack travel. The farm node
+  // resolves the path itself, locally, from the app name — exactly
+  // like /deploy/ship's resolveDeployStackPath fallback. Live build
+  // output streams P2P (Phase 3), never through here. `result` is
+  // per-target metadata only (ok / exitCode / errorClass / ms).
+  publishJobs: defineTable({
+    jobId: v.string(), // external id (agent-friendly, not the _id)
+    deviceId: v.string(), // Mac-farm node that will run the build
+    ownerUserId: v.id("users"),
+    app: v.string(), // vault scope + label — NOT a path
+    stack: v.string(), // e.g. "react-native-expo"
+    // Canonical /deploy/ship target IDs, e.g. ["testflight","playstore"].
+    targets: v.array(v.string()),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("claimed"),
+      v.literal("running"),
+      v.literal("done"),
+      v.literal("failed"),
+      v.literal("expired"),
+    ),
+    // Per-target outcome metadata — NO logs/stdout. Mirrors the shape
+    // /deploy/ship's composite summary already emits.
+    result: v.optional(
+      v.array(
+        v.object({
+          target: v.string(),
+          ok: v.boolean(),
+          exitCode: v.number(),
+          errorClass: v.optional(v.string()),
+          durationMs: v.optional(v.number()),
+        }),
+      ),
+    ),
+    message: v.optional(v.string()), // short status line, not output
+    createdAt: v.number(),
+    claimedAt: v.optional(v.number()),
+    // Refreshed by the worker while a long build runs so a 20-min
+    // archive isn't reaped as a dead claim.
+    lastProgressAt: v.optional(v.number()),
+    finishedAt: v.optional(v.number()),
+    // Claim TTL is short (a queued job must be picked up promptly);
+    // once claimed, lastProgressAt + a longer running-grace governs
+    // reaping instead.
+    expiresAt: v.number(),
+    sourceSurface: v.optional(v.string()), // "cli" | "mobile" | "web"
+  })
+    .index("by_device_status", ["deviceId", "status"])
+    .index("by_owner", ["ownerUserId"])
+    .index("by_jobId", ["jobId"]),
 
   downloads: defineTable({
     platform: v.union(
@@ -118,6 +862,45 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 
+  // Public install catalogue — the Go agent fetches this on startup
+  // and merges it with its built-in list. Lets new tools / new OS
+  // install commands ship without a CLI release. Every field is
+  // intentionally NON-SENSITIVE: tool name, one-line description,
+  // and an array of `(packageManager, command)` pairs. No URLs to
+  // private infra, no credentials, no customer data.
+  //
+  // `kind` groups the tool so UIs can section them: "ai-runner" for
+  // claude-code / codex / aider, "model-runtime" for ollama + lm
+  // studio, "language" for node / python / go / rust, "devtool"
+  // for ripgrep / fd / bat / jq / gh / docker / sqlite, "system"
+  // for things that only make sense once (tailscale, cloudflared).
+  packageRegistry: defineTable({
+    name: v.string(),                 // tool slug, e.g. "ollama"
+    kind: v.string(),                 // category hint (see comment)
+    description: v.string(),          // one-line summary for UIs
+    tags: v.optional(v.array(v.string())),
+    // Install steps as a flat array so an agent can pick the first
+    // one whose `packageManager` it has on PATH. `platform` is
+    // optional — when set ("darwin", "linux", "windows") the agent
+    // must also match GOOS. `packageManager` of "" means "run the
+    // command verbatim" (for one-line curl installers etc.).
+    installs: v.array(v.object({
+      platform: v.optional(v.string()),
+      packageManager: v.string(),
+      command: v.string(),
+    })),
+    // `checkCommand` is executed to decide whether the tool is
+    // already installed. Empty = fall back to `which <name>`.
+    checkCommand: v.optional(v.string()),
+    // `docUrl` points at an authoritative page for users who want
+    // to read more. Optional and always public.
+    docUrl: v.optional(v.string()),
+    sortOrder: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_name", ["name"])
+    .index("by_kind", ["kind"]),
+
   authLogs: defineTable({
     level: v.union(v.literal("info"), v.literal("error"), v.literal("warn")),
     provider: v.string(),
@@ -127,85 +910,323 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_createdAt", ["createdAt"]),
 
+  // Device black box — the agent's flight recorder (desktop/agent/flightrecorder.go).
+  //
+  // Lifecycle events ONLY (boot / shutdown / unclean_stop / sleep / wake), so a
+  // box that went silent can say why once it is back. This is an activity audit
+  // summary — action + outcome + timestamp — which is exactly what the privacy
+  // contract permits in Convex. It MUST NEVER carry paths, LAN IPs, hostnames,
+  // tokens, or command output; `detail` is a short bounded cause string and
+  // convex_privacy_test.go fences the payload.
+  //
+  // Bounded by design: flightRecorder.recordEvents prunes each device to the
+  // last FLIGHT_EVENT_CAP rows on every write, so this table cannot grow into a
+  // log stream no matter how often a box reboots.
+  deviceFlightEvents: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    // Per-agent-process id. Lets a later boot attribute an orphaned record to
+    // the exact run that died.
+    session: v.string(),
+    kind: v.string(),
+    detail: v.optional(v.string()),
+    at: v.number(), // ms epoch — when the event happened on the box
+    createdAt: v.number(), // ms epoch — when it reached Convex (may be much later)
+  })
+    .index("by_device", ["deviceId"])
+    .index("by_device_at", ["deviceId", "at"]),
+
   userSettings: defineTable({
     userId: v.id("users"),
+    // Which tab the mobile app opens on ("projects" | "tasks"). Account-scoped
+    // so it follows the user across devices. Not a secret and not derivable
+    // from anything else, so it belongs in Convex rather than on the box.
+    startupScreen: v.optional(v.string()),
     forceRelay: v.optional(v.boolean()),
-    codingMode: v.optional(v.union(v.literal("remote-preferred"), v.literal("local-only"), v.literal("auto-fallback"))),
-    localProvider: v.optional(v.string()),
-    localModel: v.optional(v.string()),
     runnerId: v.optional(v.string()),
-    runnerModel: v.optional(v.string()),
-    reasoningEffort: v.optional(v.union(v.literal("low"), v.literal("medium"), v.literal("high"))),
     customRunnerCommand: v.optional(v.string()),
     relayUrl: v.optional(v.string()),
     relayPassword: v.optional(v.string()),
-    vibingTransport: v.optional(v.union(v.literal("auto"), v.literal("sse"), v.literal("webrtc"))),
-    relayTier: v.optional(v.union(v.literal("free"), v.literal("pro"))),
-  }).index("by_userId", ["userId"]),
-
-  // Server-authoritative Cloud Studio access. Clients can read this through
-  // /cloud/status but cannot grant or mutate their own access.
-  cloudAccess: defineTable({
-    userId: v.id("users"),
-    status: cloudAccessStatus,
-    maxCloudWorkspaces: v.number(),
-    maxConcurrentTasks: v.number(),
-    maxConcurrentPreviews: v.number(),
-    allowedRunnerClasses: v.array(runnerClass),
-    validUntil: v.optional(v.number()),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  }).index("by_userId", ["userId"]),
-
-  cloudWorkspaces: defineTable({
-    userId: v.id("users"),
-    cloudWorkspaceId: v.string(),
-    runnerDeviceId: v.string(),
-    runnerClass,
-    region: v.string(),
-    state: cloudWorkspaceState,
-    capabilitiesDigest: v.optional(v.string()),
-    lastReadyAt: v.optional(v.number()),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
-    .index("by_userId", ["userId"])
-    .index("by_workspaceId", ["cloudWorkspaceId"])
-    .index("by_runnerDeviceId", ["runnerDeviceId"]),
-
-  // Provider credentials live in an external credential broker. Convex stores
-  // only non-secret connection state and an opaque credential reference.
-  gitConnections: defineTable({
-    userId: v.id("users"),
-    gitConnectionId: v.string(),
-    provider: v.union(v.literal("github"), v.literal("gitlab")),
-    externalAccountId: v.string(),
-    displayName: v.string(),
-    status: gitConnectionStatus,
-    credentialReference: v.string(),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
-    .index("by_userId", ["userId"])
-    .index("by_connectionId", ["gitConnectionId"]),
-
-  // Hashes of short-lived runner credentials. These credentials are scoped to
-  // one managed runner and are never accepted as user sessions.
-  workloadCredentials: defineTable({
-    userId: v.id("users"),
-    tokenHash: v.string(),
-    cloudWorkspaceId: v.string(),
-    runnerDeviceId: v.string(),
-    status: v.union(v.literal("active"), v.literal("revoked")),
-    expiresAt: v.number(),
-    lastUsedAt: v.optional(v.number()),
-    revokedAt: v.optional(v.number()),
-    createdAt: v.number(),
-  })
-    .index("by_tokenHash", ["tokenHash"])
-    .index("by_runnerDeviceId", ["runnerDeviceId"])
-    .index("by_workspaceId", ["cloudWorkspaceId"])
-    .index("by_userId", ["userId"]),
+    tunnelUrl: v.optional(v.string()),
+    // Speech-to-text settings
+    speechProvider: v.optional(v.string()),      // "on-device" | "openai" | "deepgram" | "assemblyai"
+    speechApiKey: v.optional(v.string()),         // legacy only; never returned/updated by /settings
+    ttsEnabled: v.optional(v.boolean()),          // read responses aloud
+    ttsProvider: v.optional(v.string()),          // "device" | "openai" | "cartesia" preference only
+    ttsTaskMode: v.optional(v.boolean()),         // run tasks in TTS mode: agent leads replies with a spoken-style summary (text only; no audio synthesized)
+    verbosity: v.optional(v.number()),            // 0-10: response detail level (0=summary, 10=full detail)
+    keyStorage: v.optional(v.string()),            // legacy preference; provider keys stay local/vault-only
+    // When true, the mobile + (eventually) web tasks `+` button opens a
+    // device + agent picker before the compose modal. Lets one task
+    // route to a specific machine + runner instead of always using the
+    // currently-connected device. Default: undefined → off. Stored on
+    // the user record (not per-device) so the preference roams across
+    // phones/web logins.
+    multiTargetMode: v.optional(v.boolean()),
+    // How many machines a surface connects to at once: "all" (default) or
+    // "single". Unset means "all" — fan-out is the product default and this
+    // field exists only to let a user downgrade. Read by every surface out of
+    // the /settings payload they already fetch, so it costs no extra call.
+    connectionMode: v.optional(v.string()),
+    // Rare/specialized More-tab tools the user explicitly wants visible.
+    // Stored as string IDs only, no per-device details or sensitive data.
+    // Omitted/empty = keep the default More menu focused.
+    moreOptionalTools: v.optional(v.array(v.string())),
+    // Preferred device for auto-connect when the user has more than one
+    // machine registered. When set, mobile / desktop / web will attach
+    // to this device on login if it's online, skipping the "pick one"
+    // prompt. Cleared (undefined) = no preference → manual pick only
+    // when N > 1. When N == 1 we always auto-connect regardless.
+    // Value is devices.deviceId (uuid), not an Id<"devices">, so the
+    // pref survives a device record being deleted and re-created.
+    primaryDeviceId: v.optional(v.string()),
+    // Optional second elevated device. Surfaced via `yaver secondary
+    // {set,unset,status}`, `yaver ssh secondary`, the mobile + web
+    // pickers, and the watchdog (gets the same tight 90s staleness
+    // threshold as primary). Same validation as primary: must be one
+    // of the caller's owned devices. Most users will leave this unset.
+    secondaryDeviceId: v.optional(v.string()),
+    // Per-device primary coding agent preference. The dashboard reads
+    // this when it connects to a device and pre-selects the named
+    // runner so the user doesn't have to pick "codex" every time on
+    // the box that's signed into Codex but not Claude. Stored as an
+    // array of {deviceId, runnerId} pairs (rather than a record/map)
+    // so the schema works on every Convex version we currently
+    // support. deviceId matches devices.deviceId (uuid), runnerId
+    // matches the agent's runner.id ("claude" / "codex" / "aider" /
+    // "ollama" / "aider-ollama" / "opencode" / "goose").
+    //
+    // Cleared (undefined) for the device → fall back to the previous
+    // selection logic (agent's own default, then first installed).
+    primaryRunnerByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          runnerId: v.string(),
+          // Optional model hint seeded into the runner at spawn time.
+          // Examples:
+          //   runnerId=claude → model="claude-opus-4-7" / "claude-sonnet-4-6" / "claude-haiku-4-5"
+          //   runnerId=codex  → model="gpt-5-codex" / "gpt-5"
+          //   runnerId=ollama → model="qwen2.5-coder:14b"
+          // Empty/undefined = runner's own default (preserves legacy
+          // rows without a model field).
+          model: v.optional(v.string()),
+          // Optional non-secret runner sub-selection. Today this is
+          // primarily for OpenCode's `--agent <mode>` (build / plan /
+          // custom agents). Other runners ignore it.
+          mode: v.optional(v.string()),
+          // Optional non-secret provider hint (e.g. "zai", "glm",
+          // "ollama"). Secrets still stay on the machine in
+          // opencode.json / env / vault; Convex only stores the
+          // user's cross-surface preference.
+          provider: v.optional(v.string()),
+        }),
+      ),
+    ),
+    // Latest non-secret OpenCode config observed per device. This is a cache
+    // of ~/.config/opencode/opencode.json metadata so web/mobile can render
+    // the right provider/model immediately, then refresh from the live agent.
+    // Never store API keys here; only provider ids, model ids, mode/agent ids,
+    // diagnostics, and timestamps.
+    opencodeConfigByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          model: v.optional(v.string()),
+          provider: v.optional(v.string()),
+          defaultAgent: v.optional(v.string()),
+          buildModel: v.optional(v.string()),
+          planModel: v.optional(v.string()),
+          models: v.optional(v.array(v.object({
+            id: v.string(),
+            name: v.optional(v.string()),
+            provider: v.optional(v.string()),
+            isDefault: v.optional(v.boolean()),
+            source: v.optional(v.string()),
+          }))),
+          providers: v.optional(v.array(v.object({
+            id: v.string(),
+            name: v.optional(v.string()),
+            baseUrl: v.optional(v.string()),
+            hasApiKey: v.optional(v.boolean()),
+            models: v.optional(v.array(v.string())),
+          }))),
+          agents: v.optional(v.array(v.object({
+            name: v.string(),
+            model: v.optional(v.string()),
+            description: v.optional(v.string()),
+            isBuiltin: v.optional(v.boolean()),
+          }))),
+          diagnostics: v.optional(v.array(v.string())),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    // Privacy-limited runtime project memory. Convex stores only the project
+    // display name and remote repository identity per machine so Settings can
+    // pick a default across web/mobile/tablet/etc. Absolute local paths stay on
+    // the machine and are resolved from the live agent inventory at runtime.
+    defaultRuntimeProjectByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          projectName: v.string(),
+          repoName: v.optional(v.string()),
+          gitProvider: v.optional(v.string()),
+          gitRemote: v.optional(v.string()),
+          branch: v.optional(v.string()),
+          framework: v.optional(v.string()),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    // OPTIONAL machine-role slicing (docs/architecture/RUNNER_RENDER_SPLIT.md):
+    // runner machine (AI tasks / vibing) vs render machine (source, builds,
+    // previews). No row = single-box behavior; runner and render MAY be the
+    // same device. Row without projectName = account-wide favorite. Identity
+    // only — deviceIds + mode flags, never hostnames or paths.
+    machineRolesByProject: v.optional(
+      v.array(
+        v.object({
+          projectName: v.optional(v.string()),
+          runnerDeviceId: v.string(),
+          secondaryRunnerDeviceId: v.optional(v.string()),
+          renderDeviceId: v.optional(v.string()),
+          secondaryRenderDeviceId: v.optional(v.string()),
+          workspace: v.optional(v.union(v.literal("runner-clone"), v.literal("render-ssh"))),
+          autoPush: v.optional(v.union(v.literal("never"), v.literal("ask"), v.literal("always"))),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    // Saved render target per (device, project) — with a default project this
+    // lets the Vibing tab render without a click. Stable target identity only
+    // (targetId like "browser-iframe" / "android-device"), never URLs, ports
+    // or device serials. Row without projectName = machine-wide fallback.
+    defaultRuntimeTargetByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          projectName: v.optional(v.string()),
+          targetId: v.string(),
+          targetKind: v.optional(v.string()),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    runtimeProjectCatalogByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          projects: v.array(
+            v.object({
+              projectName: v.string(),
+              repoName: v.optional(v.string()),
+              gitProvider: v.optional(v.string()),
+              gitRemote: v.optional(v.string()),
+              branch: v.optional(v.string()),
+              framework: v.optional(v.string()),
+              updatedAt: v.number(),
+            }),
+          ),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    // Per-device external-MCP catalog (2026-08-13). Which user-registered MCP
+    // servers live on which machine — seeded by the Go agent's heartbeat
+    // (agentSync:batchSync mcpCatalog → userSettings.set mcpCatalogForDevice)
+    // so the web chat + mobile composers can offer another machine's MCPs.
+    // Privacy-limited: names/URLs/cached tool counts only; auth tokens never
+    // leave the agent.
+    mcpCatalogByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          servers: v.array(
+            v.object({
+              name: v.string(),
+              url: v.string(),
+              enabled: v.boolean(),
+              toolCount: v.optional(v.number()),
+            }),
+          ),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    // Per-device MCP selection preference (2026-08-09). The canonical
+    // cross-surface memory for which MCP servers a task should attach, plus
+    // whether Yaver's own `yaver mcp` doorway is included (default true).
+    // Privacy-limited: MCP names only (server URLs/keys stay on the agent).
+    // Row without mcpServers = default selection (no externals, yaver on).
+    mcpServersByDevice: v.optional(
+      v.array(
+        v.object({
+          deviceId: v.string(),
+          mcpServers: v.optional(v.array(v.string())),
+          includeYaverMcp: v.optional(v.boolean()),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
+    // Per-subsystem managed: true|false toggle. true = use Yaver's
+    // hosted infrastructure for that subsystem (managed relay,
+    // managed analytics, managed storage, …). false = user hosts
+    // their own (their Cloudflare, their Plausible, their VPS). The
+    // endgame: one checkbox per feature, every Yaver surface honors
+    // the same choice without the user juggling per-provider configs.
+    //
+    // Omitted fields mean "not yet chosen" — the feature keeps its
+    // legacy behaviour until the user explicitly opts in/out. Any
+    // new subsystem adopting the pattern adds an optional field
+    // here; the dashboard/mobile/web Settings page enumerates the
+    // schema and shows a toggle per subsystem automatically.
+    managed: v.optional(v.object({
+      relay:     v.optional(v.boolean()),  // today wired via relayUrl/platformConfig fallback; setting this to true forces the platform relay
+      dns:       v.optional(v.boolean()),
+      analytics: v.optional(v.boolean()),
+      storage:   v.optional(v.boolean()),
+      email:     v.optional(v.boolean()),
+      ci:        v.optional(v.boolean()),
+      voice:     v.optional(v.boolean()),
+      llm:       v.optional(v.boolean()),
+    })),
+    deployPreferences: v.optional(v.object({
+      web: v.optional(v.string()),
+      convex: v.optional(v.string()),
+      npm: v.optional(v.string()),
+      testflight: v.optional(v.string()),
+      play: v.optional(v.string()),
+    })),
+    // Per-capability à-la-carte opt-in for the metered Yaver-managed
+    // services (distinct from `managed` above, which only picks WHO
+    // hosts a subsystem). This is the user's explicit "charge me to run
+    // this capability for me" switch, keyed to the managedUsage meter
+    // `kind` (see managedMeter.ts). Each is independent — a normie can
+    // enable `reload` alone, or `reload`+`backend`+`web`, etc. (the
+    // à-la-carte ladder, docs/yaver-normie-concierge-fair-metering.md).
+    //
+    // Effective REAL billing for a (user, kind) requires all three:
+    //   global meter flag (YAVER_MANAGED_METER_LIVE)
+    //   AND this per-user opt-in == true
+    //   AND wallet balance > 0
+    // Omitted/false → that capability stays dry-run (simulated) for this
+    // user even when the global flag is live (fail-closed per-user; the
+    // gate lives in managedMeter.recordManagedUsage). reload + agentBox
+    // both route through the COMPUTE meter (cloudLifecycle.ts), not
+    // managedMeter; they're tracked here for the cockpit ladder/UX, and
+    // gated on the compute side. Counter/label-only; no secrets.
+    managedServices: v.optional(v.object({
+      reload:    v.optional(v.boolean()),  // Hermes build-native on the pooled farm → compute
+      backend:   v.optional(v.boolean()),  // managed Convex proxy                   → backend
+      web:       v.optional(v.boolean()),  // managed Cloudflare proxy               → web
+      agentBox:  v.optional(v.boolean()),  // always-on Claude Code/Codex box        → compute
+      inference: v.optional(v.boolean()),  // Yaver gateway (only if no own AI key)  → inference
+      publish:   v.optional(v.boolean()),  // Mac-farm App Store / Play              → publish
+    })),
+  }).index("by_userId", ["userId"])
+    .index("by_relayPassword", ["relayPassword"]),
 
   aiRunners: defineTable({
     runnerId: v.string(),
@@ -233,14 +1254,16 @@ export default defineSchema({
     .index("by_runnerId", ["runnerId"])
     .index("by_modelId", ["modelId", "runnerId"]),
 
-  // Per-minute CPU/RAM metrics from desktop agents (last 1 hour kept)
+  // Per-minute CPU/RAM/disk metrics from desktop agents (last 1 hour kept)
   deviceMetrics: defineTable({
     deviceId: v.string(),       // matches devices.deviceId
     timestamp: v.number(),      // epoch ms
     cpuPercent: v.number(),     // 0-100
     memoryUsedMb: v.number(),
     memoryTotalMb: v.number(),
-    diskPercent: v.optional(v.number()),
+    // Optional: older agents don't send it, so it must not be required or
+    // every pre-upgrade heartbeat fails validation.
+    diskPercent: v.optional(v.number()), // 0-100, root/home volume
   })
     .index("by_deviceId", ["deviceId", "timestamp"]),
 
@@ -266,7 +1289,6 @@ export default defineSchema({
     taskId: v.string(),           // task identifier
     runner: v.string(),           // "claude", "codex", "aider", etc.
     model: v.optional(v.string()), // "sonnet", "opus", etc.
-    reasoningEffort: v.optional(v.string()),
     durationSec: v.number(),      // how many seconds the runner ran
     startedAt: v.number(),        // epoch ms when task started
     finishedAt: v.number(),       // epoch ms when task finished
@@ -274,25 +1296,6 @@ export default defineSchema({
   })
     .index("by_userId", ["userId", "startedAt"])
     .index("by_deviceId", ["deviceId", "startedAt"]),
-
-  // Privacy-safe cross-surface task timeline. Prompts, source, tool output and
-  // provider credentials stay on the selected runtime; Convex receives only
-  // routing and execution metadata.
-  taskRuns: defineTable({
-    userId: v.string(),
-    taskId: v.string(),
-    runtime: v.union(v.literal("remote-agent"), v.literal("local-yaver"), v.literal("cloud-runner"), v.literal("queued")),
-    status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed"), v.literal("stopped")),
-    runnerId: v.optional(v.string()),
-    model: v.optional(v.string()),
-    reasoningEffort: v.optional(v.string()),
-    deviceId: v.optional(v.string()),
-    gitProvider: v.optional(v.union(v.literal("github"), v.literal("gitlab"))),
-    gitRef: v.optional(v.string()),
-    commitSha: v.optional(v.string()),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  }).index("by_user_task", ["userId", "taskId"]).index("by_user_updated", ["userId", "updatedAt"]),
 
   // Daily task counts per user — simple counter for analytics dashboard
   dailyTaskCounts: defineTable({
@@ -319,26 +1322,1260 @@ export default defineSchema({
     userCode: v.string(),
     deviceCode: v.string(),
     status: v.union(v.literal("pending"), v.literal("authorized"), v.literal("expired")),
-    pendingToken: v.optional(v.string()),
-    expiresAt: v.number(),
-    createdAt: v.number(),
-    approveNonce: v.optional(v.string()),
-    environment: v.optional(v.string()),
     machineName: v.optional(v.string()),
-    matchCode: v.optional(v.string()),
     platform: v.optional(v.string()),
     arch: v.optional(v.string()),
-    runtimeVersion: v.optional(v.string()),
     shell: v.optional(v.string()),
-    approvedAt: v.optional(v.number()),
+    environment: v.optional(v.string()),
+    runtimeVersion: v.optional(v.string()),
+    preferredProvider: v.optional(v.string()),
+    isWsl: v.optional(v.boolean()),
+    deviceId: v.optional(v.string()),
     approvedUserId: v.optional(v.id("users")),
-    authorizeAttempts: v.optional(v.number()),
-    lastAuthorizeAttemptAt: v.optional(v.number()),
+    approvedAt: v.optional(v.number()),
     claimHandle: v.optional(v.string()),
     claimedAt: v.optional(v.number()),
+    authorizeAttempts: v.optional(v.number()),
+    lastAuthorizeAttemptAt: v.optional(v.number()),
+    pendingToken: v.optional(v.string()),
+    // Owner HINT for the proactive phone-approval event ("mobil onay"): a
+    // re-authing TV/headset passes the userId it remembers from its last
+    // session, so that user's signed-in phone can list this pending code
+    // and offer one-tap approve (number-match against the TV screen). A
+    // hint GRANTS NOTHING — authorization still requires the hinted user's
+    // authenticated session; a wrong/forged hint only produces a prompt
+    // the user declines.
+    ownerHintUserId: v.optional(v.id("users")),
+    // LAN approval (2026-08-13): same-network sign-in for surfaces that can
+    // see a local beacon (phone app, Electron GUI). The waiting device
+    // broadcasts {approveNonce, matchCode, expiresAtMs} — NEVER the userCode —
+    // so a LAN eavesdropper cannot hijack the code into their own account.
+    // approveNonce: random 32-hex; lookup key for POST /auth/device-code/lan-approve.
+    // matchCode: 3-digit number the TV shows and the approver displays for
+    //   visual confirmation (WhatsApp-style number matching).
+    // lanApproverUserId/Email + lanPendingExpiresAt: set when an authenticated
+    //   surface requests approval; the TV's poll sees the approver's identity
+    //   and the user presses Allow/Deny on the TV itself (single-use window).
+    approveNonce: v.optional(v.string()),
+    matchCode: v.optional(v.string()),
+    lanApproverUserId: v.optional(v.id("users")),
+    lanApproverEmail: v.optional(v.string()),
+    lanPendingExpiresAt: v.optional(v.number()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
   })
     .index("by_userCode", ["userCode"])
-    .index("by_deviceCode", ["deviceCode"]),
+    .index("by_deviceCode", ["deviceCode"])
+    .index("by_ownerHint", ["ownerHintUserId", "status"])
+    .index("by_approveNonce", ["approveNonce"])
+    // Lazy cleanup scanned this table with an unindexed .filter(), so a flood
+    // of live (non-expired) rows made every subsequent insert O(table) — a
+    // self-amplifying cost bomb. This index makes expiry pruning O(matches).
+    .index("by_expiresAt", ["expiresAt"]),
+
+  // Fixed-window rate-limit counters (rateLimiter.ts). One row per bucket
+  // ("<limitName>:<subject>"), reset when its window rolls over. Keyed opaque
+  // so per-IP, per-user, and global backstops all share the same table — the
+  // global buckets are what cap total spend when an attacker rotates IPs/proxies.
+  rateLimits: defineTable({
+    key: v.string(),
+    windowStart: v.number(),
+    count: v.number(),
+  }).index("by_key", ["key"]),
+
+  // Managed relay subscriptions (LemonSqueezy payments)
+  subscriptions: defineTable({
+    userId: v.id("users"),
+    plan: v.string(), // "relay-monthly" | "relay-yearly"
+    status: v.string(), // "active" | "past_due" | "cancelled" | "expired"
+    lemonSqueezyId: v.string(), // LemonSqueezy subscription ID
+    lemonSqueezyCustomerId: v.string(),
+    currentPeriodEnd: v.number(), // Unix timestamp
+    cancelledAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"])
+    .index("by_lemon_id", ["lemonSqueezyId"])
+    .index("by_status", ["status"]),
+
+  // Managed relay servers (provisioned on Hetzner)
+  managedRelays: defineTable({
+    userId: v.id("users"),
+    // Optional: owner-dev relays (the /billing/yaver-cloud/dev-relay path)
+    // have NO subscription row — they exist so the owner can exercise the
+    // full Relay Pro provision/deprovision lifecycle on the real Hetzner
+    // account before LemonSqueezy billing is live. Paid rows always carry it.
+    subscriptionId: v.optional(v.id("subscriptions")),
+    // ─── Shared relay pool ──────────────────────────────────────────────
+    // Relay Pro rides a SHARED multi-tenant host by default. A dedicated box
+    // (cax11, €6.99/mo, necessarily always-on) against $9/mo revenue is 16%
+    // gross — and a relay cannot scale to zero, so that margin is structural.
+    // Shared across ~20 tenants it is €0.35 and 96%.
+    //
+    // Sharing costs NO security here, and that is why it is safe: the relay is
+    // pass-through, authorizes nothing, cross-tenant bridging is blocked in
+    // Convex (devices.ts / userSettings.ts), and free-vs-Pro is explicitly not
+    // a security boundary — Pro buys capacity only.
+    //
+    // `sharedHostKey` groups rows onto one physical box. Absent ⇒ dedicated
+    // (legacy rows, and the paid "Private Relay" SKU which is sold separately
+    // at a price that actually covers an always-on machine).
+    sharedHostKey: v.optional(v.string()),
+    isDedicated: v.optional(v.boolean()),
+    status: v.string(), // "provisioning" | "active" | "stopping" | "stopped" | "error"
+    // Underlying IaaS (provider-agnostic above the facade). Absent ⇒
+    // "hetzner". See cloudMachines.provider for the rationale.
+    provider: v.optional(v.string()),
+    cloudResourceId: v.optional(v.string()),
+    hetznerServerId: v.optional(v.string()),
+    // Decommission policy + recovery pointer (see cloudMachines for the
+    // privacy/security rationale). snapshotOnDelete defaults OFF.
+    snapshotOnDelete: v.optional(v.boolean()),
+    lastSnapshotId: v.optional(v.string()),
+    lastSnapshotAt: v.optional(v.number()),
+    serverIp: v.optional(v.string()),
+    domain: v.optional(v.string()), // e.g. "abc123.relay.yaver.io"
+    region: v.string(), // "eu" | "us" — datacenter region
+    password: v.string(), // relay password (auto-generated)
+    quicPort: v.number(),
+    httpPort: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastHealthCheck: v.optional(v.number()),
+    errorMessage: v.optional(v.string()),
+  }).index("by_user", ["userId"])
+    .index("by_subscription", ["subscriptionId"])
+    .index("by_status", ["status"]),
+
+  // Teams (shared machines, centralized billing)
+  teams: defineTable({
+    teamId: v.string(),             // short unique ID (e.g. "team_abc123")
+    name: v.string(),               // "Acme Engineering"
+    ownerId: v.id("users"),         // admin/billing owner
+    plan: v.string(),               // "cpu" | "gpu" | "custom"
+    maxMembers: v.number(),         // seat limit
+    subscriptionId: v.optional(v.id("subscriptions")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_teamId", ["teamId"])
+    .index("by_owner", ["ownerId"]),
+
+  // Team membership (who has access to which team's machines)
+  teamMembers: defineTable({
+    teamId: v.string(),
+    userId: v.id("users"),
+    role: v.string(),               // "admin" | "member"
+    invitedBy: v.optional(v.id("users")),
+    joinedAt: v.number(),
+  }).index("by_team", ["teamId"])
+    .index("by_user", ["userId"])
+    .index("by_team_user", ["teamId", "userId"]),
+
+  // Company-level AI/runtime policy for Talos-style tenants that use
+  // Yaver as the remote execution plane. This is intentionally policy
+  // and routing metadata only: no API keys, OAuth tokens, customer
+  // prompts, output, logs, absolute paths, relay hosts, or secrets.
+  // Secrets live on the tenant runtime, in a company vault, or in the
+  // provider's own secret store. Convex stores only booleans/ids/labels
+  // needed for UI gating and execution planning.
+  companyAIOptions: defineTable({
+    teamId: v.string(),
+    enabled: v.boolean(),
+    runtime: v.object({
+      mode: v.union(
+        v.literal("dedicated-compute"),
+        v.literal("bring-your-own-yaver"),
+        v.literal("local-only"),
+      ),
+      defaultProvider: v.union(
+        v.literal("hetzner"),
+        v.literal("aws"),
+        v.literal("gcp"),
+        v.literal("azure"),
+        v.literal("onprem"),
+        v.literal("byo-yaver-device"),
+      ),
+      defaultDeviceId: v.optional(v.string()),
+      fallbackDeviceIds: v.optional(v.array(v.string())),
+      region: v.optional(v.string()),
+    }),
+    convex: v.object({
+      deploymentKind: v.union(
+        v.literal("dedicated"),
+        v.literal("shared-isolated"),
+        v.literal("external"),
+      ),
+      deploymentName: v.optional(v.string()),
+      siteUrl: v.optional(v.string()),
+      envName: v.string(),
+    }),
+    runners: v.object({
+      defaultRunner: v.string(),
+      allowedRunners: v.array(v.string()),
+      defaultModelByRunner: v.optional(v.array(v.object({
+        runner: v.string(),
+        model: v.string(),
+      }))),
+      allowUserOverride: v.boolean(),
+      requireRunnerAuthPerUser: v.boolean(),
+      credentialMode: v.union(
+        v.literal("user-auth-on-runtime"),
+        v.literal("company-api-key-on-runtime"),
+        v.literal("local-model-on-runtime"),
+        v.literal("external-onprem-endpoint"),
+      ),
+    }),
+    opencode: v.optional(v.object({
+      providers: v.array(v.object({
+        id: v.string(),
+        label: v.string(),
+        baseUrl: v.optional(v.string()),
+        models: v.array(v.string()),
+        keyPolicy: v.union(
+          v.literal("company-secret"),
+          v.literal("user-secret"),
+          v.literal("none"),
+        ),
+        keyConfigured: v.optional(v.boolean()),
+      })),
+      defaultAgent: v.optional(v.string()),
+    })),
+    mcp: v.object({
+      enabledServers: v.array(v.string()),
+      requiredServers: v.array(v.string()),
+      toolPolicyByRole: v.optional(v.array(v.object({
+        role: v.string(),
+        allowedTools: v.array(v.string()),
+      }))),
+    }),
+    workKinds: v.object({
+      appCode: v.boolean(),
+      erpFlow: v.boolean(),
+      convex: v.boolean(),
+      webUi: v.boolean(),
+      harnessCad: v.boolean(),
+      openScadCad: v.boolean(),
+      robotTrial: v.boolean(),
+      inspection: v.boolean(),
+    }),
+    approvals: v.object({
+      requireApprovalForProductionWrites: v.boolean(),
+      requireApprovalForDeploy: v.boolean(),
+      requireApprovalForRobotMotion: v.boolean(),
+      requireApprovalForSecretsAccess: v.boolean(),
+    }),
+    dataPolicy: v.object({
+      allowCustomerDataInPrompts: v.boolean(),
+      allowScreenshotsInPrompts: v.boolean(),
+      allowTelemetryInPrompts: v.boolean(),
+      redactPII: v.boolean(),
+      retentionDays: v.number(),
+    }),
+    // Generic, app-contributed profile — the de-Talos-ified path. An app
+    // (talos, carrotbet, …) registers its own work kinds + role caps +
+    // provider catalog here instead of baking app vocabulary into Yaver's
+    // fixed `workKinds` booleans. Optional for back-compat. Config only.
+    appProfile: v.optional(v.object({
+      app: v.string(),
+      workKinds: v.array(v.object({
+        key: v.string(),
+        label: v.optional(v.string()),
+        enabled: v.optional(v.boolean()),
+        requiredTools: v.optional(v.array(v.string())),
+        requiredMcp: v.optional(v.array(v.string())),
+        approvals: v.optional(v.array(v.string())),
+        promptHints: v.optional(v.array(v.string())),
+        artifactKinds: v.optional(v.array(v.string())),
+        allowedRoles: v.optional(v.array(v.string())),
+      })),
+      roles: v.optional(v.array(v.object({
+        role: v.string(),
+        allowedTools: v.optional(v.array(v.string())),
+        allowedRunners: v.optional(v.array(v.string())),
+        allowedProviders: v.optional(v.array(v.string())),
+        allowedWorkKinds: v.optional(v.array(v.string())),
+      }))),
+      providers: v.optional(v.array(v.object({
+        id: v.string(),
+        label: v.string(),
+        baseUrl: v.optional(v.string()),
+        models: v.array(v.string()),
+        keyPolicy: v.union(
+          v.literal("company-secret"),
+          v.literal("user-secret"),
+          v.literal("none"),
+        ),
+        keyConfigured: v.optional(v.boolean()),
+      }))),
+    })),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    updatedBy: v.optional(v.id("users")),
+  }).index("by_teamId", ["teamId"]),
+
+  // Cloud dev machines (provisioned on Hetzner, subscription required)
+  cloudMachines: defineTable({
+    userId: v.id("users"),
+    teamId: v.optional(v.string()),   // legacy team-owned-machine tombstone; never grants access
+    subscriptionId: v.optional(v.id("subscriptions")),
+    machineType: v.string(),          // "cpu" | "gpu"
+    // The CONCRETE provider server type this box was actually created on
+    // (e.g. "cpx51"). Recorded at provision so a resume-from-snapshot
+    // recreates on the SAME type — critical because a snapshot's disk image
+    // can only be restored onto a server type whose disk is >= it. Without
+    // this, resume used the current global default (YAVER_CLOUD_CPU_TYPE),
+    // which fails with Hetzner 422 "image disk is bigger than server type
+    // disk" whenever the default was downsized after the box was created.
+    serverType: v.optional(v.string()),
+    // Provenance tag. "managed" = provisioned/adopted by Yaver (bought
+    // from us, billed via LemonSqueezy or owner dev-adopt). Plain BYO
+    // boxes are not cloudMachines rows at all, so they read as
+    // "self-hosted" at the device layer. Optional for back-compat:
+    // any existing cloudMachines row is Yaver-side ⇒ treat as managed.
+    origin: v.optional(v.union(v.literal("managed"), v.literal("self-hosted"))),
+    // Backend-hosting model. "byok" (default, absent ⇒ byok): the box
+    // runs the user's deploys against THEIR own Convex/Cloudflare via
+    // vault-stored keys. "hosted": the box additionally runs a
+    // self-hosted Convex (Docker) so deploy targets the box itself —
+    // no Convex Cloud account, no tokens. Privacy-safe: the tenant's
+    // data lives in the Convex on their own dedicated box; central
+    // Convex still sees only identity. Flag/URL only — never secrets.
+    tier: v.optional(v.union(v.literal("byok"), v.literal("hosted"))),
+    // Shared serverless host slot. A backend cannot park (it must serve
+    // requests), so it can never be dedicated at $29 — 14% gross. Pooled
+    // ~10 tenants per box it is 86%. Absent ⇒ dedicated/legacy.
+    // ⚠️ Placement readiness is NOT runtime readiness: co-tenanting executing
+    // tenant functions needs microVM-grade isolation. See serverlessPool.ts.
+    serverlessHostKey: v.optional(v.string()),
+    // Self-hosted Convex public API origin on this box (e.g.
+    // https://<id>.cloud.yaver.io/_convex-api). Set once the hosted
+    // backend is up. Plain URL — privacy-safe (no key, no path).
+    hostedConvexUrl: v.optional(v.string()),
+    // Phase 4 — hosted-tier teardown grace. A hosted box holds the
+    // user's whole app + DB, so on subscription end we DON'T delete it
+    // immediately: status goes "grace", deprovisionAt is the deadline,
+    // scheduledDestroyId is the pending destroy job (cancelled if they
+    // resubscribe). byok boxes are disposable → none of this applies.
+    deprovisionAt: v.optional(v.number()),
+    scheduledDestroyId: v.optional(v.id("_scheduled_functions")),
+    // ─── Park mode ──────────────────────────────────────────────────────
+    // HOW this box parks, which is really a question about what we can
+    // PROMISE. Hetzner has no capacity reservation and bills a STOPPED server
+    // exactly like a running one — only DELETE stops the meter. So there is no
+    // "cheap but guaranteed" state to buy, and on 2026-07-21 every SKU Yaver
+    // uses was sold out in all three EU datacenters, i.e. a deep-parked EU box
+    // genuinely could not have been woken.
+    //
+    //   "deep"     (default) delete the server, keep the volume. ~90% cheaper,
+    //              wake is BEST-EFFORT and may fail when a region is full.
+    //   "standby"  keep the SMALLEST server alive with the volume attached and
+    //              resize up on use. Costs a few € more than the volume alone,
+    //              and the workspace is never UNREACHABLE — only slower. This
+    //              is the honest way to sell availability: degraded, not gone.
+    //   "reserved" never park. Full price, full guarantee.
+    //
+    // Absent ⇒ "deep" (every existing row predates this field and is deleted
+    // on park today).
+    parkMode: v.optional(v.string()),
+    // ─── Zero-friction trial ────────────────────────────────────────────
+    // A trial box is EPHEMERAL and deliberately unlike a paid workspace: no
+    // volume, no reserved egress IP, no snapshot — so it has no satellites
+    // that can outlive it and leak. It never parks; it is deleted.
+    //
+    // trialExpiresAt is WALL-CLOCK, not idle-based. An idle timer can be
+    // defeated by a keepalive, which turns a bounded cost into an unbounded
+    // one; wall-clock is a promise we can keep and a cost we can compute in
+    // advance (€0.037 for 60 min on cpx22).
+    // See docs/architecture/yaver-activation-trial-analysis.md.
+    isTrial: v.optional(v.boolean()),
+    trialExpiresAt: v.optional(v.number()),
+    // Auto-park (auto-close) is OPT-OUT: undefined === enabled, so an idle box
+    // still stops its own meter by default. Only an explicit `false` keeps a
+    // box running while idle (the owner accepts the bill). Surfaced as a toggle
+    // in mobile + web; enforced in cloudLifecycle.listIdleCandidates.
+    autoParkEnabled: v.optional(v.boolean()),
+    // Minutes of idleness before auto-park fires (default 20 when unset).
+    // 20, not 45: scattered sessions keep a box alive through every gap shorter
+    // than the timer, so a 45-min timer turns "4 h/day of work" into 6-8 h/day
+    // of billed uptime — 180-240 h/month against a 120 h allowance. See
+    // cloudLifecycle.idleSweep and docs/architecture/yaver-four-tier-deep-analysis.md §6.3.
+    autoParkMinutes: v.optional(v.number()),
+    // Persistent Hetzner Volume holding the workspace/Docker/model data. It
+    // SURVIVES the server delete and re-attaches in seconds, so a park does not
+    // need to snapshot the data and a wake does not need to restore it — the
+    // difference between a ~10 min wake and a ~60-90s one.
+    volumeId: v.optional(v.string()),
+    volumeSizeGb: v.optional(v.number()),
+    // ─── Stable egress identity ─────────────────────────────────────────
+    // Park is delete-not-stop, so every wake used to mint a BRAND NEW public
+    // IP. One subscription credential (the user's own Claude/Codex login,
+    // mirrored onto the box) then reaches the vendor from a different
+    // datacenter IP every single wake — indistinguishable, to an abuse
+    // heuristic, from credential sharing or resale. A reserved IP that
+    // survives the server delete keeps one workspace = one egress address.
+    //
+    // Provider-NEUTRAL names on purpose: `hetznerServerId` taught us that
+    // baking the provider into the field name costs a migration later. The
+    // concrete primitive differs per provider (Hetzner Primary IP with
+    // auto_delete:false, AWS Elastic IP, GCP static external IP, Azure
+    // Standard static Public IP) but the contract is identical: reserve
+    // once, re-attach on every wake, release ONLY on decommission.
+    //
+    // ⚠️ COST: a reserved IP bills while the box is parked (~€0.50-1.20/mo
+    // Hetzner, ~$3-7/mo on the hyperscalers) — it partially offsets
+    // scale-to-zero, so it is for PAID workspaces only, never trials, and
+    // is auto-released after a long park (egressIpReservedAt is the clock).
+    // ⚠️ It is also a DETACHABLE PAID RESOURCE that outlives its server —
+    // exactly the shape that already leaks via volumeId. It MUST be
+    // reclaimed in the same path. See cloudLifecycle.reclaimAuxResources.
+    egressIpId: v.optional(v.string()),
+    egressIpAddress: v.optional(v.string()),
+    // Provider placement scope the reserved IP is pinned to (Hetzner
+    // Primary IPs are datacenter-bound, AWS EIPs region-bound, GCP static
+    // IPs region-bound). A wake MUST recreate inside this scope or the IP
+    // cannot be re-attached.
+    egressIpScope: v.optional(v.string()),
+    egressIpReservedAt: v.optional(v.number()),
+    // Resize request state. The current first pass records that the existing
+    // persisted workspace must be recreated on a larger profile; the provider
+    // worker consumes this later. Labels only — no paths, prompts, logs, IPs,
+    // or provider-native volume details beyond the existing volume pointer.
+    resizeTargetMachineType: v.optional(v.string()),
+    resizeRequestedAt: v.optional(v.number()),
+    resizeReason: v.optional(v.string()),
+    resizePlacementId: v.optional(v.id("taskPlacements")),
+    // SLIM boot image (OS + toolchain, no user data) used to recreate the
+    // server on wake when a volume holds the state. Restoring this is fast;
+    // the old full-disk snapshot (lastSnapshotId) is the legacy fallback.
+    baseImageId: v.optional(v.string()),
+    status: v.string(),               // "provisioning" | "active" | "grace" | "stopping" | "stopped" | "paused" | "resuming" | "suspended" | "error"
+    // First-class onboarding (project_managed_cloud_onboarding_gap).
+    // Granular phase + 0-100 progress so web/mobile show a real
+    // "setting up your box" bar, not a binary provisioning/active.
+    // The box cloud-init POSTs ticks to /machine/phase (machine-token
+    // authed); provision()/healthCheck set the server-side bookends.
+    // Privacy-safe: label + percent + timestamp only.
+    provisionPhase: v.optional(v.string()), // creating|booting|installing-docker|pulling-image|starting-agent|registering|authorizing-runners|ready|error
+    provisionProgress: v.optional(v.number()), // 0-100
+    provisionPhaseAt: v.optional(v.number()),
+    // Last failure string the box itself reported via /machine/phase
+    // (phase="error") — e.g. "agent-health-unreachable-300s". Short
+    // curated label only: NEVER raw logs, paths, or secrets (the SSH
+    // debug key, not Convex, is how real logs are read). Cleared the
+    // moment the box ticks a healthy phase. project_managed_cloud_onboarding_gap.
+    provisionError: v.optional(v.string()),
+    // What the PROVIDER says the server is doing right now ("initializing",
+    // "starting", "running", "off"), refreshed while a wake is in flight.
+    // Between "we asked Hetzner to create a server" and "the agent answered"
+    // there is a multi-minute window where Yaver knows nothing — the box is
+    // not ours yet and not reachable yet. Without this the only honest thing
+    // a surface can show is a spinner, which is precisely what reads as
+    // "stuck". Provider vocabulary, not ours; label only, never IDs or logs.
+    providerStatus: v.optional(v.string()),
+    providerStatusAt: v.optional(v.number()),
+    // ── Wake / park run telemetry ────────────────────────────────────────
+    // How long THIS box's last wake and park actually took, and how the wake
+    // ended. Two things this buys that constants cannot:
+    //   1. an honest ETA — "usually ~4 min" measured on this machine's own
+    //      disk and region, instead of a hardcoded guess that is wrong for
+    //      every box that isn't the one we measured,
+    //   2. a parked box that can explain its LAST wake. Without an outcome, a
+    //      box that woke, sat signed-out for ten minutes and re-parked looks
+    //      identical to one that has been peacefully asleep all week.
+    // Durations only — never what ran on the box (privacy contract).
+    wakeStartedAt: v.optional(v.number()),
+    wakeCompletedAt: v.optional(v.number()),
+    lastWakeDurationMs: v.optional(v.number()),
+    /** "ready" | "needs-auth" | "abandoned" | "error" — how the last wake ended. */
+    lastWakeOutcome: v.optional(v.string()),
+    parkStartedAt: v.optional(v.number()),
+    parkCompletedAt: v.optional(v.number()),
+    lastParkDurationMs: v.optional(v.number()),
+    // Snapshot facts, so "Snapshot kept" can say WHAT is kept. Size explains
+    // the wake time (a 160 GB restore is minutes) and the idle storage cost.
+    snapshotSizeGb: v.optional(v.number()),
+    snapshotCreatedAt: v.optional(v.number()),
+    // Which base image the box booted from: "golden" = a prebuilt Yaver
+    // snapshot (YAVER_CLOUD_IMAGE_ID_*, everything pre-installed, ~seconds
+    // to ready) vs "vanilla" = ubuntu-24.04 with a 3–5 min first-boot
+    // build. Set at provision time; drives the "⚡ fast boot" vs "first
+    // boot" hint on the device card so a slow vanilla-fallback is visible
+    // instead of looking like a hang. No secret/path — just an enum.
+    bootImageSource: v.optional(v.string()), // "golden" | "vanilla"
+    // Has the user's runner OAuth (claude/codex/opencode subscription)
+    // been pushed to this dedicated box? absent/false ⇒ device shows
+    // "Unauthorized — Authorize runners" so the user triggers the
+    // remote-OAuth push from web/mobile. Never an API key.
+    runnersAuthorized: v.optional(v.boolean()),
+    multiUser: v.optional(v.boolean()), // legacy shared-machine tombstone; new rows omit it
+    // Underlying IaaS this resource lives on. The whole stack above this
+    // record stays provider-agnostic ("cloud resource"); only Yaver's
+    // facade layer (agent ops_cloud.go) knows the concrete API to call.
+    // Absent ⇒ "hetzner" (every existing row predates multi-provider).
+    // Future: "gcp" | "aws" | "digitalocean" | … — recorded now so the
+    // schema doesn't need a migration when we add a second provider.
+    provider: v.optional(v.string()),
+    // Provider-native resource id. `hetznerServerId` kept for back-compat;
+    // new code reads `cloudResourceId` (provider-agnostic) and falls back.
+    cloudResourceId: v.optional(v.string()),
+    hetznerServerId: v.optional(v.string()),
+    // Decommission policy + recovery pointer. snapshotOnDelete defaults
+    // OFF (a snapshot is a paid, lingering image). lastSnapshotId is an
+    // opaque provider resource id (NOT contents — snapshot data never
+    // touches Convex; privacy-safe, same class as hetznerServerId).
+    // SECURITY: managed boxes share Yaver's platform token, so any read
+    // of these MUST be scoped by this row's userId — one developer can
+    // never see another's snapshot. BYO is isolated by the user's own
+    // provider account.
+    snapshotOnDelete: v.optional(v.boolean()),
+    lastSnapshotId: v.optional(v.string()),
+    lastSnapshotAt: v.optional(v.number()),
+    serverIp: v.optional(v.string()),
+    hostname: v.optional(v.string()),
+    // The box's Yaver agent deviceId. For provisioned boxes this is
+    // the deterministic `cloud-<machineIdPrefix>` written into the
+    // box's config by cloud-init; for adopted boxes it's the existing
+    // box's real deviceId supplied at adopt time. Stored so web/mobile
+    // can target git/dev-loop/deploy ops at the exact owned device —
+    // a credentials/exec op must never fuzzy-guess its target.
+    deviceId: v.optional(v.string()),
+    region: v.string(),               // "eu" | "us"
+    tools: v.array(v.string()),       // ["nodejs", "python", "go", "docker", ...]
+    repoUrl: v.optional(v.string()),  // cloned on provisioning
+    sshPublicKey: v.optional(v.string()),
+    specs: v.optional(v.object({
+      vcpu: v.number(),
+      ramGb: v.number(),
+      diskGb: v.number(),
+      arch: v.string(),               // "arm64" | "amd64"
+      gpu: v.optional(v.string()),    // "rtx4000" | null
+      vram: v.optional(v.number()),   // GB
+      // Seeded from the box itself (agent) so Convex reflects reality, not a
+      // provisioning-time guess. Hardware/OS facts are NOT P2P-sensitive
+      // (unlike task IO / paths), so they may live in Convex. Drives capacity
+      // planning, the resume server-type choice, and machine policies.
+      os: v.optional(v.string()),     // "linux" | "darwin" | "windows"
+      distro: v.optional(v.string()), // "ubuntu-24.04" | "debian-12" | …
+      kernel: v.optional(v.string()),
+    })),
+    // Which coding runners are installed + authed on this box, seeded by the
+    // agent. Same privacy class as specs — capability metadata, no secrets.
+    // Lets the fleet/policy layer route work to a box that has the right
+    // runner ready without waking it first.
+    runnersAvailable: v.optional(v.array(v.object({
+      id: v.string(),                 // "claude" | "codex" | "opencode"
+      name: v.optional(v.string()),
+      installed: v.optional(v.boolean()),
+      authed: v.optional(v.boolean()),
+      verified: v.optional(v.boolean()),
+      authSource: v.optional(v.string()),
+    }))),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastHealthCheck: v.optional(v.number()),
+    // Last MEANINGFUL user activity (task run, exec/shell, inference) on
+    // this box — distinct from lastHealthCheck (agent liveness: an idle
+    // box still heartbeats). Bumped by the box agent via /machine/activity
+    // and by the gateway on inference. Drives idle auto-shutdown
+    // (cloudLifecycle.idleSweep): a box idle past the threshold is paused
+    // (snapshot+delete) so we never bill Hetzner hours nobody is using.
+    // Privacy-safe: a single timestamp, no payload.
+    lastActivityAt: v.optional(v.number()),
+    // Wake/park lifecycle timestamps the owner wants surfaced on the box
+    // card. lastParkedAt = when the box last transitioned to a parked
+    // (stopped/paused/suspended/grace) state — drives "slept 3h ago".
+    // lastWokeAt = when the last wake (resume-from-snapshot) was requested —
+    // drives "woke 2m ago" once the box is active again. Stamped centrally
+    // in setStatus so every park/wake path (idle sweep, manual pause, the
+    // wake mutation, resumeMachine) records them without extra wiring.
+    // Privacy-safe: plain timestamps, no payload.
+    lastParkedAt: v.optional(v.number()),
+    lastWokeAt: v.optional(v.number()),
+    errorMessage: v.optional(v.string()),
+    // Hash of a long-lived machine-auth token generated at provisioning
+    // time. The plaintext is placed on the box in /etc/yaver/machine.json
+    // (root-owned, 0600) so the TLS reconciler systemd timer can call
+    // /machine/pending-tls on Convex. We never store the plaintext.
+    machineTokenHash: v.optional(v.string()),
+  }).index("by_user", ["userId"])
+    .index("by_team", ["teamId"])
+    .index("by_deviceId", ["deviceId"]),
+
+  // User-bound custom domains. Independent of the auto-generated
+  // <shortId>.cloud.yaver.io / <shortId>.relay.yaver.io hostnames, so a user
+  // can bring their own myapp.com from Namecheap / Porkbun / Route53 and
+  // point it at either a cloud machine or a managed relay.
+  //
+  // `targetType` + `targetId` identify where the domain should route to
+  // (cloud_machine → cloudMachines._id, managed_relay → managedRelays._id,
+  //  custom_server → raw IP in `targetIp`). Verification flow:
+  //   1. User enters domain + chooses target.
+  //   2. Convex returns a TXT-record challenge (verificationToken) and an
+  //      A/CNAME record spec for the target (serverIp / autoDomain).
+  //   3. User adds both records at their registrar / DNS host.
+  //   4. verify() polls DNS, flips `status` to "verified" when both appear.
+  //   5. Once verified, the target's nginx/Caddy config is updated to
+  //      accept the custom hostname and certbot issues a TLS cert.
+  userDomains: defineTable({
+    userId: v.id("users"),
+    domain: v.string(),              // "myapp.com" or "api.myapp.com"
+    targetType: v.union(
+      v.literal("cloud_machine"),
+      v.literal("managed_relay"),
+      v.literal("custom_server"),
+    ),
+    targetId: v.optional(v.string()),  // Convex id of target (as string)
+    targetIp: v.optional(v.string()),  // IPv4 of the current target — kept
+                                       // here so the UI can print DNS
+                                       // instructions without re-joining.
+    autoDomain: v.optional(v.string()), // "<shortId>.cloud.yaver.io" for
+                                        // CNAME-based setups.
+    dnsProvider: v.optional(v.string()), // "cloudflare" | "manual" | ...
+    verificationToken: v.string(),     // the user adds this as a TXT record
+                                       // to prove ownership.
+    status: v.union(
+      v.literal("pending"),            // waiting for DNS records
+      v.literal("verified"),           // records observed, TLS being issued
+      v.literal("active"),             // TLS cert issued, domain live
+      v.literal("error"),
+    ),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    verifiedAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_domain", ["domain"])
+    .index("by_target", ["targetType", "targetId"]),
+
+  // LEGACY REMOVED ACCOUNT-SHARING TOMBSTONES.
+  // The tables through guestUsage are retained only so existing deployments can
+  // migrate or delete historical rows. No live route, query, mutation, agent,
+  // MCP tool, web view, or mobile view creates, accepts, or consumes them.
+  guestInvitations: defineTable({
+    hostUserId: v.id("users"),       // who is sharing their machine
+    guestEmail: v.string(),          // invited user's email (hint — code also works). Empty string when invited by userId.
+    inviteCode: v.string(),          // 6-char code for acceptance (works even if emails differ)
+    status: v.union(v.literal("pending"), v.literal("accepted"), v.literal("revoked")),
+    guestUserId: v.optional(v.id("users")),  // set when accepted, OR pre-set when host invited by userId
+    invitedByUserId: v.optional(v.boolean()), // true if the host typed a userId (not an email)
+    // Host's proposed device scope at invite time. Guest sees this and can trim it on accept.
+    // Absent / empty = propose all host devices.
+    proposedDeviceIds: v.optional(v.array(v.string())),
+    // Access tier the host is granting:
+    //   "full"          — classic teammate scope: /tasks, /vibing, /dev, /builds, /projects, /todolist,
+    //                     plus the feedback/blackbox/voice/health/info safe set.
+    //   "feedback-only" — hardened end-user scope: /feedback, /blackbox, /voice, /health, /info only.
+    //                     Any task auto-triggered by this guest's feedback is force-containerized.
+    //                     /info is redacted of project metadata; /projects returns 403.
+    // Absent on legacy rows → treated as "full" at runtime (backward-compat). New invites
+    // default to "feedback-only" (safer for Feedback-SDK-distributed end-users).
+    scope: v.optional(v.union(v.literal("full"), v.literal("feedback-only"), v.literal("sdk-project"), v.literal("support"))),
+    // Optional project narrowing at invite time — copied into guestAccess.allowedProjects
+    // when the invitation is accepted. See guestAccess.allowedProjects for semantics.
+    allowedProjects: v.optional(v.array(v.string())),
+    // canVibe opts an sdk-project (tester) invite into the AI-improve surface
+    // (/vibing). Copied into guestAccess on accept. Absent/false = test-only.
+    // Only meaningful with scope="sdk-project"; the agent ignores it otherwise.
+    canVibe: v.optional(v.boolean()),
+    createdAt: v.number(),
+    expiresAt: v.number(),           // pending invitations expire after 2 days
+    acceptedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+    // Host-side UI tombstone. Delete/hide is distinct from revoke: revoke
+    // removes access, hostHiddenAt removes old pending/revoked/expired rows
+    // from normal guest lists while preserving audit history.
+    hostHiddenAt: v.optional(v.number()),
+  })
+    .index("by_hostUserId", ["hostUserId"])
+    .index("by_guestEmail", ["guestEmail"])
+    .index("by_host_guest", ["hostUserId", "guestEmail"])
+    .index("by_host_guestUser", ["hostUserId", "guestUserId"])
+    .index("by_guestUserId", ["guestUserId"])
+    .index("by_inviteCode", ["inviteCode"]),
+
+  guestAccess: defineTable({
+    hostUserId: v.id("users"),       // machine owner
+    guestUserId: v.id("users"),      // guest who has access
+    grantedAt: v.number(),
+    revokedAt: v.optional(v.number()),  // null = active, set = revoked
+    // Access tier inherited from the accepted invitation. See guestInvitations.scope for semantics.
+    // Absent on legacy rows → treated as "full" at runtime.
+    scope: v.optional(v.union(v.literal("full"), v.literal("feedback-only"), v.literal("sdk-project"), v.literal("support"))),
+    // Project narrowing — scopes the grant to a subset of the host's
+    // projects/repos even within the allowed path list. Most useful with
+    // scope=feedback-only when a dev wants to let end-users of Project
+    // A file feedback without exposing feedback, workdirs, or fix-task
+    // targets of Projects B/C. Matches by MobileProject.Name / project
+    // slug. Empty / absent = all projects on this host (current behavior).
+    //
+    // Enforced in the agent's auth middleware + /feedback fix-task path:
+    //   - /feedback (GET list): filter to reports whose inferred project is in the list
+    //   - /feedback/{id}/fix: reject if the feedback's project is not in the list
+    //   - /tasks: pin workDir to a project in the list; reject attempts to escape
+    allowedProjects: v.optional(v.array(v.string())),
+    // Per-project collaboration permissions, materialized from projectShares
+    // (projectShares.ts::materializeProjectGrant).
+    //
+    // A LIST, not a single field, because one guest can hold different roles on
+    // different shared projects of the same host — "dev" on the API repo,
+    // "normie" on the marketing site. Keyed by the same project slug that
+    // allowedProjects uses.
+    //
+    // Why this exists: scope cannot express role. scopeForRole() maps BOTH
+    // "dev" and "normie" to scope="full", so before 2026-07-23 the agent could
+    // not tell them apart and the documented normie restrictions were
+    // unenforceable — the Convex comment claimed agent-side enforcement that
+    // had no field to enforce on. A host who picked "normie" got a full
+    // teammate.
+    //
+    // `role` is a LABEL (for UI + as the preset the capabilities came from).
+    // The booleans are what the agent actually enforces. They are deliberately
+    // separate: baking "normie ⇒ no deploy" into the agent binary would freeze
+    // one opinion of what a role means into every user's install, and changing
+    // it would need an agent release. The host owns the policy; the agent just
+    // reads it. Absent flag = not restricted (legacy rows keep today's
+    // behavior rather than being silently downgraded).
+    projectRoles: v.optional(
+      v.array(
+        v.object({
+          project: v.string(),
+          role: v.union(
+            v.literal("owner"),
+            v.literal("dev"),
+            v.literal("normie"),
+            v.literal("viewer"),
+          ),
+          canDeploy: v.optional(v.boolean()),
+          canPush: v.optional(v.boolean()),
+          requirePullRequest: v.optional(v.boolean()),
+          // Pin this member's work to one branch. Empty/absent = no pin.
+          pinnedBranch: v.optional(v.string()),
+        }),
+      ),
+    ),
+    // canVibe opts a tester (sdk-project) grant into /vibing. Inherited from the
+    // invitation on accept; toggleable later via updateGuestConfig. Absent/false
+    // = test-only. Agent enforces it only for scope="sdk-project", and a tester's
+    // vibe is always force-isolated + GLM/BYO (see agent guest_scope.go / vibing.go).
+    canVibe: v.optional(v.boolean()),
+    // Guest config — set by host to control guest access
+    dailyTokenLimit: v.optional(v.number()),    // max task-seconds per day (0 or absent = unlimited)
+    allowedRunners: v.optional(v.array(v.string())), // runner IDs guest can use (empty/absent = all)
+    usageMode: v.optional(v.string()),          // "idle-only" (default), "always", "scheduled"
+    schedule: v.optional(v.object({
+      startHour: v.number(),
+      endHour: v.number(),
+      timezone: v.optional(v.string()),
+    })),
+  })
+    .index("by_hostUserId", ["hostUserId"])
+    .index("by_guestUserId", ["guestUserId"])
+    .index("by_host_guest", ["hostUserId", "guestUserId"]),
+
+  // Removed conversion-attribution rows retained for migration only.
+  // This was the UI-surface synergy
+  // spine for the "developer invited a normie; normie later buys their
+  // own runtime/capabilities" funnel.
+  //
+  // Privacy shape: IDs, scope labels, service labels, counters, timestamps
+  // only. No prompts, task output, paths, tokens, app contents, or spend
+  // amounts. Billing truth stays in prepaidCredits / creditUsage /
+  // managedUsage; this table only lets surfaces explain the journey:
+  // "you first used Yaver through Alice's shared app; turn on your own
+  // phone preview / compute / publish when ready."
+  guestConversions: defineTable({
+    hostUserId: v.id("users"),
+    guestUserId: v.id("users"),
+    inviteId: v.optional(v.id("guestInvitations")),
+    accessId: v.optional(v.id("guestAccess")),
+    sourceScope: v.optional(v.union(v.literal("full"), v.literal("feedback-only"), v.literal("sdk-project"), v.literal("support"))),
+    sourceProjects: v.optional(v.array(v.string())),
+    firstAcceptedAt: v.number(),
+    lastGuestActivityAt: v.optional(v.number()),
+    guestActivityCount: v.optional(v.number()),
+    firstManagedServiceAt: v.optional(v.number()),
+    firstManagedService: v.optional(v.string()),
+    lastManagedServiceAt: v.optional(v.number()),
+    enabledServices: v.optional(v.array(v.string())),
+    firstPaidUsageAt: v.optional(v.number()),
+    convertedAt: v.optional(v.number()),
+    conversionState: v.union(
+      v.literal("guest-active"),
+      v.literal("service-enabled"),
+      v.literal("paid-usage"),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_guest", ["guestUserId", "updatedAt"])
+    .index("by_host", ["hostUserId", "updatedAt"])
+    .index("by_host_guest", ["hostUserId", "guestUserId"])
+    .index("by_state", ["conversionState", "updatedAt"]),
+
+  // Removed infra-grant rows retained for migration only. Hosts used to share selected devices/machines with
+  // another user without giving them blanket access to the whole account.
+  infraAccessGrants: defineTable({
+    hostUserId: v.id("users"),
+    guestUserId: v.id("users"),
+    status: v.union(v.literal("active"), v.literal("revoked")),
+    resourcePreset: v.optional(v.string()),
+    shareAllDevices: v.optional(v.boolean()),
+    shareAllMachines: v.optional(v.boolean()),
+    useHostApiKeys: v.optional(v.boolean()),
+    allowGuestProvidedApiKeys: v.optional(v.boolean()),
+    allowDesktopControl: v.optional(v.boolean()),
+    allowBrowserControl: v.optional(v.boolean()),
+    allowTunnelForward: v.optional(v.boolean()),
+    // Wake-on-request: may THIS grantee's inbound request bring a parked box
+    // back up? Default OFF, like every other allow* flag here, because a wake
+    // spends the OWNER's metered money (parked means the server was DELETED and
+    // must be recreated — Hetzner bills stopped ones).
+    //
+    // This is a permission and not an ownership rule on purpose. "Only the
+    // owner may wake" would make scale-to-zero useless for the thing it exists
+    // for: a small app's actual users could never reach it. The owner decides,
+    // per grant, whose traffic is worth waking for — and can revoke it.
+    // Enforced via wakeOnRequestPolicy.ts::classifyWakeTarget.
+    allowWake: v.optional(v.boolean()),
+    // Optional owner-set ceiling on automatic wakes per rolling 24h for this
+    // grant. Absent = no cap. This is the spend control that makes allowWake
+    // safe to hand out; nothing in code picks a number on the owner's behalf.
+    wakeDailyLimit: v.optional(v.number()),
+    requireIsolation: v.optional(v.boolean()),
+    cpuLimitPercent: v.optional(v.number()),
+    ramLimitMb: v.optional(v.number()),
+    priorityMode: v.optional(v.string()), // "same-priority" | "spare-capacity" | "background"
+    allowedRunners: v.optional(v.array(v.string())),
+    usageMode: v.optional(v.string()),
+    schedule: v.optional(v.object({
+      startHour: v.number(),
+      endHour: v.number(),
+      timezone: v.optional(v.string()),
+    })),
+    grantedAt: v.number(),
+    updatedAt: v.number(),
+    revokedAt: v.optional(v.number()),
+    // Optional auto-expiry — set by support-link redemption when the friend
+    // chose "Allow for 24h" rather than "until I revoke". access.ts treats an
+    // expired grant as inactive.
+    expiresAt: v.optional(v.number()),
+    // Provenance: set when this grant was created by a support-link redemption
+    // (vs a normal host→guest invite), so the UI can label it "support".
+    origin: v.optional(v.string()), // "support-link" | undefined
+  })
+    .index("by_hostUserId", ["hostUserId"])
+    .index("by_guestUserId", ["guestUserId"])
+    .index("by_host_guest", ["hostUserId", "guestUserId"]),
+
+  infraAccessGrantDevices: defineTable({
+    grantId: v.id("infraAccessGrants"),
+    hostUserId: v.id("users"),
+    guestUserId: v.id("users"),
+    deviceId: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_grant", ["grantId"])
+    .index("by_guestUserId", ["guestUserId"])
+    .index("by_hostUserId", ["hostUserId"])
+    .index("by_device_guest", ["deviceId", "guestUserId"]),
+
+  infraAccessGrantMachines: defineTable({
+    grantId: v.id("infraAccessGrants"),
+    hostUserId: v.id("users"),
+    guestUserId: v.id("users"),
+    machineId: v.id("cloudMachines"),
+    createdAt: v.number(),
+  })
+    .index("by_grant", ["grantId"])
+    .index("by_guestUserId", ["guestUserId"])
+    .index("by_hostUserId", ["hostUserId"])
+    .index("by_machine_guest", ["machineId", "guestUserId"]),
+
+  // Removed support-link rows retained for migration only. A supporter used to mint a shareable
+  // link (yaver.io/j/<code>); when a FRIEND redeems it on their machine, a
+  // REVERSE grant is created (host=friend, guest=supporter) so the friend's box
+  // joins the supporter's mesh and the supporter can ssh/exec/code into it. The
+  // link only OFFERS scope; the friend's consent decides the actual grant.
+  supportInvites: defineTable({
+    inviterUserId: v.id("users"),
+    code: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("redeemed"),
+      v.literal("revoked"),
+      v.literal("expired")
+    ),
+    singleUse: v.boolean(),
+    // The MAX the link offers; the friend opts up to these on the consent screen.
+    offerTerminal: v.boolean(),
+    offerDesktopControl: v.boolean(),
+    defaultTtlHours: v.number(), // suggested session length shown on consent
+    label: v.optional(v.string()),
+    createdAt: v.number(),
+    expiresAt: v.number(), // redeem window for the link itself
+    // Populated on redemption:
+    redeemedByUserId: v.optional(v.id("users")),
+    redeemedDeviceId: v.optional(v.string()),
+    redeemedAt: v.optional(v.number()),
+    grantId: v.optional(v.id("infraAccessGrants")),
+  })
+    .index("by_code", ["code"])
+    .index("by_inviter", ["inviterUserId"]),
+
+  hostShareInvites: defineTable({
+    hostUserId: v.id("users"),
+    hostDeviceId: v.optional(v.string()),
+    guestEmail: v.optional(v.string()),
+    guestUserId: v.optional(v.id("users")),
+    acceptedByGuestUserId: v.optional(v.id("users")),
+    inviteCode: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("revoked"),
+      v.literal("expired"),
+    ),
+    label: v.optional(v.string()),
+    inviteExpiresAt: v.number(),
+    sessionTtlMinutes: v.number(),
+    idleTimeoutMinutes: v.number(),
+    toolingPreset: v.optional(v.string()),
+    resourcePreset: v.optional(v.string()),
+    allowInfra: v.boolean(),
+    allowTerminal: v.boolean(),
+    allowTunnel: v.boolean(),
+    useHostAgentTools: v.boolean(),
+    useHostInfra: v.boolean(),
+    allowedRunners: v.optional(v.array(v.string())),
+    allowedProjects: v.optional(v.array(v.string())),
+    createdAt: v.number(),
+    acceptedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_hostUserId", ["hostUserId"])
+    .index("by_guestUserId", ["guestUserId"])
+    .index("by_inviteCode", ["inviteCode"]),
+
+  hostShareSessions: defineTable({
+    inviteId: v.id("hostShareInvites"),
+    hostUserId: v.id("users"),
+    hostDeviceId: v.optional(v.string()),
+    guestUserId: v.id("users"),
+    guestDeviceId: v.optional(v.string()),
+    status: v.union(
+      v.literal("active"),
+      v.literal("ended"),
+      v.literal("expired"),
+      v.literal("revoked"),
+    ),
+    label: v.optional(v.string()),
+    policy: v.object({
+      toolingPreset: v.optional(v.string()),
+      resourcePreset: v.optional(v.string()),
+      allowInfra: v.boolean(),
+      allowTerminal: v.boolean(),
+      allowTunnel: v.boolean(),
+      useHostAgentTools: v.boolean(),
+      useHostInfra: v.boolean(),
+      allowedRunners: v.array(v.string()),
+      allowedProjects: v.array(v.string()),
+    }),
+    createdAt: v.number(),
+    startedAt: v.number(),
+    expiresAt: v.number(),
+    idleTimeoutMinutes: v.number(),
+    lastActivityAt: v.number(),
+    endedAt: v.optional(v.number()),
+    endedReason: v.optional(v.string()),
+  })
+    .index("by_invite", ["inviteId"])
+    .index("by_host_status", ["hostUserId", "status"])
+    .index("by_guest_status", ["guestUserId", "status"]),
+
+  // Removed usage rows retained for migration only.
+  guestUsage: defineTable({
+    hostUserId: v.id("users"),
+    guestUserId: v.id("users"),
+    date: v.string(),              // "2026-04-06"
+    secondsUsed: v.number(),
+  })
+    .index("by_host_guest_date", ["hostUserId", "guestUserId", "date"])
+    .index("by_hostUserId_date", ["hostUserId", "date"]),
+
+  // ── Social graph ────────────────────────────────────────────────
+  // Reusable contact graph. This does not authorize machine, project, task, or
+  // relay access; those paths are owner-only. A mutual connection is modeled
+  // as two rows, one per perspective. It carries no sensitive content: ids,
+  // a display nickname, a source label, and timestamps.
+  connections: defineTable({
+    userId: v.id("users"),         // owner of this row's perspective
+    peerUserId: v.id("users"),     // the other person
+    status: v.union(
+      v.literal("pending"),        // request sent / received, not yet accepted
+      v.literal("accepted"),       // mutual connection live
+      v.literal("blocked"),        // this user blocked the peer
+    ),
+    direction: v.union(
+      v.literal("outgoing"),       // this user initiated the request
+      v.literal("incoming"),       // the peer initiated; this user must accept
+    ),
+    nickname: v.optional(v.string()),  // "Serhat (designer)" — display only
+    // How the edge was created: "email" | "username" | "support-link" |
+    // "project-invite" | "qr" | "manual" | "suggested". Non-secret label.
+    source: v.optional(v.string()),
+    createdAt: v.number(),
+    acceptedAt: v.optional(v.number()),
+    blockedAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_peer", ["peerUserId"])
+    .index("by_user_peer", ["userId", "peerUserId"])
+    .index("by_user_status", ["userId", "status"]),
+
+  // Removed project-collaboration schema retained only so existing rows can be
+  // migrated or deleted. No route or live mutation creates or consumes it.
+  projectShares: defineTable({
+    ownerUserId: v.id("users"),
+    slug: v.string(),                  // human label, e.g. "acme-app"
+    repoUrl: v.string(),               // normalized host/owner/repo
+    defaultBranch: v.optional(v.string()),
+    // Where collaborators' work runs.
+    hostKind: v.union(
+      v.literal("owner-device"),       // an online device the owner already has
+      v.literal("managed-cloud"),      // a Yaver-managed box (cloudMachines)
+    ),
+    hostDeviceId: v.optional(v.string()),          // when owner-device / provisioned cloud
+    hostMachineId: v.optional(v.id("cloudMachines")),
+    // Who funds managed compute when hostKind=managed-cloud.
+    payer: v.optional(v.union(v.literal("owner"), v.literal("invitee"))),
+    shareCode: v.string(),             // join-by-code (like inviteCode)
+    status: v.union(v.literal("active"), v.literal("archived")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    archivedAt: v.optional(v.number()),
+  })
+    .index("by_owner", ["ownerUserId"])
+    .index("by_shareCode", ["shareCode"]),
+
+  projectMemberships: defineTable({
+    shareId: v.id("projectShares"),
+    ownerUserId: v.id("users"),        // denormalized — the share owner
+    userId: v.optional(v.id("users")), // set when accepted / pre-set if invited by userId
+    invitedEmail: v.optional(v.string()), // when invited by email and not yet a user
+    role: v.union(
+      v.literal("owner"),
+      v.literal("dev"),
+      v.literal("normie"),
+      v.literal("viewer"),
+    ),
+    branch: v.optional(v.string()),    // per-collaborator feature branch, e.g. "yaver/serhat"
+    grantId: v.optional(v.id("infraAccessGrants")), // the materialized access edge
+    status: v.union(
+      v.literal("invited"),
+      v.literal("active"),
+      v.literal("revoked"),
+    ),
+    invitedAt: v.number(),
+    acceptedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_share", ["shareId"])
+    .index("by_user", ["userId"])
+    .index("by_share_user", ["shareId", "userId"])
+    .index("by_owner", ["ownerUserId"]),
+
+  // Owner project artifacts: APKs, Hermes bundles, web previews, screenshots,
+  // logs, etc. The record is
+  // metadata + a signed/external URL pointer only. Privacy contract: no local
+  // filesystem paths, no build stdout, no secrets, no provider credentials.
+  projectArtifacts: defineTable({
+    userId: v.id("users"),             // uploader / creator
+    ownerUserId: v.id("users"),        // project owner
+    shareId: v.optional(v.id("projectShares")), // removed collaboration tombstone
+    membershipId: v.optional(v.id("projectMemberships")), // removed collaboration tombstone
+    taskId: v.optional(v.string()),
+    localTaskId: v.optional(v.string()),
+    projectSlug: v.string(),
+    kind: v.string(),                  // apk | hermes | web-preview | screenshot | log | other
+    title: v.string(),
+    description: v.optional(v.string()),
+    provider: v.string(),              // yaver-storage | external | convex | s3 | r2 | ...
+    storageId: v.optional(v.id("_storage")),
+    objectKey: v.optional(v.string()), // provider object id/key, never local path
+    url: v.optional(v.string()),       // externally shareable URL, if already minted
+    contentType: v.optional(v.string()),
+    sizeBytes: v.optional(v.number()),
+    checksum: v.optional(v.string()),
+    visibility: v.union(v.literal("private"), v.literal("project"), v.literal("public-link")),
+    shareToken: v.optional(v.string()),
+    shareUrlExpiresAt: v.optional(v.number()),
+    expiresAt: v.optional(v.number()),
+    status: v.union(v.literal("active"), v.literal("hidden"), v.literal("expired"), v.literal("deleted")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastAccessedAt: v.optional(v.number()),
+  })
+    .index("by_user_created", ["userId", "createdAt"])
+    .index("by_owner_created", ["ownerUserId", "createdAt"])
+    .index("by_owner_project_created", ["ownerUserId", "projectSlug", "createdAt"])
+    .index("by_owner_project_kind_created", ["ownerUserId", "projectSlug", "kind", "createdAt"])
+    .index("by_share_created", ["shareId", "createdAt"])
+    .index("by_share_kind_created", ["shareId", "kind", "createdAt"])
+    .index("by_shareToken", ["shareToken"]),
+
+  projectArtifactUploadIntents: defineTable({
+    userId: v.id("users"),
+    ownerUserId: v.id("users"),
+    shareId: v.optional(v.id("projectShares")), // removed collaboration tombstone
+    projectSlug: v.string(),
+    sizeBytes: v.number(),
+    status: v.union(v.literal("pending"), v.literal("consumed")),
+    storageId: v.optional(v.id("_storage")),
+    artifactId: v.optional(v.id("projectArtifacts")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_status", ["ownerUserId", "status"])
+    .index("by_owner_project_status", ["ownerUserId", "projectSlug", "status"])
+    .index("by_share_status", ["shareId", "status"])
+    .index("by_user_status", ["userId", "status"]),
+
+  // Feedback SDK work queue for owner SDK tokens. The row may contain the
+  // submitted short feedback text,
+  // but it must not contain local filesystem paths, runner output, OAuth,
+  // provider credentials, screenshots/base64, or app secrets. Attachments are
+  // artifact ids or HTTPS URLs only.
+  feedbackWorkItems: defineTable({
+    userId: v.id("users"),             // owner that minted the SDK token
+    ownerUserId: v.id("users"),
+    shareId: v.optional(v.id("projectShares")), // removed collaboration tombstone
+    membershipId: v.optional(v.id("projectMemberships")), // removed collaboration tombstone
+    projectSlug: v.string(),
+    sourceSurface: v.optional(v.string()),
+    sourceTokenLabel: v.optional(v.string()),
+    title: v.string(),
+    body: v.string(),
+    kind: v.string(),                  // bug | idea | task | question | other
+    priority: v.string(),              // low | normal | high
+    component: v.optional(v.string()),
+    appVersion: v.optional(v.string()),
+    platform: v.optional(v.string()),
+    artifactIds: v.optional(v.array(v.id("projectArtifacts"))),
+    attachmentUrls: v.optional(v.array(v.string())),
+    target: v.union(v.literal("task"), v.literal("issue"), v.literal("branch"), v.literal("triage")),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("claimed"),
+      v.literal("task_created"),
+      v.literal("issue_draft_created"),
+      v.literal("issue_created"),
+      v.literal("branch_created"),
+      v.literal("blocked"),
+      v.literal("cancelled"),
+      v.literal("rejected"),
+      v.literal("expired"),
+    ),
+    relaySourceIntentId: v.optional(v.id("relaySourceIntents")),
+    taskId: v.optional(v.string()),
+    issueUrl: v.optional(v.string()),
+    branch: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    workerId: v.optional(v.string()),
+    attempts: v.number(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  }).index("by_user_created", ["userId", "createdAt"])
+    .index("by_owner_created", ["ownerUserId", "createdAt"])
+    .index("by_owner_project_created", ["ownerUserId", "projectSlug", "createdAt"])
+    .index("by_share_created", ["shareId", "createdAt"])
+    .index("by_owner_status", ["ownerUserId", "status"])
+    .index("by_owner_project_status", ["ownerUserId", "projectSlug", "status"])
+    .index("by_share_status", ["shareId", "status"])
+    .index("by_status_expires", ["status", "expiresAt"]),
+
+  // SDK tokens — owner-minted service credentials (independent from CLI
+  // session tokens). delegatedGuest* are legacy tombstones only; validation
+  // rejects every historical row carrying them.
+  sdkTokens: defineTable({
+    tokenHash: v.string(),        // SHA-256 of the raw token
+    userId: v.id("users"),        // owner — must match CLI user
+    label: v.optional(v.string()), // human-readable label (e.g. "AcmeStore dev build")
+    scopes: v.optional(v.array(v.string())), // allowed scopes: "feedback","blackbox","voice","builds","spatial"
+    allowedCIDRs: v.optional(v.array(v.string())), // IP binding: "192.168.1.0/24"
+    delegatedGuestUserId: v.optional(v.id("users")), // legacy delegated-account tombstone; always rejected
+    delegatedGuestScope: v.optional(v.string()), // legacy tombstone; never honored
+    sourceSurface: v.optional(v.string()), // e.g. "feedback-sdk"
+    targetDeviceId: v.optional(v.string()), // host device this token may hit
+    allowedProjects: v.optional(v.array(v.string())), // owner service-token repo/project allowlist
+    replacedBy: v.optional(v.string()),  // tokenHash of replacement (rotation)
+    replacedAt: v.optional(v.number()),  // when replaced (5min grace period)
+    expiresAt: v.number(),        // 1 year from creation (or custom)
+    createdAt: v.number(),
+  })
+    .index("by_tokenHash", ["tokenHash"])
+    .index("by_userId", ["userId"]),
+
+  // Yaver-owned WhatsApp command intake. Privacy contract: these rows are
+  // routing metadata and receipts only. Raw WhatsApp message text, task
+  // prompts, output, logs, paths, media, and secrets must not be stored here.
+  whatsappInvites: defineTable({
+    userId: v.id("users"),
+    codeHash: v.string(),
+    targetDeviceId: v.string(),
+    projectSlug: v.optional(v.string()),
+    allowedActions: v.array(v.string()), // task | status | reload | build_reload
+    status: v.union(v.literal("active"), v.literal("revoked"), v.literal("expired")),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_codeHash", ["codeHash"]),
+
+  whatsappContacts: defineTable({
+    userId: v.id("users"),
+    phoneHash: v.string(),
+    targetDeviceId: v.string(),
+    projectSlug: v.optional(v.string()),
+    allowedActions: v.array(v.string()),
+    displayName: v.optional(v.string()),
+    status: v.union(v.literal("active"), v.literal("revoked")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_phoneHash", ["phoneHash"])
+    .index("by_user_phone", ["userId", "phoneHash"]),
+
+  whatsappCommandReceipts: defineTable({
+    userId: v.id("users"),
+    phoneHash: v.string(),
+    waMessageIdHash: v.string(),
+    targetDeviceId: v.string(),
+    projectSlug: v.optional(v.string()),
+    action: v.string(),
+    status: v.string(), // received | delivered | failed | ignored
+    taskId: v.optional(v.string()),
+    errorCode: v.optional(v.string()),
+    createdAt: v.number(),
+    deliveredAt: v.optional(v.number()),
+  })
+    .index("by_waMessageIdHash", ["waMessageIdHash"])
+    .index("by_user_created", ["userId", "createdAt"])
+    .index("by_phone_created", ["phoneHash", "createdAt"]),
+
+  // Security events — new device IP alerts, token usage anomalies
+  securityEvents: defineTable({
+    userId: v.id("users"),
+    eventType: v.string(),        // "new_ip", "token_rotated", "token_revoked"
+    details: v.string(),          // JSON blob with event-specific data
+    read: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_userId", ["userId", "createdAt"]),
 
   mobileStreamLogs: defineTable({
     userId: v.optional(v.string()),
@@ -352,4 +2589,889 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_createdAt", ["createdAt"])
     .index("by_userId", ["userId", "createdAt"]),
+
+  // Projects — synced from each agent via /projects/sync. Source of truth for
+  // the dashboard overview grid, recent activity feed, and cross-machine
+  // project discovery.
+  userProjects: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),         // Yaver device id where this project lives
+    slug: v.string(),              // filesystem basename
+    // path deliberately omitted — absolute paths contain the user's
+    // home-dir username; privacy contract keeps them on the agent.
+    // The field remains optional for back-compat with rows written
+    // before the cutoff; new rows are never given one.
+    path: v.optional(v.string()),
+    name: v.string(),
+    stack: v.optional(v.string()), // nextjs, vite, expo, hono, etc.
+    backend: v.optional(v.string()),
+    auth: v.optional(v.string()),
+    activeEnv: v.optional(v.string()),
+    localPort: v.optional(v.number()),
+    tunnelUrl: v.optional(v.string()),
+    gitBranch: v.optional(v.string()),
+    lastCommit: v.optional(v.string()),
+    status: v.union(
+      v.literal("running"),
+      v.literal("stopped"),
+      v.literal("error"),
+      v.literal("creating"),
+    ),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId", "updatedAt"])
+    .index("by_device", ["deviceId"])
+    .index("by_user_slug", ["userId", "slug"]),
+
+  // Coarse project profile for machine placement. Written by agents/mobile when
+  // they can classify a repo/app without uploading source. Privacy contract:
+  // projectSlug is the same basename already allowed in userProjects; counts,
+  // stack labels, and resource classes are bookkeeping only. Never absolute
+  // paths, file contents, prompts, logs, package names, or dependency lists.
+  projectProfiles: defineTable({
+    userId: v.id("users"),
+    projectSlug: v.string(),
+    sourceDeviceId: v.optional(v.string()),
+    stack: v.optional(v.string()),
+    appCount: v.optional(v.number()),
+    repoSizeMb: v.optional(v.number()),
+    fileCount: v.optional(v.number()),
+    hasNativeMobile: v.optional(v.boolean()),
+    hasDocker: v.optional(v.boolean()),
+    resourceClass: v.union(
+      v.literal("phone"),
+      v.literal("relay-source"),
+      v.literal("standard"),
+      v.literal("heavy"),
+      v.literal("build"),
+    ),
+    confidence: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_user_slug", ["userId", "projectSlug"])
+    .index("by_user", ["userId", "updatedAt"]),
+
+  // Durable task-placement decisions. This is the central ledger for "where
+  // should this work run?" across phone sandbox, relay source runner, owned
+  // machines, and managed cloud. It deliberately stores decision metadata only:
+  // no prompt, stdout, repo path, branch diff, generated artifact, or secret.
+  taskPlacements: defineTable({
+    userId: v.id("users"),
+    taskId: v.string(),
+    sourceSurface: v.optional(v.string()), // mobile | web | cli | sdk | autorun
+    projectSlug: v.optional(v.string()),
+    requestedRunner: v.optional(v.string()),
+    kind: v.string(), // vibe | build | deploy | test | source | autorun | unknown
+    lane: v.union(
+      v.literal("phone_sandbox"),
+      v.literal("relay_source"),
+      v.literal("owned_machine"),
+      v.literal("cloud_standard"),
+      v.literal("cloud_heavy"),
+      v.literal("cloud_build"),
+      v.literal("external_deploy"),
+      v.literal("manual"),
+    ),
+    resourceClass: v.union(
+      v.literal("phone"),
+      v.literal("relay-source"),
+      v.literal("standard"),
+      v.literal("heavy"),
+      v.literal("build"),
+    ),
+    targetDeviceId: v.optional(v.string()),
+    cloudMachineId: v.optional(v.id("cloudMachines")),
+    subscriptionPlan: v.optional(v.string()),
+    entitlement: v.optional(v.string()), // free | relay-pro | cloud-workspace | owner-dev
+    status: v.union(
+      v.literal("planned"),
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("superseded"),
+    ),
+    reason: v.string(),
+    wakeRequired: v.boolean(),
+    wakeTargetMs: v.optional(v.number()),
+    estimatedCreditCost: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user_created", ["userId", "createdAt"])
+    .index("by_task", ["taskId"])
+    .index("by_project", ["userId", "projectSlug", "createdAt"])
+    .index("by_cloud_machine", ["cloudMachineId", "createdAt"]),
+
+  // Prompt-free durable dispatch intent. This records that a client is holding
+  // a local task body while cloud/owned compute wakes, so another session can
+  // show/coordinate the pending state without Convex storing prompts, repo
+  // paths, command bodies, stdout, generated artifacts, or secrets.
+  taskDispatchIntents: defineTable({
+    userId: v.id("users"),
+    localTaskId: v.string(),
+    placementId: v.optional(v.id("taskPlacements")),
+    taskId: v.optional(v.string()),
+    sourceSurface: v.optional(v.string()),
+    lane: v.optional(v.string()),
+    targetDeviceId: v.optional(v.string()),
+    cloudMachineId: v.optional(v.id("cloudMachines")),
+    requestedRunner: v.optional(v.string()),
+    projectSlug: v.optional(v.string()),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("dispatching"),
+      v.literal("dispatched"),
+      v.literal("blocked"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+      v.literal("expired"),
+    ),
+    blockedAction: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    attempts: v.number(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  }).index("by_user_created", ["userId", "createdAt"])
+    .index("by_user_local_task", ["userId", "localTaskId"])
+    .index("by_local_task", ["localTaskId"])
+    .index("by_placement", ["placementId"])
+    .index("by_status_expires", ["status", "expiresAt"]),
+
+  // Relay-source work ledger. This lets the cheap relay layer create/track a
+  // branch-scoped source task for Yaver-managed projects while Cloud Workspace
+  // wakes. Privacy contract: no prompt, diff, file path, stdout, token, vault
+  // reference, or runner OAuth. It stores only ids, branch names scoped under
+  // yaver/, coarse status/reason labels, and expiry/attempt counters.
+  relaySourceIntents: defineTable({
+    userId: v.id("users"),             // owner
+    ownerUserId: v.id("users"),        // project owner
+    shareId: v.optional(v.id("projectShares")), // removed collaboration tombstone
+    membershipId: v.optional(v.id("projectMemberships")), // removed collaboration tombstone
+    placementId: v.optional(v.id("taskPlacements")),
+    localTaskId: v.string(),
+    taskId: v.optional(v.string()),
+    sourceSurface: v.optional(v.string()),
+    projectSlug: v.string(),
+    repoUrl: v.string(),               // normalized owner repo URL
+    baseBranch: v.string(),
+    branch: v.string(),                // must be under yaver/
+    providerKind: v.optional(v.string()),          // github | gitlab | yaver-git | ...
+    providerHost: v.optional(v.string()),          // github.com / gitlab.com / custom host
+    providerRepo: v.optional(v.string()),          // owner/repo, non-secret
+    providerBranch: v.optional(v.string()),        // yaver/* branch mirrored on provider
+    providerBranchUrl: v.optional(v.string()),     // provider web URL for the branch, non-secret
+    providerAppInstallationId: v.optional(v.string()), // opaque app install id, never token material
+    providerAuthMode: v.optional(v.string()),      // none | app_installation | owner_local_token
+    providerAuthStatus: v.optional(v.string()),    // required | available | owner_token_fallback | unsupported
+    kind: v.string(),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("claimed"),
+      v.literal("committed"),
+      v.literal("handoff_ready"),
+      v.literal("blocked"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+      v.literal("expired"),
+    ),
+    reason: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    relayId: v.optional(v.string()),
+    attempts: v.number(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  }).index("by_user_created", ["userId", "createdAt"])
+    .index("by_owner_created", ["ownerUserId", "createdAt"])
+    .index("by_share_created", ["shareId", "createdAt"])
+    .index("by_placement", ["placementId"])
+    .index("by_local_task", ["localTaskId"])
+    .index("by_status_expires", ["status", "expiresAt"]),
+
+  // Durable Cloud Workspace wake/provision/park attempts. This is the honest
+  // progress ledger behind "machine is coming up" UX and postmortems. Privacy
+  // contract: stores only control-plane ids, coarse phase/status strings,
+  // timings, profile labels, non-secret provider action/resource ids, dry-run
+  // flags, and short curated error/reason text. No prompts, logs, repo paths,
+  // provider IPs, hostnames, tokens, or file data.
+  wakeRuns: defineTable({
+    userId: v.id("users"),
+    machineId: v.id("cloudMachines"),
+    placementId: v.optional(v.id("taskPlacements")),
+    taskId: v.optional(v.string()),
+    kind: v.union(v.literal("provision"), v.literal("wake"), v.literal("park")),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("retrying"),
+      v.literal("blocked"),
+      v.literal("cancelled"),
+    ),
+    phase: v.optional(v.string()),
+    progress: v.optional(v.number()),
+    resourceClass: v.optional(v.string()),
+    machineType: v.optional(v.string()),
+    targetDeviceId: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    error: v.optional(v.string()),
+    provider: v.optional(v.string()),
+    providerResourceId: v.optional(v.string()),
+    providerActionId: v.optional(v.string()),
+    providerStatus: v.optional(v.string()),
+    dryRun: v.optional(v.boolean()),
+    startedAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  }).index("by_user_started", ["userId", "startedAt"])
+    .index("by_machine_started", ["machineId", "startedAt"])
+    .index("by_placement", ["placementId"])
+    .index("by_status", ["status", "updatedAt"]),
+
+  // User-defined one-tap shortcuts (mobile Shortcuts tab). Each shortcut
+  // is an ordered chain of deterministic actions — connect to a device,
+  // open a project, push a Hermes reload, start a dev server, open/debug a
+  // robot cell — run client-side on the phone. Privacy contract: steps carry
+  // ONLY a deviceId (uuid), a project slug, numeric robot flags, and labels.
+  // They MUST NOT carry absolute paths, task-prompt text, logs, images, or
+  // sensor captures (a "speak/type a task" step collects its prompt at run
+  // time and never persists it) — same reasoning as userProjects above.
+  // Enforced by convex_privacy_test.go.
+  userShortcuts: defineTable({
+    userId: v.id("users"),
+    name: v.string(),
+    icon: v.optional(v.string()),   // key into the app's inline-SVG icon set
+    color: v.optional(v.string()),  // accent hex for the card
+    order: v.number(),              // sort position in the grid
+    steps: v.array(
+      v.object({
+        kind: v.string(),                     // select-device | open-project | hermes-reload | start-dev | open-robot | robot-action
+        deviceId: v.optional(v.string()),     // uuid, matches devices.deviceId
+        deviceName: v.optional(v.string()),   // display label only (resolved deviceId can roam)
+        projectSlug: v.optional(v.string()),  // filesystem basename only — never a path
+        mode: v.optional(v.string()),         // hermes-reload: "dev" | "bundle"
+        framework: v.optional(v.string()),    // start-dev: expo | vite | nextjs | flutter | ...
+        label: v.optional(v.string()),        // UI label ONLY — never a task prompt
+        runner: v.optional(v.string()),        // agent id only (codex / claude / ...)
+        model: v.optional(v.string()),         // model id only
+        runnerLabel: v.optional(v.string()),   // display label only
+        robotAction: v.optional(v.string()),   // status | home | jog | tool | screw | program-run | estop | reset
+        verify: v.optional(v.string()),        // frames | agent | off
+        axis: v.optional(v.string()),          // X | Y | Z
+        distanceMm: v.optional(v.number()),
+        feed: v.optional(v.number()),
+        toolOn: v.optional(v.boolean()),
+        programName: v.optional(v.string()),   // taught robot program name only
+        targetTorqueNmm: v.optional(v.number()),
+        x: v.optional(v.number()),
+        y: v.optional(v.number()),
+      }),
+    ),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId", "order"]),
+
+  // Services running on each device — synced from /services/status.
+  userServices: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    projectSlug: v.optional(v.string()),
+    name: v.string(),
+    image: v.optional(v.string()),
+    port: v.number(),
+    status: v.string(),
+    cpuPercent: v.optional(v.number()),
+    ramMB: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId", "updatedAt"])
+    .index("by_device", ["deviceId"]),
+
+  // Deployment records from /deploy/list fanned out into Convex.
+  userDeployments: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    projectSlug: v.string(),
+    deployId: v.string(),
+    target: v.optional(v.string()),     // vercel, cloudflare, fly, vps
+    environment: v.optional(v.string()),
+    status: v.string(),                 // success, failed, rolled-back
+    commit: v.optional(v.string()),
+    message: v.optional(v.string()),
+    duration: v.optional(v.string()),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+  }).index("by_user", ["userId", "startedAt"])
+    .index("by_project", ["userId", "projectSlug"]),
+
+  // Agent audit log mirrored into Convex for cross-machine activity feed.
+  userActivity: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    action: v.string(),
+    target: v.optional(v.string()),
+    outcome: v.string(),
+    error: v.optional(v.string()),
+    timestamp: v.number(),
+  }).index("by_user", ["userId", "timestamp"]),
+
+  // ── Managed-cloud prepaid wallet (metered stop/start) ──────────────
+  // Bookkeeping counters only — Convex-allowed (same class as
+  // runnerUsage/dailyTaskCounts; convex_privacy_test.go bans
+  // secrets/output/paths, NOT balances). All money in integer cents to
+  // avoid float drift. Owned by cloudLifecycle.ts; cloudMachines.ts
+  // (parallel session) is NOT edited — read-only seam.
+  prepaidCredits: defineTable({
+    userId: v.id("users"),
+    subscriptionId: v.optional(v.id("subscriptions")),
+    balanceCents: v.number(),       // current spendable balance
+    totalAddedCents: v.number(),    // lifetime topped up
+    totalUsedCents: v.number(),     // lifetime metered out
+    currency: v.string(),           // "usd" (display only; math is cents)
+    lastTopupAt: v.optional(v.number()),
+    lastMeteredAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"])
+    .index("by_subscription", ["subscriptionId"]),
+
+  // One row per metering tick (cron) or transition. Append-only ledger
+  // so balance is auditable. `chargedCents` = 2x `hetznerCostCents`
+  // (100% margin, both live and stopped/snapshot states).
+  creditUsage: defineTable({
+    userId: v.id("users"),
+    machineId: v.optional(v.id("cloudMachines")),
+    date: v.string(),                 // "YYYY-MM-DD" (UTC)
+    state: v.string(),                // "live" | "stopped"
+    seconds: v.number(),              // billable seconds in this tick
+    hetznerCostCents: v.number(),     // raw provider cost (our COGS)
+    chargedCents: v.number(),         // user-facing (2x markup)
+    ratePerHourCents: v.number(),     // effective user rate this tick
+    dryRun: v.boolean(),              // true = simulated, no real spend
+    createdAt: v.number(),
+  }).index("by_user_date", ["userId", "date"])
+    .index("by_machine", ["machineId", "createdAt"]),
+
+  // One row per real-money top-up (OpenAI-style prepaid credit pack
+  // bought on the web; LemonSqueezy `order_created` webhook → topUp).
+  // Append-only and keyed by the payment-provider order id so a
+  // re-delivered webhook can't double-credit a wallet (idempotency).
+  // Counter/id/timestamp only — same Convex-allowed class as
+  // creditUsage (privacy: convex_privacy_test.go pins the field names).
+  creditTopups: defineTable({
+    userId: v.id("users"),
+    orderId: v.string(),              // provider order id (idempotency key)
+    source: v.string(),               // "lemonsqueezy" | "owner-dev"
+    packId: v.optional(v.string()),   // catalog pack id (e.g. "p25")
+    amountCents: v.number(),          // credit added to the wallet
+    createdAt: v.number(),
+  }).index("by_user", ["userId", "createdAt"])
+    .index("by_order", ["orderId"]),
+
+  // ── Subscription included-hours allowance (Phase 1 base + overage) ──
+  // A paid plan (cloud-agent / cloud-workspace) grants N ACTIVE cloud
+  // hours per billing period BEFORE the prepaid wallet (overage) is
+  // touched. Allowance is PER machineType ("cpu" / "gpu") so the SAME
+  // base+overage model covers both: e.g. 40 CPU-hours + 0 GPU-hours
+  // (GPU is then pure prepaid overage), or a GPU plan that grants a few
+  // GPU-hours too. One row per (userId, period, machineType). `period`
+  // is the billing key ("YYYY-MM" calendar month by default; a renewal
+  // webhook may pass an anniversary key). A new period = a fresh row
+  // with usedSeconds 0 = the monthly reset (no reset cron — the meter
+  // reads the current-period row; the renewal webhook grants it). A user
+  // with NO row for a type is pure pay-as-you-go for that type (legacy
+  // wallet behaviour, unchanged). Risk control is the existing wallet
+  // floor + canStart gate: once included is spent, the box only keeps
+  // running while the prepaid wallet can still afford the metered rate
+  // PLUS the snapshot-transition reserve, else it auto-stops — so we
+  // never run compute we can't bill. Counter/id/label only — same
+  // Convex-allowed class as creditUsage. Owned by cloudLifecycle.ts.
+  includedAllowance: defineTable({
+    userId: v.id("users"),
+    period: v.string(),                 // "YYYY-MM" (UTC) or billing-period key
+    machineType: v.string(),            // "cpu" | "gpu"
+    plan: v.string(),                   // "cloud-agent" | "cloud-workspace" | ...
+    includedSeconds: v.number(),        // granted live seconds this period
+    usedSeconds: v.number(),            // live seconds consumed this period
+    source: v.optional(v.string()),     // "subscription" | "owner-dev" | "grant"
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user_period_type", ["userId", "period", "machineType"]),
+
+  // ── Yaver Gateway: per-user limits (OPERATOR-set, user-IMMUTABLE) ───
+  // The free public-compute tier lends the operator's GLM key through the
+  // gateway. Per-user limits live HERE — in a table only the operator
+  // (ownerAllowlist) can write — NOT in userSettings (which the user can
+  // mutate). A tenant can never raise their own cap or re-enable a
+  // disabled account. Absent row = gateway defaults (env ceilings). All
+  // values are counters; no secrets. Read by /gateway/authorize.
+  gatewayPolicy: defineTable({
+    userId: v.id("users"),
+    enabled: v.boolean(),                  // false = hard-deny gateway
+    dailyCapCents: v.optional(v.number()), // 0/unset = no daily cap
+    hourlyCapCents: v.optional(v.number()),// per-user rolling-hour cap
+    maxTokensPerRequest: v.optional(v.number()),
+    maxCentsPerRequest: v.optional(v.number()),
+    freeGrantCents: v.optional(v.number()),// informational: granted trial credit
+    note: v.optional(v.string()),          // operator note (non-secret)
+    setBy: v.optional(v.string()),         // operator userId who set it
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  // ── Yaver Gateway: scoped inference-only tokens (OPERATOR-minted) ───
+  // A tenant's runner authenticates to the gateway with one of THESE, not
+  // a session token. Stored as a hash (raw shown once at mint). Scope is
+  // always "inference" today: a leaked token authorizes ONLY gateway
+  // inference for one user, within their gatewayPolicy caps — it cannot
+  // touch any other Yaver API. Rotatable + revocable by the operator
+  // (rotation = revoke old + mint new). Never user-mutable.
+  gatewayTokens: defineTable({
+    userId: v.id("users"),
+    tokenHash: v.string(),                 // sha256(raw); raw never stored
+    scope: v.string(),                     // "inference"
+    label: v.optional(v.string()),         // non-secret label (e.g. grant id)
+    createdBy: v.optional(v.string()),     // operator userId
+    createdAt: v.number(),
+    expiresAt: v.optional(v.number()),     // 0/unset = no expiry
+    revokedAt: v.optional(v.number()),     // set = dead
+    lastUsedAt: v.optional(v.number()),
+  }).index("by_hash", ["tokenHash"])
+    .index("by_user", ["userId", "createdAt"]),
+
+  // ── Per-user OpenRouter key (METADATA ONLY — raw key never here) ────
+  // A paid hosted (Cloud Agent) seat gets its OWN OpenRouter API key,
+  // minted via OpenRouter's Provisioning API. WHY per-user (not one
+  // shared upstream key): a single GLM/OpenRouter key rate-limits under
+  // many concurrent paying users; a per-user key spreads load across
+  // OpenRouter's GLM provider pool AND carries its own hard credit
+  // `limit` (the margin backstop — set BELOW what the user prepaid, so
+  // "if they finish credit we already made money" holds at the provider
+  // level too). PRIVACY: the raw `sk-or-v1-...` secret lives ONLY in the
+  // gateway Worker's KV (OR_USER_KEYS), NEVER in Convex — this row holds
+  // just OpenRouter's `hash` (an identifier used to PATCH/DELETE the key,
+  // not a bearer), the non-secret name, the limit, and status. Same
+  // counter/id/label class as gatewayTokens; pinned by convex_privacy_test.go.
+  // SECURITY (open-source repo): the code is public, the Convex DATA is
+  // not — but treat this table as if a row could leak. It deliberately
+  // holds NOTHING that authorizes inference: `orHash` is OpenRouter's
+  // management identifier (you still need the operator's PROVISIONING key
+  // to act on it), never the `sk-or-v1-...` secret. Every function that
+  // writes this table is internal-only (no client/mutation surface), so a
+  // tenant can neither mint themselves a key nor raise their own
+  // `limitCents`. The limit itself is set to our COGS budget (margin
+  // already removed — see openrouterKeys.ts), so even a total breach of
+  // the key caps third-party spend well below what the user prepaid.
+  openrouterKeys: defineTable({
+    userId: v.id("users"),
+    orHash: v.string(),                 // OpenRouter key hash (mgmt id, NOT the secret)
+    name: v.string(),                   // "yaver-user-<id>" (non-secret label)
+    limitCents: v.number(),             // OpenRouter-side hard credit cap (monthly reset) = our COGS budget
+    status: v.string(),                 // "active" | "disabled"
+    usageCents: v.optional(v.number()), // mirror of OpenRouter usage_monthly (display; synced)
+    lastSyncedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    disabledAt: v.optional(v.number()),
+  }).index("by_user", ["userId"])
+    .index("by_hash", ["orHash"]),
+
+  // ── Generic managed-resource meter (one wallet, many meters) ───────
+  // The compute meter (creditUsage above) is SKU-specific and predates
+  // this. As Yaver Premium resells more of the stack — inference tokens
+  // (GLM/OpenRouter gateway), managed backend (Convex proxy), managed
+  // web (Cloudflare proxy), publish (Mac-farm builds + ASC/Play upload)
+  // — each new meter would otherwise need its own table. Instead they
+  // all append here and debit the SAME prepaidCredits wallet. `kind`
+  // discriminates the meter; `provider`/`unit`/`model`/`ref` are plain
+  // NON-SECRET labels (same class as cloudMachines.serverId) so the row
+  // stays counter/id/timestamp-only. chargedCents = providerCostCents x
+  // markup(kind) — the arbitrage spread, env-tunable per kind. dryRun
+  // mirrors the compute meter's fail-closed launch posture.
+  // Owned by managedMeter.ts. Privacy: pinned by convex_privacy_test.go.
+  managedUsage: defineTable({
+    userId: v.id("users"),
+    kind: v.string(),                 // "inference"|"backend"|"web"|"publish"|"compute"|"ci"
+    provider: v.string(),             // "zai"|"openrouter"|"convex"|"cloudflare"|"macfarm"|"yaver-cloud"|"self-hosted"|"operator-fleet"|...
+    unit: v.string(),                 // "token"|"request"|"read"|"gb"|"build-min"|"cpu-min"|"mac-min"|...
+    quantity: v.number(),             // units metered this row
+    providerCostCents: v.number(),    // raw upstream COGS (cents)
+    chargedCents: v.number(),         // user-facing after markup(kind)
+    // What the user WOULD have paid the upstream SaaS for this same work —
+    // the "savings ledger" anchor. For ci: minutes x GitHub Actions per-min
+    // (linux $0.008 / macOS $0.08 / windows $0.016). Non-secret counter;
+    // savings = SUM(wouldHaveCostUpstreamCents) - SUM(chargedCents).
+    wouldHaveCostUpstreamCents: v.optional(v.number()),
+    model: v.optional(v.string()),    // inference model label (non-secret)
+    ref: v.optional(v.string()),      // resource id (deployment/build) — non-secret
+    date: v.string(),                 // "YYYY-MM-DD" (UTC)
+    dryRun: v.boolean(),              // true = simulated, no real spend
+    createdAt: v.number(),
+  }).index("by_user_date", ["userId", "date"])
+    .index("by_user_kind", ["userId", "kind", "createdAt"]),
+
+  // BYO (bring-your-own) cloud boxes the user runs on THEIR OWN provider
+  // account (Hetzner/DigitalOcean) via their vault token — Yaver's wallet
+  // is NOT involved (they pay the provider directly). Lifecycle
+  // BOOKKEEPING ONLY so state (alive/sleeping/deleted) + timestamps are
+  // visible across the user's devices. STRICTLY id/state/timestamps — NO
+  // token, NO key, NO path, NO secret (privacy contract; pinned by
+  // convex_privacy_test.go). serverId / serverIp are the user's own
+  // public cloud resource (not credentials); the token to act on them
+  // never leaves the owner's agent vault.
+  byoMachines: defineTable({
+    userId: v.id("users"),
+    provider: v.string(),                    // "hetzner" | "digitalocean"
+    serverId: v.string(),                    // provider numeric id (not a secret)
+    deviceId: v.optional(v.string()),        // once the box self-registers
+    name: v.string(),
+    region: v.optional(v.string()),
+    plan: v.optional(v.string()),
+    serverIp: v.optional(v.string()),        // user's own public box ip
+    imageId: v.optional(v.string()),         // baked per-account golden image (fast re-spin)
+    snapshotImageId: v.optional(v.string()), // current stop snapshot to resume from
+    state: v.union(
+      v.literal("active"),                   // alive / running
+      v.literal("stopped"),                  // sleeping (snapshot kept, server deleted)
+      v.literal("deleted"),                  // gone
+    ),
+    createdAt: v.number(),
+    lastUpAt: v.optional(v.number()),        // last time it went active
+    stoppedAt: v.optional(v.number()),       // last sleep
+    deletedAt: v.optional(v.number()),       // tombstone
+    updatedAt: v.number(),
+  }).index("by_user", ["userId", "updatedAt"])
+    .index("by_user_server", ["userId", "serverId"]),
+
+  // ── Org-admin singletons ──────────────────────────────────────────
+  // Both keyed by the literal "org" so .first() always returns the
+  // one-and-only row. A new row replaces; a deleted row reverts the
+  // deployment to defaults (per-user managed config + 7-day retention
+  // + no OIDC).
+
+  orgPolicy: defineTable({
+    singletonKey: v.literal("org"),
+    enforceRelay: v.optional(v.boolean()),
+    allowedRunners: v.optional(v.array(v.string())),
+    allowedProviders: v.optional(v.array(v.string())),
+    /** Idle window in minutes. 0 or missing = disabled. Enforced in
+     *  authenticateRequest: sessions whose lastRefreshAt is older are
+     *  refused as 401. */
+    idleTimeoutMin: v.optional(v.number()),
+    /** Replaces the hard-coded 7-day default in cleanup.ts. Floors
+     *  at 1 day; missing = 7. */
+    auditRetentionDays: v.optional(v.number()),
+    /** When true, requireAdminRequest refuses admins without TOTP
+     *  enrollment. Bootstrap allowlist admins are exempt during the
+     *  first 24h after promotion so they can set up MFA. */
+    requireMfaForAdmins: v.optional(v.boolean()),
+    updatedAt: v.number(),
+    updatedBy: v.id("users"),
+  }).index("by_singleton", ["singletonKey"]),
+
+  oidcConfig: defineTable({
+    singletonKey: v.literal("org"),
+    enabled: v.boolean(),
+    issuerUrl: v.string(),
+    clientId: v.string(),
+    /** AES-GCM ciphertext of the client secret. Stored as
+     *  base64(iv || ciphertext). Decryption key comes from env
+     *  OIDC_SECRET_ENCRYPTION_KEY (32 bytes, base64). */
+    clientSecretEnc: v.string(),
+    /** Optional email-domain or tenant id; refuses sign-in from
+     *  any other tenant. Empty = no restriction. */
+    tenant: v.optional(v.string()),
+    /** Discovered from .well-known/openid-configuration. Refreshed
+     *  on every save + on every Test connection click. */
+    authorizationEndpoint: v.optional(v.string()),
+    tokenEndpoint: v.optional(v.string()),
+    userinfoEndpoint: v.optional(v.string()),
+    jwksUri: v.optional(v.string()),
+    discoveredAt: v.optional(v.number()),
+    updatedAt: v.number(),
+    updatedBy: v.id("users"),
+  }).index("by_singleton", ["singletonKey"]),
+
+  /** Ephemeral state for the OIDC authorize-code flow. PKCE verifier
+   *  + nonce + return-to URL keyed by the random `state` query param.
+   *  Pruned by cleanup.ts after the 10-min TTL. */
+  oidcAuthAttempts: defineTable({
+    state: v.string(),
+    codeVerifier: v.string(),
+    nonce: v.string(),
+    returnTo: v.optional(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  }).index("by_state", ["state"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  /** Companion-compute bookkeeping (desktop/agent/companion.go). Cross-device
+   *  visibility for which box runs which serverless project's crons. Privacy
+   *  contract: bookkeeping ONLY — slug + bound deviceId + cron names/schedules
+   *  + last/next-run status. NEVER endpoint URLs, cron auth tokens, vault
+   *  secrets, or absolute paths (those stay on the agent). The agent builds
+   *  the payload through buildCompanionUpsertPayload, guarded by
+   *  desktop/agent/convex_privacy_test.go. */
+  companionProjects: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    slug: v.string(),
+    enabled: v.boolean(),
+    crons: v.array(v.object({
+      name: v.string(),
+      schedule: v.string(),
+      lastOutcome: v.optional(v.string()),
+      lastRunAt: v.optional(v.number()),
+      nextRunAt: v.optional(v.number()),
+    })),
+    serviceCount: v.number(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"])
+    .index("by_device_slug", ["deviceId", "slug"]),
+
+  /** Task Packages — shareable, portable cross-user task-execution units
+   *  (desktop/agent/package_*.go, docs/yaver-task-packages.md). Convex holds
+   *  BOOKKEEPING ONLY so an owner and a runner (often a DIFFERENT user) can
+   *  discover / share / track a package across devices: name, public hostnames
+   *  (for the consent screen), schedule intent, consent text, coarse counters.
+   *  NEVER the collector spec (selectors, full URLs w/ tokens), output
+   *  endpoints, secrets, IPs, or absolute paths — those resolve on-device
+   *  (collection_store is local). The agent builds the payload through
+   *  buildTaskPackagePayload, pinned by desktop/agent/convex_privacy_test.go. */
+  taskPackages: defineTable({
+    ownerUserId: v.id("users"),
+    deviceId: v.string(),          // owner box that published it
+    name: v.string(),              // sanitized slug
+    version: v.number(),
+    kind: v.string(),              // collect|probe|monitor|operate|agent
+    tier: v.string(),              // read_only | acting
+    description: v.optional(v.string()),
+    domains: v.array(v.string()),  // hostnames only, for consent
+    runtimes: v.array(v.string()), // mobile|agent|docker|worker
+    engines: v.array(v.string()),
+    vantageGeo: v.array(v.string()),
+    vantageResidential: v.boolean(),
+    schedule: v.optional(v.string()),
+    consentSummary: v.optional(v.string()),
+    willNot: v.array(v.string()),
+    dataShown: v.array(v.string()),
+    status: v.string(),            // draft | published | archived
+    updatedAt: v.number(),
+  }).index("by_owner", ["ownerUserId"])
+    .index("by_owner_name", ["ownerUserId", "name"])
+    .index("by_device_name", ["deviceId", "name"]),
+
+  /** A Task Package allocated to a runner (often a DIFFERENT user) + device +
+   *  target, under the runner's consent — the cross-user "share a task" object.
+   *  Acceptance materializes a scoped infraAccessGrants row (origin
+   *  "task-package") so the runner is recognized on the owner channel.
+   *  PRIVACY: counters + coarse country only; never collected rows or IPs. */
+  packageAllocations: defineTable({
+    packageId: v.id("taskPackages"),
+    packageName: v.string(),
+    ownerUserId: v.id("users"),
+    runnerUserId: v.optional(v.id("users")),  // set on accept
+    runnerEmail: v.optional(v.string()),      // invite-by-email before accept
+    runnerDeviceId: v.optional(v.string()),
+    target: v.string(),                       // mobile|agent|docker|worker
+    status: v.union(
+      v.literal("proposed"),
+      v.literal("accepted"),
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("revoked"),
+    ),
+    inviteCode: v.string(),
+    consentSummary: v.optional(v.string()),
+    consentAt: v.optional(v.number()),
+    wifiOnly: v.boolean(),
+    chargingOnly: v.boolean(),
+    expiresAt: v.optional(v.number()),
+    grantId: v.optional(v.id("infraAccessGrants")),
+    // counters — never collected data, never an IP:
+    lastRunAt: v.optional(v.number()),
+    runCount: v.number(),
+    blockCount: v.number(),
+    lastStatus: v.optional(v.string()),
+    lastCountry: v.optional(v.string()),      // coarse "RS"
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_owner", ["ownerUserId"])
+    .index("by_runner", ["runnerUserId"])
+    .index("by_package", ["packageId"])
+    .index("by_code", ["inviteCode"]),
+
+  // GPU-rental orchestration bookkeeping (gpuRentals.ts, written by the
+  // agent's gpu_rental_sync.go). Cross-device visibility of which dispatcher
+  // box rented which burst GPU / bound which serverless inference, for the
+  // call-center and any app that bursts GPU. See docs/gpu-rental-orchestration.md.
+  //
+  // PRIVACY: bookkeeping ONLY. provider + opaque resource id + kind + gpu
+  // class + the PUBLIC inference endpoint (host-only, no key) + model id + the
+  // vault PROJECT NAME the app reads (never its values) + voiceSafe + status +
+  // usage counters. NO api keys, vault values, prompts, call data, or absolute
+  // paths — the agent strips them via buildGpuRentalUpsertPayload and
+  // desktop/agent/convex_privacy_test.go pins it. Same class as
+  // cloudMachines.hostedConvexUrl / cloudResourceId (public id/url, privacy-safe).
+  gpuRentals: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),          // dispatcher box that owns this rental
+    provider: v.string(),          // "salad" | "deepinfra"
+    resourceId: v.string(),        // salad container-group id | "deepinfra:<model>"
+    kind: v.string(),              // "gpu-group" | "serverless-binding"
+    gpuClass: v.optional(v.string()),
+    endpoint: v.optional(v.string()), // PUBLIC OpenAI-compatible base URL (no key)
+    model: v.optional(v.string()),
+    bindProject: v.optional(v.string()), // vault project NAME (not its values)
+    voiceSafe: v.optional(v.boolean()),
+    status: v.string(),            // "provisioning" | "running" | "draining" | "stopped"
+    // Usage rollup — SUMMARY only, never per-call content.
+    hoursUsed: v.optional(v.number()),
+    tokensUsed: v.optional(v.number()),
+    costCents: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"])
+    .index("by_device_resource", ["deviceId", "resourceId"]),
+
+  /** Yaver Mesh — optional WireGuard overlay control plane (desktop/agent
+   *  mesh_cmd.go + desktop/agent/mesh/). STRICTLY OPT-IN: a device only gets
+   *  a row here after the user runs `yaver mesh up`. Privacy contract:
+   *  PUBLIC keys + endpoints + assigned mesh IP ONLY. The WireGuard PRIVATE
+   *  key never leaves the device (it lives in the vault); `wgPrivateKey` is
+   *  on the Convex forbidden-field list and pinned by
+   *  desktop/agent/convex_privacy_test.go. `endpoints` are host:port UDP
+   *  candidates the peer can be reached at — the same privacy class as the
+   *  existing quicHost/publicEndpoints on the devices table. */
+  meshNodes: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    // Base64 WireGuard public key (Curve25519). Never the private half.
+    wgPublicKey: v.string(),
+    // Stable overlay address assigned by joinMesh. Globally unique across
+    // all meshNodes so devices shared between users never collide.
+    meshIPv4: v.string(),
+    meshIPv6: v.optional(v.string()),
+    // host:port UDP candidates for WireGuard (LAN IPs, public endpoint,
+    // relay-DERP pseudo-endpoint). Privacy-equivalent to devices.localIps.
+    endpoints: v.array(v.string()),
+    // Subnet-router CIDRs this node is willing to route (Phase 5).
+    advertisedRoutes: v.optional(v.array(v.string())),
+    isExitNode: v.optional(v.boolean()),
+    online: v.boolean(),
+    lastHandshake: v.optional(v.number()),
+    updatedAt: v.number(),
+    // DESIRED state set by the web/mobile console (Tailscale-style: the control
+    // plane holds intent, the agent converges to it on its reconcile tick).
+    // The agent reads these for its OWN node and applies them; they are NOT
+    // touched by joinMesh (which only reports actual state).
+    wantEnabled: v.optional(v.boolean()),     // false = console asked this node to leave
+    wantExitNode: v.optional(v.boolean()),    // advertise as exit node
+    wantUseExitNode: v.optional(v.string()),  // deviceId of exit node to route through ("" = none)
+    wantRoutes: v.optional(v.array(v.string())), // subnet routes to advertise
+    desiredAt: v.optional(v.number()),        // when intent last changed (agent dedupe)
+  }).index("by_user", ["userId"])
+    .index("by_device", ["deviceId"])
+    .index("by_meshIPv4", ["meshIPv4"]),
+
+  /** Mesh ACL rules (Phase 4). The tailnet owner authors who-can-reach-whom
+   *  on which ports; the agent is the authoritative enforcer (compiled to a
+   *  TUN packet filter), mirroring sdk/js/src/acl.ts "Convex composes, agent
+   *  enforces". src/dst resolve by tag, deviceId, userId, or "*" (any). */
+  meshAcls: defineTable({
+    userId: v.id("users"),
+    srcType: v.union(
+      v.literal("tag"),
+      v.literal("device"),
+      v.literal("user"),
+      v.literal("any")
+    ),
+    src: v.string(),
+    dstType: v.union(
+      v.literal("tag"),
+      v.literal("device"),
+      v.literal("user"),
+      v.literal("any")
+    ),
+    dst: v.string(),
+    // Port specs: "22", "80-90", or "*".
+    ports: v.array(v.string()),
+    action: v.union(v.literal("accept"), v.literal("drop")),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  /** Device tags for group ACLs (Phase 4) — lets a rule target many devices
+   *  ("tag:prod") without per-pair grants. */
+  meshTags: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    tag: v.string(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"])
+    .index("by_device", ["deviceId"]),
+
+  // tmuxRunnerSessions — the durable "who is vibing where" ledger. Each row is
+  // one tmux session on one owned device, with the RUNNER that lives in it
+  // (claude / codex / opencode — or "shell"/"unknown" when none) and whether
+  // that seat is still OPEN or has CLOSED (runner exited via /exit /quit, pane
+  // went dead, or the whole session was torn down).
+  //
+  // Why this table exists: adoption state is in-memory on the agent, so an
+  // agent restart forgets every tmux session even though the runner keeps
+  // running, and the mobile Tasks list can only show sessions of the ONE
+  // connected box. This ledger lets every surface — mobile, web, TV, watch —
+  // answer "which machines have which runner seats, open or closed" from Convex
+  // alone, and keep vibing into them (the attach still goes P2P to the box;
+  // this is the inventory + lifecycle truth, never the context).
+  //
+  // Privacy contract (enforced by convex_privacy_test.go): IDENTIFIERS ONLY.
+  // tmux session names, tmux session/pane ids, a runner label, open/closed
+  // status and timestamps. NO pane content, NO current-path (absolute paths
+  // leak the home-dir username), NO prompts, NO titles, NO model, NO preview.
+  // The record answers "is there a claude seat open on box X" and nothing else.
+  tmuxRunnerSessions: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),            // the box that hosts the session
+    sessionName: v.string(),         // tmux session name (identifier, not content)
+    sessionId: v.optional(v.string()), // tmux session_id, e.g. "$1"
+    paneId: v.optional(v.string()),  // primary pane id, e.g. "%17"
+    runner: v.union(
+      v.literal("claude"),
+      v.literal("codex"),
+      v.literal("opencode"),
+      v.literal("shell"),
+      v.literal("unknown"),
+    ),
+    // open = tmux session exists with a live (non-dead) pane. closed = the
+    // runner exited (/exit etc.), its pane went dead, or the session is gone.
+    status: v.union(v.literal("open"), v.literal("closed")),
+    paneCount: v.optional(v.number()),
+    // firstSeenAt is sticky across transitions (kept from the row when an
+    // open record is re-observed or a closed record arrives for a known
+    // session); lastSeenAt is refreshed on every sync; closedAt is set once
+    // when the seat closes and cleared if the session reopens.
+    firstSeenAt: v.number(),         // epoch ms
+    lastSeenAt: v.number(),          // epoch ms
+    closedAt: v.optional(v.number()), // epoch ms
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_status", ["userId", "status"])
+    .index("by_device", ["deviceId"])
+    .index("by_device_session", ["deviceId", "sessionName"]),
+
+  // Push tokens for the device-auth approval channel (P2): lets a remote
+  // box's re-auth ring the user's phone so they approve with Face ID instead
+  // of opening a browser. Only a notification-routing id is stored (Expo push
+  // token / native APNs/FCM token) — never an auth token or task data.
+  pushTokens: defineTable({
+    userId: v.id("users"),
+    installId: v.string(), // stable per phone install
+    pushToken: v.string(), // expo push token, or native device token
+    transport: v.string(), // "expo" | "apns" | "fcm"
+    platform: v.string(), // "ios" | "android"
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_pushToken", ["pushToken"])
+    .index("by_install", ["installId"]),
 });

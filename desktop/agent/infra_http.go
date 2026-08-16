@@ -1,0 +1,547 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/user"
+	"runtime"
+	"sort"
+	"strings"
+	"time"
+)
+
+type InfraNetworkInterface struct {
+	Name      string   `json:"name"`
+	MAC       string   `json:"mac,omitempty"`
+	Flags     string   `json:"flags,omitempty"`
+	Addresses []string `json:"addresses,omitempty"`
+}
+
+type InfraRelaySummary struct {
+	ID               string `json:"id"`
+	Label            string `json:"label,omitempty"`
+	HttpURL          string `json:"httpUrl,omitempty"`
+	QuicAddr         string `json:"quicAddr,omitempty"`
+	Region           string `json:"region,omitempty"`
+	Source           string `json:"source"`
+	PasswordRequired bool   `json:"passwordRequired"`
+}
+
+type InfraCapabilities struct {
+	Terminal       bool `json:"terminal"`
+	MCP            bool `json:"mcp"`
+	DevServices    bool `json:"devServices"`
+	SystemServices bool `json:"systemServices"`
+	AgentShutdown  bool `json:"agentShutdown"`
+	HostReboot     bool `json:"hostReboot"`
+}
+
+type InfraSummary struct {
+	Machine      MachineInfo             `json:"machine"`
+	Metrics      *HostMetrics            `json:"metrics,omitempty"`
+	DevServices  []ServiceStatus         `json:"devServices,omitempty"`
+	Network      []InfraNetworkInterface `json:"network,omitempty"`
+	Relays       []InfraRelaySummary     `json:"relays,omitempty"`
+	Sandbox      ContainerSandboxSummary `json:"sandbox"`
+	Capabilities InfraCapabilities       `json:"capabilities"`
+	// Why reboot is unavailable, and exactly what granting it would take. The UI
+	// renders "No permission — Enable" from this instead of a dead button.
+	RebootGrant     rebootGrantState `json:"rebootGrant"`
+	PackageManagers []string         `json:"packageManagers,omitempty"`
+	Binaries        []DetectedBinary `json:"binaries,omitempty"`
+}
+
+func (s *HTTPServer) infraSummary(ctx context.Context) InfraSummary {
+	workDir := "."
+	if s != nil && s.taskMgr != nil && strings.TrimSpace(s.taskMgr.workDir) != "" {
+		workDir = s.taskMgr.workDir
+	}
+	machine := selfMachine(ctx)
+	if strings.TrimSpace(s.deviceID) != "" {
+		machine.DeviceID = s.deviceID
+	}
+	machine.Capabilities = detectMachineCapabilities(workDir)
+
+	summary := InfraSummary{
+		Machine:         machine,
+		Metrics:         infraMetricsSnapshot(ctx),
+		DevServices:     infraDevServices(workDir),
+		Network:         infraNetworkInterfaces(),
+		Relays:          infraRelaySummary(),
+		Sandbox:         s.sandboxSummary(),
+		Capabilities:    infraCapabilities(),
+		RebootGrant:     currentRebootGrantState(),
+		PackageManagers: detectPackageManagers(),
+		Binaries:        DiscoverInstalledBinaries(),
+	}
+	return summary
+}
+
+// detectPackageManagers probes the PATH for package managers the AI
+// runner (claude-code / codex / opencode) and the install catalogue can
+// use. Returned in priority order so the caller can pick the first
+// match. Kept tiny on purpose — distro-specific ones like `zypper` or
+// `emerge` can be added on demand, but every entry here has to map
+// cleanly to an install command in install_cmd.go.
+func detectPackageManagers() []string {
+	candidates := []string{
+		// OS-native package managers
+		"brew", "apt-get", "dnf", "pacman", "zypper", "apk", "pkg",
+		// Universal Linux package sources — often present alongside
+		// the distro's own manager, so we advertise both.
+		"snap", "flatpak",
+		// Windows
+		"winget", "choco", "scoop",
+		// Language-level — listed separately so prompts can pick the
+		// right one for whatever the user is trying to install.
+		"npm", "pnpm", "yarn", "pip", "pip3", "uv", "pipx",
+		"cargo", "go", "gem", "composer", "dart",
+		// Generic fallbacks — "curl" is here so one-line installer
+		// scripts (Rust, Ollama) always have a matcher.
+		"curl",
+	}
+	out := make([]string, 0, len(candidates))
+	for _, name := range candidates {
+		// DiscoverBinary also falls back to common install prefixes
+		// (~/.local/bin, /snap/bin, /opt/homebrew/bin, ~/.cargo/bin)
+		// so this works even when the agent was launched without the
+		// user's shell profile — common under systemd and launchd.
+		if DiscoverBinary(name) != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func infraMetricsSnapshot(ctx context.Context) *HostMetrics {
+	snap, _ := sampleHostMetrics(ctx, nil)
+	return snap
+}
+
+func infraDevServices(workDir string) []ServiceStatus {
+	sm := NewServicesManager(workDir)
+	statuses, err := sm.Status()
+	if err != nil {
+		return nil
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		if statuses[i].Running == statuses[j].Running {
+			return statuses[i].Name < statuses[j].Name
+		}
+		return statuses[i].Running
+	})
+	return statuses
+}
+
+func infraNetworkInterfaces() []InfraNetworkInterface {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	out := make([]InfraNetworkInterface, 0, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, _ := iface.Addrs()
+		addrStrs := make([]string, 0, len(addrs))
+		for _, addr := range addrs {
+			addrStrs = append(addrStrs, addr.String())
+		}
+		out = append(out, InfraNetworkInterface{
+			Name:      iface.Name,
+			MAC:       iface.HardwareAddr.String(),
+			Flags:     iface.Flags.String(),
+			Addresses: addrStrs,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func infraRelaySummary() []InfraRelaySummary {
+	cfg, err := LoadConfig()
+	if err != nil || cfg == nil {
+		return nil
+	}
+	var out []InfraRelaySummary
+	appendRelays := func(relays []RelayServerConfig, source string, globalPassword string) {
+		for _, relay := range relays {
+			out = append(out, InfraRelaySummary{
+				ID:               relay.ID,
+				Label:            relay.Label,
+				HttpURL:          relay.HttpURL,
+				QuicAddr:         relay.QuicAddr,
+				Region:           relay.Region,
+				Source:           source,
+				PasswordRequired: strings.TrimSpace(relay.Password) != "" || strings.TrimSpace(globalPassword) != "",
+			})
+		}
+	}
+	appendRelays(cfg.RelayServers, "configured", cfg.RelayPassword)
+	appendRelays(cfg.CachedRelayServers, "cached", cfg.CachedRelayPassword)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source == out[j].Source {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Source < out[j].Source
+	})
+	return out
+}
+
+func infraCapabilities() InfraCapabilities {
+	return InfraCapabilities{
+		Terminal:       true,
+		MCP:            true,
+		DevServices:    true,
+		SystemServices: true,
+		AgentShutdown:  true,
+		HostReboot:     canRebootHost(),
+	}
+}
+
+// canRebootHost reports whether this agent could ACTUALLY reboot the machine —
+// not merely whether the OS has a reboot command.
+//
+// The capability used to be `GOOS == darwin || linux`, which is a statement
+// about the operating system, not about us. Every reboot path needs root
+// (`sudo -n shutdown -r now`, `sudo -n systemctl reboot`), and an agent running
+// as an ordinary user under launchd/systemd usually does not have passwordless
+// sudo. So the phone and the dashboard rendered an ENABLED "Reboot host" button
+// that could only fail when tapped — an offer we could not honour.
+//
+// Verify it instead: we can reboot if we are root, or if `sudo -n true`
+// succeeds (proving passwordless sudo is configured for this user). `sudo -n`
+// never prompts, so this cannot hang a headless box.
+func canRebootHost() bool {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		return false
+	}
+	if os.Geteuid() == 0 {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "sudo", "-n", "true").Run() == nil
+}
+
+func (s *HTTPServer) handleInfraSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.infraSummary(r.Context()))
+}
+
+func (s *HTTPServer) handleInfraServiceAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Scope  string `json:"scope"`
+		Name   string `json:"name"`
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	req.Scope = strings.TrimSpace(req.Scope)
+	req.Name = strings.TrimSpace(req.Name)
+	req.Action = strings.TrimSpace(req.Action)
+
+	switch req.Scope {
+	case "dev":
+		if req.Name == "" {
+			jsonError(w, http.StatusBadRequest, "service name required")
+			return
+		}
+		workDir := "."
+		if s.taskMgr != nil && strings.TrimSpace(s.taskMgr.workDir) != "" {
+			workDir = s.taskMgr.workDir
+		}
+		sm := NewServicesManager(workDir)
+		var result interface{}
+		switch req.Action {
+		case "start":
+			msg, err := sm.Start(req.Name)
+			if err != nil {
+				jsonError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			result = map[string]interface{}{"output": msg}
+		case "stop":
+			msg, err := sm.Stop(req.Name)
+			if err != nil {
+				jsonError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			result = map[string]interface{}{"output": msg}
+		case "restart":
+			if _, err := sm.Stop(req.Name); err != nil {
+				jsonError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			msg, err := sm.Start(req.Name)
+			if err != nil {
+				jsonError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			result = map[string]interface{}{"output": msg}
+		default:
+			jsonError(w, http.StatusBadRequest, "unsupported dev service action")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "result": result})
+	case "system":
+		if req.Name == "" {
+			jsonError(w, http.StatusBadRequest, "service name required")
+			return
+		}
+		if req.Action == "status" {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "result": mcpServiceStatus(req.Name)})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "result": mcpServiceAction(req.Name, req.Action)})
+	default:
+		jsonError(w, http.StatusBadRequest, "scope must be 'dev' or 'system'")
+	}
+}
+
+// handleInfraPower — GET returns the capability report (read-only dry run);
+// POST performs an action.
+//
+// GET is not a convenience: it is how a surface renders a power menu without
+// asking for permission to do anything. Before this, the only way to learn what
+// reboot meant on a box was to try it.
+func (s *HTTPServer) handleInfraPower(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, powerReportPayload())
+		return
+	}
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Action  string `json:"action"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	action := strings.TrimSpace(req.Action)
+	// Asking what is possible never requires confirming anything.
+	if action == "report" {
+		writeJSON(w, http.StatusOK, powerReportPayload())
+		return
+	}
+	if !req.Confirm {
+		jsonError(w, http.StatusBadRequest, "confirm=true required")
+		return
+	}
+	switch action {
+	case "agent_shutdown":
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "action": action})
+		go func() {
+			if s.onShutdown != nil {
+				s.onShutdown()
+			}
+		}()
+	case "agent_restart":
+		facts := powerFactsNow()
+		if a, ok := PowerActionByID(facts, ActionAgentRestart); ok && !a.Available {
+			jsonError(w, http.StatusBadRequest, a.Reason+" "+a.Remedy)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": true, "action": action, "scope": string(ScopeAgent), "etaSeconds": 15,
+			"note": "The agent is restarting. The machine stays up; it should answer again within about 15s.",
+		})
+		scheduleAgentRestart()
+	case "host_reboot":
+		facts := powerFactsNow()
+		eta := rebootETALinuxSeconds
+		if a, ok := PowerActionByID(facts, ActionHostReboot); ok {
+			if !a.Available {
+				jsonError(w, http.StatusBadRequest, a.Reason+" "+a.Remedy)
+				return
+			}
+			eta = a.ETASeconds
+		}
+		command, err := infraHostReboot()
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": true, "action": action, "scope": string(ScopeMachine),
+			"command": command, "etaSeconds": eta,
+			"note": fmt.Sprintf("Rebooting. The machine will drop off the network and should answer again in about %s.",
+				humanizeRebootSeconds(eta)),
+		})
+	default:
+		jsonError(w, http.StatusBadRequest, "unsupported power action — use report, host_reboot, agent_restart or agent_shutdown")
+	}
+}
+
+func (s *HTTPServer) handleMachineRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Confirm bool   `json:"confirm"`
+		Phrase  string `json:"phrase"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if !req.Confirm {
+		jsonError(w, http.StatusBadRequest, "confirm=true required")
+		return
+	}
+	if !machineRemovalPhraseValid(req.Phrase) {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("phrase must equal %q", machineRemovalPhrase))
+		return
+	}
+	// Stream every step of the uninstall to a named log stream so the
+	// caller (web/mobile/CLI) can subscribe via GET /streams/{name}
+	// and watch each phase land in real time. Pattern matches
+	// /install/<tool>: 202 Accepted with {stream: "<name>"}, structured
+	// events on the stream, final {type:"result"} before the agent exits.
+	streamName := fmt.Sprintf("machine-remove:%d", time.Now().UnixNano())
+	progress := newMachineRemoveStreamProgress(s, streamName)
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"ok":          true,
+		"action":      "machine_remove",
+		"phase":       "scheduled",
+		"stream":      streamName,
+		"manualSteps": machineRemovalManualSteps(),
+	})
+	schedulePermanentMachineRemoval(s.onShutdown, progress)
+}
+
+// newMachineRemoveStreamProgress wires a machineRemoveProgress
+// callback to the named log stream. Each step becomes one structured
+// event { type:"machine_remove_step", step, status, detail, error? }
+// plus a final { type:"machine_remove_result" } emitted by the
+// schedulePermanentMachineRemoval goroutine itself when it sees the
+// "done" sentinel. Returns nil if streams are disabled on this agent
+// (so the call-site falls back to silent runs).
+func newMachineRemoveStreamProgress(s *HTTPServer, streamName string) machineRemoveProgress {
+	if s == nil || s.streams == nil {
+		return nil
+	}
+	stream := s.streams.Get(streamName)
+	stream.Append("Starting machine removal — this agent will stream every step until it exits.")
+	return func(step, status, detail string, err error) {
+		evt := map[string]interface{}{
+			"type":   "machine_remove_step",
+			"step":   step,
+			"status": status,
+		}
+		if detail != "" {
+			evt["detail"] = detail
+		}
+		if err != nil {
+			evt["error"] = err.Error()
+		}
+		// Sentinel: the goroutine emits ("done","ok",...) right before
+		// onShutdown. Promote it to a result event so subscribers can
+		// distinguish "I am about to exit" from individual steps.
+		if step == "done" {
+			evt["type"] = "machine_remove_result"
+		}
+		stream.AppendEvent(evt)
+	}
+}
+
+func infraHostReboot() (string, error) {
+	// Ask the capability report FIRST, and refuse if it says we cannot.
+	//
+	// This used to jump straight to the candidate ladder, which meant that
+	// inside a Docker container we would actually RUN `systemctl reboot` and
+	// report whatever it printed. On a container with systemd that can kill the
+	// container; on one without, it returns a confusing "System has not been
+	// booted with systemd" that reads like a broken agent. Neither outcome is a
+	// host reboot, and the user believed they were power-cycling a machine.
+	// The report knows the difference between "no permission" (fixable, and the
+	// remedy says how) and "no such thing from in here" (a container, WSL) —
+	// so let it speak instead of discovering it by executing.
+	facts := powerFactsNow()
+	if action, ok := PowerActionByID(facts, ActionHostReboot); ok && !action.Available {
+		return "", fmt.Errorf("%s %s", action.Reason, action.Remedy)
+	}
+
+	type candidate struct {
+		name string
+		args []string
+	}
+	var candidates []candidate
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = []candidate{
+			{name: "sudo", args: []string{"-n", "shutdown", "-r", "now"}},
+			{name: "shutdown", args: []string{"-r", "now"}},
+		}
+	case "linux":
+		candidates = []candidate{
+			{name: "sudo", args: []string{"-n", "systemctl", "reboot"}},
+			{name: "systemctl", args: []string{"reboot"}},
+			{name: "sudo", args: []string{"-n", "reboot"}},
+			{name: "reboot"},
+		}
+	default:
+		return "", fmt.Errorf("host reboot unsupported on %s", runtime.GOOS)
+	}
+	var errs []string
+	for _, cand := range candidates {
+		// Bounded, always. `sudo` can sit waiting on a password prompt forever if
+		// the -n is ever dropped, and a reboot handler that hangs is a machine
+		// the user believes is rebooting while nothing is happening. WaitDelay
+		// matters as much as the context: killing the process does not free us
+		// while a grandchild still holds the output pipe.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cmd := exec.CommandContext(ctx, cand.name, cand.args...)
+		cmd.WaitDelay = 5 * time.Second
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err == nil {
+			return strings.TrimSpace(strings.Join(append([]string{cand.name}, cand.args...), " ")), nil
+		}
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		errs = append(errs, fmt.Sprintf("%s: %s", cand.name, msg))
+	}
+	// Every candidate needs root. When they all fail on an otherwise-supported
+	// OS, the cause is almost always "this agent is not root and has no
+	// passwordless sudo" — so say what to do about it rather than dumping raw
+	// command errors the user cannot act on.
+	if os.Geteuid() != 0 {
+		return "", fmt.Errorf(
+			"reboot needs root: the Yaver agent runs as %s and passwordless sudo is not configured on this machine. "+
+				"Grant it with a sudoers rule (e.g. `%s ALL=(root) NOPASSWD: /sbin/shutdown, /bin/systemctl`), "+
+				"or run the agent as root. Underlying: %s",
+			currentUsername(), currentUsername(), strings.Join(errs, "; "))
+	}
+	return "", fmt.Errorf("reboot failed: %s", strings.Join(errs, "; "))
+}
+
+// currentUsername is a best-effort login name for user-facing hints.
+func currentUsername() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	if n := os.Getenv("USER"); n != "" {
+		return n
+	}
+	return "the agent user"
+}

@@ -1,0 +1,2396 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+type ManagedGitCreateOptions struct {
+	Enabled    bool   `json:"enabled" yaml:"enabled"`
+	Visibility string `json:"visibility,omitempty" yaml:"visibility,omitempty"` // private|unlisted|public
+}
+
+type ManagedGitProjectMeta struct {
+	RepoID          string                         `json:"repoId" yaml:"repoId"`
+	Enabled         bool                           `json:"enabled" yaml:"enabled"`
+	Visibility      string                         `json:"visibility" yaml:"visibility"`
+	DefaultBranch   string                         `json:"defaultBranch" yaml:"defaultBranch"`
+	BarePath        string                         `json:"barePath" yaml:"barePath"`
+	WorkDir         string                         `json:"workDir" yaml:"workDir"`
+	LastCommit      string                         `json:"lastCommit,omitempty" yaml:"lastCommit,omitempty"`
+	LastBackup      *ManagedGitBackupMeta          `json:"lastBackup,omitempty" yaml:"lastBackup,omitempty"`
+	ExternalBackups []ManagedGitExternalBackupMeta `json:"externalBackups,omitempty" yaml:"externalBackups,omitempty"`
+	Mirrors         []ManagedGitMirrorMeta         `json:"mirrors,omitempty" yaml:"mirrors,omitempty"`
+	CreatedAt       string                         `json:"createdAt" yaml:"createdAt"`
+	UpdatedAt       string                         `json:"updatedAt" yaml:"updatedAt"`
+}
+
+type ManagedGitBackupMeta struct {
+	Path      string `json:"path" yaml:"path"`
+	Target    string `json:"target,omitempty" yaml:"target,omitempty"`
+	SizeBytes int64  `json:"sizeBytes" yaml:"sizeBytes"`
+	Commit    string `json:"commit,omitempty" yaml:"commit,omitempty"`
+	CreatedAt string `json:"createdAt" yaml:"createdAt"`
+}
+
+type ManagedGitExternalBackupMeta struct {
+	TargetKind string `json:"targetKind" yaml:"targetKind"`
+	TargetID   string `json:"targetId,omitempty" yaml:"targetId,omitempty"`
+	Path       string `json:"path" yaml:"path"`
+	SizeBytes  int64  `json:"sizeBytes" yaml:"sizeBytes"`
+	Commit     string `json:"commit,omitempty" yaml:"commit,omitempty"`
+	CreatedAt  string `json:"createdAt" yaml:"createdAt"`
+}
+
+type ManagedGitMirrorMeta struct {
+	Provider   string `json:"provider" yaml:"provider"`
+	Host       string `json:"host" yaml:"host"`
+	FullName   string `json:"fullName" yaml:"fullName"`
+	CloneURL   string `json:"cloneUrl" yaml:"cloneUrl"`
+	Visibility string `json:"visibility" yaml:"visibility"`
+	LastPushAt string `json:"lastPushAt,omitempty" yaml:"lastPushAt,omitempty"`
+}
+
+func managedGitRoot() (string, error) {
+	cfg, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(cfg, "managed-git")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
+func managedGitReposRoot() (string, error) {
+	root, err := managedGitRoot()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, "repos")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func managedGitBackupsRoot() (string, error) {
+	root, err := managedGitRoot()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, "backups")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func managedGitMetaPath(workDir string) string {
+	return filepath.Join(workDir, ".yaver", "managed-git.yaml")
+}
+
+func normalizeManagedGitVisibility(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "public":
+		return "public"
+	case "unlisted":
+		return "unlisted"
+	default:
+		return "private"
+	}
+}
+
+func EnsureManagedGitForProject(workDir, slug, name string, opts *ManagedGitCreateOptions) (*ManagedGitProjectMeta, error) {
+	if opts == nil || !opts.Enabled {
+		return nil, nil
+	}
+	if _, err := osexec.LookPath("git"); err != nil {
+		return nil, fmt.Errorf("git not found on PATH")
+	}
+	if existing, err := LoadManagedGitMeta(workDir); err == nil && existing.Enabled {
+		return existing, nil
+	}
+	if err := os.MkdirAll(filepath.Join(workDir, ".yaver"), 0o700); err != nil {
+		return nil, err
+	}
+	reposRoot, err := managedGitReposRoot()
+	if err != nil {
+		return nil, err
+	}
+	repoID := Slugify(slug)
+	if repoID == "" {
+		repoID = Slugify(name)
+	}
+	if repoID == "" {
+		return nil, fmt.Errorf("repo id required")
+	}
+	barePath := filepath.Join(reposRoot, repoID+".git")
+	if _, err := os.Stat(barePath); os.IsNotExist(err) {
+		if out, err := managedGitCmd("", "init", "--bare", barePath); err != nil {
+			return nil, fmt.Errorf("init bare: %s: %w", out, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".git")); os.IsNotExist(err) {
+		if out, err := managedGitCmd(workDir, "init", "-b", "main"); err != nil {
+			if out2, err2 := managedGitCmd(workDir, "init"); err2 != nil {
+				return nil, fmt.Errorf("init worktree: %s / %s: %w", out, out2, err2)
+			}
+			_, _ = managedGitCmd(workDir, "checkout", "-B", "main")
+		}
+	}
+	_, _ = managedGitCmd(workDir, "remote", "remove", "origin")
+	if out, err := managedGitCmd(workDir, "remote", "add", "origin", barePath); err != nil {
+		return nil, fmt.Errorf("add managed remote: %s: %w", out, err)
+	}
+	meta := &ManagedGitProjectMeta{
+		RepoID:        repoID,
+		Enabled:       true,
+		Visibility:    normalizeManagedGitVisibility(opts.Visibility),
+		DefaultBranch: "main",
+		BarePath:      barePath,
+		WorkDir:       workDir,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := SaveManagedGitMeta(workDir, meta); err != nil {
+		return nil, err
+	}
+	commit, err := ManagedGitCheckpoint(workDir, "yaver: create managed repo")
+	if err != nil {
+		return nil, err
+	}
+	meta.LastCommit = commit
+	if err := SaveManagedGitMeta(workDir, meta); err != nil {
+		return nil, err
+	}
+	return meta, nil
+}
+
+func LoadManagedGitMeta(workDir string) (*ManagedGitProjectMeta, error) {
+	data, err := os.ReadFile(managedGitMetaPath(workDir))
+	if err != nil {
+		return nil, err
+	}
+	var meta ManagedGitProjectMeta
+	if err := yaml.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	if meta.WorkDir == "" {
+		meta.WorkDir = workDir
+	}
+	return &meta, nil
+}
+
+func SaveManagedGitMeta(workDir string, meta *ManagedGitProjectMeta) error {
+	meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	data, err := yaml.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(managedGitMetaPath(workDir), data, 0o600)
+}
+
+func ManagedGitCheckpoint(workDir, message string) (string, error) {
+	if strings.TrimSpace(message) == "" {
+		message = "yaver: checkpoint"
+	}
+	if out, err := managedGitCmd(workDir, "add", "-A"); err != nil {
+		return "", fmt.Errorf("git add: %s: %w", out, err)
+	}
+	status, err := managedGitCmd(workDir, "status", "--porcelain")
+	if err != nil {
+		return "", fmt.Errorf("git status: %s: %w", status, err)
+	}
+	if strings.TrimSpace(status) != "" {
+		_, _ = managedGitCmd(workDir, "config", "user.name", "Yaver Agent")
+		_, _ = managedGitCmd(workDir, "config", "user.email", "agent@yaver.io")
+		if out, err := managedGitCmd(workDir, "commit", "-m", message); err != nil {
+			return "", fmt.Errorf("git commit: %s: %w", out, err)
+		}
+	}
+	if out, err := managedGitCmd(workDir, "push", "-u", "origin", "HEAD:main"); err != nil {
+		return "", fmt.Errorf("git push managed origin: %s: %w", out, err)
+	}
+	commit, err := managedGitCmd(workDir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse: %s: %w", commit, err)
+	}
+	commit = strings.TrimSpace(commit)
+	if meta, err := LoadManagedGitMeta(workDir); err == nil {
+		meta.LastCommit = commit
+		_ = SaveManagedGitMeta(workDir, meta)
+	}
+	// mirror-on-push: if the user connected GitHub/GitLab mirrors, propagate this
+	// checkpoint there too (owner-side, best-effort). No-op when no mirrors.
+	ManagedGitMirrorSyncAll(workDir)
+	return commit, nil
+}
+
+func ManagedGitBackup(workDir string) (*ManagedGitBackupMeta, error) {
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := ManagedGitCheckpoint(workDir, "yaver: backup checkpoint"); err != nil {
+		return nil, err
+	}
+	root, err := managedGitBackupsRoot()
+	if err != nil {
+		return nil, err
+	}
+	repoDir := filepath.Join(root, meta.RepoID)
+	if err := os.MkdirAll(repoDir, 0o700); err != nil {
+		return nil, err
+	}
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	path := filepath.Join(repoDir, stamp+".bundle")
+	if out, err := managedGitCmd(workDir, "bundle", "create", path, "--all"); err != nil {
+		return nil, fmt.Errorf("git bundle: %s: %w", out, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	commit, _ := managedGitCmd(workDir, "rev-parse", "HEAD")
+	backup := &ManagedGitBackupMeta{
+		Path:      path,
+		SizeBytes: info.Size(),
+		Commit:    strings.TrimSpace(commit),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	meta.LastBackup = backup
+	if err := SaveManagedGitMeta(workDir, meta); err != nil {
+		return nil, err
+	}
+	return backup, nil
+}
+
+func ManagedGitBackupToTarget(workDir, targetKind, targetID, destPath string) (*ManagedGitExternalBackupMeta, error) {
+	backup, err := ManagedGitBackup(workDir)
+	if err != nil {
+		return nil, err
+	}
+	targetKind = strings.ToLower(strings.TrimSpace(targetKind))
+	if targetKind == "" {
+		targetKind = "local-folder"
+	}
+	var root string
+	switch targetKind {
+	case "dropbox":
+		meta, err := LoadManagedGitMeta(workDir)
+		if err != nil {
+			return nil, err
+		}
+		out, err := uploadManagedGitBackupToDropbox(backup.Path, meta.RepoID)
+		if err != nil {
+			return nil, err
+		}
+		out.Commit = backup.Commit
+		meta.ExternalBackups = append(meta.ExternalBackups, *out)
+		_ = SaveManagedGitMeta(workDir, meta)
+		return out, nil
+	case "local-folder":
+		root = strings.TrimSpace(destPath)
+		if root == "" {
+			return nil, fmt.Errorf("destPath required for local-folder backup")
+		}
+	case "shared-storage":
+		if strings.TrimSpace(targetID) == "" {
+			return nil, fmt.Errorf("targetId required for shared-storage backup")
+		}
+		profile, err := getSharedStorageProfile(targetID)
+		if err != nil {
+			return nil, err
+		}
+		if profile.ReadOnly {
+			return nil, fmt.Errorf("shared storage profile is read-only")
+		}
+		switch profile.Type {
+		case "local", "storagebox":
+			root = sharedStorageResolvedPath(*profile)
+		default:
+			return nil, fmt.Errorf("shared storage type %q is not writable by managed git yet", profile.Type)
+		}
+		if strings.TrimSpace(destPath) != "" {
+			root = filepath.Join(root, filepath.Clean(destPath))
+		}
+	default:
+		return nil, fmt.Errorf("unsupported backup target %q", targetKind)
+	}
+	if root == "" {
+		return nil, fmt.Errorf("backup target path resolved empty")
+	}
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return nil, err
+	}
+	destDir := filepath.Join(root, "YaverBackups", meta.RepoID)
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
+		return nil, err
+	}
+	dest := filepath.Join(destDir, filepath.Base(backup.Path))
+	if err := managedGitCopyFile(backup.Path, dest, 0o600); err != nil {
+		return nil, err
+	}
+	latest := filepath.Join(destDir, "latest.bundle")
+	_ = managedGitCopyFile(backup.Path, latest, 0o600)
+	info, err := os.Stat(dest)
+	if err != nil {
+		return nil, err
+	}
+	out := &ManagedGitExternalBackupMeta{
+		TargetKind: targetKind,
+		TargetID:   targetID,
+		Path:       dest,
+		SizeBytes:  info.Size(),
+		Commit:     backup.Commit,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	meta.ExternalBackups = append(meta.ExternalBackups, *out)
+	_ = SaveManagedGitMeta(workDir, meta)
+	return out, nil
+}
+
+func managedGitCopyFile(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+func ManagedGitRestoreBundle(workDir, bundlePath string) (string, error) {
+	bundlePath = strings.TrimSpace(bundlePath)
+	if bundlePath == "" {
+		return "", fmt.Errorf("bundlePath required")
+	}
+	if _, err := os.Stat(bundlePath); err != nil {
+		return "", err
+	}
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return "", err
+	}
+	branch := meta.DefaultBranch
+	if branch == "" {
+		branch = "main"
+	}
+	backupRef := "refs/heads/yaver-restore-" + time.Now().UTC().Format("20060102T150405Z")
+	if out, err := managedGitCmd(workDir, "fetch", bundlePath, "refs/heads/"+branch+":"+backupRef); err != nil {
+		return "", fmt.Errorf("fetch bundle: %s: %w", out, err)
+	}
+	if out, err := managedGitCmd(workDir, "checkout", "-B", branch, backupRef); err != nil {
+		return "", fmt.Errorf("checkout restored bundle: %s: %w", out, err)
+	}
+	if out, err := managedGitCmd(workDir, "reset", "--hard", "HEAD"); err != nil {
+		return "", fmt.Errorf("reset restored bundle: %s: %w", out, err)
+	}
+	if out, err := managedGitCmd(workDir, "push", "-u", "origin", "HEAD:"+branch); err != nil {
+		return "", fmt.Errorf("push restored state: %s: %w", out, err)
+	}
+	commit, err := managedGitCmd(workDir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("rev-parse restored state: %s: %w", commit, err)
+	}
+	meta.LastCommit = strings.TrimSpace(commit)
+	_ = SaveManagedGitMeta(workDir, meta)
+	return meta.LastCommit, nil
+}
+
+func ManagedGitMirrorToProvider(workDir, provider, host, repoName, visibility, description string) (*ManagedGitMirrorMeta, error) {
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return nil, err
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider != "github" && provider != "gitlab" {
+		return nil, fmt.Errorf("provider must be github or gitlab")
+	}
+	if host == "" {
+		host = provider + ".com"
+	}
+	if repoName == "" {
+		repoName = meta.RepoID
+	}
+	providers, err := loadGitProviders()
+	if err != nil {
+		return nil, err
+	}
+	var token, username string
+	for _, p := range providers {
+		if p.Provider == provider && p.Host == host {
+			token = p.Token
+			username = p.Username
+			break
+		}
+	}
+	if token == "" {
+		return nil, fmt.Errorf("no %s token configured on this machine", provider)
+	}
+	private := normalizeManagedGitVisibility(visibility) != "public"
+	var cloneURL, fullName string
+	var sshURL string
+	switch provider {
+	case "github":
+		cloneURL, sshURL, fullName, err = createRepoOnGitHub(token, repoName, description, private)
+	case "gitlab":
+		cloneURL, sshURL, fullName, err = createRepoOnGitLab(host, token, repoName, description, private)
+	}
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already_exists") && !strings.Contains(strings.ToLower(err.Error()), "name already exists") {
+		return nil, err
+	}
+	if fullName == "" {
+		fullName = repoName
+	}
+	pushURL := cloneURL
+	if pushURL == "" {
+		switch provider {
+		case "github":
+			pushURL = fmt.Sprintf("https://%s/%s.git", host, fullName)
+		case "gitlab":
+			pushURL = fmt.Sprintf("https://%s/%s.git", host, fullName)
+		}
+	}
+	credentialed := credentialedGitURL(provider, host, username, token, fullName)
+	if credentialed == "" {
+		credentialed = pushURL
+	}
+	if out, err := managedGitCmd(workDir, "push", credentialed, "HEAD:main"); err != nil {
+		safeOut := strings.ReplaceAll(out, token, "<redacted>")
+		return nil, fmt.Errorf("mirror push: %s: %w", safeOut, err)
+	}
+	mirror := ManagedGitMirrorMeta{
+		Provider:   provider,
+		Host:       host,
+		FullName:   fullName,
+		CloneURL:   pushURL,
+		Visibility: normalizeManagedGitVisibility(visibility),
+		LastPushAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	_ = sshURL
+	meta.Mirrors = upsertManagedGitMirror(meta.Mirrors, mirror)
+	if err := SaveManagedGitMeta(workDir, meta); err != nil {
+		return nil, err
+	}
+	return &mirror, nil
+}
+
+// ManagedGitMirrorSyncAll pushes the current HEAD to every connected mirror
+// (mirror-on-push). Best-effort: a mirror failure is logged (token redacted),
+// never fatal — the local managed checkpoint already succeeded. Owner-side ONLY:
+// it uses the owner's stored provider tokens (loadGitProviders); a tenant's
+// credential-free push never reaches here, so mirror credentials never leak to task code.
+func ManagedGitMirrorSyncAll(workDir string) []ManagedGitMirrorMeta {
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil || len(meta.Mirrors) == 0 {
+		return nil
+	}
+	providers, _ := loadGitProviders()
+	var synced []ManagedGitMirrorMeta
+	for _, m := range meta.Mirrors {
+		var token, username string
+		for _, p := range providers {
+			if p.Provider == m.Provider && p.Host == m.Host {
+				token = p.Token
+				username = p.Username
+				break
+			}
+		}
+		if token == "" {
+			log.Printf("[managed-git] mirror-on-push %s/%s: no token on this machine, skip", m.Provider, m.FullName)
+			continue
+		}
+		url := credentialedGitURL(m.Provider, m.Host, username, token, m.FullName)
+		if out, err := managedGitCmd(workDir, "push", url, "HEAD:main"); err != nil {
+			safe := strings.ReplaceAll(out, token, "<redacted>")
+			log.Printf("[managed-git] mirror-on-push %s/%s failed: %s: %v", m.Provider, m.FullName, safe, err)
+			continue
+		}
+		m.LastPushAt = time.Now().UTC().Format(time.RFC3339)
+		synced = append(synced, m)
+	}
+	if len(synced) > 0 {
+		if fresh, err := LoadManagedGitMeta(workDir); err == nil {
+			for _, u := range synced {
+				fresh.Mirrors = upsertManagedGitMirror(fresh.Mirrors, u)
+			}
+			_ = SaveManagedGitMeta(workDir, fresh)
+		}
+	}
+	return synced
+}
+
+func managedGitRelayBranchRefspec(branch string) (string, error) {
+	branch = strings.TrimSpace(branch)
+	if !strings.HasPrefix(branch, "yaver/") {
+		return "", fmt.Errorf("relay source mirror branch must be under yaver/")
+	}
+	if branch == "yaver/main" || branch == "yaver/master" {
+		return "", fmt.Errorf("relay source mirror branch is protected")
+	}
+	if strings.Contains(branch, "..") || strings.ContainsAny(branch, "\\ ~^:?*[") {
+		return "", fmt.Errorf("invalid relay source mirror branch")
+	}
+	return "HEAD:refs/heads/" + branch, nil
+}
+
+func managedGitRelayBareBranchRefspec(branch string) (string, error) {
+	branch = strings.TrimSpace(branch)
+	if _, err := managedGitRelayBranchRefspec(branch); err != nil {
+		return "", err
+	}
+	return "refs/heads/" + branch + ":refs/heads/" + branch, nil
+}
+
+func managedGitProviderBranchURL(m ManagedGitMirrorMeta, branch string) string {
+	host := strings.TrimSpace(m.Host)
+	fullName := strings.Trim(strings.TrimSpace(m.FullName), "/")
+	branch = strings.TrimSpace(branch)
+	if host == "" || fullName == "" || branch == "" {
+		return ""
+	}
+	encodedBranch := strings.Join(strings.Split(branch, "/"), "/")
+	switch m.Provider {
+	case "github":
+		return fmt.Sprintf("https://%s/%s/tree/%s", host, fullName, encodedBranch)
+	case "gitlab":
+		return fmt.Sprintf("https://%s/%s/-/tree/%s", host, fullName, encodedBranch)
+	default:
+		return ""
+	}
+}
+
+func managedGitProviderBranchFromGitHubAppToken(token *relaySourceGitHubAppToken) ManagedGitRelaySourceProviderBranch {
+	if token == nil {
+		return ManagedGitRelaySourceProviderBranch{}
+	}
+	return ManagedGitRelaySourceProviderBranch{
+		ProviderKind:       "github",
+		ProviderHost:       strings.TrimSpace(token.ProviderHost),
+		ProviderRepo:       strings.Trim(strings.TrimSpace(token.ProviderRepo), "/"),
+		ProviderBranch:     strings.TrimSpace(token.ProviderBranch),
+		ProviderBranchURL:  strings.TrimSpace(token.ProviderBranchURL),
+		ProviderAuthMode:   "app_installation",
+		ProviderAuthStatus: "available",
+	}
+}
+
+func ManagedGitPushRelaySourceBranchWithGitHubAppToken(workDir string, token *relaySourceGitHubAppToken) (*ManagedGitRelaySourceProviderBranch, error) {
+	if token == nil {
+		return nil, fmt.Errorf("github app token required")
+	}
+	if strings.TrimSpace(token.ProviderKind) != "github" {
+		return nil, fmt.Errorf("github app token target must be github")
+	}
+	if strings.TrimSpace(token.Token) == "" {
+		return nil, fmt.Errorf("github app token missing")
+	}
+	repo := strings.Trim(strings.TrimSpace(token.ProviderRepo), "/")
+	if repo == "" || !strings.Contains(repo, "/") {
+		return nil, fmt.Errorf("github app token repo target missing")
+	}
+	host := strings.TrimSpace(token.ProviderHost)
+	if host == "" {
+		host = "github.com"
+	}
+	refspec, err := managedGitRelayBareBranchRefspec(token.ProviderBranch)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return nil, err
+	}
+	if !meta.Enabled || strings.TrimSpace(meta.BarePath) == "" {
+		return nil, fmt.Errorf("managed git is not enabled")
+	}
+	if _, err := os.Stat(meta.BarePath); err != nil {
+		return nil, fmt.Errorf("managed bare repo unavailable: %w", err)
+	}
+	url := credentialedGitURL("github", host, "x-access-token", token.Token, repo)
+	if out, err := managedGitCmd("", "--git-dir", meta.BarePath, "push", url, refspec); err != nil {
+		safe := strings.ReplaceAll(out, token.Token, "<redacted>")
+		return nil, fmt.Errorf("github app relay branch push failed: %s: %w", strings.TrimSpace(safe), err)
+	}
+	branch := managedGitProviderBranchFromGitHubAppToken(token)
+	if branch.ProviderBranchURL == "" {
+		branch.ProviderBranchURL = managedGitProviderBranchURL(ManagedGitMirrorMeta{
+			Provider: "github",
+			Host:     host,
+			FullName: repo,
+		}, token.ProviderBranch)
+	}
+	return &branch, nil
+}
+
+func managedGitRelayProviderBranchFromMirror(m ManagedGitMirrorMeta, branch string) ManagedGitRelaySourceProviderBranch {
+	return ManagedGitRelaySourceProviderBranch{
+		ProviderKind:       strings.TrimSpace(m.Provider),
+		ProviderHost:       strings.TrimSpace(m.Host),
+		ProviderRepo:       strings.Trim(strings.TrimSpace(m.FullName), "/"),
+		ProviderBranch:     strings.TrimSpace(branch),
+		ProviderBranchURL:  managedGitProviderBranchURL(m, branch),
+		ProviderAuthMode:   "owner_local_token",
+		ProviderAuthStatus: "owner_token_fallback",
+	}
+}
+
+func managedGitMirrorSyncRelayBranchFromRepo(workDir, pushDir, branch string, meta *ManagedGitProjectMeta) []ManagedGitMirrorMeta {
+	if meta == nil || len(meta.Mirrors) == 0 {
+		return nil
+	}
+	refspec, err := managedGitRelayBranchRefspec(branch)
+	if err != nil {
+		log.Printf("[managed-git] relay mirror branch %q rejected: %v", branch, err)
+		return nil
+	}
+	providers, _ := loadGitProviders()
+	var synced []ManagedGitMirrorMeta
+	for _, m := range meta.Mirrors {
+		var token, username string
+		for _, p := range providers {
+			if p.Provider == m.Provider && p.Host == m.Host {
+				token = p.Token
+				username = p.Username
+				break
+			}
+		}
+		if token == "" {
+			log.Printf("[managed-git] relay mirror %s/%s: no token on this machine, skip", m.Provider, m.FullName)
+			continue
+		}
+		url := credentialedGitURL(m.Provider, m.Host, username, token, m.FullName)
+		if out, err := managedGitCmd(pushDir, "push", url, refspec); err != nil {
+			safe := strings.ReplaceAll(out, token, "<redacted>")
+			log.Printf("[managed-git] relay mirror %s/%s failed: %s: %v", m.Provider, m.FullName, safe, err)
+			continue
+		}
+		m.LastPushAt = time.Now().UTC().Format(time.RFC3339)
+		synced = append(synced, m)
+	}
+	if len(synced) > 0 {
+		if fresh, err := LoadManagedGitMeta(workDir); err == nil {
+			for _, u := range synced {
+				fresh.Mirrors = upsertManagedGitMirror(fresh.Mirrors, u)
+			}
+			_ = SaveManagedGitMeta(workDir, fresh)
+		}
+	}
+	return synced
+}
+
+// ManagedGitMirrorPull is the inbound half of bidirectional sync: fetch the
+// primary connected mirror and merge it into the working repo. On a merge
+// conflict it invokes the AI runner (resolveManagedGitConflict) to resolve and
+// commit; if that fails the merge is aborted (repo left clean) and the conflict
+// is reported. Owner-side only (uses the owner's stored provider tokens).
+// Returns one of: no-mirror | up-to-date | merged | conflict-resolved.
+func ManagedGitMirrorPull(workDir string) (string, error) {
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return "", err
+	}
+	if len(meta.Mirrors) == 0 {
+		return "no-mirror", nil
+	}
+	m := meta.Mirrors[0] // primary mirror
+	providers, _ := loadGitProviders()
+	var token, username string
+	for _, p := range providers {
+		if p.Provider == m.Provider && p.Host == m.Host {
+			token = p.Token
+			username = p.Username
+			break
+		}
+	}
+	if token == "" {
+		return "", fmt.Errorf("no %s token on this machine for sync", m.Provider)
+	}
+	url := credentialedGitURL(m.Provider, m.Host, username, token, m.FullName)
+	redact := func(s string) string { return strings.ReplaceAll(s, token, "<redacted>") }
+	if out, err := managedGitCmd(workDir, "fetch", url, "main"); err != nil {
+		return "", fmt.Errorf("sync fetch: %s: %w", redact(out), err)
+	}
+	// Nothing new upstream?
+	if ahead, _ := managedGitCmd(workDir, "rev-list", "--count", "HEAD..FETCH_HEAD"); strings.TrimSpace(ahead) == "0" {
+		return "up-to-date", nil
+	}
+	if out, err := managedGitCmd(workDir, "merge", "--no-edit", "FETCH_HEAD"); err != nil {
+		// Distinguish a real conflict from other merge errors.
+		check, _ := managedGitCmd(workDir, "diff", "--check")
+		if strings.Contains(check, "conflict") || strings.Contains(out, "CONFLICT") {
+			if rerr := resolveManagedGitConflict(workDir); rerr != nil {
+				_, _ = managedGitCmd(workDir, "merge", "--abort")
+				return "conflict-unresolved", rerr
+			}
+			ManagedGitMirrorSyncAll(workDir) // push the resolved merge back out
+			return "conflict-resolved", nil
+		}
+		return "", fmt.Errorf("sync merge: %s: %w", redact(out), err)
+	}
+	return "merged", nil
+}
+
+// resolveManagedGitConflict runs the AI coding runner (opencode) on a repo that
+// is mid-conflict, asking it to produce a coherent merge, then stages + commits.
+// Best-effort: if opencode is absent/unauthed or markers remain, it errors and
+// the caller aborts the merge — never leaves a broken tree. Keeps normies out of
+// rebase/merge hell ([[BETA-TEST-PLAN advanced yaver-git]]).
+func resolveManagedGitConflict(workDir string) error {
+	prompt := "Resolve ALL git merge conflicts in this repository. Edit each " +
+		"conflicted file into a single coherent result, removing every conflict " +
+		"marker (<<<<<<<, =======, >>>>>>>). Prefer keeping both sides' " +
+		"functionality where it makes sense. Do NOT run any git commands."
+	cmd := osexec.Command("opencode", "run", prompt)
+	cmd.Dir = workDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ai resolve (opencode): %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, _ := managedGitCmd(workDir, "diff", "--check"); strings.TrimSpace(out) != "" {
+		return fmt.Errorf("conflict markers remain after ai resolve")
+	}
+	if out, err := managedGitCmd(workDir, "add", "-A"); err != nil {
+		return fmt.Errorf("git add: %s: %w", out, err)
+	}
+	if out, err := managedGitCmd(workDir, "commit", "--no-edit"); err != nil {
+		return fmt.Errorf("git commit: %s: %w", out, err)
+	}
+	return nil
+}
+
+func upsertManagedGitMirror(items []ManagedGitMirrorMeta, next ManagedGitMirrorMeta) []ManagedGitMirrorMeta {
+	for i := range items {
+		if items[i].Provider == next.Provider && items[i].Host == next.Host && items[i].FullName == next.FullName {
+			items[i] = next
+			return items
+		}
+	}
+	return append(items, next)
+}
+
+func credentialedGitURL(provider, host, username, token, fullName string) string {
+	switch provider {
+	case "github":
+		if username == "" {
+			username = "x-access-token"
+		}
+		return fmt.Sprintf("https://%s:%s@%s/%s.git", username, token, host, fullName)
+	case "gitlab":
+		return fmt.Sprintf("https://oauth2:%s@%s/%s.git", token, host, fullName)
+	}
+	return ""
+}
+
+func managedGitCmd(dir string, args ...string) (string, error) {
+	cmd := osexec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+type ManagedGitRelaySourceBranchResult struct {
+	OK         bool   `json:"ok"`
+	RepoID     string `json:"repoId"`
+	Branch     string `json:"branch"`
+	BaseBranch string `json:"baseBranch"`
+	Commit     string `json:"commit"`
+}
+
+type ManagedGitRelaySourceFilePatch struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+type ManagedGitRelaySourceProviderBranch struct {
+	ProviderKind       string `json:"providerKind"`
+	ProviderHost       string `json:"providerHost"`
+	ProviderRepo       string `json:"providerRepo"`
+	ProviderBranch     string `json:"providerBranch"`
+	ProviderBranchURL  string `json:"providerBranchUrl,omitempty"`
+	ProviderAuthMode   string `json:"providerAuthMode"`
+	ProviderAuthStatus string `json:"providerAuthStatus"`
+}
+
+type ManagedGitRelaySourceApplyResult struct {
+	OK               bool                                  `json:"ok"`
+	RepoID           string                                `json:"repoId"`
+	Branch           string                                `json:"branch"`
+	BaseBranch       string                                `json:"baseBranch"`
+	Commit           string                                `json:"commit"`
+	FilesChanged     []string                              `json:"filesChanged"`
+	MirrorsPushed    []string                              `json:"mirrorsPushed,omitempty"`
+	ProviderBranches []ManagedGitRelaySourceProviderBranch `json:"providerBranches,omitempty"`
+	Noop             bool                                  `json:"noop,omitempty"`
+}
+
+type ManagedGitRelaySourcePlanResult struct {
+	OK            bool     `json:"ok"`
+	RepoID        string   `json:"repoId,omitempty"`
+	Branch        string   `json:"branch,omitempty"`
+	BaseBranch    string   `json:"baseBranch,omitempty"`
+	Mode          string   `json:"mode"`
+	RelayEligible bool     `json:"relayEligible"`
+	CanApply      bool     `json:"canApply"`
+	FilesPlanned  []string `json:"filesPlanned,omitempty"`
+	CommitMessage string   `json:"commitMessage,omitempty"`
+	Reasons       []string `json:"reasons,omitempty"`
+}
+
+type ManagedGitRelaySourceWorkResult struct {
+	OK      bool                               `json:"ok"`
+	Intent  *relaySourceIntent                 `json:"intent,omitempty"`
+	Plan    *ManagedGitRelaySourcePlanResult   `json:"plan,omitempty"`
+	Prepare *ManagedGitRelaySourceBranchResult `json:"prepare,omitempty"`
+	Apply   *ManagedGitRelaySourceApplyResult  `json:"apply,omitempty"`
+}
+
+func normalizeRelaySourceBranch(branch, fallbackSeed string) string {
+	slug := func(v, fallback string) string {
+		s := strings.ToLower(strings.TrimSpace(v))
+		s = strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' || r == '/' {
+				return r
+			}
+			return '-'
+		}, s)
+		for strings.Contains(s, "..") {
+			s = strings.ReplaceAll(s, "..", ".")
+		}
+		parts := strings.Split(s, "/")
+		cleaned := parts[:0]
+		for _, p := range parts {
+			p = strings.Trim(p, "-.")
+			if p == "" {
+				continue
+			}
+			cleaned = append(cleaned, p)
+		}
+		out := strings.Join(cleaned, "/")
+		if out == "" {
+			out = fallback
+		}
+		if len(out) > 96 {
+			out = out[:96]
+		}
+		return out
+	}
+	raw := slug(branch, "")
+	if !strings.HasPrefix(raw, "yaver/") {
+		raw = "yaver/source/" + slug(fallbackSeed, "task")
+	}
+	raw = strings.TrimSuffix(raw, ".lock")
+	if raw == "yaver/main" || raw == "yaver/master" || raw == "yaver" {
+		raw = "yaver/source/" + slug(fallbackSeed, "task")
+	}
+	if len(raw) > 120 {
+		raw = raw[:120]
+	}
+	return raw
+}
+
+func normalizeRelaySourceBaseBranch(baseBranch, fallback string) (string, error) {
+	baseBranch = strings.TrimSpace(baseBranch)
+	if baseBranch == "" {
+		baseBranch = strings.TrimSpace(fallback)
+	}
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	if strings.ContainsAny(baseBranch, "\\ ~^:?*[") || strings.HasPrefix(baseBranch, "-") || strings.Contains(baseBranch, "..") {
+		return "", fmt.Errorf("invalid base branch")
+	}
+	return baseBranch, nil
+}
+
+func validateRelaySourcePatchPath(rel string) (string, error) {
+	rel = strings.TrimSpace(filepath.ToSlash(rel))
+	if rel == "" {
+		return "", fmt.Errorf("patch path required")
+	}
+	if strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "-") || strings.Contains(rel, "\x00") {
+		return "", fmt.Errorf("unsafe patch path")
+	}
+	clean := filepath.Clean(rel)
+	clean = filepath.ToSlash(clean)
+	if clean == "." || strings.HasPrefix(clean, "../") || clean == ".." || filepath.IsAbs(clean) {
+		return "", fmt.Errorf("unsafe patch path")
+	}
+	lower := strings.ToLower(clean)
+	parts := strings.Split(lower, "/")
+	for _, part := range parts {
+		switch part {
+		case ".git", ".yaver", "node_modules", "vendor", ".next", "dist", "build", "ios", "android":
+			return "", fmt.Errorf("relay source patch cannot write %s", part)
+		}
+		if strings.HasPrefix(part, ".env") {
+			return "", fmt.Errorf("relay source patch cannot write env files")
+		}
+	}
+	switch filepath.Base(lower) {
+	case "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock":
+		return "", fmt.Errorf("relay source patch cannot write lockfiles")
+	}
+	allowedExt := map[string]bool{
+		".css": true, ".dart": true, ".go": true, ".html": true, ".java": true,
+		".js": true, ".json": true, ".jsx": true, ".kt": true, ".md": true,
+		".py": true, ".swift": true, ".ts": true, ".tsx": true, ".txt": true,
+		".yaml": true, ".yml": true,
+	}
+	if !allowedExt[strings.ToLower(filepath.Ext(clean))] {
+		return "", fmt.Errorf("relay source patch extension is not allowed")
+	}
+	return clean, nil
+}
+
+func relaySourceForbiddenPromptReason(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return "prompt required before relay can plan source work"
+	}
+	checks := []struct {
+		needle string
+		reason string
+	}{
+		{"deploy", "deploy work must run on compute"},
+		{"testflight", "mobile release work must run on compute"},
+		{"app store", "mobile release work must run on compute"},
+		{"build apk", "native build work must run on compute"},
+		{"build ipa", "native build work must run on compute"},
+		{"xcodebuild", "native build work must run on compute"},
+		{"gradle", "native build work must run on compute"},
+		{"pod install", "dependency/native setup must run on compute"},
+		{"npm install", "dependency install must run on compute"},
+		{"pnpm install", "dependency install must run on compute"},
+		{"yarn install", "dependency install must run on compute"},
+		{"bun install", "dependency install must run on compute"},
+		{"docker", "Docker work must run on compute"},
+		{"compose", "Docker work must run on compute"},
+		{"migration", "database migration work must run on compute"},
+		{"migrate", "database migration work must run on compute"},
+		{".env", "secret/env work must run on compute"},
+		{"secret", "secret/env work must run on compute"},
+		{"oauth", "OAuth work must run on compute"},
+		{"login token", "auth-token work must run on compute"},
+		{"api key", "secret/env work must run on compute"},
+	}
+	for _, check := range checks {
+		if strings.Contains(lower, check.needle) {
+			return check.reason
+		}
+	}
+	return ""
+}
+
+func relaySourceForbiddenGeneratedContentReason(content string) string {
+	lower := strings.ToLower(content)
+	checks := []struct {
+		needle string
+		reason string
+	}{
+		{"-----begin private key-----", "generated relay source patch cannot include private keys"},
+		{"-----begin openSSH private key-----", "generated relay source patch cannot include private keys"},
+		{"password=", "generated relay source patch cannot include password assignments"},
+		{"api_key=", "generated relay source patch cannot include api key assignments"},
+		{"apikey=", "generated relay source patch cannot include api key assignments"},
+		{"secret=", "generated relay source patch cannot include secret assignments"},
+		{"token=", "generated relay source patch cannot include token assignments"},
+		{"sk-", "generated relay source patch cannot include likely API keys"},
+	}
+	for _, check := range checks {
+		if strings.Contains(lower, strings.ToLower(check.needle)) {
+			return check.reason
+		}
+	}
+	return ""
+}
+
+func relaySourceGeneratedPatchesFromPrompt(prompt string) ([]ManagedGitRelaySourceFilePatch, error) {
+	lines := strings.Split(prompt, "\n")
+	patches := []ManagedGitRelaySourceFilePatch{}
+	inBlock := false
+	path := ""
+	var body strings.Builder
+	totalBytes := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inBlock {
+			if !strings.HasPrefix(trimmed, "```yaver-file ") {
+				continue
+			}
+			path = strings.TrimSpace(strings.TrimPrefix(trimmed, "```yaver-file "))
+			path = strings.Trim(path, "` \t")
+			if path == "" {
+				return nil, fmt.Errorf("yaver-file block requires a path")
+			}
+			inBlock = true
+			body.Reset()
+			continue
+		}
+		if trimmed == "```" {
+			content := body.String()
+			if reason := relaySourceForbiddenGeneratedContentReason(content); reason != "" {
+				return nil, errors.New(reason)
+			}
+			totalBytes += len(content)
+			if totalBytes > 64*1024 {
+				return nil, fmt.Errorf("generated relay source patches are too large")
+			}
+			patches = append(patches, ManagedGitRelaySourceFilePatch{Path: path, Content: content})
+			if len(patches) > 5 {
+				return nil, fmt.Errorf("too many generated relay source files")
+			}
+			inBlock = false
+			path = ""
+			continue
+		}
+		body.WriteString(line)
+		body.WriteByte('\n')
+	}
+	if inBlock {
+		return nil, fmt.Errorf("unterminated yaver-file block")
+	}
+	return patches, nil
+}
+
+func relaySourceCommitMessage(title, prompt string) string {
+	seed := strings.TrimSpace(firstNonEmpty(title, prompt, "relay source update"))
+	if idx := strings.IndexByte(seed, '\n'); idx >= 0 {
+		seed = strings.TrimSpace(seed[:idx])
+	}
+	seed = strings.Join(strings.Fields(seed), " ")
+	if seed == "" {
+		seed = "relay source update"
+	}
+	if len(seed) > 72 {
+		seed = strings.TrimSpace(seed[:72])
+	}
+	if strings.HasPrefix(strings.ToLower(seed), "yaver:") {
+		return seed
+	}
+	return "yaver: " + seed
+}
+
+func PlanManagedGitRelaySourcePatch(workDir, branch, baseBranch, title, prompt string, patches []ManagedGitRelaySourceFilePatch) (*ManagedGitRelaySourcePlanResult, error) {
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return nil, err
+	}
+	if !meta.Enabled || strings.TrimSpace(meta.BarePath) == "" {
+		return nil, fmt.Errorf("managed git is not enabled")
+	}
+	if _, err := os.Stat(meta.BarePath); err != nil {
+		return nil, fmt.Errorf("managed bare repo unavailable: %w", err)
+	}
+	baseBranch, err = normalizeRelaySourceBaseBranch(baseBranch, meta.DefaultBranch)
+	if err != nil {
+		return nil, err
+	}
+	branch = normalizeRelaySourceBranch(branch, meta.RepoID)
+	reasons := []string{}
+	if reason := relaySourceForbiddenPromptReason(title + "\n" + prompt); reason != "" {
+		return &ManagedGitRelaySourcePlanResult{
+			OK:            true,
+			RepoID:        meta.RepoID,
+			Branch:        branch,
+			BaseBranch:    baseBranch,
+			Mode:          "compute_required",
+			RelayEligible: false,
+			CanApply:      false,
+			Reasons:       []string{reason},
+		}, nil
+	}
+	if len(patches) == 0 {
+		generated, err := relaySourceGeneratedPatchesFromPrompt(prompt)
+		if err != nil {
+			return &ManagedGitRelaySourcePlanResult{
+				OK:            true,
+				RepoID:        meta.RepoID,
+				Branch:        branch,
+				BaseBranch:    baseBranch,
+				Mode:          "compute_required",
+				RelayEligible: false,
+				CanApply:      false,
+				Reasons:       []string{err.Error()},
+			}, nil
+		}
+		if len(generated) > 0 {
+			patches = generated
+			reasons = append(reasons, "generated explicit yaver-file patch from owner-held prompt")
+		}
+	}
+	if len(patches) == 0 {
+		return &ManagedGitRelaySourcePlanResult{
+			OK:            true,
+			RepoID:        meta.RepoID,
+			Branch:        branch,
+			BaseBranch:    baseBranch,
+			Mode:          "prepare_only",
+			RelayEligible: true,
+			CanApply:      false,
+			CommitMessage: relaySourceCommitMessage(title, prompt),
+			Reasons: []string{
+				"relay can prepare a scoped yaver/* branch",
+				"explicit safe file patches are required before relay can commit source edits",
+			},
+		}, nil
+	}
+	if len(patches) > 20 {
+		return &ManagedGitRelaySourcePlanResult{
+			OK:            true,
+			RepoID:        meta.RepoID,
+			Branch:        branch,
+			BaseBranch:    baseBranch,
+			Mode:          "compute_required",
+			RelayEligible: false,
+			CanApply:      false,
+			Reasons:       []string{"too many files for relay source patch"},
+		}, nil
+	}
+	totalBytes := 0
+	paths := make([]string, 0, len(patches))
+	for _, patch := range patches {
+		rel, err := validateRelaySourcePatchPath(patch.Path)
+		if err != nil {
+			return &ManagedGitRelaySourcePlanResult{
+				OK:            true,
+				RepoID:        meta.RepoID,
+				Branch:        branch,
+				BaseBranch:    baseBranch,
+				Mode:          "compute_required",
+				RelayEligible: false,
+				CanApply:      false,
+				Reasons:       []string{err.Error()},
+			}, nil
+		}
+		totalBytes += len(patch.Content)
+		if totalBytes > 256*1024 {
+			return &ManagedGitRelaySourcePlanResult{
+				OK:            true,
+				RepoID:        meta.RepoID,
+				Branch:        branch,
+				BaseBranch:    baseBranch,
+				Mode:          "compute_required",
+				RelayEligible: false,
+				CanApply:      false,
+				Reasons:       []string{"relay source patch is too large"},
+			}, nil
+		}
+		paths = append(paths, rel)
+	}
+	reasons = append(reasons, "explicit patches fit relay source-only guardrails")
+	return &ManagedGitRelaySourcePlanResult{
+		OK:            true,
+		RepoID:        meta.RepoID,
+		Branch:        branch,
+		BaseBranch:    baseBranch,
+		Mode:          "apply_patch",
+		RelayEligible: true,
+		CanApply:      true,
+		FilesPlanned:  paths,
+		CommitMessage: relaySourceCommitMessage(title, prompt),
+		Reasons:       reasons,
+	}, nil
+}
+
+func checkoutRelaySourceBranch(cloneDir, branch, baseBranch string) error {
+	baseRef := "origin/" + baseBranch
+	if out, err := managedGitCmd(cloneDir, "fetch", "origin", baseBranch); err != nil {
+		return fmt.Errorf("fetch base branch: %s: %w", strings.TrimSpace(out), err)
+	}
+	if out, err := managedGitCmd(cloneDir, "ls-remote", "--exit-code", "--heads", "origin", branch); err == nil && strings.TrimSpace(out) != "" {
+		if out, err := managedGitCmd(cloneDir, "fetch", "origin", branch); err != nil {
+			return fmt.Errorf("fetch relay branch: %s: %w", strings.TrimSpace(out), err)
+		}
+		if out, err := managedGitCmd(cloneDir, "checkout", "-B", branch, "origin/"+branch); err != nil {
+			return fmt.Errorf("checkout existing relay branch: %s: %w", strings.TrimSpace(out), err)
+		}
+		return nil
+	}
+	if out, err := managedGitCmd(cloneDir, "checkout", "-B", branch, baseRef); err != nil {
+		return fmt.Errorf("checkout relay branch: %s: %w", strings.TrimSpace(out), err)
+	}
+	return nil
+}
+
+func ManagedGitPrepareRelaySourceBranch(workDir, branch, baseBranch string) (*ManagedGitRelaySourceBranchResult, error) {
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return nil, err
+	}
+	if !meta.Enabled || strings.TrimSpace(meta.BarePath) == "" {
+		return nil, fmt.Errorf("managed git is not enabled")
+	}
+	if _, err := os.Stat(meta.BarePath); err != nil {
+		return nil, fmt.Errorf("managed bare repo unavailable: %w", err)
+	}
+	baseBranch, err = normalizeRelaySourceBaseBranch(baseBranch, meta.DefaultBranch)
+	if err != nil {
+		return nil, err
+	}
+	branch = normalizeRelaySourceBranch(branch, meta.RepoID)
+	if !strings.HasPrefix(branch, "yaver/") {
+		return nil, fmt.Errorf("relay source branch must be under yaver/")
+	}
+	tmp, err := os.MkdirTemp("", "yaver-relay-source-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	cloneDir := filepath.Join(tmp, "repo")
+	if out, err := managedGitCmd("", "clone", "--no-checkout", meta.BarePath, cloneDir); err != nil {
+		return nil, fmt.Errorf("clone managed repo: %s: %w", strings.TrimSpace(out), err)
+	}
+	if err := checkoutRelaySourceBranch(cloneDir, branch, baseBranch); err != nil {
+		return nil, err
+	}
+	commit, err := managedGitCmd(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("rev-parse relay branch: %s: %w", strings.TrimSpace(commit), err)
+	}
+	commit = strings.TrimSpace(commit)
+	if out, err := managedGitCmd(cloneDir, "push", "origin", "HEAD:refs/heads/"+branch); err != nil {
+		return nil, fmt.Errorf("push relay branch: %s: %w", strings.TrimSpace(out), err)
+	}
+	return &ManagedGitRelaySourceBranchResult{
+		OK:         true,
+		RepoID:     meta.RepoID,
+		Branch:     branch,
+		BaseBranch: baseBranch,
+		Commit:     commit,
+	}, nil
+}
+
+func ManagedGitApplyRelaySourcePatch(workDir, branch, baseBranch, message string, patches []ManagedGitRelaySourceFilePatch) (*ManagedGitRelaySourceApplyResult, error) {
+	if len(patches) == 0 {
+		return nil, fmt.Errorf("files are required")
+	}
+	if len(patches) > 20 {
+		return nil, fmt.Errorf("too many relay source files")
+	}
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		return nil, err
+	}
+	if !meta.Enabled || strings.TrimSpace(meta.BarePath) == "" {
+		return nil, fmt.Errorf("managed git is not enabled")
+	}
+	if _, err := os.Stat(meta.BarePath); err != nil {
+		return nil, fmt.Errorf("managed bare repo unavailable: %w", err)
+	}
+	baseBranch, err = normalizeRelaySourceBaseBranch(baseBranch, meta.DefaultBranch)
+	if err != nil {
+		return nil, err
+	}
+	branch = normalizeRelaySourceBranch(branch, meta.RepoID)
+	tmp, err := os.MkdirTemp("", "yaver-relay-source-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	cloneDir := filepath.Join(tmp, "repo")
+	if out, err := managedGitCmd("", "clone", "--no-checkout", meta.BarePath, cloneDir); err != nil {
+		return nil, fmt.Errorf("clone managed repo: %s: %w", strings.TrimSpace(out), err)
+	}
+	if err := checkoutRelaySourceBranch(cloneDir, branch, baseBranch); err != nil {
+		return nil, err
+	}
+	changed := make([]string, 0, len(patches))
+	totalBytes := 0
+	for _, patch := range patches {
+		rel, err := validateRelaySourcePatchPath(patch.Path)
+		if err != nil {
+			return nil, err
+		}
+		totalBytes += len(patch.Content)
+		if totalBytes > 256*1024 {
+			return nil, fmt.Errorf("relay source patch is too large")
+		}
+		dst := filepath.Join(cloneDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(dst, []byte(patch.Content), 0o644); err != nil {
+			return nil, err
+		}
+		changed = append(changed, rel)
+	}
+	if out, err := managedGitCmd(cloneDir, "add", "--", "."); err != nil {
+		return nil, fmt.Errorf("git add relay patch: %s: %w", strings.TrimSpace(out), err)
+	}
+	status, err := managedGitCmd(cloneDir, "status", "--porcelain")
+	if err != nil {
+		return nil, fmt.Errorf("git status relay patch: %s: %w", strings.TrimSpace(status), err)
+	}
+	if strings.TrimSpace(status) == "" {
+		commit, _ := managedGitCmd(cloneDir, "rev-parse", "HEAD")
+		return &ManagedGitRelaySourceApplyResult{
+			OK:           true,
+			RepoID:       meta.RepoID,
+			Branch:       branch,
+			BaseBranch:   baseBranch,
+			Commit:       strings.TrimSpace(commit),
+			FilesChanged: []string{},
+			Noop:         true,
+		}, nil
+	}
+	_, _ = managedGitCmd(cloneDir, "config", "user.name", "Yaver Relay")
+	_, _ = managedGitCmd(cloneDir, "config", "user.email", "relay@yaver.io")
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "yaver: relay source update"
+	}
+	if out, err := managedGitCmd(cloneDir, "commit", "-m", message); err != nil {
+		return nil, fmt.Errorf("git commit relay patch: %s: %w", strings.TrimSpace(out), err)
+	}
+	commit, err := managedGitCmd(cloneDir, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("rev-parse relay patch: %s: %w", strings.TrimSpace(commit), err)
+	}
+	commit = strings.TrimSpace(commit)
+	if out, err := managedGitCmd(cloneDir, "push", "origin", "HEAD:refs/heads/"+branch); err != nil {
+		return nil, fmt.Errorf("push relay patch: %s: %w", strings.TrimSpace(out), err)
+	}
+	pushedMirrors := managedGitMirrorSyncRelayBranchFromRepo(workDir, cloneDir, branch, meta)
+	mirrorLabels := make([]string, 0, len(pushedMirrors))
+	providerBranches := make([]ManagedGitRelaySourceProviderBranch, 0, len(pushedMirrors))
+	for _, mirror := range pushedMirrors {
+		mirrorLabels = append(mirrorLabels, mirror.Provider+"/"+mirror.FullName)
+		providerBranches = append(providerBranches, managedGitRelayProviderBranchFromMirror(mirror, branch))
+	}
+	return &ManagedGitRelaySourceApplyResult{
+		OK:               true,
+		RepoID:           meta.RepoID,
+		Branch:           branch,
+		BaseBranch:       baseBranch,
+		Commit:           commit,
+		FilesChanged:     changed,
+		MirrorsPushed:    mirrorLabels,
+		ProviderBranches: providerBranches,
+	}, nil
+}
+
+func (s *HTTPServer) registerManagedGitRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/managed-git/enable", s.auth(s.handleManagedGitEnable))
+	mux.HandleFunc("/managed-git/status", s.auth(s.handleManagedGitStatus))
+	mux.HandleFunc("/managed-git/checkpoint", s.auth(s.handleManagedGitCheckpoint))
+	mux.HandleFunc("/managed-git/backup/run", s.auth(s.handleManagedGitBackupRun))
+	mux.HandleFunc("/managed-git/backup/copy", s.auth(s.handleManagedGitBackupCopy))
+	mux.HandleFunc("/managed-git/backup/download", s.auth(s.handleManagedGitBackupDownload))
+	mux.HandleFunc("/managed-git/backup/receive", s.auth(s.handleManagedGitBackupReceive))
+	mux.HandleFunc("/managed-git/backup/restore", s.auth(s.handleManagedGitBackupRestore))
+	mux.HandleFunc("/managed-git/mirrors/connect", s.auth(s.handleManagedGitMirrorConnect))
+	mux.HandleFunc("/managed-git/sync", s.auth(s.handleManagedGitSync))
+	mux.HandleFunc("/managed-git/visibility", s.auth(s.handleManagedGitVisibility))
+	mux.HandleFunc("/managed-git/dropbox/oauth/start", s.auth(s.handleManagedGitDropboxOAuthStart))
+	mux.HandleFunc("/managed-git/dropbox/oauth/submit", s.auth(s.handleManagedGitDropboxOAuthSubmit))
+	mux.HandleFunc("/managed-git/dropbox/status", s.auth(s.handleManagedGitDropboxStatus))
+	mux.HandleFunc("/managed-git/relay-source/plan", s.auth(s.handleManagedGitRelaySourcePlan))
+	mux.HandleFunc("/managed-git/relay-source/work-once", s.auth(s.handleManagedGitRelaySourceWorkOnce))
+	mux.HandleFunc("/managed-git/relay-source/prepare", s.auth(s.handleManagedGitRelaySourcePrepare))
+	mux.HandleFunc("/managed-git/relay-source/apply", s.auth(s.handleManagedGitRelaySourceApply))
+}
+
+func (s *HTTPServer) handleManagedGitEnable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug       string `json:"slug"`
+		WorkDir    string `json:"workDir"`
+		Name       string `json:"name"`
+		Visibility string `json:"visibility"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	slug := body.Slug
+	if slug == "" {
+		slug = filepath.Base(workDir)
+	}
+	meta, err := EnsureManagedGitForProject(workDir, slug, body.Name, &ManagedGitCreateOptions{
+		Enabled:    true,
+		Visibility: body.Visibility,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if p, err := LoadPhoneProject(slug); err == nil {
+		p.ManagedGit = meta
+		_ = savePhoneMeta(p)
+	}
+	jsonReply(w, http.StatusOK, meta)
+}
+
+// handleManagedGitSync runs a full bidirectional sync: push local checkpoints to
+// connected mirrors (outbound), then fetch + merge remote changes (inbound) with
+// AI conflict resolution. No-op-safe when no mirror is connected.
+func (s *HTTPServer) handleManagedGitSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug    string `json:"slug"`
+		WorkDir string `json:"workDir"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	pushed := ManagedGitMirrorSyncAll(workDir)   // outbound
+	result, err := ManagedGitMirrorPull(workDir) // inbound (+ AI-resolve on conflict)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]any{"ok": true, "result": result, "mirrorsPushed": len(pushed)})
+}
+
+func (s *HTTPServer) handleManagedGitStatus(w http.ResponseWriter, r *http.Request) {
+	workDir, err := managedGitWorkDirFromRequest(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, meta)
+}
+
+func (s *HTTPServer) handleManagedGitCheckpoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug    string `json:"slug"`
+		WorkDir string `json:"workDir"`
+		Message string `json:"message"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	commit, err := ManagedGitCheckpoint(workDir, body.Message)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "commit": commit})
+}
+
+func (s *HTTPServer) handleManagedGitRelaySourcePlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug       string                           `json:"slug"`
+		WorkDir    string                           `json:"workDir"`
+		Branch     string                           `json:"branch"`
+		BaseBranch string                           `json:"baseBranch"`
+		Title      string                           `json:"title"`
+		Prompt     string                           `json:"prompt"`
+		Files      []ManagedGitRelaySourceFilePatch `json:"files"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 512<<10)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := PlanManagedGitRelaySourcePatch(workDir, body.Branch, body.BaseBranch, body.Title, body.Prompt, body.Files)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, result)
+}
+
+func (s *HTTPServer) handleManagedGitRelaySourceWorkOnce(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug        string                           `json:"slug"`
+		WorkDir     string                           `json:"workDir"`
+		IntentID    string                           `json:"intentId"`
+		LocalTaskID string                           `json:"localTaskId"`
+		Branch      string                           `json:"branch"`
+		BaseBranch  string                           `json:"baseBranch"`
+		RelayID     string                           `json:"relayId"`
+		Title       string                           `json:"title"`
+		Prompt      string                           `json:"prompt"`
+		Message     string                           `json:"message"`
+		Files       []ManagedGitRelaySourceFilePatch `json:"files"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 512<<10)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authHeader := r.Header.Get("Authorization")
+	ctx := r.Context()
+	intentID := strings.TrimSpace(body.IntentID)
+	localTaskID := strings.TrimSpace(body.LocalTaskID)
+	relayID := firstNonEmpty(strings.TrimSpace(body.RelayID), "managed-git")
+	var intent *relaySourceIntent
+	if intentID == "" && localTaskID == "" {
+		claimed, claimErr := claimRelaySourceIntent(ctx, authHeader, body.Slug, relayID)
+		if claimErr != nil {
+			jsonError(w, http.StatusBadGateway, claimErr.Error())
+			return
+		}
+		if claimed == nil {
+			jsonReply(w, http.StatusOK, map[string]any{"ok": true, "intent": nil})
+			return
+		}
+		intent = claimed
+		intentID = claimed.ID
+		localTaskID = claimed.LocalTaskID
+		if strings.TrimSpace(body.Branch) == "" {
+			body.Branch = claimed.Branch
+		}
+		if strings.TrimSpace(body.BaseBranch) == "" {
+			body.BaseBranch = claimed.BaseBranch
+		}
+	} else {
+		updated, _ := updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"claimed",
+			"",
+			relayID,
+			"relay is evaluating source-only work",
+			"",
+			true,
+		)
+		intent = updated
+	}
+
+	hasLocalContext := strings.TrimSpace(body.Title) != "" || strings.TrimSpace(body.Prompt) != "" || len(body.Files) > 0
+	if !hasLocalContext {
+		result, err := ManagedGitPrepareRelaySourceBranch(workDir, body.Branch, body.BaseBranch)
+		if err != nil {
+			_, _ = updateRelaySourceIntentStatus(
+				ctx,
+				authHeader,
+				intentID,
+				localTaskID,
+				"failed",
+				"",
+				relayID,
+				"metadata-only relay branch preparation failed",
+				err.Error(),
+				false,
+			)
+			jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"handoff_ready",
+			"",
+			relayID,
+			"relay prepared a branch from prompt-free intent metadata; compute still owns task execution",
+			"",
+			false,
+		)
+		jsonReply(w, http.StatusOK, ManagedGitRelaySourceWorkResult{
+			OK:      true,
+			Intent:  intent,
+			Prepare: result,
+			Plan: &ManagedGitRelaySourcePlanResult{
+				OK:            true,
+				RepoID:        result.RepoID,
+				Branch:        result.Branch,
+				BaseBranch:    result.BaseBranch,
+				Mode:          "prepare_only",
+				RelayEligible: true,
+				CanApply:      false,
+				Reasons:       []string{"relay only had prompt-free intent metadata, so it prepared a scoped branch for compute handoff"},
+			},
+		})
+		return
+	}
+
+	applyFiles := body.Files
+	if len(applyFiles) == 0 {
+		if generated, genErr := relaySourceGeneratedPatchesFromPrompt(body.Prompt); genErr == nil && len(generated) > 0 {
+			applyFiles = generated
+		}
+	}
+	plan, err := PlanManagedGitRelaySourcePatch(workDir, body.Branch, body.BaseBranch, body.Title, body.Prompt, body.Files)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !plan.RelayEligible || plan.Mode == "compute_required" {
+		reason := strings.Join(plan.Reasons, "; ")
+		if reason == "" {
+			reason = "relay planner routed this work to compute"
+		}
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"blocked",
+			"",
+			relayID,
+			reason,
+			"",
+			false,
+		)
+		jsonReply(w, http.StatusOK, ManagedGitRelaySourceWorkResult{OK: true, Intent: intent, Plan: plan})
+		return
+	}
+	if plan.CanApply {
+		message := firstNonEmpty(strings.TrimSpace(body.Message), plan.CommitMessage)
+		result, err := ManagedGitApplyRelaySourcePatch(workDir, plan.Branch, plan.BaseBranch, message, applyFiles)
+		if err != nil {
+			_, _ = updateRelaySourceIntentStatus(
+				ctx,
+				authHeader,
+				intentID,
+				localTaskID,
+				"failed",
+				"",
+				relayID,
+				"relay source patch failed",
+				err.Error(),
+				false,
+			)
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"committed",
+			"",
+			relayID,
+			"relay committed source-only changes",
+			"",
+			false,
+		)
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"handoff_ready",
+			"",
+			relayID,
+			"relay source branch is ready for compute handoff",
+			"",
+			false,
+		)
+		if (strings.TrimSpace(intentID) != "" || strings.TrimSpace(localTaskID) != "") && (intent == nil || intent.ProviderKind == "" || intent.ProviderKind == "github") {
+			appToken, appTokenErr := requestRelaySourceGitHubAppToken(ctx, authHeader, intentID, localTaskID)
+			if appTokenErr == nil && appToken != nil {
+				appBranch, appPushErr := ManagedGitPushRelaySourceBranchWithGitHubAppToken(workDir, appToken)
+				if appPushErr == nil && appBranch != nil {
+					result.ProviderBranches = append([]ManagedGitRelaySourceProviderBranch{*appBranch}, result.ProviderBranches...)
+					_, _ = updateRelaySourceIntentProviderBranch(
+						ctx,
+						authHeader,
+						intentID,
+						localTaskID,
+						"handoff_ready",
+						relayID,
+						"relay source branch was pushed to GitHub with an app installation token",
+						*appBranch,
+					)
+				} else if appPushErr != nil {
+					log.Printf("[managed-git] github app relay branch push skipped: %v", appPushErr)
+				}
+			} else if appTokenErr != nil {
+				log.Printf("[managed-git] github app token unavailable for relay branch push: %v", appTokenErr)
+			}
+		}
+		if (strings.TrimSpace(intentID) != "" || strings.TrimSpace(localTaskID) != "") && intent != nil && intent.ProviderKind == "gitlab" {
+			if err := markRelaySourceGitLabScopedTokenUnsupported(ctx, authHeader, intentID, localTaskID); err != nil {
+				log.Printf("[managed-git] gitlab scoped token unavailable for relay branch push: %v", err)
+			}
+		}
+		if len(result.ProviderBranches) > 0 && result.ProviderBranches[0].ProviderAuthMode != "app_installation" {
+			_, _ = updateRelaySourceIntentProviderBranch(
+				ctx,
+				authHeader,
+				intentID,
+				localTaskID,
+				"handoff_ready",
+				relayID,
+				"relay source branch was mirrored to the provider with owner-local token fallback; app installation token remains the target path",
+				result.ProviderBranches[0],
+			)
+		}
+		jsonReply(w, http.StatusOK, ManagedGitRelaySourceWorkResult{OK: true, Intent: intent, Plan: plan, Apply: result})
+		return
+	}
+
+	result, err := ManagedGitPrepareRelaySourceBranch(workDir, plan.Branch, plan.BaseBranch)
+	if err != nil {
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"failed",
+			"",
+			relayID,
+			"relay source branch preparation failed",
+			err.Error(),
+			false,
+		)
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_, _ = updateRelaySourceIntentStatus(
+		ctx,
+		authHeader,
+		intentID,
+		localTaskID,
+		"handoff_ready",
+		"",
+		relayID,
+		"relay source branch is ready for explicit source-only edits or compute handoff",
+		"",
+		false,
+	)
+	jsonReply(w, http.StatusOK, ManagedGitRelaySourceWorkResult{OK: true, Intent: intent, Plan: plan, Prepare: result})
+}
+
+func (s *HTTPServer) handleManagedGitRelaySourcePrepare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug        string `json:"slug"`
+		WorkDir     string `json:"workDir"`
+		IntentID    string `json:"intentId"`
+		LocalTaskID string `json:"localTaskId"`
+		Branch      string `json:"branch"`
+		BaseBranch  string `json:"baseBranch"`
+		RelayID     string `json:"relayId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authHeader := r.Header.Get("Authorization")
+	ctx := r.Context()
+	intentID := strings.TrimSpace(body.IntentID)
+	localTaskID := strings.TrimSpace(body.LocalTaskID)
+	relayID := firstNonEmpty(strings.TrimSpace(body.RelayID), "managed-git")
+	if intentID == "" && localTaskID == "" {
+		claimed, claimErr := claimRelaySourceIntent(ctx, authHeader, body.Slug, relayID)
+		if claimErr != nil {
+			jsonError(w, http.StatusBadGateway, claimErr.Error())
+			return
+		}
+		if claimed == nil {
+			jsonReply(w, http.StatusOK, map[string]any{"ok": true, "intent": nil})
+			return
+		}
+		intentID = claimed.ID
+		localTaskID = claimed.LocalTaskID
+		if strings.TrimSpace(body.Branch) == "" {
+			body.Branch = claimed.Branch
+		}
+		if strings.TrimSpace(body.BaseBranch) == "" {
+			body.BaseBranch = claimed.BaseBranch
+		}
+	} else {
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"claimed",
+			"",
+			relayID,
+			"relay is preparing a branch-scoped source workspace",
+			"",
+			true,
+		)
+	}
+	result, err := ManagedGitPrepareRelaySourceBranch(workDir, body.Branch, body.BaseBranch)
+	if err != nil {
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"failed",
+			"",
+			relayID,
+			"relay source branch preparation failed",
+			err.Error(),
+			false,
+		)
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_, _ = updateRelaySourceIntentStatus(
+		ctx,
+		authHeader,
+		intentID,
+		localTaskID,
+		"handoff_ready",
+		"",
+		relayID,
+		"relay source branch is ready for source-only edits or compute handoff",
+		"",
+		false,
+	)
+	jsonReply(w, http.StatusOK, result)
+}
+
+func (s *HTTPServer) handleManagedGitRelaySourceApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug        string                           `json:"slug"`
+		WorkDir     string                           `json:"workDir"`
+		IntentID    string                           `json:"intentId"`
+		LocalTaskID string                           `json:"localTaskId"`
+		Branch      string                           `json:"branch"`
+		BaseBranch  string                           `json:"baseBranch"`
+		RelayID     string                           `json:"relayId"`
+		Message     string                           `json:"message"`
+		Files       []ManagedGitRelaySourceFilePatch `json:"files"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 512<<10)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authHeader := r.Header.Get("Authorization")
+	ctx := r.Context()
+	intentID := strings.TrimSpace(body.IntentID)
+	localTaskID := strings.TrimSpace(body.LocalTaskID)
+	relayID := firstNonEmpty(strings.TrimSpace(body.RelayID), "managed-git")
+	if intentID == "" && localTaskID == "" {
+		claimed, claimErr := claimRelaySourceIntent(ctx, authHeader, body.Slug, relayID)
+		if claimErr != nil {
+			jsonError(w, http.StatusBadGateway, claimErr.Error())
+			return
+		}
+		if claimed == nil {
+			jsonReply(w, http.StatusOK, map[string]any{"ok": true, "intent": nil})
+			return
+		}
+		intentID = claimed.ID
+		localTaskID = claimed.LocalTaskID
+		if strings.TrimSpace(body.Branch) == "" {
+			body.Branch = claimed.Branch
+		}
+		if strings.TrimSpace(body.BaseBranch) == "" {
+			body.BaseBranch = claimed.BaseBranch
+		}
+	} else {
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"claimed",
+			"",
+			relayID,
+			"relay is applying source-only file changes",
+			"",
+			true,
+		)
+	}
+	result, err := ManagedGitApplyRelaySourcePatch(workDir, body.Branch, body.BaseBranch, body.Message, body.Files)
+	if err != nil {
+		_, _ = updateRelaySourceIntentStatus(
+			ctx,
+			authHeader,
+			intentID,
+			localTaskID,
+			"failed",
+			"",
+			relayID,
+			"relay source patch failed",
+			err.Error(),
+			false,
+		)
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	_, _ = updateRelaySourceIntentStatus(
+		ctx,
+		authHeader,
+		intentID,
+		localTaskID,
+		"committed",
+		"",
+		relayID,
+		"relay committed source-only changes",
+		"",
+		false,
+	)
+	_, _ = updateRelaySourceIntentStatus(
+		ctx,
+		authHeader,
+		intentID,
+		localTaskID,
+		"handoff_ready",
+		"",
+		relayID,
+		"relay source branch is ready for compute handoff",
+		"",
+		false,
+	)
+	jsonReply(w, http.StatusOK, result)
+}
+
+func (s *HTTPServer) handleManagedGitBackupRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug    string `json:"slug"`
+		WorkDir string `json:"workDir"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	backup, err := ManagedGitBackup(workDir)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "backup": backup})
+}
+
+func (s *HTTPServer) handleManagedGitBackupCopy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug       string `json:"slug"`
+		WorkDir    string `json:"workDir"`
+		TargetKind string `json:"targetKind"`
+		TargetID   string `json:"targetId"`
+		DestPath   string `json:"destPath"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	backup, err := ManagedGitBackupToTarget(workDir, body.TargetKind, body.TargetID, body.DestPath)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "backup": backup})
+}
+
+func (s *HTTPServer) handleManagedGitBackupDownload(w http.ResponseWriter, r *http.Request) {
+	workDir, err := managedGitWorkDirFromRequest(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	backup, err := ManagedGitBackup(workDir)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(backup.Path)+`"`)
+	w.Header().Set("X-Yaver-Commit", backup.Commit)
+	http.ServeFile(w, r, backup.Path)
+}
+
+func (s *HTTPServer) handleManagedGitBackupReceive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	repoID := Slugify(r.URL.Query().Get("repoId"))
+	if repoID == "" {
+		repoID = "received"
+	}
+	root, err := managedGitBackupsRoot()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	dir := filepath.Join(root, "received", repoID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	name := time.Now().UTC().Format("20060102T150405Z") + ".bundle"
+	path := filepath.Join(dir, name)
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	n, copyErr := io.Copy(f, http.MaxBytesReader(w, r.Body, 512<<20))
+	closeErr := f.Close()
+	if copyErr != nil {
+		jsonError(w, http.StatusBadRequest, copyErr.Error())
+		return
+	}
+	if closeErr != nil {
+		jsonError(w, http.StatusInternalServerError, closeErr.Error())
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	latest := filepath.Join(dir, "latest.bundle")
+	_ = managedGitCopyFile(path, latest, 0o600)
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":        true,
+		"repoId":    repoID,
+		"path":      path,
+		"sizeBytes": n,
+	})
+}
+
+func (s *HTTPServer) handleManagedGitBackupRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug       string `json:"slug"`
+		WorkDir    string `json:"workDir"`
+		BundlePath string `json:"bundlePath"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	commit, err := ManagedGitRestoreBundle(workDir, body.BundlePath)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "commit": commit})
+}
+
+func (s *HTTPServer) handleManagedGitMirrorConnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug        string `json:"slug"`
+		WorkDir     string `json:"workDir"`
+		Provider    string `json:"provider"`
+		Host        string `json:"host"`
+		RepoName    string `json:"repoName"`
+		Visibility  string `json:"visibility"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	mirror, err := ManagedGitMirrorToProvider(workDir, body.Provider, body.Host, body.RepoName, body.Visibility, body.Description)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "mirror": mirror})
+}
+
+func (s *HTTPServer) handleManagedGitVisibility(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		Slug       string `json:"slug"`
+		WorkDir    string `json:"workDir"`
+		Visibility string `json:"visibility"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	workDir, err := managedGitWorkDir(body.Slug, body.WorkDir)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	meta, err := LoadManagedGitMeta(workDir)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	meta.Visibility = normalizeManagedGitVisibility(body.Visibility)
+	if err := SaveManagedGitMeta(workDir, meta); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, meta)
+}
+
+func (s *HTTPServer) handleManagedGitDropboxOAuthStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		RedirectURI string `json:"redirectUri"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	sess, err := startDropboxOAuth(body.RedirectURI)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":          true,
+		"sessionId":   sess.ID,
+		"authUrl":     sess.AuthURL,
+		"redirectUri": sess.RedirectURI,
+		"expiresAt":   sess.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
+func (s *HTTPServer) handleManagedGitDropboxOAuthSubmit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var body struct {
+		SessionID string `json:"sessionId"`
+		Code      string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	rec, err := submitDropboxOAuthCode(body.SessionID, body.Code)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok":        true,
+		"accountId": rec.AccountID,
+		"scope":     rec.Scope,
+		"expiresAt": rec.ExpiresAt,
+	})
+}
+
+func (s *HTTPServer) handleManagedGitDropboxStatus(w http.ResponseWriter, r *http.Request) {
+	rec, err := loadDropboxToken()
+	if err != nil {
+		jsonReply(w, http.StatusOK, map[string]interface{}{"connected": false})
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"connected": true,
+		"accountId": rec.AccountID,
+		"scope":     rec.Scope,
+		"expiresAt": rec.ExpiresAt,
+		"updatedAt": rec.UpdatedAt,
+	})
+}
+
+func managedGitWorkDirFromRequest(r *http.Request) (string, error) {
+	return managedGitWorkDir(r.URL.Query().Get("slug"), r.URL.Query().Get("workDir"))
+}
+
+func managedGitWorkDir(slug, workDir string) (string, error) {
+	if strings.TrimSpace(workDir) != "" {
+		return filepath.Abs(workDir)
+	}
+	if strings.TrimSpace(slug) == "" {
+		return "", fmt.Errorf("slug or workDir required")
+	}
+	return PhoneProjectDir(slug)
+}
+
+func mcpManagedGitStatus(slug, workDir string) interface{} {
+	dir, err := managedGitWorkDir(slug, workDir)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	meta, err := LoadManagedGitMeta(dir)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return meta
+}
+
+func mcpManagedGitEnable(slug, workDir, name, visibility string) interface{} {
+	dir, err := managedGitWorkDir(slug, workDir)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	if slug == "" {
+		slug = filepath.Base(dir)
+	}
+	meta, err := EnsureManagedGitForProject(dir, slug, name, &ManagedGitCreateOptions{Enabled: true, Visibility: visibility})
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	if p, err := LoadPhoneProject(slug); err == nil {
+		p.ManagedGit = meta
+		_ = savePhoneMeta(p)
+	}
+	return meta
+}
+
+func mcpManagedGitCheckpoint(slug, workDir, message string) interface{} {
+	dir, err := managedGitWorkDir(slug, workDir)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	commit, err := ManagedGitCheckpoint(dir, message)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return map[string]interface{}{"ok": true, "commit": commit}
+}
+
+func mcpManagedGitBackup(slug, workDir, targetKind, targetID, destPath string) interface{} {
+	dir, err := managedGitWorkDir(slug, workDir)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	if strings.TrimSpace(targetKind) != "" || strings.TrimSpace(destPath) != "" || strings.TrimSpace(targetID) != "" {
+		backup, err := ManagedGitBackupToTarget(dir, targetKind, targetID, destPath)
+		if err != nil {
+			return map[string]interface{}{"error": err.Error()}
+		}
+		return map[string]interface{}{"ok": true, "backup": backup}
+	}
+	backup, err := ManagedGitBackup(dir)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return map[string]interface{}{"ok": true, "backup": backup}
+}
+
+func mcpManagedGitRestore(slug, workDir, bundlePath string) interface{} {
+	dir, err := managedGitWorkDir(slug, workDir)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	commit, err := ManagedGitRestoreBundle(dir, bundlePath)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return map[string]interface{}{"ok": true, "commit": commit}
+}
+
+func mcpManagedGitMirror(slug, workDir, provider, host, repoName, visibility, description string) interface{} {
+	dir, err := managedGitWorkDir(slug, workDir)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	mirror, err := ManagedGitMirrorToProvider(dir, provider, host, repoName, visibility, description)
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return map[string]interface{}{"ok": true, "mirror": mirror}
+}
