@@ -84,7 +84,7 @@ func (s *HTTPServer) attachTmuxSessionPTY(conn *websocket.Conn, r *http.Request)
 	cmd := exec.Command(tmuxCmdName(), args...)
 	cmd.Env = append(os.Environ(), "TERM="+safePTYTermName(q.Get("term")))
 
-	ts, err := s.newTerminalSession(cmd, nil, "", "", "")
+	ts, err := s.newTerminalSession(cmd, nil, "")
 	if err != nil {
 		runnerPTYFail(conn, "pty start failed: "+err.Error())
 		return

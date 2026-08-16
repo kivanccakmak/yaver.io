@@ -60,7 +60,7 @@ Starting with **0.6.0**, the SDK login screen mirrors the Yaver mobile app: nati
 Drop in `<FeedbackModal />` and the first time a user triggers feedback without a cached session, they get:
 
 1. A full-screen login modal — Apple (native) / Google / GitHub / GitLab / Microsoft (in-app browser) / email + password (inline).
-2. A picker of the machines they can reach — **their own dev boxes** plus **guest-shared machines** (where another user invited them).
+2. A picker of the authenticated account's own dev boxes.
 
 Both screens persist their selection to `AsyncStorage`, so subsequent launches reconnect silently.
 

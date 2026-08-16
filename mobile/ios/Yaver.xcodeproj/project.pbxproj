@@ -62,7 +62,6 @@
 		E2569915B4C3473591F5EB7C /* PhoneSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7AA00305AAE42C69456FAC8 /* PhoneSession.swift */; };
 		E9DCD20A034E49BC960E3BA1 /* ConfirmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CD938F23974D9C9AC33B33 /* ConfirmView.swift */; };
 		F07CE48FD595B0ACD2F8B805 /* YaverBundleLoader.m in Sources */ = {isa = PBXBuildFile; fileRef = 415536B78C32721035E86A5D /* YaverBundleLoader.m */; };
-		F087E96891C04034A7EB0671 /* GuestAccessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F36680197D47059569B2A8 /* GuestAccessView.swift */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 		FCAA90D03B4E4E9F81DA0047 /* WakeProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47E06EDB37C2459087D39E09 /* WakeProgressView.swift */; };
 		FF7DDBBE80B84B9DBDBC343D /* Backend.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAE27D0C2AC344CA8EA727F7 /* Backend.swift */; };
@@ -138,7 +137,6 @@
 		7A0D5E2B0003000200030004 /* YaverFeedbackTranscript.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Yaver/YaverFeedbackTranscript.swift; sourceTree = "<group>"; };
 		7B6D3B8CC79B4516BFB9D831 /* YaverActivityAttributes.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = YaverActivityAttributes.swift; path = "../native-liveactivity/shared/YaverActivityAttributes.swift"; sourceTree = "<group>"; };
 		80141A7795EF4EDB854A526F /* Complications.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = Complications.swift; path = ../../watch/YaverWatch/Complications.swift; sourceTree = "<group>"; };
-		81F36680197D47059569B2A8 /* GuestAccessView.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = GuestAccessView.swift; path = ../../watch/YaverWatch/Views/GuestAccessView.swift; sourceTree = "<group>"; };
 		8A180F91D4364C6F82AFB2D8 /* YaverLiveActivity.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = YaverLiveActivity.swift; path = "../native-liveactivity/ios/YaverLiveActivity.swift"; sourceTree = "<group>"; };
 		93F1A42E32324F83AC528F42 /* SettingsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = SettingsView.swift; path = ../../watch/YaverWatch/Views/SettingsView.swift; sourceTree = "<group>"; };
 		97047227A457584A52C75D70 /* YaverBundleLoader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = YaverBundleLoader.swift; path = Yaver/YaverBundleLoader.swift; sourceTree = "<group>"; };
@@ -355,7 +353,6 @@
 				A042BE27882E4C9D8FB1D5B1 /* Assets.xcassets */,
 				5ADAB851FD3541E49AADD291 /* BoxLifecycle.swift */,
 				47E06EDB37C2459087D39E09 /* WakeProgressView.swift */,
-				81F36680197D47059569B2A8 /* GuestAccessView.swift */,
 			);
 			name = YaverWatch;
 			sourceTree = "<group>";
@@ -766,7 +763,6 @@
 				1D5AB8C5762346A0B4B4541A /* SettingsView.swift in Sources */,
 				DDD2C5898B6F430A8D987B3D /* BoxLifecycle.swift in Sources */,
 				FCAA90D03B4E4E9F81DA0047 /* WakeProgressView.swift in Sources */,
-				F087E96891C04034A7EB0671 /* GuestAccessView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

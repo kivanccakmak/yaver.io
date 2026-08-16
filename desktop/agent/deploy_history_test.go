@@ -17,11 +17,11 @@ func TestDeployHistoryRingBuffer(t *testing.T) {
 
 	ids := []string{}
 	for i := 0; i < 5; i++ {
-		r := h.Start(DeployRun{App: "x", Target: "y", RequestedBy: "owner"})
+		r := h.Start(DeployRun{App: "x", Target: "y"})
 		ids = append(ids, r.ID)
 	}
 
-	list := h.List(0, "")
+	list := h.List(0)
 	if len(list) != 3 {
 		t.Fatalf("expected 3 entries after 5 inserts into cap=3, got %d", len(list))
 	}
@@ -44,7 +44,7 @@ func TestDeployHistoryAppendCap(t *testing.T) {
 	for i := 0; i < 2000; i++ {
 		h.Append(r.ID, "this is a reasonably long line to stress the buffer")
 	}
-	got, ok := h.Get(r.ID, "")
+	got, ok := h.Get(r.ID)
 	if !ok {
 		t.Fatalf("Get missed entry")
 	}
@@ -66,7 +66,7 @@ func TestDeployHistoryFinish(t *testing.T) {
 	r := h.Start(DeployRun{App: "a", Target: "b"})
 	h.Finish(r.ID, 0, false)
 
-	got, _ := h.Get(r.ID, "")
+	got, _ := h.Get(r.ID)
 	if got.InProgress {
 		t.Error("finished entry should not be InProgress")
 	}
@@ -80,37 +80,9 @@ func TestDeployHistoryFinish(t *testing.T) {
 	// Non-zero exit flags OK=false.
 	r2 := h.Start(DeployRun{App: "a", Target: "b"})
 	h.Finish(r2.ID, 42, false)
-	got2, _ := h.Get(r2.ID, "")
+	got2, _ := h.Get(r2.ID)
 	if got2.ExitCode != 42 || got2.OK {
 		t.Errorf("exit=42 should NOT flag OK: %+v", got2)
-	}
-}
-
-func TestDeployHistoryGuestFilter(t *testing.T) {
-	// Isolate HOME: NewDeployHistory loads (and evicts, deleting log
-	// dirs from) ~/.yaver/deploys. Without this a test run mutates the
-	// developer's real deploy history and reads their runs as its own.
-	t.Setenv("HOME", t.TempDir())
-	h := NewDeployHistory(10)
-	_ = h.Start(DeployRun{App: "a", Target: "b", RequestedBy: "owner"})
-	guestA := h.Start(DeployRun{App: "a", Target: "b", RequestedBy: "guest-A"})
-	_ = h.Start(DeployRun{App: "a", Target: "b", RequestedBy: "guest-B"})
-
-	// Guest A only sees their own.
-	list := h.List(0, "guest-A")
-	if len(list) != 1 {
-		t.Fatalf("expected 1 entry for guest-A, got %d", len(list))
-	}
-	if list[0].ID != guestA.ID {
-		t.Errorf("wrong entry: %+v", list[0])
-	}
-
-	// Get respects filter.
-	if _, ok := h.Get(guestA.ID, "guest-B"); ok {
-		t.Error("guest-B should not be able to Get guest-A's run")
-	}
-	if _, ok := h.Get(guestA.ID, "guest-A"); !ok {
-		t.Error("guest-A should see own run")
 	}
 }
 
@@ -126,14 +98,6 @@ func TestDeployLimiter(t *testing.T) {
 	}
 	if l.tryAcquire("owner", 2) {
 		t.Fatal("third acquire should have been rejected")
-	}
-
-	// Guest key is independent.
-	if !l.tryAcquire("guest:X", 1) {
-		t.Fatal("guest:X first acquire failed")
-	}
-	if l.tryAcquire("guest:X", 1) {
-		t.Fatal("guest:X second acquire should have been rejected")
 	}
 
 	// Release restores slots.
@@ -153,15 +117,14 @@ func TestDeployRunsEndpoints(t *testing.T) {
 	// developer's real deploy history and reads their runs as its own.
 	t.Setenv("HOME", t.TempDir())
 	h := NewDeployHistory(10)
-	// Pre-populate with one owner run + one guest run.
-	_ = h.Start(DeployRun{App: "web", Target: "cloudflare", RequestedBy: "owner", IsGuest: false})
-	guestRun := h.Start(DeployRun{App: "web", Target: "cloudflare", RequestedBy: "guest-1", IsGuest: true})
-	h.Append(guestRun.ID, "building...")
-	h.Finish(guestRun.ID, 0, false)
+	_ = h.Start(DeployRun{App: "web", Target: "cloudflare"})
+	recentRun := h.Start(DeployRun{App: "web", Target: "cloudflare"})
+	h.Append(recentRun.ID, "building...")
+	h.Finish(recentRun.ID, 0, false)
 
 	srv := &HTTPServer{deployHistory: h}
 
-	// Owner sees both.
+	// The owner sees all local runs.
 	req := httptest.NewRequest("GET", "/deploy/runs", nil)
 	w := httptest.NewRecorder()
 	srv.handleDeployRuns(w, req)
@@ -183,41 +146,17 @@ func TestDeployRunsEndpoints(t *testing.T) {
 		}
 	}
 
-	// Guest only sees their own.
-	req = httptest.NewRequest("GET", "/deploy/runs", nil)
-	req.Header.Set("X-Yaver-Guest", "true")
-	req.Header.Set("X-Yaver-GuestUserID", "guest-1")
-	w = httptest.NewRecorder()
-	srv.handleDeployRuns(w, req)
-	json.Unmarshal(w.Body.Bytes(), &list)
-	if len(list.Runs) != 1 || list.Runs[0].ID != guestRun.ID {
-		t.Fatalf("guest list wrong: %+v", list.Runs)
-	}
-
-	// Guest detail with correct ID, correct filter: OK + includes OutputTail.
-	req = httptest.NewRequest("GET", "/deploy/runs/"+guestRun.ID, nil)
-	req.Header.Set("X-Yaver-Guest", "true")
-	req.Header.Set("X-Yaver-GuestUserID", "guest-1")
+	// Detail includes the output tail.
+	req = httptest.NewRequest("GET", "/deploy/runs/"+recentRun.ID, nil)
 	w = httptest.NewRecorder()
 	srv.handleDeployRunDetail(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("guest detail: %d", w.Code)
+		t.Fatalf("run detail: %d", w.Code)
 	}
 	var detail DeployRun
 	json.Unmarshal(w.Body.Bytes(), &detail)
-	if detail.ID != guestRun.ID || !strings.Contains(detail.OutputTail, "building...") {
+	if detail.ID != recentRun.ID || !strings.Contains(detail.OutputTail, "building...") {
 		t.Fatalf("detail wrong: %+v", detail)
-	}
-
-	// Guest detail with ID they don't own → 404 (info hiding).
-	otherGuest := h.Start(DeployRun{App: "x", Target: "y", RequestedBy: "guest-2", IsGuest: true})
-	req = httptest.NewRequest("GET", "/deploy/runs/"+otherGuest.ID, nil)
-	req.Header.Set("X-Yaver-Guest", "true")
-	req.Header.Set("X-Yaver-GuestUserID", "guest-1")
-	w = httptest.NewRecorder()
-	srv.handleDeployRunDetail(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("guest cross-access should be 404, got %d", w.Code)
 	}
 
 	// Missing ID → 400.
@@ -230,24 +169,21 @@ func TestDeployRunsEndpoints(t *testing.T) {
 }
 
 func TestDeployShipConcurrencyCap(t *testing.T) {
-	// Two guest deploys should be allowed (cap=2); a third must be
-	// rejected with 429.
+	// An owner request beyond the global cap is rejected with 429.
 	srv := &HTTPServer{
 		deployLimiter: newDeployLimiter(),
 	}
-	// Pre-fill the guest's slots.
-	srv.deployLimiter.tryAcquire("guest:G", deployShipLimits.Guest)
-	srv.deployLimiter.tryAcquire("guest:G", deployShipLimits.Guest)
+	for i := 0; i < deployShipMaxInFlight; i++ {
+		srv.deployLimiter.tryAcquire("owner", deployShipMaxInFlight)
+	}
 
 	body := `{"app":"web","target":"cloudflare"}`
 	req := httptest.NewRequest("POST", "/deploy/ship", strings.NewReader(body))
-	req.Header.Set("X-Yaver-Guest", "true")
-	req.Header.Set("X-Yaver-GuestUserID", "G")
 	w := httptest.NewRecorder()
 	srv.handleDeployShip(w, req)
 
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("expected 429 once guest cap exhausted, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("expected 429 once deploy cap is exhausted, got %d: %s", w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "concurrency cap") {
 		t.Errorf("unexpected body: %s", w.Body.String())

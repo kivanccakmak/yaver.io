@@ -8,6 +8,14 @@ import (
 	"path/filepath"
 )
 
+func legacyPairedTokensPath() (string, error) {
+	base, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "paired_tokens.json"), nil
+}
+
 func runAuthFactoryReset(args []string) {
 	fs := flag.NewFlagSet("auth factory-reset", flag.ExitOnError)
 	convexURL := fs.String("convex-url", defaultConvexSiteURL, "Convex site URL")
@@ -57,9 +65,9 @@ func runAuthFactoryReset(args []string) {
 		fmt.Println("Wiped auth state; preserved relay credentials so the dashboard can re-pair this box.")
 	}
 
-	// pendingAuthPath / pairedTokensPath are user-bound and should
-	// always be removed. They don't carry relay info.
-	for _, resolver := range []func() (string, error){pendingAuthPath, pairedTokensPath} {
+	// Pending auth state is user-bound and should always be removed. It does not
+	// carry relay info.
+	for _, resolver := range []func() (string, error){pendingAuthPath, legacyPairedTokensPath} {
 		path, pathErr := resolver()
 		if pathErr != nil || path == "" {
 			continue

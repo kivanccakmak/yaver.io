@@ -15,7 +15,7 @@ import (
 // counts ONLY — never a token, key, or vault value. The actual secret
 // copy to a new box happens device→device through the EXISTING paths
 // (git_push_creds, runner-auth, vault) — never through mobile or Convex.
-// Owner-only (AllowGuest:false).
+// Owner-only (AllowCompanion:false).
 
 func init() {
 	registerOpsVerb(opsVerbSpec{
@@ -26,9 +26,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsSetupInventoryHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsSetupInventoryHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

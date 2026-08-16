@@ -43,10 +43,10 @@ const defaultPairBaseURL = "https://yaver.io/pair"
 // PairURLOptions feeds buildPairURL. All fields except Session are
 // optional; the URL is still meaningful with just a session.
 type PairURLOptions struct {
-	Mode      string // "pair" | "bootstrap" | "recovery"
-	Target    string // first-choice reach URL for the agent
-	BaseURL   string // override canonical base (rarely used)
-	OmitCode  bool   // suppress ?code=... — useful when the URL is shared in writing
+	Mode     string // "pair" | "bootstrap" | "recovery"
+	Target   string // first-choice reach URL for the agent
+	BaseURL  string // override canonical base (rarely used)
+	OmitCode bool   // suppress ?code=... — useful when the URL is shared in writing
 }
 
 // pairBaseURLFromConfig returns the configured web base URL with /pair

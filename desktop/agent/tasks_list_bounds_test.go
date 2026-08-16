@@ -269,7 +269,7 @@ type blockingTaskStore struct {
 	saved     chan struct{}
 }
 
-func (s *blockingTaskStore) Load() map[string]*Task { return map[string]*Task{} }
+func (s *blockingTaskStore) Load() map[string]*Task      { return map[string]*Task{} }
 func (s *blockingTaskStore) Save(tasks map[string]*Task) {}
 func (s *blockingTaskStore) SaveRecords(records []persistedTask) {
 	time.Sleep(s.saveDelay)

@@ -638,12 +638,7 @@ func runPrimaryStatus(ctx context.Context, asJSON bool) {
 	if current == "" {
 		// Single-device users have no primary set but the CLI should
 		// still answer — fall back to the only registered owner device.
-		var owned []DeviceInfo
-		for _, d := range devices {
-			if !d.IsGuest {
-				owned = append(owned, d)
-			}
-		}
+		owned := devices
 		if len(owned) == 0 {
 			fmt.Fprintln(os.Stderr, "No registered owner devices yet. Run `yaver serve` on a machine to register it.")
 			os.Exit(1)

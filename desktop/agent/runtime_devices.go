@@ -170,9 +170,9 @@ func AllHeldResources() []VibeResourceView {
 	return out
 }
 
-// MachineResourceReport is the whole machine in one payload: every live vibe
-// session, its participants, and the resources it holds. One endpoint, one shape,
-// rendered identically by web / mobile / TV / watch.
+// MachineResourceReport is the whole machine in one payload: every owner
+// workload and the resources it holds. One endpoint, one shape, rendered
+// identically by web / mobile / TV / watch.
 type MachineResourceReport struct {
 	Hostname string            `json:"hostname"`
 	Sessions []VibeSessionView `json:"sessions"`

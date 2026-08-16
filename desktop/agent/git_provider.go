@@ -1445,7 +1445,7 @@ func (s *HTTPServer) handleRepoCloneWithMetadata(w http.ResponseWriter, r *http.
 
 	// Credential hygiene: the HTTPS branch injected a token into the clone URL,
 	// which git persists in .git/config. Reset origin to the token-free URL so a
-	// tester/guest in this workdir can't read the owner's PAT. SSH clones carry
+	// untrusted task code in this workdir cannot read the owner's PAT. SSH clones carry
 	// no token, so they're left untouched. See resetOriginToCleanURL.
 	usedTokenURL := (provider == nil || provider.SSHKeyPath == "") && cloneURL != req.URL
 	if usedTokenURL {

@@ -81,7 +81,7 @@ func screwFailRate(passed, screws int) float64 {
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 
 	reg("screw_cell_record", "Record a screw-driving cell run (a terminal block's PASS/FAIL). {label?, ficheno?, productId?, screws, passed, results?[], host?}. Flags the block if any screw failed.", func(c OpsContext, payload json.RawMessage) OpsResult {
@@ -247,7 +247,9 @@ func init() {
 				flaggedOrders = append(flaggedOrders, map[string]any{"ficheno": k, "productId": v.productID, "blocks": v.runs, "flaggedBlocks": v.flagged, "screws": v.screws, "failed": v.screws - v.passed, "failRate": screwFailRate(v.passed, v.screws), "lastAt": v.lastAt})
 			}
 		}
-		sort.Slice(flaggedOrders, func(a, b int) bool { return flaggedOrders[a]["failRate"].(float64) > flaggedOrders[b]["failRate"].(float64) })
+		sort.Slice(flaggedOrders, func(a, b int) bool {
+			return flaggedOrders[a]["failRate"].(float64) > flaggedOrders[b]["failRate"].(float64)
+		})
 		sort.Slice(recent, func(a, b int) bool { return recent[a].CreatedAt > recent[b].CreatedAt })
 		if len(recent) > 10 {
 			recent = recent[:10]

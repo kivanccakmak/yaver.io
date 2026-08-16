@@ -39,15 +39,15 @@ import (
 
 // Form is a named submission endpoint.
 type Form struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	CreatedAt      time.Time `json:"createdAt"`
-	NotifyEmail    string    `json:"notifyEmail,omitempty"`
-	HoneypotField  string    `json:"honeypotField,omitempty"`  // field name; if non-empty in submission, drop
-	RequireField   string    `json:"requireField,omitempty"`   // must be present+non-empty
-	AllowedOrigins []string  `json:"allowedOrigins,omitempty"` // CORS / Referer check
-	RateLimit      int       `json:"rateLimitPerHour,omitempty"`
-	SuccessRedirect string   `json:"successRedirect,omitempty"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	CreatedAt       time.Time `json:"createdAt"`
+	NotifyEmail     string    `json:"notifyEmail,omitempty"`
+	HoneypotField   string    `json:"honeypotField,omitempty"`  // field name; if non-empty in submission, drop
+	RequireField    string    `json:"requireField,omitempty"`   // must be present+non-empty
+	AllowedOrigins  []string  `json:"allowedOrigins,omitempty"` // CORS / Referer check
+	RateLimit       int       `json:"rateLimitPerHour,omitempty"`
+	SuccessRedirect string    `json:"successRedirect,omitempty"`
 }
 
 // Submission captures one POST body.

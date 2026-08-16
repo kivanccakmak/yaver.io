@@ -13,10 +13,8 @@ package main
 // same TUI. The tmux status bar is hidden by default (zero chrome) and
 // enabled with ?chrome=1.
 //
-// Owner-only: spawning a runner with caller-controlled argv is arbitrary
-// code execution, so guests are rejected outright (same posture as
-// runner_agent_session_http.go). The endpoint is intentionally NOT in
-// hostShareAllowedPrefixes.
+// Owner-only: spawning a runner with caller-controlled argv is arbitrary code
+// execution. The endpoint is registered behind owner auth.
 //
 // Frame protocol (identical to /ws/terminal, terminal_session.go):
 //   - binary frames: stdin bytes → pty / pty bytes → stdout
@@ -37,11 +35,6 @@ import (
 )
 
 func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		http.Error(w, "runner PTY is owner-only", http.StatusForbidden)
-		return
-	}
-
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -183,7 +176,7 @@ func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
 	cmd.Env = append(os.Environ(), runnerPTYPaneEnv(runnerID, q.Get("term"))...)
 	cmd = sandboxWrapCmd(cmd)
 
-	ts, err := s.newTerminalSession(cmd, nil, "", "", cwd)
+	ts, err := s.newTerminalSession(cmd, nil, cwd)
 	if err != nil {
 		runnerPTYFail(conn, "pty start failed: "+err.Error())
 		return
@@ -357,7 +350,7 @@ func killStaleRunnerTmuxSession(session string) {
 }
 
 // pumpRunnerPTY attaches the WS to a terminal session and pumps frames until
-// either side closes. Mirrors handleTerminalWS's loop minus the host-share /
+// either side closes. Mirrors handleTerminalWS's loop minus the legacy delegation /
 // sudo-prompt machinery, which has no place inside a runner TUI.
 func (s *HTTPServer) pumpRunnerPTY(conn *websocket.Conn, ts *terminalSession, resumed bool, meta map[string]any) {
 	if err := ts.attach(conn, resumed); err != nil {
@@ -440,19 +433,11 @@ type RunnerSessionCloseResult struct {
 // is a known runner binary (survives custom --yaver-session names) or the
 // session name is the yaver-<runner> default.
 func (s *HTTPServer) handleRunnerSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		jsonReply(w, http.StatusForbidden, map[string]string{"error": "runner sessions are owner-only"})
-		return
-	}
 	sessions := listRunnerPTYSessions()
 	jsonReply(w, http.StatusOK, map[string]any{"ok": true, "sessions": sessions})
 }
 
 func (s *HTTPServer) handleRunnerSessionsClose(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		jsonReply(w, http.StatusForbidden, map[string]string{"error": "runner sessions are owner-only"})
-		return
-	}
 	if r.Method != http.MethodPost {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
 		return

@@ -44,14 +44,14 @@ import (
 
 // Subscriber is one row in the list.
 type Subscriber struct {
-	Email           string    `json:"email"`
-	Status          string    `json:"status"` // "pending" | "confirmed" | "unsubscribed"
-	CreatedAt       time.Time `json:"createdAt"`
-	ConfirmedAt     time.Time `json:"confirmedAt,omitempty"`
-	UnsubscribedAt  time.Time `json:"unsubscribedAt,omitempty"`
-	ConfirmToken    string    `json:"confirmToken"`
-	UnsubToken      string    `json:"unsubToken"`
-	Source          string    `json:"source,omitempty"`
+	Email          string    `json:"email"`
+	Status         string    `json:"status"` // "pending" | "confirmed" | "unsubscribed"
+	CreatedAt      time.Time `json:"createdAt"`
+	ConfirmedAt    time.Time `json:"confirmedAt,omitempty"`
+	UnsubscribedAt time.Time `json:"unsubscribedAt,omitempty"`
+	ConfirmToken   string    `json:"confirmToken"`
+	UnsubToken     string    `json:"unsubToken"`
+	Source         string    `json:"source,omitempty"`
 }
 
 // Campaign is one broadcast.
@@ -74,10 +74,10 @@ type Campaign struct {
 // --- storage ---------------------------------------------------------------
 
 var (
-	newsletterMu      sync.Mutex
-	subscribersCache  []Subscriber
-	campaignsCache    []Campaign
-	newsletterSecret  []byte
+	newsletterMu     sync.Mutex
+	subscribersCache []Subscriber
+	campaignsCache   []Campaign
+	newsletterSecret []byte
 )
 
 func newsletterDir() (string, error) {

@@ -4,7 +4,7 @@ package main
 // `yaver serve` as root.
 //
 // Why this matters: Yaver's entire normal runtime state lives under
-// $HOME/.yaver — config, vault, runner tokens, ledger, paired tokens,
+// $HOME/.yaver — config, vault, runner tokens, and local ledgers,
 // cached binaries. If a user one-shot `sudo yaver serve` (out of
 // confusion or copy-paste from a tutorial), those files get created
 // owned by root. The NEXT time the user runs `yaver` as themselves,

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import {
   includedArtifactStorageBytes,
-  isPublicArtifactVisible,
   normalizeArtifactSizeBytes,
   normalizeArtifactKind,
   normalizeArtifactProvider,
@@ -59,7 +58,7 @@ test("artifact usage counts active metered storage without charging external lin
       kind: "apk",
       provider: "convex",
       sizeBytes: 500,
-      visibility: "public-link",
+      visibility: "private",
       status: "active",
       createdAt: 100,
     },
@@ -95,42 +94,7 @@ test("artifact usage counts active metered storage without charging external lin
   assert.equal(usage.totalMeteredBytes, 750);
   assert.equal(usage.remainingBytes, 250);
   assert.equal(usage.quotaPercent, 0.75);
-  assert.equal(usage.publicLinkCount, 1);
   assert.deepEqual(usage.byKind, { apk: 1, "web-preview": 1 });
   assert.equal(usage.oldestCreatedAt, 100);
   assert.equal(usage.newestCreatedAt, 200);
-});
-
-test("public artifact visibility requires active public link and unexpired clocks", () => {
-  const now = 1_000_000;
-  assert.equal(isPublicArtifactVisible({
-    status: "active",
-    visibility: "public-link",
-    shareUrlExpiresAt: now + 1,
-    expiresAt: now + 1,
-  }, now), true);
-
-  assert.equal(isPublicArtifactVisible({
-    status: "hidden",
-    visibility: "public-link",
-    shareUrlExpiresAt: now + 1,
-  }, now), false);
-
-  assert.equal(isPublicArtifactVisible({
-    status: "active",
-    visibility: "project",
-    shareUrlExpiresAt: now + 1,
-  }, now), false);
-
-  assert.equal(isPublicArtifactVisible({
-    status: "active",
-    visibility: "public-link",
-    shareUrlExpiresAt: now,
-  }, now), false);
-
-  assert.equal(isPublicArtifactVisible({
-    status: "active",
-    visibility: "public-link",
-    expiresAt: now,
-  }, now), false);
 });

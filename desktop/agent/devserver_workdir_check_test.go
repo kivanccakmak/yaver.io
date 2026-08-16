@@ -21,7 +21,7 @@ import (
 // /dev/start, the Mac happily accepts it, and the failure surfaces
 // 30+ seconds later in a confusing form.
 func TestDevServerStart_RejectsMissingWorkDir(t *testing.T) {
-	fx := startGuestShareFixture(t, false)
+	fx := startOwnerDevFixture(t)
 	defer fx.cancel()
 	defer fx.taskMgr.Shutdown()
 
@@ -47,11 +47,11 @@ func TestDevServerStart_RejectsMissingWorkDir(t *testing.T) {
 // this, the new guard could over-fire on every legitimate /dev/start
 // and break Hot Reload entirely.
 func TestDevServerStart_AcceptsExistingWorkDir(t *testing.T) {
-	fx := startGuestShareFixture(t, false)
+	fx := startOwnerDevFixture(t)
 	defer fx.cancel()
 	defer fx.taskMgr.Shutdown()
 
-	body := `{"workDir":"` + fx.sfmgDir + `","framework":"expo","platform":"ios"}`
+	body := `{"workDir":"` + fx.project + `","framework":"expo","platform":"ios"}`
 	req := httptest.NewRequest(http.MethodPost, "/dev/start", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+fx.hostToken)
 	req.Header.Set("Content-Type", "application/json")

@@ -61,7 +61,7 @@ type MockServer struct {
 	port       int
 	routes     []MockRoute
 	recordings []MockRecording
-	recording  bool   // record mode enabled
+	recording  bool // record mode enabled
 	configPath string
 }
 

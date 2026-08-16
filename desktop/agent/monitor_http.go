@@ -54,12 +54,12 @@ func (s *HTTPServer) handleMonitors(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m := &Monitor{
-			ID:       randomID(),
-			Name:     body.Name,
-			URL:      body.URL,
-			Interval: body.Interval,
-			Method:   strings.ToUpper(body.Method),
-			State:    "unknown",
+			ID:        randomID(),
+			Name:      body.Name,
+			URL:       body.URL,
+			Interval:  body.Interval,
+			Method:    strings.ToUpper(body.Method),
+			State:     "unknown",
 			CreatedAt: nowRFC3339(),
 		}
 		if m.Name == "" {

@@ -15,11 +15,11 @@ import (
 
 // SessionAuditor watches completed tasks and extracts missed items.
 type SessionAuditor struct {
-	taskMgr     *TaskManager
-	todoMgr     *TodoListManager
-	interval    time.Duration
+	taskMgr      *TaskManager
+	todoMgr      *TodoListManager
+	interval     time.Duration
 	auditedTasks sync.Map // taskID -> true (already audited)
-	stopCh      chan struct{}
+	stopCh       chan struct{}
 }
 
 // NewSessionAuditor creates a new auditor that checks for completed tasks.

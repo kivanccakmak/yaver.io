@@ -505,7 +505,7 @@ func ManagedGitMirrorToProvider(workDir, provider, host, repoName, visibility, d
 // (mirror-on-push). Best-effort: a mirror failure is logged (token redacted),
 // never fatal — the local managed checkpoint already succeeded. Owner-side ONLY:
 // it uses the owner's stored provider tokens (loadGitProviders); a tenant's
-// credential-free push never reaches here, so mirror creds never leak to guests.
+// credential-free push never reaches here, so mirror credentials never leak to task code.
 func ManagedGitMirrorSyncAll(workDir string) []ManagedGitMirrorMeta {
 	meta, err := LoadManagedGitMeta(workDir)
 	if err != nil || len(meta.Mirrors) == 0 {

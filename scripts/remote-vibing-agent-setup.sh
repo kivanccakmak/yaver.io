@@ -41,7 +41,6 @@ cfg.update({
     "auth_token": token,
     "auto_update": False,
     "headless_keep_awake": False,
-    "host_share": {"prepare_prompt_done": True},
 })
 path.write_text(json.dumps(cfg, indent=2) + "\n")
 path.chmod(0o600)

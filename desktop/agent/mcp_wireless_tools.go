@@ -62,11 +62,11 @@ type mcpWirelessPairAndroidArgs struct {
 // returns the resulting device list so the caller can verify in one round
 // trip. Output:
 //
-//   {
-//     ok, paired_to, pair_output,
-//     connected, connect_to, connect_output,
-//     devices_now, error
-//   }
+//	{
+//	  ok, paired_to, pair_output,
+//	  connected, connect_to, connect_output,
+//	  devices_now, error
+//	}
 func mcpWirelessPairAndroid(args mcpWirelessPairAndroidArgs) (interface{}, error) {
 	ipPort := strings.TrimSpace(args.IPPort)
 	code := strings.TrimSpace(args.Code)
@@ -85,9 +85,9 @@ func mcpWirelessPairAndroid(args mcpWirelessPairAndroidArgs) (interface{}, error
 	defer cancel()
 
 	out := map[string]interface{}{
-		"ok":         false,
-		"paired_to":  ipPort,
-		"connected":  false,
+		"ok":           false,
+		"paired_to":    ipPort,
+		"connected":    false,
 		"auto_connect": autoConnect,
 	}
 	pairOut, perr := adbPair(ctx, ipPort, code)
@@ -151,8 +151,8 @@ func mcpWirelessConnectAndroid(args mcpWirelessConnectAndroidArgs) (interface{},
 	}
 	cout, cerr := adbConnect(ctx, ipPort)
 	out := map[string]interface{}{
-		"ok":            cerr == nil,
-		"connect_to":    ipPort,
+		"ok":             cerr == nil,
+		"connect_to":     ipPort,
 		"connect_output": cout,
 	}
 	if cerr != nil {
@@ -171,17 +171,17 @@ func mcpWirelessConnectAndroid(args mcpWirelessConnectAndroidArgs) (interface{},
 // the pairing service via mDNS — but the AI agent supplies the code
 // (collected via `yaver_ask_user`) so no human-stdin is needed.
 type mcpWirelessSetupAndroidArgs struct {
-	Code         string `json:"code"`
-	PollSeconds  int    `json:"poll_seconds"`
+	Code        string `json:"code"`
+	PollSeconds int    `json:"poll_seconds"`
 }
 
 // mcpWirelessSetupAndroid wraps the `yaver android setup` flow for AI
 // agents:
-//   1. Polls mDNS up to PollSeconds for `_adb-tls-pairing._tcp`.
-//   2. Pairs against the discovered host:port using `code`.
-//   3. Resolves `_adb-tls-connect._tcp` for the same instance and
-//      `adb connect`s.
-//   4. Returns the post-setup device list.
+//  1. Polls mDNS up to PollSeconds for `_adb-tls-pairing._tcp`.
+//  2. Pairs against the discovered host:port using `code`.
+//  3. Resolves `_adb-tls-connect._tcp` for the same instance and
+//     `adb connect`s.
+//  4. Returns the post-setup device list.
 //
 // AI agents should typically call yaver_ask_user *before* this tool to
 // (a) tell the user to tap "Pair device with pairing code", (b) collect
@@ -203,7 +203,7 @@ func mcpWirelessSetupAndroid(args mcpWirelessSetupAndroidArgs) (interface{}, err
 	pairCancel()
 	if pair.HostPort == "" {
 		return map[string]interface{}{
-			"ok": false,
+			"ok":    false,
 			"error": "no _adb-tls-pairing._tcp service appeared within poll_seconds — confirm the user tapped 'Pair device with pairing code' on the phone and that the phone is on the same WiFi as the agent",
 		}, nil
 	}

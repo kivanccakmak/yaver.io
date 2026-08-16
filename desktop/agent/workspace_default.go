@@ -52,9 +52,9 @@ const DefaultWorkspaceDirName = "Workspace"
 // Path: $HOME/Workspace
 //
 // Errors only when both:
-//   1. os.UserHomeDir() fails (rare — usually only in stripped
-//      Docker containers without HOME set), AND
-//   2. /workspace doesn't exist as a fallback.
+//  1. os.UserHomeDir() fails (rare — usually only in stripped
+//     Docker containers without HOME set), AND
+//  2. /workspace doesn't exist as a fallback.
 //
 // Callers that can tolerate fallback should use ResolveWorkspaceParent
 // instead — that helper accepts a user override and falls back to
@@ -90,11 +90,11 @@ func DefaultWorkspaceDir() (string, error) {
 // ResolveWorkspaceParent picks the right parent directory for a new
 // clone / scaffold, with this precedence:
 //
-//   1. `provided` if non-empty and non-whitespace — user / API
-//      explicitly set it, honor verbatim.
-//   2. $HOME/Workspace via DefaultWorkspaceDir() — auto-created.
-//   3. os.Getwd() — last-resort fallback if HOME resolution dies.
-//      Logged-warning case; usually only hit in degenerate containers.
+//  1. `provided` if non-empty and non-whitespace — user / API
+//     explicitly set it, honor verbatim.
+//  2. $HOME/Workspace via DefaultWorkspaceDir() — auto-created.
+//  3. os.Getwd() — last-resort fallback if HOME resolution dies.
+//     Logged-warning case; usually only hit in degenerate containers.
 //
 // Returns the absolute path that callers should use as the parent.
 // The named repo dir (`<parent>/<repo-name>`) is the caller's job.

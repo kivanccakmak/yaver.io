@@ -14,9 +14,15 @@ import (
 const mailpitBase = "http://127.0.0.1:8025"
 
 type mailpitMessage struct {
-	ID      string   `json:"ID"`
-	From    struct{ Address string `json:"Address"`; Name string `json:"Name"` } `json:"From"`
-	To      []struct{ Address string `json:"Address"`; Name string `json:"Name"` } `json:"To"`
+	ID   string `json:"ID"`
+	From struct {
+		Address string `json:"Address"`
+		Name    string `json:"Name"`
+	} `json:"From"`
+	To []struct {
+		Address string `json:"Address"`
+		Name    string `json:"Name"`
+	} `json:"To"`
 	Subject string   `json:"Subject"`
 	Created string   `json:"Created"`
 	Size    int64    `json:"Size"`
@@ -69,7 +75,9 @@ func (s *HTTPServer) handleMailpitDelete(w http.ResponseWriter, r *http.Request)
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ IDs []string `json:"ids"` }
+	var b struct {
+		IDs []string `json:"ids"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	body, _ := json.Marshal(map[string]interface{}{"IDs": b.IDs})
 	req, _ := http.NewRequest("DELETE", mailpitBase+"/api/v1/messages",
@@ -90,7 +98,10 @@ func newBuf(b []byte) io.Reader {
 	return &bufReader{b: b}
 }
 
-type bufReader struct{ b []byte; i int }
+type bufReader struct {
+	b []byte
+	i int
+}
 
 func (r *bufReader) Read(p []byte) (int, error) {
 	if r.i >= len(r.b) {

@@ -14,8 +14,8 @@ import (
 // case we've already shipped a workaround for.
 func TestClassifyInstallFailure_KnownPatterns(t *testing.T) {
 	cases := []struct {
-		name     string
-		tail     string
+		name        string
+		tail        string
 		mustMention []string // each substring must appear in the cause
 		shouldMatch bool
 	}{

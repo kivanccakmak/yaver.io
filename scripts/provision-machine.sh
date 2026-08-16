@@ -2,15 +2,15 @@
 # provision-machine.sh — Provision a Yaver cloud dev machine on Hetzner.
 #
 # Called by the Convex webhook when a customer subscribes to CPU/GPU machine.
-# Sets up a single Docker container with everything pre-installed:
-#   - Yaver agent in multi-user mode
+# Sets up an owner-only Yaver machine with everything pre-installed:
+#   - Yaver agent bound to one account
 #   - Dev tools (Node.js, Python, Go, Rust, Docker-in-Docker)
 #   - GPU stack (Ollama, PersonaPlex) for GPU machines
 #   - Managed relay tunnel
 #
 # Usage:
 #   ./scripts/provision-machine.sh --server <ip> --type <cpu|gpu> \
-#     --team <team-id> --token <admin-token> [--relay-domain <domain>]
+#     --token <admin-token> [--relay-domain <domain>]
 #
 # Environment (from .env.test or GitHub Actions secrets):
 #   HETZNER_API_TOKEN — for server creation (if --server not provided)
@@ -22,7 +22,6 @@ set -euo pipefail
 # ── Parse args ──────────────────────────────────────────────────
 SERVER_IP=""
 MACHINE_TYPE="cpu"
-TEAM_ID=""
 ADMIN_TOKEN=""
 RELAY_DOMAIN=""
 
@@ -30,7 +29,6 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --server)     SERVER_IP="$2"; shift 2 ;;
     --type)       MACHINE_TYPE="$2"; shift 2 ;;
-    --team)       TEAM_ID="$2"; shift 2 ;;
     --token)      ADMIN_TOKEN="$2"; shift 2 ;;
     --relay-domain) RELAY_DOMAIN="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
@@ -148,16 +146,12 @@ echo "GPU stack ready"
 GPU
 fi
 
-# ── 5. Configure Yaver for multi-user mode ──────────────────────
-echo ">>> Configuring Yaver multi-user mode..."
-TEAM_FLAG=""
-if [[ -n "$TEAM_ID" ]]; then
-  TEAM_FLAG="--team $TEAM_ID"
-fi
+# ── 5. Configure the owner-only Yaver agent ─────────────────────
+echo ">>> Configuring owner-only Yaver agent..."
 
 $SSH "cat > /etc/systemd/system/yaver-agent.service" <<EOF
 [Unit]
-Description=Yaver Agent (Multi-User)
+Description=Yaver Agent
 After=network.target docker.service
 Wants=docker.service
 
@@ -165,7 +159,7 @@ Wants=docker.service
 Type=simple
 User=root
 Environment=HOME=/root
-ExecStart=/usr/local/bin/yaver serve --multi-user $TEAM_FLAG --port 18080 --work-dir /var/yaver/workspaces --debug
+ExecStart=/usr/local/bin/yaver serve --port 18080 --work-dir /var/yaver/workspaces --debug
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -199,13 +193,4 @@ echo "=== Machine provisioned ==="
 echo "  Type:    $MACHINE_TYPE"
 echo "  Server:  $SERVER_IP"
 echo "  Agent:   http://$SERVER_IP:18080"
-echo "  Multi-user: enabled"
-if [[ -n "$TEAM_ID" ]]; then
-  echo "  Team:    $TEAM_ID"
-fi
-echo ""
-echo "Team members can now:"
-echo "  1. Open Yaver app"
-echo "  2. The machine appears automatically in their device list"
-echo "  3. Tap Connect → authenticate with their own account"
-echo "  4. Each user gets isolated workspace + sessions"
+echo "  Access:  owner account only"

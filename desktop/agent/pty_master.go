@@ -58,7 +58,6 @@ func (m *osFilePTYMaster) Resize(cols, rows uint16) error {
 	return m.resizer(m.File, cols, rows)
 }
 
-
 // ── Windows seat hooks (runner-pty persistence without tmux) ──────────────
 //
 // On Unix, tmux's `new-session -A` gives runner seats persistence: a fresh

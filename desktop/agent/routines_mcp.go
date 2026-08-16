@@ -15,7 +15,7 @@ package main
 // graduating to a "feature" the rest of the product has to maintain.
 //
 // Auth: every MCP call goes through the owner-only /mcp endpoint
-// (guests can't reach the dispatcher), so no per-tool guest check is
+// (constrained credentials cannot reach the dispatcher), so no per-tool check is
 // needed here. Routines fire as Caller="owner" by virtue of the
 // dispatcher wired in main.go.
 

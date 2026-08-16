@@ -179,7 +179,9 @@ func (s *HTTPServer) handleProjectEnvSwitch(w http.ResponseWriter, r *http.Reque
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ Name string `json:"name"` }
+	var b struct {
+		Name string `json:"name"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	res, err := SwitchEnv(s.dirParam(r), b.Name)
 	if err != nil {
@@ -225,7 +227,9 @@ func (s *HTTPServer) handleProjectEnvDelete(w http.ResponseWriter, r *http.Reque
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ Name string `json:"name"` }
+	var b struct {
+		Name string `json:"name"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if err := DeleteEnv(s.dirParam(r), b.Name); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})

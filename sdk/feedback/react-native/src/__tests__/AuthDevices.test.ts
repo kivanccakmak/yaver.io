@@ -9,7 +9,7 @@ describe('auth device listing', () => {
     mockFetch.mockReset();
   });
 
-  it('keeps guest-shared devices in the shared bucket', async () => {
+  it('returns the owner devices emitted by /devices/list', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: () =>
@@ -20,23 +20,9 @@ describe('auth device listing', () => {
               name: 'My Mac',
               platform: 'macos',
               isOnline: true,
-              isGuest: false,
               quicHost: '10.0.0.10',
               quicPort: 18080,
               lastHeartbeat: 123,
-            },
-            {
-              deviceId: 'guest-1',
-              name: 'yaver-test-ephemeral',
-              platform: 'linux',
-              isOnline: true,
-              isGuest: true,
-              hostName: 'Host User',
-              hostEmail: 'host@example.com',
-              accessScope: 'shared-scoped',
-              quicHost: '198.51.100.20',
-              quicPort: 18080,
-              lastHeartbeat: 456,
             },
           ],
         }),
@@ -51,43 +37,6 @@ describe('auth device listing', () => {
       }),
     );
     expect(result.owned).toHaveLength(1);
-    expect(result.shared).toHaveLength(1);
     expect(result.owned[0].deviceId).toBe('own-1');
-    expect(result.shared[0]).toMatchObject({
-      deviceId: 'guest-1',
-      isGuest: true,
-      hostEmail: 'host@example.com',
-      accessScope: 'shared-scoped',
-    });
-  });
-
-  it('shows shared devices even when the guest owns no machines', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          devices: [
-            {
-              deviceId: 'guest-only',
-              name: 'yaver-test-ephemeral',
-              platform: 'linux',
-              isOnline: true,
-              isGuest: true,
-              hostName: 'Host User',
-              hostEmail: 'host@example.com',
-              accessScope: 'shared-scoped',
-              quicHost: '198.51.100.20',
-              quicPort: 18080,
-              lastHeartbeat: 789,
-            },
-          ],
-        }),
-    });
-
-    const result = await listReachableDevices('guest-only-token');
-
-    expect(result.owned).toEqual([]);
-    expect(result.shared).toHaveLength(1);
-    expect(result.shared[0].deviceId).toBe('guest-only');
   });
 });

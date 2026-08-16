@@ -44,7 +44,7 @@ func TestOwnerClaimRejectsUserWhoDoesNotOwnDevice(t *testing.T) {
 
 	oldList := listDevicesForOwnerClaimFn
 	listDevicesForOwnerClaimFn = func(baseURL, token string) ([]DeviceInfo, error) {
-		return []DeviceInfo{{DeviceID: "other-device", AccessScope: "owner"}}, nil
+		return []DeviceInfo{{DeviceID: "other-device"}}, nil
 	}
 	defer func() { listDevicesForOwnerClaimFn = oldList }()
 
@@ -70,7 +70,7 @@ func TestOwnerClaimRequiresActivePairSession(t *testing.T) {
 
 	oldList := listDevicesForOwnerClaimFn
 	listDevicesForOwnerClaimFn = func(baseURL, token string) ([]DeviceInfo, error) {
-		return []DeviceInfo{{DeviceID: "device-123", AccessScope: "owner", HostName: "owner-host"}}, nil
+		return []DeviceInfo{{DeviceID: "device-123"}}, nil
 	}
 	defer func() { listDevicesForOwnerClaimFn = oldList }()
 
@@ -101,7 +101,7 @@ func TestOwnerClaimSubmitsBearerIntoActivePairSession(t *testing.T) {
 
 	oldList := listDevicesForOwnerClaimFn
 	listDevicesForOwnerClaimFn = func(baseURL, token string) ([]DeviceInfo, error) {
-		return []DeviceInfo{{DeviceID: "device-123", AccessScope: "owner", HostName: "owner-host"}}, nil
+		return []DeviceInfo{{DeviceID: "device-123"}}, nil
 	}
 	defer func() { listDevicesForOwnerClaimFn = oldList }()
 
@@ -128,78 +128,6 @@ func TestOwnerClaimSubmitsBearerIntoActivePairSession(t *testing.T) {
 	}
 }
 
-// TestOwnerClaimRejectsGuestToken proves guests/shared scopes cannot reclaim
-// a host's box. The handler enforces match.IsGuest || AccessScope!="owner",
-// but until this test landed nothing in CI proved that guard fires for
-// a token that DOES list the device — only for tokens that don't list it
-// at all. That was the audit's biggest concrete owner-claim coverage hole:
-// a stolen guest token combined with relay reachability would have looked
-// indistinguishable from a real reclaim attempt at the request layer.
-func TestOwnerClaimRejectsGuestToken(t *testing.T) {
-	withTempHome(t)
-	EndPairingSession()
-	if err := SaveConfig(&Config{
-		ConvexSiteURL: "https://example.convex.cloud",
-		DeviceID:      "device-123",
-	}); err != nil {
-		t.Fatalf("SaveConfig: %v", err)
-	}
-	if _, err := StartPairingSession(bootstrapPairingTTL); err != nil {
-		t.Fatalf("StartPairingSession: %v", err)
-	}
-	t.Cleanup(EndPairingSession)
-
-	cases := []struct {
-		name   string
-		device DeviceInfo
-	}{
-		{
-			name:   "isGuest=true_with_owner_scope",
-			device: DeviceInfo{DeviceID: "device-123", IsGuest: true, AccessScope: "owner", HostName: "real-host"},
-		},
-		{
-			name:   "shared-scoped_access",
-			device: DeviceInfo{DeviceID: "device-123", AccessScope: "shared-scoped", HostName: "real-host"},
-		},
-		{
-			name:   "shared-legacy_access",
-			device: DeviceInfo{DeviceID: "device-123", AccessScope: "shared-legacy", HostName: "real-host"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			oldList := listDevicesForOwnerClaimFn
-			listDevicesForOwnerClaimFn = func(baseURL, token string) ([]DeviceInfo, error) {
-				return []DeviceInfo{tc.device}, nil
-			}
-			defer func() { listDevicesForOwnerClaimFn = oldList }()
-
-			req := httptest.NewRequest(http.MethodPost, "/auth/pair/owner-claim", strings.NewReader(`{}`))
-			req.Header.Set("Authorization", "Bearer guest-token")
-			rec := httptest.NewRecorder()
-
-			(&bootstrapHTTPServer{}).handleOwnerClaim(rec, req)
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("expected 403 for %s, got %d: %s", tc.name, rec.Code, rec.Body.String())
-			}
-			if !strings.Contains(rec.Body.String(), "guests cannot owner-claim") {
-				t.Fatalf("expected guest-rejection error message, got %s", rec.Body.String())
-			}
-			// The active pair session must NOT have been polluted with the
-			// guest's token. If it were, a follow-up real owner submit would
-			// race against pre-stamped state.
-			snap := activePairingSnapshot()
-			if snap == nil {
-				t.Fatalf("pair session must remain intact after rejection")
-			}
-			if snap.ReceivedToken != "" {
-				t.Fatalf("guest token leaked into pair session: %q", snap.ReceivedToken)
-			}
-		})
-	}
-}
-
 // TestOwnerClaimAcceptsBearerInBody proves the handler accepts the token
 // from the JSON body when no Authorization header is present. This is the
 // path mobile/web fall back to when running in environments that strip
@@ -223,7 +151,7 @@ func TestOwnerClaimAcceptsBearerInBody(t *testing.T) {
 		if token != "body-token" {
 			t.Fatalf("expected body-token to be forwarded to listDevices, got %q", token)
 		}
-		return []DeviceInfo{{DeviceID: "device-123", AccessScope: "owner"}}, nil
+		return []DeviceInfo{{DeviceID: "device-123"}}, nil
 	}
 	defer func() { listDevicesForOwnerClaimFn = oldList }()
 
@@ -284,7 +212,7 @@ func TestOwnerClaimSurvivesPairSessionRotation(t *testing.T) {
 
 	oldList := listDevicesForOwnerClaimFn
 	listDevicesForOwnerClaimFn = func(baseURL, token string) ([]DeviceInfo, error) {
-		return []DeviceInfo{{DeviceID: "device-123", AccessScope: "owner"}}, nil
+		return []DeviceInfo{{DeviceID: "device-123"}}, nil
 	}
 	defer func() { listDevicesForOwnerClaimFn = oldList }()
 

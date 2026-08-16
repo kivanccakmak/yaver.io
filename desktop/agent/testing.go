@@ -25,25 +25,25 @@ const (
 
 // TestSession represents a test run.
 type TestSession struct {
-	ID        string     `json:"id"`
-	Framework string     `json:"framework"` // flutter_test, jest, pytest, go_test, xctest, espresso, playwright, cypress, maestro
-	TestType  string     `json:"testType"`  // unit, integration, e2e
-	Command   string     `json:"command"`
-	WorkDir   string     `json:"workDir"`
-	Status    TestStatus `json:"status"`
-	ExecID    string     `json:"execId,omitempty"`
-	Results   *TestResults `json:"results,omitempty"`
-	StartedAt string     `json:"startedAt"`
-	FinishedAt string    `json:"finishedAt,omitempty"`
+	ID         string       `json:"id"`
+	Framework  string       `json:"framework"` // flutter_test, jest, pytest, go_test, xctest, espresso, playwright, cypress, maestro
+	TestType   string       `json:"testType"`  // unit, integration, e2e
+	Command    string       `json:"command"`
+	WorkDir    string       `json:"workDir"`
+	Status     TestStatus   `json:"status"`
+	ExecID     string       `json:"execId,omitempty"`
+	Results    *TestResults `json:"results,omitempty"`
+	StartedAt  string       `json:"startedAt"`
+	FinishedAt string       `json:"finishedAt,omitempty"`
 }
 
 // TestResults holds parsed test output.
 type TestResults struct {
-	Total   int           `json:"total"`
-	Passed  int           `json:"passed"`
-	Failed  int           `json:"failed"`
-	Skipped int           `json:"skipped"`
-	Duration string       `json:"duration"`
+	Total    int           `json:"total"`
+	Passed   int           `json:"passed"`
+	Failed   int           `json:"failed"`
+	Skipped  int           `json:"skipped"`
+	Duration string        `json:"duration"`
 	Failures []TestFailure `json:"failures,omitempty"`
 }
 

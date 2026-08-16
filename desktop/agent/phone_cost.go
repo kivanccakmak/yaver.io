@@ -105,8 +105,8 @@ func EnforcePhoneDeployBudget(actual int64, overrideCap int64) error {
 // handlePhoneCostHint serves /phone/projects/cost-hint.
 func (s *HTTPServer) handlePhoneCostHint(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"hints":           PhoneDeployCostHints(),
-		"bundleCapBytes":  PhoneDeployBudgetBytes,
-		"bundleCapMB":     PhoneDeployBudgetBytes / (1024 * 1024),
+		"hints":          PhoneDeployCostHints(),
+		"bundleCapBytes": PhoneDeployBudgetBytes,
+		"bundleCapMB":    PhoneDeployBudgetBytes / (1024 * 1024),
 	})
 }

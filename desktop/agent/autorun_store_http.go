@@ -16,15 +16,15 @@ import (
 
 // deployStatusRow is the lean per-target summary the UI consumes.
 type deployStatusRow struct {
-	Target      string `json:"target"`
-	Deploying   bool   `json:"deploying"`
-	Holder      string `json:"holder,omitempty"`
-	Build       string `json:"build,omitempty"`
-	Stage       string `json:"stage,omitempty"`         // archiving|exporting|uploading|submitting
-	StartedAt   int64  `json:"startedAt,omitempty"`     // unix seconds
-	ElapsedSecs int64  `json:"elapsedSecs,omitempty"`   // for a live "deploying for 4m" label
-	UploadsToday int   `json:"uploadsToday"`
-	Quota       int    `json:"quota"`
+	Target       string `json:"target"`
+	Deploying    bool   `json:"deploying"`
+	Holder       string `json:"holder,omitempty"`
+	Build        string `json:"build,omitempty"`
+	Stage        string `json:"stage,omitempty"`       // archiving|exporting|uploading|submitting
+	StartedAt    int64  `json:"startedAt,omitempty"`   // unix seconds
+	ElapsedSecs  int64  `json:"elapsedSecs,omitempty"` // for a live "deploying for 4m" label
+	UploadsToday int    `json:"uploadsToday"`
+	Quota        int    `json:"quota"`
 }
 
 // handleAutorunDeployStatus: GET /autoruns/deploy-status

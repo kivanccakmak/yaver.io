@@ -33,7 +33,7 @@ func CreateScheduledJob(projectDir, name, schedule, target string) (interface{},
 	case BackendConvex:
 		return map[string]interface{}{
 			"backend": "convex",
-			"note": "Add this to convex/crons.ts and run `npx convex deploy`:",
+			"note":    "Add this to convex/crons.ts and run `npx convex deploy`:",
 			"snippet": fmt.Sprintf(`
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
@@ -118,7 +118,9 @@ func (s *HTTPServer) handleCronDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ Name string `json:"name"` }
+	var b struct {
+		Name string `json:"name"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if err := DeleteScheduledJob(s.dirParam(r), b.Name); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})

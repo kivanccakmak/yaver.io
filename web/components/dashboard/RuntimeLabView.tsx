@@ -1574,7 +1574,7 @@ export default function RuntimeLabView({
     return id ? deviceNameById.get(id) || id.slice(0, 8) : null;
   })();
   const roleEligibleDevices = useMemo(
-    () => (devices || []).filter((d) => !d.isGuest),
+    () => devices || [],
     [devices],
   );
   // The box that will actually answer the target probe / serve previews.

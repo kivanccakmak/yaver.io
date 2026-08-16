@@ -50,9 +50,9 @@ type AsciiCast struct {
 }
 
 var (
-	castMu      sync.Mutex
-	castIndex   []AsciiCast
-	activeCast  *exec.Cmd
+	castMu         sync.Mutex
+	castIndex      []AsciiCast
+	activeCast     *exec.Cmd
 	activeCastInfo *AsciiCast
 )
 
@@ -128,10 +128,10 @@ func (s *HTTPServer) handleAsciinemaImport(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var header struct {
-		Version int     `json:"version"`
-		Width   int     `json:"width"`
-		Height  int     `json:"height"`
-		Title   string  `json:"title"`
+		Version  int     `json:"version"`
+		Width    int     `json:"width"`
+		Height   int     `json:"height"`
+		Title    string  `json:"title"`
 		Duration float64 `json:"duration,omitempty"`
 	}
 	if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {

@@ -38,10 +38,10 @@ type ProxyRouteStatus struct {
 
 // ProxyStatus is a point-in-time snapshot of the proxy manager state.
 type ProxyStatus struct {
-	Running    bool               `json:"running"`
-	CaddyPID   int                `json:"caddy_pid,omitempty"`
-	Routes     []ProxyRouteStatus `json:"routes"`
-	CaddyFile  string             `json:"caddyfile"`
+	Running   bool               `json:"running"`
+	CaddyPID  int                `json:"caddy_pid,omitempty"`
+	Routes    []ProxyRouteStatus `json:"routes"`
+	CaddyFile string             `json:"caddyfile"`
 }
 
 // ProxyManager manages a Caddy-backed reverse proxy for local development.

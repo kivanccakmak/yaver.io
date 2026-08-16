@@ -73,7 +73,7 @@ func TestBootstrapServer_OwnerClaimEndToEnd(t *testing.T) {
 		if token != "owner-bearer" {
 			t.Errorf("expected bearer to round-trip through HTTP, got %q", token)
 		}
-		return []DeviceInfo{{DeviceID: "device-end-to-end", AccessScope: "owner"}}, nil
+		return []DeviceInfo{{DeviceID: "device-end-to-end"}}, nil
 	}
 	t.Cleanup(func() { listDevicesForOwnerClaimFn = oldList })
 
@@ -133,7 +133,7 @@ func TestBootstrapServer_OwnerClaimWithRelayHeaders(t *testing.T) {
 
 	oldList := listDevicesForOwnerClaimFn
 	listDevicesForOwnerClaimFn = func(baseURL, token string) ([]DeviceInfo, error) {
-		return []DeviceInfo{{DeviceID: "device-relayed", AccessScope: "owner"}}, nil
+		return []DeviceInfo{{DeviceID: "device-relayed"}}, nil
 	}
 	t.Cleanup(func() { listDevicesForOwnerClaimFn = oldList })
 

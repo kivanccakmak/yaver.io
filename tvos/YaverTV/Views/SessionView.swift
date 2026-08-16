@@ -101,6 +101,10 @@ struct SessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .task(id: store.selectedBox?.id) { await loadSessions() }
+        // A turn response is only one snapshot. Keep following the pane so
+        // output produced ten seconds later — and a menu that appears after
+        // that — reaches the TV without polling or another prompt.
+        .task(id: selected) { await streamSelectedSession() }
         .onChange(of: lifecycle.phase) { _, phase in
             // Box came back — clear the asleep state so the prompt bar returns.
             if phase == .ready {
@@ -411,6 +415,42 @@ struct SessionView: View {
             handleTurnError(error)
         }
         loading = false
+    }
+
+    private func streamSelectedSession() async {
+        guard let selected, !selected.isEmpty, let agent = store.runnerClient() else { return }
+        let stream = await agent.subscribeTmuxPane(
+            session: selected,
+            onPane: { frame in
+                Task { @MainActor in
+                    guard self.selected == frame.sessionName else { return }
+                    self.sessionName = frame.sessionName
+                    self.runnerName = frame.agent ?? self.runnerName
+                    self.pane = frame.preview.map(Self.redact) ?? self.pane
+                    self.awaitingChoice = frame.status == "awaiting-input"
+                    self.options = (frame.options ?? []).map(Self.redact)
+                    if frame.status == "dead" {
+                        self.error = frame.statusReason ?? "The coding session closed."
+                    }
+                }
+            },
+            onDone: { reason in
+                Task { @MainActor in
+                    self.error = reason ?? "The coding session closed."
+                }
+            },
+            onEnd: { kind, reason in
+                guard case .interrupted = kind else { return }
+                Task { @MainActor in
+                    self.error = reason ?? "The live session stream was interrupted."
+                }
+            }
+        )
+        await withTaskCancellationHandler {
+            await stream.value
+        } onCancel: {
+            stream.cancel()
+        }
     }
 
     private func sendChoice(_ choice: String) async {

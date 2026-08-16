@@ -10,7 +10,7 @@
  *     (`yaver://oauth-callback`) the Yaver mobile app uses.
  *   - Email / password sign-up + login (no 2FA flow — for SDK simplicity).
  *   - Token validation.
- *   - `/devices/list` → owned + shared (guest) remote dev machines.
+ *   - `/devices/list` → owner remote dev machines.
  *
  * Mobile-only. A web equivalent will ship as a separate `yaver-web-feedback`
  * package; do not import this module from a browser bundle.
@@ -399,7 +399,7 @@ export async function loginWithEmail(
   return { token: data.token, userId: data.userId };
 }
 
-// ─── Devices (owned + shared) ─────────────────────────────────────────
+// ─── Owner devices ────────────────────────────────────────────────────
 
 export interface RemoteDevice {
   deviceId: string;
@@ -409,12 +409,6 @@ export interface RemoteDevice {
   needsAuth: boolean;
   runnerDown: boolean;
   lastHeartbeat: number;
-  isGuest: boolean;
-  hostUserId?: string;
-  hostName?: string;
-  hostEmail?: string;
-  hostUserIdString?: string;
-  accessScope: 'owner' | 'shared-scoped' | 'shared-legacy';
   quicHost: string;
   quicPort: number;
   /** Agent HTTP port — preferred over quicPort when present. */
@@ -432,7 +426,6 @@ export interface RemoteDevice {
 
 export interface DeviceList {
   owned: RemoteDevice[];
-  shared: RemoteDevice[];
 }
 
 export interface DeviceReachability {
@@ -440,52 +433,9 @@ export interface DeviceReachability {
   url?: string;
 }
 
-export interface GuestInvitation {
-  hostUserId: string;
-  hostName: string;
-  hostEmail: string;
-  hostUserIdString?: string;
-  createdAt: number;
-  expiresAt: number;
-  inviteCode?: string;
-}
-
-export interface ActiveGuestHost {
-  hostUserId: string;
-  hostName: string;
-  hostEmail: string;
-  grantedAt: number;
-}
-
-export interface GuestHostsResponse {
-  pending: GuestInvitation[];
-  active: ActiveGuestHost[];
-}
-
-export interface InvitationHostDevice {
-  deviceId: string;
-  name: string;
-  platform: string;
-  lastHeartbeat?: number;
-  proposed: boolean;
-}
-
-export interface InvitationPreview {
-  inviteCode: string;
-  hostUserId: string;
-  hostName: string;
-  hostEmail: string;
-  hostUserIdString?: string;
-  proposedDeviceIds?: string[];
-  hostDevices: InvitationHostDevice[];
-  invitedByUserId?: boolean;
-  expiresAt: number;
-  createdAt: number;
-}
-
 /**
- * Fetch the set of remote dev machines this user can reach. Splits into
- * owned (user is the host) vs shared (host invited them as a guest).
+ * Fetch the signed-in owner's remote dev machines. Legacy non-owner rows are
+ * discarded even if a stale backend still returns them.
  *
  * Collapses duplicate rows before splitting — Convex can return multiple
  * rows per physical machine after a re-pair or hostname change, and the
@@ -498,7 +448,7 @@ export async function listReachableDevices(
     const res = await fetch(`${convexSiteUrl}/devices/list`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) return { owned: [], shared: [] };
+    if (!res.ok) return { owned: [] };
     const data = await res.json();
     const raw = (data.devices ?? []) as any[];
     // Normalise Convex field names → SDK's RemoteDevice shape. The
@@ -512,12 +462,6 @@ export async function listReachableDevices(
       needsAuth: !!d.needsAuth,
       runnerDown: !!d.runnerDown,
       lastHeartbeat: d.lastHeartbeat ?? 0,
-      isGuest: !!d.isGuest,
-      hostUserId: d.hostUserId,
-      hostName: d.hostName,
-      hostEmail: d.hostEmail,
-      hostUserIdString: d.hostUserIdString,
-      accessScope: d.accessScope ?? 'owner',
       quicHost: d.quicHost ?? d.host ?? '',
       quicPort: d.quicPort ?? 0,
       httpPort: d.httpPort ?? d.quicPort,
@@ -532,12 +476,9 @@ export async function listReachableDevices(
     // Lazy require so Jest + tree-shakers don't choke on a circular import.
     const { collapseRemoteDevices } = require('./deviceDedup') as typeof import('./deviceDedup');
     const deduped = collapseRemoteDevices(normalised);
-    return {
-      owned: deduped.filter((d) => !d.isGuest),
-      shared: deduped.filter((d) => d.isGuest),
-    };
+    return { owned: deduped };
   } catch {
-    return { owned: [], shared: [] };
+    return { owned: [] };
   }
 }
 
@@ -580,94 +521,4 @@ export async function probeDeviceReachability(
     }
   }
   return { reachable: false };
-}
-
-export async function mintGuestSdkToken(
-  token: string,
-  hostUserId: string,
-  targetDeviceId: string,
-): Promise<{ token: string; expiresAt: number; allowedProjects?: string[] }> {
-  const res = await fetch(`${convexSiteUrl}/guests/sdk-token`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ hostUserId, targetDeviceId }),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to mint delegated SDK token');
-  }
-  return res.json();
-}
-
-export async function fetchGuestHosts(token: string): Promise<GuestHostsResponse> {
-  const res = await fetch(`${convexSiteUrl}/guests/hosts`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to fetch guest hosts');
-  }
-  return res.json();
-}
-
-export async function findInviteByCode(
-  token: string,
-  code: string,
-): Promise<InvitationPreview | null> {
-  const cleaned = code.toUpperCase().trim();
-  const res = await fetch(
-    `${convexSiteUrl}/guests/find-by-code?code=${encodeURIComponent(cleaned)}`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to load invite');
-  }
-  return res.json();
-}
-
-export async function acceptGuestByCode(
-  token: string,
-  code: string,
-  approvedDeviceIds?: string[],
-): Promise<{ hostName: string; hostEmail: string }> {
-  const res = await fetch(`${convexSiteUrl}/guests/accept-code`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      code: code.toUpperCase().trim(),
-      approvedDeviceIds,
-    }),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Invalid invite code');
-  }
-  return res.json();
-}
-
-export async function acceptGuestInvitation(
-  token: string,
-  hostUserId: string,
-  approvedDeviceIds?: string[],
-): Promise<void> {
-  const res = await fetch(`${convexSiteUrl}/guests/accept`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ hostUserId, approvedDeviceIds }),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to accept invitation');
-  }
 }

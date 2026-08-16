@@ -113,16 +113,16 @@ type AgentGraphRun struct {
 }
 
 type AgentGraphCreateRequest struct {
-	Name            string               `json:"name"`
-	WorkDir         string               `json:"workDir"`
-	Prompt          string               `json:"prompt,omitempty"`
-	Template        string               `json:"template,omitempty"`
-	Runner          string               `json:"runner,omitempty"`
-	Model           string               `json:"model,omitempty"`
-	MaxParallel     int                  `json:"maxParallel,omitempty"`
-	PreferredDevice string               `json:"preferredDevice,omitempty"`
-	AllowedDevices  []string             `json:"allowedDevices,omitempty"`
-	AllowedRunners  []string             `json:"allowedRunners,omitempty"`
+	Name            string   `json:"name"`
+	WorkDir         string   `json:"workDir"`
+	Prompt          string   `json:"prompt,omitempty"`
+	Template        string   `json:"template,omitempty"`
+	Runner          string   `json:"runner,omitempty"`
+	Model           string   `json:"model,omitempty"`
+	MaxParallel     int      `json:"maxParallel,omitempty"`
+	PreferredDevice string   `json:"preferredDevice,omitempty"`
+	AllowedDevices  []string `json:"allowedDevices,omitempty"`
+	AllowedRunners  []string `json:"allowedRunners,omitempty"`
 	// HybridDegree selects the cost-aware duo/trio routing: 0 = default
 	// (unconstrained rotation), 2 = duo (claude-code subscription + glm apikey),
 	// 3 = trio (claude-code + codex subscription + glm apikey). Independent

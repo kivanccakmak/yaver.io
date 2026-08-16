@@ -25,8 +25,8 @@ func init() {
 			"baseUrl":     map[string]interface{}{"type": "string"},
 			"accessState": map[string]interface{}{"type": "string", "description": "public_allowed | official_api | manual_required | blocked_geo | ..."},
 		}, "name"),
-		Handler:    collectionSourceRegisterHandler,
-		AllowGuest: false,
+		Handler:        collectionSourceRegisterHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "collection_vantage_register",
@@ -43,8 +43,8 @@ func init() {
 			"egressAsn":     map[string]interface{}{"type": "string"},
 			"viaPeer":       map[string]interface{}{"type": "string", "description": "device id when egress routes via a peer"},
 		}),
-		Handler:    collectionVantageRegisterHandler,
-		AllowGuest: false,
+		Handler:        collectionVantageRegisterHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "collection_run_record",
@@ -63,8 +63,8 @@ func init() {
 			"errorCode":     map[string]interface{}{"type": "string"},
 			"errorMessage":  map[string]interface{}{"type": "string"},
 		}, "sourceId", "vantageId"),
-		Handler:    collectionRunRecordHandler,
-		AllowGuest: false,
+		Handler:        collectionRunRecordHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "collection_observe",
@@ -77,8 +77,8 @@ func init() {
 			"dataset":   map[string]interface{}{"type": "string"},
 			"fields":    map[string]interface{}{"type": "object", "description": "normalized row (no egress/client IP)"},
 		}, "sourceId", "vantageId", "fields"),
-		Handler:    collectionObserveHandler,
-		AllowGuest: false,
+		Handler:        collectionObserveHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "collection_dataset_query",
@@ -89,8 +89,8 @@ func init() {
 			"vantageId": map[string]interface{}{"type": "string"},
 			"limit":     map[string]interface{}{"type": "integer", "description": "max rows (default 100)"},
 		}),
-		Handler:    collectionDatasetQueryHandler,
-		AllowGuest: false,
+		Handler:        collectionDatasetQueryHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "collection_source_health",
@@ -98,8 +98,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"sourceId": map[string]interface{}{"type": "string", "description": "filter to one source (optional)"},
 		}),
-		Handler:    collectionSourceHealthHandler,
-		AllowGuest: false,
+		Handler:        collectionSourceHealthHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "collection_vantage_compare",
@@ -109,8 +109,8 @@ func init() {
 			"sourceId": map[string]interface{}{"type": "string"},
 			"dataset":  map[string]interface{}{"type": "string"},
 		}, "sourceId"),
-		Handler:    collectionVantageCompareHandler,
-		AllowGuest: false,
+		Handler:        collectionVantageCompareHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "block_list",
@@ -118,8 +118,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"sourceId": map[string]interface{}{"type": "string", "description": "filter to one source (optional)"},
 		}),
-		Handler:    blockListHandler,
-		AllowGuest: false,
+		Handler:        blockListHandler,
+		AllowCompanion: false,
 	})
 }
 

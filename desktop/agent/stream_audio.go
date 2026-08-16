@@ -81,6 +81,6 @@ func init() {
 				"ffmpeg":       ffmpegPath() != "",
 			}}
 		},
-		AllowGuest: true,
+		AllowCompanion: true,
 	})
 }

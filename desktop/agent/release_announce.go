@@ -122,13 +122,6 @@ func AnnounceReleaseToOwnedDevices(baseURL, token, version string, onlyDeviceIDs
 		if len(want) > 0 && !want[d.DeviceID] {
 			continue
 		}
-		// A GUEST device is somebody else's box shared with us. Setting desired
-		// state on it would be updating a machine we do not own, which the
-		// Convex mutation rejects anyway (userId check) — skipping it keeps the
-		// release log free of guaranteed failures.
-		if d.IsGuest {
-			continue
-		}
 		// Phones and tablets carry no agent binary. Announcing to them is
 		// harmless but noisy, and noise in a release log is how the one line
 		// that matters gets missed.

@@ -26,10 +26,10 @@ import (
 )
 
 var (
-	learnMu        sync.RWMutex
-	learnAllow     map[string]bool
-	learnDeny      map[string]bool
-	learnLoaded    bool
+	learnMu     sync.RWMutex
+	learnAllow  map[string]bool
+	learnDeny   map[string]bool
+	learnLoaded bool
 )
 
 func mailAllowFile() (string, error) {

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Public data API — the runtime surface a third-party RN/web app hits from
@@ -157,13 +156,6 @@ func (s *HTTPServer) phoneDataOwnerAuthorized(r *http.Request) bool {
 	if secretEqual(token, s.token) {
 		return true
 	}
-	if strings.HasPrefix(token, "yv_supp_") && supportTokenValidFor(token, r.URL.Path) {
-		return true
-	}
-	if IsPairedToken(token) {
-		TouchPairedToken(token)
-		return true
-	}
 	// Owner's current on-disk token (handles drift from s.token across a
 	// restart / rotation), same as the main s.auth wrapper.
 	if s.tokenIsOwner(token) {
@@ -182,7 +174,7 @@ func (s *HTTPServer) phoneDataOwnerAuthorized(r *http.Request) bool {
 			}
 		}
 		if uid, err := ValidateTokenUser(s.convexURL, token); err == nil && uid == s.ownerUserID {
-			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, isSdk: false, storedAt: time.Now()})
+			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, isSdk: false})
 			return true
 		}
 	}

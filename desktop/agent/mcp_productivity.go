@@ -7,8 +7,8 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	osexec "os/exec"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -285,11 +285,19 @@ func hexToInt(h string) int {
 func rgbToHSL(r, g, b int) string {
 	rf, gf, bf := float64(r)/255, float64(g)/255, float64(b)/255
 	max := rf
-	if gf > max { max = gf }
-	if bf > max { max = bf }
+	if gf > max {
+		max = gf
+	}
+	if bf > max {
+		max = bf
+	}
 	min := rf
-	if gf < min { min = gf }
-	if bf < min { min = bf }
+	if gf < min {
+		min = gf
+	}
+	if bf < min {
+		min = bf
+	}
 	l := (max + min) / 2
 	if max == min {
 		return fmt.Sprintf("hsl(0, 0%%, %.0f%%)", l*100)
@@ -300,7 +308,9 @@ func rgbToHSL(r, g, b int) string {
 	switch max {
 	case rf:
 		h = (gf - bf) / d
-		if gf < bf { h += 6 }
+		if gf < bf {
+			h += 6
+		}
 	case gf:
 		h = (bf-rf)/d + 2
 	case bf:
@@ -311,7 +321,9 @@ func rgbToHSL(r, g, b int) string {
 }
 
 func abs(x float64) float64 {
-	if x < 0 { return -x }
+	if x < 0 {
+		return -x
+	}
 	return x
 }
 
@@ -395,12 +407,12 @@ func mcpGitHubBadge(dir string) interface{} {
 	}
 
 	badges := map[string]string{
-		"ci":       fmt.Sprintf("[![CI](https://github.com/%s/actions/workflows/ci.yml/badge.svg)](https://github.com/%s/actions)", repo, repo),
-		"license":  fmt.Sprintf("[![License](https://img.shields.io/github/license/%s)](https://github.com/%s/blob/main/LICENSE)", repo, repo),
-		"stars":    fmt.Sprintf("[![Stars](https://img.shields.io/github/stars/%s)](https://github.com/%s)", repo, repo),
-		"release":  fmt.Sprintf("[![Release](https://img.shields.io/github/v/release/%s)](https://github.com/%s/releases)", repo, repo),
-		"issues":   fmt.Sprintf("[![Issues](https://img.shields.io/github/issues/%s)](https://github.com/%s/issues)", repo, repo),
-		"yaver":    "[![Yaver](https://img.shields.io/badge/MCP-Yaver-blue)](https://yaver.io)",
+		"ci":      fmt.Sprintf("[![CI](https://github.com/%s/actions/workflows/ci.yml/badge.svg)](https://github.com/%s/actions)", repo, repo),
+		"license": fmt.Sprintf("[![License](https://img.shields.io/github/license/%s)](https://github.com/%s/blob/main/LICENSE)", repo, repo),
+		"stars":   fmt.Sprintf("[![Stars](https://img.shields.io/github/stars/%s)](https://github.com/%s)", repo, repo),
+		"release": fmt.Sprintf("[![Release](https://img.shields.io/github/v/release/%s)](https://github.com/%s/releases)", repo, repo),
+		"issues":  fmt.Sprintf("[![Issues](https://img.shields.io/github/issues/%s)](https://github.com/%s/issues)", repo, repo),
+		"yaver":   "[![Yaver](https://img.shields.io/badge/MCP-Yaver-blue)](https://yaver.io)",
 	}
 
 	return map[string]interface{}{
@@ -479,7 +491,10 @@ func mcpGitStats(dir string, days int) interface{} {
 		}
 	}
 	// Top 5 files
-	type fc struct{ name string; count int }
+	type fc struct {
+		name  string
+		count int
+	}
 	var topFiles []fc
 	for name, count := range fileCounts {
 		topFiles = append(topFiles, fc{name, count})
@@ -510,13 +525,13 @@ func mcpGitStats(dir string, days int) interface{} {
 	}
 
 	return map[string]interface{}{
-		"author":       user,
-		"days":         days,
-		"commits":      strings.TrimSpace(count),
-		"lines_added":  added,
+		"author":        user,
+		"days":          days,
+		"commits":       strings.TrimSpace(count),
+		"lines_added":   added,
 		"lines_removed": removed,
-		"top_files":    topFileNames,
-		"languages":    extCounts,
+		"top_files":     topFileNames,
+		"languages":     extCounts,
 	}
 }
 

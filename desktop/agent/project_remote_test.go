@@ -17,33 +17,33 @@ func TestProjectRemoteFromURL(t *testing.T) {
 		wantRepo string
 	}{
 		{
-			name: "github https",
-			url:  "https://github.com/owner/repo.git",
+			name:   "github https",
+			url:    "https://github.com/owner/repo.git",
 			wantOK: true, wantProv: "github", wantHost: "github.com", wantRepo: "owner/repo",
 		},
 		{
-			name: "github ssh",
-			url:  "git@github.com:owner/repo.git",
+			name:   "github ssh",
+			url:    "git@github.com:owner/repo.git",
 			wantOK: true, wantProv: "github", wantHost: "github.com", wantRepo: "owner/repo",
 		},
 		{
-			name: "gitlab.com https",
-			url:  "https://gitlab.com/group/project.git",
+			name:   "gitlab.com https",
+			url:    "https://gitlab.com/group/project.git",
 			wantOK: true, wantProv: "gitlab", wantHost: "gitlab.com", wantRepo: "group/project",
 		},
 		{
-			name: "self-hosted gitlab by hostname keyword",
-			url:  "https://gitlab.example.com/team/app.git",
+			name:   "self-hosted gitlab by hostname keyword",
+			url:    "https://gitlab.example.com/team/app.git",
 			wantOK: true, wantProv: "gitlab", wantHost: "gitlab.example.com", wantRepo: "team/app",
 		},
 		{
-			name: "garbage",
-			url:  "not a url",
+			name:   "garbage",
+			url:    "not a url",
 			wantOK: false,
 		},
 		{
-			name: "bitbucket — unsupported by registry mapper",
-			url:  "https://bitbucket.org/owner/repo.git",
+			name:   "bitbucket — unsupported by registry mapper",
+			url:    "https://bitbucket.org/owner/repo.git",
 			wantOK: false,
 		},
 	}

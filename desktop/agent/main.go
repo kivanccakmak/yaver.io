@@ -597,8 +597,6 @@ func main() {
 		runACL(os.Args[2:])
 	case "mesh":
 		runMesh(os.Args[2:])
-	case "join":
-		runJoin(os.Args[2:])
 	case "discover":
 		discoverProjects()
 		fp, _ := projectsFilePath()
@@ -725,10 +723,6 @@ func main() {
 		runClean(os.Args[2:])
 	case "cloud":
 		runCloud(os.Args[2:])
-	case "guests":
-		runGuests(os.Args[2:])
-	case "host-share":
-		runHostShare(os.Args[2:])
 	case "primary":
 		runPrimary(os.Args[2:])
 	case "secondary":
@@ -833,8 +827,6 @@ func main() {
 		runExposeCmd(os.Args[2:])
 	case "completion":
 		runCompletion(os.Args[2:])
-	case "support":
-		runSupport(os.Args[2:])
 	case "ui":
 		runUI(os.Args[2:])
 	case "phone":
@@ -988,25 +980,6 @@ Usage:
   yaver cloud status   Show cloud machine status
   yaver cloud ssh      SSH into your cloud machine
   yaver cloud destroy  Tear down your cloud machine
-  yaver guests invite <email>  Invite someone to use your machine (max 5 guests)
-  yaver guests list            List your guests and their status
-  yaver guests remove <email>  Revoke guest access
-  yaver host-share prepare     Audit this machine for future host-backed guest coding
-  yaver host-share create      Create a host-backed coding invite code/link
-  yaver host-share join <code> Join a host-backed coding lease
-  yaver host-share list        List host-share invites or sessions
-  yaver host-share workspace-status --session <id>   Show local borrowed workspace
-  yaver host-share workspace-bootstrap --session <id> --source-dir <path>  Seed workspace
-  yaver host-share attach-repo --session <id> [--path <repo>]  Attach a guest repo to a borrowed workspace
-  yaver host-share sync-repo --session <id> --to-host|--from-host  Sync an attached repo
-  yaver host-share guest-roots --device <id>         List guest repo roots via host-share bus
-  yaver host-share guest-read --device <id> --root <id> --path <file>  Read guest file
-  yaver host-share guest-write --device <id> --root <id> --path <file> --content <txt>  Write guest file
-  yaver host-share guest-pull --session <id> --device <id> [--root <id>]  Mirror guest repo into workspace
-  yaver host-share guest-push --session <id> [--device <id>] [--root <id>]  Push workspace back to guest repo
-  yaver host-share end <id>    End an active host-share session immediately
-  yaver host-share revoke <code>  Revoke a host-share invite
-  yaver host-share status      Show the saved host-share capability manifest
   yaver 2fa status             Show whether two-factor auth is enabled
   yaver 2fa enable             Enroll a TOTP authenticator app (optional)
   yaver 2fa disable            Remove two-factor auth from your account
@@ -1981,7 +1954,6 @@ func finalizeAuthConfig(cfg *Config, convexURL, token string, printSuccess, prin
 	maybeRegisterAutoStartAfterAuth()
 	startServeIfStopped()
 	autoSetupMCP()
-	maybeRunHostSharePrepareOnboarding("auth")
 	if printHeadlessSteps {
 		printHeadlessNextSteps()
 	}
@@ -2414,11 +2386,7 @@ func runServe(args []string) {
 	ghostFlag := fs.Bool("ghost", false, "Enable the GUI ghost (UI-automation slave) capability so remote Commanders can drive this machine's desktop")
 	machineFlag := fs.Bool("machine", false, "Enable the machine/PLC hijack capability (Modbus sniff + register fetch + AI understand) so remote Commanders can read/tune this machine")
 	netcaptureFlag := fs.Bool("netcapture", false, "Enable wire-observe & deep-analysis (tcpdump network capture + serial RS232/RS485 tty tap) for PLC/robotics/ERP troubleshooting")
-	multiUser := fs.Bool("multi-user", false, "Enable multi-user mode (shared machines)")
-	teamID := fs.String("team", "", "Restrict access to team members (requires --multi-user)")
-	maxUsers := fs.Int("max-users", 0, "Max concurrent users in multi-user mode (0 = unlimited)")
 	allowIPs := fs.String("allow-ips", "", "IP allowlist: comma-separated CIDRs (e.g. 192.168.1.0/24). Applies to every request, including anonymous probes.")
-	allowGuestIPs := fs.String("allow-guest-ips", "", "Extra CIDRs admitted only when the request carries a bearer token. Use when --allow-ips is LAN-scoped but guests arrive over relay/Tailscale/Cloudflare (e.g. --allow-guest-ips=0.0.0.0/0,::/0).")
 	recoveryPolicy := fs.String("recovery-policy", "", "Recovery ingress policy: open (default) or private. 'private' blocks /auth/recover on direct public HTTP and allows only LAN/loopback, Tailscale, private relay, or HTTPS Cloudflare Tunnel.")
 	tlsPort := fs.Int("tls-port", 18443, "HTTPS server port (0 to disable)")
 	noTLS := fs.Bool("no-tls", false, "Disable HTTPS server")
@@ -2427,7 +2395,6 @@ func runServe(args []string) {
 	installLaunchdDaemon := fs.Bool("install-launchd-daemon", false, "Install a macOS LaunchDaemon for boot-before-login headless start, then exit")
 	noAutopilot := fs.Bool("no-autopilot", false, "Disable auto-driving mode (enabled by default)")
 	iosInstall := fs.String("ios-install", "", "iOS install method: auto (default), native (xcodebuild+xcrun), bundle (Hermes push)")
-	containerizeGuests := fs.Bool("containerize-guests", false, "Run guest tasks inside Docker containers (requires yaver-sandbox image)")
 	containerizeHost := fs.Bool("containerize-host", false, "Run host tasks inside Docker containers (requires yaver-sandbox image)")
 	// Phase 5 — opt this agent in as a remote-mac builder for paired
 	// Linux dev boxes. Empty (default) means "not a builder", which
@@ -2438,10 +2405,9 @@ func runServe(args []string) {
 	containerNetwork := fs.String("container-network", "", "Container network mode: host (default), bridge, none")
 	containerReadOnly := fs.Bool("container-read-only", false, "Read-only container root filesystem (only /workspace and /tmp writable)")
 	// Operator-fleet mode: this box is part of a Yaver-operated public
-	// compute fleet (docs/yaver-public-compute-operator-fleet.md). Implies
-	// multi-user + tenant containerization + the host-share reaper every
-	// cycle, and disables the paired-token owner fast-path (no foreign token
-	// is ever owner-equivalent). Pair with --relay-only on a home/office LAN.
+	// compute fleet (docs/yaver-public-compute-operator-fleet.md). Tenant jobs
+	// remain scoped, containerized, and auto-wiped. Pair with --relay-only on a
+	// home/office LAN.
 	operator := fs.Bool("operator", false, "Run as a Yaver public-compute fleet node (multi-tenant; tenants are scoped+containerized+auto-wiped; never owner-equivalent)")
 	relayOnly := fs.Bool("relay-only", false, "Bind direct HTTP/TLS listeners to loopback so the box is reachable only via the relay (recommended for operator nodes on a home/office LAN)")
 	containerizeTenants := fs.Bool("containerize-tenants", false, "Force every non-owner (tenant) task into a Docker container, fail-closed if Docker is unavailable (implied by --operator)")
@@ -2494,7 +2460,6 @@ func runServe(args []string) {
 	}
 
 	maybeRunMacOSPermissionOnboarding("serve")
-	maybeRunHostSharePrepareOnboarding("serve")
 	maybeRunWSL2NetworkTuning()
 
 	cfgForReuse, _ := LoadConfig()
@@ -2697,9 +2662,6 @@ func runServe(args []string) {
 		if *allowIPs != "" {
 			childArgs = append(childArgs, fmt.Sprintf("--allow-ips=%s", *allowIPs))
 		}
-		if *allowGuestIPs != "" {
-			childArgs = append(childArgs, fmt.Sprintf("--allow-guest-ips=%s", *allowGuestIPs))
-		}
 		if strings.TrimSpace(*recoveryPolicy) != "" {
 			childArgs = append(childArgs, fmt.Sprintf("--recovery-policy=%s", strings.TrimSpace(*recoveryPolicy)))
 		}
@@ -2713,9 +2675,6 @@ func runServe(args []string) {
 		}
 		if *iosInstall != "" {
 			childArgs = append(childArgs, fmt.Sprintf("--ios-install=%s", *iosInstall))
-		}
-		if *containerizeGuests {
-			childArgs = append(childArgs, "--containerize-guests")
 		}
 		if *containerizeHost {
 			childArgs = append(childArgs, "--containerize-host")
@@ -3462,18 +3421,6 @@ func runServe(args []string) {
 	if allowIPsList != "" {
 		httpServer.allowedCIDRs = parseCIDRs(strings.Split(allowIPsList, ","))
 	}
-	// Guest IP allowlist — widens the gate for bearer-carrying
-	// requests only. Typical use: --allow-ips="192.168.0.0/16"
-	// (owner on LAN) + --allow-guest-ips="0.0.0.0/0,::/0" (guests
-	// from anywhere, authenticated by token).
-	allowGuestIPsList := *allowGuestIPs
-	if allowGuestIPsList == "" && len(cfg.AllowedGuestIPs) > 0 {
-		allowGuestIPsList = strings.Join(cfg.AllowedGuestIPs, ",")
-	}
-	if allowGuestIPsList != "" {
-		httpServer.allowedGuestCIDRs = parseCIDRs(strings.Split(allowGuestIPsList, ","))
-	}
-
 	// TLS setup
 	if !*noTLS {
 		cert, fingerprint, err := EnsureTLSCert()
@@ -3606,10 +3553,6 @@ func runServe(args []string) {
 		httpServer.designRefMgr = drMgr
 		log.Printf("Design reference manager ready (%d existing references)", len(drMgr.List()))
 	}
-	if cfgDir, err := ConfigDir(); err == nil {
-		httpServer.guestConfigMgr = NewGuestConfigManager(cfgDir)
-		log.Printf("Guest config manager ready")
-	}
 	// GUI ghost (UI-automation slave) — opt-in via --ghost or config. The
 	// engine itself is created lazily on first ghost verb (ops_ghost.go).
 	httpServer.ghostEnabled = *ghostFlag || cfg.GhostEnabled
@@ -3651,8 +3594,8 @@ func runServe(args []string) {
 	// never run a stranger's task on the host. Fail-closed below if Docker
 	// is unavailable in that mode.
 	tenantContainers := *containerizeTenants || *operator
-	useContainerGuests := *containerizeGuests || cfg.ContainerizeGuests || tenantContainers
-	useContainerHost := *containerizeHost || cfg.ContainerizeHost
+	useContainerTenants := tenantContainers
+	useContainerHost := tenantContainers || *containerizeHost || cfg.ContainerizeHost
 	if tenantContainers {
 		if cr := NewContainerRunner(); !cr.IsAvailable() {
 			log.Fatalf("[OPERATOR] --operator/--containerize-tenants requires Docker, but Docker is not available. Refusing to serve tenants on the host (fail-closed). Install Docker and retry.")
@@ -3664,15 +3607,13 @@ func runServe(args []string) {
 		cNetwork = cfg.ContainerNetwork
 	}
 	cReadOnly := *containerReadOnly || cfg.ContainerReadOnly
-	if useContainerGuests || useContainerHost {
+	if useContainerTenants || useContainerHost {
 		cr := NewContainerRunner()
 		if cr.IsAvailable() {
 			httpServer.containerRunner = cr
-			httpServer.containerizeGuests = useContainerGuests
 			httpServer.containerizeHost = useContainerHost
 			// Wire into task manager so tasks can use containers
 			taskMgr.ContainerRunner = cr
-			taskMgr.ContainerizeGuests = useContainerGuests
 			taskMgr.ContainerizeHost = useContainerHost
 			taskMgr.ContainerCPU = cfg.ContainerCPU
 			taskMgr.ContainerMemory = cfg.ContainerMemory
@@ -3681,8 +3622,8 @@ func runServe(args []string) {
 			taskMgr.ContainerReadOnly = cReadOnly
 			taskMgr.ContainerMounts = cfg.ContainerMounts
 			if cr.IsImageReady() {
-				log.Printf("Container sandbox ready (guests=%v, host=%v, network=%s, readOnly=%v)",
-					useContainerGuests, useContainerHost, cNetwork, cReadOnly)
+				log.Printf("Container sandbox ready (tenants=%v, host=%v, network=%s, readOnly=%v)",
+					useContainerTenants, useContainerHost, cNetwork, cReadOnly)
 			} else {
 				log.Printf("Container sandbox enabled but image not built — will auto-build on first task")
 			}
@@ -3749,26 +3690,12 @@ func runServe(args []string) {
 	// Vibing pre-warm disabled — was running 5 LLM calls × 3 projects on every startup.
 	// Deep Shuffle is now on-demand only (user taps the dice button).
 	// Quick actions (no LLM) are generated on first /vibing request.
-	// Operator mode implies multi-user (a fleet box serves many tenants).
-	if *multiUser || *operator {
-		muMgr, err := NewMultiUserManager(MultiUserConfig{
-			TeamID:   *teamID,
-			MaxUsers: *maxUsers,
-		})
-		if err != nil {
-			log.Printf("Warning: multi-user mode unavailable: %v", err)
-		} else {
-			httpServer.multiUserMgr = muMgr
-			log.Printf("Multi-user mode enabled (team=%q, maxUsers=%d, users=%d)", *teamID, *maxUsers, len(muMgr.ListUsers()))
-		}
-	}
-
 	// Operator-fleet posture: scoped+containerized+auto-wiped tenants; the
-	// paired-token owner fast-path is disabled (see httpserver.go auth).
+	// owner HTTP API still accepts only the operator principal.
 	httpServer.operatorMode = *operator
 	httpServer.relayOnly = *relayOnly
 	if *operator {
-		log.Printf("[OPERATOR] public-compute fleet node: tenants are scoped host-share sessions (containerized, auto-wiped); paired-token owner fast-path DISABLED; relay-only=%v", *relayOnly)
+		log.Printf("[OPERATOR] public-compute fleet node: tenant workloads are scoped, containerized, and auto-wiped; relay-only=%v", *relayOnly)
 	}
 
 	// Initialize vault (P2P encrypted key store). The early-boot path
@@ -3921,11 +3848,6 @@ func runServe(args []string) {
 		// See feedback_to_vibe.go.
 		httpServer.autoReloadAfterFeedbackVibingTask(task)
 
-		// Record guest usage
-		if task.GuestUserID != "" && dur > 0 && httpServer.guestConfigMgr != nil {
-			httpServer.guestConfigMgr.RecordUsage(task.GuestUserID, float64(dur))
-		}
-
 		// Chain advancement: start next task in chain
 		if task.ChainID != "" {
 			taskMgr.advanceChain(task)
@@ -3935,12 +3857,6 @@ func runServe(args []string) {
 		if httpServer.autopilot != nil && httpServer.autopilot.IsEnabled() && task.Source == "todolist" {
 			httpServer.autopilot.OnTaskDone(task)
 		}
-
-		// Self-growing tests: when a coding/vibe task finishes successfully on a
-		// project that has a yaver-tests/ suite, let the runner author specs for
-		// any newly-uncovered routes — zero-touch growth during vibe-coding.
-		// Guarded against recursion (skips its own "testkit-grow" tasks).
-		maybeGrowTestsAfterTask(taskMgr, task)
 
 		// Video summary: if task asked for one, kick off the clip
 		// recorder. Non-blocking; the recorder emits clip_ready over
@@ -6270,9 +6186,6 @@ func runStatus() {
 		}
 	}
 
-	printStatusRemoteAccess(cfg)
-	printStatusSharing(statusClient, cfg)
-
 	// Voice / Speech status
 	fmt.Println()
 	fmt.Println("Voice:")
@@ -6344,152 +6257,6 @@ func runTmux(args []string) {
 	}
 }
 
-type statusSharedUsersResponse struct {
-	Users    []statusSharedUser `json:"users"`
-	TeamID   string             `json:"teamId"`
-	MaxUsers int                `json:"maxUsers"`
-}
-
-type statusSharedUser struct {
-	UserID       string `json:"userId"`
-	Email        string `json:"email"`
-	FullName     string `json:"fullName"`
-	Provider     string `json:"provider"`
-	WorkspaceDir string `json:"workspaceDir"`
-	CreatedAt    string `json:"createdAt"`
-	LastActiveAt string `json:"lastActiveAt"`
-}
-
-func printStatusSharing(client *http.Client, cfg *Config) {
-	fmt.Println()
-	fmt.Println("Sharing:")
-
-	paired := ListPairedTokens()
-	fmt.Printf("  Paired users: %d\n", len(paired))
-	if len(paired) > 0 {
-		for _, p := range paired {
-			label := p.Label
-			if label == "" {
-				label = p.TokenHash[:8]
-			}
-			source := p.SourceHost
-			if source == "" {
-				source = "unknown"
-			}
-			lastUsed := p.LastUsedAt
-			if lastUsed == "" {
-				lastUsed = "never"
-			}
-			fmt.Printf("    %s  source=%s  last-used=%s\n", label, source, lastUsed)
-		}
-	}
-
-	if shared, err := fetchLocalSharedUsers(client, cfg.AuthToken); err == nil {
-		fmt.Printf("  Shared sessions: %d", len(shared.Users))
-		if shared.TeamID != "" {
-			fmt.Printf("  team=%s", shared.TeamID)
-		}
-		if shared.MaxUsers > 0 {
-			fmt.Printf("  limit=%d", shared.MaxUsers)
-		}
-		fmt.Println()
-		if len(shared.Users) > 0 {
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "    EMAIL\tPROVIDER\tLAST ACTIVE\tWORKSPACE")
-			for _, u := range shared.Users {
-				email := u.Email
-				if email == "" {
-					email = shortStatusUserID(u.UserID)
-				}
-				provider := u.Provider
-				if provider == "" {
-					provider = "-"
-				}
-				fmt.Fprintf(w, "    %s\t%s\t%s\t%s\n",
-					email,
-					provider,
-					statusTimeOrDash(u.LastActiveAt),
-					u.WorkspaceDir,
-				)
-			}
-			w.Flush()
-		}
-	} else {
-		fmt.Println("  Shared sessions: unavailable (agent not in multi-user mode or not reachable)")
-	}
-
-	statusCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	var (
-		guests      []GuestInfo
-		guestErr    error
-		configs     []GuestConfig
-		cfgErr      error
-		devices     []DeviceInfo
-		devicesErr  error
-		statusFetch sync.WaitGroup
-	)
-	statusFetch.Add(3)
-	go func() {
-		defer statusFetch.Done()
-		guests, guestErr = fetchGuestListForStatus(statusCtx, cfg.ConvexSiteURL, cfg.AuthToken)
-	}()
-	go func() {
-		defer statusFetch.Done()
-		configs, cfgErr = fetchGuestConfigsForStatus(statusCtx, cfg.ConvexSiteURL, cfg.AuthToken)
-	}()
-	go func() {
-		defer statusFetch.Done()
-		devices, devicesErr = listDevicesForStatus(statusCtx, cfg.ConvexSiteURL, cfg.AuthToken)
-	}()
-	statusFetch.Wait()
-
-	if guestErr != nil {
-		fmt.Printf("  Guests: unavailable (%v)\n", guestErr)
-		printStatusRunnableMachinesFromDevices(devices, devicesErr, cfg)
-		return
-	}
-	configByEmail := map[string]*GuestConfig{}
-	if cfgErr == nil {
-		for i := range configs {
-			c := configs[i]
-			configByEmail[strings.ToLower(strings.TrimSpace(c.GuestEmail))] = &c
-		}
-	}
-
-	activeGuests := 0
-	for _, g := range guests {
-		if strings.EqualFold(g.Status, "accepted") || strings.EqualFold(g.Status, "active") {
-			activeGuests++
-		}
-	}
-	fmt.Printf("  Guests: %d total, %d active\n", len(guests), activeGuests)
-	if len(guests) == 0 {
-		printStatusRunnableMachinesFromDevices(devices, devicesErr, cfg)
-		return
-	}
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "    EMAIL\tSTATUS\tSINCE\tACCESS")
-	for _, g := range guests {
-		since := g.CreatedAt
-		if g.AcceptedAt > 0 {
-			since = g.AcceptedAt
-		}
-		cfg := configByEmail[strings.ToLower(strings.TrimSpace(g.Email))]
-		fmt.Fprintf(w, "    %s\t%s\t%s\t%s\n",
-			g.Email,
-			g.Status,
-			statusUnixMilliOrDash(since),
-			summarizeGuestAccess(cfg),
-		)
-	}
-	w.Flush()
-
-	printStatusRunnableMachinesFromDevices(devices, devicesErr, cfg)
-}
-
 func printStatusRunnableMachines(cfg *Config) {
 	devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
 	printStatusRunnableMachinesFromDevices(devices, err, cfg)
@@ -6529,76 +6296,25 @@ func printStatusRunnableMachinesFromDevices(devices []DeviceInfo, err error, cfg
 		if runnable[i].IsOnline != runnable[j].IsOnline {
 			return runnable[i].IsOnline
 		}
-		if runnable[i].IsGuest != runnable[j].IsGuest {
-			return !runnable[i].IsGuest
-		}
 		return strings.ToLower(runnable[i].Name) < strings.ToLower(runnable[j].Name)
 	})
 
 	fmt.Printf("  Runnable machines: %d total, %d up\n", len(runnable), onlineCount)
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "    NAME\tHOSTING\tSTATUS\tACCESS\tSESSION\tADDRESS")
+	fmt.Fprintln(w, "    NAME\tHOSTING\tSTATUS\tADDRESS")
 	for _, d := range runnable {
 		status := "down"
 		if d.IsOnline {
 			status = "up"
 		}
-		fmt.Fprintf(w, "    %s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "    %s\t%s\t%s\t%s\n",
 			statusDeviceLabel(d, cfg.DeviceID),
 			deviceHostingLabel(d),
 			status,
-			deviceAccessLabel(d),
-			deviceSessionBindingLabel(d),
 			deviceAddressLabel(d),
 		)
 	}
 	w.Flush()
-}
-
-func fetchGuestListForStatus(ctx context.Context, baseURL, token string) ([]GuestInfo, error) {
-	req, err := newBearerRequest("GET", baseURL+"/guests/list", token, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create guest list request: %w", err)
-	}
-	req = req.WithContext(ctx)
-	resp, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch guest list: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("guest list failed (status %d)", resp.StatusCode)
-	}
-	var result struct {
-		Guests []GuestInfo `json:"guests"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode guest list: %w", err)
-	}
-	return result.Guests, nil
-}
-
-func fetchGuestConfigsForStatus(ctx context.Context, baseURL, token string) ([]GuestConfig, error) {
-	req, err := newBearerRequest("GET", baseURL+"/guests/config", token, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create guest config request: %w", err)
-	}
-	req = req.WithContext(ctx)
-	resp, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch guest config: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("guest config failed (status %d)", resp.StatusCode)
-	}
-	var result struct {
-		Configs []GuestConfig `json:"configs"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode guest config: %w", err)
-	}
-	return result.Configs, nil
 }
 
 func listDevicesForStatus(ctx context.Context, baseURL, token string) ([]DeviceInfo, error) {
@@ -6648,186 +6364,6 @@ func fetchUserSettingsForStatus(baseURL, token string) (*UserSettings, error) {
 		return nil, fmt.Errorf("parse settings: %w", err)
 	}
 	return &result.Settings, nil
-}
-
-func fetchLocalSharedUsers(client *http.Client, token string) (*statusSharedUsersResponse, error) {
-	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:18080/users", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// STREAMING DEBUG
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	var out statusSharedUsersResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-func summarizeGuestAccess(cfg *GuestConfig) string {
-	if cfg == nil {
-		return "default: unlimited, all runners, all shared devices"
-	}
-	var parts []string
-	mode := strings.TrimSpace(cfg.UsageMode)
-	if mode == "" {
-		mode = "always"
-	}
-	parts = append(parts, "mode="+mode)
-	if cfg.DailyTokenLimit != nil && *cfg.DailyTokenLimit > 0 {
-		parts = append(parts, fmt.Sprintf("limit=%ds/day", *cfg.DailyTokenLimit))
-	} else {
-		parts = append(parts, "limit=unlimited")
-	}
-	if len(cfg.AllowedRunners) > 0 {
-		parts = append(parts, "runners="+strings.Join(cfg.AllowedRunners, ","))
-	} else {
-		parts = append(parts, "runners=all")
-	}
-	if preset := guestResourcePreset(cfg); preset != "" {
-		parts = append(parts, "preset="+preset)
-	}
-	if cfg.ShareAllDevices != nil && *cfg.ShareAllDevices {
-		parts = append(parts, "devices=all")
-	} else if len(cfg.DeviceIDs) > 0 {
-		parts = append(parts, fmt.Sprintf("devices=%d", len(cfg.DeviceIDs)))
-	}
-	if cfg.ShareAllMachines != nil && *cfg.ShareAllMachines {
-		parts = append(parts, "machines=all")
-	} else if len(cfg.MachineIDs) > 0 {
-		parts = append(parts, fmt.Sprintf("machines=%d", len(cfg.MachineIDs)))
-	}
-	if cfg.UseHostAPIKeys != nil {
-		parts = append(parts, fmt.Sprintf("hostkeys=%t", *cfg.UseHostAPIKeys))
-	}
-	if cfg.AllowGuestProvidedAPIKeys != nil {
-		parts = append(parts, fmt.Sprintf("guestkeys=%t", *cfg.AllowGuestProvidedAPIKeys))
-	}
-	if cfg.RequireIsolation != nil {
-		parts = append(parts, fmt.Sprintf("isolation=%t", *cfg.RequireIsolation))
-	}
-	return strings.Join(parts, "; ")
-}
-
-func statusUnixMilliOrDash(ms int64) string {
-	if ms <= 0 {
-		return "-"
-	}
-	return time.UnixMilli(ms).Format("2006-01-02")
-}
-
-func statusDateTimeUnixMilliOrDash(ms int64) string {
-	if ms <= 0 {
-		return "-"
-	}
-	return time.UnixMilli(ms).Local().Format("2006-01-02 15:04")
-}
-
-func statusAgoOrDash(ms int64) string {
-	if ms <= 0 {
-		return "-"
-	}
-	return humanRoundDuration(time.Since(time.UnixMilli(ms)))
-}
-
-func filterHostShareSessionsForDevice(sessions []HostShareSessionInfo, deviceID string) []HostShareSessionInfo {
-	deviceID = strings.TrimSpace(deviceID)
-	if deviceID == "" {
-		return nil
-	}
-	filtered := make([]HostShareSessionInfo, 0, len(sessions))
-	for _, session := range sessions {
-		if strings.TrimSpace(session.HostDeviceID) != deviceID {
-			continue
-		}
-		filtered = append(filtered, session)
-	}
-	sort.Slice(filtered, func(i, j int) bool {
-		if filtered[i].LastActivityAt != filtered[j].LastActivityAt {
-			return filtered[i].LastActivityAt > filtered[j].LastActivityAt
-		}
-		return filtered[i].StartedAt > filtered[j].StartedAt
-	})
-	return filtered
-}
-
-func printStatusRemoteAccess(cfg *Config) {
-	fmt.Println()
-	fmt.Println("Remote access:")
-	if strings.TrimSpace(cfg.DeviceID) == "" {
-		fmt.Println("  Host-share: local device id unknown")
-		return
-	}
-
-	sessions, err := FetchHostShareSessions(cfg.ConvexSiteURL, cfg.AuthToken, "host")
-	if err != nil {
-		fmt.Printf("  Host-share: unavailable (%v)\n", err)
-		return
-	}
-
-	deviceSessions := filterHostShareSessionsForDevice(sessions, cfg.DeviceID)
-	if len(deviceSessions) == 0 {
-		fmt.Println("  Host-share: no active remote sessions on this device")
-		return
-	}
-
-	fmt.Printf("  Host-share: %d active remote session(s) on this device\n", len(deviceSessions))
-	fmt.Printf("  Last activity: %s (%s ago)\n",
-		statusDateTimeUnixMilliOrDash(deviceSessions[0].LastActivityAt),
-		statusAgoOrDash(deviceSessions[0].LastActivityAt),
-	)
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "    GUEST\tSTATUS\tSTARTED\tLAST ACTIVE\tEXPIRES")
-	for _, session := range deviceSessions {
-		guest := strings.TrimSpace(session.GuestEmail)
-		if guest == "" {
-			guest = strings.TrimSpace(session.GuestName)
-		}
-		if guest == "" {
-			guest = session.SessionID
-		}
-		status := strings.TrimSpace(session.Status)
-		if status == "" {
-			status = "active"
-		}
-		fmt.Fprintf(w, "    %s\t%s\t%s\t%s\t%s\n",
-			guest,
-			status,
-			statusDateTimeUnixMilliOrDash(session.StartedAt),
-			statusDateTimeUnixMilliOrDash(session.LastActivityAt),
-			statusDateTimeUnixMilliOrDash(session.ExpiresAt),
-		)
-	}
-	w.Flush()
-}
-
-func statusTimeOrDash(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "-"
-	}
-	t, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return value
-	}
-	return t.Local().Format("2006-01-02 15:04")
-}
-
-func shortStatusUserID(userID string) string {
-	userID = strings.TrimSpace(userID)
-	if len(userID) <= 8 {
-		return userID
-	}
-	return userID[:8] + "..."
 }
 
 func runTmuxList() {
@@ -7197,44 +6733,6 @@ func runDoctor() {
 		pass(fmt.Sprintf("%d running, %d total", runningTasks, totalTasks))
 	} else {
 		pass(fmt.Sprintf("idle (%d total)", totalTasks))
-	}
-
-	fmt.Println("\n── Device Sessions ──")
-	check("Session binding")
-	if cfg != nil && cfg.AuthToken != "" && cfg.ConvexSiteURL != "" {
-		devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
-		if err != nil {
-			warning(fmt.Sprintf("Could not inspect devices: %v", err))
-		} else {
-			legacyCount := 0
-			for _, device := range devices {
-				if device.IsGuest {
-					continue
-				}
-				if device.SessionBinding != "dedicated" {
-					legacyCount++
-				}
-			}
-			if legacyCount == 0 {
-				pass("All owned devices use dedicated device sessions")
-			} else {
-				warning(fmt.Sprintf("%d owned device(s) still on legacy shared sessions", legacyCount))
-			}
-			for _, device := range devices {
-				if device.IsGuest {
-					continue
-				}
-				check("  " + device.Name)
-				switch device.SessionBinding {
-				case "dedicated":
-					pass("dedicated device session")
-				default:
-					warning("legacy shared session — restart/serve this machine once to rotate it")
-				}
-			}
-		}
-	} else {
-		warning("Sign in first to inspect device session binding")
 	}
 
 	if runtime.GOOS == "darwin" {
@@ -7996,20 +7494,6 @@ func runDevices(args []string) {
 				fmt.Fprintln(os.Stderr, "Refusing to remove the current device from itself. Run this from another device or use the mobile app.")
 				os.Exit(1)
 			}
-			// A shared device isn't ours to remove — the owner-scoped remove
-			// would no-op confusingly. Point at the verb that actually works.
-			if devices, err := listDevicesEnsuringAuth(cfg); err == nil {
-				for _, d := range devices {
-					if d.DeviceID != deviceID || !d.IsGuest {
-						continue
-					}
-					host := firstNonEmpty(d.HostEmail, d.HostUserIDString, d.HostName)
-					fmt.Fprintf(os.Stderr, "%s is shared with you by %s — it isn't yours to remove.\n",
-						firstNonEmpty(d.Name, deviceID), firstNonEmpty(d.HostName, host))
-					fmt.Fprintf(os.Stderr, "To drop your own access to their machines:\n\n    yaver guests leave %s\n", host)
-					os.Exit(1)
-				}
-			}
 			if err := RemoveDevice(cfg.ConvexSiteURL, cfg.AuthToken, deviceID); err != nil {
 				fmt.Fprintf(os.Stderr, "Remove failed: %v\n", err)
 				os.Exit(1)
@@ -8073,7 +7557,7 @@ func runDevices(args []string) {
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	defer w.Flush()
-	fmt.Fprintln(w, "ID\tROLE\tHOSTING\tALIAS\tNAME\tPLATFORM\tSTATUS\tACCESS\tSESSION\tRUNNERS\tADDRESS")
+	fmt.Fprintln(w, "ID\tROLE\tHOSTING\tALIAS\tNAME\tPLATFORM\tSTATUS\tRUNNERS\tADDRESS")
 	for _, d := range devices {
 		status := "offline"
 		if d.IsOnline {
@@ -8099,8 +7583,8 @@ func runDevices(args []string) {
 			runners = "-"
 		}
 		address := fmt.Sprintf("%s:%d", d.QuicHost, d.QuicPort)
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			id, role, deviceHostingLabel(d), alias, d.Name, d.Platform, status, deviceAccessLabel(d), deviceSessionBindingLabel(d), runners, address)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			id, role, deviceHostingLabel(d), alias, d.Name, d.Platform, status, runners, address)
 	}
 	w.Flush()
 
@@ -8305,7 +7789,7 @@ func runAlias(args []string) {
 		}
 		any := false
 		for _, d := range devices {
-			if d.IsGuest || strings.TrimSpace(d.Alias) == "" {
+			if strings.TrimSpace(d.Alias) == "" {
 				continue
 			}
 			any = true
@@ -8333,10 +7817,6 @@ func runAlias(args []string) {
 		dev, err := resolveDevice(target, devices)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		if dev.IsGuest {
-			fmt.Fprintln(os.Stderr, "Cannot set alias on a shared/guest device — only the host can.")
 			os.Exit(1)
 		}
 		if err := SetDeviceAlias(cfg.ConvexSiteURL, cfg.AuthToken, dev.DeviceID, newAlias); err != nil {
@@ -8940,12 +8420,7 @@ func resolveSSHPrimary() (string, error) {
 	// No explicit primary — fall back to "exactly one owner device" so
 	// fresh single-device users don't have to set one before they can
 	// `yaver ssh`.
-	var owned []DeviceInfo
-	for _, d := range devices {
-		if !d.IsGuest {
-			owned = append(owned, d)
-		}
-	}
+	owned := devices
 	if len(owned) == 0 {
 		return "", fmt.Errorf("no registered owner devices — run 'yaver serve' on a machine to register it")
 	}
@@ -9388,32 +8863,6 @@ func SetDeviceAlias(baseURL, token, deviceId, alias string) error {
 		return fmt.Errorf("set alias failed (status %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
-}
-
-func deviceAccessLabel(d DeviceInfo) string {
-	if !d.IsGuest {
-		return "OWN"
-	}
-	label := "SHARED"
-	if d.HostName != "" {
-		label = "SHARED:" + d.HostName
-	} else if d.HostEmail != "" {
-		label = "SHARED:" + d.HostEmail
-	}
-	if len(label) > 22 {
-		label = label[:21] + "…"
-	}
-	return label
-}
-
-func deviceSessionBindingLabel(d DeviceInfo) string {
-	if d.IsGuest {
-		return "-"
-	}
-	if d.SessionBinding != "" {
-		return d.SessionBinding
-	}
-	return "legacy-shared"
 }
 
 func deviceAddressLabel(d DeviceInfo) string {
@@ -9892,16 +9341,6 @@ type DeviceInfo struct {
 	LastHeartbeat   int64    `json:"lastHeartbeat,omitempty"`
 	LastTunnelEvent int64    `json:"lastTunnelEvent,omitempty"`
 	AgentVersion    string   `json:"agentVersion,omitempty"`
-	IsGuest         bool     `json:"isGuest,omitempty"`
-	HostName        string   `json:"hostName,omitempty"`
-	HostEmail       string   `json:"hostEmail,omitempty"`
-	// Host's public userId string — identifies the share to `guests leave`.
-	HostUserIDString          string `json:"hostUserIdString,omitempty"`
-	AccessScope               string `json:"accessScope,omitempty"`
-	PriorityMode              string `json:"priorityMode,omitempty"`
-	UseHostAPIKeys            bool   `json:"useHostApiKeys,omitempty"`
-	AllowGuestProvidedAPIKeys bool   `json:"allowGuestProvidedApiKeys,omitempty"`
-	SessionBinding            string `json:"sessionBinding,omitempty"`
 	// Hosting provenance (populated by listMyDevices). "yaver-hosted" =
 	// a Yaver-managed cloud box (paid via LemonSqueezy or owner-adopted);
 	// "byo" = a bring-your-own cloud box provisioned through Yaver;
@@ -10563,9 +10002,8 @@ func heartbeatLoop(ctx context.Context, baseURL, token, deviceID string, taskMgr
 						httpServer.token = newToken
 						// Flush token→user cache — old bearer entries
 						// reference a revoked token and will make
-						// auth() hand out the wrong routing decision
-						// (owner vs guest vs host-share) until the
-						// old entries age out.
+						// auth() hand out a stale routing decision until
+						// the old entries age out.
 						httpServer.tokenCache.Range(func(k, _ interface{}) bool {
 							httpServer.tokenCache.Delete(k)
 							return true

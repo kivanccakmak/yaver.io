@@ -163,32 +163,6 @@ func TestBrokerSnapshotAttributesEveryHeldPort(t *testing.T) {
 	}
 }
 
-// The multi-user slot allocator and the broker must not disagree during the
-// window between reserving a port and binding it.
-func TestSlotAllocatorSkipsPortsTheBrokerHolds(t *testing.T) {
-	base := unusedPort(t)
-	alloc := &DevPortAllocator{
-		metroBase: base,
-		webBase:   base + 100,
-		maxSlots:  4,
-		taken:     map[int]string{},
-	}
-
-	// A single-user session (or another user's) reserves slot 0's metro port
-	// first — reserved, not yet bound, so the OS still sees it as free.
-	_, _, release := AcquireDevPort("metro", "owner:/work/owner-app", base)
-	defer release()
-
-	pair, err := alloc.Reserve("user-2")
-	if err != nil {
-		t.Fatalf("Reserve: %v", err)
-	}
-	if pair.MetroPort == base {
-		t.Errorf("slot allocator handed out :%d while the broker holds it — both sessions "+
-			"would point at the same port, and only one would survive the bind", base)
-	}
-}
-
 func TestPortBindFailureNamesEveryFrameworkPhrasing(t *testing.T) {
 	real := "Failed to bind web development server:\n" +
 		"SocketException: Failed to create server socket (OS Error: Address already in use, errno = 48), address = 0.0.0.0, port = 9100"

@@ -2,7 +2,7 @@
 
 // PackagesView — owner console for Yaver Task Packages (docs/yaver-task-packages.md).
 // Lists published packages, runs one once (showing the result incl. MCP-over-MCP
-// calls), allocates a package to a runner device, and publishes a manifest.
+// calls), validates packages, and publishes a manifest.
 // Drives the agent's package_* ops verbs via agentClient.callOps.
 
 import { useCallback, useEffect, useState } from "react";
@@ -65,10 +65,7 @@ export default function PackagesView() {
   const [detail, setDetail] = useState<any>(null);
   const [run, setRun] = useState<RunResult | null>(null);
   const [check, setCheck] = useState<any>(null);
-  const [forceShare, setForceShare] = useState(false);
   const [manifest, setManifest] = useState(SAMPLE);
-  const [allocDevice, setAllocDevice] = useState("");
-  const [allocTarget, setAllocTarget] = useState("mobile");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -86,7 +83,6 @@ export default function PackagesView() {
     setSelected(name);
     setRun(null);
     setCheck(null);
-    setForceShare(false);
     try {
       const res = await agentClient.callOps("package_get", { name });
       setDetail(res?.initial ?? null);
@@ -144,34 +140,6 @@ export default function PackagesView() {
     }
   }
 
-  async function allocate() {
-    if (!selected || !allocDevice.trim()) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await agentClient.callOps("package_allocate", {
-        packageName: selected,
-        device: allocDevice.trim(),
-        target: allocTarget,
-        force: forceShare,
-      });
-      if (res?.ok === false) {
-        if (res?.code === "check_required" || res?.code === "check_failed") {
-          throw new Error(`${res.error} — run the preflight check above first.`);
-        }
-        throw new Error(res?.error || "allocate failed");
-      }
-      setAllocDevice("");
-      await openPackage(selected);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const shareReady = forceShare || (check && check.status !== "fail");
-
   return (
     <div className="flex flex-col gap-4 text-surface-100">
       <div className="flex items-center justify-between">
@@ -221,7 +189,7 @@ export default function PackagesView() {
           </div>
         </div>
 
-        {/* right: detail + run + allocate */}
+        {/* right: detail + validation + run */}
         <div className="flex flex-col gap-3">
           {!selected && <div className={`${card} text-sm text-white/40`}>Select a package.</div>}
 
@@ -297,8 +265,8 @@ export default function PackagesView() {
                   </div>
                   <div className="mt-2 text-xs text-white/40">
                     {check.status === "fail"
-                      ? "Sharing is blocked until this passes (or check Force below)."
-                      : "Ready to share."}
+                      ? "Fix the failed checks before running this package."
+                      : "Ready to run."}
                   </div>
                 </div>
               )}
@@ -328,67 +296,6 @@ export default function PackagesView() {
                   ))}
                 </div>
               )}
-
-              <div className={card}>
-                <div className="mb-2 text-xs uppercase tracking-wide text-white/50">
-                  Allocate to a runner
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    value={allocDevice}
-                    onChange={(e) => setAllocDevice(e.target.value)}
-                    placeholder="runner device id"
-                    className="flex-1 rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-sm"
-                  />
-                  <select
-                    value={allocTarget}
-                    onChange={(e) => setAllocTarget(e.target.value)}
-                    className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-sm"
-                  >
-                    <option value="mobile">mobile</option>
-                    <option value="agent">agent</option>
-                    <option value="docker">docker</option>
-                    <option value="worker">worker</option>
-                  </select>
-                  <button
-                    className={btn}
-                    disabled={busy || !shareReady}
-                    onClick={() => void allocate()}
-                    title={shareReady ? "" : "Run the preflight check first"}
-                  >
-                    Allocate
-                  </button>
-                </div>
-                <label className="mt-2 flex items-center gap-2 text-xs text-white/50">
-                  <input
-                    type="checkbox"
-                    checked={forceShare}
-                    onChange={(e) => setForceShare(e.target.checked)}
-                  />
-                  Force share without a passing preflight
-                </label>
-                {!shareReady && (
-                  <div className="mt-1 text-xs text-amber-300/70">
-                    Run a preflight check before sharing to a runner.
-                  </div>
-                )}
-                <div className="mt-3 flex flex-col gap-1">
-                  {(detail?.allocations ?? []).map((a: any) => (
-                    <div
-                      key={a.allocationId}
-                      className="flex items-center justify-between rounded-lg bg-white/[0.04] px-2 py-1.5 text-sm"
-                    >
-                      <span>
-                        {a.runnerDeviceId} · {a.target}
-                      </span>
-                      <span className="text-xs text-white/50">{a.status}</span>
-                    </div>
-                  ))}
-                  {(detail?.allocations ?? []).length === 0 && (
-                    <div className="text-sm text-white/40">No runners yet.</div>
-                  )}
-                </div>
-              </div>
 
               {(detail?.recentRuns ?? []).length > 0 && (
                 <div className={card}>

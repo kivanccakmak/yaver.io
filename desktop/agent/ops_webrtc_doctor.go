@@ -58,9 +58,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsWebRTCDoctorHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsWebRTCDoctorHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

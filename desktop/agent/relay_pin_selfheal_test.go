@@ -53,7 +53,7 @@ func TestClassifyRelayAuthFailure_CredentialMatcherDoesNotSwallowPinErrors(t *te
 func TestRelayPinMismatchRemedy_NamesBothCausesAndTheFix(t *testing.T) {
 	msg := relayPinMismatchRemedy("46.224.110.38:4433") // infra-addr-ok: public.yaver.io resolves here — public by design, not a leak
 	for _, want := range []string{
-		"46.224.110.38:4433", // infra-addr-ok: public.yaver.io resolves here — public by design, not a leak
+		"46.224.110.38:4433",   // infra-addr-ok: public.yaver.io resolves here — public by design, not a leak
 		"rotated",              // cause 1
 		"intercepted",          // cause 2
 		"keep refusing",        // the guarantee is not being relaxed

@@ -22,8 +22,7 @@ package main
 // Files land in ~/.yaver/clips/<sessionID>/ with a metadata.json
 // and agent-screen.mp4 (plus mobile-camera.mp4 when mobile adds
 // its own stream). Each session gets a public share URL via the
-// shortener module: /clips/:id serves the metadata + download
-// links, /clips/:id/agent-screen.mp4 streams the file.
+// Owner clients replay through /clips/private/:id/... with normal auth.
 
 import (
 	"encoding/json"
@@ -59,8 +58,8 @@ type ClipSession struct {
 // ClipStream is one uploaded track. Agent-screen always exists;
 // mobile-camera / mobile-screen slots are optional.
 type ClipStream struct {
-	Kind     string `json:"kind"`     // "agent-screen" | "mobile-camera" | "mobile-screen" | "mic"
-	File     string `json:"file"`     // filename inside the session dir
+	Kind     string `json:"kind"` // "agent-screen" | "mobile-camera" | "mobile-screen" | "mic"
+	File     string `json:"file"` // filename inside the session dir
 	Bytes    int64  `json:"bytes"`
 	Mime     string `json:"mime"`
 	Uploaded bool   `json:"uploaded"` // false until the stop signal arrives
@@ -288,17 +287,12 @@ func (s *HTTPServer) handleClipStart(w http.ResponseWriter, r *http.Request) {
 	clipActive = &activeSession{session: session, cmd: cmd, stopCh: make(chan struct{})}
 	clipMu.Unlock()
 
-	jsonReply(w, http.StatusOK, map[string]interface{}{
-		"ok":       true,
-		"session":  session,
-		"shareUrl": "/clips/" + session.ID,
-	})
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "session": session})
 }
 
 // handleClipStop gracefully terminates the ffmpeg process
 // (SIGINT so the moov atom gets flushed) and marks the stream
-// uploaded. Mobile can then GET /clips/:id for metadata or
-// /clips/:id/agent-screen.mp4 for playback.
+// uploaded. Owner clients use /clips/private/:id for playback.
 func (s *HTTPServer) handleClipStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
@@ -371,9 +365,7 @@ func preferredClipVideo(sess *ClipSession) string {
 }
 
 // handleClipPrivateDetail is the authenticated playback surface for
-// first-party Yaver clients. Public sharing stays on /clips/, but the
-// mobile app should use this route so replay stays on the normal
-// owner-auth path.
+// first-party Yaver clients.
 func (s *HTTPServer) handleClipPrivateDetail(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/clips/private/")
 	parts := strings.SplitN(path, "/", 2)
@@ -393,7 +385,6 @@ func (s *HTTPServer) handleClipPrivateDetail(w http.ResponseWriter, r *http.Requ
 			"session":    sess,
 			"videoFile":  preferredClipVideo(sess),
 			"privateUrl": "/clips/private/" + sess.ID,
-			"shareUrl":   "/clips/" + sess.ID,
 		})
 		return
 	}
@@ -421,51 +412,6 @@ func (s *HTTPServer) handleClipPrivateDetail(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
 	http.ServeContent(w, r, full, st.ModTime(), f)
-}
-
-// handleClipDetail is the public playback endpoint — returns
-// metadata when called at /clips/:id and streams the file when
-// called at /clips/:id/<filename>. Auth-free so share links work
-// from anywhere the agent is reachable.
-func (s *HTTPServer) handleClipDetail(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/clips/")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) == 0 || parts[0] == "" {
-		jsonError(w, http.StatusNotFound, "session id required")
-		return
-	}
-	id := parts[0]
-	sess, err := loadClipSession(id)
-	if err != nil {
-		jsonError(w, http.StatusNotFound, "session not found")
-		return
-	}
-	if len(parts) == 1 {
-		// Metadata view. Show merged video if available, otherwise agent-screen.
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		videoSrc := preferredClipVideo(sess)
-		// Build stream badges.
-		var badges string
-		for _, st := range sess.Streams {
-			if st.Uploaded {
-				badges += fmt.Sprintf(` <span style="background:#334;padding:2px 8px;border-radius:4px;font-size:12px;color:#aaa">%s</span>`, st.Kind)
-			}
-		}
-		fmt.Fprintf(w, `<!doctype html><html><body style='font-family:system-ui;max-width:960px;margin:32px auto;background:#111;color:#eee'>
-<h1>%s</h1><p>%s</p>
-<video controls style="width:100%%;border-radius:8px" src="/clips/%s/%s"></video>
-<p>Recorded %s · %d sec%s</p>
-</body></html>`, sess.Title, sess.Description, sess.ID, videoSrc, sess.StartedAt.Format(time.RFC1123), sess.DurationSec, badges)
-		return
-	}
-	// File streaming view.
-	dir, _ := sessionDir(id)
-	full := filepath.Join(dir, parts[1])
-	if _, err := os.Stat(full); err != nil {
-		jsonError(w, http.StatusNotFound, "file not found")
-		return
-	}
-	http.ServeFile(w, r, full)
 }
 
 // handleClipUpload accepts a streamed upload from the mobile

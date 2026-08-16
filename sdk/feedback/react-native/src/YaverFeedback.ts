@@ -15,7 +15,6 @@ import {
   getToken,
   getSelectedDeviceId,
   listReachableDevices,
-  mintGuestSdkToken,
   clearToken,
   clearSelectedDeviceId,
   DEFAULT_CONVEX_SITE_URL,
@@ -241,23 +240,7 @@ const flagCache: Map<string, { value: unknown; at: number }> = new Map();
  */
 export class YaverFeedback {
   private static async resolveP2PAuthToken(): Promise<string | null> {
-    if (!config?.authToken) return null;
-    if (!config.preferredDeviceId) return config.authToken;
-    const devices = await listReachableDevices(config.authToken);
-    const all = [...devices.owned, ...devices.shared];
-    const selected = all.find((device) => device.deviceId === config?.preferredDeviceId);
-    if (!selected || !selected.isGuest || selected.accessScope !== 'shared-scoped') {
-      return config.authToken;
-    }
-    if (!selected.hostUserId) {
-      return config.authToken;
-    }
-    const delegated = await mintGuestSdkToken(
-      config.authToken,
-      selected.hostUserId,
-      selected.deviceId,
-    );
-    return delegated.token;
+    return config?.authToken ?? null;
   }
 
   private static async rebuildP2PClient(agentUrl?: string): Promise<void> {
@@ -815,8 +798,7 @@ export class YaverFeedback {
     if (!config?.authToken || !config.preferredDeviceId) return null;
     const preferredDeviceId = config.preferredDeviceId;
     const devices = await listReachableDevices(config.authToken);
-    const all = [...devices.owned, ...devices.shared];
-    return all.find((device) => device.deviceId === preferredDeviceId) ?? null;
+    return devices.owned.find((device) => device.deviceId === preferredDeviceId) ?? null;
   }
 
   /**

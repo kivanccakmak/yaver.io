@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -408,7 +409,7 @@ func truncateForPreview(s string) string {
 // PATH but not at a well-known location is not reported as browser-less.
 func chromeLikelyOnPath() bool {
 	for _, n := range []string{"google-chrome", "chromium", "chromium-browser", "chrome"} {
-		if hostShareCommandExists(n) {
+		if _, err := exec.LookPath(n); err == nil {
 			return true
 		}
 	}

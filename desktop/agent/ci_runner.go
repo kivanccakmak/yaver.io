@@ -19,11 +19,11 @@ import (
 // CIPipeline is the schema of .yaver/ci.yaml. Minimal on purpose — a vibe
 // coder writes a handful of steps, not a 200-line GHA workflow.
 type CIPipeline struct {
-	Name     string   `yaml:"name,omitempty" json:"name,omitempty"`
-	Image    string   `yaml:"image,omitempty" json:"image,omitempty"` // default node:20
-	Steps    []CIStep `yaml:"steps" json:"steps"`
-	OnFail   string   `yaml:"onFail,omitempty" json:"onFail,omitempty"` // "block-deploy" | "warn"
-	Env      map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Name   string            `yaml:"name,omitempty" json:"name,omitempty"`
+	Image  string            `yaml:"image,omitempty" json:"image,omitempty"` // default node:20
+	Steps  []CIStep          `yaml:"steps" json:"steps"`
+	OnFail string            `yaml:"onFail,omitempty" json:"onFail,omitempty"` // "block-deploy" | "warn"
+	Env    map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 }
 
 type CIStep struct {
@@ -33,13 +33,13 @@ type CIStep struct {
 
 // CIRun is a recorded execution.
 type CIRun struct {
-	ID         string     `json:"id" yaml:"id"`
-	ProjectDir string     `json:"projectDir" yaml:"projectDir"`
-	StartedAt  time.Time  `json:"startedAt" yaml:"startedAt"`
-	FinishedAt time.Time  `json:"finishedAt,omitempty" yaml:"finishedAt,omitempty"`
-	Status     string     `json:"status" yaml:"status"` // running, passed, failed
+	ID         string      `json:"id" yaml:"id"`
+	ProjectDir string      `json:"projectDir" yaml:"projectDir"`
+	StartedAt  time.Time   `json:"startedAt" yaml:"startedAt"`
+	FinishedAt time.Time   `json:"finishedAt,omitempty" yaml:"finishedAt,omitempty"`
+	Status     string      `json:"status" yaml:"status"` // running, passed, failed
 	Steps      []CIStepRun `json:"steps" yaml:"steps"`
-	Trigger    string     `json:"trigger" yaml:"trigger"`
+	Trigger    string      `json:"trigger" yaml:"trigger"`
 }
 
 type CIStepRun struct {
@@ -52,7 +52,7 @@ type CIStepRun struct {
 
 var ciMu sync.Mutex
 
-func ciPath(dir string) string { return filepath.Join(dir, ".yaver", "ci.yaml") }
+func ciPath(dir string) string    { return filepath.Join(dir, ".yaver", "ci.yaml") }
 func ciRunsDir(dir string) string { return filepath.Join(dir, ".yaver", "ci-runs") }
 
 // LoadCIPipeline reads .yaver/ci.yaml; returns nil if not present.

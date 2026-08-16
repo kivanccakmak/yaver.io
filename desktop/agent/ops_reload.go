@@ -37,49 +37,10 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsReloadHandler,
-		Streaming:  false, // short operation
-		AllowGuest: true,  // guests with dev-server scope already hit /dev/reload
+		Handler:        opsReloadHandler,
+		Streaming:      false, // short operation
+		AllowCompanion: false,
 	})
-}
-
-// forwardGuestIdentity copies the server-stamped guest headers from the
-// authenticated /ops request onto a request we forge to call a dev handler
-// in-process.
-//
-// Both dev handlers below authorize guests by HEADER, not by argument:
-// requireGuestAccessToActiveDevServer checks the active project against the
-// guest's shared set, and (bundle mode) isolatedGuestDevMutationBlocked
-// refuses a guest configured to require isolation. Both read
-// X-Yaver-GuestUserID and read "" as "the owner is calling" — so a forged
-// request carrying no headers walks through both gates as an owner.
-//
-// This is defence in depth, not a plugged hole: today no guest reaches this
-// handler, because dispatchOps authorizes first (authorizeGuestOpsExecution
-// allows a deploy-scope guest only info/status/deploy, and no other guest
-// scope has /ops on its path allow-list at all). But `reload` is declared
-// AllowGuest:true — "guests with dev-server scope already hit /dev/reload" —
-// so the verb INTENDS to be guest-reachable, and the only thing standing in
-// the way is a separate allow-list in a different file. The day `reload` is
-// added there, the project gate must already hold. It holds now.
-//
-// These values are safe to carry inward because they are not caller-supplied:
-// the auth middleware strips every inbound X-Yaver-Guest* header and re-stamps
-// them from server-resolved state (stripGuestRequestHeaders, httpserver.go).
-func forwardGuestIdentity(dst *http.Request, src http.Header) {
-	if dst == nil || src == nil {
-		return
-	}
-	for _, name := range []string{
-		"X-Yaver-Guest",
-		"X-Yaver-GuestUserID",
-		"X-Yaver-GuestScope",
-		"X-Yaver-GuestAllowedProjects",
-	} {
-		if v := src.Get(name); v != "" {
-			dst.Header.Set(name, v)
-		}
-	}
 }
 
 func opsReloadHandler(c OpsContext, payload json.RawMessage) OpsResult {
@@ -100,7 +61,6 @@ func opsReloadHandler(c OpsContext, payload json.RawMessage) OpsResult {
 	switch mode {
 	case "dev":
 		req, _ := http.NewRequest(http.MethodPost, "/dev/reload", nil)
-		forwardGuestIdentity(req, c.RequestHeaders)
 		rec := newCapturingResponseWriter()
 		c.Server.handleDevServerReload(rec, req)
 		if rec.Status() >= 300 {
@@ -130,7 +90,6 @@ func opsReloadHandler(c OpsContext, payload json.RawMessage) OpsResult {
 		})
 		req, _ := http.NewRequest(http.MethodPost, "/dev/reload-app", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		forwardGuestIdentity(req, c.RequestHeaders)
 		rec := newCapturingResponseWriter()
 		c.Server.handleReloadApp(rec, req)
 		if rec.Status() >= 300 {

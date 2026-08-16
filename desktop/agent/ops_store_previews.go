@@ -545,8 +545,8 @@ func init() {
 			"waitSeconds":          map[string]interface{}{"type": "integer", "description": "How long to wait for Apple's transcode verdict (default 180). Still-transcoding previews are reported as pending, never as done."},
 			"skipPreflight":        map[string]interface{}{"type": "boolean", "description": "Skip the local ffprobe check and let Apple be the only judge."},
 		}, "previewType", "files"),
-		Handler:    storePreviewsSetHandler,
-		AllowGuest: false,
+		Handler:        storePreviewsSetHandler,
+		AllowCompanion: false,
 	})
 }
 

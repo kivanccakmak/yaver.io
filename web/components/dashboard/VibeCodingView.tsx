@@ -122,10 +122,8 @@ function resourceClassFromProjectHints(args: {
   return args.kind === "source" || args.kind === "vibe" ? "relay-source" : "standard";
 }
 
-// react-markdown component overrides shared by every assistant-side
-// surface (final bubble + live streaming bubble). Keeps the visual
-// vocabulary aligned with web/components/ChatWidget.tsx so the support
-// chat and the vibing surface don't diverge.
+// react-markdown component overrides shared by every coding-assistant surface
+// (final bubble + live streaming bubble).
 //
 // `**$ <cmd>**` is the marker readStreamJSON emits for claude bash
 // tool_use events and that opencodeStreamFilter rewrites for opencode
@@ -782,7 +780,7 @@ export default function VibeCodingView({
             // asleep cloud box. The dispatch intent is updated so the
             // backend agrees; the next loop iteration dispatches normally.
             const ownedTarget = devices.find((device) => {
-              if (device.isGuest || device.id === targetDeviceId) return false;
+              if (device.id === targetDeviceId) return false;
               if (!device.online || device.needsAuth) return false;
               const runner = currentRow.params?.runner || selectedRunner;
               if (runner && Array.isArray((device as any).installedRunnerIds) && !(device as any).installedRunnerIds.includes(runner)) {
@@ -1950,7 +1948,7 @@ export default function VibeCodingView({
     setBusy(`Removed ${host}.`);
   }
 
-  async function runGitAction(action: "pull" | "push" | "stash" | "stash-pop" | "commit" | "revert-head") {
+  async function runGitAction(action: "pull" | "sync" | "push" | "stash" | "stash-pop" | "commit" | "revert-head") {
     if (!selectedProject) return;
     try {
       if (action === "commit") {
@@ -1966,6 +1964,16 @@ export default function VibeCodingView({
         setBusy(`Pulling ${selectedProject.name}…`);
         const result = await agentClient.gitPull(selectedProject.path);
         setBusy(result.message || "Pulled latest changes.");
+      } else if (action === "sync") {
+        setBusy(`Syncing ${selectedProject.name} (rebase → push)…`);
+        const result = await agentClient.gitSyncRemote(selectedProject.path);
+        if (result.requiresAgent) {
+          setBusy(`${result.error || "Rebase hit conflicts"} (${result.conflicts?.join(", ") || "files"}). Nothing was pushed. Hand off to a coding agent.`);
+        } else if (!result.ok) {
+          setBusy(result.error || result.output || "Sync failed.");
+        } else {
+          setBusy(`Synced ${selectedProject.name} on ${result.branch}: ${result.actions?.join(", ")} → ${result.hash}.`);
+        }
       } else if (action === "push") {
         setBusy(`Pushing ${selectedProject.name}…`);
         const result = await agentClient.gitPush(selectedProject.path);
@@ -3052,6 +3060,14 @@ export default function VibeCodingView({
                     className="rounded-lg border border-surface-700 px-2.5 py-1.5 text-[11px] text-surface-300 hover:border-surface-600 disabled:opacity-40"
                   >
                     Pull
+                  </button>
+                  <button
+                    onClick={() => void runGitAction("sync")}
+                    disabled={!selectedProject}
+                    className="rounded-lg border border-brand/40 px-2.5 py-1.5 text-[11px] text-brand-300 hover:border-brand/70 disabled:opacity-40"
+                    title="Rebase against origin/<branch> (autostash), then push that origin branch without force. Stops and reports before any push if rebase or autostash restoration conflicts."
+                  >
+                    Sync (rebase → push)
                   </button>
                   <button
                     onClick={() => void runGitAction("push")}

@@ -57,7 +57,7 @@ type buildWebRequest struct {
 }
 
 // handleBuildWebTarget dispatches between the two web compile flows.
-// Owner-only path; guests are blocked at the routing layer.
+// Owner-only path; constrained credentials are blocked at the routing layer.
 func (s *HTTPServer) handleBuildWebTarget(w http.ResponseWriter, r *http.Request, req buildWebRequest) {
 	switch req.Target {
 	case "web-js-bundle":

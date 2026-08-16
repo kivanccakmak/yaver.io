@@ -61,8 +61,8 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsRedroidResourceStatusHandler,
-		AllowGuest: false,
+		Handler:        opsRedroidResourceStatusHandler,
+		AllowCompanion: false,
 	})
 }
 

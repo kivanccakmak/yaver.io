@@ -29,7 +29,7 @@ const ProvisionManifestName = "yaver.provision.yaml"
 
 // ProvisionManifest is the on-disk schema.
 type ProvisionManifest struct {
-	Version int    `yaml:"version"`
+	Version int `yaml:"version"`
 	// Product is the SKU slug registered in Convex (deviceProducts.productId).
 	Product string `yaml:"product"`
 	// Model + Vendor are display strings shown in the claim UI.

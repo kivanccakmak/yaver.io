@@ -9,8 +9,8 @@ import "testing"
 // overlay-SSH, and a 100.96 address must never be claimed as Tailscale.
 func TestMeshVsTailscaleClassification(t *testing.T) {
 	tests := []struct {
-		ip       string
-		mesh     bool
+		ip        string
+		mesh      bool
 		tailscale bool
 	}{
 		// Yaver mesh overlay 100.96.0.0/12 → 100.96–111.x.y
@@ -25,7 +25,7 @@ func TestMeshVsTailscaleClassification(t *testing.T) {
 		// Real LAN / public — neither.
 		{ip: "192.168.1.10", mesh: false, tailscale: false},
 		{ip: "10.0.0.4", mesh: false, tailscale: false},
-		{ip: "100.63.0.1", mesh: false, tailscale: false}, // just below CGNAT
+		{ip: "100.63.0.1", mesh: false, tailscale: false},  // just below CGNAT
 		{ip: "100.128.0.1", mesh: false, tailscale: false}, // just above CGNAT
 		{ip: "8.8.8.8", mesh: false, tailscale: false},
 		{ip: "not-an-ip", mesh: false, tailscale: false},

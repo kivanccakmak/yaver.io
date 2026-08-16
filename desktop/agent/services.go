@@ -180,7 +180,7 @@ func presets() map[string]*DevServiceConfig {
 			Port:   3333,
 			Engine: "umami",
 			Env: map[string]string{
-				"DATABASE_URL": "postgresql://umami:umami@postgres:5432/umami",
+				"DATABASE_URL":  "postgresql://umami:umami@postgres:5432/umami",
 				"DATABASE_TYPE": "postgresql",
 			},
 		},
@@ -193,7 +193,7 @@ func presets() map[string]*DevServiceConfig {
 			Port:   3001,
 			Engine: "logto",
 			Env: map[string]string{
-				"DB_URL":    "postgresql://logto:logto@postgres:5432/logto",
+				"DB_URL":   "postgresql://logto:logto@postgres:5432/logto",
 				"ENDPOINT": "http://localhost:3001",
 			},
 		},
@@ -215,10 +215,10 @@ func presets() map[string]*DevServiceConfig {
 			Port:   5433,
 			Volume: "yaver-pg-replica-data",
 			Env: map[string]string{
-				"POSTGRES_USER":       "postgres",
-				"POSTGRES_PASSWORD":   "dev",
-				"PGUSER":              "postgres",
-				"POSTGRES_DB":         "myapp",
+				"POSTGRES_USER":     "postgres",
+				"POSTGRES_PASSWORD": "dev",
+				"PGUSER":            "postgres",
+				"POSTGRES_DB":       "myapp",
 			},
 			// Command: run base_backup → recovery, then start as replica.
 			// Concrete setup handled by ConfigureReplication below.
@@ -271,9 +271,9 @@ func presets() map[string]*DevServiceConfig {
 			},
 		},
 		"typesense": {
-			Image:  "typesense/typesense:27.1",
-			Port:   8108,
-			Volume: "yaver-typesense-data",
+			Image:   "typesense/typesense:27.1",
+			Port:    8108,
+			Volume:  "yaver-typesense-data",
 			Command: "--data-dir /data --api-key=dev-key",
 			Env: map[string]string{
 				"TYPESENSE_API_KEY": "dev-key",
@@ -542,8 +542,8 @@ func (sm *ServicesManager) Status() ([]ServiceStatus, error) {
 				continue
 			}
 			var s struct {
-				Name      string `json:"Name"`
-				MemUsage  string `json:"MemUsage"`
+				Name     string `json:"Name"`
+				MemUsage string `json:"MemUsage"`
 			}
 			if err := json.Unmarshal([]byte(line), &s); err == nil {
 				parts := strings.SplitN(s.MemUsage, " / ", 2)

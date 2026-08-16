@@ -5,7 +5,7 @@ package main
 // sources (capture card, screen, pushed phone camera) + a layout; a loop grabs
 // the latest frame of each, composites them into ONE image (grid / row / pip),
 // and publishes it as the "scene" pushed source — so it flows through the exact
-// same stream plane (stream_list / stream_snapshot) and guest watch link as any
+// same stream plane (stream_list / stream_snapshot) and signed watch link as any
 // other source, no extra plumbing.
 //
 // Deliberately simple: in-process image compositing (nearest-neighbor scale, no
@@ -68,7 +68,7 @@ func init() {
 		Handler: func(c OpsContext, _ json.RawMessage) OpsResult {
 			return OpsResult{OK: true, Initial: sceneComp.status()}
 		},
-		AllowGuest: true,
+		AllowCompanion: true,
 	})
 }
 

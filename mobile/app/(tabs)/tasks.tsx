@@ -1520,7 +1520,7 @@ interface AgentContextExtras {
   selectedModelId?: string;
   /** Active device descriptor (full object, not just name) for the
    *  preferredDefaultModelForRunner fallback when Task lacks model. */
-  activeDevice?: { id?: string; name?: string | null; hostName?: string | null; os?: string | null };
+  activeDevice?: { id?: string; name?: string | null; os?: string | null };
   /** Signed-in user email — feeds the kivanc-account fallback inside
    *  preferredDefaultModelForRunner. Honest pass-through: any user. */
   userEmail?: string | null;
@@ -1987,7 +1987,7 @@ export default function TasksScreen() {
   const remoteMcpRows = useMemo(() => {
     const rows: Array<{ device: Device; label: string; server: { name: string; url: string; toolCount?: number } }> = [];
     for (const d of devices || []) {
-      if (d.id === activeDevice?.id || d.isGuest) continue;
+      if (d.id === activeDevice?.id) continue;
       for (const s of mcpCatalogByDevice[d.id] || []) {
         rows.push({ device: d, label: (d.name || d.id || "other machine").trim(), server: s });
       }
@@ -1998,7 +1998,7 @@ export default function TasksScreen() {
   const remoteProjectRows = useMemo(() => {
     const rows: Array<{ device: Device; label: string; name: string; gitRemote?: string }> = [];
     for (const d of devices || []) {
-      if (d.id === activeDevice?.id || d.isGuest) continue;
+      if (d.id === activeDevice?.id) continue;
       for (const p of projectCatalogByDevice[d.id] || []) {
         rows.push({
           device: d,

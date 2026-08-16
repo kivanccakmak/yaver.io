@@ -19,8 +19,8 @@ func init() {
 				"enum":        []string{"restart_agent"},
 			},
 		}),
-		Handler:    machineRepairHandler,
-		AllowGuest: false,
+		Handler:        machineRepairHandler,
+		AllowCompanion: false,
 	})
 }
 

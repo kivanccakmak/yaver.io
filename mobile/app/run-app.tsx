@@ -171,7 +171,7 @@ function KanbanBoard({
 }
 
 // run-app — generic READ-ONLY renderer for a Yaver Serverless app on mobile.
-// Mirrors the web RunSharedApp: it reads the project's app.yaml screens + table
+// Reads the project's app.yaml screens + table
 // schema and renders an interactive list view backed by the live /data API.
 // This is the "USE the app" runtime for serverless-lite projects on mobile
 // (distinct from the Hermes path used for full third-party RN code).

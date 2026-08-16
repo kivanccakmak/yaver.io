@@ -24,10 +24,10 @@ func TestClassifyUnsupportedModel_LiveRefusal(t *testing.T) {
 func TestClassifyUnsupportedModel_RefusesToGuess(t *testing.T) {
 	for _, in := range []string{
 		"",
-		"HTTP 401 token_expired",                              // auth, not entitlement
-		"Metro bundler failed: SyntaxError in app/index.tsx",  // a code error
-		"ECONNRESET",                                          // transport
-		"rate limit exceeded, please retry",                   // throttling
+		"HTTP 401 token_expired", // auth, not entitlement
+		"Metro bundler failed: SyntaxError in app/index.tsx", // a code error
+		"ECONNRESET",                        // transport
+		"rate limit exceeded, please retry", // throttling
 	} {
 		if m, _ := classifyUnsupportedModel(in); m != "" {
 			t.Fatalf("must not treat %q as a model-entitlement refusal (got %q)", in, m)

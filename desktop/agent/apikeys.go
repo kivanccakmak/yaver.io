@@ -36,14 +36,14 @@ import (
 
 // APIKeyRecord is one registered key's metadata.
 type APIKeyRecord struct {
-	TokenHash        string `json:"tokenHash"` // sha256 of the raw token
-	Label            string `json:"label"`
-	CreatedAt        string `json:"createdAt"`
-	LastUsedAt       string `json:"lastUsedAt,omitempty"`
-	UsageCount       int64  `json:"usageCount"`
-	RateLimitPerMin  int    `json:"rateLimitPerMin,omitempty"`
-	Disabled         bool   `json:"disabled,omitempty"`
-	Scopes           []string `json:"scopes,omitempty"`
+	TokenHash       string   `json:"tokenHash"` // sha256 of the raw token
+	Label           string   `json:"label"`
+	CreatedAt       string   `json:"createdAt"`
+	LastUsedAt      string   `json:"lastUsedAt,omitempty"`
+	UsageCount      int64    `json:"usageCount"`
+	RateLimitPerMin int      `json:"rateLimitPerMin,omitempty"`
+	Disabled        bool     `json:"disabled,omitempty"`
+	Scopes          []string `json:"scopes,omitempty"`
 }
 
 var apiKeyMu sync.Mutex

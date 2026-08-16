@@ -111,7 +111,7 @@ func TestWebTransportPhaseLadder(t *testing.T) {
 	}
 
 	manifest := map[string]int64{
-		"index.html":          1024,
+		"index.html":           1024,
 		"_expo/static/js/a.js": 50000,
 		"_expo/static/js/b.js": 30000,
 	}
@@ -231,6 +231,7 @@ func TestScanBundleManifestProducesForwardSlashKeys(t *testing.T) {
 //   - it has a status banner the iframe can read
 //   - it loads /dev/hermes-wasm-runtime (the wasm) and
 //     /dev/web-bundle/main.jsbundle (the HBC)
+//
 // Dropping any of those three would silently break the experimental
 // render even though the build still succeeds.
 func TestHermesWasmRunnerHTMLEmitsExpectedShape(t *testing.T) {

@@ -791,8 +791,8 @@ func (m *AnalyticsManager) plausibleEvents(cfg *analyticsConfig, eventName, peri
 	}
 	var resp struct {
 		Results []struct {
-			Name    string `json:"event:name"`
-			Visitors int   `json:"visitors"`
+			Name     string `json:"event:name"`
+			Visitors int    `json:"visitors"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {

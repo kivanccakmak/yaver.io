@@ -18,8 +18,3 @@
 // match. The flag stays as the single emergency kill switch for the whole paid
 // surface.
 export const HIDE_PAID_UI = false;
-
-// Guest/share UI is closed for v1. Backend and agent enforcement are already
-// fail-closed; this flag keeps mobile from advertising flows that Convex and
-// the agent refuse.
-export const ENABLE_GUEST_FEATURES = false;

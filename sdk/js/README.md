@@ -96,22 +96,22 @@ one profile.
 ### Composable ACL — jointly inclusive, never forcing
 
 The team policy is **one layer**. It composes with Yaver's existing layers
-(guest grants, SDK-token scopes, host-share policy, peer ACL, and the user's own
-prefs) by **intersecting only the constraints each layer sets** — an absent
+(owner SDK-token scopes, registered-device ACL, and the user's own prefs) by
+**intersecting only the constraints each layer sets** — an absent
 allowlist never narrows, and no layer is forced onto another:
 
 ```typescript
-import { composeEntitlements, entitlementFromGuest, entitlementFromUser } from 'yaver-sdk';
+import { composeEntitlements, entitlementFromSdkToken, entitlementFromUser } from 'yaver-sdk';
 
-// company allows codex+opencode, but this guest is capped to opencode → codex blocked.
+// Company policy, an owner SDK token, and owner preferences are intersected.
 const handle = await app.resolvedHandle(
   { teamId, workKind: 'app-code' },
   { entitlements: [
-      entitlementFromGuest({ scope: 'full', allowedRunners: ['opencode'] }),
+      entitlementFromSdkToken({ allowedProjects: ['api'] }),
       entitlementFromUser({ allowedProviders: ['ollama'] }),
   ]},
 );
-// handle.effective.allowedRunners === ['opencode']
+// handle.effective.allowedProjects === ['api']
 ```
 
 The effective runner scope is baked into the minted token; the **agent enforces

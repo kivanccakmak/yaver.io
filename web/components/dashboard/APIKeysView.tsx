@@ -133,7 +133,7 @@ export default function APIKeysView() {
       <header>
         <h2 className="text-lg font-semibold">Yaver Tokens</h2>
         <p className="text-xs text-surface-400">
-          npm-style token generation for remote boxes, CI, and app SDKs. Use guest invites for people; use Yaver tokens for machine-to-machine access.
+          Scoped token generation for remote boxes, CI, and app SDKs. Human access is owner-account only.
         </p>
       </header>
 
@@ -143,7 +143,7 @@ export default function APIKeysView() {
             Audit
           </span>
           <p className="text-sm text-surface-200">
-            Yaver is not the same as npm here. npm granular tokens stop at package and org permissions; Yaver also has guest identity, invite codes, per-machine scope, and live runtime policy.
+            Yaver tokens add per-machine scope and live runtime policy to ordinary granular API scopes.
           </p>
         </div>
       </section>
@@ -269,7 +269,7 @@ export default function APIKeysView() {
         </div>
         <div className="mt-3 flex items-center justify-between gap-3">
           <span className="text-xs text-surface-500">
-            Use guest invites for human access. Tokens are better for agents, remote boxes, and CI.
+            Tokens are for agents, remote boxes, app SDKs, and CI—not alternate human access.
           </span>
           <button
             type="button"

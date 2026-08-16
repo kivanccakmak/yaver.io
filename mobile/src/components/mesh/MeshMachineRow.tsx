@@ -22,7 +22,6 @@ export function MeshMachineRow({
   name,
   os,
   online,
-  isGuest,
   meshOn,
   meshIPv4,
   joinedPeer,
@@ -30,12 +29,10 @@ export function MeshMachineRow({
   phase,
   onEnable,
   onOpen,
-  onLeave,
 }: {
   name: string;
   os?: string;
   online: boolean;
-  isGuest?: boolean;
   meshOn: boolean;
   meshIPv4?: string;
   /** The matching /mesh/peers entry, when the box is already a known node. */
@@ -46,12 +43,6 @@ export function MeshMachineRow({
   onEnable: () => void;
   /** Open the node detail screen — only meaningful when the box is a peer. */
   onOpen?: () => void;
-  /**
-   * Guest-only: drop my own access to this box's host. Bound to long-press
-   * rather than a second right-side control, which the layout below
-   * deliberately keeps to one element.
-   */
-  onLeave?: () => void;
 }) {
   const c = useColors();
   const glyph = osGlyph(os);
@@ -65,17 +56,12 @@ export function MeshMachineRow({
     ? ip || "on the mesh"
     : online
       ? "not on the mesh"
-      : isGuest
-        ? "offline · shared"
-        : "offline · power on to enable";
+      : "offline · power on to enable";
 
   return (
     <Pressable
       onPress={canOpen ? onOpen : undefined}
-      onLongPress={onLeave}
-      // Stay pressable when the only available action is the long-press leave,
-      // otherwise a shared box that isn't a mesh peer would be inert.
-      disabled={!canOpen && !onLeave}
+      disabled={!canOpen}
       style={{
         flexDirection: "row",
         alignItems: "center",
@@ -104,20 +90,6 @@ export function MeshMachineRow({
             {glyph ? `${glyph} ` : ""}
             {name}
           </Text>
-          {isGuest ? (
-            <View
-              style={{
-                borderRadius: 6,
-                paddingHorizontal: 6,
-                paddingVertical: 1,
-                backgroundColor: c.border,
-              }}
-            >
-              <Text style={{ color: c.textMuted, fontSize: 10, fontWeight: "700", letterSpacing: 0.4 }}>
-                SHARED
-              </Text>
-            </View>
-          ) : null}
         </View>
         <Text
           style={{ color: meshOn && ip ? "#34d399" : c.textMuted, fontSize: 12, fontFamily: "Menlo" }}

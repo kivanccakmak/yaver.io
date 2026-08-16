@@ -38,26 +38,6 @@ gotest() {
 step "go build (agent) — always"
 (cd desktop/agent && go build ./...) ; check $? "desktop/agent builds"
 
-# ---------------------------------------------------------------- P0
-if want p0; then
-  step "P0.1 guest cannot reach a subscription runner via /tasks"
-  # The fail-open default must be gone: CheckRunner must not return nil for an
-  # empty AllowedRunners without consulting isSubscriptionRunner.
-  gotest 'TestGuestRunner|TestCheckRunner|TestIsSubscriptionRunner|TestGuestTasksRunnerGuard' ; check $? "guest subscription-runner guard tests"
-  grep -qn 'isSubscriptionRunner' desktop/agent/guest_config.go 2>/dev/null \
-    || grep -qn 'isSubscriptionRunner' desktop/agent/httpserver.go 2>/dev/null
-  check $? "isSubscriptionRunner consulted on the /tasks path"
-
-  step "P0.2 guest lane's model is glm-5.2, not the silently-no-op'ing 4.7"
-  # Scoped to the opencode-provider axis. tasks.go's `Model: "glm-4.7"` belongs
-  # to builtinRunners["glm"], which tasks/glm-remove-runner.md deletes — not
-  # ours to touch, so it is deliberately NOT asserted here.
-  absent 'zai-coding-plan/glm-4\.7' desktop/agent
-  check $? "no zai-coding-plan/glm-4.7 pin remains"
-  absent 'openrouter/z-ai/glm-4\.7' desktop/agent
-  check $? "no openrouter/z-ai/glm-4.7 pin remains"
-fi
-
 # ---------------------------------------------------------------- P1
 if want p1; then
   step "P1.1 infer + notify ops verbs exist and are registered"
@@ -84,18 +64,11 @@ fi
 
 # ---------------------------------------------------------------- P2
 if want p2; then
-  step "P2.1 guest routines are per-guest scoped"
-  gotest 'TestGuestRoutine|TestScheduleGuestScope|TestRoutineGuestIsolation' ; check $? "guest routine isolation tests"
-
-  step "P2.2 guest scope default denies"
-  gotest 'TestGuestScopeDefault|TestGuestScopeOrDefault'
-  check $? "unknown/empty guest scope no longer defaults to full"
-
-  step "P2.3 tmux session names carry a user dimension"
+  step "P2.1 tmux session names carry an owner dimension"
   gotest 'TestTmuxSessionName|TestAutorunTmuxSession'
-  check $? "tmux session naming is user-scoped"
+  check $? "tmux session naming is owner-scoped"
 
-  step "P2.4 convex privacy contract still holds for the new rows"
+  step "P2.2 convex privacy contract still holds for the new rows"
   gotest 'TestConvexPrivacy|TestFieldsWeForbid'
   check $? "convex privacy test"
 fi

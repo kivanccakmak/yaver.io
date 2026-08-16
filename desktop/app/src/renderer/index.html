@@ -54,7 +54,6 @@
     .device-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: all 0.15s; }
     .device-card:hover { border-color: var(--accent); background: var(--bg-hover); }
     .device-card.local { border-color: var(--green); border-style: dashed; }
-    .guest-code-row { display: flex; gap: 8px; max-width: 440px; width: 100%; padding: 0 20px; }
 
     /* ── Main layout ───────────────────── */
     .main-screen { flex-direction: column; }
@@ -188,10 +187,6 @@
     <div style="font-size:16px;font-weight:600">Connect to a machine</div>
     <div style="font-size:12px;color:var(--text-secondary)" id="user-greeting"></div>
     <div id="device-grid" class="device-grid"></div>
-    <div class="guest-code-row">
-      <input class="input no-drag" id="guest-code" placeholder="Invite code (e.g. ABC123)" maxlength="6" style="text-align:center;letter-spacing:3px;text-transform:uppercase;font-family:monospace">
-      <button class="btn btn-ghost btn-sm no-drag" onclick="acceptGuestCode()">Join</button>
-    </div>
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-ghost btn-sm no-drag" onclick="refreshDevices()">&#x21BB; Refresh</button>
       <button class="btn btn-ghost btn-sm no-drag" onclick="handleSignOut()" style="color:var(--red)">Sign Out</button>
@@ -335,10 +330,6 @@
           <div class="section"><div class="section-title">AI Runner</div>
             <div id="settings-runners"></div>
           </div>
-          <div class="section"><div class="section-title">Guests</div>
-            <button class="btn btn-ghost btn-sm no-drag" onclick="inviteGuest()" style="width:100%;margin-bottom:6px">+ Invite Guest</button>
-            <div id="settings-guests"></div>
-          </div>
           <div class="section"><div class="section-title">Deploy</div>
             <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeploy('testflight')" style="width:100%;margin-bottom:4px">&#x1F34E; TestFlight</button>
             <button class="btn btn-ghost btn-sm no-drag" onclick="handleDeploy('playstore')" style="width:100%;margin-bottom:4px">&#x1F4E6; Play Store</button>
@@ -478,7 +469,7 @@ async function refreshDevices() {
   // Dedup by hostname, keep latest
   const seen = new Map();
   for (const d of devices) { const k = (d.name||d.deviceId||'').toLowerCase(); const e = seen.get(k); if (!e || (d.lastHeartbeat||0) > (e.lastHeartbeat||0)) seen.set(k, d); }
-  devices = Array.from(seen.values()).filter(d => d.isGuest || d.isOnline);
+  devices = Array.from(seen.values()).filter(d => d.isOnline);
 
   // If local agent found, remove remote entries that are actually this same machine
   const localHostname = (local.found && local.hostname) ? local.hostname.toLowerCase() : null;
@@ -521,14 +512,6 @@ async function refreshDevices() {
   // Remote devices (already filtered out local duplicates)
   for (let i = 0; i < devices.length; i++) {
     const d = devices[i];
-    // Shared rows come from /devices/list with isGuest + host identity attached.
-    const host = d.hostName || d.hostEmail || 'someone';
-    const shared = d.isGuest
-      ? `<span class="badge badge-yellow" title="Shared with you by ${esc(d.hostEmail||host)}">SHARED &middot; ${esc(host)}</span>`
-      : '';
-    const leave = d.isGuest
-      ? `<button class="btn-icon no-drag" onclick="event.stopPropagation();leaveHost(${i})" title="Remove my access to ${esc(host)}'s machines" style="width:22px;height:22px;font-size:10px;color:var(--red)">&#x2715;</button>`
-      : '';
     const online = !!d.isOnline;
     const dot = online ? 'var(--green)' : 'var(--text-muted)';
     const connectBadge = online ? '<span class="badge badge-green">Connect</span>' : '<span class="badge" style="background:rgba(255,255,255,0.08);color:var(--text-muted)">Offline</span>';
@@ -536,15 +519,15 @@ async function refreshDevices() {
     html += `<div class="device-card no-drag"${online ? ` onclick="connectRemote(${i})"` : cardStyle}>
       <div class="dot" style="background:${dot}"></div>
       <div style="flex:1"><div style="font-size:14px;font-weight:500">${esc(d.name||d.deviceId)}</div>
-      <div style="font-size:11px;color:var(--text-muted)">${d.platform||'unknown'}${d.isGuest && d.accessScope ? ' &middot; ' + esc(d.accessScope) : ''}</div></div>
-      ${shared}${connectBadge}${leave}</div>`;
+      <div style="font-size:11px;color:var(--text-muted)">${d.platform||'unknown'}</div></div>
+      ${connectBadge}</div>`;
   }
 
   if (!html) {
     html = `<div style="text-align:center;padding:30px;color:var(--text-muted)">
       <div style="font-size:40px;opacity:0.3;margin-bottom:10px">&#x1F5A5;</div>
       <div style="font-size:13px;margin-bottom:6px">No machines online</div>
-      <div style="font-size:11px;line-height:1.6">Ask your developer to invite you, or:<br><code style="background:var(--bg-hover);padding:2px 6px;border-radius:4px">npm install -g yaver-cli && yaver serve</code></div></div>`;
+      <div style="font-size:11px;line-height:1.6"><code style="background:var(--bg-hover);padding:2px 6px;border-radius:4px">npm install -g yaver-cli && yaver serve</code></div></div>`;
   }
 
   grid.innerHTML = html;
@@ -565,39 +548,6 @@ async function connectRemote(i) {
   const r = await window.yaver.connectDevice(d, relays);
   if (!r.ok) { grid.innerHTML = `<div style="text-align:center;color:var(--red);font-size:12px;padding:20px">${esc(r.error)}</div>`; setTimeout(refreshDevices, 2000); return; }
   enterMain(d, r.mode);
-}
-
-async function acceptGuestCode() {
-  const code = document.getElementById('guest-code').value.trim();
-  if (!code) return;
-  try {
-    const r = await window.yaver.convexRequest('POST', '/guests/accept-code', { inviteCode: code });
-    if (r.ok || r.hostName) { alert('Joined ' + (r.hostName||'host') + "'s machine!"); document.getElementById('guest-code').value = ''; refreshDevices(); }
-    else alert(r.error || 'Invalid code.');
-  } catch(e) { alert(e.message); }
-}
-
-// Guest side of invite/revoke: drop MY access to everything one host shared.
-// Scoped to the host, not the card — the API has no per-device leave.
-async function leaveHost(i) {
-  const d = window._devices?.[i]; if (!d || !d.isGuest) return;
-  const host = d.hostName || d.hostEmail || 'this host';
-  const n = (window._devices || []).filter(x => x.isGuest && sameHost(x, d)).length;
-  const machines = n > 1 ? `all ${n} machines` : 'the machine';
-  if (!confirm(
-    `Remove your access to ${machines} ${host} shared with you?\n\n` +
-    `This drops every machine from ${host} — not just "${d.name||d.deviceId}".\n\n` +
-    `You can be given access again at any time: ${host} re-invites you, you accept the code.`
-  )) return;
-  const r = await window.yaver.leaveSharedAccess({ hostUserId: d.hostUserIdString, hostEmail: d.hostEmail });
-  if (r && r.ok === false) alert(r.error || 'Could not remove access.');
-  refreshDevices();
-}
-
-// Two shared rows are the same host when either identifier matches.
-function sameHost(a, b) {
-  if (a.hostUserIdString && b.hostUserIdString) return a.hostUserIdString === b.hostUserIdString;
-  return !!a.hostEmail && a.hostEmail === b.hostEmail;
 }
 
 function enterMain(device, mode) {
@@ -1174,21 +1124,14 @@ async function loadSettings() {
     document.getElementById('btn-change-pw').classList.toggle('hidden', currentUser.provider !== 'email');
   }
   loadRunners();
-  // Guests
-  try { const d = await window.yaver.listGuests(); const g = d.guests||[];
-    document.getElementById('settings-guests').innerHTML = g.map(x => `<div class="item"><span class="item-name">${esc(x.email)}</span><span class="badge ${x.status==='accepted'?'badge-green':'badge-yellow'}">${x.status}</span><button class="btn-icon no-drag" onclick="revokeGuest('${esc(x.email)}')" style="width:20px;height:20px;font-size:9px;color:var(--red)">&#x2715;</button></div>`).join('');
-  } catch {}
   // Sandbox
   try { const s = await window.yaver.sandboxStatus();
-    document.getElementById('settings-sandbox').innerHTML = `<div class="item"><span class="item-name">Docker</span><span class="badge ${s.docker?'badge-green':'badge-red'}">${s.docker?'available':'not found'}</span></div>
-    <div class="item"><span class="item-name">Guest isolation</span><span class="badge ${s.containerizeGuests?'badge-green':''}">${s.containerizeGuests?'on':'off'}</span></div>`;
+    document.getElementById('settings-sandbox').innerHTML = `<div class="item"><span class="item-name">Docker</span><span class="badge ${s.docker?'badge-green':'badge-red'}">${s.docker?'available':'not found'}</span></div>`;
   } catch { document.getElementById('settings-sandbox').innerHTML = '<div style="font-size:12px;color:var(--text-muted)">Not connected</div>'; }
 }
 
 async function editProfileName() { const n = prompt('New name:', currentUser?.fullName||''); if (!n) return; await window.yaver.updateProfile({ fullName: n }); currentUser.fullName = n; loadSettings(); }
 async function handleChangePw() { const c = prompt('Current password:'); if (!c) return; const n = prompt('New password (8+ chars):'); if (!n||n.length<8) { alert('Min 8 chars.'); return; } const n2 = prompt('Confirm:'); if (n!==n2) { alert('Mismatch.'); return; } const r = await window.yaver.changePassword(c, n); alert(r.ok ? 'Changed.' : (r.error||'Failed.')); }
-async function inviteGuest() { const e = prompt('Guest email:'); if (!e) return; const r = await window.yaver.inviteGuest(e); if (r.inviteCode) { alert('Code: '+r.inviteCode+'\nShare with '+e); loadSettings(); } else alert(r.error||'Failed.'); }
-async function revokeGuest(email) { if (!confirm('Revoke access for '+email+'?')) return; await window.yaver.revokeGuest(email); loadSettings(); }
 async function addRelay() { const url = document.getElementById('relay-url-input').value.trim(); if (!url) return; alert('Relay added: '+url+' (save to config)'); document.getElementById('relay-url-input').value = ''; }
 async function agentClean() { if (confirm('Remove tasks older than 7 days?')) { await window.yaver.agentClean(7); alert('Cleaned.'); } }
 function clearCache() { alert('Cache cleared.'); }

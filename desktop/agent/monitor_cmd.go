@@ -42,11 +42,11 @@ type Monitor struct {
 	ID          string         `json:"id"`
 	Name        string         `json:"name,omitempty"`
 	URL         string         `json:"url"`
-	Interval    string         `json:"interval"` // duration string, e.g. "60s"
+	Interval    string         `json:"interval"`         // duration string, e.g. "60s"
 	Method      string         `json:"method,omitempty"` // default GET
 	Paused      bool           `json:"paused,omitempty"`
-	State       string         `json:"state"` // "up" | "down" | "unknown"
-	Streak      int            `json:"streak"` // consecutive same-state checks
+	State       string         `json:"state"`             // "up" | "down" | "unknown"
+	Streak      int            `json:"streak"`            // consecutive same-state checks
 	History     []MonitorCheck `json:"history,omitempty"` // last 100
 	CreatedAt   string         `json:"createdAt"`
 	LastCheckAt string         `json:"lastCheckAt,omitempty"`

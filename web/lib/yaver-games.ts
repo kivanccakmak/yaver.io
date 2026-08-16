@@ -15,7 +15,7 @@ import {
 
 export type YaverGameGenre = YaverAppCategory;
 export type YaverGameSurface = YaverAppSurface;
-export type YaverGameAuthMode = "required" | "optional" | "guest";
+export type YaverGameAuthMode = "required" | "optional";
 export type YaverGameBillingMode = YaverAppBillingMode;
 export type YaverGameRuntimeMode = Extract<YaverAppRuntimeMode, "first-party" | "invited-developer" | "internal-tool">;
 export type YaverGameAiCapability = YaverAppAiCapability;

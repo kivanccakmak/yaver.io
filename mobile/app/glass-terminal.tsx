@@ -330,11 +330,14 @@ export default function GlassTerminalScreen() {
   const makeVoiceOptions = useCallback(
     (): Omit<CreateVoiceCoreOptions, "listener"> => ({
       surface: "glass",
-      sessionTurn: async (text, choice) => {
+      sessionTurn: async (text, choice, session) => {
         const r = await quicClient.runnerSessionTurn(
           deviceIdRef.current || "",
           text,
           choice,
+          6000,
+          undefined,
+          session,
         );
         return {
           ok: r.ok === true,
@@ -342,6 +345,8 @@ export default function GlassTerminalScreen() {
           runner: r.runner,
           sent: r.sent,
           awaitingChoice: r.awaitingChoice === true,
+          needsChoice: r.needsChoice,
+          available: r.available,
           options: r.options,
           pane: r.pane,
           error: r.error,

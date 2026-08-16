@@ -36,13 +36,13 @@ const (
 
 // AutopilotState is persisted to disk so autopilot survives restarts.
 type AutopilotState struct {
-	Enabled    bool              `json:"enabled"`
-	RunID      string            `json:"runId,omitempty"`
-	StartedAt  *time.Time        `json:"startedAt,omitempty"`
-	Items      []AutopilotItem   `json:"items,omitempty"`
-	TaskID     string            `json:"currentTaskId,omitempty"`
-	TurnCount  int               `json:"turnCount"`
-	TotalCost  float64           `json:"totalCost"`
+	Enabled   bool            `json:"enabled"`
+	RunID     string          `json:"runId,omitempty"`
+	StartedAt *time.Time      `json:"startedAt,omitempty"`
+	Items     []AutopilotItem `json:"items,omitempty"`
+	TaskID    string          `json:"currentTaskId,omitempty"`
+	TurnCount int             `json:"turnCount"`
+	TotalCost float64         `json:"totalCost"`
 }
 
 // AutopilotItem tracks one todo item through the autopilot run.

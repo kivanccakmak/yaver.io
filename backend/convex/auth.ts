@@ -436,8 +436,9 @@ async function mergeUserInto(
     }
   }
 
-  // Guest tables — both hostUserId and guestUserId can match source.
-  const guestDualTables: Array<{ table: any; hostIndex: string; guestIndex: string }> = [
+  // Removed account-sharing tombstones still need reassignment during an
+  // account merge so historical rows do not become orphaned.
+  const legacyDelegationTables: Array<{ table: any; hostIndex: string; guestIndex: string }> = [
     { table: "guestInvitations", hostIndex: "by_hostUserId", guestIndex: "" },
     { table: "guestAccess", hostIndex: "by_hostUserId", guestIndex: "by_guestUserId" },
     { table: "guestUsage", hostIndex: "by_host_guest_date", guestIndex: "" },
@@ -447,7 +448,7 @@ async function mergeUserInto(
     { table: "hostShareInvites", hostIndex: "by_hostUserId", guestIndex: "by_guestUserId" },
     { table: "hostShareSessions", hostIndex: "by_host_status", guestIndex: "by_guest_status" },
   ];
-  for (const { table, hostIndex, guestIndex } of guestDualTables) {
+  for (const { table, hostIndex, guestIndex } of legacyDelegationTables) {
     if (hostIndex) {
       const rows = await ctx.db
         .query(table as any)
@@ -1868,6 +1869,9 @@ export const validateSdkToken = query({
 
     if (!sdkToken) return null;
     if (sdkToken.expiresAt < Date.now()) return null;
+    // Historical delegated SDK credentials represented non-owner access.
+    // They stay invalid even while their tombstone fields remain in schema.
+    if (sdkToken.delegatedGuestUserId) return null;
 
     // Rotation grace: replaced tokens valid for 5 minutes
     if (sdkToken.replacedAt) {
@@ -1885,8 +1889,6 @@ export const validateSdkToken = query({
       provider: user.provider,
       scopes: sdkToken.scopes ?? DEFAULT_SDK_SCOPES,
       allowedCIDRs: sdkToken.allowedCIDRs ?? [],
-      delegatedGuestUserId: sdkToken.delegatedGuestUserId ? String(sdkToken.delegatedGuestUserId) : undefined,
-      delegatedGuestScope: sdkToken.delegatedGuestScope,
       sourceSurface: sdkToken.sourceSurface,
       targetDeviceId: sdkToken.targetDeviceId,
       allowedProjects: sdkToken.allowedProjects ?? [],
@@ -1911,6 +1913,7 @@ export const rotateSdkToken = mutation({
     if (!current) throw new Error("Invalid token");
     if (current.expiresAt < Date.now()) throw new Error("Token expired");
     if (current.replacedAt) throw new Error("Token already rotated");
+    if (current.delegatedGuestUserId) throw new Error("Legacy delegated SDK tokens are invalid; create an owner SDK token");
 
     // Create new token inheriting scopes and allowedCIDRs
     const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000;
@@ -1920,8 +1923,6 @@ export const rotateSdkToken = mutation({
       label: current.label,
       scopes: current.scopes,
       allowedCIDRs: current.allowedCIDRs,
-      delegatedGuestUserId: current.delegatedGuestUserId,
-      delegatedGuestScope: current.delegatedGuestScope,
       sourceSurface: current.sourceSurface,
       targetDeviceId: current.targetDeviceId,
       allowedProjects: current.allowedProjects,

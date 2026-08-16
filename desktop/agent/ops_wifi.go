@@ -7,16 +7,16 @@ import (
 
 func init() {
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_capabilities",
-		Description: "Detect Linux Wi-Fi AP/repeater capabilities from iw/nl80211.",
-		Handler:     opsWiFiCapabilities,
-		AllowGuest:  false,
+		Name:           "wifi_capabilities",
+		Description:    "Detect Linux Wi-Fi AP/repeater capabilities from iw/nl80211.",
+		Handler:        opsWiFiCapabilities,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_status",
-		Description: "Return current Yaver-managed Wi-Fi hotspot/repeater status.",
-		Handler:     opsWiFiStatus,
-		AllowGuest:  false,
+		Name:           "wifi_status",
+		Description:    "Return current Yaver-managed Wi-Fi hotspot/repeater status.",
+		Handler:        opsWiFiStatus,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "wifi_start",
@@ -40,84 +40,84 @@ func init() {
 				"enableNat":    map[string]interface{}{"type": "boolean", "description": "Enable NAT masquerade. Default true."},
 			},
 		},
-		Handler:    opsWiFiStart,
-		AllowGuest: false,
+		Handler:        opsWiFiStart,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_stop",
-		Description: "Stop the Yaver-managed Wi-Fi access point/repeater and clean up Yaver-owned NAT/processes.",
-		Handler:     opsWiFiStop,
-		AllowGuest:  false,
+		Name:           "wifi_stop",
+		Description:    "Stop the Yaver-managed Wi-Fi access point/repeater and clean up Yaver-owned NAT/processes.",
+		Handler:        opsWiFiStop,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_mesh_capabilities",
-		Description: "Detect Linux Wi-Fi mesh substrate support: 802.11s mesh point, wpa_supplicant, BATMAN-adv.",
-		Handler:     opsWiFiMeshCapabilities,
-		AllowGuest:  false,
+		Name:           "wifi_mesh_capabilities",
+		Description:    "Detect Linux Wi-Fi mesh substrate support: 802.11s mesh point, wpa_supplicant, BATMAN-adv.",
+		Handler:        opsWiFiMeshCapabilities,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_mesh_status",
-		Description: "Return current Yaver-managed Wi-Fi mesh status.",
-		Handler:     opsWiFiMeshStatus,
-		AllowGuest:  false,
+		Name:           "wifi_mesh_status",
+		Description:    "Return current Yaver-managed Wi-Fi mesh status.",
+		Handler:        opsWiFiMeshStatus,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_mesh_start",
-		Description: "Start a Yaver-managed Linux 802.11s Wi-Fi mesh. Payload is WiFiMeshConfig. backend can be 80211s or batman.",
-		Handler:     opsWiFiMeshStart,
-		AllowGuest:  false,
+		Name:           "wifi_mesh_start",
+		Description:    "Start a Yaver-managed Linux 802.11s Wi-Fi mesh. Payload is WiFiMeshConfig. backend can be 80211s or batman.",
+		Handler:        opsWiFiMeshStart,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_mesh_stop",
-		Description: "Stop the Yaver-managed Wi-Fi mesh and clean up Yaver-owned wpa_supplicant/BATMAN state.",
-		Handler:     opsWiFiMeshStop,
-		AllowGuest:  false,
+		Name:           "wifi_mesh_stop",
+		Description:    "Stop the Yaver-managed Wi-Fi mesh and clean up Yaver-owned wpa_supplicant/BATMAN state.",
+		Handler:        opsWiFiMeshStop,
+		AllowCompanion: false,
 	})
 
 	// Client management ops (added for APSTA and self-hosted remote dev)
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_list_clients",
-		Description: "List all clients currently connected to the Wi-Fi hotspot.",
-		Handler:     opsWiFiListClients,
-		AllowGuest:  false,
+		Name:           "wifi_list_clients",
+		Description:    "List all clients currently connected to the Wi-Fi hotspot.",
+		Handler:        opsWiFiListClients,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_kick_client",
-		Description: "Kick a specific client from the Wi-Fi hotspot by MAC address. Payload: {\"mac\":\"xx:xx:xx:xx:xx\"}.",
-		Handler:     opsWiFiKickClient,
-		AllowGuest:  false,
+		Name:           "wifi_kick_client",
+		Description:    "Kick a specific client from the Wi-Fi hotspot by MAC address. Payload: {\"mac\":\"xx:xx:xx:xx:xx\"}.",
+		Handler:        opsWiFiKickClient,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_ban_client",
-		Description: "Ban a client from the Wi-Fi hotspot. Payload: {\"mac\":\"xx:xx:xx:xx:xx\",\"durationHours\":int}. Duration of 0 means permanent ban. Kick client if currently connected.",
-		Handler:     opsWiFiBanClient,
-		AllowGuest:  false,
+		Name:           "wifi_ban_client",
+		Description:    "Ban a client from the Wi-Fi hotspot. Payload: {\"mac\":\"xx:xx:xx:xx:xx\",\"durationHours\":int}. Duration of 0 means permanent ban. Kick client if currently connected.",
+		Handler:        opsWiFiBanClient,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_unban_client",
-		Description: "Unban a previously banned client by MAC address. Payload: {\"mac\":\"xx:xx:xx:xx:xx\"}.",
-		Handler:     opsWiFiUnbanClient,
-		AllowGuest:  false,
+		Name:           "wifi_unban_client",
+		Description:    "Unban a previously banned client by MAC address. Payload: {\"mac\":\"xx:xx:xx:xx:xx\"}.",
+		Handler:        opsWiFiUnbanClient,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_get_banned",
-		Description: "List all currently banned clients with their MAC addresses and ban expiry times.",
-		Handler:     opsWiFiGetBannedClients,
-		AllowGuest:  false,
+		Name:           "wifi_get_banned",
+		Description:    "List all currently banned clients with their MAC addresses and ban expiry times.",
+		Handler:        opsWiFiGetBannedClients,
+		AllowCompanion: false,
 	})
 
 	// APSTA configuration ops (added for self-hosted remote dev)
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_set_apsta_config",
-		Description: "Set and persist the APSTA hotspot configuration. Payload is WiFiHotspotConfig JSON. On macOS, custom SSID/password are not supported.",
-		Handler:     opsWiFiSetAPSTAConfig,
-		AllowGuest:  false,
+		Name:           "wifi_set_apsta_config",
+		Description:    "Set and persist the APSTA hotspot configuration. Payload is WiFiHotspotConfig JSON. On macOS, custom SSID/password are not supported.",
+		Handler:        opsWiFiSetAPSTAConfig,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "wifi_get_apsta_config",
-		Description: "Return the currently saved APSTA hotspot configuration, or error if none exists.",
-		Handler:     opsWiFiGetAPSTAConfig,
-		AllowGuest:  false,
+		Name:           "wifi_get_apsta_config",
+		Description:    "Return the currently saved APSTA hotspot configuration, or error if none exists.",
+		Handler:        opsWiFiGetAPSTAConfig,
+		AllowCompanion: false,
 	})
 }
 

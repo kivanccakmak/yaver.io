@@ -20,7 +20,7 @@ func (s *HTTPServer) mcpCloseTmuxSessionsAllMachines() interface{} {
 	var sb strings.Builder
 	count := 0
 	for _, d := range devices {
-		if d.IsGuest || !d.IsOnline || strings.TrimSpace(d.DeviceID) == "" {
+		if !d.IsOnline || strings.TrimSpace(d.DeviceID) == "" {
 			continue
 		}
 		count++

@@ -2,7 +2,7 @@
 // hero for THIS phone, then lists EVERY machine in the account (not just nodes
 // already on the mesh) with its mesh on/off state and a one-tap "Enable mesh"
 // that — back-to-back over P2P — stages an agent self-update and brings mesh up
-// on the box. Access rules + Sharing stay as footer entries. See
+// on the box. Access rules stay as a footer entry. See
 // docs/yaver-mesh-mobile-tailscale-ui-design.md.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,39 +51,7 @@ export default function MeshHomeScreen() {
   const tabletContent = useTabletContentStyle("regular");
   const { token } = useAuth();
   const mesh = useMesh();
-  const { devices, leaveSharedAccess } = useDevice();
-
-  // Long-press on a SHARED WITH ME row. Host-keyed like the endpoint, so the
-  // copy has to say it takes every machine that host shared — not just this
-  // row — and that it's reversible.
-  const confirmLeaveShared = useCallback(
-    (d: Device) => {
-      const hostLabel = d.hostName || d.hostEmail || "that host";
-      Alert.alert(
-        `Remove your access to ${hostLabel}'s machines?`,
-        `You'll lose access to every machine ${hostLabel} shared with you, on all your devices.\n\n${hostLabel} can share again later, and you can accept again.`,
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Remove access",
-            style: "destructive",
-            onPress: async () => {
-              try {
-                const res = await leaveSharedAccess(d);
-                Alert.alert(
-                  "Access removed",
-                  `You no longer have access to ${res.hostName}'s machines.`,
-                );
-              } catch (e: any) {
-                Alert.alert("Error", e?.message || "Failed to remove access");
-              }
-            },
-          },
-        ],
-      );
-    },
-    [leaveSharedAccess],
-  );
+  const { devices } = useDevice();
   const [query, setQuery] = useState("");
 
   const tunnelSupported = isMeshTunnelSupported();
@@ -247,7 +215,7 @@ export default function MeshHomeScreen() {
   // (not parallel) to avoid hammering the relay + each box's self-heal at once.
   const enableAllOnline = useCallback(async () => {
     if (!token || enableAll) return;
-    const targets = machines.filter((d) => d.online && !d.isGuest && !meshOnFor(d));
+    const targets = machines.filter((d) => d.online && !meshOnFor(d));
     if (targets.length === 0) {
       setNotice("All your online machines are already on the mesh.");
       return;
@@ -273,7 +241,7 @@ export default function MeshHomeScreen() {
   const autoEnableRanRef = useRef(false);
   useEffect(() => {
     if (!token || autoEnableRanRef.current) return;
-    const candidates = machines.filter((d) => d.online && !d.isGuest && !meshOnFor(d));
+    const candidates = machines.filter((d) => d.online && !meshOnFor(d));
     if (candidates.length === 0) return;
     autoEnableRanRef.current = true; // once per mount
     let cancelled = false;
@@ -321,19 +289,16 @@ export default function MeshHomeScreen() {
     };
   }, [token, machines, meshOnFor, mesh]);
 
-  const { mine, shared } = useMemo(() => {
+  const mine = useMemo(() => {
     const q = query.trim().toLowerCase();
     const match = (d: Device) =>
       !q || d.name.toLowerCase().includes(q) || (meshIpFor(d) ?? "").includes(q);
     const visible = machines.filter(match);
-    return {
-      mine: visible.filter((d) => !d.isGuest),
-      shared: visible.filter((d) => d.isGuest),
-    };
+    return visible;
   }, [machines, query, meshIpFor]);
 
   const anyEnableable = useMemo(
-    () => machines.some((d) => d.online && !d.isGuest && !meshOnFor(d)),
+    () => machines.some((d) => d.online && !meshOnFor(d)),
     [machines, meshOnFor]
   );
 
@@ -369,7 +334,6 @@ export default function MeshHomeScreen() {
       name={d.name}
       os={d.os}
       online={d.online}
-      isGuest={d.isGuest}
       meshOn={meshOnFor(d)}
       meshIPv4={meshIpFor(d)}
       joinedPeer={joinedById.get(d.id)}
@@ -377,7 +341,6 @@ export default function MeshHomeScreen() {
       phase={phaseById[d.id]}
       onEnable={() => void handleEnableOne(d)}
       onOpen={() => openNode(d.id)}
-      onLeave={d.isGuest ? () => confirmLeaveShared(d) : undefined}
     />
   );
 
@@ -486,9 +449,6 @@ export default function MeshHomeScreen() {
             {mine.length > 0 ? (
               <MachineSection title="MY DEVICES" devices={mine} render={renderRow} />
             ) : null}
-            {shared.length > 0 ? (
-              <MachineSection title="SHARED WITH ME" devices={shared} render={renderRow} />
-            ) : null}
           </>
         )}
 
@@ -497,7 +457,6 @@ export default function MeshHomeScreen() {
         {machines.length > 0 ? (
           <View style={{ gap: 8, marginTop: 4 }}>
             <FooterLink label="Access rules" sub="Who can reach what — ACLs & device tags" onPress={() => router.navigate("/(tabs)/mesh-access" as any)} />
-            <FooterLink label="Sharing" sub="Support a friend · who can access your machines" onPress={() => router.navigate("/(tabs)/mesh-share" as any)} />
           </View>
         ) : null}
       </ScrollView>

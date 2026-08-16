@@ -10,11 +10,11 @@ import (
 
 // SandboxConfig controls command validation before execution.
 type SandboxConfig struct {
-	Enabled          bool     `json:"enabled"`
-	AllowSudo        bool     `json:"allow_sudo,omitempty"`
-	AllowedPaths     []string `json:"allowed_paths,omitempty"`
-	BlockedCommands  []string `json:"blocked_commands,omitempty"`
-	MaxOutputSizeMB  int      `json:"max_output_size_mb,omitempty"`
+	Enabled         bool     `json:"enabled"`
+	AllowSudo       bool     `json:"allow_sudo,omitempty"`
+	AllowedPaths    []string `json:"allowed_paths,omitempty"`
+	BlockedCommands []string `json:"blocked_commands,omitempty"`
+	MaxOutputSizeMB int      `json:"max_output_size_mb,omitempty"`
 }
 
 // DefaultSandboxConfig returns secure defaults.
@@ -105,8 +105,8 @@ var sudoPattern = regexp.MustCompile(`^\s*(sudo\b|su\s|doas\b)`)
 // it closes a real exploitation gap.
 var dangerousAbsolutePaths = []string{
 	"/",
-	"/Users",    // parent of every macOS user home
-	"/home",     // parent of every Linux user home
+	"/Users", // parent of every macOS user home
+	"/home",  // parent of every Linux user home
 	"/root",
 	"/etc",
 	"/var",
@@ -120,8 +120,8 @@ var dangerousAbsolutePaths = []string{
 	"/proc",
 	"/opt",
 	"/srv",
-	"/System",   // macOS
-	"/Library",  // macOS (user and root)
+	"/System",  // macOS
+	"/Library", // macOS (user and root)
 	"/Applications",
 }
 

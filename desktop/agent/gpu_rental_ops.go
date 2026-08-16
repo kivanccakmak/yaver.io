@@ -29,9 +29,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsGPUPlansHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGPUPlansHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "gpu_bind",
@@ -51,9 +51,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsGPUBindHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGPUBindHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "gpu_status",
@@ -68,9 +68,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsGPUStatusHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGPUStatusHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "gpu_destroy",
@@ -86,9 +86,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsGPUDestroyHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGPUDestroyHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

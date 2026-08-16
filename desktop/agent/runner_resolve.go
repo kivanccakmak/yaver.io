@@ -30,8 +30,8 @@ package main
 
 import (
 	"context"
-	osexec "os/exec"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -186,4 +186,3 @@ func loginShellLookup(name string) string {
 	}
 	return path
 }
-

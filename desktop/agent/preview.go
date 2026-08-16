@@ -525,4 +525,5 @@ func sanitizeBranchName(branch string) string {
 	}
 	return s
 }
+
 // hasFile and hasDir are defined in project_actions.go and shared across the package.

@@ -57,8 +57,8 @@ func init() {
 				"body":    map[string]interface{}{"type": "string"},
 			},
 		},
-		AllowGuest: false,
-		Handler:    companionHTTPHandler,
+		AllowCompanion: false,
+		Handler:        companionHTTPHandler,
 	})
 }
 
@@ -198,22 +198,22 @@ type CompanionEngine struct {
 
 // CompanionStatus is the engine's view of one project (P2P payload for the UI).
 type CompanionStatus struct {
-	Project  string                 `json:"project"`
-	Enabled  bool                   `json:"enabled"`
-	Crons    []CompanionCronStatus  `json:"crons"`
-	Services []CompanionSvcStatus   `json:"services"`
-	Warnings []string               `json:"warnings,omitempty"`
+	Project  string                `json:"project"`
+	Enabled  bool                  `json:"enabled"`
+	Crons    []CompanionCronStatus `json:"crons"`
+	Services []CompanionSvcStatus  `json:"services"`
+	Warnings []string              `json:"warnings,omitempty"`
 }
 
 type CompanionCronStatus struct {
-	Name       string `json:"name"`
-	Schedule   string `json:"schedule"`
-	ScheduleID string `json:"scheduleId,omitempty"`
-	Status     string `json:"status"` // scheduled | proposed | completed | failed
+	Name        string `json:"name"`
+	Schedule    string `json:"schedule"`
+	ScheduleID  string `json:"scheduleId,omitempty"`
+	Status      string `json:"status"` // scheduled | proposed | completed | failed
 	LastOutcome string `json:"lastOutcome,omitempty"`
-	NextRunAt  string `json:"nextRunAt,omitempty"`
-	LastRunAt  string `json:"lastRunAt,omitempty"`
-	Proposed   bool   `json:"proposed,omitempty"`
+	NextRunAt   string `json:"nextRunAt,omitempty"`
+	LastRunAt   string `json:"lastRunAt,omitempty"`
+	Proposed    bool   `json:"proposed,omitempty"`
 }
 
 type CompanionSvcStatus struct {

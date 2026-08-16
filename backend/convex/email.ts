@@ -233,7 +233,7 @@ export function accountsMergedHtml(name: string, mergedFrom: string, mergedInto:
   <p style="margin:0 0 16px;color:#444;font-size:15px;">
     We merged <strong>${mergedFrom}</strong> into <strong>${mergedInto}</strong>.
     Everything from ${mergedFrom} — devices, linked providers, settings,
-    projects, guest access, and history — now lives on ${mergedInto}. The
+    projects and history — now lives on ${mergedInto}. The
     old account has been deleted.
   </p>
   <p style="margin:0 0 16px;color:#444;font-size:15px;">
@@ -257,49 +257,4 @@ export function mergeStartedHtml(name: string, targetEmail: string): string {
     "Merge another account" → Cancel.
   </p>`
   );
-}
-
-export function guestInviteHtml(hostName: string, inviteCode: string): string {
-  return `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:520px;margin:0 auto;padding:32px 16px;color:#1a1a1a;">
-  <h2 style="margin:0 0 8px;">You're invited to Yaver</h2>
-  <p style="margin:0 0 20px;color:#666;font-size:15px;">
-    <strong>${hostName}</strong> invited you to access their machine through Yaver.
-  </p>
-
-  <div style="background:#f5f5f5;border-radius:12px;padding:24px;text-align:center;margin:0 0 24px;">
-    <p style="margin:0 0 8px;font-size:13px;color:#666;">Your invite code</p>
-    <p style="margin:0;font-size:32px;font-weight:700;letter-spacing:6px;font-family:monospace;">${inviteCode}</p>
-  </div>
-
-  <p style="font-size:15px;line-height:1.7;margin:0 0 20px;">
-    As a guest, you can:
-  </p>
-
-  <ul style="font-size:14px;line-height:2;color:#333;padding-left:20px;margin:0 0 20px;">
-    <li>Send tasks to AI coding agents running on ${hostName}'s machine</li>
-    <li>Hot reload apps on your phone — same Wi-Fi or remotely over 5G</li>
-    <li>Submit visual feedback with screenshots and voice notes</li>
-    <li>Test apps with push-to-device (React Native)</li>
-    <li>All traffic is P2P — your code never touches our servers</li>
-  </ul>
-
-  <p style="font-size:15px;line-height:1.7;margin:0 0 20px;">
-    <strong>To accept:</strong>
-  </p>
-
-  <ol style="font-size:14px;line-height:2;color:#333;padding-left:20px;margin:0 0 20px;">
-    <li>Download <strong>Yaver</strong> from the <a href="https://apps.apple.com/app/yaver/id6760467669" style="color:#1a1a1a;">App Store</a> or <a href="https://play.google.com/store/apps/details?id=io.yaver.mobile" style="color:#1a1a1a;">Google Play</a></li>
-    <li>Sign in with any account (Apple, Google, or Microsoft)</li>
-    <li>Enter the invite code above</li>
-  </ol>
-
-  <p style="font-size:12px;color:#999;margin:32px 0 0;">
-    This code expires in 2 days. If you didn't expect this, you can safely ignore it.
-  </p>
-</body>
-</html>`.trim();
 }

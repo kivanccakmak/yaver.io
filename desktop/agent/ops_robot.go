@@ -353,7 +353,7 @@ func parseRobot(payload json.RawMessage) robotPayload {
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 	reg("robot_status", "Robot cell status (position, homed, tool, e-stop, camera, profile)", func(c OpsContext, _ json.RawMessage) OpsResult {
 		ctrl, deny := robotForOps()

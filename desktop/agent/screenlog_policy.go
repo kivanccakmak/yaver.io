@@ -15,12 +15,7 @@ package main
 //     allowed — your machines, your call — but every remote start is
 //     audited and (optionally) notified.
 //
-//   - Delegated / guest (someone you invited): gated at the existing
-//     guest-scope middleware (guest_scope.go). /screenlog/* is on the
-//     FULL-scope allow-list only — feedback-only and read-only support
-//     guests physically cannot reach it.
-//
-//   - Yaver mesh peer (a different account you peered with): the ACL
+//   - Yaver mesh peer: the ACL
 //     layer (acl.go CallPeerTool) delivers the tools/call; this policy
 //     requires the peer id to be in AllowedPeers, so a mesh peering does
 //     NOT implicitly grant screen access — it must be granted per peer.
@@ -97,7 +92,7 @@ func saveScreenlogPolicy(pol ScreenlogPolicy) error {
 type screenlogCaller struct {
 	Remote bool   // non-loopback request
 	Mesh   bool   // arrived via a mesh peer tool-call
-	PeerID string // mesh/guest peer identity, if any
+	PeerID string // mesh peer identity, if any
 }
 
 // screenlogEnforce decides whether a control request is allowed. Returns

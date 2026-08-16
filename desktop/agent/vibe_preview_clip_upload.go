@@ -38,8 +38,9 @@ const vibeClipUploadMaxBytes = 50 * 1024 * 1024
 // handleVibePreviewClipUpload — POST /vibing/preview/clip/upload
 //
 // Headers:
-//   X-Yaver-Clip-ID:    required, must match an existing recording clip
-//   Content-Type:       video/mp4 (or octet-stream — we write bytes either way)
+//
+//	X-Yaver-Clip-ID:    required, must match an existing recording clip
+//	Content-Type:       video/mp4 (or octet-stream — we write bytes either way)
 //
 // Body: raw MP4 bytes. Multipart is overkill for a single-file upload;
 // raw body keeps the mobile native code simpler (one URLSession upload

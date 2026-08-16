@@ -40,8 +40,8 @@ func (f *fakeBurstBackend) Rebind(ep, model string) error {
 
 type fakeClock struct{ t time.Time }
 
-func (c *fakeClock) Now() time.Time            { return c.t }
-func (c *fakeClock) advance(d time.Duration)   { c.t = c.t.Add(d) }
+func (c *fakeClock) Now() time.Time          { return c.t }
+func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func newTestAutoscaler(be GPUBurstBackend, now func() time.Time) *GPUAutoscaler {
 	return NewGPUAutoscaler(GPUAutoscalerPolicy{
@@ -72,13 +72,13 @@ func TestAutoscalerFullBurstThenReap(t *testing.T) {
 	be := &fakeBurstBackend{endpointReadyAfter: 2}
 	a := newTestAutoscaler(be, clk.Now)
 
-	mustTick(t, a, 10, ActNone)          // aboveCount=1
-	mustTick(t, a, 12, ActProvision)     // aboveCount=2 ≥ sustain → provision
+	mustTick(t, a, 10, ActNone)      // aboveCount=1
+	mustTick(t, a, 12, ActProvision) // aboveCount=2 ≥ sustain → provision
 	if be.provisionCalls != 1 {
 		t.Fatalf("provisionCalls=%d", be.provisionCalls)
 	}
-	mustTick(t, a, 12, ActWaitEndpoint)  // endpoint call #1 not ready
-	mustTick(t, a, 12, ActBurst)         // endpoint call #2 ready → rebind to salad
+	mustTick(t, a, 12, ActWaitEndpoint) // endpoint call #1 not ready
+	mustTick(t, a, 12, ActBurst)        // endpoint call #2 ready → rebind to salad
 	if len(be.rebinds) != 1 || be.rebinds[0] != "https://fake.salad.cloud/v1" {
 		t.Fatalf("expected rebind to salad, got %v", be.rebinds)
 	}
@@ -86,7 +86,7 @@ func TestAutoscalerFullBurstThenReap(t *testing.T) {
 		t.Fatalf("state=%s, want bursted", a.Snapshot().State)
 	}
 
-	mustTick(t, a, 0, ActNone)        // belowCount=1
+	mustTick(t, a, 0, ActNone)       // belowCount=1
 	mustTick(t, a, 0, ActDrainStart) // belowCount=2 → drain
 	mustTick(t, a, 0, ActNone)       // drain window not elapsed yet
 

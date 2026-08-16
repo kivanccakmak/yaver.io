@@ -44,7 +44,7 @@ type FleetDeployDevice struct {
 	Platform     string                 `json:"platform"` // os/arch from heartbeat (e.g. "darwin/arm64")
 	IsLocal      bool                   `json:"isLocal"`  // this is the agent serving the request
 	IsOnline     bool                   `json:"isOnline"`
-	Probed       bool                   `json:"probed"`             // false if the doctor probe failed (offline / unreachable)
+	Probed       bool                   `json:"probed"` // false if the doctor probe failed (offline / unreachable)
 	ProbeError   string                 `json:"probeError,omitempty"`
 	Capabilities []FleetDeployTargetCap `json:"capabilities"`
 }
@@ -187,20 +187,20 @@ func orderFleetTargets(targets []string) []string {
 // reason. Empty string means OK. Order of priority — most user-actionable
 // first:
 //
-//   1. Project not found on this machine (multi-machine deploy wedge —
-//      cheap check, surface BEFORE toolchain so users don't waste time
-//      reading "missing xcodebuild" when the real fix is "use a different
-//      box"). Top of the list because the mobile pane's whole point is
-//      "pick which box runs the deploy."
-//   2. Platform skip (xcodebuild on Linux).
-//   3. Tool missing entirely.
-//   4. Tool present but DeepValid=false (Xcode CLT stub vs real Xcode,
-//      Java < 17). Promoted above missing secrets because broken-tool
-//      errors are typically harder for the user to diagnose than a
-//      missing vault entry.
-//   5. Secret missing.
-//   6. Secret present but PathValid=false (vault has APP_STORE_KEY_PATH
-//      but the .p8 file is gone).
+//  1. Project not found on this machine (multi-machine deploy wedge —
+//     cheap check, surface BEFORE toolchain so users don't waste time
+//     reading "missing xcodebuild" when the real fix is "use a different
+//     box"). Top of the list because the mobile pane's whole point is
+//     "pick which box runs the deploy."
+//  2. Platform skip (xcodebuild on Linux).
+//  3. Tool missing entirely.
+//  4. Tool present but DeepValid=false (Xcode CLT stub vs real Xcode,
+//     Java < 17). Promoted above missing secrets because broken-tool
+//     errors are typically harder for the user to diagnose than a
+//     missing vault entry.
+//  5. Secret missing.
+//  6. Secret present but PathValid=false (vault has APP_STORE_KEY_PATH
+//     but the .p8 file is gone).
 func firstBlockerFromReport(rep BuildDoctorReport) string {
 	if rep.OK {
 		return ""
@@ -443,11 +443,6 @@ func (s *HTTPServer) handleFleetDeployOptions(w http.ResponseWriter, r *http.Req
 	remotes := make([]DeviceInfo, 0, len(devices))
 	for _, d := range devices {
 		if d.DeviceID == "" || d.DeviceID == s.deviceID {
-			continue
-		}
-		if d.IsGuest {
-			// Guest grants give the caller access TO that host, not the
-			// other way round — they don't run our deploys.
 			continue
 		}
 		remotes = append(remotes, d)

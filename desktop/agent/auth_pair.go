@@ -541,44 +541,15 @@ func (s *HTTPServer) handlePairEncrypted(w http.ResponseWriter, r *http.Request)
 // the QR, and blocks until a token arrives or the window
 // expires. Called as `yaver auth pair`.
 //
-// Subcommands:
-//
-//	list               — print every paired token (masked)
-//	revoke <id|label>  — remove a paired token
-//	(no subcommand)    — start a new pairing session
-//
 // Flags on the default path:
 //
-//	--replace   — overwrite cfg.AuthToken instead of appending
-//	              to the paired-tokens ledger. Legacy single-
-//	              user behavior.
-//	--label NAME — tag the incoming token for easy revoke.
 //	--ttl 10m    — pairing window.
 func runAuthPair(args []string) {
-	// Sub-subcommands: list + revoke.
-	if len(args) > 0 {
-		switch args[0] {
-		case "list":
-			listPairedTokensCmd()
-			return
-		case "revoke":
-			if len(args) < 2 {
-				fmt.Fprintln(os.Stderr, "usage: yaver auth pair revoke <label|hash-prefix>")
-				os.Exit(1)
-			}
-			n := RevokePairedToken(args[1])
-			if n == 0 {
-				fmt.Fprintf(os.Stderr, "no paired token matched %q\n", args[1])
-				os.Exit(2)
-			}
-			fmt.Printf("✓ revoked %d paired token(s)\n", n)
-			return
-		}
+	if len(args) > 0 && (args[0] == "list" || args[0] == "revoke") {
+		fmt.Fprintln(os.Stderr, "additional-account pairing has been removed; pairing installs the primary owner token")
+		return
 	}
-
 	ttl := 10 * time.Minute
-	replace := false
-	label := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--ttl":
@@ -588,23 +559,17 @@ func runAuthPair(args []string) {
 				}
 				i++
 			}
-		case "--replace":
-			replace = true
-		case "--label":
-			if i+1 < len(args) {
-				label = args[i+1]
-				i++
-			}
 		case "--no-qr":
 			// Per-invocation QR opt-out. Same effect as
 			// YAVER_NO_QR=1 for this process. Useful for the
 			// "I'm pairing over SSH and don't want block-art
 			// in my scrollback" case.
 			_ = os.Setenv("YAVER_NO_QR", "1")
+		case "--replace", "--label":
+			fmt.Fprintln(os.Stderr, "additional-account pairing options have been removed; pairing installs the primary owner token")
+			return
 		}
 	}
-	_ = replace
-	_ = label
 	session, err := StartPairingSession(ttl)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pair: %v\n", err)
@@ -681,83 +646,22 @@ func runAuthPair(args []string) {
 		os.Exit(1)
 	}
 
-	// Persist the token. Two modes:
-	//
-	// - --replace (legacy / single-user): overwrite
-	//   cfg.AuthToken so the target's primary session is this
-	//   one. Use when a solo dev wants to migrate their token
-	//   across machines.
-	//
-	// - default (multi-user): append to the paired-tokens
-	//   ledger. The target keeps its existing primary token
-	//   AND accepts this new one from the HTTP auth middleware.
-	//   Multiple phones / accounts can stack up on the same
-	//   remote Mac mini this way.
+	// Pairing installs the owner's token as the machine's sole account token.
+	// Additional-account ledgers were removed with shared-machine access.
 	cfg, err := LoadConfig()
 	if err != nil || cfg == nil {
 		cfg = &Config{}
 	}
-	if replace || cfg.AuthToken == "" {
-		if session.ReceivedURL != "" {
-			cfg.ConvexSiteURL = session.ReceivedURL
-		}
-		if err := SetAuthToken(cfg, session.ReceivedToken); err != nil {
-			fmt.Fprintf(os.Stderr, "save config: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("✓ paired — primary auth token installed")
-		fmt.Println()
-		startServeIfStopped()
-		return
+	if session.ReceivedURL != "" {
+		cfg.ConvexSiteURL = session.ReceivedURL
 	}
-
-	sourceHost := ""
-	if session.ReceivedUserID != "" {
-		sourceHost = session.ReceivedUserID
-	}
-	if err := AddPairedToken(session.ReceivedToken, label, session.ReceivedURL, sourceHost); err != nil {
-		fmt.Fprintf(os.Stderr, "add paired token: %v\n", err)
+	if err := SetAuthToken(cfg, session.ReceivedToken); err != nil {
+		fmt.Fprintf(os.Stderr, "save config: %v\n", err)
 		os.Exit(1)
 	}
-	labelMsg := ""
-	if label != "" {
-		labelMsg = " (label: " + label + ")"
-	}
-	fmt.Printf("✓ paired%s — added to paired-tokens ledger (%d total)\n",
-		labelMsg, len(ListPairedTokens()))
-	fmt.Println("  The primary owner's token is still active; this added user can hit")
-	fmt.Println("  the agent alongside them. Revoke with `yaver auth pair revoke <label>`.")
+	fmt.Println("✓ paired — primary owner token installed")
 	fmt.Println()
 	startServeIfStopped()
-}
-
-// listPairedTokensCmd prints every accepted paired token in a
-// terminal-friendly form. Tokens are masked — the stored
-// ledger has the real bearer, but `list` only shows the
-// fingerprint so a shoulder-surfer at a coffee shop can't
-// copy one off the screen.
-func listPairedTokensCmd() {
-	tokens := ListPairedTokens()
-	if len(tokens) == 0 {
-		fmt.Println("(no paired tokens yet)")
-		return
-	}
-	for _, t := range tokens {
-		lastUse := "never"
-		if t.LastUsedAt != "" {
-			lastUse = t.LastUsedAt
-		}
-		source := t.SourceHost
-		if source == "" {
-			source = "(unknown)"
-		}
-		label := t.Label
-		if label == "" {
-			label = "(no label)"
-		}
-		fmt.Printf("  %s  %-20s  source=%s  added=%s  last-used=%s\n",
-			t.TokenHash[:8], label, source, t.AddedAt, lastUse)
-	}
 }
 
 // runAuthSend is the source-side CLI. `yaver auth send <code>

@@ -206,7 +206,6 @@ export async function startMockAgent(opts?: { token?: string }): Promise<MockAge
       machine: { name: "mock", platform: "linux", arch: "amd64", deviceId: "mock-device", isOnline: true },
       metrics: { cpuPct: 5, ramPct: 40, ramUsed: 4e9, ramTotal: 16e9, diskPct: 30, diskUsed: 120e9, diskTotal: 500e9, cores: 8, uptime: 1000, hostname: "mock" },
       capabilities: { terminal: true, mcp: true, devServices: true, systemServices: false, agentShutdown: true, hostReboot: false },
-      sharing: { isShared: false, pendingGuests: 0, acceptedGuests: 0 },
       sandbox: { enabledMode: "off", imageReady: false, docker: false, imageName: "yaver-sandbox" },
       packageManagers: ["apt-get", "snap", "npm"],
       binaries: [{ name: "git", path: "/usr/bin/git", manager: "system" }],

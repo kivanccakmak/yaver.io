@@ -58,10 +58,10 @@ func TestClipTruncatesWithEllipsis(t *testing.T) {
 
 func TestHumanElapsed(t *testing.T) {
 	cases := map[time.Duration]string{
-		500 * time.Millisecond: "500ms",
-		2 * time.Second:        "2s",
-		59 * time.Second:       "59s",
-		1 * time.Minute:        "1m00s",
+		500 * time.Millisecond:        "500ms",
+		2 * time.Second:               "2s",
+		59 * time.Second:              "59s",
+		1 * time.Minute:               "1m00s",
 		2*time.Minute + 5*time.Second: "2m05s",
 	}
 	for d, want := range cases {

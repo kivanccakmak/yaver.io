@@ -14,12 +14,10 @@ package main
 //     dir. Run is reachable via GetRun and ListRuns.
 //   - Disk persistence: Start writes meta.json; reload via a fresh
 //     RunnerStore picks the run back up; in-progress flag is reset.
-//   - Guest filter: GetRun and ListRuns hide runs from a different
-//     guestUserID.
 //   - Shell exec: runJobShell against /bin/sh -c "echo hi" returns OK
 //     with the line on the tail; non-zero exit is reported; timeout
 //     fires within bounds.
-//   - composeRunnerEnv: jobEnv overrides parent env, guest sandbox
+//   - composeRunnerEnv: jobEnv overrides parent env while the runner sandbox
 //     drops arbitrary vars but keeps PATH.
 //   - LocalCapabilities: emits the canonical labels (any, os:*, arch:*).
 
@@ -158,7 +156,7 @@ func TestRunnerStoreRunLifecycle(t *testing.T) {
 	s.Append(rec.ID, "second line")
 	s.Finish(rec.ID, 0, false)
 
-	final, ok := s.GetRun(rec.ID, "")
+	final, ok := s.GetRun(rec.ID)
 	if !ok {
 		t.Fatalf("GetRun lost the record")
 	}
@@ -200,7 +198,7 @@ func TestRunnerStoreRingBufferEvicts(t *testing.T) {
 		s.Finish(r.ID, 0, false)
 		ids = append(ids, r.ID)
 	}
-	if got := len(s.ListRuns("", "", 0)); got != 3 {
+	if got := len(s.ListRuns("", 0)); got != 3 {
 		t.Fatalf("ListRuns size after eviction = %d; want 3", got)
 	}
 	// Oldest two evicted; their on-disk dirs gone.
@@ -211,7 +209,7 @@ func TestRunnerStoreRingBufferEvicts(t *testing.T) {
 	}
 	// Newest three still present in memory + disk.
 	for _, id := range ids[2:] {
-		if _, ok := s.GetRun(id, ""); !ok {
+		if _, ok := s.GetRun(id); !ok {
 			t.Errorf("expected run %s to be present", id)
 		}
 	}
@@ -228,7 +226,7 @@ func TestRunnerStoreReloadFromDisk(t *testing.T) {
 	// fresh store opens the same on-disk root and rehydrates the run
 	// via loadRuns() in NewRunnerStore.
 	fresh := NewRunnerStore(10)
-	loaded, ok := fresh.GetRun(r.ID, "")
+	loaded, ok := fresh.GetRun(r.ID)
 	if !ok {
 		t.Fatalf("reloaded store lost the run (runRoot=%s)", fresh.runRoot)
 	}
@@ -237,36 +235,6 @@ func TestRunnerStoreReloadFromDisk(t *testing.T) {
 	}
 	if loaded.InProgress {
 		t.Errorf("reload should clear InProgress")
-	}
-}
-
-func TestRunnerStoreGuestFilter(t *testing.T) {
-	s := newTestStore(t)
-	rA := s.Start(RunnerRun{JobName: "a", TriggeredBy: "guestA"})
-	s.Finish(rA.ID, 0, false)
-	rB := s.Start(RunnerRun{JobName: "b", TriggeredBy: "guestB"})
-	s.Finish(rB.ID, 0, false)
-	rOwner := s.Start(RunnerRun{JobName: "c", TriggeredBy: "owner"})
-	s.Finish(rOwner.ID, 0, false)
-
-	// Owner sees everything.
-	if got := s.ListRuns("", "", 0); len(got) != 3 {
-		t.Errorf("owner ListRuns size = %d; want 3", len(got))
-	}
-
-	// guestA sees only their own.
-	got := s.ListRuns("", "guestA", 0)
-	if len(got) != 1 || got[0].JobName != "a" {
-		t.Errorf("guestA ListRuns = %#v", got)
-	}
-
-	// guestB cannot fetch guestA's run by id.
-	if _, ok := s.GetRun(rA.ID, "guestB"); ok {
-		t.Error("guestB should not see guestA's run")
-	}
-	// guestA can fetch their own run by id.
-	if _, ok := s.GetRun(rA.ID, "guestA"); !ok {
-		t.Error("guestA should see their own run")
 	}
 }
 
@@ -284,7 +252,7 @@ func TestRunJobShellEcho(t *testing.T) {
 	if _, err := s.AddJob(job); err != nil {
 		t.Fatalf("AddJob: %v", err)
 	}
-	final, err := runJobShell(context.Background(), s, job, "owner", false, nil)
+	final, err := runJobShell(context.Background(), s, job, "owner", nil)
 	if err != nil {
 		t.Fatalf("runJobShell: %v", err)
 	}
@@ -305,7 +273,7 @@ func TestRunJobShellNonZero(t *testing.T) {
 	}
 	s := newTestStore(t)
 	job := RunnerJob{Name: "fail", Kind: RunnerJobShell, Command: "exit 7"}
-	final, err := runJobShell(context.Background(), s, job, "owner", false, nil)
+	final, err := runJobShell(context.Background(), s, job, "owner", nil)
 	if err != nil {
 		t.Fatalf("runJobShell: %v", err)
 	}
@@ -324,7 +292,7 @@ func TestRunJobShellTimeout(t *testing.T) {
 	s := newTestStore(t)
 	job := RunnerJob{Name: "slow", Kind: RunnerJobShell, Command: "sleep 5", TimeoutSec: 1}
 	start := time.Now()
-	final, err := runJobShell(context.Background(), s, job, "owner", false, nil)
+	final, err := runJobShell(context.Background(), s, job, "owner", nil)
 	if err != nil {
 		t.Fatalf("runJobShell: %v", err)
 	}
@@ -340,13 +308,12 @@ func TestRunJobShellTimeout(t *testing.T) {
 }
 
 func TestComposeRunnerEnvJobOverridesEverything(t *testing.T) {
-	// No vault here — we only assert the explicit job env and the
-	// guest sandbox of parent env. Vault overlay is exercised by the
-	// vault tests already.
+	// No vault here — we only assert the explicit job env. Vault overlay
+	// is exercised by the vault tests already.
 	t.Setenv("MY_ALREADY_SET", "from-parent")
 	jobEnv := map[string]string{"MY_JOB_VAR": "from-job", "MY_ALREADY_SET": "from-job"}
 
-	got := composeRunnerEnv(nil, "", jobEnv, false)
+	got := composeRunnerEnv(nil, "", jobEnv)
 	have := map[string]string{}
 	for _, kv := range got {
 		eq := strings.IndexByte(kv, '=')
@@ -360,26 +327,6 @@ func TestComposeRunnerEnvJobOverridesEverything(t *testing.T) {
 	}
 	if have["MY_ALREADY_SET"] != "from-job" {
 		t.Errorf("job env should override parent: %q", have["MY_ALREADY_SET"])
-	}
-}
-
-func TestComposeRunnerEnvGuestSandboxesParentEnv(t *testing.T) {
-	t.Setenv("UNSAFE_TOKEN", "leaky-secret")
-	t.Setenv("PATH", "/usr/bin")
-	got := composeRunnerEnv(nil, "", nil, true /* isGuest */)
-	have := map[string]string{}
-	for _, kv := range got {
-		eq := strings.IndexByte(kv, '=')
-		if eq <= 0 {
-			continue
-		}
-		have[kv[:eq]] = kv[eq+1:]
-	}
-	if _, leaked := have["UNSAFE_TOKEN"]; leaked {
-		t.Error("guest env must not inherit arbitrary parent vars")
-	}
-	if have["PATH"] != "/usr/bin" {
-		t.Errorf("PATH should be inherited for guests, got %q", have["PATH"])
 	}
 }
 

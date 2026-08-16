@@ -222,8 +222,8 @@ func decideUpdateWindow(now time.Time, latestVersion string, busy []updateBusyRe
 	}
 }
 
-// summarizeBusy renders the reasons as one human clause: "2 coding tasks and a
-// support session are running".
+// summarizeBusy renders the reasons as one human clause such as "2 coding
+// tasks and a dev server are running".
 func summarizeBusy(busy []updateBusyReason) string {
 	if len(busy) == 0 {
 		return "nothing"
@@ -278,16 +278,6 @@ func registerDefaultUpdateBusyProbes(taskMgr *TaskManager) {
 			}
 		})
 	}
-
-	// A support session is a person watching their machine over the wire. A
-	// restart drops them with no explanation, which is the exact "silent
-	// serve" experience this repo keeps paying to remove.
-	RegisterUpdateBusyProbe("support", func() updateBusyReason {
-		if activeSupportSnapshot() == nil {
-			return updateBusyReason{}
-		}
-		return updateBusyReason{Kind: "support", Count: 1, Detail: "a support session is live"}
-	})
 
 	// A live vibe capture means somebody is looking at a preview right now.
 	// Restarting mid-capture kills the browser and the frames stop, which reads

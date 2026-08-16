@@ -24,8 +24,8 @@ func TestOpsCloudCheckoutRegistered(t *testing.T) {
 	if spec.Streaming {
 		t.Error("cloud_checkout should not be streaming")
 	}
-	if spec.AllowGuest {
-		t.Error("cloud_checkout must not be guest-allowed (it spends/auths as the owner)")
+	if spec.AllowCompanion {
+		t.Error("cloud_checkout must not be companion-allowed (it spends/auths as the owner)")
 	}
 }
 
@@ -43,7 +43,7 @@ func TestOpsCloudStatusRegistered(t *testing.T) {
 	if !ok || spec.Handler == nil {
 		t.Fatal("cloud_status ops verb not registered / no handler")
 	}
-	if spec.AllowGuest {
-		t.Error("cloud_status must not be guest-allowed (authed-as-owner proxy)")
+	if spec.AllowCompanion {
+		t.Error("cloud_status must not be companion-allowed (authed-as-owner proxy)")
 	}
 }

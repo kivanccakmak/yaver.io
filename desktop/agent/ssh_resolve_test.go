@@ -47,7 +47,7 @@ func TestIsYaverHTTPRelayHost(t *testing.T) {
 		{host: "yaver.io", want: false},
 		{host: "relay.yaver.io", want: false},
 		{host: "public.yaver.io", want: true}, // shared relay gateway — never ssh
-		{host: "test.yaver.io", want: false},                 // not a UUID label
+		{host: "test.yaver.io", want: false},  // not a UUID label
 		{host: "12345678-1234-1234-1234-12345678abcd.example.com", want: false},
 		{host: "yaver-test-ephemeral", want: false},
 		{host: "157.180.114.179", want: false},
@@ -70,7 +70,7 @@ func TestBareHostNoPort(t *testing.T) {
 		want string
 	}{
 		{in: "157.180.114.179:18080", want: "157.180.114.179"}, // the bug
-		{in: "157.180.114.179", want: "157.180.114.179"},        // bare host untouched
+		{in: "157.180.114.179", want: "157.180.114.179"},       // bare host untouched
 		{in: "example-host:22", want: "example-host"},
 		{in: "example-host", want: "example-host"},
 		{in: "[::1]:18080", want: "::1"},

@@ -34,8 +34,8 @@ func resolvePrimaryDeviceID(ctx context.Context, s *HTTPServer) (string, error) 
 // agent-side flows need them — keep the struct narrow so unrelated
 // shape changes don't require recompiling the parser.
 type userSettingsRow struct {
-	PrimaryDeviceID        string `json:"primaryDeviceId"`
-	PrimaryRunnerByDevice  []struct {
+	PrimaryDeviceID       string `json:"primaryDeviceId"`
+	PrimaryRunnerByDevice []struct {
 		DeviceID string `json:"deviceId"`
 		RunnerID string `json:"runnerId"`
 		Model    string `json:"model,omitempty"`

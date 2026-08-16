@@ -12,8 +12,8 @@ func TestOpsGitPushRegistered(t *testing.T) {
 	if !ok || spec.Handler == nil {
 		t.Fatal("git_push ops verb not registered / no handler")
 	}
-	if spec.AllowGuest {
-		t.Error("git_push must not be guest-allowed (it moves credentials)")
+	if spec.AllowCompanion {
+		t.Error("git_push must not be companion-allowed (it moves credentials)")
 	}
 }
 
@@ -37,8 +37,8 @@ func TestOpsGitConnectRegistered(t *testing.T) {
 		if !ok || spec.Handler == nil {
 			t.Fatalf("%s ops verb not registered / no handler", v)
 		}
-		if spec.AllowGuest {
-			t.Errorf("%s must not be guest-allowed (OAuth → credentials)", v)
+		if spec.AllowCompanion {
+			t.Errorf("%s must not be companion-allowed (OAuth → credentials)", v)
 		}
 	}
 }

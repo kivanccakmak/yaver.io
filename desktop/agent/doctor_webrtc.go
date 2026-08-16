@@ -24,13 +24,13 @@ import (
 // webrtc --json`. Stable shape — the dashboard depends on field
 // names. Extend by adding fields, never by renaming.
 type WebRTCDoctorReport struct {
-	Platform     string                 `json:"platform"`
-	Arch         string                 `json:"arch"`
-	HostClass    string                 `json:"hostClass"`
-	AgentVersion string                 `json:"agentVersion"`
-	Checks       []WebRTCDoctorCheck    `json:"checks"`
-	Targets      map[string]bool        `json:"targets"`
-	NextSteps    []string               `json:"nextSteps,omitempty"`
+	Platform     string              `json:"platform"`
+	Arch         string              `json:"arch"`
+	HostClass    string              `json:"hostClass"`
+	AgentVersion string              `json:"agentVersion"`
+	Checks       []WebRTCDoctorCheck `json:"checks"`
+	Targets      map[string]bool     `json:"targets"`
+	NextSteps    []string            `json:"nextSteps,omitempty"`
 }
 
 // WebRTCDoctorCheck is one OK/missing line in the report. Detail is
@@ -42,10 +42,11 @@ type WebRTCDoctorCheck struct {
 }
 
 // runDoctorWebRTC is the CLI entry point. Flags:
-//   --json       structured output (one line, no headers)
-//   --install    after probing, run `yaver install remote-runtime`
-//                to fix what it can. Idempotent — already-installed
-//                tools are skipped.
+//
+//	--json       structured output (one line, no headers)
+//	--install    after probing, run `yaver install remote-runtime`
+//	             to fix what it can. Idempotent — already-installed
+//	             tools are skipped.
 func runDoctorWebRTC(args []string) {
 	wantJSON := false
 	wantInstall := false

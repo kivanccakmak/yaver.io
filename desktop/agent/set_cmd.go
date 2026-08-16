@@ -347,9 +347,6 @@ func runSetEmailOAuthRemote(ctx context.Context, opts emailOAuthSetOptions) erro
 	if err != nil {
 		return err
 	}
-	if dev.IsGuest {
-		return fmt.Errorf("refusing remote emailOauth setup on shared/guest device %s", dev.Name)
-	}
 	remoteArgs := []string{
 		"yaver", "set", "emailOauth",
 		"--email", opts.Email,

@@ -26,10 +26,10 @@
 //
 // ── Auth ─────────────────────────────────────────────────────────────────────
 //
-// No new secret. `/dev/reload` is registered under `authSDKOrGuest` in
+// No new secret. `/dev/reload` is registered under `authSDK` in
 // desktop/agent/httpserver.go — the same middleware that already admits the
 // bearer this SDK sends with its feedback upload — and the scope-limited
-// `guest-reload` SDK token already lists the route. Nothing widens.
+// `reload` SDK token already lists the route. Nothing widens.
 
 /// Stable identifier for each action the overlay can render.
 enum ReloadActionId { hot, full }

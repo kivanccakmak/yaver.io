@@ -52,14 +52,6 @@ type QualityReport = {
   android?: { caught?: number; fixed?: number; passed?: boolean; bugs?: any[]; flows?: any[] };
   summary?: string[];
 };
-type GrowPlan = {
-  coveredCount?: number;
-  uncovered?: { suggestedName: string; route: string; file: string }[];
-  applied?: boolean;
-  authorPrompt?: string;
-  taskId?: string;
-};
-
 export default function WebTestsPanel({ initialDir = "" }: { initialDir?: string }) {
   const [dir, setDir] = useState(initialDir);
   const [token, setToken] = useState("");
@@ -85,7 +77,6 @@ export default function WebTestsPanel({ initialDir = "" }: { initialDir?: string
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [report, setReport] = useState<Report | null>(null);
-  const [grow, setGrow] = useState<GrowPlan | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -118,7 +109,7 @@ export default function WebTestsPanel({ initialDir = "" }: { initialDir?: string
   });
 
   const run = async () => {
-    setBusy(true); setMsg(null); setReport(null); setGrow(null); setQualityReport(null);
+    setBusy(true); setMsg(null); setReport(null); setQualityReport(null);
     try {
       const verb = mode === "chromedp" ? "project_test_run" : mode === "playwright-native" ? "playwright_native_run" : "playwright_run";
       const r = await agentClient.callOps(verb, mode === "playwright-native" ? nativePayload() : browserPayload());
@@ -235,7 +226,7 @@ export default function WebTestsPanel({ initialDir = "" }: { initialDir?: string
   };
 
   const runQuality = async () => {
-    setBusy(true); setMsg(null); setReport(null); setGrow(null); setQualityReport(null);
+    setBusy(true); setMsg(null); setReport(null); setQualityReport(null);
     try {
       const r = await agentClient.callOps("talos_quality_run", {
         browserMode: mode,
@@ -299,16 +290,6 @@ export default function WebTestsPanel({ initialDir = "" }: { initialDir?: string
         }
       }, 3000);
     } catch (e: any) { setMsg(String(e?.message || e)); setBusy(false); }
-  };
-
-  const doGrow = async () => {
-    setBusy(true); setMsg(null);
-    try {
-      const r = await agentClient.callOps("project_test_grow", { dir: dir || undefined, apply: true, author: true });
-      if ((r as any)?.error) setMsg((r as any).error);
-      else setGrow((r.initial as GrowPlan) || null);
-    } catch (e: any) { setMsg(String(e?.message || e)); }
-    setBusy(false);
   };
 
   const installDeps = async () => {
@@ -431,9 +412,6 @@ export default function WebTestsPanel({ initialDir = "" }: { initialDir?: string
         <button onClick={run} disabled={busy || running} className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60">
           {running ? "Running…" : mode === "playwright-native" ? "Run Native Playwright" : mode === "playwright-yaml" ? "Run Playwright YAML" : "Run Web Tests"}
         </button>
-        <button onClick={doGrow} disabled={busy || running} className="rounded border border-neutral-700 bg-neutral-900 px-4 py-2 text-sm font-medium text-neutral-200 disabled:opacity-60">
-          🌱 Grow Tests
-        </button>
         <button onClick={installDeps} disabled={busy || running} title="Install ffmpeg, chromium, node, playwright, redroid once" className="rounded border border-amber-700 bg-amber-950 px-4 py-2 text-sm font-medium text-amber-300 disabled:opacity-60">
           🔧 Install test tools
         </button>
@@ -548,17 +526,6 @@ export default function WebTestsPanel({ initialDir = "" }: { initialDir?: string
         </div>
       )}
 
-      {grow && (
-        <div className="rounded bg-neutral-900 border border-neutral-800 p-3 space-y-1">
-          <div className="font-medium">🌱 Self-grow plan</div>
-          <div className="text-xs text-neutral-400">{grow.coveredCount ?? 0} covered · {(grow.uncovered?.length ?? 0)} uncovered route(s){grow.applied ? " · ledger updated" : ""}</div>
-          {grow.taskId && <div className="text-xs text-green-400">🤖 runner authoring specs (task {grow.taskId})</div>}
-          {(grow.uncovered || []).slice(0, 30).map((u, i) => (
-            <div key={i} className="text-xs text-neutral-200">• {u.suggestedName} <span className="text-neutral-500">({u.route})</span></div>
-          ))}
-          <div className="text-xs text-neutral-500 mt-1">The Yaver runner authors these as new specs — no hand-written YAML.</div>
-        </div>
-      )}
     </div>
   );
 }

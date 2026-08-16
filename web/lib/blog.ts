@@ -128,13 +128,6 @@ export const blogPosts: BlogPost[] = [
       "A plain-language explanation of what Yaver is building for Unity: feedback inside the game, self-hosted iteration, tests, builds, relaunches, and remote supervision on your own machines.",
   },
   {
-    slug: "yaver-relay-shared-boxes",
-    title: "Yaver Relay, Shared Boxes, and the Real Trust Boundary",
-    date: "2026-04-22",
-    description:
-      "How a host can put one Yaver box behind Yaver Relay, share that box with guests, and keep Yaver as the actual authorization boundary.",
-  },
-  {
     slug: "yaver-pi-image",
     title: "Announcing the Yaver Raspberry Pi 5 Dev-Node Image",
     date: "2026-04-19",

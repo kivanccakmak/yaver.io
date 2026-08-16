@@ -1,4 +1,11 @@
-# Yaver Remote Test Runner — Self-Growing, Feature-Based, AI-Authored
+# Yaver Remote Test Runner — Feature-Based, User-Authored
+
+> **Current status (2026-08-16): automatic test growth was removed.** The
+> automatic task-completion hook, `project_test_grow` ops/MCP verb, and the
+> planner implementation and mobile/web Grow controls were removed. Stale MCP
+> callers receive an explicit removal error. Manual test runs, reports, artifacts,
+> Playwright/Chromedp/Redroid execution, and user-authored specs remain. The
+> design below is historical context, not an active execution contract.
 
 > **Goal (user, 2026-06-16):** From the Yaver **mobile app + web UI Projects tab**, point at a
 > **remote PC** and have the **Yaver runner** author, run, and **continuously grow** web + mobile
@@ -31,10 +38,10 @@ one auth gap, an ops verb, two UI surfaces, the AI test-author loop, and a highl
 | Web QA panel + machine picker pattern | `web/components/dashboard/QAPanel.tsx`, `ProjectsView.tsx`, `lib/agent-client.ts:callOps` | ✅ |
 | **Cookie/session auth for web specs** (`cookies:` block, CDP `SetCookie`, `${ENV}`) | `testkit/spec.go` + `runner.go:seedCookies` | ✅ **added 2026-06-16** |
 
-**Gaps to build:** (1) testkit as an **ops verb** (today MCP/CLI only), (2) **project-aware** test
+**Historical gaps:** (1) testkit as an **ops verb**, (2) **project-aware** test
 routing (resolve project → repo → `yaver-tests/` → remote host), (3) **Projects→Tests UI** on
 mobile + web, (4) **highlights** report viewer over the frames, (5) the **AI test-author loop**
-(self-growing specs), (6) optional **Playwright** driver (chromedp covers web today).
+(removed self-growing specs), (6) optional **Playwright** driver (chromedp covers web today).
 
 ---
 
@@ -56,34 +63,13 @@ monotonic and de-duplicated.
 
 ---
 
-## 2. Self-growing, AI-authored specs (the key point)
+## 2. Removed: self-growing, AI-authored specs
 
-The Yaver **runner** (claude/codex/opencode on the remote PC) is both **author** and **executor**.
-During vibe-coding, after the runner ships a change it runs a **test-author step**:
-
-```
-vibe-code change ──► diff + route/component map ──► test-author step:
-   1. read coverage ledger (.coverage.json) — what's already specced
-   2. for each NEW/CHANGED route|component|feature with no spec:
-        synthesize a *.test.yaml Feature (selectors from the just-written DOM/testids,
-        assertions from the acceptance intent of the change)
-   3. append/refresh specs, update ledger, never delete green coverage
-   4. run the new + impacted specs on the remote PC; attach video
-   5. if a spec is flaky/red on a correct app, self-heal selector (testkit_self_heal_selector)
-```
-
-Mechanics (reuse-first):
-- The author step is a **runner sub-prompt** (a `playbook`) invoked by the agent loop, not new
-  infra. Input = `git diff` + `project_context` + ledger; output = spec files written into
-  `yaver-tests/`.
-- Trigger points: (a) end of each vibe-code task, (b) the **ops verb** `project_test_grow` (manual
-  "grow my tests"), (c) a schedule (`schedule_task`) for nightly coverage expansion.
-- **Third-party projects:** identical — `project_context` infers stack/routes; the author step
-  needs only the repo + a base URL (+ auth env). No per-project code. `data-testid` backfill is
-  itself a suggested vibe-code change the runner can make to raise determinism.
-- Guardrails: specs are **append/refresh-only** for green coverage; a red spec on a known-good app
-  triggers self-heal, not deletion; the ledger caps runaway growth (one Feature per route/component
-  until asked to deepen).
+The automatic author loop described by the original design is gone. Yaver does
+not inspect task diffs to synthesize specs, write a coverage ledger, schedule a
+test-author sub-prompt, or grow tests after a coding task. There is no planner,
+schedule hook, placement hook, UI control, or callable ops verb for this flow.
+Manual test runs and explicitly user-authored specs remain supported.
 
 ---
 
@@ -138,24 +124,21 @@ The frames + per-step results already exist; the highlights layer is presentatio
 `testkit/runner.go` (`seedCookies` via CDP). `go build ./testkit` clean.
 
 **P1 — Project-aware ops verbs ✅** `desktop/agent/ops_testkit.go`: `project_test_specs`,
-`project_test_run`, `project_test_report`, `project_test_grow`, `project_test_artifact`. Runs
+`project_test_run`, `project_test_report`, `project_test_artifact`. Runs
 `testkit.RunSuite` in a `studioJobs` job; env-injection (`${ENV}` secrets) serialized under
 `testkitEnvMu`. Web runs where the agent runs → remote PC = `OpsRequest.machine` routing.
 
-**P2 — Self-growing author loop ✅** `desktop/agent/testkit_grow.go`: `growTestPlan` scans Next/Expo
-routes, diffs the `.coverage.json` ledger, returns the author plan + prompt. `project_test_grow
-author:true` enqueues the runner (`taskMgr.CreateTask`) to write the specs. **Zero-touch:**
-`maybeGrowTestsAfterTask` is chained into `TaskManager.OnTaskDone` (main.go), so every successful
-vibe-code task on a project with `yaver-tests/` auto-authors specs for newly-uncovered routes —
-recursion-guarded (skips its own `testkit-grow` tasks). Monotonic, never deletes green coverage.
-Unit-tested (`testkit_grow_test.go`, green).
+**P2 — Self-growing author loop DISABLED (2026-08-15).** The planner source is
+retained as inert historical code, but it has no registered ops/MCP verb, no
+task-completion hook, and no UI caller. `ops_testkit_placement_test.go` guards
+the registry so the feature cannot silently reappear from MCP.
 
 **P3 — Mobile Projects→Tests ✅** `mobile/app/project-tests.tsx` + `mobile/src/lib/testkitClient.ts`
 (mirror `qaClient.ts`) + `apps.tsx` action-sheet "🧪 Tests" entry → `/project-tests`. Remote-PC
 picker = `useDevice()`. Plays per-Feature mp4 clips (expo-av) + screenshots (data-URI), deps banner.
 
 **P4 — Web Projects→Tests ✅** `web/components/dashboard/WebTestsPanel.tsx` + quality-tab mount in
-`web/app/dashboard/page.tsx`. Feature highlights + grow + "Install test tools" via `agentClient.callOps`.
+`web/app/dashboard/page.tsx`. Feature highlights + "Install test tools" via `agentClient.callOps`.
 
 **P5 — Highlights ✅** Per-Feature ffmpeg clip + combined reel in `ops_testkit.go`
 (`stitchFramesToMP4`/`concatMP4`), served by `project_test_artifact` (base64), played in both UIs.

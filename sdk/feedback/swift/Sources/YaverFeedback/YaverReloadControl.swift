@@ -89,8 +89,8 @@ extension YaverFeedback {
     /// Every failure path yields `.failed` with a named cause.
     ///
     /// Auth: the SAME bearer used for the feedback POST. `/dev/reload` is
-    /// registered under `authSDKOrGuest` on the agent and is already inside
-    /// the `guest-reload` SDK-token scope — no new secret, no widened gate.
+    /// registered under `authSDK` on the agent and is already inside the
+    /// `reload` SDK-token scope — no new secret, no widened gate.
     public static func reload(
         _ mode: ReloadWireMode = .fast,
         snapshot: DevServerSnapshot? = nil,

@@ -48,9 +48,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsMobilePlatformMatrixHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMobilePlatformMatrixHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "mobile_platform_deploy_plan",
@@ -64,9 +64,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsMobilePlatformDeployPlanHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMobilePlatformDeployPlanHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

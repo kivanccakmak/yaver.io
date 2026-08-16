@@ -124,7 +124,7 @@ export default function UnityFeedbackSdkBlogPage() {
         <section>
           <h2 className="mb-3 text-xl font-semibold text-surface-100">Why this matters for a studio</h2>
           <p>
-            A studio can use the same package, but point it at a stronger shared machine, a rented
+            A studio can use the same package, but point it at a stronger owner-controlled machine, a rented
             GPU box, or a private runner with a local model. That can reduce outside AI spend and
             keep more of the workflow on infrastructure the team already controls.
           </p>

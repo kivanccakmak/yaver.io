@@ -114,8 +114,8 @@ func init() {
 			"adapter":             map[string]interface{}{"type": "string", "description": "Optional domain adapter/MCP server hint."},
 			"dataset":             map[string]interface{}{"type": "string"},
 		}, "source"),
-		Handler:    collectionPlanHandler,
-		AllowGuest: false,
+		Handler:        collectionPlanHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "collection_plan_apply",
@@ -134,8 +134,8 @@ func init() {
 			"adapter":             map[string]interface{}{"type": "string"},
 			"dataset":             map[string]interface{}{"type": "string"},
 		}, "source"),
-		Handler:    collectionPlanApplyHandler,
-		AllowGuest: false,
+		Handler:        collectionPlanApplyHandler,
+		AllowCompanion: false,
 	})
 }
 

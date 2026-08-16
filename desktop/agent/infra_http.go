@@ -32,13 +32,6 @@ type InfraRelaySummary struct {
 	PasswordRequired bool   `json:"passwordRequired"`
 }
 
-type InfraSharingSummary struct {
-	IsShared       bool   `json:"isShared"`
-	AccessScope    string `json:"accessScope,omitempty"`
-	PendingGuests  int    `json:"pendingGuests"`
-	AcceptedGuests int    `json:"acceptedGuests"`
-}
-
 type InfraCapabilities struct {
 	Terminal       bool `json:"terminal"`
 	MCP            bool `json:"mcp"`
@@ -54,7 +47,6 @@ type InfraSummary struct {
 	DevServices  []ServiceStatus         `json:"devServices,omitempty"`
 	Network      []InfraNetworkInterface `json:"network,omitempty"`
 	Relays       []InfraRelaySummary     `json:"relays,omitempty"`
-	Sharing      InfraSharingSummary     `json:"sharing"`
 	Sandbox      ContainerSandboxSummary `json:"sandbox"`
 	Capabilities InfraCapabilities       `json:"capabilities"`
 	// Why reboot is unavailable, and exactly what granting it would take. The UI
@@ -81,7 +73,6 @@ func (s *HTTPServer) infraSummary(ctx context.Context) InfraSummary {
 		DevServices:     infraDevServices(workDir),
 		Network:         infraNetworkInterfaces(),
 		Relays:          infraRelaySummary(),
-		Sharing:         infraSharingSummary(),
 		Sandbox:         s.sandboxSummary(),
 		Capabilities:    infraCapabilities(),
 		RebootGrant:     currentRebootGrantState(),
@@ -198,27 +189,6 @@ func infraRelaySummary() []InfraRelaySummary {
 		return out[i].Source < out[j].Source
 	})
 	return out
-}
-
-func infraSharingSummary() InfraSharingSummary {
-	summary := InfraSharingSummary{}
-	cfg, err := LoadConfig()
-	if err != nil || cfg == nil || strings.TrimSpace(cfg.ConvexSiteURL) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
-		return summary
-	}
-	guests, err := FetchGuestList(cfg.ConvexSiteURL, cfg.AuthToken)
-	if err != nil {
-		return summary
-	}
-	for _, guest := range guests {
-		switch guest.Status {
-		case "accepted":
-			summary.AcceptedGuests++
-		case "pending":
-			summary.PendingGuests++
-		}
-	}
-	return summary
 }
 
 func infraCapabilities() InfraCapabilities {

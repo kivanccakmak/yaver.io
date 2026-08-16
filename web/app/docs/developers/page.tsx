@@ -1897,12 +1897,6 @@ CLI Agent ◄──QUIC──────────────── Relay (:
             code, no AI output, no logs are stored. Everything AI-related flows
             peer-to-peer between mobile and desktop agent.
           </Prose>
-          <Prose>
-            One narrow exception: guest-sharing config may store selected
-            project names for the allowlist UX. That is metadata only. It does
-            not include repo contents or project runtime data.
-          </Prose>
-
           <div className="space-y-4">
             <div className="card">
               <h4 className="mb-2 text-sm font-medium text-surface-200">

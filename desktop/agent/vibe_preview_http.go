@@ -2,7 +2,7 @@ package main
 
 // vibe_preview_http.go — HTTP handlers for /vibing/preview/*.
 //
-// Mounted under /vibing/* so the existing guest-vibing scope prefix
+// Mounted under /vibing/* so the owner SDK vibing scope prefix
 // (httpserver.go scopePathPrefixes) covers reads automatically. Mutating
 // endpoints (start/stop) still gate on full owner auth.
 //

@@ -134,9 +134,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsGPUAutoscaleStartHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGPUAutoscaleStartHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "gpu_autoscale_status",
@@ -146,9 +146,9 @@ func init() {
 			"properties":           map[string]interface{}{"key": map[string]interface{}{"type": "string"}},
 			"additionalProperties": false,
 		},
-		Handler:    opsGPUAutoscaleStatusHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGPUAutoscaleStatusHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "gpu_autoscale_stop",
@@ -159,9 +159,9 @@ func init() {
 			"properties":           map[string]interface{}{"key": map[string]interface{}{"type": "string"}},
 			"additionalProperties": false,
 		},
-		Handler:    opsGPUAutoscaleStopHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGPUAutoscaleStopHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

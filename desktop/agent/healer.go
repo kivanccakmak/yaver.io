@@ -143,21 +143,21 @@ type supervisedTask struct {
 	restarts     atomic.Uint64
 	skippedTicks atomic.Uint64
 
-	mu                sync.RWMutex
-	registeredAt      time.Time // set on Register; used for stall detection before first tick
-	lastTickAt        time.Time
-	lastOKAt          time.Time
-	lastErrorAt       time.Time
-	lastErrorText     string
-	lastPanicAt       time.Time
-	lastPanicStack    string
-	lastTickDuration  time.Duration
-	maxTickDuration   time.Duration
-	stopped           bool
-	stalled           bool // edge state — true while in stalled window
-	panicWindowStart  time.Time
-	panicWindowCount  int
-	skipTicksRemain   int
+	mu               sync.RWMutex
+	registeredAt     time.Time // set on Register; used for stall detection before first tick
+	lastTickAt       time.Time
+	lastOKAt         time.Time
+	lastErrorAt      time.Time
+	lastErrorText    string
+	lastPanicAt      time.Time
+	lastPanicStack   string
+	lastTickDuration time.Duration
+	maxTickDuration  time.Duration
+	stopped          bool
+	stalled          bool // edge state — true while in stalled window
+	panicWindowStart time.Time
+	panicWindowCount int
+	skipTicksRemain  int
 
 	cancel context.CancelFunc
 }
@@ -213,15 +213,15 @@ func NewTaskSupervisor(parent context.Context) *TaskSupervisor {
 // Register adds a task. Safe to call before or after Start(); tasks added
 // after Start() begin running immediately on their own goroutine.
 //
-//   name     — unique label. Re-registering with the same name replaces
-//              the previous task (useful during `yaver reload` flows).
-//   interval — how often the task's fn runs. Minimum 10ms; lower
-//              values are clamped silently. The real floor is set by
-//              scheduler latency anyway.
-//   fn       — the task body. Should respect ctx for cancellation.
-//   runNow   — if true, fire fn immediately before waiting for the first
-//              tick. Matches what several existing tickers already do
-//              (heartbeat, state sync).
+//	name     — unique label. Re-registering with the same name replaces
+//	           the previous task (useful during `yaver reload` flows).
+//	interval — how often the task's fn runs. Minimum 10ms; lower
+//	           values are clamped silently. The real floor is set by
+//	           scheduler latency anyway.
+//	fn       — the task body. Should respect ctx for cancellation.
+//	runNow   — if true, fire fn immediately before waiting for the first
+//	           tick. Matches what several existing tickers already do
+//	           (heartbeat, state sync).
 func (s *TaskSupervisor) Register(name string, interval time.Duration, runNow bool, fn TaskFunc) {
 	if interval < 10*time.Millisecond {
 		interval = 10 * time.Millisecond
@@ -665,11 +665,12 @@ func initSupervisor(ctx context.Context) *TaskSupervisor {
 // Kept package-private by choice: every call site is in desktop/agent/.
 //
 // Example (convex_state_sync.go):
-//     SupervisedGo("convex-state-sync", 60*time.Second, true,
-//         func(ctx context.Context) error {
-//             globalConvexSync.syncAll(ctx)
-//             return nil
-//         })
+//
+//	SupervisedGo("convex-state-sync", 60*time.Second, true,
+//	    func(ctx context.Context) error {
+//	        globalConvexSync.syncAll(ctx)
+//	        return nil
+//	    })
 func SupervisedGo(name string, interval time.Duration, runNow bool, fn TaskFunc) {
 	supervisor().Register(name, interval, runNow, fn)
 }

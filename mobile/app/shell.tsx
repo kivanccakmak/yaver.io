@@ -259,7 +259,7 @@ export default function ShellScreen() {
 
   const closeAllMachineSessions = useCallback(() => {
     if (closingSessions) return;
-    const targets = devices.filter((d) => d.online && !d.isGuest && !d.needsAuth);
+    const targets = devices.filter((d) => d.online && !d.needsAuth);
     if (targets.length === 0) {
       Alert.alert("No online machines", "No online owned machines are available.");
       return;
@@ -354,7 +354,7 @@ export default function ShellScreen() {
     );
   }
 
-  if (activeDevice.needsAuth && !activeDevice.isGuest) {
+  if (activeDevice.needsAuth) {
     return (
       <View style={{ flex: 1, backgroundColor: c.bg, paddingTop: insets.top + 16, paddingHorizontal: 16 }}>
         <AppBackButton onPress={() => router.back()} />

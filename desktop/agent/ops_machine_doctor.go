@@ -56,8 +56,8 @@ func init() {
 				"description": "Per-leg dial+response budget. Default 4000. Legs run in parallel, so total ≈ this, not N×this.",
 			},
 		}),
-		Handler:    machineDoctorHandler,
-		AllowGuest: false,
+		Handler:        machineDoctorHandler,
+		AllowCompanion: false,
 	})
 }
 
@@ -124,7 +124,6 @@ type targetVerdict struct {
 	Hosting         string   `json:"hosting,omitempty"` // managed|byo|self-hosted|shared
 	Managed         bool     `json:"managed,omitempty"`
 	MachineStatus   string   `json:"machineStatus,omitempty"`
-	AccessScope     string   `json:"accessScope,omitempty"`
 	QuicHost        string   `json:"quicHost,omitempty"`
 	QuicPort        int      `json:"quicPort,omitempty"`
 	LocalIPs        []string `json:"localIps,omitempty"`
@@ -343,9 +342,6 @@ func targetFromDevice(target *DeviceInfo) *targetVerdict {
 		return nil
 	}
 	hosting := deviceHostingLabel(*target)
-	if target.IsGuest && !strings.HasPrefix(hosting, "shared") {
-		hosting = "shared"
-	}
 	t := &targetVerdict{
 		DeviceID:        target.DeviceID,
 		Name:            target.Name,
@@ -354,7 +350,6 @@ func targetFromDevice(target *DeviceInfo) *targetVerdict {
 		Hosting:         hosting,
 		Managed:         target.Managed,
 		MachineStatus:   target.MachineStatus,
-		AccessScope:     target.AccessScope,
 		QuicHost:        target.QuicHost,
 		QuicPort:        target.QuicPort,
 		LocalIPs:        append([]string(nil), target.LocalIps...),

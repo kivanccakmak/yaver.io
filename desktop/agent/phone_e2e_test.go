@@ -101,34 +101,4 @@ func TestFullSandboxLoop_E2E(t *testing.T) {
 		t.Fatal("receive SSE stream should not expose Convex wiring for serverless-lite")
 	}
 
-	// 4. Share the original project → join code carries the Yaver Serverless
-	// data path the friend should use on the host origin.
-	w = httptest.NewRecorder()
-	srv.handlePhoneShare(w, auth(httptest.NewRequest("POST", "/phone/projects/share",
-		strings.NewReader(`{"slug":"`+slug+`"}`))))
-	if w.Code != 200 {
-		t.Fatalf("share: %d %s", w.Code, w.Body.String())
-	}
-	var sh PhoneShare
-	if err := json.Unmarshal(w.Body.Bytes(), &sh); err != nil {
-		t.Fatalf("share decode: %v", err)
-	}
-	if sh.Code == "" || sh.Runtime != "yaver-serverless-lite" || sh.DataURL != "/data/"+slug {
-		t.Fatalf("bad share: %+v", sh)
-	}
-
-	// 5. A friend joins with the code.
-	w = httptest.NewRecorder()
-	srv.handlePhoneJoin(w, auth(httptest.NewRequest("GET",
-		"/phone/projects/join?code="+sh.Code, nil)))
-	if w.Code != 200 {
-		t.Fatalf("join: %d %s", w.Code, w.Body.String())
-	}
-	var joined PhoneShare
-	if err := json.Unmarshal(w.Body.Bytes(), &joined); err != nil {
-		t.Fatalf("join decode: %v", err)
-	}
-	if joined.Slug != slug || joined.Runtime != "yaver-serverless-lite" || joined.DataURL != "/data/"+slug || joined.BundleURL == "" {
-		t.Fatalf("join resolved wrong: %+v", joined)
-	}
 }

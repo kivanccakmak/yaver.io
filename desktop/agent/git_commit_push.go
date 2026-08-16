@@ -41,13 +41,13 @@ type commitPushRequest struct {
 }
 
 type commitPushResponse struct {
-	OK             bool     `json:"ok"`
-	Branch         string   `json:"branch,omitempty"`
-	Hash           string   `json:"hash,omitempty"`
-	Actions        []string `json:"actions,omitempty"`
-	Pushed         bool     `json:"pushed,omitempty"`
-	NothingToCommit bool    `json:"nothingToCommit,omitempty"`
-	Rebased        bool     `json:"rebased,omitempty"`
+	OK              bool     `json:"ok"`
+	Branch          string   `json:"branch,omitempty"`
+	Hash            string   `json:"hash,omitempty"`
+	Actions         []string `json:"actions,omitempty"`
+	Pushed          bool     `json:"pushed,omitempty"`
+	NothingToCommit bool     `json:"nothingToCommit,omitempty"`
+	Rebased         bool     `json:"rebased,omitempty"`
 	// RequiresAgent: true when a rebase was needed but introduced merge
 	// conflicts. The deterministic path can't resolve those — caller
 	// should re-run the same intent through a coding agent (createTask).

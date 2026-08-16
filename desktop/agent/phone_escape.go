@@ -25,15 +25,15 @@ import (
 
 // EscapeRoute is one curated migration path.
 type EscapeRoute struct {
-	ID          string           `json:"id"`                    // stable id: "convex-to-yaver-cloud"
-	FromBackend BackendKind      `json:"fromBackend"`           // inferred from project dir
-	FromLabel   string           `json:"fromLabel"`             // "Convex"
-	ToTargetID  string           `json:"toTargetId"`            // SwitchEngine target id ("yaver-cloud")
-	ToLabel     string           `json:"toLabel"`               // "Yaver Cloud"
-	Label       string           `json:"label"`                 // "Convex → Yaver Cloud"
-	Blurb       string           `json:"blurb"`                 // one-liner what happens
-	Complexity  SwitchComplexity `json:"complexity,omitempty"`  // trivial/easy/medium/hard (computed)
-	Highlight   bool             `json:"highlight,omitempty"`   // one of the top-surfaced routes
+	ID          string           `json:"id"`                   // stable id: "convex-to-yaver-cloud"
+	FromBackend BackendKind      `json:"fromBackend"`          // inferred from project dir
+	FromLabel   string           `json:"fromLabel"`            // "Convex"
+	ToTargetID  string           `json:"toTargetId"`           // SwitchEngine target id ("yaver-cloud")
+	ToLabel     string           `json:"toLabel"`              // "Yaver Cloud"
+	Label       string           `json:"label"`                // "Convex → Yaver Cloud"
+	Blurb       string           `json:"blurb"`                // one-liner what happens
+	Complexity  SwitchComplexity `json:"complexity,omitempty"` // trivial/easy/medium/hard (computed)
+	Highlight   bool             `json:"highlight,omitempty"`  // one of the top-surfaced routes
 }
 
 // escapeRouteCatalog is the single source of truth for the curated

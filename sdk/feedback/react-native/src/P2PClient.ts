@@ -737,8 +737,8 @@ export class P2PClient {
    * told. So this method reports the failure instead, with a named cause.
    *
    * Auth: the SAME bearer used for the feedback POST. `/dev/reload` is
-   * registered under `authSDKOrGuest` in desktop/agent/httpserver.go and is
-   * already in the `guest-reload` SDK-token scope list — nothing widens.
+   * registered under `authSDK` in desktop/agent/httpserver.go and is already
+   * in the `reload` SDK-token scope list — nothing widens.
    */
   async reloadWithMode(
     mode: ReloadWireMode,
@@ -864,7 +864,7 @@ export class P2PClient {
    * the project context plus the user's prompt. Returns the task id the
    * caller can poll via `/tasks/{id}` if needed.
    *
-   * Requires an owner/CLI/paired token — the `/vibing*` routes do not
+   * Requires an owner/CLI token — the `/vibing*` routes do not
    * currently accept SDK-minted tokens. Power users typically drive
    * vibing from Claude Code / the Yaver mobile app; this method is a
    * convenience for the SDK's one-tap bug-report-to-vibing path.

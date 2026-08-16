@@ -203,9 +203,9 @@ func TestTerminalControlFrameIsNeverTypedIntoThePTY(t *testing.T) {
 	}
 }
 
-// TestTerminalLegacyTextStdinStillReachesTheShell: the support console
-// (web/app/support/page.tsx) shipped sending the operator's typed line as a
-// TEXT frame. Tightening the control plane must not mute an already-open tab,
+// TestTerminalLegacyTextStdinStillReachesTheShell: an older browser terminal
+// shipped sending the operator's typed line as a TEXT frame. Tightening the
+// control plane must not mute an already-open tab,
 // so non-JSON text is still stdin.
 func TestTerminalLegacyTextStdinStillReachesTheShell(t *testing.T) {
 	conn, cleanup := dialTestTerminal(t)

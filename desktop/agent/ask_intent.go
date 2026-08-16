@@ -22,7 +22,7 @@ import "strings"
 
 // consoleSourcesForAskDetection are the free-typing console surfaces where a
 // plain prose question should auto-route to ask mode. Structured surfaces
-// (mobile feedback, vibing, guest) are intentionally excluded — their input
+// (mobile feedback and vibing) are intentionally excluded — their input
 // is already shaped by the UI, not free console text.
 var consoleSourcesForAskDetection = map[string]bool{
 	terminalLocalTaskSource:  true,

@@ -12,12 +12,11 @@ import {
 import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Alert } from "react-native";
-import { TextInput } from "react-native";
 import { getConvexSiteUrlSync } from "../../src/lib/backendConfig";
 import { useLocalSearchParams, router } from "expo-router";
 import { Device, useDevice } from "../../src/context/DeviceContext";
 import { appTag } from "../../src/lib/appVersion";
-import { ENABLE_GUEST_FEATURES, HIDE_PAID_UI } from "../../src/lib/launchFlags";
+import { HIDE_PAID_UI } from "../../src/lib/launchFlags";
 import { useAuth } from "../../src/context/AuthContext";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { chipPalette } from "../../src/lib/chipPalette";
@@ -303,7 +302,7 @@ function DeviceCard({
   /** One-tap setters for the primary / secondary roles, surfaced as
    *  pill buttons on the card so the user doesn't have to discover
    *  the long-press menu just to mark a fallback box. The long-press
-   *  flow stays as-is for guest devices and the destructive Remove. */
+   *  flow stays as-is for the destructive Remove action. */
   onSetSecondary?: () => void;
   onUnsetSecondary?: () => void;
   onSetPrimary?: () => void;
@@ -690,10 +689,9 @@ function DeviceCard({
         <View style={styles.cardInfo}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <Text style={[styles.deviceName, { color: c.textPrimary }]}>{device.name}</Text>
-            {device.isGuest ? <StatusChip tone="blue" label="SHARED" isDark={isDark} /> : null}
-            {!device.isGuest && device.hosting === "yaver-hosted" ? <StatusChip tone="blue" label="YAVER-HOSTED" isDark={isDark} /> : null}
-            {!device.isGuest && device.hosting === "byo" ? <StatusChip tone="amber" label="BYO" isDark={isDark} /> : null}
-            {!device.isGuest && device.hosting === "self-hosted" ? <StatusChip tone="slate" label="SELF-HOSTED" isDark={isDark} /> : null}
+            {device.hosting === "yaver-hosted" ? <StatusChip tone="blue" label="YAVER-HOSTED" isDark={isDark} /> : null}
+            {device.hosting === "byo" ? <StatusChip tone="amber" label="BYO" isDark={isDark} /> : null}
+            {device.hosting === "self-hosted" ? <StatusChip tone="slate" label="SELF-HOSTED" isDark={isDark} /> : null}
             {isPrimary ? <StatusChip tone="indigo" label="PRIMARY ★" isDark={isDark} /> : null}
             {!isPrimary && isSecondary ? <StatusChip tone="violet" label="SECONDARY ☆" isDark={isDark} /> : null}
             {defaultRunner ? <StatusChip tone="violet" label={`★ ${labelForRunnerId(defaultRunner)}`} isDark={isDark} /> : null}
@@ -717,7 +715,7 @@ function DeviceCard({
             <TransportBadge device={device} />
           </View>
           <Text style={[styles.deviceMeta, { color: c.textSecondary }]}>
-            {[platformLabel, device.host, device.isGuest && device.hostName ? `shared from ${device.hostName}` : ""].filter(Boolean).join(" · ")}
+            {[platformLabel, device.host].filter(Boolean).join(" · ")}
           </Text>
           <Text style={[styles.deviceMeta, { color: statusTone, marginTop: 4 }]}>
             {statusLabel}
@@ -787,12 +785,11 @@ function DeviceCard({
               <Text style={[styles.pingBtnText, { color: c.accent, fontWeight: "700" }]}>Details</Text>
             </Pressable>
           )}
-          {/* Inline elevation actions. Guest devices and the device
-              that's already primary get nothing here — the long-press
-              menu still owns those edge cases. Otherwise we surface
+          {/* Inline elevation actions. The device that's already primary gets
+              nothing here. Otherwise we surface
               "Make secondary" / "Unmark secondary" as a pill so the
               fallback role is reachable in a single tap from the list. */}
-          {!device.isGuest && !isPrimary ? (
+          {!isPrimary ? (
             isSecondary && onUnsetSecondary ? (
               <Pressable
                 style={[styles.pingBtn, { backgroundColor: "transparent", borderWidth: 1, borderColor: c.accent + "55" }]}
@@ -809,7 +806,7 @@ function DeviceCard({
               </Pressable>
             ) : null
           ) : null}
-          {!device.isGuest && !isPrimary && !isSecondary && onSetPrimary ? (
+          {!isPrimary && !isSecondary && onSetPrimary ? (
             <Pressable
               style={[styles.pingBtn, { backgroundColor: "transparent", borderWidth: 1, borderColor: c.accent + "55" }]}
               onPress={onSetPrimary}
@@ -819,7 +816,7 @@ function DeviceCard({
           ) : null}
           {/* Up/down for a Yaver-hosted (managed) box. Resume when paused/stopped,
               else Pause. Self-hosted boxes have no machineId ⇒ nothing here. */}
-          {!HIDE_PAID_UI && !device.isGuest && device.machineId ? (
+          {!HIDE_PAID_UI && device.machineId ? (
             device.machineStatus === "paused" ||
             device.machineStatus === "stopped" ||
             device.machineStatus === "suspended" ? (
@@ -986,12 +983,9 @@ export default function DevicesScreen() {
     disconnect,
     disconnectDevice,
     refreshDevices,
-    detachDevice,
-    leaveSharedAccess,
     hiddenDeviceCount,
     unhideAllDevices,
     removeDevice,
-    acceptGuestByCode,
     unreachableDeviceIds,
     primaryDeviceId,
     setPrimaryDevice,
@@ -1042,8 +1036,6 @@ export default function DevicesScreen() {
     return () => clearTimeout(t);
   }, [openDetailsId]);
 
-  const [guestCode, setGuestCode] = useState("");
-  const [guestLoading, setGuestLoading] = useState(false);
   const [peerStates, setPeerStates] = useState<Record<string, { state: "online" | "stale" | "offline"; lastSeen?: number }>>({});
   // Tablet master-detail: when in landscape, picking a device on
   // the left list opens its details in a persistent right pane
@@ -1196,33 +1188,6 @@ export default function DevicesScreen() {
     [token, user, refreshDevices],
   );
 
-  const handleAcceptGuestCode = async () => {
-    const code = guestCode.trim();
-    if (!code || code.length < 4) return;
-    setGuestLoading(true);
-    try {
-      const result = await acceptGuestByCode(code);
-      Alert.alert("Joined!", `You now have access to ${result.hostName}'s machine.`);
-      setGuestCode("");
-      refreshDevices();
-    } catch (e: any) {
-      // Inline classifier (mirrors more.tsx's guest-invite error shape, kept
-      // local so we don't reach into another agent's file). Never surface the
-      // raw e.message as the primary line.
-      const raw = e instanceof Error ? e.message : String(e);
-      const lower = raw.toLowerCase();
-      const friendly = /expired|expire/.test(lower)
-        ? "Invite codes expire after 2 days — ask the host to resend."
-        : /network|fetch|timeout|econn|offline|unreach|connection/.test(lower)
-          ? "Couldn't reach the server — check your connection."
-          : /not found|invalid|no such|bad code|unknown/.test(lower)
-            ? "Double-check the 6-char code."
-            : "Couldn't join with that code. Double-check it and try again.";
-      Alert.alert("Couldn't join", friendly);
-    }
-    setGuestLoading(false);
-  };
-
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
       <AppScreenHeader title="Devices" onBack={() => router.navigate("/(tabs)/more" as any)} />
@@ -1239,26 +1204,6 @@ export default function DevicesScreen() {
           </View>
         )}
 
-        {ENABLE_GUEST_FEATURES ? (
-          <View style={[styles.guestCodeRow, { borderBottomColor: c.border }]}>
-            <TextInput
-              style={[styles.guestCodeInput, { backgroundColor: c.bgCard, borderColor: c.borderSubtle, color: c.textPrimary }]}
-              placeholder="Invite code"
-              placeholderTextColor={c.textMuted}
-              value={guestCode}
-              onChangeText={setGuestCode}
-              autoCapitalize="characters"
-              maxLength={6}
-            />
-            <Pressable
-              style={[styles.guestCodeBtn, { backgroundColor: guestCode.trim().length >= 6 ? c.accent : c.accent + "33" }]}
-              onPress={handleAcceptGuestCode}
-              disabled={guestCode.trim().length < 6 || guestLoading}
-            >
-              <Text style={styles.guestCodeBtnText}>{guestLoading ? "..." : "Join"}</Text>
-            </Pressable>
-          </View>
-        ) : null}
 
         {/* Zero-touch: claim a Yaver-powered device by scanning its label QR
             (DPP-style). Opens the camera scanner; the box self-credentials
@@ -1468,34 +1413,21 @@ export default function DevicesScreen() {
               authExpired={activeDevice?.id === item.id && connectionStatus === "connected" && agentAuthExpired}
               forceDetailsOpen={openDetailsId === item.id}
               onLongPress={() => {
-                // Guests get two distinct exits, because they mean different
-                // things: "Hide" is the old local-only detach (row comes back
-                // on the next poll), "Remove my access" revokes the grant in
-                // Convex so it's gone on every surface until the host shares
-                // again.
-                const actionLabel = item.isGuest ? "Hide from this phone" : "Remove";
+                const actionLabel = "Remove";
                 const isConnectedHere = connectedSet.has(item.id);
-                const hostLabel = item.hostName || item.hostEmail || "the host";
-                const message = item.isGuest
-                  ? isConnectedHere
-                    ? `Disconnect from this shared machine, hide it on this phone, or remove your access to ${hostLabel}'s machines entirely?`
-                    : `Hide this shared machine on this phone, or remove your access to ${hostLabel}'s machines entirely?`
-                  : isConnectedHere
+                const message = isConnectedHere
                     ? "Disconnect from this machine, or remove it from your account? The node will need to re-register before it shows up again."
                     : "Remove this device from your account? The node will need to re-register before it shows up again.";
-                // Guest machines can't be elevated — they can vanish on host revocation.
                 const isThisPrimary = primaryDeviceId === item.id;
                 const isThisSecondary = secondaryDeviceId === item.id;
-                const primaryAction = item.isGuest
-                  ? null
-                  : isThisPrimary
+                const primaryAction = isThisPrimary
                     ? { text: "Unset primary", onPress: async () => {
                         try { await setPrimaryDevice(null); } catch (e: any) { Alert.alert("Error", e?.message || "Failed"); }
                       } }
                     : { text: "Set as primary", onPress: async () => {
                         try { await setPrimaryDevice(item.id); } catch (e: any) { Alert.alert("Error", e?.message || "Failed"); }
                       } };
-                const secondaryAction = item.isGuest || isThisPrimary
+                const secondaryAction = isThisPrimary
                   ? null
                   : isThisSecondary
                     ? { text: "Unset secondary", onPress: async () => {
@@ -1520,48 +1452,12 @@ export default function DevicesScreen() {
                   style: "destructive",
                   onPress: async () => {
                     try {
-                      if (item.isGuest) {
-                        await detachDevice(item);
-                      } else {
-                        await removeDevice(item);
-                      }
+                      await removeDevice(item);
                     } catch (e: any) {
                       Alert.alert("Error", e?.message || "Failed");
                     }
                   },
                 });
-                if (item.isGuest) {
-                  buttons.push({
-                    text: "Remove my access",
-                    style: "destructive",
-                    onPress: () => {
-                      // Second confirm: this one reaches the server and takes
-                      // every machine from this host, not just the tapped row.
-                      Alert.alert(
-                        `Remove your access to ${hostLabel}'s machines?`,
-                        `You'll lose access to every machine ${hostLabel} shared with you, on all your devices.\n\n${hostLabel} can share again later, and you can accept again.`,
-                        [
-                          { text: "Cancel", style: "cancel" },
-                          {
-                            text: "Remove access",
-                            style: "destructive",
-                            onPress: async () => {
-                              try {
-                                const res = await leaveSharedAccess(item);
-                                Alert.alert(
-                                  "Access removed",
-                                  `You no longer have access to ${res.hostName}'s machines. They can share again whenever you both want.`,
-                                );
-                              } catch (e: any) {
-                                Alert.alert("Error", e?.message || "Failed to remove access");
-                              }
-                            },
-                          },
-                        ],
-                      );
-                    },
-                  });
-                }
                 Alert.alert(item.name, message, buttons);
               }}
               onRecoverAuth={async () => {
@@ -1626,38 +1522,6 @@ export default function DevicesScreen() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
-  guestCodeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-  },
-  guestCodeInput: {
-    flex: 1,
-    height: 40,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 16,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    letterSpacing: 4,
-    textAlign: "center",
-    textTransform: "uppercase",
-  },
-  guestCodeBtn: {
-    height: 40,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  guestCodeBtnText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "600",
-  },
   addDeviceBtn: {
     marginHorizontal: 12,
     marginTop: 10,

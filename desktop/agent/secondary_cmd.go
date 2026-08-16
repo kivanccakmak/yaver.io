@@ -78,8 +78,7 @@ Usage:
   yaver secondary ping             One-shot reachability check
   yaver secondary auth             SSH in and run 'yaver auth --headless'
 
-The secondary slot has the same access semantics as primary (must be
-one of your owned devices, never a guest device). It receives the
+The secondary slot has the same access semantics as primary and receives the
 same tight 90s staleness threshold from the watchdog.`)
 }
 
@@ -133,11 +132,7 @@ func runSecondaryShow(ctx context.Context) {
 		if d.IsOnline {
 			status = "online"
 		}
-		shared := ""
-		if d.IsGuest {
-			shared = " (shared)"
-		}
-		fmt.Printf("%s%s — %s — %s%s — %s\n", marker, d.DeviceID[:min(8, len(d.DeviceID))], d.Name, status, shared, d.Platform)
+		fmt.Printf("%s%s — %s — %s — %s\n", marker, d.DeviceID[:min(8, len(d.DeviceID))], d.Name, status, d.Platform)
 	}
 }
 
@@ -188,10 +183,6 @@ func runSecondarySet(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 	chosen := matches[0]
-	if chosen.IsGuest {
-		fmt.Fprintln(os.Stderr, "Cannot mark a shared (guest) device as secondary — the host can revoke it at any time.")
-		os.Exit(1)
-	}
 	// Reject when secondary == primary. Both slots pointing at the
 	// same device makes the watchdog and auto-connect surfaces trip
 	// over themselves; the user almost certainly meant to pick a
@@ -234,12 +225,7 @@ func runSecondaryPick(ctx context.Context) {
 		fmt.Fprintf(os.Stderr, "Failed to list devices: %v\n", err)
 		os.Exit(1)
 	}
-	owned := make([]primaryDevice, 0, len(devices))
-	for _, d := range devices {
-		if !d.IsGuest {
-			owned = append(owned, d)
-		}
-	}
+	owned := devices
 	if len(owned) == 0 {
 		fmt.Fprintln(os.Stderr, "No owned devices available.")
 		os.Exit(1)

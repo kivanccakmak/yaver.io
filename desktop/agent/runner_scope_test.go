@@ -46,20 +46,6 @@ func TestRunnerDeniedByScopeHeaders_SdkScope(t *testing.T) {
 	}
 }
 
-func TestRunnerDeniedByScopeHeaders_JointlyInclusive(t *testing.T) {
-	// Both layers present: requested runner must satisfy EVERY layer (intersection).
-	r := reqWithHeaders(map[string]string{
-		"X-Yaver-HostShareAllowedRunners": "opencode",          // host-share: only opencode
-		"X-Yaver-SdkAllowedRunners":       "opencode,codex",    // sdk: opencode or codex
-	})
-	if d := runnerDeniedByScopeHeaders(r, "codex", "opencode"); d == nil {
-		t.Fatalf("codex must be denied because host-share excludes it, even though sdk allows it")
-	}
-	if d := runnerDeniedByScopeHeaders(r, "opencode", "opencode"); d != nil {
-		t.Fatalf("opencode is in both layers and must be allowed, got %q", d.Reason)
-	}
-}
-
 func TestRunnerDeniedByScopeHeaders_DefaultFallback(t *testing.T) {
 	// Empty requested runner falls back to the default runner for the check.
 	r := reqWithHeaders(map[string]string{"X-Yaver-SdkAllowedRunners": "opencode"})

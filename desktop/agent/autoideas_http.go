@@ -196,4 +196,3 @@ func (s *HTTPServer) handleAutoIdeasFile(w http.ResponseWriter, r *http.Request)
 		"path":  path,
 	})
 }
-

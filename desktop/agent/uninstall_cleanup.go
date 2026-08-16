@@ -26,9 +26,9 @@ import (
 // cli/src/postinstall.js appends to ~/.bashrc / ~/.zshrc / ~/.profile
 // and removes it. The block is exactly:
 //
-//   <blank line>
-//   # yaver-cli PATH (added by yaver-cli postinstall)
-//   case ":$PATH:" in *":<binDir>:"*) ;; *) export PATH="<binDir>:$PATH" ;; esac
+//	<blank line>
+//	# yaver-cli PATH (added by yaver-cli postinstall)
+//	case ":$PATH:" in *":<binDir>:"*) ;; *) export PATH="<binDir>:$PATH" ;; esac
 //
 // We strip from the marker line back through the leading blank, plus
 // the case-statement line that immediately follows. Any other content

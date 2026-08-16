@@ -35,7 +35,7 @@ type sdkManifest struct {
 	// step pins/keeps the key module, every companion must also be installed
 	// at the host version or Metro fails to resolve it at bundle time.
 	NativeModuleCompanions map[string][]string `json:"nativeModuleCompanions"`
-	Hermes struct {
+	Hermes                 struct {
 		Version         string `json:"version"`
 		BytecodeVersion int    `json:"bytecodeVersion"`
 	} `json:"hermes"`

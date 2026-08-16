@@ -120,7 +120,9 @@ func (s *HTTPServer) handleBackupEncryption(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if r.Method == "POST" {
-		var b struct{ Enabled bool `json:"enabled"` }
+		var b struct {
+			Enabled bool `json:"enabled"`
+		}
 		decodeJSON(r, &b)
 		if err := SetBackupEncryption(dir, b.Enabled); err != nil {
 			writeJSON(w, 200, map[string]interface{}{"error": err.Error()})

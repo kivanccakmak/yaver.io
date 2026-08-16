@@ -9,7 +9,7 @@ import "encoding/json"
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 
 	reg("twin_job_start",

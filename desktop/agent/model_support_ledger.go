@@ -70,7 +70,7 @@ type modelRefusal struct {
 	Runner string    `json:"runner"`
 	Model  string    `json:"model"`
 	At     time.Time `json:"at"`
-	// Reason is kept verbatim so a future reader (or a support session) can see
+	// Reason is kept verbatim so a future owner can see
 	// WHAT the provider said, not just that something failed.
 	Reason string `json:"reason,omitempty"`
 }

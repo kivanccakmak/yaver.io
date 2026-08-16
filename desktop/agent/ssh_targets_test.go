@@ -70,7 +70,7 @@ func TestRememberSSHHostNoClobber(t *testing.T) {
 }
 
 func TestSSHArgsWithSurvivabilityAcceptsNewHostKeys(t *testing.T) {
-	args := strings.Join(sshArgsWithSurvivability("user@100.64.0.5" , []string{"true"}), " ") // infra-addr-ok: synthetic fixture — generic user, unassigned overlay address
+	args := strings.Join(sshArgsWithSurvivability("user@100.64.0.5", []string{"true"}), " ") // infra-addr-ok: synthetic fixture — generic user, unassigned overlay address
 	if !strings.Contains(args, "StrictHostKeyChecking=accept-new") {
 		t.Fatalf("watchdog ssh must learn first-contact host keys non-interactively, got %s", args)
 	}
@@ -88,7 +88,7 @@ func TestSSHArgsWithSurvivabilityAcceptsNewHostKeys(t *testing.T) {
 	// The unattended watchdog leg (attemptPeerRecovery sets this env) DOES
 	// pin identities so a keyring full of agent keys can't trip MaxAuthTries.
 	t.Setenv("YAVER_SSH_IDENTITIES_ONLY", "1")
-	watchdogArgs := strings.Join(sshArgsWithSurvivability("user@100.64.0.5" , []string{"true"}), " ") // infra-addr-ok: synthetic fixture — generic user, unassigned overlay address
+	watchdogArgs := strings.Join(sshArgsWithSurvivability("user@100.64.0.5", []string{"true"}), " ") // infra-addr-ok: synthetic fixture — generic user, unassigned overlay address
 	if !strings.Contains(watchdogArgs, "IdentitiesOnly=yes") {
 		t.Fatalf("watchdog ssh must not fail after offering unrelated agent keys, got %s", watchdogArgs)
 	}

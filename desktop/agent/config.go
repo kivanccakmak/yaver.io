@@ -50,9 +50,9 @@ type Config struct {
 	// everywhere, mirroring the env vars MISTRAL_API_KEY / OPENAI_API_KEY /
 	// ANTHROPIC_API_KEY. Never synced to Convex; stays in ~/.yaver/config.json.
 	VisionKeys map[string]string `json:"vision_keys,omitempty"`
-	TLSCert    string      `json:"tls_cert,omitempty"`
-	TLSKey     string      `json:"tls_key,omitempty"`
-	AutoStart  bool        `json:"auto_start,omitempty"`
+	TLSCert    string            `json:"tls_cert,omitempty"`
+	TLSKey     string            `json:"tls_key,omitempty"`
+	AutoStart  bool              `json:"auto_start,omitempty"`
 	// AutoUpdate is tri-state: nil ("operator never said") defaults to
 	// ON — see shouldAutoUpdate in auto_update_policy.go. Read it
 	// through that helper, never directly.
@@ -86,13 +86,12 @@ type Config struct {
 	// without standing up a Cloudflare tunnel. Each entry can be a
 	// bare host (e.g. "198.51.100.20") or an https URL — the
 	// resolver strips schemes + trailing slashes for SSH use.
-	PublicEndpoints               []string         `json:"public_endpoints,omitempty"`
-	MacOSPermissionOnboardingDone bool             `json:"macos_permission_onboarding_done,omitempty"`
-	HostShare                     *HostShareConfig `json:"host_share,omitempty"`
-	Sandbox                       *SandboxConfig   `json:"sandbox,omitempty"`
-	Exec                          *ExecConfig      `json:"exec,omitempty"`
-	Email                         *EmailConfig     `json:"email,omitempty"`
-	ACLPeers                      []ACLPeerConfig  `json:"acl_peers,omitempty"`
+	PublicEndpoints               []string        `json:"public_endpoints,omitempty"`
+	MacOSPermissionOnboardingDone bool            `json:"macos_permission_onboarding_done,omitempty"`
+	Sandbox                       *SandboxConfig  `json:"sandbox,omitempty"`
+	Exec                          *ExecConfig     `json:"exec,omitempty"`
+	Email                         *EmailConfig    `json:"email,omitempty"`
+	ACLPeers                      []ACLPeerConfig `json:"acl_peers,omitempty"`
 	// ExternalMCPServers are user-registered remote MCP servers (e.g. a private
 	// yaver-bet on Hetzner). Their tools are namespaced "<name>__<tool>" and
 	// proxied through this agent so the mobile/web app can use them via Yaver.
@@ -109,7 +108,7 @@ type Config struct {
 	AnalyticsWebhookURL string              `json:"analytics_webhook_url,omitempty"`
 	// DeployWebhookURL is POST'd a JSON body summarising each finished
 	// /deploy/ship run. Empty = disabled. Intended use: point at a
-	// Slack / Discord / Zapier inbound URL so overnight guest-deploy
+	// Slack / Discord / Zapier inbound URL so overnight deploy
 	// failures can page a human.
 	DeployWebhookURL string `json:"deploy_webhook_url,omitempty"`
 	// DeployWebhookOn filters which events fire. Values: "success",
@@ -167,8 +166,7 @@ type Config struct {
 	RequirePrivateRecoveryTransport bool     `json:"require_private_recovery_transport,omitempty"`
 	HAURL                           string   `json:"ha_url,omitempty"`
 	HAToken                         string   `json:"ha_token,omitempty"`
-	AllowedIPs                      []string `json:"allowed_ips,omitempty"`        // IP allowlist CIDRs (applies to owner + guest; guests can also use AllowedGuestIPs)
-	AllowedGuestIPs                 []string `json:"allowed_guest_ips,omitempty"`  // Extra CIDRs admitted ONLY when the request carries a valid guest/SDK bearer (e.g. relay/Tailscale IPs that should not permit anonymous access)
+	AllowedIPs                      []string `json:"allowed_ips,omitempty"`        // IP allowlist CIDRs
 	TLSFingerprint                  string   `json:"tls_fingerprint,omitempty"`    // SHA256 of TLS cert
 	TLSPort                         int      `json:"tls_port,omitempty"`           // HTTPS port (default 18443)
 	IOSInstallMethod                string   `json:"ios_install_method,omitempty"` // "auto" (default), "native", "bundle"
@@ -177,16 +175,15 @@ type Config struct {
 	NetcaptureEnabled               bool     `json:"netcapture_enabled,omitempty"` // enable wire-observe & deep-analysis (tcpdump + serial RS232/RS485 capture) (default: false)
 
 	// Container isolation — run tasks inside Docker containers
-	ContainerizeGuests bool                   `json:"containerize_guests,omitempty"` // run guest tasks in containers (default: false)
-	ContainerizeHost   bool                   `json:"containerize_host,omitempty"`   // run host tasks in containers (default: false)
-	ContainerImage     string                 `json:"container_image,omitempty"`     // custom image (default: yaver-sandbox)
-	ContainerCPU       string                 `json:"container_cpu,omitempty"`       // CPU limit e.g. "2.0"
-	ContainerMemory    string                 `json:"container_memory,omitempty"`    // Memory limit e.g. "4g"
-	ContainerNetwork   string                 `json:"container_network,omitempty"`   // Network mode: "host" (default), "bridge", "none"
-	ContainerReadOnly  bool                   `json:"container_read_only,omitempty"` // Read-only root filesystem (writes only to /workspace, /tmp)
-	ContainerMounts    []string               `json:"container_mounts,omitempty"`    // Extra volume mounts e.g. ["/opt/android-sdk:/opt/android-sdk:ro"]
-	SharedStorage      []SharedStorageProfile `json:"shared_storage,omitempty"`
-	Code               *CodeCLIConfig         `json:"code,omitempty"`
+	ContainerizeHost  bool                   `json:"containerize_host,omitempty"`   // run host tasks in containers (default: false)
+	ContainerImage    string                 `json:"container_image,omitempty"`     // custom image (default: yaver-sandbox)
+	ContainerCPU      string                 `json:"container_cpu,omitempty"`       // CPU limit e.g. "2.0"
+	ContainerMemory   string                 `json:"container_memory,omitempty"`    // Memory limit e.g. "4g"
+	ContainerNetwork  string                 `json:"container_network,omitempty"`   // Network mode: "host" (default), "bridge", "none"
+	ContainerReadOnly bool                   `json:"container_read_only,omitempty"` // Read-only root filesystem (writes only to /workspace, /tmp)
+	ContainerMounts   []string               `json:"container_mounts,omitempty"`    // Extra volume mounts e.g. ["/opt/android-sdk:/opt/android-sdk:ro"]
+	SharedStorage     []SharedStorageProfile `json:"shared_storage,omitempty"`
+	Code              *CodeCLIConfig         `json:"code,omitempty"`
 	// Mesh is the optional WireGuard overlay ("Yaver Mesh" — Tailscale
 	// alternative). nil = never opted in; nothing in the mesh code path runs
 	// and no TUN/listener is created. Populated by `yaver mesh up`.
@@ -438,23 +435,21 @@ type CloudflareTunnelConfig struct {
 // SharedStorageProfile defines a machine-level shared storage target that any
 // authenticated Yaver client on this machine may browse.
 type SharedStorageProfile struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name"`
-	Type               string `json:"type"` // local, smb, webdav, storagebox, s3
-	Path               string `json:"path,omitempty"`
-	MountPath          string `json:"mount_path,omitempty"`
-	Remote             string `json:"remote,omitempty"`
-	Endpoint           string `json:"endpoint,omitempty"`
-	Bucket             string `json:"bucket,omitempty"`
-	Region             string `json:"region,omitempty"`
-	Username           string `json:"username,omitempty"`
-	Password           string `json:"password,omitempty"`
-	AccessKey          string `json:"access_key,omitempty"`
-	SecretKey          string `json:"secret_key,omitempty"`
-	ReadOnly           bool   `json:"read_only,omitempty"`
-	Notes              string `json:"notes,omitempty"`
-	ContainerMountMode string `json:"container_mount_mode,omitempty"` // none, host, guests, all
-	ContainerPath      string `json:"container_path,omitempty"`       // in-container mount path
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Type      string `json:"type"` // local, smb, webdav, storagebox, s3
+	Path      string `json:"path,omitempty"`
+	MountPath string `json:"mount_path,omitempty"`
+	Remote    string `json:"remote,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	Bucket    string `json:"bucket,omitempty"`
+	Region    string `json:"region,omitempty"`
+	Username  string `json:"username,omitempty"`
+	Password  string `json:"password,omitempty"`
+	AccessKey string `json:"access_key,omitempty"`
+	SecretKey string `json:"secret_key,omitempty"`
+	ReadOnly  bool   `json:"read_only,omitempty"`
+	Notes     string `json:"notes,omitempty"`
 }
 
 // ConfigDir returns the path to ~/.yaver/, creating it if needed.

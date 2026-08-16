@@ -57,7 +57,7 @@ func TestRDDefaultPolicy(t *testing.T) {
 func TestRDScalePoint(t *testing.T) {
 	disp := ghost.Display{Index: 0, X: 0, Y: 0, Width: 1920, Height: 1080, Primary: true}
 	cases := []struct {
-		nx, ny     float64
+		nx, ny       float64
 		wantX, wantY int
 	}{
 		{0, 0, 0, 0},

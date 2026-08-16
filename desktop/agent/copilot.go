@@ -42,20 +42,20 @@ import (
 // CopilotRequest is the input shape the HTTP and MCP callers
 // both use.
 type CopilotRequest struct {
-	Prefix     string `json:"prefix"`     // text BEFORE the cursor
-	Suffix     string `json:"suffix"`     // text AFTER the cursor (fill-in-the-middle)
-	Language   string `json:"language"`   // "typescript", "python", etc. — hint for the model
-	File       string `json:"file"`       // optional filename for the hint
-	MaxTokens  int    `json:"maxTokens"`  // default 80
-	Model      string `json:"model"`      // override the configured Ollama model
+	Prefix      string  `json:"prefix"`    // text BEFORE the cursor
+	Suffix      string  `json:"suffix"`    // text AFTER the cursor (fill-in-the-middle)
+	Language    string  `json:"language"`  // "typescript", "python", etc. — hint for the model
+	File        string  `json:"file"`      // optional filename for the hint
+	MaxTokens   int     `json:"maxTokens"` // default 80
+	Model       string  `json:"model"`     // override the configured Ollama model
 	Temperature float64 `json:"temperature"`
 }
 
 // CopilotResponse is what we give back.
 type CopilotResponse struct {
-	Completion string        `json:"completion"`
-	Model      string        `json:"model"`
-	LatencyMs  int64         `json:"latencyMs"`
+	Completion string `json:"completion"`
+	Model      string `json:"model"`
+	LatencyMs  int64  `json:"latencyMs"`
 }
 
 // defaultCopilotModel is the Ollama tag we use when the caller

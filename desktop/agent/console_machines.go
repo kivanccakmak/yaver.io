@@ -33,17 +33,6 @@ type MachineInfo struct {
 	Capabilities   *MachineCapabilities `json:"capabilities,omitempty"`
 	GeoRegion      string               `json:"geoRegion,omitempty"` // coarse egress region only: eu|us|ap|...
 
-	// Shared-infrastructure fields: when true, this machine is not owned by
-	// the current user but was shared with them via guest access on another
-	// host account. The mesh planner uses these to score placement and
-	// enforce the host's resource policy.
-	IsShared                  bool   `json:"isShared,omitempty"`
-	HostName                  string `json:"hostName,omitempty"`
-	HostEmail                 string `json:"hostEmail,omitempty"`
-	AccessScope               string `json:"accessScope,omitempty"`  // owner | shared-scoped | shared-legacy
-	PriorityMode              string `json:"priorityMode,omitempty"` // "", "spare-capacity", "always", "scheduled"
-	UseHostAPIKeys            bool   `json:"useHostApiKeys,omitempty"`
-	AllowGuestProvidedAPIKeys bool   `json:"allowGuestProvidedApiKeys,omitempty"`
 }
 
 type MachineRunnerCapability struct {
@@ -96,21 +85,14 @@ func listAllMachines(ctx context.Context) []MachineInfo {
 					continue
 				}
 				out = append(out, MachineInfo{
-					DeviceID:                  d.DeviceID,
-					Name:                      d.Name,
-					Platform:                  d.Platform,
-					IsOnline:                  d.IsOnline,
-					QuicHost:                  d.QuicHost,
-					QuicPort:                  d.QuicPort,
-					GeoRegion:                 d.GeoRegion,
-					Provider:                  providerFromHint(d.Platform, d.QuicHost),
-					IsShared:                  d.IsGuest,
-					HostName:                  d.HostName,
-					HostEmail:                 d.HostEmail,
-					AccessScope:               d.AccessScope,
-					PriorityMode:              d.PriorityMode,
-					UseHostAPIKeys:            d.UseHostAPIKeys,
-					AllowGuestProvidedAPIKeys: d.AllowGuestProvidedAPIKeys,
+					DeviceID:  d.DeviceID,
+					Name:      d.Name,
+					Platform:  d.Platform,
+					IsOnline:  d.IsOnline,
+					QuicHost:  d.QuicHost,
+					QuicPort:  d.QuicPort,
+					GeoRegion: d.GeoRegion,
+					Provider:  providerFromHint(d.Platform, d.QuicHost),
 				})
 			}
 		}

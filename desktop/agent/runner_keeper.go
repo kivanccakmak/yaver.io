@@ -122,17 +122,17 @@ func NewRunnerKeeper() (*RunnerKeeper, error) {
 		return nil, err
 	}
 	k := &RunnerKeeper{
-		baseDir:      base,
-		pollInterval: 15 * time.Second,
-		idleDebounce: 90 * time.Second,
-		nudgeCap:     20,
+		baseDir:        base,
+		pollInterval:   15 * time.Second,
+		idleDebounce:   90 * time.Second,
+		nudgeCap:       20,
 		states:         map[string]*SessionState{},
 		paneHash:       map[string]string{},
 		lastActivityAt: map[string]time.Time{},
 		stopSignals:    map[string]chan struct{}{},
-		sendKeys:     defaultTmuxSendKeys,
-		capturePane:  defaultTmuxCapturePane,
-		clock:        time.Now,
+		sendKeys:       defaultTmuxSendKeys,
+		capturePane:    defaultTmuxCapturePane,
+		clock:          time.Now,
 	}
 	if err := k.loadFromDisk(); err != nil {
 		return nil, err

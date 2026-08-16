@@ -98,7 +98,7 @@ func TestUpload_writesMP4AndMarksReady(t *testing.T) {
 	// brief moment — the goroutine fires asynchronously after StopClip.
 	deadline := time.After(2 * time.Second)
 	got := false
-	pollLoop:
+pollLoop:
 	for {
 		select {
 		case <-deadline:

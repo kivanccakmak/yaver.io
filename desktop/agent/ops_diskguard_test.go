@@ -21,7 +21,7 @@ func TestDiskGuardVerbsRegisteredOwnerOnly(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s not registered", name)
 		}
-		if spec.AllowGuest {
+		if spec.AllowCompanion {
 			t.Errorf("%s must be owner-only: a guest could delete files", name)
 		}
 		if spec.Schema == nil {

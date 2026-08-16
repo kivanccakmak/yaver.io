@@ -10,11 +10,11 @@ import (
 
 func TestGroupTwoFactorSecretReadsIn4CharGroups(t *testing.T) {
 	cases := map[string]string{
-		"":                    "",
-		"JBSWY3DP":            "JBSW Y3DP",
-		"JBSWY3DPEHPK3PXP":    "JBSW Y3DP EHPK 3PXP",
-		"jbswy3dpehpk3pxp":    "JBSW Y3DP EHPK 3PXP",
-		"ABC":                 "ABC",
+		"":                 "",
+		"JBSWY3DP":         "JBSW Y3DP",
+		"JBSWY3DPEHPK3PXP": "JBSW Y3DP EHPK 3PXP",
+		"jbswy3dpehpk3pxp": "JBSW Y3DP EHPK 3PXP",
+		"ABC":              "ABC",
 	}
 	for in, want := range cases {
 		if got := groupTwoFactorSecret(in); got != want {

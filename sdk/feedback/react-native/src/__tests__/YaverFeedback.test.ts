@@ -34,13 +34,10 @@ jest.mock('../auth', () => ({
         needsAuth: false,
         runnerDown: false,
         lastHeartbeat: Date.now(),
-        isGuest: false,
-        accessScope: 'owner',
         quicHost: '127.0.0.1',
         quicPort: 18080,
       },
     ],
-    shared: [],
   })),
   DEFAULT_CONVEX_SITE_URL: 'https://example.convex.site',
 }));

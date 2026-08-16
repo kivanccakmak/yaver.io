@@ -178,8 +178,8 @@ func TestFeedbackFixWorkDirPrefersMonorepoRoot(t *testing.T) {
 		t.Errorf("feedbackFixWorkDir = %q, want %q (project path)", got, want)
 	}
 
-	// An unresolved project must yield "", so the caller's guest guard
-	// rejects rather than falling through to the agent's own directory.
+	// An unresolved project must yield "", so the owner-only task path rejects
+	// rather than falling through to the agent's own directory.
 	if got := feedbackFixWorkDir(nil); got != "" {
 		t.Errorf("feedbackFixWorkDir(nil) = %q, want empty", got)
 	}

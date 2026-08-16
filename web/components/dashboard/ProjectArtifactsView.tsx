@@ -60,14 +60,7 @@ function artifactLink(artifact: ProjectArtifact): string | null {
 }
 
 function visibilityLabel(value: ProjectArtifactVisibility): string {
-  switch (value) {
-    case "public-link":
-      return "Public link";
-    case "project":
-      return "Project";
-    default:
-      return "Private";
-  }
+  return value === "project" ? "Project" : "Private";
 }
 
 export default function ProjectArtifactsView({ token }: { token: string | null | undefined }) {
@@ -81,7 +74,7 @@ export default function ProjectArtifactsView({ token }: { token: string | null |
   const [storageEntitled, setStorageEntitled] = useState(false);
   const [title, setTitle] = useState("");
   const [kind, setKind] = useState("apk");
-  const [visibility, setVisibility] = useState<ProjectArtifactVisibility>("public-link");
+  const [visibility, setVisibility] = useState<ProjectArtifactVisibility>("project");
   const [url, setUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
 
@@ -211,17 +204,6 @@ export default function ProjectArtifactsView({ token }: { token: string | null |
     }
   }
 
-  async function copyPublicLink(artifact: ProjectArtifact) {
-    if (!artifact.shareToken || typeof window === "undefined") return;
-    const link = `${window.location.origin}/artifacts/${encodeURIComponent(artifact.shareToken)}`;
-    try {
-      await window.navigator.clipboard.writeText(link);
-      setMessage("Public artifact link copied.");
-    } catch {
-      setMessage(link);
-    }
-  }
-
   async function cleanupExpired() {
     if (!token || !normalizedSlug) return;
     setBusy(true);
@@ -251,7 +233,7 @@ export default function ProjectArtifactsView({ token }: { token: string | null |
         <div>
           <h2 className="text-lg font-semibold">Project Artifacts</h2>
           <p className="mt-1 text-xs leading-5 text-surface-500">
-            Save APKs, Hermes bundles, web previews, and shareable outputs for a project. External HTTPS links work on every plan; Yaver-hosted artifact storage is included with Cloud Workspace.
+            Save APKs, Hermes bundles, web previews, and other private project outputs. Yaver-hosted artifact storage is included with Cloud Workspace.
           </p>
         </div>
         <button
@@ -298,7 +280,7 @@ export default function ProjectArtifactsView({ token }: { token: string | null |
         </div>
       ) : null}
 
-      <section className="grid gap-3 md:grid-cols-3">
+      <section className="grid gap-3 md:grid-cols-2">
         <div className="rounded border border-surface-800 bg-surface-950/40 p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-surface-500">Project files</p>
           <p className="mt-2 text-2xl font-semibold text-surface-100">{projectUsage?.activeCount ?? 0}</p>
@@ -308,11 +290,6 @@ export default function ProjectArtifactsView({ token }: { token: string | null |
           <p className="text-xs font-semibold uppercase tracking-wide text-surface-500">Owner storage</p>
           <p className="mt-2 text-2xl font-semibold text-surface-100">{fmtProjectArtifactBytes(ownerUsage?.totalMeteredBytes ?? ownerUsage?.storageBytes)}</p>
           <p className="mt-1 text-xs text-surface-500">{ownerArtifactStorageLabel(ownerUsage)}</p>
-        </div>
-        <div className="rounded border border-surface-800 bg-surface-950/40 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-surface-500">Public links</p>
-          <p className="mt-2 text-2xl font-semibold text-surface-100">{projectUsage?.publicLinkCount ?? 0}</p>
-          <p className="mt-1 text-xs text-surface-500">{ownerUsage?.overQuota ? "Storage quota exceeded" : "Stored + pending bytes checked"}</p>
         </div>
       </section>
 
@@ -345,7 +322,6 @@ export default function ProjectArtifactsView({ token }: { token: string | null |
               onChange={(event) => setVisibility(event.target.value as ProjectArtifactVisibility)}
               className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-sm text-surface-100 outline-none focus:border-brand/60"
             >
-              <option value="public-link">public link</option>
               <option value="project">project</option>
               <option value="private">private</option>
             </select>
@@ -425,15 +401,6 @@ export default function ProjectArtifactsView({ token }: { token: string | null |
                         >
                           Open
                         </a>
-                      ) : null}
-                      {artifact.shareToken ? (
-                        <button
-                          type="button"
-                          onClick={() => void copyPublicLink(artifact)}
-                          className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-700 dark:text-sky-200"
-                        >
-                          Copy Link
-                        </button>
                       ) : null}
                       <button
                         type="button"

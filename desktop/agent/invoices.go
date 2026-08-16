@@ -356,8 +356,8 @@ func (s *HTTPServer) handleInvoiceSub(w http.ResponseWriter, r *http.Request) {
 		})
 	case len(parts) == 3 && parts[2] == "payment-link" && r.Method == http.MethodPost:
 		var body struct {
-			Provider string `json:"provider"` // "stripe" | "lemonsqueezy"
-			APIKey   string `json:"apiKey"`
+			Provider  string `json:"provider"` // "stripe" | "lemonsqueezy"
+			APIKey    string `json:"apiKey"`
 			ReturnURL string `json:"returnUrl,omitempty"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)

@@ -2,11 +2,10 @@ package main
 
 // deploy_run_support.go — supporting pieces for /deploy/ship:
 //
-//   1. deployLimiter — per-user in-flight cap so a misbehaving guest
-//      can't kick off dozens of parallel xcodebuild runs. Owner calls
-//      use the empty-string key and get a higher cap.
+//   1. deployLimiter — in-flight cap so one client cannot kick off
+//      dozens of parallel xcodebuild runs.
 //   2. HTTP handlers for /deploy/runs (list) and /deploy/runs/{id}
-//      (detail). Guest-aware: a guest only sees their own runs.
+//      (detail). Both are owner-only at the auth boundary.
 //   3. ensureDeployHistory / ensureDeployLimiter — lazy init so a
 //      server built in a test doesn't have to remember to allocate
 //      them.
@@ -23,13 +22,9 @@ import (
 // can stub file access if they ever need to.
 func openDeployLog(path string) (*os.File, error) { return os.Open(path) }
 
-// deployShipLimits is the default concurrency cap table.
-var deployShipLimits = struct {
-	Owner int
-	Guest int
-}{Owner: 8, Guest: 2}
+const deployShipMaxInFlight = 8
 
-// deployLimiter tracks per-caller in-flight deploys. "" is the owner.
+// deployLimiter tracks in-flight deploys.
 type deployLimiter struct {
 	mu       sync.Mutex
 	inFlight map[string]int
@@ -78,21 +73,9 @@ func (s *HTTPServer) ensureDeployLimiter() *deployLimiter {
 	return s.deployLimiter
 }
 
-// guestFilterForRequest returns ("guestUID") when the caller is a
-// guest and ("") when the caller is the owner. Used by the history
-// endpoints to hide other users' runs.
-func guestFilterForRequest(r *http.Request) string {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		return r.Header.Get("X-Yaver-GuestUserID")
-	}
-	return ""
-}
-
 // handleDeployRuns: GET /deploy/runs[?limit=N]
 //
 // Response: { "runs": [ DeployRun, ... ] }
-//
-// Guests only see runs they themselves initiated. Owner sees all.
 func (s *HTTPServer) handleDeployRuns(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -104,8 +87,7 @@ func (s *HTTPServer) handleDeployRuns(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	guestFilter := guestFilterForRequest(r)
-	runs := s.ensureDeployHistory().List(limit, guestFilter)
+	runs := s.ensureDeployHistory().List(limit)
 	// Elide OutputTail from list responses — the detail endpoint
 	// gives you that. Keeps a `list` cheap and prevents accidental
 	// 8 KB × N blow-ups.
@@ -122,8 +104,6 @@ func (s *HTTPServer) handleDeployRuns(w http.ResponseWriter, r *http.Request) {
 //
 // Returns a single DeployRun including its OutputTail, or (when the
 // path ends in /output) streams the full on-disk log as text/plain.
-// Guests get 404 for runs they didn't initiate (indistinguishable
-// from absent, deliberately).
 func (s *HTTPServer) handleDeployRunDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -149,8 +129,7 @@ func (s *HTTPServer) handleDeployRunDetail(w http.ResponseWriter, r *http.Reques
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing run id"})
 		return
 	}
-	guestFilter := guestFilterForRequest(r)
-	run, ok := s.ensureDeployHistory().Get(id, guestFilter)
+	run, ok := s.ensureDeployHistory().Get(id)
 	if !ok {
 		jsonReply(w, http.StatusNotFound, map[string]string{"error": "run not found"})
 		return

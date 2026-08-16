@@ -87,56 +87,6 @@ func TestDeployShipMethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestDeployShipGuestCannotOverrideStack(t *testing.T) {
-	srv := &HTTPServer{token: "t"}
-	body := `{"app":"web","target":"cloudflare","stack":"evil","path":"/tmp"}`
-	req := httptest.NewRequest("POST", "/deploy/ship", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer t")
-	req.Header.Set("X-Yaver-Guest", "true")
-	req.Header.Set("X-Yaver-GuestUserID", "g1")
-	w := httptest.NewRecorder()
-	srv.handleDeployShip(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("guest override must be 403, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestDeployShipGuestProjectRestriction(t *testing.T) {
-	// Run in a temp dir with a workspace manifest declaring "web".
-	tmp := t.TempDir()
-	writeTestWorkspace(t, tmp, "web", "nextjs", "app")
-	// Swap cwd so resolveAppFromWorkspaceFull finds the manifest.
-	orig, _ := os.Getwd()
-	defer os.Chdir(orig)
-	_ = os.Chdir(tmp)
-
-	// Guest is only allowed project "otherapp" — requesting "web"
-	// must be rejected.
-	mgr := NewGuestConfigManager(t.TempDir())
-	mgr.UpdateConfigs([]GuestConfig{
-		{
-			GuestUserID:     "guestA",
-			Scope:           GuestScopeDeploy,
-			AllowedProjects: []string{"otherapp"},
-		},
-	})
-	srv := &HTTPServer{token: "t", guestConfigMgr: mgr}
-
-	body := `{"app":"web","target":"cloudflare"}`
-	req := httptest.NewRequest("POST", "/deploy/ship", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer t")
-	req.Header.Set("X-Yaver-Guest", "true")
-	req.Header.Set("X-Yaver-GuestUserID", "guestA")
-	w := httptest.NewRecorder()
-	srv.handleDeployShip(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("out-of-scope project must be 403, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "not authorised for this project") {
-		t.Fatalf("wrong error body: %s", w.Body.String())
-	}
-}
-
 func TestDeployShipEndToEndWithEchoTemplate(t *testing.T) {
 	// End-to-end: register a dummy template that just echoes a vault
 	// value, spawn it, and verify the SSE stream carries the expected
@@ -248,10 +198,8 @@ func TestDeployShipEndToEndWithEchoTemplate(t *testing.T) {
 	}
 }
 
-func TestBuildDeployShipEnvGuestWhitelist(t *testing.T) {
-	// Pollute the parent env with a sensitive-looking var; the guest
-	// env must NOT include it.
-	t.Setenv("GITHUB_TOKEN", "ghp_leak_this")
+func TestBuildDeployShipEnvIncludesOwnerAndVaultValues(t *testing.T) {
+	t.Setenv("DEPLOY_TEST_OWNER_VALUE", "owner-value")
 	t.Setenv("PATH", "/usr/bin")
 	t.Setenv("HOME", "/tmp")
 
@@ -261,47 +209,22 @@ func TestBuildDeployShipEnvGuestWhitelist(t *testing.T) {
 	vs, _ := NewVaultStore("p")
 	_ = vs.Set(VaultEntry{Name: "CLOUDFLARE_API_TOKEN", Project: "web", Value: "vault-token"})
 
-	env := buildDeployShipEnv(vs, "web", true /* isGuest */)
+	env := buildDeployShipEnv(vs, "web")
 
-	hasGitHubLeak := false
+	hasOwnerValue := false
 	hasVaultToken := false
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "GITHUB_TOKEN=") {
-			hasGitHubLeak = true
+		if kv == "DEPLOY_TEST_OWNER_VALUE=owner-value" {
+			hasOwnerValue = true
 		}
 		if kv == "CLOUDFLARE_API_TOKEN=vault-token" {
 			hasVaultToken = true
 		}
 	}
-	if hasGitHubLeak {
-		t.Error("guest subprocess env must NOT include GITHUB_TOKEN from parent shell")
+	if !hasOwnerValue {
+		t.Error("owner subprocess env must include the parent environment")
 	}
 	if !hasVaultToken {
-		t.Error("guest subprocess env must include vault-supplied token")
-	}
-}
-
-func TestGuestScopeDeployAllowList(t *testing.T) {
-	// A scope=deploy guest should be blocked from /tasks but allowed
-	// on /deploy/ship.
-	if isGuestAllowedPathForScope("/tasks", GuestScopeDeploy) {
-		t.Error("scope=deploy must NOT allow /tasks")
-	}
-	if !isGuestAllowedPathForScope("/deploy/ship", GuestScopeDeploy) {
-		t.Error("scope=deploy must allow /deploy/ship")
-	}
-	if !isGuestAllowedPathForScope("/doctor/build", GuestScopeDeploy) {
-		t.Error("scope=deploy must allow /doctor/build")
-	}
-	if isGuestAllowedPathForScope("/vault/list", GuestScopeDeploy) {
-		t.Error("scope=deploy must NOT allow /vault/list")
-	}
-	// Scope=full keeps the new endpoints accessible.
-	if !isGuestAllowedPathForScope("/deploy/ship", GuestScopeFull) {
-		t.Error("scope=full must allow /deploy/ship")
-	}
-	// Feedback-only stays tight.
-	if isGuestAllowedPathForScope("/deploy/ship", GuestScopeFeedbackOnly) {
-		t.Error("scope=feedback-only must NOT allow /deploy/ship")
+		t.Error("owner subprocess env must include vault-supplied token")
 	}
 }

@@ -206,9 +206,9 @@ func TestVibePreviewStartHTTP_refusedTarget_424WithGap(t *testing.T) {
 		t.Fatalf("status: want 424 got %d (body %s)", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		OK           bool           `json:"ok"`
-		Code         string         `json:"code"`
-		Error        string         `json:"error"`
+		OK            bool           `json:"ok"`
+		Code          string         `json:"code"`
+		Error         string         `json:"error"`
 		CapabilityGap *CapabilityGap `json:"capabilityGap"`
 	}
 	if err := jsonUnmarshalStrict(rec.Body.Bytes(), &resp); err != nil {

@@ -10,7 +10,7 @@ package main
 // H264 track fed by the source, and answers. Sub-second glass-to-glass vs. the
 // snapshot/MJPEG paths.
 //
-// Egress note (CLAUDE.md): same as the rest of streaming — owner/guest only over
+// Egress note (CLAUDE.md): same as the rest of streaming — owner only over
 // the authed mesh, neutral tool, user's content + responsibility.
 
 import (

@@ -74,36 +74,28 @@ test("feedback artifact id list deduplicates and caps", () => {
   assert.deepEqual(ids, ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]);
 });
 
-test("feedback artifact attachment stays inside project and private owner/uploader boundary", () => {
+test("feedback artifact attachment stays inside the owner's project", () => {
   const base = {
-    shareId: "share-a",
+    projectSlug: "project-a",
     ownerUserId: "owner",
-    userId: "guest-a",
+    userId: "owner",
     status: "active",
     visibility: "project",
     expiresAt: 2_000,
   };
   const ctx = {
-    shareId: "share-a",
+    projectSlug: "project-a",
     ownerUserId: "owner",
-    requesterUserId: "guest-a",
     now: 1_000,
   };
 
   assert.equal(canAttachArtifactToFeedback(base, ctx), true);
-  assert.equal(canAttachArtifactToFeedback({ ...base, shareId: "share-b" }, ctx), false);
+  assert.equal(canAttachArtifactToFeedback({ ...base, projectSlug: "project-b" }, ctx), false);
   assert.equal(canAttachArtifactToFeedback({ ...base, ownerUserId: "other-owner" }, ctx), false);
   assert.equal(canAttachArtifactToFeedback({ ...base, status: "hidden" }, ctx), false);
   assert.equal(canAttachArtifactToFeedback({ ...base, expiresAt: 900 }, ctx), false);
   assert.equal(canAttachArtifactToFeedback({ ...base, visibility: "private" }, ctx), true);
-  assert.equal(canAttachArtifactToFeedback({ ...base, visibility: "private", userId: "guest-b" }, ctx), false);
-  assert.equal(
-    canAttachArtifactToFeedback(
-      { ...base, visibility: "private", userId: "guest-b" },
-      { ...ctx, requesterUserId: "owner" },
-    ),
-    true,
-  );
+  assert.equal(canAttachArtifactToFeedback({ ...base, visibility: "private", userId: "other" }, ctx), false);
 });
 
 test("feedback relay metadata is bounded and body-free", () => {
@@ -154,13 +146,13 @@ test("feedback relay intent metadata includes safe provider target", () => {
 test("feedback relay-source reuse requires matching live intent", () => {
   const base = {
     ownerUserId: "owner",
-    shareId: "share-a",
+    projectSlug: "project-a",
     localTaskId: "feedback:item-1",
     status: "queued",
   };
   const ctx = {
     ownerUserId: "owner",
-    shareId: "share-a",
+    projectSlug: "project-a",
     localTaskId: "feedback:item-1",
   };
 
@@ -169,12 +161,12 @@ test("feedback relay-source reuse requires matching live intent", () => {
   assert.equal(canReuseFeedbackRelaySourceIntent({ ...base, status: "failed" }, ctx), false);
   assert.equal(canReuseFeedbackRelaySourceIntent({ ...base, status: "cancelled" }, ctx), false);
   assert.equal(canReuseFeedbackRelaySourceIntent({ ...base, ownerUserId: "other" }, ctx), false);
-  assert.equal(canReuseFeedbackRelaySourceIntent({ ...base, shareId: "share-b" }, ctx), false);
+  assert.equal(canReuseFeedbackRelaySourceIntent({ ...base, projectSlug: "project-b" }, ctx), false);
   assert.equal(canReuseFeedbackRelaySourceIntent({ ...base, localTaskId: "feedback:item-2" }, ctx), false);
 
   assert.equal(feedbackRelaySourceLocalTaskCollision(base, ctx), false);
   assert.equal(feedbackRelaySourceLocalTaskCollision({ ...base, ownerUserId: "other" }, ctx), true);
-  assert.equal(feedbackRelaySourceLocalTaskCollision({ ...base, shareId: "share-b" }, ctx), true);
+  assert.equal(feedbackRelaySourceLocalTaskCollision({ ...base, projectSlug: "project-b" }, ctx), true);
 });
 
 test("feedback terminal statuses distinguish recoverable blocked rows", () => {

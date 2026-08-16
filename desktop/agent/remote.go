@@ -18,22 +18,22 @@ import (
 // RemoteMachine represents a headless dev machine managed by Yaver.
 // It may be a VPS, an old laptop, a Raspberry Pi, or any SSH-accessible host.
 type RemoteMachine struct {
-	ID          string    `json:"id"`
-	Host        string    `json:"host"`
-	User        string    `json:"user"`
-	Label       string    `json:"label"`
-	Platform    string    `json:"platform"` // "linux" or "darwin"
-	Arch        string    `json:"arch"`     // "amd64", "arm64"
-	Online      bool      `json:"online"`
-	CPU         string    `json:"cpu,omitempty"`
-	Memory      string    `json:"memory,omitempty"`
-	Disk        string    `json:"disk,omitempty"`
-	DiskUsed    string    `json:"diskUsed,omitempty"`
-	Projects    []string  `json:"projects,omitempty"`
-	Containers  int       `json:"containers"`
-	CostEstimate float64  `json:"costEstimate,omitempty"` // USD/month
-	Provider    string    `json:"provider,omitempty"`     // "hetzner", "digitalocean", "unknown"
-	LastSeen    time.Time `json:"lastSeen"`
+	ID           string    `json:"id"`
+	Host         string    `json:"host"`
+	User         string    `json:"user"`
+	Label        string    `json:"label"`
+	Platform     string    `json:"platform"` // "linux" or "darwin"
+	Arch         string    `json:"arch"`     // "amd64", "arm64"
+	Online       bool      `json:"online"`
+	CPU          string    `json:"cpu,omitempty"`
+	Memory       string    `json:"memory,omitempty"`
+	Disk         string    `json:"disk,omitempty"`
+	DiskUsed     string    `json:"diskUsed,omitempty"`
+	Projects     []string  `json:"projects,omitempty"`
+	Containers   int       `json:"containers"`
+	CostEstimate float64   `json:"costEstimate,omitempty"` // USD/month
+	Provider     string    `json:"provider,omitempty"`     // "hetzner", "digitalocean", "unknown"
+	LastSeen     time.Time `json:"lastSeen"`
 
 	// Provider-specific instance ID for API operations (destroy, snapshot).
 	ProviderInstanceID string `json:"providerInstanceId,omitempty"`
@@ -506,8 +506,6 @@ func (m *RemoteManager) Provision(provider, size, region string) (string, error)
 	}
 }
 
-
-
 func (m *RemoteManager) Destroy(machineID string, confirm bool) (string, error) {
 	if !confirm {
 		return "", fmt.Errorf("pass confirm=true to destroy machine %q", machineID)
@@ -869,7 +867,7 @@ func (m *RemoteManager) saveConfig() error {
 // detectProvider guesses the VPS provider from IP address or hostname.
 // Returns "unknown" when detection fails.
 func detectProvider(host string) string {
-	if strings.Contains(host, "hetzner") || strings.Contains(host, "hc-")  {
+	if strings.Contains(host, "hetzner") || strings.Contains(host, "hc-") {
 		return "hetzner"
 	}
 	if strings.Contains(host, "digitalocean") || strings.Contains(host, "droplet") {
@@ -938,8 +936,6 @@ func cloudAPIRequest(url, method, authorization string, body interface{}) ([]byt
 }
 
 // digitaloceanAPI makes an authenticated request to the DigitalOcean v2 API.
-
-
 
 func (m *RemoteManager) userForHost(host string) (string, error) {
 	m.mu.Lock()

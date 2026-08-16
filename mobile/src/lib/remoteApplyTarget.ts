@@ -2,13 +2,13 @@
 //
 // In `(engine: hermes, target: box)` the brain runs on the phone (one mirrored
 // token, $0 on plan) but the EditPlan must land on the BOX's filesystem, not the
-// phone sandbox. This adapts the box's existing host-share FS endpoints
+// phone sandbox. This adapts the box's owner-authenticated FS endpoints
 // (desktop/agent/files_browser.go) to the same ApplyTarget interface that
 // applyEditPlan() already drives for phone-local edits — so llmClient.applyEditPlan
 // is reused verbatim; only the target swaps.
 //
 //   phone-local : phoneSandboxSourceDefault  → expo-file-system
-//   box (remote): makeRemoteApplyTarget(...)  → POST /host-share/fs/{write,delete}
+//   box (remote): makeRemoteApplyTarget(...)  → POST /files/{write,delete}
 //
 // Pure + injectable (fetch + headers passed in) so it's tsx-testable with no RN.
 
@@ -19,20 +19,16 @@ export interface RemoteApplyConfig {
   baseUrl: string;
   /** Auth headers for the box (quicClient.getAuthHeaders()). */
   headers: Record<string, string>;
-  /** Host-share root id + absolute base path identifying the project ON THE BOX.
-   *  Both come from the project the user selected on that device; the agent
-   *  safeJoin()s `path` under rootPath so edits can't escape the project. */
+  /** Owner file-root id identifying the project on the box. The agent resolves
+   *  it from its own project inventory and safeJoin()s every relative path. */
   root: string;
-  rootPath: string;
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
 
-const HOST_SHARE_HEADER = { "X-Yaver-HostShare": "true" } as const;
-
 /** Build an ApplyTarget that writes/deletes files on a remote box. The `slug`
  *  arg of writeSourceFile/deleteSourceFile is ignored — the box project is
- *  already pinned by (root, rootPath); we forward only the relative path. */
+ *  already pinned by root id; we forward only the relative path. */
 export function makeRemoteApplyTarget(cfg: RemoteApplyConfig): ApplyTarget {
   const fetchImpl = cfg.fetchImpl ?? fetch;
   const base = cfg.baseUrl.replace(/\/+$/, "");
@@ -42,10 +38,9 @@ export function makeRemoteApplyTarget(cfg: RemoteApplyConfig): ApplyTarget {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...HOST_SHARE_HEADER,
         ...cfg.headers,
       },
-      body: JSON.stringify({ root: cfg.root, rootPath: cfg.rootPath, ...body }),
+      body: JSON.stringify({ root: cfg.root, ...body }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -63,10 +58,10 @@ export function makeRemoteApplyTarget(cfg: RemoteApplyConfig): ApplyTarget {
 
   return {
     async writeSourceFile(_slug: string, relPath: string, content: string): Promise<void> {
-      await post("/host-share/fs/write", { path: normalizeRel(relPath), content });
+      await post("/files/write", { path: normalizeRel(relPath), content });
     },
     async deleteSourceFile(_slug: string, relPath: string): Promise<void> {
-      await post("/host-share/fs/delete", { path: normalizeRel(relPath) });
+      await post("/files/delete", { path: normalizeRel(relPath) });
     },
   };
 }

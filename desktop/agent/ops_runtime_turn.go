@@ -29,9 +29,9 @@ func init() {
 			},
 			"additionalProperties": true,
 		},
-		Handler:    opsRuntimeTurnHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRuntimeTurnHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "runtime_turns",
@@ -43,9 +43,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRuntimeTurnsHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRuntimeTurnsHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "runtime_turn_status",
@@ -58,9 +58,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRuntimeTurnStatusHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRuntimeTurnStatusHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "runtime_turn_run",
@@ -73,9 +73,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRuntimeTurnRunHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRuntimeTurnRunHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "runtime_turn_verify",
@@ -88,9 +88,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRuntimeTurnVerifyHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRuntimeTurnVerifyHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

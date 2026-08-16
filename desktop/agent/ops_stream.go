@@ -3,14 +3,12 @@ package main
 // ops_stream.go — read-only "share a live view" verbs. The generalized peer-
 // streaming primitive: any source on this box (the capture card, the Apple TV's
 // now-playing artwork, a robot/host camera) can be enumerated and snapshotted by
-// a viewer — including a GUEST account holding a "stream"-scoped token, which is
-// isolated to exactly these stream_* verbs (see capabilityScopeVerbPrefix in
-// ops.go) and can reach nothing else on the machine.
+// the authenticated owner. There is no public/share-token stream lane.
 //
 // Snapshots return a base64 data URL in Initial (the cad_get / robot_camera
 // pattern) so a phone / TV / web viewer renders them with no extra HTTP route or
-// guest-auth plumbing. High-fps live video keeps using the MJPEG endpoints
-// (/capture/stream); guest-authed MJPEG is the next increment (see
+// constrained-auth plumbing. High-fps live video keeps using the MJPEG endpoints
+// (/capture/stream); companion video access is a separate explicit capability (see
 // docs/yaver-appletv-remote-control.md Part C). Privacy: frames flow P2P over
 // the authed mesh; nothing touches Convex.
 
@@ -23,11 +21,11 @@ import (
 
 func init() {
 	registerOpsVerb(opsVerbSpec{
-		Name:        "stream_list",
-		Description: "List the live sources this box can SHARE as a view (capture card, Apple TV now-playing, robot/host camera). Read-only; guest-viewable.",
-		Schema:      atvSchema(map[string]interface{}{}),
-		Handler:     streamListHandler,
-		AllowGuest:  true,
+		Name:           "stream_list",
+		Description:    "List the live sources on this box (capture card, Apple TV now-playing, robot/host camera). Owner-only.",
+		Schema:         atvSchema(map[string]interface{}{}),
+		Handler:        streamListHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "stream_broadcast",
@@ -82,23 +80,14 @@ func init() {
 		Handler: screenWatchHandler,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "stream_share",
-		Description: "Mint a VIEW-ONLY share token (owner only) for this box's live streams — capture card / Apple TV now-playing / screen. The token is scoped to the read-only stream_* verbs and NOTHING else; hand it to a friend's account or put it in a watch link. Payload {ttlHours?} (default 24). Returns {token, expiresInMs}.",
-		Schema: atvSchema(map[string]interface{}{
-			"ttlHours": map[string]interface{}{"type": "integer", "description": "link lifetime in hours (default 24)"},
-		}),
-		Handler:    streamShareHandler,
-		AllowGuest: false, // owner mints; a guest can't escalate their own scope
-	})
-	registerOpsVerb(opsVerbSpec{
 		Name:        "stream_snapshot",
-		Description: "Pull one frame from a shared source as a base64 data URL. Payload {source} — \"capture\" (capture card), \"appletv\" (now-playing artwork), \"camera\" (robot/host camera). Read-only; guest-viewable.",
+		Description: "Pull one frame from an owner source as a base64 data URL. Payload {source} — \"capture\" (capture card), \"appletv\" (now-playing artwork), \"camera\" (robot/host camera). Owner-only.",
 		Schema: atvSchema(map[string]interface{}{
 			"source": map[string]interface{}{"type": "string", "description": "capture|appletv|camera"},
 			"device": map[string]interface{}{"type": "string", "description": "for source=appletv: which paired TV"},
 		}),
-		Handler:    streamSnapshotHandler,
-		AllowGuest: true,
+		Handler:        streamSnapshotHandler,
+		AllowCompanion: false,
 	})
 }
 
@@ -171,36 +160,6 @@ func screenWatchHandler(c OpsContext, payload json.RawMessage) OpsResult {
 	}}
 }
 
-func streamShareHandler(c OpsContext, payload json.RawMessage) OpsResult {
-	var p struct {
-		TTLHours int `json:"ttlHours"`
-	}
-	_ = json.Unmarshal(payload, &p)
-	if p.TTLHours <= 0 {
-		p.TTLHours = 24
-	}
-	cfg, err := LoadConfig()
-	if err != nil || cfg == nil || cfg.AuthToken == "" {
-		return OpsResult{OK: false, Code: "not_signed_in", Error: "the box must be signed in (yaver auth) to mint a share token"}
-	}
-	expires := int64(p.TTLHours) * 3600 * 1000
-	tok, err := CreateSdkToken(c.Server.convexURL, cfg.AuthToken, SdkTokenCreateOpts{
-		Label:       "stream-watch-link",
-		Scopes:      []string{"stream"},
-		ExpiresInMs: expires,
-	})
-	if err != nil {
-		return OpsResult{OK: false, Code: "mint_failed", Error: err.Error()}
-	}
-	return OpsResult{OK: true, Initial: map[string]interface{}{
-		"token":       tok,
-		"scope":       "stream",
-		"expiresInMs": expires,
-		"deviceId":    c.Server.deviceID,
-		"hint":        "view-only — reaches only the stream_* verbs on this box. Expires; mint a new one to extend.",
-	}}
-}
-
 func streamSnapshotHandler(c OpsContext, payload json.RawMessage) OpsResult {
 	var p struct {
 		Source string `json:"source"`
@@ -224,8 +183,7 @@ func streamSnapshotHandler(c OpsContext, payload json.RawMessage) OpsResult {
 		return OpsResult{OK: true, Initial: out}
 	case "appletv":
 		// Include now-playing text too (title/artist/app/state) so a view-only
-		// watcher gets context without needing the appletv_now_playing verb
-		// (which is outside the stream_* scope).
+		// viewer gets context without another round trip.
 		np, dataURL := appleTVEng.nowPlayingArtworkDataURL(c.Ctx, p.Device)
 		out := map[string]interface{}{"source": "appletv"}
 		if dataURL != "" {

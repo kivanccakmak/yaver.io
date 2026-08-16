@@ -42,12 +42,6 @@ class RemoteDevice {
 
   /// Unix ms of the latest heartbeat the agent sent to Convex.
   final int lastHeartbeat;
-  final bool isGuest;
-  final String? hostName;
-  final String? hostEmail;
-
-  /// "owner" | "shared-scoped" | "shared-legacy".
-  final String accessScope;
 
   /// Primary LAN IP (or tunnel host) the agent advertised.
   final String quicHost;
@@ -74,10 +68,6 @@ class RemoteDevice {
     required this.needsAuth,
     required this.runnerDown,
     required this.lastHeartbeat,
-    required this.isGuest,
-    this.hostName,
-    this.hostEmail,
-    this.accessScope = 'owner',
     required this.quicHost,
     required this.quicPort,
     this.httpPort,
@@ -101,14 +91,10 @@ class RemoteDevice {
       needsAuth: j['needsAuth'] == true,
       runnerDown: j['runnerDown'] == true,
       lastHeartbeat: (j['lastHeartbeat'] as num?)?.toInt() ?? 0,
-      isGuest: j['isGuest'] == true,
-      hostName: j['hostName'] as String?,
-      hostEmail: j['hostEmail'] as String?,
-      accessScope: (j['accessScope'] as String?) ?? 'owner',
       quicHost: (j['quicHost'] ?? j['host'] ?? '') as String,
       quicPort: (j['quicPort'] as num?)?.toInt() ?? 0,
-      httpPort: (j['httpPort'] as num?)?.toInt() ??
-          (j['quicPort'] as num?)?.toInt(),
+      httpPort:
+          (j['httpPort'] as num?)?.toInt() ?? (j['quicPort'] as num?)?.toInt(),
       publicKey: j['publicKey'] as String?,
       hwid: (j['hardwareId'] ?? j['hwid']) as String?,
       localIps: ips,
@@ -134,10 +120,6 @@ class RemoteDevice {
       needsAuth: needsAuth,
       runnerDown: runnerDown ?? this.runnerDown,
       lastHeartbeat: lastHeartbeat ?? this.lastHeartbeat,
-      isGuest: isGuest,
-      hostName: hostName,
-      hostEmail: hostEmail,
-      accessScope: accessScope,
       quicHost: quicHost ?? this.quicHost,
       quicPort: quicPort ?? this.quicPort,
       httpPort: httpPort ?? this.httpPort,
@@ -148,12 +130,11 @@ class RemoteDevice {
   }
 }
 
-/// The user's reachable devices, split by ownership.
+/// The signed-in user's own reachable devices.
 class DeviceList {
   final List<RemoteDevice> owned;
-  final List<RemoteDevice> shared;
-  const DeviceList({required this.owned, required this.shared});
-  factory DeviceList.empty() => const DeviceList(owned: [], shared: []);
+  const DeviceList({required this.owned});
+  factory DeviceList.empty() => const DeviceList(owned: []);
 }
 
 // ── Normalisers ───────────────────────────────────────────────────────
@@ -173,11 +154,6 @@ String _identityKey(RemoteDevice d) {
   if (hwid != null && hwid.isNotEmpty) return 'hwid:$hwid';
   final pk = d.publicKey;
   if (pk != null && pk.isNotEmpty) return 'pub:$pk';
-  if (d.isGuest) {
-    final scope = d.hostEmail ?? d.hostName ?? 'guest';
-    final id = d.deviceId.isNotEmpty ? d.deviceId : d.name;
-    return 'guest:$scope:$id';
-  }
   final n = _normName(d.name);
   final os = d.platform.trim().toLowerCase();
   if (n.isNotEmpty && os.isNotEmpty) return 'host:$os:$n';
@@ -186,7 +162,6 @@ String _identityKey(RemoteDevice d) {
 }
 
 String? _aliasKey(RemoteDevice d) {
-  if (d.isGuest) return null;
   final n = _normName(d.name);
   final os = d.platform.trim().toLowerCase();
   if (n.isEmpty || os.isEmpty) return null;
@@ -194,7 +169,6 @@ String? _aliasKey(RemoteDevice d) {
 }
 
 String? _endpointKey(RemoteDevice d) {
-  if (d.isGuest) return null;
   final h = _normHost(d.quicHost);
   if (h.isEmpty) return null;
   return '$h:${d.quicPort}';
@@ -225,9 +199,8 @@ RemoteDevice _merge(RemoteDevice a, RemoteDevice b) {
     runnerDown: base.runnerDown && other.runnerDown,
     publicKey: base.publicKey ?? other.publicKey,
     hwid: base.hwid ?? other.hwid,
-    lastHeartbeat: a.lastHeartbeat > b.lastHeartbeat
-        ? a.lastHeartbeat
-        : b.lastHeartbeat,
+    lastHeartbeat:
+        a.lastHeartbeat > b.lastHeartbeat ? a.lastHeartbeat : b.lastHeartbeat,
     localIps: ipSet.isEmpty ? null : ipSet.toList(),
   );
 }
@@ -454,9 +427,7 @@ Future<ProbeResult?> raceHealthProbes(
 
 // ── Convex /devices/list ─────────────────────────────────────────────
 
-/// Fetch the set of remote dev machines this user can reach, then
-/// collapse the duplicates and split into owned (user is the host)
-/// vs shared (host invited them as a guest).
+/// Fetch the signed-in user's own remote dev machines and collapse duplicates.
 Future<DeviceList> listReachableDevices(String token) async {
   try {
     final res = await http.get(
@@ -471,10 +442,7 @@ Future<DeviceList> listReachableDevices(String token) async {
         .map(RemoteDevice.fromJson)
         .toList();
     final deduped = collapseRemoteDevices(normalised);
-    return DeviceList(
-      owned: deduped.where((d) => !d.isGuest).toList(),
-      shared: deduped.where((d) => d.isGuest).toList(),
-    );
+    return DeviceList(owned: deduped);
   } catch (_) {
     return DeviceList.empty();
   }

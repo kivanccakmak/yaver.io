@@ -53,9 +53,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsBuildHandler,
-		Streaming:  true,
-		AllowGuest: false,
+		Handler:        opsBuildHandler,
+		Streaming:      true,
+		AllowCompanion: false,
 	})
 }
 

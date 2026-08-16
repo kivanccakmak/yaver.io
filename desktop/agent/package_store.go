@@ -1,14 +1,14 @@
 package main
 
 // package_store.go — local-first store + manifest types for Yaver Task Packages:
-// portable, declarative, consent-gated units of work an owner authors once and
-// shares to another person who runs them on their phone or a worker box.
+// portable, declarative, consent-gated units of work an owner authors and runs
+// on their own phone, agent, or worker box.
 // See docs/yaver-task-packages.md.
 //
 // PRIVACY: like the collection store, this is LOCAL ONLY (~/.yaver/packages/
 // store.json). Convex carries only bookkeeping (handled elsewhere); collected
-// data and secret-bearing config never live here in a shareable form — the
-// shareable manifest is the metadata, secrets resolve on-device at run time.
+// data and secret-bearing config never leave this device; secrets resolve at
+// run time.
 
 import (
 	"encoding/json"
@@ -93,7 +93,7 @@ type PackageStep struct {
 type PackageMCPBinding struct {
 	Name      string                 `json:"name"`
 	URL       string                 `json:"url,omitempty"`       // remote http MCP endpoint
-	AuthToken string                 `json:"authToken,omitempty"` // resolved on-device; not shipped in the public manifest
+	AuthToken string                 `json:"authToken,omitempty"` // resolved on-device; not included in Convex bookkeeping
 	Tool      string                 `json:"tool,omitempty"`      // tools/call name (http transport)
 	Verb      string                 `json:"verb,omitempty"`      // local Yaver ops verb (local transport)
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
@@ -187,26 +187,7 @@ func validatePackage(p *TaskPackage) error {
 	return nil
 }
 
-// --- allocations + runs -----------------------------------------------------
-
-// PackageAllocation binds a package to a runner device + target, under consent.
-type PackageAllocation struct {
-	AllocationID   string `json:"allocationId"`
-	PackageName    string `json:"packageName"`
-	RunnerDeviceID string `json:"runnerDeviceId"`
-	Target         string `json:"target"` // mobile | agent | docker | worker
-	Status         string `json:"status"` // proposed | accepted | active | paused | revoked
-	ConsentAt      int64  `json:"consentAt,omitempty"`
-	WifiOnly       bool   `json:"wifiOnly"`
-	ChargingOnly   bool   `json:"chargingOnly"`
-	RunCount       int    `json:"runCount"`
-	BlockCount     int    `json:"blockCount"`
-	LastRunAt      int64  `json:"lastRunAt,omitempty"`
-	LastStatus     string `json:"lastStatus,omitempty"`
-	LastCountry    string `json:"lastCountry,omitempty"`
-	CreatedAt      int64  `json:"createdAt"`
-	UpdatedAt      int64  `json:"updatedAt"`
-}
+// --- runs ------------------------------------------------------------------
 
 // PackageRun is a local audit row for one execution (counts + a small summary).
 type PackageRun struct {
@@ -229,10 +210,9 @@ type packageStoreT struct {
 	loaded bool
 	seq    int64
 
-	Packages    map[string]*TaskPackage        `json:"packages"`    // keyed by metadata.name
-	Allocations map[string]*PackageAllocation  `json:"allocations"` // keyed by allocationId
-	Runs        []*PackageRun                  `json:"runs"`
-	Checks      map[string]*PackageCheckResult `json:"checks"` // last preflight, keyed by package name
+	Packages map[string]*TaskPackage        `json:"packages"` // keyed by metadata.name
+	Runs     []*PackageRun                  `json:"runs"`
+	Checks   map[string]*PackageCheckResult `json:"checks"` // last preflight, keyed by package name
 }
 
 var pkgStore = &packageStoreT{}
@@ -243,9 +223,6 @@ func (s *packageStoreT) ensureLoaded() {
 	}
 	if s.Packages == nil {
 		s.Packages = map[string]*TaskPackage{}
-	}
-	if s.Allocations == nil {
-		s.Allocations = map[string]*PackageAllocation{}
 	}
 	if s.Checks == nil {
 		s.Checks = map[string]*PackageCheckResult{}
@@ -330,59 +307,12 @@ func (s *packageStoreT) deletePackage(name string) bool {
 	return true
 }
 
-func (s *packageStoreT) upsertAllocation(a PackageAllocation) *PackageAllocation {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ensureLoaded()
-	now := time.Now().UnixMilli()
-	if a.AllocationID == "" {
-		a.AllocationID = s.nextID("alloc")
-	}
-	if a.Status == "" {
-		a.Status = "proposed"
-	}
-	if existing, ok := s.Allocations[a.AllocationID]; ok {
-		a.CreatedAt = existing.CreatedAt
-		a.RunCount = existing.RunCount
-		a.BlockCount = existing.BlockCount
-	} else {
-		a.CreatedAt = now
-	}
-	a.UpdatedAt = now
-	s.Allocations[a.AllocationID] = &a
-	s.save()
-	return &a
-}
-
-func (s *packageStoreT) listAllocations(packageName string) []*PackageAllocation {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ensureLoaded()
-	out := make([]*PackageAllocation, 0)
-	for _, a := range s.Allocations {
-		if packageName != "" && a.PackageName != packageName {
-			continue
-		}
-		out = append(out, a)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].AllocationID < out[j].AllocationID })
-	return out
-}
-
 func (s *packageStoreT) setCheck(name string, r *PackageCheckResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureLoaded()
 	s.Checks[name] = r
 	s.save()
-}
-
-func (s *packageStoreT) getCheck(name string) (*PackageCheckResult, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ensureLoaded()
-	r, ok := s.Checks[name]
-	return r, ok
 }
 
 func (s *packageStoreT) recordRun(run PackageRun) *PackageRun {
@@ -428,10 +358,9 @@ func resetPackageStoreForTest(dir string) {
 		path = filepath.Join(dir, "package-store.json")
 	}
 	pkgStore = &packageStoreT{
-		path:        path,
-		loaded:      true,
-		Packages:    map[string]*TaskPackage{},
-		Allocations: map[string]*PackageAllocation{},
-		Checks:      map[string]*PackageCheckResult{},
+		path:     path,
+		loaded:   true,
+		Packages: map[string]*TaskPackage{},
+		Checks:   map[string]*PackageCheckResult{},
 	}
 }

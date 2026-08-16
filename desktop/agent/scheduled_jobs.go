@@ -8,13 +8,13 @@ import (
 
 // ScheduledJob is a universal scheduled task (cron / Convex scheduled function / pg_cron).
 type ScheduledJob struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind"` // cron, once, recurring
-	NextRun   string `json:"nextRun,omitempty"`
-	LastRun   string `json:"lastRun,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Schedule  string `json:"schedule,omitempty"`
-	Target    string `json:"target,omitempty"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"` // cron, once, recurring
+	NextRun  string `json:"nextRun,omitempty"`
+	LastRun  string `json:"lastRun,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Schedule string `json:"schedule,omitempty"`
+	Target   string `json:"target,omitempty"`
 }
 
 func ListScheduledJobs(projectDir string) ([]ScheduledJob, string, error) {

@@ -18,8 +18,8 @@ export default function OpenCodeModelCard({ devices }: Props) {
   const peers = useMemo(
     () =>
       devices
-        .filter((device) => device.online && !device.isGuest)
-        .map((device) => ({ id: device.id, name: device.name || device.hostName || device.id })),
+        .filter((device) => device.online)
+        .map((device) => ({ id: device.id, name: device.name || device.id })),
     [devices],
   );
   const targets = useMemo(() => [{ id: "__local__", name: "This machine" }, ...peers], [peers]);

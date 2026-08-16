@@ -388,63 +388,6 @@ function VoiceHintsRow({ device }: { device: Device }) {
 }
 
 // uniqueness errors verbatim so the user knows which alias is taken.
-/**
- * Guest-only exit from a share, mirroring the web card's "Remove my access".
- * Two-step by design: this reaches Convex and drops every machine the host
- * shared, on all of the user's surfaces — not just this row.
- *
- * Reversible: the host can share again and the guest can accept again.
- */
-function LeaveShareRow({ device }: { device: Device }) {
-  const c = useColors();
-  const { leaveSharedAccess } = useDevice();
-  const [leaving, setLeaving] = useState(false);
-  const hostLabel = device.hostName || device.hostEmail || "this host";
-
-  const confirmLeave = () => {
-    Alert.alert(
-      `Remove your access to ${hostLabel}'s machines?`,
-      `You'll lose access to every machine ${hostLabel} shared with you, on all your devices.\n\n${hostLabel} can share again later, and you can accept again.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove access",
-          style: "destructive",
-          onPress: async () => {
-            setLeaving(true);
-            try {
-              const res = await leaveSharedAccess(device);
-              Alert.alert(
-                "Access removed",
-                `You no longer have access to ${res.hostName}'s machines. They can share again whenever you both want.`,
-              );
-            } catch (e: any) {
-              Alert.alert("Error", e?.message || "Failed to remove access");
-            } finally {
-              setLeaving(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  return (
-    <Pressable
-      onPress={leaving ? undefined : confirmLeave}
-      disabled={leaving}
-      style={{ paddingVertical: 8, opacity: leaving ? 0.5 : 1 }}
-    >
-      <Text style={{ color: c.error, fontSize: 12, fontWeight: "700" }}>
-        {leaving ? "Removing…" : "Remove my access"}
-      </Text>
-      <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }}>
-        Drops every machine {hostLabel} shared with you. They can share again later.
-      </Text>
-    </Pressable>
-  );
-}
-
 function AliasRow({ device }: { device: Device }) {
   const c = useColors();
   const { setDeviceAlias } = useDevice();
@@ -2239,14 +2182,11 @@ export default function DeviceDetailsModal({ device, agentVersion, visible, onCl
               IDENTITY
             </Text>
             <Row label="Device ID" value={device.id} mono />
-            {!device.isGuest ? <AliasRow device={device} /> : device.alias ? <Row label="Alias" value={`@${device.alias}`} mono /> : null}
-            {!device.isGuest ? <VoiceHintsRow device={device} /> : null}
+            <AliasRow device={device} />
+            <VoiceHintsRow device={device} />
             {device.hwid ? <Row label="Hardware ID" value={device.hwid.slice(0, 16) + "…"} mono /> : null}
             {device.publicKey ? <Row label="Primary key" value={device.publicKey.slice(0, 16) + "…"} mono /> : null}
-            {device.accessScope ? <Row label="Access scope" value={device.accessScope} /> : null}
             {device.priorityMode ? <Row label="Priority mode" value={device.priorityMode} /> : null}
-            {device.isGuest && device.hostName ? <Row label="Shared from" value={device.hostName} /> : null}
-            {device.isGuest ? <LeaveShareRow device={device} /> : null}
           </View>
 
           {/* Runtime */}
@@ -2285,11 +2225,8 @@ export default function DeviceDetailsModal({ device, agentVersion, visible, onCl
             ) : null}
           </View>
 
-          {/* Recovery — owner-only. Hidden for guests because they
-              can't factory-reset the host's auth (the agent enforces
-              this via Convex check in handleAuthFactoryReset). */}
-          {!device.isGuest ? (
-            <View style={{
+          {/* Recovery */}
+          <View style={{
               borderWidth: 1, borderColor: c.border, borderRadius: 8,
               backgroundColor: c.bgCard, padding: 12, marginBottom: 12,
             }}>
@@ -2341,8 +2278,7 @@ export default function DeviceDetailsModal({ device, agentVersion, visible, onCl
                   stays a thin WhatsApp-Web-style companion). Recovery
                   (re-auth, watchdog, factory-reset) stays — it mutates
                   agent state, never provisions or tears down a box. */}
-            </View>
-          ) : null}
+          </View>
 
           {/* Coding agents — auth status + sign-in + default runner picker.
               Replaces the old RUNNERS section, which surfaced active task

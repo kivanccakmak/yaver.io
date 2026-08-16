@@ -67,9 +67,6 @@ func probeRunnerLocations() []*runnerLocation {
 		if !d.IsOnline {
 			continue
 		}
-		if d.IsGuest {
-			continue
-		}
 		if cfg.DeviceID != "" && d.DeviceID == cfg.DeviceID {
 			continue
 		}
@@ -230,12 +227,9 @@ func runnerDisplayName(id string) string {
 }
 
 // deviceDisplayLabel builds a short human label for a remote device,
-// preferring alias > hostname > device-name > a truncated device ID.
+// preferring alias > device-name > a truncated device ID.
 func deviceDisplayLabel(d DeviceInfo) string {
 	if s := strings.TrimSpace(d.Alias); s != "" {
-		return s
-	}
-	if s := strings.TrimSpace(d.HostName); s != "" {
 		return s
 	}
 	if s := strings.TrimSpace(d.Name); s != "" {

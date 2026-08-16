@@ -33,11 +33,8 @@ Options:
   --user       SSH user (default: root)
   --keyfile    SSH private key (default: ssh-agent)
   --port       Yaver agent HTTP port (default: 18080)
-  --multi-user Enable Yaver multi-user mode on the box
-  --team       Restrict multi-user mode to one Yaver team id
-  --max-users  Max concurrent multi-user sessions (default: 0 = unlimited)
   --allow-ips  Comma-separated CIDR allowlist for the agent
-  --containerize-guests  Run guest tasks in Docker containers
+  --containerize-host    Run all tasks in Docker containers
   --no-chrome  Skip Chrome install (use if you only need agent + tasks, not yaver-test-sdk)
   --uninstall  Tear down: stop the systemd service and remove the binary
 
@@ -66,11 +63,8 @@ KEYFILE=""
 PORT="18080"
 INSTALL_CHROME="yes"
 UNINSTALL="no"
-MULTI_USER="no"
-TEAM_ID=""
-MAX_USERS="0"
 ALLOW_IPS=""
-CONTAINERIZE_GUESTS="no"
+CONTAINERIZE_HOST="no"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -78,11 +72,8 @@ while [[ $# -gt 0 ]]; do
     --user)       USER="$2"; shift 2;;
     --keyfile)    KEYFILE="$2"; shift 2;;
     --port)       PORT="$2"; shift 2;;
-    --multi-user) MULTI_USER="yes"; shift;;
-    --team)       TEAM_ID="$2"; shift 2;;
-    --max-users)  MAX_USERS="$2"; shift 2;;
     --allow-ips)  ALLOW_IPS="$2"; shift 2;;
-    --containerize-guests) CONTAINERIZE_GUESTS="yes"; shift;;
+    --containerize-host) CONTAINERIZE_HOST="yes"; shift;;
     --no-chrome)  INSTALL_CHROME="no"; shift;;
     --uninstall)  UNINSTALL="yes"; shift;;
     -h|--help)    usage; exit 0;;
@@ -171,20 +162,11 @@ ssh_run "set -e; \
 
 echo "=> writing systemd unit..."
 SERVE_CMD=(/usr/local/bin/yaver serve --debug --port "$PORT" --work-dir /home/yaver)
-if [[ "$MULTI_USER" == "yes" ]]; then
-  SERVE_CMD+=(--multi-user)
-fi
-if [[ -n "$TEAM_ID" ]]; then
-  SERVE_CMD+=(--team "$TEAM_ID")
-fi
-if [[ "$MAX_USERS" != "0" ]]; then
-  SERVE_CMD+=(--max-users "$MAX_USERS")
-fi
 if [[ -n "$ALLOW_IPS" ]]; then
   SERVE_CMD+=(--allow-ips "$ALLOW_IPS")
 fi
-if [[ "$CONTAINERIZE_GUESTS" == "yes" ]]; then
-  SERVE_CMD+=(--containerize-guests)
+if [[ "$CONTAINERIZE_HOST" == "yes" ]]; then
+  SERVE_CMD+=(--containerize-host)
 fi
 printf -v EXEC_START '%q ' "${SERVE_CMD[@]}"
 EXEC_START="${EXEC_START% }"
@@ -226,12 +208,8 @@ echo "Next steps:"
 echo "  1. SSH in as the box owner and run 'yaver auth --headless' or 'yaver auth pair'."
 echo "  2. Add your Codex/OpenAI key to the encrypted vault:"
 echo "       yaver vault add OPENAI_API_KEY --category api-key"
-if [[ "$MULTI_USER" == "yes" ]]; then
-echo "  3. This box is in multi-user mode. Pair your own devices first, then let CI/guest users connect with separate tokens."
-else
-echo "  3. If this box should serve more than one user, redeploy with --multi-user."
-fi
-echo "  4. Do not use --uninstall on a persistent shared Hetzner box unless you intentionally want to tear it down."
+echo "  3. This agent accepts only devices signed into the owner's Yaver account."
+echo "  4. Do not use --uninstall on a persistent Hetzner box unless you intentionally want to tear it down."
 echo "  5. In your Yaver mobile app, add this device — either via the"
 echo "     existing relay (recommended) or a Tailscale IP if you use one."
 echo "  6. Open the 'Local CI' tab and tap 'Run all specs'."

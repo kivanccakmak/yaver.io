@@ -61,7 +61,6 @@ export default function MeshNodeScreen() {
     );
   }
 
-  const isOwner = peer.accessScope === "owner" || peer.accessScope === undefined;
   const routes = effectiveRoutes(peer).filter((r) => r !== TAILSCALE_BRIDGE_CIDR);
   const bridgingTailnet = (peer.wantRoutes ?? peer.advertisedRoutes ?? []).includes(TAILSCALE_BRIDGE_CIDR);
 
@@ -94,7 +93,6 @@ export default function MeshNodeScreen() {
         </View>
         <Text style={{ fontSize: 12, color: c.textMuted }}>
           {peer.online ? "Online" : "Offline"}
-          {peer.accessScope === "shared" ? " · shared with you" : ""}
           {peer.os ? ` · ${peer.os}` : ""}
           {peer.clientVersion ? ` · v${peer.clientVersion}` : ""}
         </Text>
@@ -120,9 +118,8 @@ export default function MeshNodeScreen() {
         </Card>
       ) : null}
 
-      {/* Provider axis — owner only */}
-      {isOwner ? (
-        <Card title="THIS NODE SERVES AS">
+      {/* Provider axis */}
+      <Card title="THIS NODE SERVES AS">
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
             <ExitNodeIcon size={18} color={peer.wantExitNode ? "#fcd34d" : c.textMuted} />
             <View style={{ flex: 1 }}>
@@ -163,12 +160,10 @@ export default function MeshNodeScreen() {
               {bridgingTailnet ? "✓ Bridging Tailnet (100.64/10)" : "Bridge my Tailnet"}
             </Text>
           </Pressable>
-        </Card>
-      ) : null}
+      </Card>
 
       {/* Consumer axis — route this node through an exit node */}
-      {isOwner ? (
-        <Pressable
+      <Pressable
           onPress={() => router.navigate({ pathname: "/(tabs)/mesh-exit", params: { deviceId: peer.deviceId } } as any)}
           style={{ flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 14, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard, padding: 14 }}
         >
@@ -176,8 +171,7 @@ export default function MeshNodeScreen() {
           <Text style={{ flex: 1, color: c.textPrimary, fontSize: 14 }}>Route through exit node</Text>
           <Text style={{ color: c.textMuted, fontSize: 13 }}>{usingExit}</Text>
           <ChevronRightIcon size={16} color={c.textMuted} />
-        </Pressable>
-      ) : null}
+      </Pressable>
       </ScrollView>
     </View>
   );

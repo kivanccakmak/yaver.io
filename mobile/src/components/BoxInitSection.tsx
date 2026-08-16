@@ -53,7 +53,7 @@ function overallColor(c: ThemeColors, o: BoxReadiness["overall"]): string {
 
 export default function BoxInitSection({ c }: { c: ThemeColors; token?: string | null }) {
   const { activeDevice, connectionStatus } = useDevice();
-  const connected = connectionStatus === "connected" && !!activeDevice && !activeDevice.isGuest;
+  const connected = connectionStatus === "connected" && !!activeDevice;
   const deviceId = activeDevice?.id;
 
   const [open, setOpen] = useState(false);

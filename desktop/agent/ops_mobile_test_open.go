@@ -64,17 +64,17 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsMobileTestOpenHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMobileTestOpenHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 
 type mobileTestOpenRequest struct {
-	Mode      string `json:"mode"`
-	Profile   string `json:"profile"`
-	URL       string `json:"url"`
-	TimeoutSec int   `json:"timeout_sec"`
+	Mode       string `json:"mode"`
+	Profile    string `json:"profile"`
+	URL        string `json:"url"`
+	TimeoutSec int    `json:"timeout_sec"`
 }
 
 func opsMobileTestOpenHandler(c OpsContext, payload json.RawMessage) OpsResult {
@@ -180,7 +180,7 @@ func opsMobileTestOpenHandler(c OpsContext, payload json.RawMessage) OpsResult {
 		}
 		if err != nil {
 			return OpsResult{OK: false, Code: "verify_failed",
-				Error:  fmt.Sprintf("verify_live_console.mjs failed: %v", err),
+				Error:   fmt.Sprintf("verify_live_console.mjs failed: %v", err),
 				Initial: map[string]interface{}{"output": tail}}
 		}
 		return OpsResult{OK: true, Initial: map[string]interface{}{

@@ -37,9 +37,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCIRunnerRegisterHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIRunnerRegisterHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ci_runner_list",
@@ -47,9 +47,9 @@ func init() {
 		Schema: map[string]interface{}{
 			"type": "object", "properties": map[string]interface{}{}, "additionalProperties": false,
 		},
-		Handler:    opsCIRunnerListHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIRunnerListHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ci_runner_remove",
@@ -62,9 +62,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCIRunnerRemoveHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIRunnerRemoveHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ci_workflow_scaffold",
@@ -80,9 +80,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCIWorkflowScaffoldHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIWorkflowScaffoldHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ci_workflow_targets",
@@ -90,9 +90,9 @@ func init() {
 		Schema: map[string]interface{}{
 			"type": "object", "properties": map[string]interface{}{}, "additionalProperties": false,
 		},
-		Handler:    opsCIWorkflowTargetsHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIWorkflowTargetsHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ci_jail_setup",
@@ -100,9 +100,9 @@ func init() {
 		Schema: map[string]interface{}{
 			"type": "object", "properties": map[string]interface{}{}, "additionalProperties": false,
 		},
-		Handler:    opsCIJailSetupHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIJailSetupHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ci_jail_status",
@@ -110,9 +110,9 @@ func init() {
 		Schema: map[string]interface{}{
 			"type": "object", "properties": map[string]interface{}{}, "additionalProperties": false,
 		},
-		Handler:    opsCIJailStatusHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIJailStatusHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ci_jail_teardown",
@@ -120,9 +120,9 @@ func init() {
 		Schema: map[string]interface{}{
 			"type": "object", "properties": map[string]interface{}{}, "additionalProperties": false,
 		},
-		Handler:    opsCIJailTeardownHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIJailTeardownHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ci_runner_status",
@@ -130,9 +130,9 @@ func init() {
 		Schema: map[string]interface{}{
 			"type": "object", "properties": map[string]interface{}{}, "additionalProperties": false,
 		},
-		Handler:    opsCIRunnerStatusHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCIRunnerStatusHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

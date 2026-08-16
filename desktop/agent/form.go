@@ -24,7 +24,7 @@ import (
 // FormField describes a single input on a form.
 type FormField struct {
 	Name        string   `json:"name"`
-	Type        string   `json:"type"`        // text, email, textarea, select, checkbox, file, hidden
+	Type        string   `json:"type"` // text, email, textarea, select, checkbox, file, hidden
 	Required    bool     `json:"required"`
 	Label       string   `json:"label"`
 	Placeholder string   `json:"placeholder,omitempty"`
@@ -40,8 +40,8 @@ type FormConfig struct {
 	NotifyDiscord  string      `json:"notifyDiscord,omitempty"`
 	RedirectURL    string      `json:"redirectUrl,omitempty"`
 	SuccessMessage string      `json:"successMessage,omitempty"`
-	Honeypot       bool        `json:"honeypot"`   // default true
-	RateLimit      int         `json:"rateLimit"`  // submissions per IP per hour, default 10
+	Honeypot       bool        `json:"honeypot"`  // default true
+	RateLimit      int         `json:"rateLimit"` // submissions per IP per hour, default 10
 }
 
 // FormSubmission is a recorded form submission.
@@ -346,10 +346,10 @@ func (fm *FormManager) GenerateComponent(formName, framework string) (string, er
 
 // FormStats summarises activity across all forms.
 type FormStats struct {
-	TotalForms       int            `json:"totalForms"`
-	TotalSubmissions int            `json:"totalSubmissions"`
-	SubmissionsToday int            `json:"submissionsToday"`
-	TopForms         []FormVolume   `json:"topForms"`
+	TotalForms       int          `json:"totalForms"`
+	TotalSubmissions int          `json:"totalSubmissions"`
+	SubmissionsToday int          `json:"submissionsToday"`
+	TopForms         []FormVolume `json:"topForms"`
 }
 
 // FormVolume pairs a form name with its submission count.

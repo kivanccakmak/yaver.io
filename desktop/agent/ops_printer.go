@@ -165,7 +165,7 @@ type printerCmdPayload struct {
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 
 	reg("printer_discover", "Find 3D printers on the LAN via SSDP (Bambu broadcast on UDP 2021). Credential-free — returns ip/serial/model/firmware/signal for a picker. No config required.", func(c OpsContext, payload json.RawMessage) OpsResult {

@@ -49,9 +49,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsFilesHandler,
-		Streaming:  false,
-		AllowGuest: false, // filesystem access is owner-only
+		Handler:        opsFilesHandler,
+		Streaming:      false,
+		AllowCompanion: false, // filesystem access is owner-only
 	})
 }
 
@@ -127,10 +127,10 @@ func opsFilesHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 			})
 		}
 		return OpsResult{OK: true, Initial: map[string]interface{}{
-			"path":       p.Path,
-			"count":      len(out),
-			"truncated":  len(entries) > max,
-			"entries":    out,
+			"path":      p.Path,
+			"count":     len(out),
+			"truncated": len(entries) > max,
+			"entries":   out,
 		}}
 
 	case "write":

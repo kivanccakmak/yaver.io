@@ -30,9 +30,9 @@ import (
 // the live terminalSession id that currently owns it. Only meaningful on
 // Windows where there is no tmux server to hold the mapping.
 type windowsSeatIndex struct {
-	mu      sync.Mutex
-	byName  map[string]string // seat name → terminal session id
-	bySess  map[string]string // terminal session id → seat name
+	mu     sync.Mutex
+	byName map[string]string // seat name → terminal session id
+	bySess map[string]string // terminal session id → seat name
 }
 
 func newWindowsSeatIndex() *windowsSeatIndex {

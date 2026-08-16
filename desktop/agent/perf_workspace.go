@@ -27,36 +27,36 @@ import (
 
 // LighthouseResult holds scores and Core Web Vitals from a Lighthouse audit.
 type LighthouseResult struct {
-	URL                     string    `json:"url"`
-	Performance             float64   `json:"performance"`
-	Accessibility           float64   `json:"accessibility"`
-	BestPractices           float64   `json:"best_practices"`
-	SEO                     float64   `json:"seo"`
-	FirstContentfulPaint    string    `json:"fcp"`
-	LargestContentfulPaint  string    `json:"lcp"`
-	TotalBlockingTime       string    `json:"tbt"`
-	CumulativeLayoutShift   string    `json:"cls"`
-	SpeedIndex              string    `json:"speed_index"`
-	ReportPath              string    `json:"report_path"`
-	CapturedAt              time.Time `json:"captured_at"`
+	URL                    string    `json:"url"`
+	Performance            float64   `json:"performance"`
+	Accessibility          float64   `json:"accessibility"`
+	BestPractices          float64   `json:"best_practices"`
+	SEO                    float64   `json:"seo"`
+	FirstContentfulPaint   string    `json:"fcp"`
+	LargestContentfulPaint string    `json:"lcp"`
+	TotalBlockingTime      string    `json:"tbt"`
+	CumulativeLayoutShift  string    `json:"cls"`
+	SpeedIndex             string    `json:"speed_index"`
+	ReportPath             string    `json:"report_path"`
+	CapturedAt             time.Time `json:"captured_at"`
 }
 
 // LoadTestResult holds aggregated statistics from a single load test run.
 type LoadTestResult struct {
-	URL         string         `json:"url"`
-	Requests    int            `json:"requests"`
-	Concurrency int            `json:"concurrency"`
-	Duration    time.Duration  `json:"duration_ns"`
-	RPS         float64        `json:"rps"`
-	AvgLatency  time.Duration  `json:"avg_latency_ns"`
-	P50         time.Duration  `json:"p50_ns"`
-	P95         time.Duration  `json:"p95_ns"`
-	P99         time.Duration  `json:"p99_ns"`
-	MaxLatency  time.Duration  `json:"max_latency_ns"`
-	ErrorCount  int            `json:"error_count"`
-	ErrorRate   float64        `json:"error_rate"`
-	StatusCodes map[int]int    `json:"status_codes"`
-	CapturedAt  time.Time      `json:"captured_at"`
+	URL         string        `json:"url"`
+	Requests    int           `json:"requests"`
+	Concurrency int           `json:"concurrency"`
+	Duration    time.Duration `json:"duration_ns"`
+	RPS         float64       `json:"rps"`
+	AvgLatency  time.Duration `json:"avg_latency_ns"`
+	P50         time.Duration `json:"p50_ns"`
+	P95         time.Duration `json:"p95_ns"`
+	P99         time.Duration `json:"p99_ns"`
+	MaxLatency  time.Duration `json:"max_latency_ns"`
+	ErrorCount  int           `json:"error_count"`
+	ErrorRate   float64       `json:"error_rate"`
+	StatusCodes map[int]int   `json:"status_codes"`
+	CapturedAt  time.Time     `json:"captured_at"`
 }
 
 // PerfComparison holds before/after Lighthouse results and per-metric diffs.
@@ -490,9 +490,9 @@ func (pm *PerfManager) FormatLighthouse(r *LighthouseResult) string {
 	sb.WriteString("\n  Core Web Vitals:\n")
 
 	type vitalRow struct {
-		label    string
-		value    string
-		goodFn   func(string) bool
+		label  string
+		value  string
+		goodFn func(string) bool
 	}
 	vitals := []vitalRow{
 		{"FCP", r.FirstContentfulPaint, fcpGood},
@@ -1017,13 +1017,13 @@ func fmtDurationK6(d time.Duration) string {
 // ---------------------------------------------------------------------------
 
 // fcpGood returns true if FCP value string is within Google's "Good" threshold (< 1.8s).
-func fcpGood(v string) bool  { return vitalLTE(v, 1800) }
+func fcpGood(v string) bool { return vitalLTE(v, 1800) }
 
 // lcpGood returns true if LCP value string is within Google's "Good" threshold (< 2.5s).
-func lcpGood(v string) bool  { return vitalLTE(v, 2500) }
+func lcpGood(v string) bool { return vitalLTE(v, 2500) }
 
 // tbtGood returns true if TBT value string is within Google's "Good" threshold (< 200ms).
-func tbtGood(v string) bool  { return vitalLTE(v, 200) }
+func tbtGood(v string) bool { return vitalLTE(v, 200) }
 
 // clsGood returns true if CLS value string is within Google's "Good" threshold (< 0.1).
 func clsGood(v string) bool {

@@ -396,37 +396,14 @@ func reloadDeliveryContext(s *HTTPServer, projectPath string, target DevServerTa
 	return out
 }
 
-func (s *HTTPServer) guestAllowedDevWorkDir(guestUID, workDir string) bool {
-	if guestUID == "" || s.guestConfigMgr == nil {
-		return true
-	}
-	workDir = strings.TrimSpace(workDir)
-	if workDir == "" {
-		return s.guestConfigMgr.GuestCanAccessProject(guestUID, "")
-	}
-	if s.guestConfigMgr.GuestCanAccessProject(guestUID, filepath.Base(workDir)) {
-		return true
-	}
-	if mp := findMobileProjectByPath(workDir); mp != nil && s.guestConfigMgr.GuestCanAccessProject(guestUID, mp.Name) {
-		return true
-	}
-	return false
-}
-
-func (s *HTTPServer) guestResolveDevWorkDir(r *http.Request, projectName, fallbackWorkDir string) (string, error) {
-	guestUID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID"))
-	if guestUID == "" {
-		return fallbackWorkDir, nil
-	}
+func (s *HTTPServer) resolveDevWorkDir(r *http.Request, projectName, fallbackWorkDir string) (string, error) {
 	projectName = strings.TrimSpace(projectName)
 	if projectName != "" {
-		if !s.guestConfigMgr.GuestCanAccessProject(guestUID, projectName) {
-			return "", fmt.Errorf("project %q is not in the allowed project list %v", projectName, s.guestConfigMgr.AllowedProjects(guestUID))
+		ref, err := resolveProjectRef(projectName, "")
+		if err != nil {
+			return "", fmt.Errorf("could not resolve project %q: %w", projectName, err)
 		}
-		return resolveGuestTaskProjectPath(projectName)
-	}
-	if allowed := s.guestConfigMgr.AllowedProjects(guestUID); len(allowed) > 0 {
-		return "", fmt.Errorf("this guest is scoped to projects %v; projectName is required", allowed)
+		return ref.Path, nil
 	}
 	if strings.TrimSpace(fallbackWorkDir) != "" {
 		return fallbackWorkDir, nil
@@ -435,37 +412,6 @@ func (s *HTTPServer) guestResolveDevWorkDir(r *http.Request, projectName, fallba
 		return s.taskMgr.workDir, nil
 	}
 	return "", nil
-}
-
-func (s *HTTPServer) requireGuestAccessToActiveDevServer(w http.ResponseWriter, r *http.Request) bool {
-	guestUID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID"))
-	if guestUID == "" || s.devServerMgr == nil {
-		return true
-	}
-	status := s.devServerMgr.Status()
-	if status == nil || strings.TrimSpace(status.WorkDir) == "" {
-		return true
-	}
-	if s.guestAllowedDevWorkDir(guestUID, status.WorkDir) {
-		return true
-	}
-	jsonReply(w, http.StatusForbidden, map[string]string{"error": "guest cannot access the active dev server project"})
-	return false
-}
-
-func (s *HTTPServer) isolatedGuestDevMutationBlocked(w http.ResponseWriter, r *http.Request, capability string) bool {
-	guestUID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID"))
-	if guestUID == "" || s.guestConfigMgr == nil {
-		return false
-	}
-	cfg := s.guestConfigMgr.GetConfig(guestUID)
-	if !guestRequireIsolation(cfg) {
-		return false
-	}
-	jsonReply(w, http.StatusForbidden, map[string]string{
-		"error": fmt.Sprintf("guest is configured to require isolation; %s must go through a brokered host action", capability),
-	})
-	return true
 }
 
 func nativeBuildStatusPath(workDir string) string {
@@ -1458,7 +1404,7 @@ const (
 // handleDevServerStatus returns the current dev server status.
 // GET /dev/status
 func (s *HTTPServer) handleDevServerStatus(w http.ResponseWriter, r *http.Request) {
-	mgr := s.devMgrForRequest(r)
+	mgr := s.devServerMgr
 	if mgr == nil {
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
 		return
@@ -1479,9 +1425,6 @@ func (s *HTTPServer) handleDevServerStatus(w http.ResponseWriter, r *http.Reques
 			"iosInstallMethod":  resolvedIOSMethod,
 			"iosInstallReason":  resolvedIOSReason,
 		})
-		return
-	}
-	if !s.requireGuestAccessToActiveDevServer(w, r) {
 		return
 	}
 
@@ -1692,9 +1635,6 @@ func (s *HTTPServer) handleDevServerTarget(w http.ResponseWriter, r *http.Reques
 
 	switch r.Method {
 	case http.MethodGet:
-		if !s.requireGuestAccessToActiveDevServer(w, r) {
-			return
-		}
 		target := s.devServerMgr.PreferredTarget()
 		jsonReply(w, http.StatusOK, map[string]interface{}{
 			"targetDeviceId":    target.DeviceID,
@@ -1702,12 +1642,6 @@ func (s *HTTPServer) handleDevServerTarget(w http.ResponseWriter, r *http.Reques
 			"targetDeviceClass": target.DeviceClass,
 		})
 	case http.MethodPost:
-		if s.isolatedGuestDevMutationBlocked(w, r, "dev target changes") {
-			return
-		}
-		if !s.requireGuestAccessToActiveDevServer(w, r) {
-			return
-		}
 		var req struct {
 			TargetDeviceID    string `json:"targetDeviceId"`
 			TargetDeviceName  string `json:"targetDeviceName"`
@@ -1738,7 +1672,7 @@ func (s *HTTPServer) handleDevServerTarget(w http.ResponseWriter, r *http.Reques
 // handleDevServerStart starts a dev server.
 // POST /dev/start { "framework": "expo", "workDir": "/path", "platform": "ios", "port": 8081 }
 func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request) {
-	mgr := s.devMgrForRequest(r)
+	mgr := s.devServerMgr
 	if mgr == nil {
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
 		return
@@ -1746,9 +1680,6 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 
 	if r.Method != http.MethodPost {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	if s.isolatedGuestDevMutationBlocked(w, r, "dev server start") {
 		return
 	}
 	// Admission control (doctrine law 7), same gate as createTask: a
@@ -1859,7 +1790,7 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	resolvedWorkDir, err := s.guestResolveDevWorkDir(r, req.ProjectName, req.WorkDir)
+	resolvedWorkDir, err := s.resolveDevWorkDir(r, req.ProjectName, req.WorkDir)
 	if err != nil {
 		jsonReply(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return
@@ -1946,16 +1877,6 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 		})
 	}
 
-	// In multi-user mode the user has been allocated a dedicated
-	// (Metro, ExpoWeb) port pair; apply it when the caller did not
-	// pin an explicit port. Owner / single-user keeps the canonical
-	// 8081 default.
-	if req.Port == 0 {
-		if pair := s.devPortsForRequest(r); pair.MetroPort != 0 && pair.MetroPort != 8081 {
-			req.Port = pair.MetroPort
-		}
-	}
-
 	// Clear build marker if rebuild requested
 	if req.Rebuild && req.WorkDir != "" {
 		projectHash := strings.ReplaceAll(filepath.Base(req.WorkDir), " ", "_")
@@ -2029,9 +1950,7 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
-	if strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")) == "" {
-		s.maybePullBeforeHotReloadBuild(req.WorkDir)
-	}
+	s.maybePullBeforeHotReloadBuild(req.WorkDir)
 
 	// Every started dev server IS a piece of work someone can join, so give it a
 	// vibe session up front. Two consequences, both wanted:
@@ -2101,18 +2020,12 @@ func (s *HTTPServer) handleDevServerStart(w http.ResponseWriter, r *http.Request
 // handleDevServerStop stops the active dev server.
 // POST /dev/stop
 func (s *HTTPServer) handleDevServerStop(w http.ResponseWriter, r *http.Request) {
-	mgr := s.devMgrForRequest(r)
+	mgr := s.devServerMgr
 	if mgr == nil {
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
 		return
 	}
 	_ = mgr // routed below via stopServingPreviewResult; kept for parity
-	if s.isolatedGuestDevMutationBlocked(w, r, "dev server stop") {
-		return
-	}
-	if !s.requireGuestAccessToActiveDevServer(w, r) {
-		return
-	}
 
 	result := s.stopServingPreviewResult()
 	if ok, _ := result["ok"].(bool); !ok {
@@ -2188,9 +2101,6 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 		incident := s.appendDevIncident("reload", ReasonReloadDevServerUnavailable, "Dev server unavailable", "The agent cannot reload because no active dev server is available.", "dev server manager not available", "Start or reconnect the dev server before reloading.", projectPath, target.DeviceID, "dev-server", IncidentSeverityError, true, false, nil, nil, reloadOp.ID)
 		s.upsertDevOperation("reload", "failed", "error", incident.UserMessage, projectPath, target.DeviceID, 1, nil, incident.ID)
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
-		return
-	}
-	if !s.requireGuestAccessToActiveDevServer(w, r) {
 		return
 	}
 
@@ -2377,9 +2287,6 @@ func (s *HTTPServer) handleNativeFingerprintGet(w http.ResponseWriter, r *http.R
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
 		return
 	}
-	if !s.requireGuestAccessToActiveDevServer(w, r) {
-		return
-	}
 	st := s.devServerMgr.Status()
 	if st == nil || st.WorkDir == "" {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "no active dev server"})
@@ -2410,9 +2317,6 @@ func (s *HTTPServer) handleNativeFingerprintGet(w http.ResponseWriter, r *http.R
 func (s *HTTPServer) handleNativeFingerprintRefresh(w http.ResponseWriter, r *http.Request) {
 	if s.devServerMgr == nil {
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
-		return
-	}
-	if !s.requireGuestAccessToActiveDevServer(w, r) {
 		return
 	}
 	st := s.devServerMgr.Status()
@@ -2465,9 +2369,6 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 	case "full":
 		req.Mode = "bundle"
 	}
-	if req.Mode != "dev" && s.isolatedGuestDevMutationBlocked(w, r, "native reload/bundle build") {
-		return
-	}
 
 	if s.blackboxMgr == nil {
 		target := DevServerTarget{}
@@ -2479,9 +2380,6 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		incident := s.appendDevIncident("reload", ReasonReloadPreviewWorkerOffline, "No connected SDK devices", "The agent has no connected SDK device to receive the reload command.", "blackbox manager unavailable", "Connect the app or preview worker before trying remote reload.", projectPath, target.DeviceID, "preview-worker", IncidentSeverityError, true, false, nil, nil, reloadOp.ID)
 		s.upsertDevOperation("reload_app", "failed", "error", incident.UserMessage, projectPath, target.DeviceID, 1, map[string]interface{}{"mode": req.Mode}, incident.ID)
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "no SDK devices connected"})
-		return
-	}
-	if !s.requireGuestAccessToActiveDevServer(w, r) {
 		return
 	}
 
@@ -2670,12 +2568,9 @@ func (s *HTTPServer) sendPreviewWorkerReloadCommand() bool {
 // handleDevServerEvents streams dev server events via SSE.
 // GET /dev/events
 func (s *HTTPServer) handleDevServerEvents(w http.ResponseWriter, r *http.Request) {
-	mgr := s.devMgrForRequest(r)
+	mgr := s.devServerMgr
 	if mgr == nil {
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
-		return
-	}
-	if !s.requireGuestAccessToActiveDevServer(w, r) {
 		return
 	}
 
@@ -2814,7 +2709,7 @@ func (s *HTTPServer) handleDevWebProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDevWebPreviewStart spawns an Expo Web sibling alongside Metro.
-// Owner-only; guests never spawn subprocesses.
+// Owner-only; companion sessions never spawn subprocesses.
 // POST /dev/web-preview/start → { ok, port, webUrl }
 func (s *HTTPServer) handleDevWebPreviewStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -3059,9 +2954,6 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
 		return
 	}
-	if s.isolatedGuestDevMutationBlocked(w, r, "native bundle build") {
-		return
-	}
 
 	var req struct {
 		Platform string `json:"platform"`
@@ -3193,23 +3085,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 	//   3. bundleId looked up in the cached mobile-project scan
 	//   4. devServerMgr's currently-active project (legacy path)
 	var workDir string
-	guestUID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID"))
-	if guestUID != "" {
-		if strings.TrimSpace(req.ProjectName) != "" {
-			resolved, err := s.guestResolveDevWorkDir(r, req.ProjectName, "")
-			if err != nil {
-				jsonReply(w, http.StatusForbidden, map[string]string{"error": err.Error()})
-				return
-			}
-			workDir = resolved
-		} else if strings.TrimSpace(req.ProjectPath) != "" {
-			workDir = strings.TrimSpace(req.ProjectPath)
-			if !s.guestAllowedDevWorkDir(guestUID, workDir) {
-				jsonReply(w, http.StatusForbidden, map[string]string{"error": "guest cannot access this project path"})
-				return
-			}
-		}
-	} else if req.ProjectPath != "" || req.ProjectName != "" {
+	if req.ProjectPath != "" || req.ProjectName != "" {
 		if ref, err := resolveProjectRef(req.ProjectName, req.ProjectPath); err == nil {
 			workDir = ref.Path
 			if strings.TrimSpace(req.ProjectName) == "" {
@@ -3309,9 +3185,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
-	if guestUID == "" {
-		s.maybePullBeforeHotReloadBuild(workDir)
-	}
+	s.maybePullBeforeHotReloadBuild(workDir)
 	// Pick output dir per target so concurrent mobile+web builds for
 	// the same project don't trash each other's bundles.
 	var buildDir string
@@ -4677,14 +4551,6 @@ func (s *HTTPServer) handleDevServerCompatibility(w http.ResponseWriter, r *http
 	}
 
 	workDir := strings.TrimSpace(req.WorkDir)
-	if guestUID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")); guestUID != "" {
-		resolved, err := s.guestResolveDevWorkDir(r, req.ProjectName, "")
-		if err != nil {
-			jsonReply(w, http.StatusForbidden, map[string]string{"error": err.Error()})
-			return
-		}
-		workDir = resolved
-	}
 	// Fall back to the current dev-server/task context for older callers.
 	if workDir == "" {
 		if s.devServerMgr != nil {

@@ -4,31 +4,19 @@ package main
 // script for an (app, target) on the host, streaming stdout + stderr
 // to the caller via SSE. Named "ship" to disambiguate from the older
 // /deploy/run release-pipeline endpoint in deploy_pipeline.go.
-// Designed for shared-machine flows where a trusted guest (with a
-// matching allowedProjects grant) triggers a TestFlight / Play
-// Store / Cloudflare deploy from their own laptop against someone
-// else's Mac mini.
+// The route is owner-only and runs against the owner's machine.
 //
 // Security envelope:
 //
 //  - Script body is generated server-side from vetted templates.
-//    A guest's JSON body cannot inject shell; they only pick which
-//    (app, target) to run.
+//    The JSON body cannot inject shell; callers only pick vetted
+//    app/target values.
 //  - Vault values are injected into the subprocess env; they never
-//    appear in the script source or in any response to the guest.
+//    appear in the script source or in any response.
 //    Only stdout/stderr stream back, and the templates reference
 //    vault secrets via $VAR expansions — their plaintext doesn't
 //    land in a log line unless a user explicitly echoes it.
-//  - Guests are subject to the existing `allowedProjects` filter.
-//    A guest with `allowedProjects=["web"]` cannot deploy "mobile"
-//    no matter what they POST.
-//  - Guests cannot override `stack` or `path` — those come from the
-//    workspace manifest only. Owners may override explicitly.
-//  - Subprocess env is a whitelist for guests: only safe-to-inherit
-//    system vars (PATH/HOME/SHELL/USER/LOGNAME/LANG/LC_*/TMPDIR) plus
-//    the vault-supplied project env. This stops a malicious host env
-//    var (e.g. a stray GITHUB_TOKEN from the owner's shell) from
-//    being visible to whatever command the template runs.
+//  - Stack/path overrides are resolved and validated by the server.
 //  - Runs are time-bounded; default 20 min, configurable via the
 //    body's `timeout_sec` (capped at 60 min).
 //
@@ -61,21 +49,6 @@ const (
 	deployShipDefaultTimeoutSec = 20 * 60
 	deployShipMaxTimeoutSec     = 60 * 60
 )
-
-// safeSystemEnvKeys is the whitelist of parent-process env vars we
-// propagate into a deploy subprocess. Keep it tight — anything that
-// looks remotely secret-ish goes through the vault.
-var safeSystemEnvKeys = map[string]bool{
-	"PATH":    true,
-	"HOME":    true,
-	"USER":    true,
-	"LOGNAME": true,
-	"SHELL":   true,
-	"LANG":    true,
-	"TMPDIR":  true,
-	"PWD":     true,
-	"TERM":    true,
-}
 
 type deployShipRequest struct {
 	App        string   `json:"app"`
@@ -143,20 +116,13 @@ func (s *HTTPServer) handleDeployShip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isGuest := r.Header.Get("X-Yaver-Guest") == "true"
-	guestUID := r.Header.Get("X-Yaver-GuestUserID")
-
-	// Per-caller concurrency cap: every target in a composite counts
+	// Every target in a composite counts
 	// individually, because each spawns its own bash + xcodebuild.
 	// Acquire all up front; roll back if any fails so we never leak
 	// a half-acquired state.
 	limiter := s.ensureDeployLimiter()
 	limiterKey := "owner"
-	maxInFlight := deployShipLimits.Owner
-	if isGuest {
-		limiterKey = "guest:" + guestUID
-		maxInFlight = deployShipLimits.Guest
-	}
+	maxInFlight := deployShipMaxInFlight
 	acquired := 0
 	for i := 0; i < len(targets); i++ {
 		if !limiter.tryAcquire(limiterKey, maxInFlight) {
@@ -176,34 +142,6 @@ func (s *HTTPServer) handleDeployShip(w http.ResponseWriter, r *http.Request) {
 			limiter.release(limiterKey)
 		}
 	}()
-
-	if isGuest {
-		// Guests cannot override stack/path — only the workspace manifest
-		// decides where the code lives.
-		if body.Stack != "" || body.Path != "" {
-			jsonReply(w, http.StatusForbidden, map[string]string{
-				"error": "guests cannot override stack or path — values come from the workspace manifest",
-			})
-			return
-		}
-		if s.guestConfigMgr != nil && !s.guestConfigMgr.GuestCanAccessProject(guestUID, body.App) {
-			jsonReply(w, http.StatusForbidden, map[string]string{
-				"error": "guest is not authorised for this project",
-			})
-			return
-		}
-		// Per-project collaboration role (projectShares). Being allowed to
-		// REACH a project is not being allowed to SHIP it: a "normie"
-		// collaborator codes on their own branch but does not deploy. The
-		// flag is carried on the grant; nothing here maps a role name to a
-		// permission (guest_project_role.go explains why).
-		if s.guestConfigMgr != nil {
-			if ok, reason := s.guestConfigMgr.GuestCanDeployProject(guestUID, body.App); !ok {
-				jsonReply(w, http.StatusForbidden, map[string]string{"error": reason})
-				return
-			}
-		}
-	}
 
 	// Resolve stack + path (shared across all targets of the same app).
 	stack, path, err := resolveDeployStackPath(body.App, body.Stack, body.Path)
@@ -276,31 +214,23 @@ func (s *HTTPServer) handleDeployShip(w http.ResponseWriter, r *http.Request) {
 	defer cleanupPlans()
 
 	// Create history entries (one per target) BEFORE the SSE opens so
-	// the first meta events already have their IDs. Owner vs. guest
-	// identity is stamped so a guest's /deploy/runs listing only
-	// shows their own runs.
-	requestedBy := "owner"
-	if isGuest {
-		requestedBy = guestUID
-	}
+	// the first meta events already have their IDs.
 	startedAt := time.Now()
 	hist := s.ensureDeployHistory()
 	for _, p := range plans {
 		p.historyRun = hist.Start(DeployRun{
-			App:         body.App,
-			Target:      p.target,
-			Stack:       p.stack,
-			Path:        p.path,
-			RequestedBy: requestedBy,
-			IsGuest:     isGuest,
-			StartedAt:   startedAt.UnixMilli(),
+			App:       body.App,
+			Target:    p.target,
+			Stack:     p.stack,
+			Path:      p.path,
+			StartedAt: startedAt.UnixMilli(),
 		})
 		p.historyID = p.historyRun.ID
 	}
 
 	// Subprocess env — shared across all targets of the same app, so
 	// computed once.
-	env := buildDeployShipEnv(s.vaultStore, body.App, isGuest)
+	env := buildDeployShipEnv(s.vaultStore, body.App)
 
 	timeoutSec := body.TimeoutSec
 	if timeoutSec <= 0 {
@@ -408,7 +338,7 @@ func runOneDeployTarget(ctx context.Context, sw *sseWriter, plan *targetPlan, en
 			"error":  "stdout pipe: " + serr.Error(),
 		})
 		hist.Finish(plan.historyID, -1, false)
-		final, _ := hist.Get(plan.historyID, "")
+		final, _ := hist.Get(plan.historyID)
 		FireDeployWebhook(final)
 		return targetResult{target: plan.target, id: plan.historyID, ok: false, exitCode: -1, errorClass: final.ErrorClass}
 	}
@@ -420,7 +350,7 @@ func runOneDeployTarget(ctx context.Context, sw *sseWriter, plan *targetPlan, en
 			"error":  "stderr pipe: " + serr.Error(),
 		})
 		hist.Finish(plan.historyID, -1, false)
-		final, _ := hist.Get(plan.historyID, "")
+		final, _ := hist.Get(plan.historyID)
 		FireDeployWebhook(final)
 		return targetResult{target: plan.target, id: plan.historyID, ok: false, exitCode: -1, errorClass: final.ErrorClass}
 	}
@@ -431,7 +361,7 @@ func runOneDeployTarget(ctx context.Context, sw *sseWriter, plan *targetPlan, en
 			"error":  "spawn: " + err.Error(),
 		})
 		hist.Finish(plan.historyID, -1, false)
-		final, _ := hist.Get(plan.historyID, "")
+		final, _ := hist.Get(plan.historyID)
 		FireDeployWebhook(final)
 		return targetResult{target: plan.target, id: plan.historyID, ok: false, exitCode: -1, errorClass: final.ErrorClass}
 	}
@@ -479,7 +409,7 @@ func runOneDeployTarget(ctx context.Context, sw *sseWriter, plan *targetPlan, en
 	}
 	duration := time.Since(startedAt)
 	hist.Finish(plan.historyID, exitCode, timedOut)
-	finalRun, _ := hist.Get(plan.historyID, "")
+	finalRun, _ := hist.Get(plan.historyID)
 	sw.writeEvent("exit", map[string]interface{}{
 		"id":          plan.historyID,
 		"target":      plan.target,
@@ -577,24 +507,10 @@ func resolveDeployStackPath(app, stack, path string) (string, string, error) {
 	return stack, path, nil
 }
 
-// buildDeployShipEnv composes the subprocess env: sanitised system vars
-// (always), plus the project's vault env (project-scoped + globals,
-// project-wins-on-collision). Guest callers get only the whitelist;
-// owners inherit their full parent env plus vault values.
-func buildDeployShipEnv(vs *VaultStore, project string, isGuest bool) []string {
-	var base []string
-	if isGuest {
-		for _, kv := range os.Environ() {
-			if eq := strings.IndexByte(kv, '='); eq > 0 {
-				key := kv[:eq]
-				if safeSystemEnvKeys[key] || strings.HasPrefix(key, "LC_") {
-					base = append(base, kv)
-				}
-			}
-		}
-	} else {
-		base = append(base, os.Environ()...)
-	}
+// buildDeployShipEnv composes the owner subprocess env plus project
+// vault values (project-scoped + globals, project wins on collision).
+func buildDeployShipEnv(vs *VaultStore, project string) []string {
+	base := append([]string(nil), os.Environ()...)
 
 	if vs == nil {
 		return base

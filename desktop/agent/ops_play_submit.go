@@ -915,8 +915,8 @@ func init() {
 			"language":    map[string]interface{}{"type": "string", "description": "Primary listing language to check in detail (default en-US, or the app's defaultLanguage)."},
 			"track":       map[string]interface{}{"type": "string", "description": "Track to focus the readiness check on: internal | alpha | beta | production (default production)."},
 		}, "packageName"),
-		Handler:    playSubmitStatusHandler,
-		AllowGuest: false,
+		Handler:        playSubmitStatusHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "play_listing_set",
@@ -931,8 +931,8 @@ func init() {
 			"fullDescription":  map[string]interface{}{"type": "string", "description": "Play limit: 4000 chars."},
 			"video":            map[string]interface{}{"type": "string", "description": "YouTube URL for the promo video."},
 		}, "packageName"),
-		Handler:    playListingSetHandler,
-		AllowGuest: false,
+		Handler:        playListingSetHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "play_images_set",
@@ -946,8 +946,8 @@ func init() {
 			"files":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Absolute paths to the PNG/JPEG images on the target machine, in display order."},
 			"replace":     map[string]interface{}{"type": "boolean", "description": "Delete the images already in this bucket before uploading (default false = append)."},
 		}, "packageName", "imageType", "files"),
-		Handler:    playImagesSetHandler,
-		AllowGuest: false,
+		Handler:        playImagesSetHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "play_bundle_upload",
@@ -958,8 +958,8 @@ func init() {
 			"editId":      map[string]interface{}{"type": "string", "description": "Stage inside an existing edit instead of opening+committing one."},
 			"file":        map[string]interface{}{"type": "string", "description": "Absolute path to the .aab on the target machine."},
 		}, "packageName", "file"),
-		Handler:    playBundleUploadHandler,
-		AllowGuest: false,
+		Handler:        playBundleUploadHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "play_track_release",
@@ -977,8 +977,8 @@ func init() {
 			"releaseNotes": map[string]interface{}{"type": "string", "description": "What's-new text for `language` (default en-US)."},
 			"language":     map[string]interface{}{"type": "string", "description": "Language of releaseNotes (default en-US)."},
 		}, "packageName", "track"),
-		Handler:    playTrackReleaseHandler,
-		AllowGuest: false,
+		Handler:        playTrackReleaseHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "play_submit_for_review",
@@ -990,8 +990,8 @@ func init() {
 			"track":                   map[string]interface{}{"type": "string", "description": "Track being submitted, for the readiness note in the result (optional)."},
 			"changesNotSentForReview": map[string]interface{}{"type": "boolean", "description": "Commit the changes but do NOT send them for review (a human then hits 'Send changes for review' in the Console). Google DEMANDS this for some apps — it says so in the error."},
 		}, "packageName"),
-		Handler:    playSubmitForReviewHandler,
-		AllowGuest: false,
+		Handler:        playSubmitForReviewHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "play_release_halt",
@@ -1003,8 +1003,8 @@ func init() {
 			"track":       map[string]interface{}{"type": "string", "description": "internal | alpha | beta | production."},
 			"versionCode": map[string]interface{}{"type": "string", "description": "Version code of the release to halt. Omit to halt the track's inProgress release."},
 		}, "packageName", "track"),
-		Handler:    playReleaseHaltHandler,
-		AllowGuest: false,
+		Handler:        playReleaseHaltHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "play_release_resume",
@@ -1017,8 +1017,8 @@ func init() {
 			"versionCode":  map[string]interface{}{"type": "string", "description": "Version code of the release to resume. Omit to resume the track's halted release."},
 			"userFraction": map[string]interface{}{"type": "number", "description": "Resume as a staged rollout at this fraction (0<f<1). Omit for a full rollout."},
 		}, "packageName", "track"),
-		Handler:    playReleaseResumeHandler,
-		AllowGuest: false,
+		Handler:        playReleaseResumeHandler,
+		AllowCompanion: false,
 	})
 }
 

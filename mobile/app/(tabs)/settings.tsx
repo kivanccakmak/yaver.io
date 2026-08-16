@@ -493,7 +493,7 @@ export default function SettingsScreen() {
         next[key] = mergeProviderKeyState(next[key], state);
       }
       AsyncStorage.setItem(PROVIDER_KEY_STATUS_KEY, JSON.stringify(next)).catch(() => {});
-      if (pushToHost && connectionStatus === "connected" && !activeDevice?.isGuest) {
+      if (pushToHost && connectionStatus === "connected") {
         const items = Object.entries(next).map(([key, value]) => ({
           key,
           value,
@@ -507,7 +507,7 @@ export default function SettingsScreen() {
   };
 
   useEffect(() => {
-    if (connectionStatus !== "connected" || !!activeDevice?.isGuest) return;
+    if (connectionStatus !== "connected") return;
     quicClient.syncList<ProviderKeyState>("provider-keys").then(({ items }) => {
       const incoming = items
         .map((item) => item?.value)
@@ -516,7 +516,7 @@ export default function SettingsScreen() {
         mergeProviderStates(incoming, false).catch(() => {});
       }
     }).catch(() => {});
-  }, [activeDevice?.id, activeDevice?.isGuest, connectionStatus]);
+  }, [activeDevice?.id, connectionStatus]);
 
 
   const saveCustomRelays = async (relays: RelayServer[]) => {
@@ -895,10 +895,6 @@ export default function SettingsScreen() {
       Alert.alert("Connect a device", "Connect to your own Yaver machine to sync provider keys into its vault.");
       return;
     }
-    if (activeDevice?.isGuest) {
-      Alert.alert("Guest machine", "Vault sync is disabled on guest connections. Connect to your own host machine instead.");
-      return;
-    }
     setIsSyncingAiVault(true);
     try {
       const entries = [
@@ -954,7 +950,7 @@ export default function SettingsScreen() {
   };
 
   const loadRunnerAuthStatus = async () => {
-    if (connectionStatus !== "connected" || activeDevice?.isGuest) {
+    if (connectionStatus !== "connected") {
       setRunnerAuthRows([]);
       setRunnerCapabilitySnapshot(null);
       setRunnerIncidents([]);
@@ -974,13 +970,13 @@ export default function SettingsScreen() {
   };
 
   const onboardingTargetCandidates = devices.filter(
-    (device) => !device.isGuest && (device.online || device.id === activeDevice?.id),
+    (device) => device.online || device.id === activeDevice?.id,
   );
   const selectedOnboardingTargets = onboardingTargetCandidates.filter((device) => selectedOnboardingTargetIds.includes(device.id));
   const resolveOnboardingTargetArg = (deviceId: string) =>
     activeDevice?.id === deviceId ? undefined : deviceId;
   const loadMachineOnboardingStatusForTargets = async (deviceIds: string[] = selectedOnboardingTargetIds) => {
-    if (connectionStatus !== "connected" || activeDevice?.isGuest) {
+    if (connectionStatus !== "connected") {
       setMachineOnboardingRows([]);
       setMachineOnboardingRowsByDevice({});
       return;
@@ -1008,10 +1004,6 @@ export default function SettingsScreen() {
   const startGitOAuthOnboarding = async (provider: "github" | "gitlab") => {
     if (connectionStatus !== "connected") {
       Alert.alert("Connect a device", "Connect to your own Yaver machine to authorize GitHub or GitLab.");
-      return;
-    }
-    if (activeDevice?.isGuest) {
-      Alert.alert("Guest machine", "Git authorization is disabled on guest connections. Connect to your own host machine instead.");
       return;
     }
     if (selectedOnboardingTargets.length !== 1) {
@@ -1095,10 +1087,6 @@ export default function SettingsScreen() {
       Alert.alert("Connect a device", "Connect to your own Yaver machine to configure runner auth.");
       return;
     }
-    if (activeDevice?.isGuest) {
-      Alert.alert("Guest machine", "Runner auth is disabled on guest connections. Connect to your own host machine instead.");
-      return;
-    }
     const jobs = [
       {
         runner: "codex" as const,
@@ -1156,10 +1144,6 @@ export default function SettingsScreen() {
   const applyMachineOnboarding = async () => {
     if (connectionStatus !== "connected") {
       Alert.alert("Connect a device", "Connect to your own Yaver machine to configure OpenAI, GitHub, and GitLab.");
-      return;
-    }
-    if (activeDevice?.isGuest) {
-      Alert.alert("Guest machine", "Machine onboarding is disabled on guest connections. Connect to your own host machine instead.");
       return;
     }
     if (!openAiApiKey.trim() && !githubToken.trim() && !gitlabToken.trim()) {
@@ -1223,10 +1207,6 @@ export default function SettingsScreen() {
       Alert.alert("Connect a device", "Connect to your own Yaver machine to remove GitHub or GitLab credentials.");
       return;
     }
-    if (activeDevice?.isGuest) {
-      Alert.alert("Guest machine", "Machine onboarding removal is disabled on guest connections. Connect to your own host machine instead.");
-      return;
-    }
     if (selectedOnboardingTargets.length === 0) {
       Alert.alert("Select machines", "Pick at least one owned live machine first.");
       return;
@@ -1273,7 +1253,7 @@ export default function SettingsScreen() {
   };
 
   const toolchainSourceCandidates = devices.filter(
-    (device) => !device.isGuest && device.id !== activeDevice?.id,
+    (device) => device.id !== activeDevice?.id,
   );
   const selectedToolchainSource =
     toolchainSourceCandidates.find((device) => device.id === toolchainSourceId) ?? toolchainSourceCandidates[0] ?? null;
@@ -1293,16 +1273,16 @@ export default function SettingsScreen() {
     setSelectedOnboardingTargetIds((current) => {
       const filtered = current.filter((id) => allowedIds.has(id));
       if (filtered.length > 0) return filtered;
-      if (activeDevice && !activeDevice.isGuest && allowedIds.has(activeDevice.id)) return [activeDevice.id];
+      if (activeDevice && allowedIds.has(activeDevice.id)) return [activeDevice.id];
       const first = onboardingTargetCandidates[0];
       return first ? [first.id] : [];
     });
-  }, [activeDevice?.id, activeDevice?.isGuest, onboardingTargetCandidates.map((device) => device.id).join("|")]);
+  }, [activeDevice?.id, onboardingTargetCandidates.map((device) => device.id).join("|")]);
 
   useEffect(() => {
     if (!showIntegrations) return;
     void loadRunnerAuthStatus();
-  }, [showIntegrations, connectionStatus, activeDevice?.id, activeDevice?.isGuest, selectedOnboardingTargetIds.join("|")]);
+  }, [showIntegrations, connectionStatus, activeDevice?.id, selectedOnboardingTargetIds.join("|")]);
 
   const currentToolchainSyncKinds = () => {
     const kinds: string[] = [];
@@ -1348,10 +1328,6 @@ export default function SettingsScreen() {
       Alert.alert("Connect a machine", "Connect to the target machine you want to update first.");
       return;
     }
-    if (activeDevice.isGuest) {
-      Alert.alert("Owner only", "Toolchain Sync is only available on your own machines.");
-      return;
-    }
     if (!selectedToolchainSource) {
       Alert.alert("No source machine", "Bring another one of your Yaver machines online so it can act as the source toolchain.");
       return;
@@ -1388,10 +1364,6 @@ export default function SettingsScreen() {
   const applyToolchainSyncNow = async () => {
     if (connectionStatus !== "connected" || !activeDevice) {
       Alert.alert("Connect a machine", "Connect to the target machine you want to update first.");
-      return;
-    }
-    if (activeDevice.isGuest) {
-      Alert.alert("Owner only", "Toolchain Sync is only available on your own machines.");
       return;
     }
     if (!selectedToolchainSource) {
@@ -1605,10 +1577,6 @@ export default function SettingsScreen() {
     if (machineDeleteConfirm !== "delete my machine") return;
     if (connectionStatus !== "connected" || !activeDevice) {
       Alert.alert("Connect a machine", "Connect to your own machine first.");
-      return;
-    }
-    if (activeDevice.isGuest) {
-      Alert.alert("Owner only", "Guest/shared machines cannot be permanently removed from the host.");
       return;
     }
     setRemovingMachine(true);
@@ -2010,10 +1978,7 @@ export default function SettingsScreen() {
     setTestExecId(null);
   };
 
-  const runtimeProjectDevices = useMemo(
-    () => devices.filter((d) => !d.isGuest),
-    [devices],
-  );
+  const runtimeProjectDevices = useMemo(() => devices, [devices]);
 
   const saveRuntimeProjectDefaultForDevice = useCallback(async (deviceId: string, project: RuntimeProjectSeed) => {
     if (!token) {
@@ -2086,7 +2051,7 @@ export default function SettingsScreen() {
         {/* Per-machine coding agent preference lives before toolchain sync:
             choose the default runner for the connected box and drive remote
             auth for Claude/Codex from the same compact surface. */}
-        {connectionStatus === "connected" && activeDevice && !activeDevice.isGuest ? (
+        {connectionStatus === "connected" && activeDevice ? (
           <View style={styles.section}>
             <Text style={[styles.sectionLabel, { color: c.textMuted }]}>
               Coding agent - {activeDevice.name}
@@ -2103,12 +2068,12 @@ export default function SettingsScreen() {
             propagation), same path the Devices tab uses, so the
             change reflects on every signed-in surface immediately. */}
         {(() => {
-          const eligible = devices.filter((d) => !d.isGuest);
+          const eligible = devices;
           if (eligible.length === 0) return null;
           const primary = eligible.find((d) => d.id === primaryDeviceId) || null;
           const secondary = eligible.find((d) => d.id === secondaryDeviceId) || null;
           // Build the selection sheet — used for both Change Primary
-          // and Set/Change Secondary. Displays each non-guest device
+          // and Set/Change Secondary. Displays each signed-in device
           // by name, calls the appropriate setter, surfaces the
           // failure inline. Skips the device that's already in the
           // OTHER role (you can't be primary and secondary at once).
@@ -3441,10 +3406,6 @@ export default function SettingsScreen() {
                 <Text style={{ color: c.textMuted, fontSize: 13 }}>
                   Connect to the target machine first. Toolchain Sync always applies to the machine currently connected in Yaver.
                 </Text>
-              ) : activeDevice.isGuest ? (
-                <Text style={{ color: c.textMuted, fontSize: 13 }}>
-                  Toolchain Sync is owner-only. Connect to one of your own machines to use it.
-                </Text>
               ) : toolchainSourceCandidates.length === 0 ? (
                 <Text style={{ color: c.textMuted, fontSize: 13 }}>
                   No source machine available yet. Bring your development Mac/Linux box online in Yaver, then come back and sync its toolchain into this target.
@@ -4272,29 +4233,6 @@ export default function SettingsScreen() {
             )}
           </View>
 
-          {/* Containerize Guests toggle */}
-          <View style={{ height: 8 }} />
-          <View style={[styles.actionRow, { backgroundColor: c.bgCard, borderColor: c.border, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>Containerize Guests</Text>
-              <Text style={{ fontSize: 11, color: c.textMuted }}>Run guest tasks in Docker containers</Text>
-            </View>
-            <Switch
-              value={sandboxStatus.containerizeGuests}
-              disabled={sandboxSaving || !sandboxStatus.docker}
-              onValueChange={async (val) => {
-                setSandboxSaving(true);
-                const ok = await quicClient.updateSandboxConfig({ containerizeGuests: val });
-                if (ok) {
-                  const s = await quicClient.getSandboxStatus();
-                  if (s) setSandboxStatus(s);
-                }
-                setSandboxSaving(false);
-              }}
-              trackColor={{ false: c.border, true: c.accent }}
-            />
-          </View>
-
           {/* Containerize Host toggle */}
           <View style={{ height: 8 }} />
           <View style={[styles.actionRow, { backgroundColor: c.bgCard, borderColor: c.border, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }]}>
@@ -4936,10 +4874,10 @@ export default function SettingsScreen() {
                 Yaver account signup still uses Apple, Google, Microsoft, or email. OpenAI and Claude are connected as tooling providers, not Yaver login providers.
               </Text>
               <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>
-                Host vault sync is owner-only. Guest sessions do not get raw provider secrets unless the host explicitly enables host-managed key usage.
+                Provider secrets sync only to machines owned by this signed-in account.
               </Text>
               <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>
-                Shared infra policy: host can share compute only, or compute plus host-managed keys. Guests never receive raw provider values from this screen.
+                Raw provider values stay inside the signed-in owner's encrypted vault and machines.
               </Text>
 
               <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
@@ -4964,7 +4902,7 @@ export default function SettingsScreen() {
                 </Pressable>
                 <Pressable
                   onPress={syncAiProvidersToVault}
-                  disabled={isSyncingAiVault || connectionStatus !== "connected" || !!activeDevice?.isGuest}
+                  disabled={isSyncingAiVault || connectionStatus !== "connected"}
                   style={({ pressed }) => [
                     {
                       flex: 1,
@@ -4974,7 +4912,7 @@ export default function SettingsScreen() {
                       borderColor: c.border,
                       backgroundColor: c.bg,
                       alignItems: "center",
-                      opacity: (isSyncingAiVault || connectionStatus !== "connected" || !!activeDevice?.isGuest) ? 0.5 : 1,
+                      opacity: (isSyncingAiVault || connectionStatus !== "connected") ? 0.5 : 1,
                     },
                     pressed && { opacity: 0.7 },
                   ]}
@@ -4987,7 +4925,7 @@ export default function SettingsScreen() {
 
               <Pressable
                 onPress={syncAiProvidersToRunners}
-                disabled={isSyncingRunnerAuth || connectionStatus !== "connected" || !!activeDevice?.isGuest}
+                disabled={isSyncingRunnerAuth || connectionStatus !== "connected"}
                 style={({ pressed }) => [
                   {
                     marginTop: 10,
@@ -4997,7 +4935,7 @@ export default function SettingsScreen() {
                     borderColor: c.border,
                     backgroundColor: c.bg,
                     alignItems: "center",
-                    opacity: (isSyncingRunnerAuth || connectionStatus !== "connected" || !!activeDevice?.isGuest) ? 0.5 : 1,
+                    opacity: (isSyncingRunnerAuth || connectionStatus !== "connected") ? 0.5 : 1,
                   },
                   pressed && { opacity: 0.7 },
                 ]}
@@ -5022,9 +4960,9 @@ export default function SettingsScreen() {
                 )}
                 {runnerAuthRows.length === 0 ? (
                   <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                    {connectionStatus === "connected" && !activeDevice?.isGuest
+                    {connectionStatus === "connected"
                       ? "Runner auth status will appear here."
-                      : "Connect to your own machine to inspect runner auth."}
+                      : "Connect to a machine to inspect runner auth."}
                   </Text>
                 ) : (
                   runnerAuthRows.map((row) => (
@@ -5037,9 +4975,9 @@ export default function SettingsScreen() {
 
               <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
 
-              <YaverAgentSettings connected={connectionStatus === "connected" && !activeDevice?.isGuest} />
+              <YaverAgentSettings connected={connectionStatus === "connected"} />
 
-              <VisionSettingsSection connected={connectionStatus === "connected" && !activeDevice?.isGuest} />
+              <VisionSettingsSection connected={connectionStatus === "connected"} />
 
               <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
 
@@ -5171,7 +5109,7 @@ export default function SettingsScreen() {
                 <View style={{ flexDirection: "row", gap: 8 }}>
                   {(["github", "gitlab"] as const).map((provider) => {
                     const busy = startingGitOAuthProvider === provider;
-                    const disabled = !!startingGitOAuthProvider || connectionStatus !== "connected" || !!activeDevice?.isGuest || selectedOnboardingTargets.length !== 1;
+                    const disabled = !!startingGitOAuthProvider || connectionStatus !== "connected" || selectedOnboardingTargets.length !== 1;
                     return (
                       <Pressable
                         key={provider}
@@ -5269,7 +5207,7 @@ export default function SettingsScreen() {
 
               <Pressable
                 onPress={applyMachineOnboarding}
-                disabled={isApplyingMachineOnboarding || connectionStatus !== "connected" || !!activeDevice?.isGuest}
+                disabled={isApplyingMachineOnboarding || connectionStatus !== "connected"}
                 style={({ pressed }) => [
                   {
                     marginTop: 10,
@@ -5277,7 +5215,7 @@ export default function SettingsScreen() {
                     borderRadius: 8,
                     backgroundColor: c.accent,
                     alignItems: "center",
-                    opacity: (isApplyingMachineOnboarding || connectionStatus !== "connected" || !!activeDevice?.isGuest) ? 0.5 : 1,
+                    opacity: (isApplyingMachineOnboarding || connectionStatus !== "connected") ? 0.5 : 1,
                   },
                   pressed && { opacity: 0.7 },
                 ]}
@@ -5289,7 +5227,7 @@ export default function SettingsScreen() {
               <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
                 <Pressable
                   onPress={() => void removeMachineOnboarding("github")}
-                  disabled={!!removingOnboardingProvider || connectionStatus !== "connected" || !!activeDevice?.isGuest}
+                  disabled={!!removingOnboardingProvider || connectionStatus !== "connected"}
                   style={({ pressed }) => [
                     {
                       flex: 1,
@@ -5298,7 +5236,7 @@ export default function SettingsScreen() {
                       borderWidth: 1,
                       borderColor: c.error,
                       alignItems: "center",
-                      opacity: (!!removingOnboardingProvider || connectionStatus !== "connected" || !!activeDevice?.isGuest) ? 0.5 : 1,
+                      opacity: (!!removingOnboardingProvider || connectionStatus !== "connected") ? 0.5 : 1,
                     },
                     pressed && { opacity: 0.7 },
                   ]}
@@ -5309,7 +5247,7 @@ export default function SettingsScreen() {
                 </Pressable>
                 <Pressable
                   onPress={() => void removeMachineOnboarding("gitlab")}
-                  disabled={!!removingOnboardingProvider || connectionStatus !== "connected" || !!activeDevice?.isGuest}
+                  disabled={!!removingOnboardingProvider || connectionStatus !== "connected"}
                   style={({ pressed }) => [
                     {
                       flex: 1,
@@ -5318,7 +5256,7 @@ export default function SettingsScreen() {
                       borderWidth: 1,
                       borderColor: c.error,
                       alignItems: "center",
-                      opacity: (!!removingOnboardingProvider || connectionStatus !== "connected" || !!activeDevice?.isGuest) ? 0.5 : 1,
+                      opacity: (!!removingOnboardingProvider || connectionStatus !== "connected") ? 0.5 : 1,
                     },
                     pressed && { opacity: 0.7 },
                   ]}
@@ -5336,9 +5274,9 @@ export default function SettingsScreen() {
                   </Text>
                 ) : Object.keys(machineOnboardingRowsByDevice).length === 0 ? (
                   <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                    {connectionStatus === "connected" && !activeDevice?.isGuest
+                    {connectionStatus === "connected"
                       ? "OpenAI / GitHub / GitLab status will appear here for the selected machines."
-                      : "Connect to your own machine to inspect provider onboarding."}
+                      : "Connect to a machine to inspect provider onboarding."}
                   </Text>
                 ) : (
                   selectedOnboardingTargets.map((device) => (
@@ -5598,16 +5536,16 @@ export default function SettingsScreen() {
               style={({ pressed }) => [
                 styles.deleteAccountButton,
                 { borderColor: c.error + "30" },
-                machineDeleteConfirm === "delete my machine" && connectionStatus === "connected" && activeDevice && !activeDevice.isGuest
+                machineDeleteConfirm === "delete my machine" && connectionStatus === "connected" && activeDevice
                   ? { backgroundColor: c.error + "15" }
                   : { opacity: 0.3 },
                 pressed && machineDeleteConfirm === "delete my machine" && { opacity: 0.7 },
               ]}
               onPress={handleRemoveMachine}
-              disabled={machineDeleteConfirm !== "delete my machine" || removingMachine || connectionStatus !== "connected" || !activeDevice || activeDevice.isGuest}
+              disabled={machineDeleteConfirm !== "delete my machine" || removingMachine || connectionStatus !== "connected" || !activeDevice}
             >
               <Text style={[styles.deleteAccountText, { color: c.error }]}>
-                {removingMachine ? "Removing..." : activeDevice?.isGuest ? "Owner machine required" : "Remove Yaver From This Host"}
+                {removingMachine ? "Removing..." : "Remove Yaver From This Host"}
               </Text>
             </Pressable>
             {machineRemoveSteps.length > 0 ? (

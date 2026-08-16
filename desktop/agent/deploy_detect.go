@@ -224,7 +224,10 @@ func detectDeployPlan(root, bump string) *DeployPlan {
 	// Stages from the repo's own scripts, in fail-loud order (cheap/idempotent
 	// backend first, mobile uploads last). cloudflare prefers deploy-cloudflare.sh
 	// but falls back to deploy-web.sh.
-	type cand struct{ id, name string; scripts []string }
+	type cand struct {
+		id, name string
+		scripts  []string
+	}
 	cands := []cand{
 		{"convex", "Convex backend", []string{"deploy-convex.sh"}},
 		{"cloudflare", "Cloudflare (web)", []string{"deploy-cloudflare.sh", "deploy-web.sh"}},

@@ -37,12 +37,10 @@ import (
 //   project_test_specs  — list the Features (specs) discovered for a project
 //   project_test_run    — run the suite (async job), records video, returns jobId
 //   project_test_report — feature-based report + highlight clips for a finished run
-//   project_test_grow   — self-grow: plan + ledger of uncovered Features for the
-//                          runner to author (the "tests write themselves" loop)
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 
 	reg("playwright_status",
@@ -405,47 +403,6 @@ func init() {
 			return OpsResult{OK: true, Initial: art}
 		})
 
-	reg("project_test_grow",
-		"Self-grow the test suite: scan the project's routes/components, diff against the coverage ledger (yaver-tests/.coverage.json), and return an author plan of uncovered Features. With author:true, ALSO enqueue the Yaver runner to actually write the new *.test.yaml specs (the tests grow themselves, no user prompt). {dir? (repo root), apply? (write/refresh ledger), author? (dispatch the runner), runner? (claude|codex|opencode)}. No specs are deleted.",
-		func(c OpsContext, payload json.RawMessage) OpsResult {
-			var req struct {
-				Dir    string `json:"dir"`
-				Apply  bool   `json:"apply"`
-				Author bool   `json:"author"`
-				Runner string `json:"runner"`
-			}
-			if len(payload) > 0 {
-				_ = json.Unmarshal(payload, &req)
-			}
-			plan, err := growTestPlan(req.Dir, req.Apply || req.Author)
-			if err != nil {
-				return OpsResult{OK: false, Code: "grow_failed", Error: err.Error()}
-			}
-			// Autonomous authoring: hand the plan to the runner as a task so it
-			// writes the specs itself. Best-effort — the plan is still returned.
-			if req.Author && len(plan.Uncovered) > 0 && c.Server != nil && c.Server.taskMgr != nil {
-				title := "Grow tests: " + filepath.Base(plan.ProjectDir)
-				ctx := c.Ctx
-				if ctx == nil {
-					ctx = context.Background()
-				}
-				if deferral, deferred, derr := c.Server.deferIngressTaskToCloudWorkspace(ctx, "testkit-grow", "test", req.Runner, plan.ProjectDir); deferred {
-					if deferral != nil {
-						plan.TaskID = deferral.PendingTaskID
-					}
-					if derr != nil {
-						plan.AuthorPrompt = ""
-						return OpsResult{OK: false, Code: "cloud_workspace_required", Error: derr.Error(), Initial: plan}
-					}
-					plan.AuthorPrompt = ""
-					return OpsResult{OK: true, Initial: plan}
-				}
-				if t, terr := c.Server.taskMgr.CreateTask(title, plan.AuthorPrompt, "", "testkit-grow", req.Runner, "", nil); terr == nil && t != nil {
-					plan.TaskID = t.ID
-				}
-			}
-			return OpsResult{OK: true, Initial: plan}
-		})
 }
 
 // ── request + report shapes ──────────────────────────────────────────────────

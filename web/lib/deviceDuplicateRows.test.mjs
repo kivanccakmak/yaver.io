@@ -16,7 +16,7 @@ test("DevicesView collapses duplicate host rows to the operational row", () => {
 
   assert.match(
     duplicateBlock,
-    /function duplicateHostKey\(device: Pick<Device, "isGuest" \| "platform" \| "name">/,
+    /function duplicateHostKey\(device: Pick<Device, "platform" \| "name">/,
     "duplicate detection must key on hostname/platform, not agent version",
   );
   assert.match(

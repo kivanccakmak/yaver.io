@@ -740,9 +740,6 @@ export interface MachineInfo {
   arch?: string;
   isLocal: boolean;
   isOnline: boolean;
-  isShared?: boolean;
-  hostName?: string;
-  hostEmail?: string;
   provider?: string;
   currentWorkDir?: string;
   capabilities?: MachineCapabilities;
@@ -779,13 +776,6 @@ export interface InfraRelaySummary {
   region?: string;
   source: string;
   passwordRequired: boolean;
-}
-
-export interface InfraSharingSummary {
-  isShared: boolean;
-  accessScope?: string;
-  pendingGuests: number;
-  acceptedGuests: number;
 }
 
 export interface InfraCapabilities {
@@ -826,7 +816,6 @@ export interface InfraSummary {
   }>;
   network?: InfraNetworkInterface[];
   relays?: InfraRelaySummary[];
-  sharing: InfraSharingSummary;
   sandbox: SandboxStatus;
   capabilities: InfraCapabilities;
   rebootGrant?: RebootGrantState;
@@ -5291,6 +5280,24 @@ export class QuicClient {
     }
   }
 
+  /** Live runner PTY sessions on the connected box — the picker source for
+   *  constrained surfaces (car, watch) when several agents are running. */
+  async listRunnerSessions(): Promise<
+    Array<{ name: string; runner: string; command?: string; confirmed: boolean; attached?: boolean }>
+  > {
+    if (!this.isConnected && !this.hasConnectionInfo) return [];
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/runner/sessions`, {
+        headers: this.authHeaders,
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.sessions || [];
+    } catch {
+      return [];
+    }
+  }
+
   /** Adopt a tmux PANE as a Yaver task. Returns the created task.
    *
    *  Pass `paneId` to pick which agent: one session split across panes is
@@ -6157,16 +6164,41 @@ export class QuicClient {
     return res.json();
   }
 
-  /** Pull from remote. */
-  async gitPull(workDir?: string): Promise<{success: boolean; output: string}> {
+  /** Pull from remote. Rebased (--rebase --autostash) by default. */
+  async gitPull(workDir?: string, rebase = true): Promise<{success: boolean; output: string}> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(`${this.baseUrl}/git/pull`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workDir }),
+      body: JSON.stringify({ workDir, rebase }),
     });
     if (!res.ok) throw new Error(`Failed to pull: ${res.status}`);
     return res.json();
+  }
+
+  /** Deterministic safe sync of a remote repo: rebase --autostash against
+   *  origin/<branch> then push (never force). Aborts + reports conflicts.
+   *  The first-class "Sync remote repo" surface (talos etc.). */
+  async gitSyncRemote(workDir?: string): Promise<{
+    ok: boolean;
+    branch?: string;
+    hash?: string;
+    actions?: string[];
+    rebased?: boolean;
+    pushed?: boolean;
+    requiresAgent?: boolean;
+    conflicts?: string[];
+    error?: string;
+    output?: string;
+  }> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/sync-remote`, {
+      method: 'POST',
+      headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return data;
   }
 
   /** Checkout a branch. */
@@ -9224,7 +9256,7 @@ export class QuicClient {
   }
 
   /** One-step containerization setup for shared infra or full host isolation. */
-  async sandboxQuickstart(mode: "guests" | "host", buildImage = true): Promise<{ ok: boolean; message?: string; sandbox?: SandboxStatus; error?: string }> {
+  async sandboxQuickstart(mode: "host", buildImage = true): Promise<{ ok: boolean; message?: string; sandbox?: SandboxStatus; error?: string }> {
     try {
       const res = await this.fetchWithTimeout(`${this.baseUrl}/sandbox/quickstart`, {
         method: "POST",
@@ -9893,35 +9925,6 @@ export class QuicClient {
     };
   }
 
-  // ---- Chat (live visitor widget) --------------------------------------
-
-  async chatConversations(): Promise<any[]> {
-    try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/chat/conversations`, { headers: this.authHeaders });
-      if (!res.ok) return [];
-      return (await res.json()).conversations || [];
-    } catch { return []; }
-  }
-
-  async chatHistory(vid: string): Promise<any[]> {
-    try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/chat/messages?vid=${encodeURIComponent(vid)}`, { headers: this.authHeaders });
-      if (!res.ok) return [];
-      return (await res.json()).messages || [];
-    } catch { return []; }
-  }
-
-  async chatReply(vid: string, text: string): Promise<boolean> {
-    try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/chat/reply`, {
-        method: "POST",
-        headers: { ...this.authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ vid, text }),
-      });
-      return res.ok;
-    } catch { return false; }
-  }
-
   // ---- A/B experiments -------------------------------------------------
 
   async abExperiments(): Promise<any[]> {
@@ -10565,12 +10568,20 @@ export class QuicClient {
     choice: string | null,
     waitMs = 6000,
     images?: ImageAttachment[],
+    session?: string,
+    workDir?: string,
   ): Promise<{
     ok?: boolean;
     session?: string;
     runner?: string;
     sent?: string;
     awaitingChoice?: boolean;
+    /** True when a lifecycle intent (start/list/close/switch) was ambiguous and
+     *  the caller must resolve against `available` before acting. */
+    needsChoice?: boolean;
+    /** Multi-session picker from the agent when several runner sessions are
+     *  live and the caller did not name one (car/watch voice surfaces). */
+    available?: Array<{ name: string; runner: string; index: number; matched?: boolean }>;
     options?: string[];
     pane?: string;
     /** "observed" | "unconfirmed" — what the agent could PROVE about a prompt
@@ -10586,7 +10597,14 @@ export class QuicClient {
     if (!text && !choice) return { ok: false, error: "send text or choice" };
     const relayList = [...this.relayServers];
     if (relayList.length === 0) return { ok: false, error: "no relay servers configured" };
-    const body = JSON.stringify({ text, choice, waitMs, images: images?.length ? images : undefined });
+    const body = JSON.stringify({
+      session: session || undefined,
+      text,
+      choice,
+      waitMs,
+      images: images?.length ? images : undefined,
+      workDir: workDir || undefined,
+    });
     let lastError = "no relay reached the device";
     for (const relay of relayList) {
       const url =
@@ -10621,7 +10639,7 @@ export class QuicClient {
    *  via Convex round-trip in its handler (NOT against its local
    *  auth_token), so this works even when the agent has someone
    *  else's session token, which is the case the AUTH/Recover flow
-   *  cannot fix. Owner-only on the agent side; guests get 403.
+   *  cannot fix. Owner-only on the agent side.
    *
    *  Walks the same relay list connect() does and POSTs to the
    *  first reachable one. The user's bearer is what authenticates
@@ -10651,7 +10669,7 @@ export class QuicClient {
         if (res.ok) {
           return { ok: true, via: relay.id || relay.httpUrl };
         }
-        // 401/403 — bearer issue or guest. Stop walking; next relay
+        // 401/403 — bearer or ownership issue. Stop walking; next relay
         // can't change the verdict.
         if (res.status === 401 || res.status === 403) {
           let body = "";
@@ -10675,7 +10693,7 @@ export class QuicClient {
    *  itself, not the wedged target. The watchdog runs idempotent
    *  service-restart commands (systemctl / launchctl / nohup) and
    *  returns a one-line outcome. Owner-token auth on the watchdog
-   *  side; guests get 403.
+   *  side; the route is owner-only.
    */
   async recoverPeer(
     targetDeviceId: string,
@@ -11593,8 +11611,7 @@ export interface TestkitFlakeStats {
 /** Container sandbox status returned by the agent. */
 export interface SandboxStatus {
   ok: boolean;
-  enabledMode?: "off" | "guests" | "host";
-  containerizeGuests: boolean;
+  enabledMode?: "off" | "host";
   containerizeHost: boolean;
   docker: boolean;
   imageReady: boolean;
@@ -11606,14 +11623,13 @@ export interface SandboxStatus {
   cpuLimit?: string;
   memoryLimit?: string;
   extraMounts?: string[];
-  recommendedMode?: "guests" | "host";
+  recommendedMode?: "host";
   recommendedReason?: string;
   quickstartAvailable?: boolean;
 }
 
 /** Container sandbox config fields for updates. */
 export interface SandboxConfig {
-  containerizeGuests: boolean;
   containerizeHost: boolean;
   cpuLimit: string;
   memoryLimit: string;

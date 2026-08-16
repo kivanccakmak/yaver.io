@@ -243,8 +243,8 @@ func TestDevChildIdentity_StartTokenSurvivesArgvRewrite(t *testing.T) {
 	rec := devChildRecord{
 		PID:  self,
 		Port: 8089, Kind: "expo",
-		Match:      "npx,8089",                                            // never matched after the rewrite
-		Argv:       "node /root/.yaver/.../npx expo start --port 8089",    // matched only at spawn
+		Match:      "npx,8089",                                         // never matched after the rewrite
+		Argv:       "node /root/.yaver/.../npx expo start --port 8089", // matched only at spawn
 		StartToken: tok,
 	}
 	// The live argv is the REWRITTEN form — neither the needle nor the recorded
@@ -281,8 +281,8 @@ func TestDevChildIdentity_DifferentStartTokenIsSpared(t *testing.T) {
 //
 // Measured on ubuntu-4gb, 2026-08-03, minutes after the identity fix shipped:
 //
-//   [custodian:dev-children] pid 51855 · :19006 — a expo-web left by a previous
-//   agent was still holding port 19006, so this machine looked busier than it was
+//	[custodian:dev-children] pid 51855 · :19006 — a expo-web left by a previous
+//	agent was still holding port 19006, so this machine looked busier than it was
 //
 // It was not left by a previous agent. It was that agent's own expo-web,
 // alive, serving the preview a tvOS closed loop was watching — and the sweep

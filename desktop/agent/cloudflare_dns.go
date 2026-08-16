@@ -29,8 +29,8 @@ const cloudflareAPI = "https://api.cloudflare.com/client/v4"
 // dependency injection in tests that replace BaseURL + HTTP.
 type CloudflareClient struct {
 	Token   string
-	BaseURL string        // override for tests; empty = cloudflareAPI
-	HTTP    *http.Client  // override for tests; nil = 15s default
+	BaseURL string       // override for tests; empty = cloudflareAPI
+	HTTP    *http.Client // override for tests; nil = 15s default
 }
 
 func NewCloudflareClient(token string) *CloudflareClient {
@@ -57,9 +57,9 @@ type cfError struct {
 }
 
 type cfEnvelope[T any] struct {
-	Success bool       `json:"success"`
-	Errors  []cfError  `json:"errors"`
-	Result  T          `json:"result"`
+	Success bool      `json:"success"`
+	Errors  []cfError `json:"errors"`
+	Result  T         `json:"result"`
 }
 
 func (c *CloudflareClient) do(method, path string, body interface{}) ([]byte, int, error) {
@@ -107,10 +107,10 @@ type CloudflareZone struct {
 type CloudflareRecord struct {
 	ID      string `json:"id"`
 	ZoneID  string `json:"zone_id,omitempty"`
-	Type    string `json:"type"`           // A, AAAA, CNAME, TXT, MX, ...
-	Name    string `json:"name"`           // FQDN (e.g. myapp.example.com)
-	Content string `json:"content"`        // IP / target / value
-	TTL     int    `json:"ttl,omitempty"`  // 1 = auto
+	Type    string `json:"type"`          // A, AAAA, CNAME, TXT, MX, ...
+	Name    string `json:"name"`          // FQDN (e.g. myapp.example.com)
+	Content string `json:"content"`       // IP / target / value
+	TTL     int    `json:"ttl,omitempty"` // 1 = auto
 	Proxied bool   `json:"proxied,omitempty"`
 	Comment string `json:"comment,omitempty"`
 }
@@ -338,9 +338,9 @@ func (s *HTTPServer) handleCFRecords(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"records": recs})
 	case http.MethodPost:
 		var body struct {
-			ZoneID string                  `json:"zoneId"`
-			Record CloudflareRecordInput   `json:"record"`
-			Token  string                  `json:"token,omitempty"` // fallback if no header
+			ZoneID string                `json:"zoneId"`
+			Record CloudflareRecordInput `json:"record"`
+			Token  string                `json:"token,omitempty"` // fallback if no header
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			jsonError(w, http.StatusBadRequest, "invalid json: "+err.Error())

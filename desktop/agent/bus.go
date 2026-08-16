@@ -51,12 +51,12 @@ type DeviceID = string
 // BusEvent is the wire format. Small + JSON-encodable so every
 // transport can serialise it trivially.
 type BusEvent struct {
-	ID          string          `json:"id"`          // per-device monotonic (UUID v7-ish: timestamp+random)
-	Topic       string          `json:"topic"`       // e.g. "peer/abc123/online"
+	ID          string          `json:"id"`    // per-device monotonic (UUID v7-ish: timestamp+random)
+	Topic       string          `json:"topic"` // e.g. "peer/abc123/online"
 	Publisher   DeviceID        `json:"publisher"`
-	PublishedAt int64           `json:"publishedAt"` // unix millis
+	PublishedAt int64           `json:"publishedAt"`   // unix millis
 	TTL         int64           `json:"ttl,omitempty"` // retain seconds; 0 = one-shot
-	QoS         byte            `json:"qos"`         // 0 fire-forget, 1 at-least-once
+	QoS         byte            `json:"qos"`           // 0 fire-forget, 1 at-least-once
 	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -75,16 +75,16 @@ type BusTransport interface {
 // Bus is the process-local pub/sub core. One per `yaver serve`.
 // Matches the one-supervisor-per-process pattern from healer.go.
 type Bus struct {
-	mu          sync.RWMutex
-	deviceID    DeviceID
-	userID      string // from auth; scopes fanout
-	transports  []BusTransport
-	subs        map[string][]*subscription // key = topic prefix
-	retained    map[string]BusEvent        // key = topic — last-value-wins per-publisher
-	seen        map[string]time.Time       // key = event.ID — dedup window
+	mu         sync.RWMutex
+	deviceID   DeviceID
+	userID     string // from auth; scopes fanout
+	transports []BusTransport
+	subs       map[string][]*subscription // key = topic prefix
+	retained   map[string]BusEvent        // key = topic — last-value-wins per-publisher
+	seen       map[string]time.Time       // key = event.ID — dedup window
 
-	inbox   chan BusEvent
-	stop    chan struct{}
+	inbox    chan BusEvent
+	stop     chan struct{}
 	stopOnce sync.Once
 	running  atomic.Bool
 
@@ -408,15 +408,15 @@ func generateBusEventID(device DeviceID, now time.Time) string {
 
 // BusStatus exposes counters for /bus/status + /self-check.
 type BusStatus struct {
-	DeviceID    DeviceID          `json:"deviceId"`
-	UserID      string            `json:"userId"`
-	Running     bool              `json:"running"`
-	Published   uint64            `json:"published"`
-	Received    uint64            `json:"received"`
-	Dupes       uint64            `json:"dupes"`
-	Transports  []string          `json:"transports"`
-	Retained    int               `json:"retainedCount"`
-	Subs        int               `json:"subscriptionCount"`
+	DeviceID   DeviceID `json:"deviceId"`
+	UserID     string   `json:"userId"`
+	Running    bool     `json:"running"`
+	Published  uint64   `json:"published"`
+	Received   uint64   `json:"received"`
+	Dupes      uint64   `json:"dupes"`
+	Transports []string `json:"transports"`
+	Retained   int      `json:"retainedCount"`
+	Subs       int      `json:"subscriptionCount"`
 }
 
 func (b *Bus) Status() BusStatus {

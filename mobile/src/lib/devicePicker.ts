@@ -38,7 +38,7 @@ const TERMINAL_MACHINE_STATUS = new Set(["removed", "deleted", "destroyed", "ter
 export function isPickableRemoteBox(device: Device): boolean {
   // Ghost row: no hardware id and no public key means we cannot address,
   // verify, or pair with it. Mirrors DeviceContext's own ghost guard.
-  if (!device.hwid && !device.publicKey && !device.isGuest && !device.managed) return false;
+  if (!device.hwid && !device.publicKey && !device.managed) return false;
   if (device.managed && device.machineStatus && TERMINAL_MACHINE_STATUS.has(device.machineStatus)) {
     return false;
   }

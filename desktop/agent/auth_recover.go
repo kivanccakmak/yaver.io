@@ -101,11 +101,12 @@ type RecoveryResponse struct {
 //
 //  2. Flush the token cache. auth() caches token→userID decisions in
 //     s.tokenCache for the life of the process. After reauth the old
-//     bearer may still be in there with its (now-stale) userID, guest
-//     grant, or host-share decision. Leaving those entries behind
-//     re-admits revoked sessions and routes the wrong isolation slot.
+//     bearer may still be in there with its now-stale userID or a removed
+//     delegation decision. Leaving those entries behind can re-admit a
+//     revoked session or route the wrong isolation slot.
 //     A full Range+Delete is the safe thing — the cache is small and
 //     the next request repopulates whatever it needs.
+//
 // validateRecoveredTokenFn is the seam that lets unit tests stub out the
 // pre-persist Convex validation in applyRecoveredAuthToken. Production
 // path delegates to ValidateTokenUser (real HTTP). Tests swap it for a
@@ -160,7 +161,7 @@ func applyRecoveredAuthToken(token, convexURL string, s *HTTPServer) {
 		// pre-flight ValidateTokenUser call above.
 		s.ownerUserID = strings.TrimSpace(uid)
 		// Invalidate cached token→user decisions so stale bearers
-		// (old owner, old guest grants, old host-share verdicts) can't
+		// (old owner or removed delegation verdicts) can't
 		// short-circuit past the fresh Convex validation.
 		s.tokenCache.Range(func(k, _ interface{}) bool {
 			s.tokenCache.Delete(k)
@@ -239,7 +240,7 @@ func (s *HTTPServer) handleAuthReloadFromDisk(w http.ResponseWriter, r *http.Req
 			s.ownerUserID = strings.TrimSpace(uid)
 		}
 		// Invalidate cached token→user decisions so stale bearers
-		// (old guest grants, old host-share verdicts) can't short-circuit
+		// (removed delegation verdicts) can't short-circuit
 		// past the new owner identity.
 		s.tokenCache.Range(func(k, _ interface{}) bool {
 			s.tokenCache.Delete(k)

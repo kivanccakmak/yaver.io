@@ -122,7 +122,7 @@ func TestRuntimeEgressVerbRegistered(t *testing.T) {
 	if !ok {
 		t.Fatal("runtime_egress ops verb not registered")
 	}
-	if spec.AllowGuest {
+	if spec.AllowCompanion {
 		t.Fatal("runtime_egress must be owner-only (egress IP is owner provenance)")
 	}
 	if spec.Handler == nil {

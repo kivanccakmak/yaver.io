@@ -67,15 +67,6 @@ contextBridge.exposeInMainWorld('yaver', {
   deleteTodo: (id) => ipcRenderer.invoke('delete-todo', id),
   todoCount: () => ipcRenderer.invoke('todo-count'),
 
-  // ── Guests ──────────────────────────────────────────
-  inviteGuest: (email) => ipcRenderer.invoke('invite-guest', email),
-  listGuests: () => ipcRenderer.invoke('list-guests'),
-  revokeGuest: (email) => ipcRenderer.invoke('revoke-guest', email),
-  guestConfig: (email) => ipcRenderer.invoke('guest-config', email),
-  updateGuestConfig: (data) => ipcRenderer.invoke('update-guest-config', data),
-  guestUsage: (date) => ipcRenderer.invoke('guest-usage', date),
-  leaveSharedAccess: (host) => ipcRenderer.invoke('leave-shared-access', host),
-
   // ── Git ─────────────────────────────────────────────
   gitPull: (wd) => ipcRenderer.invoke('agent-request', 'POST', `/git/pull?workDir=${encodeURIComponent(wd)}`),
   gitStatus: (wd) => ipcRenderer.invoke('agent-request', 'GET', `/git/status?workDir=${encodeURIComponent(wd)}`),

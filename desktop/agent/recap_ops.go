@@ -20,8 +20,8 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRecapListHandler,
-		AllowGuest: false,
+		Handler:        opsRecapListHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "recap_show",
@@ -34,8 +34,8 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRecapShowHandler,
-		AllowGuest: false,
+		Handler:        opsRecapShowHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "recap_build",
@@ -44,8 +44,8 @@ func init() {
 			"type":                 "object",
 			"additionalProperties": true,
 		},
-		Handler:    opsRecapBuildHandler,
-		AllowGuest: false,
+		Handler:        opsRecapBuildHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "recap_delete",
@@ -58,8 +58,8 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRecapDeleteHandler,
-		AllowGuest: false,
+		Handler:        opsRecapDeleteHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "recap_config_get",
@@ -69,8 +69,8 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsRecapConfigGetHandler,
-		AllowGuest: false,
+		Handler:        opsRecapConfigGetHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "recap_config_set",
@@ -79,8 +79,8 @@ func init() {
 			"type":                 "object",
 			"additionalProperties": true,
 		},
-		Handler:    opsRecapConfigSetHandler,
-		AllowGuest: false,
+		Handler:        opsRecapConfigSetHandler,
+		AllowCompanion: false,
 	})
 }
 

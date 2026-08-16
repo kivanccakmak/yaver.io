@@ -1,8 +1,5 @@
-// app/connections.tsx — People & Shared Projects. The social graph (address
-// book) plus the invite-to-code wrapper: connect with someone, then share a
-// repo so they can code with you on your machine or a Yaver Cloud box. A
-// non-technical collaborator gets an AI agent, their own branch, and a PR
-// flow — no terminal, no tokens.
+// app/connections.tsx — People. This is an address book only; connections do
+// not grant machine, project, runner, terminal, or support access.
 
 import React, { useCallback, useState } from "react";
 import {
@@ -22,7 +19,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "../src/context/ThemeContext";
 import type { ThemeColors } from "../src/constants/colors";
 import { AppBackButton } from "../src/components/AppBackButton";
-import { HIDE_PAID_UI } from "../src/lib/launchFlags";
 import {
   listConnections,
   requestConnection,
@@ -32,18 +28,6 @@ import {
   type ConnectionsResponse,
   type SuggestedConnection,
 } from "../src/lib/connections";
-import {
-  listProjectShares,
-  createProjectShare,
-  inviteToProject,
-  acceptProjectShare,
-  revokeProjectMember,
-  archiveProjectShare,
-  type OwnedProjectShare,
-  type JoinedProjectShare,
-} from "../src/lib/projectShares";
-
-type Section = "people" | "projects";
 
 function friendlyError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
@@ -59,24 +43,14 @@ export default function ConnectionsScreen() {
   const insets = useSafeAreaInsets();
   const s = makeStyles(c);
 
-  const [section, setSection] = useState<Section>("people");
   const [conns, setConns] = useState<ConnectionsResponse>({ accepted: [], incoming: [], outgoing: [], blocked: [] });
   const [suggested, setSuggested] = useState<SuggestedConnection[]>([]);
-  const [owned, setOwned] = useState<OwnedProjectShare[]>([]);
-  const [joined, setJoined] = useState<JoinedProjectShare[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "error"; text: string } | null>(null);
 
   // people input
   const [target, setTarget] = useState("");
-  // projects input
-  const [joinCode, setJoinCode] = useState("");
-  const [showCreate, setShowCreate] = useState(false);
-  const [slug, setSlug] = useState("");
-  const [repoUrl, setRepoUrl] = useState("");
-  const [hostKind, setHostKind] = useState<"owner-device" | "managed-cloud">("owner-device");
-  const [payer, setPayer] = useState<"owner" | "invitee">("owner");
 
   const flash = (m: { type: "ok" | "error"; text: string }) => {
     setMsg(m);
@@ -85,15 +59,12 @@ export default function ConnectionsScreen() {
 
   const refresh = useCallback(async () => {
     try {
-      const [cn, sg, ps] = await Promise.all([
+      const [cn, sg] = await Promise.all([
         listConnections(),
         suggestedConnections().catch(() => []),
-        listProjectShares().catch(() => ({ owned: [], joined: [] })),
       ]);
       setConns(cn);
       setSuggested(sg);
-      setOwned(ps.owned);
-      setJoined(ps.joined);
     } catch (e) {
       flash({ type: "error", text: friendlyError(e) });
     } finally {
@@ -121,45 +92,12 @@ export default function ConnectionsScreen() {
     }, "Done.");
   }
 
-  async function createProject() {
-    if (!slug.trim() || !repoUrl.trim()) return;
-    await act(async () => {
-      await createProjectShare({
-        slug: slug.trim(),
-        repoUrl: repoUrl.trim(),
-        hostKind,
-        payer: hostKind === "managed-cloud" ? payer : undefined,
-      });
-      setShowCreate(false); setSlug(""); setRepoUrl("");
-    }, "Project created.");
-  }
-
-  async function joinProject() {
-    const code = joinCode.trim();
-    if (!code) return;
-    await act(async () => {
-      const res = await acceptProjectShare(code);
-      flash({ type: "ok", text: `Joined ${res.slug || "project"} as ${res.role || "member"}.` });
-      setJoinCode("");
-    }, "Joined.");
-  }
-
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <AppBackButton onPress={() => router.back()} />
-        <Text style={[s.title, { color: c.textPrimary }]}>People & Projects</Text>
+        <Text style={[s.title, { color: c.textPrimary }]}>People</Text>
         <View style={{ width: 36 }} />
-      </View>
-
-      <View style={s.segment}>
-        {(["people", "projects"] as Section[]).map((sec) => (
-          <Pressable key={sec} onPress={() => setSection(sec)} style={[s.segBtn, section === sec && { backgroundColor: c.bgCard }]}>
-            <Text style={{ color: section === sec ? c.textPrimary : c.textMuted, fontSize: 13, fontWeight: "600" }}>
-              {sec === "people" ? "People" : "Shared Projects"}
-            </Text>
-          </Pressable>
-        ))}
       </View>
 
       {msg && (
@@ -171,7 +109,7 @@ export default function ConnectionsScreen() {
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 32 }}>
         {loading ? (
           <ActivityIndicator color={c.accent} style={{ marginTop: 40 }} />
-        ) : section === "people" ? (
+        ) : (
           <>
             <Text style={[s.label, { color: c.textMuted }]}>Add by email or user id</Text>
             <View style={s.row}>
@@ -253,75 +191,6 @@ export default function ConnectionsScreen() {
               </Section>
             )}
           </>
-        ) : (
-          <>
-            <View style={s.row}>
-              <Pressable onPress={() => setShowCreate((v) => !v)} style={[s.primaryBtn, { backgroundColor: c.accent }]}>
-                <Text style={[s.primaryBtnText, { color: c.textInverse }]}>+ Share a project</Text>
-              </Pressable>
-            </View>
-            <View style={s.row}>
-              <TextInput
-                value={joinCode}
-                onChangeText={setJoinCode}
-                placeholder="Have a code? Join"
-                placeholderTextColor={c.textMuted}
-                autoCapitalize="characters"
-                style={[s.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border }]}
-              />
-              <Pressable onPress={joinProject} disabled={busy || !joinCode.trim()} style={[s.pill, { backgroundColor: c.bgCard, opacity: busy || !joinCode.trim() ? 0.4 : 1 }]}>
-                <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>Join</Text>
-              </Pressable>
-            </View>
-
-            {showCreate && (
-              <View style={[s.createCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-                <TextInput value={slug} onChangeText={setSlug} placeholder="Project name (acme-app)" placeholderTextColor={c.textMuted} autoCapitalize="none" style={[s.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border, marginBottom: 8 }]} />
-                <TextInput value={repoUrl} onChangeText={setRepoUrl} placeholder="Repo URL (github.com/me/acme-app)" placeholderTextColor={c.textMuted} autoCapitalize="none" style={[s.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border, marginBottom: 8 }]} />
-                <Text style={[s.label, { color: c.textMuted }]}>Where does work run?</Text>
-                <View style={[s.row, { marginBottom: 8 }]}>
-                  <Choice label="My machine" active={hostKind === "owner-device"} onPress={() => setHostKind("owner-device")} c={c} s={s} />
-                  {/* HN-LAUNCH-HIDE-PAID: hide the managed (Yaver-billed)
-                      "Yaver Cloud" host option; BYO "My machine" stays. Flip
-                      HIDE_PAID_UI in src/lib/launchFlags.ts to restore. */}
-                  {!HIDE_PAID_UI && (
-                    <Choice label="Yaver Cloud" active={hostKind === "managed-cloud"} onPress={() => setHostKind("managed-cloud")} c={c} s={s} />
-                  )}
-                </View>
-                {!HIDE_PAID_UI && hostKind === "managed-cloud" && (
-                  <View style={[s.row, { marginBottom: 8 }]}>
-                    <Choice label="I pay" active={payer === "owner"} onPress={() => setPayer("owner")} c={c} s={s} />
-                    <Choice label="They pay" active={payer === "invitee"} onPress={() => setPayer("invitee")} c={c} s={s} />
-                  </View>
-                )}
-                <Pressable onPress={createProject} disabled={busy || !slug.trim() || !repoUrl.trim()} style={[s.primaryBtn, { backgroundColor: c.accent, opacity: busy || !slug.trim() || !repoUrl.trim() ? 0.4 : 1 }]}>
-                  <Text style={[s.primaryBtnText, { color: c.textInverse }]}>Create</Text>
-                </Pressable>
-              </View>
-            )}
-
-            {owned.length === 0 && joined.length === 0 && (
-              <Text style={[s.sub, { color: c.textMuted, marginTop: 16 }]}>No shared projects yet.</Text>
-            )}
-
-            {owned.map((p) => (
-              <OwnedCard key={p.shareId} share={p} c={c} s={s} busy={busy} act={act} />
-            ))}
-
-            {joined.length > 0 && (
-              <Section title="Shared with me" c={c} s={s}>
-                {joined.map((p) => (
-                  <View key={p.shareId} style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border, alignItems: "flex-start" }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[s.name, { color: c.textPrimary }]}>{p.slug} · {p.role}</Text>
-                      <Text style={[s.sub, { color: c.textMuted }]}>{p.repoUrl}</Text>
-                      <Text style={[s.sub, { color: c.textMuted }]}>from {p.ownerName} · branch {p.branch || "—"}</Text>
-                    </View>
-                  </View>
-                ))}
-              </Section>
-            )}
-          </>
         )}
       </ScrollView>
     </KeyboardAvoidingView>
@@ -333,87 +202,6 @@ function Section({ title, children, c, s, empty }: { title: string; children?: R
     <View style={{ marginTop: 20 }}>
       <Text style={[s.sectionLabel, { color: c.textMuted }]}>{title}</Text>
       {empty ? <Text style={[s.sub, { color: c.textMuted }]}>{empty}</Text> : children}
-    </View>
-  );
-}
-
-const ROLE_BLURB: Record<"dev" | "normie" | "viewer", string> = {
-  dev: "Codes, pushes to a feature branch, opens PRs, can deploy.",
-  normie: "Codes with AI on their own branch. Cannot deploy.",
-  viewer: "Observes only — no code changes.",
-};
-
-function Choice({ label, active, onPress, c, s }: { label: string; active: boolean; onPress: () => void; c: ThemeColors; s: any }) {
-  return (
-    <Pressable onPress={onPress} style={[s.choice, { borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accentSoft : "transparent" }]}>
-      <Text style={{ color: active ? c.accent : c.textMuted, fontSize: 13, fontWeight: "600" }}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function OwnedCard({ share, c, s, busy, act }: { share: OwnedProjectShare; c: ThemeColors; s: any; busy: boolean; act: (fn: () => Promise<void>, ok: string) => Promise<void> }) {
-  const [invitee, setInvitee] = useState("");
-  const [role, setRole] = useState<"dev" | "normie" | "viewer">("normie");
-  const others = share.roster.filter((m) => m.role !== "owner");
-
-  async function invite() {
-    const q = invitee.trim();
-    if (!q) return;
-    const isEmail = q.includes("@");
-    await act(async () => {
-      await inviteToProject({ shareId: share.shareId, ...(isEmail ? { peerEmail: q } : { peerUserId: q }), role });
-      setInvitee("");
-    }, `Invited as ${role}.`);
-  }
-
-  return (
-    <View style={[s.createCard, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 16 }]}>
-      <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
-        <View style={{ flex: 1 }}>
-          <Text style={[s.name, { color: c.textPrimary }]}>{share.slug}</Text>
-          <Text style={[s.sub, { color: c.textMuted }]}>{share.repoUrl}</Text>
-          <Text style={[s.sub, { color: c.textMuted }]}>
-            {share.hostKind === "managed-cloud" ? `Yaver Cloud (${share.payer === "invitee" ? "they pay" : "you pay"})` : "Your machine"}
-          </Text>
-        </View>
-        <View style={[s.codePill, { backgroundColor: c.neutralBg }]}>
-          <Text style={{ color: c.textPrimary, fontSize: 12, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }}>{share.shareCode}</Text>
-        </View>
-      </View>
-
-      <View style={[s.row, { marginTop: 12 }]}>
-        <TextInput value={invitee} onChangeText={setInvitee} placeholder="Invite by email / user id" placeholderTextColor={c.textMuted} autoCapitalize="none" style={[s.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.border }]} />
-        <Pressable onPress={invite} disabled={busy || !invitee.trim()} style={[s.pill, { backgroundColor: c.accent, opacity: busy || !invitee.trim() ? 0.4 : 1 }]}>
-          <Text style={{ color: c.textInverse, fontSize: 13, fontWeight: "600" }}>Invite</Text>
-        </Pressable>
-      </View>
-      <View style={[s.row, { marginTop: 8 }]}>
-        {(["normie", "dev", "viewer"] as const).map((r) => (
-          <Choice key={r} label={r} active={role === r} onPress={() => setRole(r)} c={c} s={s} />
-        ))}
-      </View>
-      {/* Mirrors web CollabView's ROLE_BLURB. Keep both to what the agent
-          actually enforces (desktop/agent/guest_project_role.go) — the role
-          picker shipped for months with no enforcement behind it at all. */}
-      <Text style={[s.sub, { color: c.textMuted, marginTop: 6 }]}>{ROLE_BLURB[role]}</Text>
-
-      {others.map((m) => (
-        <View key={m.userId || m.email} style={[s.memberRow, { borderTopColor: c.borderSubtle }]}>
-          <View style={{ flex: 1 }}>
-            <Text style={[s.name, { color: c.textPrimary }]}>{m.fullName} · {m.role}</Text>
-            <Text style={[s.sub, { color: c.textMuted }]}>{m.status === "invited" ? "Invited — not yet joined" : `branch ${m.branch || "—"}`}</Text>
-          </View>
-          {m.userId ? (
-            <Pressable onPress={() => act(() => revokeProjectMember(share.shareId, m.userId), "Removed.")} disabled={busy} style={[s.pill, { backgroundColor: c.neutralBg }]}>
-              <Text style={{ color: c.textMuted, fontSize: 12 }}>Remove</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      ))}
-
-      <Pressable onPress={() => act(() => archiveProjectShare(share.shareId), "Archived.")} disabled={busy} style={{ marginTop: 12, alignSelf: "flex-end" }}>
-        <Text style={{ color: c.textMuted, fontSize: 12 }}>Archive project</Text>
-      </Pressable>
     </View>
   );
 }

@@ -19,12 +19,12 @@ import (
 
 // CreateStagingResult reports on a prod→staging materialization.
 type CreateStagingResult struct {
-	SourceDir  string   `json:"sourceDir"`
-	TargetDir  string   `json:"targetDir"`
-	Domain     string   `json:"domain,omitempty"`
-	Upstream   string   `json:"upstream,omitempty"`
-	Steps      []string `json:"steps"`
-	Error      string   `json:"error,omitempty"`
+	SourceDir string   `json:"sourceDir"`
+	TargetDir string   `json:"targetDir"`
+	Domain    string   `json:"domain,omitempty"`
+	Upstream  string   `json:"upstream,omitempty"`
+	Steps     []string `json:"steps"`
+	Error     string   `json:"error,omitempty"`
 }
 
 // CreateStaging copies a source project directory to a staging sibling,
@@ -122,9 +122,9 @@ func finishStaging(res *CreateStagingResult, err error) (*CreateStagingResult, e
 // ListQueues returns the queues visible to the local ElasticMQ. Uses the
 // unsigned SQS ListQueues action which ElasticMQ accepts by default.
 type QueueInfo struct {
-	URL              string `json:"url"`
-	ApproxMessages   int    `json:"approximateMessages"`
-	ApproxInFlight   int    `json:"approximateInFlight"`
+	URL            string `json:"url"`
+	ApproxMessages int    `json:"approximateMessages"`
+	ApproxInFlight int    `json:"approximateInFlight"`
 }
 
 func ListQueues(endpoint string) ([]QueueInfo, error) {
@@ -207,10 +207,10 @@ func PurgeQueue(endpoint, queueURL string) error {
 // RotateSecret generates a new random value, updates .env.local, restarts
 // dependent services. Returns old/new values (old only if asked — dangerous).
 type SecretRotateResult struct {
-	Key        string   `json:"key"`
-	OldValue   string   `json:"oldValue,omitempty"`
-	NewValue   string   `json:"newValue"`
-	FilesPatched []string `json:"filesPatched"`
+	Key               string   `json:"key"`
+	OldValue          string   `json:"oldValue,omitempty"`
+	NewValue          string   `json:"newValue"`
+	FilesPatched      []string `json:"filesPatched"`
 	ServicesRestarted []string `json:"servicesRestarted"`
 }
 

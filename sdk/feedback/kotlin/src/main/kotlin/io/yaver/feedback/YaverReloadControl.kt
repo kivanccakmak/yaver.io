@@ -119,8 +119,8 @@ object YaverReload {
      * restart (on Flutter the agent maps these to stdin "r" and "R").
      *
      * Auth: the SAME bearer used for the feedback POST. /dev/reload is
-     * registered under `authSDKOrGuest` on the agent and is already inside the
-     * `guest-reload` SDK-token scope — no new secret, no widened gate.
+     * registered under `authSDK` on the agent and is already inside the
+     * `reload` SDK-token scope — no new secret, no widened gate.
      */
     @JvmStatic
     @JvmOverloads

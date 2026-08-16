@@ -80,8 +80,8 @@ func runTwoFactorStatus() {
 		fatalTwoFactor(err)
 	}
 	var out struct {
-		Enabled                 bool `json:"enabled"`
-		RecoveryCodesRemaining  int  `json:"recoveryCodesRemaining"`
+		Enabled                bool `json:"enabled"`
+		RecoveryCodesRemaining int  `json:"recoveryCodesRemaining"`
 	}
 	if err := twoFactorConvexCall(cfg, http.MethodGet, "/auth/totp/status", nil, &out); err != nil {
 		fatalTwoFactor(err)
@@ -108,8 +108,8 @@ func runTwoFactorEnable() {
 	}
 
 	var setup struct {
-		Secret      string `json:"secret"`
-		OtpAuthURL  string `json:"otpAuthUrl"`
+		Secret     string `json:"secret"`
+		OtpAuthURL string `json:"otpAuthUrl"`
 	}
 	if err := twoFactorConvexCall(cfg, http.MethodPost, "/auth/totp/setup", nil, &setup); err != nil {
 		fatalTwoFactor(err)

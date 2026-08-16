@@ -521,10 +521,6 @@ export default function TabLayout() {
         options={{ href: null, title: "Access rules", headerShown: false }}
       />
       <Tabs.Screen
-        name="mesh-share"
-        options={{ href: null, title: "Sharing", headerShown: false }}
-      />
-      <Tabs.Screen
         name="robot"
         options={{ href: null, title: "Robot Cell", headerShown: false }}
       />
@@ -542,7 +538,6 @@ export default function TabLayout() {
       <Tabs.Screen name="newproject" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="designmode" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="gitproviders" options={{ href: null, headerShown: false }} />
-      <Tabs.Screen name="guests" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="solostack" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="mail" options={{ href: null, headerShown: false }} />
       <Tabs.Screen name="studio" options={{ href: null, headerShown: false }} />

@@ -17,7 +17,7 @@ import (
 type YaverDomain struct {
 	ID        string    `json:"id" yaml:"id"`
 	Domain    string    `json:"domain" yaml:"domain"`
-	Upstream  string    `json:"upstream" yaml:"upstream"` // host:port or full URL
+	Upstream  string    `json:"upstream" yaml:"upstream"`                 // host:port or full URL
 	Static    string    `json:"static,omitempty" yaml:"static,omitempty"` // serve static dir
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt"`
 	Enabled   bool      `json:"enabled" yaml:"enabled"`
@@ -76,7 +76,7 @@ func AddDomain(domain, upstream, static, dnsMode string) (*YaverDomain, error) {
 	}
 	domains.mu.Lock()
 	r := &YaverDomain{
-		ID: fmt.Sprintf("dom_%d", time.Now().Unix()),
+		ID:     fmt.Sprintf("dom_%d", time.Now().Unix()),
 		Domain: domain, Upstream: upstream, Static: static,
 		CreatedAt: time.Now(), Enabled: true, DNSMode: dnsMode,
 	}
@@ -198,7 +198,9 @@ func (s *HTTPServer) handleDomainRemove(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ Domain string `json:"domain"` }
+	var b struct {
+		Domain string `json:"domain"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if err := RemoveDomain(b.Domain); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})

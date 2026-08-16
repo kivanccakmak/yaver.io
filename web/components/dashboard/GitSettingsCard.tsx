@@ -62,8 +62,8 @@ export default function GitSettingsCard({ devices }: Props) {
   const peers = useMemo(
     () =>
       devices
-        .filter((device) => device.online && !device.isGuest && device.deviceClass !== "edge-mobile")
-        .map((device) => ({ id: device.id, name: device.name || device.hostName || device.id })),
+        .filter((device) => device.online && device.deviceClass !== "edge-mobile")
+        .map((device) => ({ id: device.id, name: device.name || device.id })),
     [devices],
   );
   const targetOptions = useMemo(() => [{ id: "__local__", name: "This machine" }, ...peers], [peers]);

@@ -145,9 +145,9 @@ export default function PreviewManifestScreen() {
                 yaver ci: {manifest.feedback.compileTimeInjected ? "compile-time injected" : "not declared"}
               </Text>
             ) : null}
-            {manifest.sharing ? (
+            {manifest.sharing?.hostVisible !== undefined ? (
               <Text style={[styles.meta, { color: c.textMuted }]}>
-                sharing: host {manifest.sharing.hostVisible ? "visible" : "private"} · guests {manifest.sharing.guestVisible ? "visible" : "private"}
+                host visibility: {manifest.sharing.hostVisible ? "visible" : "private"}
               </Text>
             ) : null}
             <Pressable

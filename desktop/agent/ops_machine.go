@@ -9,7 +9,7 @@ package main
 // Security posture (mirrors ops_ghost.go):
 //   - Opt-in only: verbs refuse unless started with --machine (config.MachineEnabled).
 //     Capability advertised via MachineCapabilities.SupportsMachineSniff.
-//   - Owner-only: AllowGuest is false on every verb.
+//   - Owner-only: AllowCompanion is false on every verb.
 //   - Reads/sniffs are safe; machine_write is range-clamped + read-back verified
 //     and refuses high-risk values unless explicitly allowed. Safety stays
 //     hardwired on the machine — Yaver never touches safety functions.

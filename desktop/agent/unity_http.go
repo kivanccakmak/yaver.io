@@ -55,9 +55,6 @@ func (s *HTTPServer) handleUnityTest(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"})
 		return
 	}
-	if s.isolatedGuestDevMutationBlocked(w, r, "unity tests") {
-		return
-	}
 	var req struct {
 		ProjectName string `json:"projectName"`
 		ProjectPath string `json:"projectPath"`
@@ -159,9 +156,6 @@ func (s *HTTPServer) handleUnityBuild(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"})
 		return
 	}
-	if s.isolatedGuestDevMutationBlocked(w, r, "unity build") {
-		return
-	}
 	var req struct {
 		ProjectName   string   `json:"projectName"`
 		ProjectPath   string   `json:"projectPath"`
@@ -185,9 +179,6 @@ func (s *HTTPServer) handleUnityBuild(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPServer) handleUnityRelaunch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"})
-		return
-	}
-	if s.isolatedGuestDevMutationBlocked(w, r, "unity relaunch") {
 		return
 	}
 	var req struct {
@@ -418,17 +409,6 @@ func nextUnityBuildAction(executablePath string) string {
 }
 
 func (s *HTTPServer) resolveUnityProjectPath(r *http.Request, projectName, fallbackPath string) (string, error) {
-	guestUID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID"))
-	if guestUID != "" {
-		resolved, err := s.guestResolveDevWorkDir(r, projectName, fallbackPath)
-		if err != nil {
-			return "", err
-		}
-		if !hasUnityProjectFiles(resolved) {
-			return "", fmt.Errorf("%s is not a Unity project", resolved)
-		}
-		return resolved, nil
-	}
 	if strings.TrimSpace(fallbackPath) != "" {
 		if !hasUnityProjectFiles(fallbackPath) {
 			return "", fmt.Errorf("%s is not a Unity project", fallbackPath)

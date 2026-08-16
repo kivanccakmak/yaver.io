@@ -17,9 +17,9 @@ type windowsSeatIndex struct{}
 func newWindowsSeatIndex() *windowsSeatIndex { return &windowsSeatIndex{} }
 
 func (w *windowsSeatIndex) register(seatName, sessionID string) (previous string) { return "" }
-func (w *windowsSeatIndex) lookup(seatName string) string                        { return "" }
-func (w *windowsSeatIndex) release(sessionID string)                             {}
-func (w *windowsSeatIndex) seatNameFor(sessionID string) string                  { return "" }
+func (w *windowsSeatIndex) lookup(seatName string) string                         { return "" }
+func (w *windowsSeatIndex) release(sessionID string)                              {}
+func (w *windowsSeatIndex) seatNameFor(sessionID string) string                   { return "" }
 
 // platform hooks — the non-Windows side: no in-process seat layer, so every
 // hook reports the "absent" answer (tmux is the persistence mechanism there).

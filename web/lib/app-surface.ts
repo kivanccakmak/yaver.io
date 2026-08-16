@@ -26,10 +26,7 @@ export const APP_SURFACE_PREFIXES = [
   "/workspace",
   "/render",
   "/dev",
-  "/a",
-  "/artifacts",
   "/shortcut",
-  "/watch",
   "/spatial",
   "/j",
 ];

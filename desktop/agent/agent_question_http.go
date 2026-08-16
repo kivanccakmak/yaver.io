@@ -19,10 +19,9 @@ package main
 //     other subscribers (e.g. the desktop and the phone simultaneously)
 //     close their open question sheet.
 //
-// Auth: all three routes inherit the standard owner / paired-token
-// path via s.auth() at the route registration (handleTaskByID is wired
-// through s.auth in httpserver.go). SDK and feedback-only guests are
-// blocked the same way they are blocked from /tasks/{id}/continue.
+// Auth: all three routes inherit the primary owner path via s.auth() at the
+// route registration (handleTaskByID is wired through s.auth in
+// httpserver.go). SDK and constrained companion tokens are blocked.
 
 import (
 	"encoding/json"

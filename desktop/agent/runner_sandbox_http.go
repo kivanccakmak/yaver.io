@@ -12,10 +12,7 @@ package main
 //   POST   /runner/sandboxes/{id}/files/write      {path, content base64}  → {ok}
 //   GET    /runner/sandboxes/status                Aggregate status (image ready, count)
 //
-// Phase 2 is owner-only — sandbox is too broad to scope to a guest
-// (it's a container shell). Future phases may add a tier where a
-// guest can drive a sandbox they themselves started, but the policy
-// review around that is its own piece of work.
+// Sandboxes are owner-only and are registered behind owner auth.
 
 import (
 	"encoding/base64"
@@ -36,10 +33,6 @@ func (s *HTTPServer) ensureSandboxManager() *SandboxManager {
 func (s *HTTPServer) handleRunnerSandboxes(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/runner/sandboxes/status" {
 		s.handleRunnerSandboxStatus(w, r)
-		return
-	}
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		jsonReply(w, http.StatusForbidden, map[string]string{"error": "sandboxes are owner-only in Phase 2"})
 		return
 	}
 	mgr := s.ensureSandboxManager()
@@ -95,10 +88,6 @@ func (s *HTTPServer) handleRunnerSandboxStatus(w http.ResponseWriter, r *http.Re
 // handleRunnerSandboxByID dispatches /runner/sandboxes/{id} variants:
 // GET, DELETE, POST .../exec, POST .../files/read, POST .../files/write.
 func (s *HTTPServer) handleRunnerSandboxByID(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		jsonReply(w, http.StatusForbidden, map[string]string{"error": "sandboxes are owner-only in Phase 2"})
-		return
-	}
 	tail := strings.TrimPrefix(r.URL.Path, "/runner/sandboxes/")
 	tail = strings.TrimSuffix(tail, "/")
 	if tail == "" {

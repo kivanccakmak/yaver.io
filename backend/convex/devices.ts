@@ -2,13 +2,6 @@ import { v } from "convex/values";
 import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
 import { validateSessionInternal } from "./auth";
-import {
-  getLegacyGuestAccess,
-  guestCanReachSpecificHostDevice,
-  listGrantedDeviceIdsForGrant,
-  listVisibleInfraGrantsForGuest,
-} from "./access";
-import { resolveSigReach } from "./accessSigPolicy";
 import { aliasCollisionOutcome, agentInstanceRelation } from "./aliasShadowing";
 import {
   resolveIdentityMerge,
@@ -224,26 +217,7 @@ type ListedDevice = {
   relayConnected?: boolean;
   canReboot?: boolean;
   pendingAuthCode?: string;
-  isGuest: boolean;
-  hostUserId?: string;
-  hostName?: string;
-  hostEmail?: string;
-  hostUserIdString?: string;
-  accessScope: "owner" | "shared-scoped" | "shared-legacy";
   tunnelUrl?: string;
-  priorityMode?: string;
-  useHostApiKeys?: boolean;
-  allowGuestProvidedApiKeys?: boolean;
-  sharedWithGuests?: boolean;
-  sharedGuests?: Array<{
-    name?: string;
-    email?: string;
-  }>;
-  sharesAllProjects?: boolean;
-  sharedProjects?: string[];
-  sharesAllRunners?: boolean;
-  sharedRunners?: string[];
-  sessionBinding?: "dedicated" | "legacy-shared";
   deviceClass?: "desktop" | "edge-mobile" | "server";
   /** Coarse egress region (eu|us|ap|...) for the multi-vantage device picker. */
   geoRegion?: string;
@@ -265,8 +239,7 @@ type ListedDevice = {
    * deleted, linked by deviceId) — Yaver holds its snapshot/recreate path and
    * auto scale-to-zeros it, but the user pays the provider. "self-hosted" = the
    * user's own box with no provisioning row (Yaver never touches its power).
-   * Informational only — entitlement gates stay server-side. Absent on
-   * guest-shared devices (the host's provenance isn't exposed to the guest).
+   * Informational only — entitlement gates stay server-side.
    */
   hosting?: "yaver-hosted" | "byo" | "self-hosted";
   managed?: boolean;
@@ -312,13 +285,6 @@ function mergeHardwareProfile(
   };
 }
 
-type ShareRule = {
-  allowedProjects?: string[];
-  allowedRunners?: string[];
-  guestName?: string;
-  guestEmail?: string;
-};
-
 function normalizeDeviceName(name: string | undefined): string {
   return String(name || "").trim().toLowerCase().replace(/\.local$/i, "");
 }
@@ -328,10 +294,6 @@ function normalizeDeviceHost(host: string | undefined): string {
 }
 
 function listedDeviceIdentityKey(device: ListedDevice): string {
-  if (device.isGuest) {
-    const scope = device.hostEmail || device.hostName || "guest";
-    return `guest:${scope}:${device.deviceId || device.name}`;
-  }
   if (device.hardwareId) return `hwid:${device.hardwareId}`;
   if (device.publicKey) return `pub:${device.publicKey}`;
   const normalizedName = normalizeDeviceName(device.name);
@@ -342,7 +304,6 @@ function listedDeviceIdentityKey(device: ListedDevice): string {
 }
 
 function listedDeviceAliasKey(device: ListedDevice): string | null {
-  if (device.isGuest) return null;
   const normalizedName = normalizeDeviceName(device.name);
   const normalizedPlatform = String(device.platform || "").trim().toLowerCase();
   if (!normalizedName || !normalizedPlatform) return null;
@@ -350,7 +311,6 @@ function listedDeviceAliasKey(device: ListedDevice): string | null {
 }
 
 function listedDeviceEndpointKey(device: ListedDevice): string | null {
-  if (device.isGuest) return null;
   const normalizedHost = normalizeDeviceHost(device.quicHost);
   if (!normalizedHost) return null;
   return `${normalizedHost}:${device.quicPort || 0}`;
@@ -459,18 +419,6 @@ function mergeListedDevices(a: ListedDevice, b: ListedDevice): ListedDevice {
       (base.installedRunnerIds && base.installedRunnerIds.length > 0)
         ? base.installedRunnerIds
         : other.installedRunnerIds,
-    sharedWithGuests: base.sharedWithGuests ?? other.sharedWithGuests,
-    sharedGuests: [
-      ...new Map(
-        [...(a.sharedGuests || []), ...(b.sharedGuests || [])]
-          .filter((guest) => guest?.name || guest?.email)
-          .map((guest) => [`${guest.email || ""}:${guest.name || ""}`, guest]),
-      ).values(),
-    ],
-    sharesAllProjects: (base.sharesAllProjects ?? false) || (other.sharesAllProjects ?? false),
-    sharedProjects: [...new Set([...(a.sharedProjects || []), ...(b.sharedProjects || [])].filter(Boolean))],
-    sharesAllRunners: (base.sharesAllRunners ?? false) || (other.sharesAllRunners ?? false),
-    sharedRunners: [...new Set([...(a.sharedRunners || []), ...(b.sharedRunners || [])].filter(Boolean))],
   };
 }
 
@@ -614,49 +562,6 @@ function inferConnectionPreferencesForDevice(
     push("free-relay", false, "relay-presence");
   }
   return mergeConnectionPreferences(device.connectionPreferences, out) || out;
-}
-
-function summarizeShareRules(rules: ShareRule[]): Pick<ListedDevice, "sharedWithGuests" | "sharedGuests" | "sharesAllProjects" | "sharedProjects" | "sharesAllRunners" | "sharedRunners"> {
-  const projects = new Set<string>();
-  const runners = new Set<string>();
-  const guests = new Map<string, { name?: string; email?: string }>();
-  let sharesAllProjects = false;
-  let sharesAllRunners = false;
-
-  for (const rule of rules) {
-    const allowedProjects = normalizeScopedList(rule.allowedProjects);
-    const allowedRunners = normalizeScopedList(rule.allowedRunners);
-
-    if (allowedProjects.length === 0) {
-      sharesAllProjects = true;
-    } else {
-      allowedProjects.forEach((project) => projects.add(project));
-    }
-
-    if (allowedRunners.length === 0) {
-      sharesAllRunners = true;
-    } else {
-      allowedRunners.forEach((runner) => runners.add(runner));
-    }
-
-    const guestName = String(rule.guestName || "").trim();
-    const guestEmail = String(rule.guestEmail || "").trim();
-    if (guestName || guestEmail) {
-      guests.set(`${guestEmail}:${guestName}`, {
-        name: guestName || undefined,
-        email: guestEmail || undefined,
-      });
-    }
-  }
-
-  return {
-    sharedWithGuests: rules.length > 0,
-    sharedGuests: [...guests.values()],
-    sharesAllProjects,
-    sharedProjects: [...projects],
-    sharesAllRunners,
-    sharedRunners: [...runners],
-  };
 }
 
 /**
@@ -1725,10 +1630,6 @@ export const presenceUpdate = internalMutation({
   },
 });
 
-/**
- * List all devices belonging to the authenticated user,
- * plus devices from hosts who granted them guest access.
- */
 // Read back a device's black box (deviceFlightEvents, written by the heartbeat
 // piggyback above from desktop/agent/flightrecorder.go).
 //
@@ -1784,16 +1685,6 @@ export const listMyDevices = query({
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
-
-    const allSessions = await ctx.db
-      .query("sessions")
-      .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
-      .collect();
-    const dedicatedSessionDeviceIds = new Set(
-      allSessions
-        .map((row) => row.deviceId)
-        .filter((deviceId): deviceId is string => typeof deviceId === "string" && deviceId.trim() !== ""),
-    );
 
     // Own devices
     const ownDevices = await ctx.db
@@ -1863,67 +1754,6 @@ export const listMyDevices = query({
     const hostingFor = (deviceId: string): "yaver-hosted" | "byo" | "self-hosted" =>
       managedByDeviceId.has(deviceId) ? "yaver-hosted" : byoDeviceIds.has(deviceId) ? "byo" : "self-hosted";
 
-    const activeGuestAccessRecords = await ctx.db
-      .query("guestAccess")
-      .withIndex("by_hostUserId", (q) => q.eq("hostUserId", session.user._id))
-      .filter((q) => q.eq(q.field("revokedAt"), undefined))
-      .collect();
-
-    const activeGuestAccessByGuest = new Map(
-      activeGuestAccessRecords.map((access) => [access.guestUserId.toString(), access]),
-    );
-
-    const activeHostInfraGrants = await ctx.db
-      .query("infraAccessGrants")
-      .withIndex("by_hostUserId", (q) => q.eq("hostUserId", session.user._id))
-      .filter((q) => q.eq(q.field("status"), "active"))
-      .collect();
-
-    const shareRulesByDeviceId = new Map<string, ShareRule[]>();
-    const pushShareRule = (deviceId: string, rule: ShareRule) => {
-      if (!deviceId) return;
-      const existing = shareRulesByDeviceId.get(deviceId) || [];
-      existing.push(rule);
-      shareRulesByDeviceId.set(deviceId, existing);
-    };
-
-    for (const grant of activeHostInfraGrants) {
-      const access = activeGuestAccessByGuest.get(grant.guestUserId.toString());
-      const guest = await ctx.db.get(grant.guestUserId);
-      const rule: ShareRule = {
-        allowedProjects: access?.allowedProjects,
-        allowedRunners: grant.allowedRunners ?? access?.allowedRunners,
-        guestName: guest?.fullName,
-        guestEmail: guest?.email,
-      };
-      if (grant.shareAllDevices) {
-        for (const device of ownDevices) pushShareRule(device.deviceId, rule);
-        continue;
-      }
-      for (const deviceId of await listGrantedDeviceIdsForGrant(ctx, grant._id)) {
-        pushShareRule(deviceId, rule);
-      }
-    }
-
-    for (const access of activeGuestAccessRecords) {
-      const hasScopedGrant = activeHostInfraGrants.some(
-        (grant) => grant.guestUserId.toString() === access.guestUserId.toString(),
-      );
-      if (hasScopedGrant) continue;
-      const rule: ShareRule = {
-        allowedProjects: access.allowedProjects,
-        allowedRunners: access.allowedRunners,
-        guestName: undefined,
-        guestEmail: undefined,
-      };
-      const guest = await ctx.db.get(access.guestUserId);
-      if (guest) {
-        rule.guestName = guest.fullName;
-        rule.guestEmail = guest.email;
-      }
-      for (const device of ownDevices) pushShareRule(device.deviceId, rule);
-    }
-
     const result: ListedDevice[] = ownDevices.map((d) => ({
       deviceId: d.deviceId,
       name: d.name,
@@ -1962,18 +1792,7 @@ export const listMyDevices = query({
           : undefined,
       agentVersion: d.agentVersion,
       agentVersionReportedAt: d.agentVersionReportedAt,
-      isGuest: false as boolean,
-      hostName: undefined as string | undefined,
-      hostEmail: undefined as string | undefined,
-      hostUserId: undefined as string | undefined,
-      hostUserIdString: undefined as string | undefined,
-      accessScope: "owner" as "owner" | "shared-scoped" | "shared-legacy",
       tunnelUrl: undefined as string | undefined,
-      priorityMode: undefined as string | undefined,
-      useHostApiKeys: undefined as boolean | undefined,
-      allowGuestProvidedApiKeys: undefined as boolean | undefined,
-      ...summarizeShareRules(shareRulesByDeviceId.get(d.deviceId) || []),
-      sessionBinding: dedicatedSessionDeviceIds.has(d.deviceId) ? "dedicated" as const : "legacy-shared" as const,
       deviceClass: d.deviceClass,
       geoRegion: d.geoRegion,
       edgeProfile: d.edgeProfile,
@@ -1987,168 +1806,6 @@ export const listMyDevices = query({
       // must read this instead of inspecting machineStatus themselves.
       machineWakeable: managedByDeviceId.get(d.deviceId)?.wakeable ?? false,
     }));
-
-    // Device LIST (UI) must drop hidden beta grants — a beta user must never see
-    // the owner's box/identity here. Access/routing paths keep the active variant.
-    const scopedGrants = await listVisibleInfraGrantsForGuest(ctx, session.user._id);
-    const scopedHosts = new Set<string>();
-
-    for (const grant of scopedGrants) {
-      scopedHosts.add(grant.hostUserId.toString());
-      const host = await ctx.db.get(grant.hostUserId);
-      if (!host) continue;
-      const access = await getLegacyGuestAccess(ctx, grant.hostUserId, session.user._id);
-      const hostSettings = await ctx.db
-        .query("userSettings")
-        .withIndex("by_userId", (q) => q.eq("userId", grant.hostUserId))
-        .first();
-
-      const hostDevices = grant.shareAllDevices
-        ? await ctx.db
-            .query("devices")
-            .withIndex("by_userId", (q) => q.eq("userId", grant.hostUserId))
-            .collect()
-        : await Promise.all(
-            (await listGrantedDeviceIdsForGrant(ctx, grant._id)).map(async (deviceId) =>
-              await ctx.db
-                .query("devices")
-                .withIndex("by_deviceId", (q) => q.eq("deviceId", deviceId))
-                .unique(),
-            ),
-          ).then((devices) => devices.filter((device): device is Doc<"devices"> => device !== null));
-      // An account-level tunnelUrl can only be attached safely when this grant
-      // resolves to exactly one host device. Otherwise the guest could be given
-      // a transport hint that belongs to another box under the same host.
-      const sharedTunnelUrl = hostDevices.length === 1 ? hostSettings?.tunnelUrl : undefined;
-
-      for (const d of hostDevices) {
-        result.push({
-          deviceId: d.deviceId,
-          name: d.name,
-          platform: d.platform,
-          publicKey: d.publicKey,
-          hardwareId: d.hardwareId,
-          hardwareProfile: d.hardwareProfile,
-          quicHost: d.quicHost,
-          localIps: d.localIps ?? [],
-          publicEndpoints: d.publicEndpoints ?? [],
-          quicPort: d.quicPort,
-          isOnline: deriveIsOnline(d),
-          needsAuth: d.needsAuth ?? false,
-          runnerDown: d.runnerDown ?? false,
-          runners: d.runners ?? [],
-          installedRunnerIds: d.installedRunnerIds ?? [],
-          lastHeartbeat: d.lastHeartbeat,
-          lastTunnelEvent: d.lastTunnelEvent,
-          relayConnected: d.relayConnected ?? false,
-          canReboot: d.canReboot ?? false,
-          // Surfaces render this as an Approve button. Expired here rather than
-          // on each surface, so five clients cannot disagree about whether a
-          // 15-minute code is still live.
-          pendingAuthCode:
-            d.pendingAuthCode && d.pendingAuthCodeAt &&
-            Date.now() - d.pendingAuthCodeAt < 15 * 60 * 1000
-              ? d.pendingAuthCode
-              : undefined,
-          isGuest: true,
-          hostUserId: String(grant.hostUserId),
-          hostName: host.fullName,
-          hostEmail: host.email,
-          hostUserIdString: host.userId,
-          accessScope: "shared-scoped",
-          tunnelUrl: sharedTunnelUrl,
-          priorityMode: grant.priorityMode,
-          useHostApiKeys: grant.useHostApiKeys,
-          allowGuestProvidedApiKeys: grant.allowGuestProvidedApiKeys,
-          ...summarizeShareRules([{
-            allowedProjects: access?.allowedProjects,
-            allowedRunners: grant.allowedRunners ?? access?.allowedRunners,
-          }]),
-          sessionBinding: undefined as "dedicated" | "legacy-shared" | undefined,
-          deviceClass: d.deviceClass,
-      geoRegion: d.geoRegion,
-          edgeProfile: d.edgeProfile,
-          recoveryPosture: d.recoveryPosture,
-          connectionPreferences: d.connectionPreferences,
-        });
-      }
-    }
-
-    // Backward-compatibility: if a host has not been migrated to a scoped grant yet,
-    // preserve the older host-wide guest access behavior.
-    const guestAccessRecords = await ctx.db
-      .query("guestAccess")
-      .withIndex("by_guestUserId", (q) => q.eq("guestUserId", session.user._id))
-      .filter((q) => q.eq(q.field("revokedAt"), undefined))
-      .collect();
-
-    for (const access of guestAccessRecords) {
-      if (scopedHosts.has(access.hostUserId.toString())) continue;
-      const host = await ctx.db.get(access.hostUserId);
-      if (!host) continue;
-      const hostSettings = await ctx.db
-        .query("userSettings")
-        .withIndex("by_userId", (q) => q.eq("userId", access.hostUserId))
-        .first();
-
-      const hostDevices = await ctx.db
-        .query("devices")
-        .withIndex("by_userId", (q) => q.eq("userId", access.hostUserId))
-        .collect();
-      const sharedTunnelUrl = hostDevices.length === 1 ? hostSettings?.tunnelUrl : undefined;
-
-      for (const d of hostDevices) {
-        result.push({
-          deviceId: d.deviceId,
-          name: d.name,
-          platform: d.platform,
-          publicKey: d.publicKey,
-          hardwareId: d.hardwareId,
-          hardwareProfile: d.hardwareProfile,
-          quicHost: d.quicHost,
-          localIps: d.localIps ?? [],
-          publicEndpoints: d.publicEndpoints ?? [],
-          quicPort: d.quicPort,
-          isOnline: deriveIsOnline(d),
-          needsAuth: d.needsAuth ?? false,
-          runnerDown: d.runnerDown ?? false,
-          runners: d.runners ?? [],
-          installedRunnerIds: d.installedRunnerIds ?? [],
-          lastHeartbeat: d.lastHeartbeat,
-          lastTunnelEvent: d.lastTunnelEvent,
-          relayConnected: d.relayConnected ?? false,
-          canReboot: d.canReboot ?? false,
-          // Surfaces render this as an Approve button. Expired here rather than
-          // on each surface, so five clients cannot disagree about whether a
-          // 15-minute code is still live.
-          pendingAuthCode:
-            d.pendingAuthCode && d.pendingAuthCodeAt &&
-            Date.now() - d.pendingAuthCodeAt < 15 * 60 * 1000
-              ? d.pendingAuthCode
-              : undefined,
-          isGuest: true,
-          hostUserId: String(access.hostUserId),
-          hostName: host.fullName,
-          hostEmail: host.email,
-          hostUserIdString: host.userId,
-          accessScope: "shared-legacy",
-          tunnelUrl: sharedTunnelUrl,
-          priorityMode: access.usageMode === "idle-only" ? "spare-capacity" : undefined,
-          useHostApiKeys: undefined,
-          allowGuestProvidedApiKeys: true,
-          ...summarizeShareRules([{
-            allowedProjects: access.allowedProjects,
-            allowedRunners: access.allowedRunners,
-          }]),
-          sessionBinding: undefined as "dedicated" | "legacy-shared" | undefined,
-          deviceClass: d.deviceClass,
-      geoRegion: d.geoRegion,
-          edgeProfile: d.edgeProfile,
-          recoveryPosture: d.recoveryPosture,
-          connectionPreferences: d.connectionPreferences,
-        });
-      }
-    }
 
     return collapseListedDevices(result);
   },
@@ -2198,8 +1855,6 @@ export const recommendTaskPlacement = query({
           lastHeartbeat: device.lastHeartbeat,
           lastTunnelEvent: device.lastTunnelEvent,
           relayConnected: device.relayConnected ?? false,
-          isGuest: false,
-          accessScope: "owner",
           deviceClass: device.deviceClass,
           edgeProfile: device.edgeProfile,
         })),
@@ -2700,8 +2355,8 @@ export const selectDevices = query({
  * relay v0.1.11+.
  *
  * Idempotent — skips devices that already have a *.exposeDomain
- * entry. Owner-scoped mutations (caller's bearer must list each
- * device under their account); guests can't seed someone else's.
+ * entry. Owner-scoped mutations require the caller's bearer to list each
+ * device under their account.
  *
  * Args:
  *   exposeDomain: the relay's expose-domain ("dev.yaver.io")
@@ -2769,26 +2424,8 @@ export const seedAutoPublicUrls = internalMutation({
  *  Two ways to be allowed, and only two (resolveSigReach in access.ts):
  *
  *    1. same-owner   — the classic same-user mesh: my phone → my Mac.
- *    2. access-graph — two DIFFERENT accounts joined by an ACTIVE
- *       infraAccessGrant that covers this specific target device (guest,
- *       host-share, project-share, support link).
- *
- *  Case 2 was missing until 2026-07-23, and its absence was a latent outage,
- *  not a missing feature: every cross-account session (guest / host-share /
- *  support) was silently falling through to the LEGACY shared-password path,
- *  because the signature path denied it. The password path is slated to be
- *  turned off once the migration metric looks clean (see sigFailReason in
- *  relay/server.go) — and that metric could not see the difference, so the
- *  cutover would have killed every guest session at once and presented as
- *  "the relay is broken". The relay now counts access-graph reaches
- *  separately (authViaSigGrant) precisely so the cutover decision can see
- *  them.
- *
- *  This does NOT widen what a guest can do — reaching the tunnel is not
- *  entering the box. The agent still authenticates the caller's bearer token
- *  and enforces its own scope allow-lists (desktop/agent/guest_scope.go).
- *  The relay stays pass-through; this only stops it from refusing to carry
- *  ciphertext for a relationship the owner explicitly created.
+ *    2. Cross-account reach is always denied. Legacy access-graph rows are
+ *       retained only as inert tombstone data and never authorize relay reach.
  *
  *  ok=false when either device is unknown, the signer has no sign key, or no
  *  relationship exists. Internal: the /relay/resolve-sig HTTP route
@@ -2814,22 +2451,7 @@ export const resolveDeviceSig = internalQuery({
     if (!target) return deny;
 
     const sameOwner = String(signer.userId) === String(target.userId);
-    // Only pay for the grant lookup when the owners actually differ.
-    const grantCoversTarget = sameOwner
-      ? false
-      : await guestCanReachSpecificHostDevice(
-          ctx,
-          target.userId,   // host = who owns the device being reached
-          signer.userId,   // guest = who is calling
-          target.deviceId,
-        );
-
-    const reach = resolveSigReach({
-      signerUserId: String(signer.userId),
-      targetUserId: String(target.userId),
-      grantCoversTarget,
-    });
-    if (reach === "deny") return deny;
+    if (!sameOwner) return deny;
 
     // The SIGNER's billing entitlement rides along so the relay can meter
     // (or exempt) sig-authenticated traffic the same way it does password-
@@ -2839,12 +2461,10 @@ export const resolveDeviceSig = internalQuery({
 
     return {
       ok: true as const,
-      // The CALLER's userId, deliberately: the relay keys its per-user rate
-      // limit on this (proxy-user:<id>), and a guest's traffic must count
-      // against the guest, never against the host they were invited to.
+      // The caller and target are guaranteed to have the same owner.
       userId: String(signer.userId),
       signerPublicKey: signer.signPublicKey,
-      viaGrant: reach === "access-graph",
+      viaGrant: false,
       plan: entitlement.plan,
       isPaid: entitlement.isPaid,
     };

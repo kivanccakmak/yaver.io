@@ -26,7 +26,6 @@ import { getConvexSiteUrl, getLocalSecret, getUserSettings, saveUserSettings, LO
 import { approveDeviceCode } from "../lib/deviceCodeApprove";
 import { fetchPendingDeviceApprovals, pendingApprovalDeviceLabel } from "../lib/pendingApprovals";
 import { appLog } from "../lib/logger";
-import { ENABLE_GUEST_FEATURES } from "../lib/launchFlags";
 import { sameDeviceList } from "../lib/deviceListEquality";
 import { beaconListener, type DiscoveredDevice } from "../lib/beacon";
 import { fetchPairInfo, submitPair } from "../lib/pairDevice";
@@ -71,13 +70,6 @@ function openCodeSnapshotFromConfig(deviceId: string, cfg: OpenCodeConfigSummary
 
 import { localBoxDeviceIfRunning } from "../lib/sandboxControl";
 import { LOCAL_BOX_DEVICE_ID } from "../lib/localBox";
-import {
-  fetchGuestHosts,
-  acceptGuestInvitation as apiAcceptInvitation,
-  acceptGuestByCode as apiAcceptByCode,
-  inviteGuest as apiInviteGuest,
-  type ActiveHost,
-} from "../lib/guests";
 
 /** User-scoped storage key. Falls back to global key if no userId. */
 function userKey(userId: string | undefined, key: string): string {
@@ -94,7 +86,7 @@ function debugLogsKey(): string { return "@yaver/debug_logs_enabled"; } // globa
 
 // Build the tunnel-server list passed to quicClient.connect for a given
 // device. Merges two sources: (a) `device.tunnelUrl` — the host-wide
-// single tunnel URL from their userSettings, used when a host shares
+// single tunnel URL from their own userSettings, used when an owner configures
 // only one machine; (b) `device.publicEndpoints` — the agent-advertised
 // HTTPS tunnel URLs from /devices/heartbeat publicEndpoints,
 // per-device and authoritative. Deduplicated, stable order, host-wide
@@ -407,8 +399,6 @@ export interface Device {
    * the phone right now (e.g. Tailscale on cellular, Wi-Fi on same LAN).
    */
   lanIps?: string[];
-  /** true when this device belongs to a host who granted us guest access */
-  isGuest?: boolean;
   /** Hosting provenance: "yaver-hosted" = Yaver-managed box (paid/adopted); "byo" = Yaver-provisioned on your own cloud account; "self-hosted" = your own box. */
   hosting?: 'yaver-hosted' | 'byo' | 'self-hosted';
   managed?: boolean;
@@ -423,18 +413,9 @@ export interface Device {
    * come back at any price.
    */
   machineWakeable?: boolean;
-  /** host's display name (only set when isGuest=true) */
-  hostName?: string;
-  /** host's email (only set when isGuest=true) */
-  hostEmail?: string;
-  /** host's public userId string (only set when isGuest=true) — identifies the
-   *  share to POST /guests/leave when the guest drops their own access. */
-  hostUserIdString?: string;
-  /** owner vs explicitly shared vs legacy broad sharing */
-  accessScope?: "owner" | "shared-scoped" | "shared-legacy";
-  /** host scheduling / priority hint for shared usage */
+  /** scheduling / priority hint */
   priorityMode?: string;
-  /** host-advertised tunnel hint for this one shared device */
+  /** device-advertised tunnel hint */
   tunnelUrl?: string;
   /** agent-advertised Cloudflare / public tunnel URLs (from /devices/heartbeat publicEndpoints). Used as a connect fallback between direct LAN and relay. */
   publicEndpoints?: string[];
@@ -443,22 +424,6 @@ export interface Device {
    * Concrete IPs/URLs remain in lanIps/publicEndpoints/relay config.
    */
   connectionPreferences?: DeviceConnectionPreference[];
-  /** guest may use host-managed credentials without seeing raw secret */
-  useHostApiKeys?: boolean;
-  /** guest may bring their own credentials on top of host infra */
-  allowGuestProvidedApiKeys?: boolean;
-  /** device is shared to one or more guests */
-  sharedWithGuests?: boolean;
-  /** share grants are not project-scoped */
-  sharesAllProjects?: boolean;
-  /** explicitly shared project scopes when narrowed */
-  sharedProjects?: string[];
-  /** share grants are not runner-scoped */
-  sharesAllRunners?: boolean;
-  /** explicitly shared runners when narrowed */
-  sharedRunners?: string[];
-  /** whether this owned device is on its own dedicated backend session */
-  sessionBinding?: "dedicated" | "legacy-shared";
   /** broad role of the node in Yaver scheduling */
   deviceClass?: "desktop" | "edge-mobile" | "server";
   /** edge/mobile capability hints for placement */
@@ -514,14 +479,12 @@ function matchDeviceSelectionHint(devices: Device[], hint: string): Device | nul
     d.id === target ||
     d.hwid === target ||
     normalizedDeviceName(d.name) === normalized ||
-    normalizedDeviceName(d.hostName) === normalized ||
     normalizedDeviceName(d.name).includes(normalized) ||
     String(d.alias || "").trim().toLowerCase() === lower
   ) || null;
 }
 
-function deviceAliasKey(device: Pick<Device, "name" | "os" | "isGuest">): string | null {
-  if (device.isGuest) return null;
+function deviceAliasKey(device: Pick<Device, "name" | "os">): string | null {
   const normalizedName = normalizedDeviceName(device.name);
   const normalizedOs = String(device.os || "").trim().toLowerCase();
   if (!normalizedName || !normalizedOs) return null;
@@ -704,20 +667,15 @@ function isRelayAuthError(message: string): boolean {
   return isRelayAuthFailure(message);
 }
 
-function deviceEndpointKey(device: Pick<Device, "host" | "port" | "isGuest">): string | null {
-  if (device.isGuest) return null;
+function deviceEndpointKey(device: Pick<Device, "host" | "port">): string | null {
   const host = normalizedHost(device.host);
   if (!host) return null;
   return `${host}:${device.port || 0}`;
 }
 
-function deviceIdentityKey(device: Pick<Device, "id" | "hwid" | "publicKey" | "name" | "os" | "isGuest" | "hostEmail" | "hostName">): string {
-  if (device.isGuest) {
-    const hostScope = device.hostEmail || device.hostName || "guest";
-    return `guest:${hostScope}:${device.id || device.name}`;
-  }
+function deviceIdentityKey(device: Pick<Device, "id" | "hwid" | "publicKey" | "name" | "os">): string {
   // Stable cryptographic identity wins. Without hwid or publicKey a
-  // non-guest row is a "ghost": (platform, name) used to be the
+  // A row without stable identity is a "ghost": (platform, name) used to be the
   // fallback but it collided across fleets that share hostnames and
   // split single boxes across renames. Mark them as their own per-id
   // entry so reconnect can refuse to act on them.
@@ -727,11 +685,11 @@ function deviceIdentityKey(device: Pick<Device, "id" | "hwid" | "publicKey" | "n
   return `name:${device.name}`;
 }
 
-/** True when the device row has unstable identity (no hwid, no publicKey,
- *  not a guest). Reconnect, owner-claim, and reauth targets all need to
+/** True when the device row has unstable identity (no hwid, no publicKey).
+ *  Reconnect, owner-claim, and reauth targets all need to
  *  block on this so a stale row doesn't accidentally match a live agent. */
-export function isGhostDevice(device: Pick<Device, "hwid" | "publicKey" | "isGuest">): boolean {
-  return !device.hwid && !device.publicKey && !device.isGuest;
+export function isGhostDevice(device: Pick<Device, "hwid" | "publicKey">): boolean {
+  return !device.hwid && !device.publicKey;
 }
 
 function deviceIdentityCandidate(d: Device): IdentityCandidate {
@@ -842,21 +800,6 @@ function collapseAliasDevices(devices: Device[]): Device[] {
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
-interface GuestInvitation {
-  /** Convex row id — present on records fetched from the backend. */
-  _id?: string;
-  inviteId?: string;
-  inviteCode?: string;
-  hostUserId: string;
-  hostName: string;
-  hostEmail: string;
-  hostUserIdString?: string;
-  createdAt: number;
-  expiresAt: number;
-  invitedByUserId?: boolean;
-  proposedDeviceIds?: string[];
-}
-
 // PendingDeviceClaim mirrors the shape returned by /devices/pending-list.
 // Bootstrap-pending boxes that joined the user's relay but have no
 // Convex devices row yet — surfaced to the user so a freshly-installed
@@ -903,8 +846,6 @@ export interface DeviceState {
   disconnect: () => void;
   refreshDevices: () => Promise<void>;
   detachDevice: (device: Device) => Promise<void>;
-  /** Guest-only: revoke my own access to this host's shared infra, server-side. */
-  leaveSharedAccess: (device: Device) => Promise<{ hostName: string; removedDevices: number }>;
   /** How many devices the local "Hide from this phone" list is hiding. */
   hiddenDeviceCount: number;
   /** Undo every local hide on this phone. */
@@ -943,27 +884,6 @@ export interface DeviceState {
   /** Re-run the reachability sweep + auto-pick (primary→secondary→alphabetical
    *  first reachable, else "Can't connect"). Wired to the Retry affordance. */
   retryConnection: () => void;
-  /** Pending guest invitations from other users */
-  guestInvitations: GuestInvitation[];
-  /** Hosts sharing with me that I've already accepted. */
-  activeHosts: ActiveHost[];
-  /**
-   * Remove my own access to a host's shared machines, by host identity rather
-   * than by device — the grant is per-host, so this drops every machine that
-   * host shared. Reversible: they can share again, I can accept again.
-   */
-  leaveHost: (host: { hostEmail?: string; hostUserId?: string }) => Promise<{ hostName: string }>;
-  /** Accept a guest invitation by email match. Optional approvedDeviceIds narrows scope. */
-  acceptGuestInvitation: (hostUserId: string, approvedDeviceIds?: string[]) => Promise<void>;
-  /** Accept a guest invitation by 6-char invite code (works with any OAuth email). */
-  acceptGuestByCode: (
-    code: string,
-    approvedDeviceIds?: string[],
-  ) => Promise<{ hostName: string; hostEmail: string }>;
-  /** Invite someone as a guest to your machine. Accepts email or userId. */
-  inviteGuest: (
-    target: string | { email?: string; userId?: string; deviceIds?: string[] },
-  ) => Promise<{ inviteCode: string; guestRegistered: boolean; guestUserId?: string; guestEmail?: string }>;
   /** User's preferred device for auto-connect when multiple machines exist. */
   primaryDeviceId: string | null;
   /** Persist the preferred device. Pass null to clear. Syncs to Convex so
@@ -1122,9 +1042,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [deviceListError, setDeviceListError] = useState<string | null>(null);
   /** How many rows the local "Hide from this phone" list is currently hiding. */
   const [hiddenDeviceCount, setHiddenDeviceCount] = useState(0);
-  const [guestInvitations, setGuestInvitations] = useState<GuestInvitation[]>([]);
-  /** Hosts whose share I've already accepted — the anchor for "remove my access". */
-  const [activeHosts, setActiveHosts] = useState<ActiveHost[]>([]);
   const [agentAuthExpired, setAgentAuthExpired] = useState(false);
   const [unreachableSet, setUnreachableSet] = useState<Set<string>>(() => new Set());
   // Sub-minute peer presence harvested from the connected agent's
@@ -1349,7 +1266,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       if (devicesRes.ok) {
         const data = await devicesRes.json();
         const rawAll = data.devices || data || [];
-        const raw = ENABLE_GUEST_FEATURES ? rawAll : rawAll.filter((d: any) => !Boolean(d?.isGuest));
+        const raw = rawAll;
         appLog("info", `Found ${raw.length} device(s) for ${user?.email || user?.id || "unknown-user"}`);
         setDeviceListError(null);
         const connectedDeviceId = quicClient.isConnected ? activeDevice?.id : null;
@@ -1369,7 +1286,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
               : undefined;
           return {
             id: deviceId,
-            name: d.isGuest ? `${d.name} (${d.hostName || "guest"})` : d.name,
+            name: d.name,
             alias: typeof d.alias === "string" && d.alias.trim() !== "" ? d.alias : undefined,
             voiceHints:
               Array.isArray(d.voiceHints) && d.voiceHints.length > 0
@@ -1410,35 +1327,20 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             lastTunnelEvent,
             relayConnected: typeof d.relayConnected === "boolean" ? d.relayConnected : undefined,
             needsAuth: d.needsAuth ?? false,
-            isGuest: d.isGuest || false,
             hosting: d.hosting === "yaver-hosted" || d.hosting === "byo" || d.hosting === "self-hosted" ? d.hosting : undefined,
             managed: typeof d.managed === "boolean" ? d.managed : undefined,
             machineId: typeof d.machineId === "string" ? d.machineId : undefined,
             machineStatus: typeof d.machineStatus === "string" ? d.machineStatus : undefined,
             machineWakeable: d.machineWakeable === true,
-            hostName: d.hostName,
-            hostEmail: d.hostEmail,
-            hostUserIdString: d.hostUserIdString,
-            accessScope: d.accessScope,
             tunnelUrl: d.tunnelUrl,
             publicEndpoints: Array.isArray(d.publicEndpoints) ? d.publicEndpoints : undefined,
             connectionPreferences: Array.isArray(d.connectionPreferences) ? d.connectionPreferences : undefined,
             priorityMode: d.priorityMode,
-            useHostApiKeys: d.useHostApiKeys,
-            allowGuestProvidedApiKeys: d.allowGuestProvidedApiKeys,
-            sharedWithGuests: ENABLE_GUEST_FEATURES ? d.sharedWithGuests : undefined,
-            sharesAllProjects: d.sharesAllProjects,
-            sharedProjects: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedProjects) ? d.sharedProjects : undefined,
-            sharesAllRunners: d.sharesAllRunners,
-            sharedRunners: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedRunners) ? d.sharedRunners : undefined,
-            sessionBinding: d.sessionBinding,
             deviceClass: d.deviceClass,
             edgeProfile: d.edgeProfile,
           };
         });
-        // Deduplicate by stable device identity. Guest devices must include
-        // host context so two different hosts with the same machine name
-        // cannot collapse into one visible entry.
+        // Deduplicate by stable device identity.
         const collapsed = collapseAliasDevices(mapped);
         // Filter out detached devices
         const detached = await getDetachedDevices(uid);
@@ -1522,21 +1424,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      if (ENABLE_GUEST_FEATURES) {
-        try {
-          const hosts = await fetchGuestHosts(token);
-          setGuestInvitations(hosts.pending || []);
-          // `active` used to be dropped here, which is why mobile had no
-          // active-hosts surface at all — you could accept a share on the phone
-          // but never leave one. Web drives its leave UI off exactly this array.
-          setActiveHosts(hosts.active || []);
-        } catch {
-          // Non-critical — don't fail device refresh
-        }
-      } else {
-        setGuestInvitations([]);
-        setActiveHosts([]);
-      }
     } catch (e) {
       appLog("error", `refreshDevices error: ${e}`);
       const msg = e instanceof Error ? e.message : String(e);
@@ -1906,47 +1793,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     await refreshDevices();
   }, [uid, refreshDevices]);
 
-  /**
-   * Leave by HOST identity rather than by device — the anchor for the active-
-   * hosts list, where there is no Device object to hand to leaveSharedAccess.
-   *
-   * Prefer hostEmail: `GET /guests/hosts` returns `hostUserId` as the Convex
-   * document _id, NOT the public userId string the endpoint resolves. Passing
-   * that id would fail to resolve the host. Device rows carry the public id as
-   * `hostUserIdString`; the hosts list does not.
-   */
-  const handleLeaveHost = useCallback(
-    async (host: { hostEmail?: string; hostUserId?: string }): Promise<{ hostName: string }> => {
-      if (!token) throw new Error("Not signed in");
-      const body: Record<string, string> = {};
-      if (host.hostEmail) body.hostEmail = host.hostEmail;
-      else if (host.hostUserId) body.hostUserId = host.hostUserId;
-      if (Object.keys(body).length === 0) throw new Error("No host on record to leave");
-
-      const res = await fetch(`${getConvexSiteUrl()}/guests/leave`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Failed to remove your access");
-
-      // Drop that host's rows locally so the list reacts immediately, then
-      // reconcile with the server.
-      setDevices((prev) =>
-        prev.filter((d) => !(d.isGuest && !!host.hostEmail && d.hostEmail === host.hostEmail)),
-      );
-      try {
-        await refreshDevices();
-      } catch {
-        // Local state is already correct; a failed refresh must not read as a
-        // failed leave.
-      }
-      return { hostName: data?.hostName || "that host" };
-    },
-    [token, refreshDevices],
-  );
-
   const handleDetachDevice = useCallback(async (device: Device) => {
     const key = deviceIdentityKey(device);
     await addDetachedDevice(key, uid);
@@ -1963,73 +1809,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     }
     setDevices((prev) => prev.filter((d) => deviceIdentityKey(d) !== key));
   }, [activeDevice, uid]);
-
-  /**
-   * Guest-side leave: drop MY OWN access to a host's shared infra, server-side.
-   *
-   * Distinct from handleDetachDevice, which only hides a row locally and lets
-   * it reappear on the next poll. This revokes the grant in Convex, so every
-   * device that host shared with me goes away everywhere (web, CLI, other
-   * phones) — not just on this screen.
-   *
-   * Reversible by design: the host can share again and I can accept again.
-   */
-  const handleLeaveSharedAccess = useCallback(
-    async (device: Device): Promise<{ hostName: string; removedDevices: number }> => {
-      if (!token) throw new Error("Not signed in");
-      if (!device.isGuest) throw new Error("This is your own device — nothing to leave");
-      if (!device.hostUserIdString && !device.hostEmail) {
-        throw new Error("This shared device has no host on record — pull to refresh and retry");
-      }
-
-      const res = await fetch(`${getConvexSiteUrl()}/guests/leave`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          hostUserId: device.hostUserIdString,
-          hostEmail: device.hostEmail,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Failed to remove your access");
-
-      // A grant is per-host, so drop every row from that host — matching what
-      // the server just did rather than hiding only the tapped card.
-      const fromSameHost = (d: Device) =>
-        d.isGuest &&
-        ((!!d.hostUserIdString &&
-          !!device.hostUserIdString &&
-          d.hostUserIdString === device.hostUserIdString) ||
-          (!!d.hostEmail && !!device.hostEmail && d.hostEmail === device.hostEmail));
-
-      const gone = devices.filter(fromSameHost);
-      for (const d of gone) {
-        connectionManager.disconnect(d.id);
-        if (activeDevice?.id === d.id) {
-          setActiveDevice(null);
-          setConnectionStatus("disconnected");
-          setAgentAuthExpired(false);
-        }
-      }
-      setDevices((prev) => prev.filter((d) => !fromSameHost(d)));
-
-      try {
-        await refreshDevices();
-      } catch {
-        // Local state is already correct; a failed refresh must not look like
-        // the leave failed.
-      }
-
-      return {
-        hostName: data?.hostName || device.hostName || "that host",
-        removedDevices: gone.length,
-      };
-    },
-    [token, devices, activeDevice, refreshDevices],
-  );
 
   const handleSetDeviceAlias = useCallback(
     async (
@@ -2101,15 +1880,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   const handleRemoveDevice = useCallback(async (device: Device) => {
     if (!token) throw new Error("Not signed in");
-    // A shared device isn't ours to remove. This used to silently downgrade to
-    // a local hide, so callers believed they'd removed something that came
-    // back on the next poll. Fail loudly instead — the caller picks: hide it
-    // locally (detachDevice) or drop the grant for real (leaveSharedAccess).
-    if (device.isGuest) {
-      throw new Error(
-        "This machine is shared with you — it isn't yours to remove. Hide it on this phone, or use 'Remove my access' to drop the share.",
-      );
-    }
     const res = await fetch(`${getConvexSiteUrl()}/devices/remove`, {
       method: "POST",
       headers: {
@@ -3210,7 +2980,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       //   - online devices with needsAuth=true (re-registered via /devices/bootstrap)
       // Both need the same encrypted-pair flow via relay.
       const offlineDevices = devices.filter(
-        (d) => (!d.online || d.needsAuth === true) && !d.isGuest && d.publicKey && !probed.has(d.id) && !autoPairedRef.current.has(d.id) && !isAutoPairBlocked(d.id)
+        (d) => (!d.online || d.needsAuth === true) && d.publicKey && !probed.has(d.id) && !autoPairedRef.current.has(d.id) && !isAutoPairBlocked(d.id)
       );
       for (const dev of offlineDevices) {
         probed.add(dev.id);
@@ -3305,35 +3075,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     }, 5000);
     return () => clearInterval(iv);
   }, [token, user?.id, activeDevice?.id, activeDevice?.host, activeDevice?.port, activeDevice?.publicKey, activeDevice?.name, refreshDevices, isAutoPairBlocked, recordAutoPairFailure, recordAutoPairSuccess]);
-
-  const acceptGuestInvitation = useCallback(
-    async (hostUserId: string, approvedDeviceIds?: string[]) => {
-      if (!token) return;
-      await apiAcceptInvitation(token, hostUserId, approvedDeviceIds);
-      await refreshDevices();
-    },
-    [token, refreshDevices]
-  );
-
-  const acceptGuestByCode = useCallback(
-    async (code: string, approvedDeviceIds?: string[]) => {
-      if (!token) throw new Error("Not signed in");
-      const result = await apiAcceptByCode(token, code, approvedDeviceIds);
-      await refreshDevices();
-      return result;
-    },
-    [token, refreshDevices]
-  );
-
-  const inviteGuest = useCallback(
-    async (
-      target: string | { email?: string; userId?: string; deviceIds?: string[] },
-    ) => {
-      if (!token) throw new Error("Not signed in");
-      return await apiInviteGuest(token, target);
-    },
-    [token]
-  );
 
   // recoverBootstrapDevice handles the DIRECT-reach reclaim path: the agent's
   // bootstrap HTTP server is reachable on the LAN (or any network where /info
@@ -3815,8 +3556,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     // Silent recovery is gated to the primary device only. Other devices
-    // (including non-primary owned + guest-shared) require an explicit
-    // user tap. Avoids hammering the agent's rate-limit budget on devices
+    // require an explicit user tap. Avoids hammering the agent's rate-limit budget on devices
     // the user isn't actively trying to use.
     if (!primaryDeviceId || primaryDeviceId !== activeDevice.id) return;
     // And only when the device is up — no point burning our 2-attempt
@@ -3963,7 +3703,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     if (activeNow && connectedNow.includes(activeNow.id)) return;
     if (autoConnectInFlightRef.current) return;
     if (autoConnectAttemptedNonceRef.current === autoConnectNonce) return;
-    const candidates = devicesNow.filter((d) => !d.isGuest);
+    const candidates = devicesNow;
     if (candidates.length === 0) return; // no devices → empty-state UI handles it
 
     autoConnectInFlightRef.current = true;
@@ -4192,7 +3932,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       warmIds.has(d.id) &&
       d.online &&
       !d.needsAuth &&
-      !d.isGuest &&
       !connectedDeviceIds.includes(d.id) &&
       !unreachableSet.has(d.id),
     );
@@ -4337,7 +4076,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       disconnect,
       refreshDevices,
       detachDevice: handleDetachDevice,
-      leaveSharedAccess: handleLeaveSharedAccess,
       hiddenDeviceCount,
       unhideAllDevices: handleUnhideAllDevices,
       removeDevice: handleRemoveDevice,
@@ -4348,12 +4086,6 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       manualAuthRequiredDeviceIds: Array.from(manualAuthRequiredSet),
       stopReconnectAndBounce,
       retryConnection,
-      guestInvitations,
-      activeHosts,
-      leaveHost: handleLeaveHost,
-      acceptGuestInvitation,
-      acceptGuestByCode,
-      inviteGuest,
       primaryDeviceId,
       setPrimaryDevice,
       secondaryDeviceId,
@@ -4376,7 +4108,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       connectedDeviceIds,
       disconnectDevice,
     }),
-    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, handleLeaveSharedAccess, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, guestInvitations, activeHosts, handleLeaveHost, acceptGuestInvitation, acceptGuestByCode, inviteGuest, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, machineRoles, setMachineRolesFavorite, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
+    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, machineRoles, setMachineRolesFavorite, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
   );
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;

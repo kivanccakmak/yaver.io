@@ -10,7 +10,6 @@ export type RunnerLike = {
 
 export type DeviceIdentityLike = {
   name?: string | null;
-  hostName?: string | null;
   os?: string | null;
 };
 
@@ -37,14 +36,14 @@ export function isKivancAccount(email: string | null | undefined): boolean {
 }
 
 export function isKivancMacBook(device: DeviceIdentityLike): boolean {
-  const haystack = `${device.name || ""} ${device.hostName || ""}`.toLowerCase();
+  const haystack = `${device.name || ""}`.toLowerCase();
   const isMac = ["darwin", "macos"].includes(String(device.os || "").trim().toLowerCase());
   if (!isMac) return false;
   return haystack.includes("kivanc") || haystack.includes("cakmak") || haystack.includes("macbook");
 }
 
 export function isHetznerLikeDevice(device: DeviceIdentityLike): boolean {
-  const haystack = `${device.name || ""} ${device.hostName || ""}`.toLowerCase();
+  const haystack = `${device.name || ""}`.toLowerCase();
   const os = String(device.os || "").trim().toLowerCase();
   return os === "linux" && (
     haystack.includes("hetzner") ||

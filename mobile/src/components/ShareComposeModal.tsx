@@ -227,7 +227,6 @@ export function ShareComposeModal() {
                       </Text>
                       <Text style={[styles.deviceMeta, { color: colors.textTertiary }]}>
                         {d.os || "device"}
-                        {d.isGuest ? " · shared" : ""}
                       </Text>
                     </View>
                     {st === "sending" ? (

@@ -99,8 +99,8 @@ func (s *HTTPServer) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 				if len(line) < 4 {
 					continue
 				}
-				x := line[0]  // index status
-				y := line[1]  // worktree status
+				x := line[0] // index status
+				y := line[1] // worktree status
 				path := strings.TrimSpace(line[3:])
 
 				// Handle renames — "R  old -> new"
@@ -436,28 +436,6 @@ func (s *HTTPServer) handleGitPush(w http.ResponseWriter, r *http.Request) {
 			jsonReply(w, http.StatusInternalServerError, map[string]string{"error": "git push failed: " + out})
 			return
 		}
-	}
-
-	jsonReply(w, http.StatusOK, map[string]string{"ok": "true", "message": out})
-}
-
-// handleGitPull handles POST /git/pull.
-func (s *HTTPServer) handleGitPull(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"})
-		return
-	}
-
-	workDir := getGitWorkDir(r, s.taskMgr)
-	if workDir == "" {
-		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
-		return
-	}
-
-	out, err := runGit(workDir, "pull")
-	if err != nil {
-		jsonReply(w, http.StatusInternalServerError, map[string]string{"error": "git pull failed: " + out})
-		return
 	}
 
 	jsonReply(w, http.StatusOK, map[string]string{"ok": "true", "message": out})

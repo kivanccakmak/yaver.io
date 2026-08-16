@@ -51,10 +51,10 @@ import (
 // input (write) and output (read) handles, a resize path through the HPCON,
 // and an explicit ClosePseudoConsole.
 type conptyMaster struct {
-	pc      windows.Handle // the HPCON — resize + close go through this
-	inW     *os.File       // write child stdin here
-	outR    *os.File       // read child stdout here
-	cmd     *exec.Cmd
+	pc        windows.Handle // the HPCON — resize + close go through this
+	inW       *os.File       // write child stdin here
+	outR      *os.File       // read child stdout here
+	cmd       *exec.Cmd
 	closeOnce sync.Once
 }
 

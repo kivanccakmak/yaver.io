@@ -414,7 +414,7 @@ ipcMain.handle('validate-token', async () => {
   return { valid: false };
 });
 
-// Convex API (devices, settings, guests, etc.)
+// Convex API (owner devices, settings, etc.)
 ipcMain.handle('convex-request', async (_e, method, path, body) => {
   return convexRequest(method, path, body);
 });
@@ -532,32 +532,6 @@ ipcMain.handle('change-password', async (_e, currentPassword, newPassword) => {
       body: JSON.stringify({ currentPassword, newPassword }),
     });
     return await res.json();
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-});
-
-// Guest management (via agent)
-ipcMain.handle('invite-guest', async (_e, email) => agentRequest('POST', '/guests/invite', { email }));
-ipcMain.handle('list-guests', async () => agentRequest('GET', '/guests'));
-ipcMain.handle('revoke-guest', async (_e, email) => agentRequest('POST', '/guests/revoke', { email }));
-
-// Leave a host's shared access (guest side, via Convex — not the host's agent).
-// The host's box may be offline or already unreachable, and dropping our own
-// access is a Convex-side fact, so this never goes through agentRequest.
-// hostUserId is the host's PUBLIC userId string (device rows: hostUserIdString),
-// NOT the users table _id. Either identifier alone is enough.
-ipcMain.handle('leave-shared-access', async (_e, host) => {
-  authToken = getToken();
-  if (!authToken) return { ok: false, error: 'Not signed in' };
-  const body = {};
-  if (host?.hostUserId) body.hostUserId = host.hostUserId;
-  if (host?.hostEmail) body.hostEmail = host.hostEmail;
-  if (!body.hostUserId && !body.hostEmail) {
-    return { ok: false, error: 'hostUserId or hostEmail is required' };
-  }
-  try {
-    return await convexRequest('POST', '/guests/leave', body);
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -790,17 +764,6 @@ ipcMain.handle('run-all-quality-gates', async () => agentRequest('POST', '/quali
 // Sandbox (via agent)
 ipcMain.handle('sandbox-status', async () => agentRequest('GET', '/sandbox/status'));
 ipcMain.handle('sandbox-config', async (_e, cfg) => agentRequest('POST', '/sandbox/config', cfg));
-
-// Guest config (via agent)
-ipcMain.handle('guest-config', async (_e, email) => {
-  const path = email ? `/guests/config?email=${encodeURIComponent(email)}` : '/guests/config';
-  return agentRequest('GET', path);
-});
-ipcMain.handle('update-guest-config', async (_e, data) => agentRequest('POST', '/guests/config', data));
-ipcMain.handle('guest-usage', async (_e, date) => {
-  const path = date ? `/guests/usage?date=${date}` : '/guests/usage';
-  return agentRequest('GET', path);
-});
 
 // Keyboard shortcuts
 ipcMain.handle('register-shortcuts', () => {

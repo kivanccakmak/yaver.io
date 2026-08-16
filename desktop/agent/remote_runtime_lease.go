@@ -54,9 +54,9 @@ type LeaseSnapshot struct {
 const defaultControlLeaseIdle = 60 * time.Second
 
 // TakeControl assigns the lease to clientID. Succeeds when:
-//   * the lease is free
-//   * force=true
-//   * the current holder has been idle > idleTimeout
+//   - the lease is free
+//   - force=true
+//   - the current holder has been idle > idleTimeout
 //
 // Otherwise returns an error naming the current holder so the UI can
 // prompt "TV is driving — take over?".

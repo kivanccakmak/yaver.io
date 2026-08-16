@@ -140,9 +140,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudStopHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudStopHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_start",
@@ -159,9 +159,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudStartHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudStartHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

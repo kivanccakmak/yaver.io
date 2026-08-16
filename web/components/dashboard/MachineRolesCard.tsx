@@ -12,10 +12,8 @@
  * v1 scope: the account-wide FAVORITE row (no projectName). Per-project
  * overrides ride the same Convex row family when the Vibing UI grows them.
  *
- * Guest compliance: this card edits the OWNER's settings doc — guests never
- * read it, and each box enforces guest scopes per request anyway (a
- * render-only guest gets previews from the render box; the runner box
- * refuses task dispatch at its own auth layer, fail-closed).
+ * This card edits the owner's settings document, and every referenced device
+ * must belong to that same account.
  */
 
 import { useCallback, useEffect, useState } from "react";

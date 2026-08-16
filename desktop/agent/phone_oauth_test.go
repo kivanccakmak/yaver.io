@@ -157,8 +157,8 @@ func TestPhoneOAuthStatusFor(t *testing.T) {
 	}
 
 	partial := &PhoneOAuthConfig{
-		Apple:  &PhoneOAuthApple{TeamID: "AB12CD34EF"},                            // missing servicesId+keyId+privateKey
-		Google: &PhoneOAuthGoogle{ClientID: "x.apps.googleusercontent.com"},       // missing secret
+		Apple:     &PhoneOAuthApple{TeamID: "AB12CD34EF"},                      // missing servicesId+keyId+privateKey
+		Google:    &PhoneOAuthGoogle{ClientID: "x.apps.googleusercontent.com"}, // missing secret
 		Microsoft: &PhoneOAuthMicrosoft{TenantID: "common", ClientID: "11111111-1111-1111-1111-111111111111", ClientSecret: "s"},
 	}
 	st = PhoneOAuthStatusFor(partial)

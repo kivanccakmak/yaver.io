@@ -33,7 +33,7 @@ import (
 func init() {
 	registerOpsVerb(opsVerbSpec{
 		Name:        "runner_turn",
-		Description: "Drive a live coding-runner session (claude/codex/opencode/glm) by ONE turn: type a prompt (`text`) or answer a menu (`choice`), wait, then return a short spoken summary + the pane tail. Target a remote box with machine=<deviceId|primary>; call runner_sessions first to see what's live (start one with `yaver <runner> --machine=<box>`). Set surface=voice|car|watch for a terse eyes-free summary with no raw pane. This is the verb a phone/car voice surface calls over MCP.",
+		Description: "Drive a live coding-runner session (claude/codex/opencode/glm) by ONE turn: type a prompt (`text`) or answer a menu (`choice`), wait, then return a short spoken summary + the pane tail. Target a remote box with machine=<deviceId|primary>; call runner_sessions first to see what's live (start one with `yaver <runner> --machine=<box>`). Set surface=voice|car|watch for a terse eyes-free summary with no raw pane. Natural-language session commands in `text` are caught first (EN + TR): \"start a new session\", \"close the session\", \"which sessions are running\", \"switch to codex\", \"yeni bir oturum başlat\", \"tüm oturumları kapat\" — they run as lifecycle actions and return sent=start|list|close|stop_all|switch (never typed into a session). This is the verb a phone/car voice surface calls over MCP.",
 		Schema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -62,12 +62,16 @@ func init() {
 					"enum":        []string{"voice", "car", "watch", "tv", "screen"},
 					"description": "Rendering hint. voice/car/watch → return only the spoken one-sentence summary (no raw pane, no code). screen/tv (or unset) → also include the pane tail.",
 				},
+				"workDir": map[string]interface{}{
+					"type":        "string",
+					"description": "Project directory for a session lifecycle start. Empty resolves to the current user's home directory; the daemon CWD is never used.",
+				},
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRunnerTurnHandler,
-		Streaming:  false,
-		AllowGuest: false, // owner-only: this types into an authenticated coding session
+		Handler:        opsRunnerTurnHandler,
+		Streaming:      false,
+		AllowCompanion: false, // owner-only: this types into an authenticated coding session
 	})
 
 	registerOpsVerb(opsVerbSpec{
@@ -78,9 +82,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsRunnerSessionsHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRunnerSessionsHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 
@@ -91,6 +95,7 @@ type opsRunnerTurnPayload struct {
 	Choice  string `json:"choice"`
 	WaitMs  int    `json:"waitMs"`
 	Surface string `json:"surface"`
+	WorkDir string `json:"workDir"`
 }
 
 func opsRunnerTurnHandler(_ OpsContext, payload json.RawMessage) OpsResult {
@@ -111,6 +116,7 @@ func opsRunnerTurnHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 		Text:    p.Text,
 		Choice:  p.Choice,
 		WaitMs:  p.WaitMs,
+		WorkDir: p.WorkDir,
 	})
 
 	spoken := summarizeRunnerTurnForSpeech(reply)
@@ -122,6 +128,12 @@ func opsRunnerTurnHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 	}
 	if reply.Sent != "" {
 		out["sent"] = reply.Sent
+	}
+	if reply.NeedsChoice {
+		out["needsChoice"] = true
+	}
+	if len(reply.Available) > 0 {
+		out["available"] = reply.Available
 	}
 	if len(reply.Options) > 0 {
 		out["options"] = reply.Options
@@ -194,6 +206,13 @@ func summarizeRunnerTurnForSpeech(reply runnerSessionTurnResponse) string {
 		}
 		return watchClampSentence(lead)
 	}
+	if reply.NeedsChoice {
+		names := sessionChoiceNames(reply.Available)
+		if len(names) == 0 {
+			return watchClampSentence(firstNonEmptyStr(reply.Error, "Which session do you mean?"))
+		}
+		return watchClampSentence("Which session? " + strings.Join(names, ", ") + ".")
+	}
 	if !reply.OK && reply.Error != "" {
 		if clause := watchFirstStatusClause(reply.Error); clause != "" {
 			return watchClampSentence("That didn't go through. " + clause)
@@ -204,10 +223,39 @@ func summarizeRunnerTurnForSpeech(reply runnerSessionTurnResponse) string {
 	if reply.Sent == "choice" {
 		lead = "Answered."
 	}
+	// Lifecycle intents (session_intent.go) speak their own outcome — a car
+	// that asked to start a session should hear "Started yaver-codex", not a
+	// code-free guess at pane content.
+	switch reply.Sent {
+	case "start":
+		lead = "Started session " + reply.Session + "."
+		return watchClampSentence(lead)
+	case "list":
+		if len(reply.Available) == 0 {
+			return watchClampSentence("No coding sessions are running. Say start a new session to launch one.")
+		}
+		lead = "Running sessions: " + strings.Join(sessionChoiceNames(reply.Available), ", ") + "."
+		return watchClampSentence(lead)
+	case "close", "stop_all":
+		lead = "Closed " + reply.Session + "."
+		return watchClampSentence(lead)
+	case "switch":
+		lead = "Switched to " + reply.Session + "."
+		return watchClampSentence(lead)
+	}
 	if clause := watchFirstStatusClause(reply.Pane); clause != "" {
 		return watchClampSentence(lead + " " + clause)
 	}
 	return watchClampSentence(lead + " Nothing readable back yet — check the session.")
+}
+
+// sessionChoiceNames extracts the picker names for a spoken list.
+func sessionChoiceNames(choices []RunnerSessionChoice) []string {
+	names := make([]string, 0, len(choices))
+	for _, c := range choices {
+		names = append(names, c.Name)
+	}
+	return names
 }
 
 // isVoiceSurface reports whether a surface hint means "eyes-free": speak a

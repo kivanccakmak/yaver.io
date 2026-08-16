@@ -39,9 +39,9 @@ type CartesiaFrame struct {
 
 // cartesiaWire is the JSON envelope we send.
 type cartesiaWire struct {
-	ModelID        string `json:"model_id"`
-	Transcript     string `json:"transcript"`
-	Voice          struct {
+	ModelID    string `json:"model_id"`
+	Transcript string `json:"transcript"`
+	Voice      struct {
 		Mode string `json:"mode"`
 		ID   string `json:"id"`
 	} `json:"voice"`
@@ -50,9 +50,9 @@ type cartesiaWire struct {
 		Encoding   string `json:"encoding"`
 		SampleRate int    `json:"sample_rate"`
 	} `json:"output_format"`
-	Language    string `json:"language"`
-	ContextID   string `json:"context_id,omitempty"`
-	Continue    bool   `json:"continue,omitempty"`
+	Language  string `json:"language"`
+	ContextID string `json:"context_id,omitempty"`
+	Continue  bool   `json:"continue,omitempty"`
 }
 
 // cartesiaIn is the JSON we read from the server. Cartesia ships

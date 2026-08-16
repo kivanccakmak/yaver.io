@@ -290,7 +290,7 @@ func parseCircuitPayload(payload json.RawMessage) circuitPayload {
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 
 	reg("circuit_engines", "List circuit simulation engines + capabilities (builtin always; ngspice if installed) {design?}", func(c OpsContext, payload json.RawMessage) OpsResult {

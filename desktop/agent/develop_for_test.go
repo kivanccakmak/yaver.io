@@ -105,7 +105,9 @@ func TestRunDevelopFor_RunnerAuthGateFails(t *testing.T) {
 		return nil, 0, nil
 	}
 	cleanup := withDevelopForStubs(t,
-		func(_ string) error { return errors.New("no authed runner on this machine — run `yaver runner auth`") },
+		func(_ string) error {
+			return errors.New("no authed runner on this machine — run `yaver runner auth`")
+		},
 		rt, fram)
 	defer cleanup()
 

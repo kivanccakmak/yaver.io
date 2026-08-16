@@ -95,7 +95,7 @@ func (s *HTTPServer) handleMailDraft(w http.ResponseWriter, r *http.Request) {
 		ID           string `json:"id"`
 		Provider     string `json:"provider"`
 		Instructions string `json:"instructions"`
-		Execute      bool   `json:"execute"` // run the runner inline
+		Execute      bool   `json:"execute"`          // run the runner inline
 		Runner       string `json:"runner,omitempty"` // override default
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -264,7 +264,7 @@ func (s *HTTPServer) handleMailConfig(w http.ResponseWriter, r *http.Request) {
 		// Return current config state (without secrets) + redirect URI to paste
 		cfg, _ := LoadConfig()
 		resp := map[string]interface{}{
-			"redirectUri":    publicOauthBase(r) + "/mail/onboard/callback",
+			"redirectUri":     publicOauthBase(r) + "/mail/onboard/callback",
 			"gmailConfigured": cfg != nil && cfg.Email != nil && cfg.Email.GoogleClientID != "",
 			"o365Configured":  cfg != nil && cfg.Email != nil && cfg.Email.AzureClientID != "",
 		}

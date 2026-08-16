@@ -71,8 +71,8 @@ export default function RelaySetupManual() {
                 Relay Pro
               </h2>
               <p className="mb-4 text-sm leading-relaxed text-surface-400">
-                Use Relay Pro for daily remote work, private relay capacity, guest
-                sessions, and fewer shared-relay limits.
+                Use Relay Pro for daily remote work, private relay capacity, and
+                fewer shared-relay limits.
               </p>
               <span className="text-xs font-medium text-surface-200">
                 Open billing &rarr;

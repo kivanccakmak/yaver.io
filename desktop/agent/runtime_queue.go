@@ -73,9 +73,8 @@ type RuntimeTurnRequest struct {
 
 type RuntimeTurnQueueItem struct {
 	ItemID string `json:"itemId"`
-	// OwnerUserID scopes the item to the user who spoke it. A shared/multi-user
-	// agent must never list one tenant's utterances to another — see the
-	// postmortem in runtime_queue_store.go.
+	// OwnerUserID scopes operator-fleet work to the account that created it. One
+	// tenant must never list another tenant's utterances.
 	OwnerUserID string                 `json:"ownerUserId,omitempty"`
 	State       string                 `json:"state"`
 	Utterance   string                 `json:"utterance"`

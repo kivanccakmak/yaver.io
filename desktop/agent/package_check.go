@@ -1,11 +1,10 @@
 package main
 
-// package_check.go — preflight sanity check that runs BEFORE a package is
-// shared. It lints the manifest statically and dry-runs it once on the owner's
-// box, returning a pass/warn/fail verdict with reasons. package_allocate refuses
-// to share a package whose latest check failed (or was never run) unless force.
+// package_check.go — owner-only package validation. It lints the manifest
+// statically and dry-runs it once on the owner's box, returning a
+// pass/warn/fail verdict with reasons before the owner executes it for real.
 //
-// Philosophy: don't ship a broken or silently-blocked package to a friend. A
+// Philosophy: catch a broken or silently-blocked package before execution. A
 // geo-block from the OWNER's vantage is a WARN, not a FAIL — it's often expected
 // (the runner's vantage differs). A broken MCP binding or invalid manifest is a
 // FAIL.
@@ -23,7 +22,7 @@ type PackageCheckFinding struct {
 	Message string `json:"message"`
 }
 
-// PackageCheckResult is the verdict, stored per package and read by the share gate.
+// PackageCheckResult is the latest locally stored verdict for a package.
 type PackageCheckResult struct {
 	Package  string                `json:"package"`
 	Status   string                `json:"status"` // pass | warn | fail
@@ -124,15 +123,14 @@ func checkPackage(c OpsContext, p *TaskPackage) *PackageCheckResult {
 func init() {
 	registerOpsVerb(opsVerbSpec{
 		Name: "package_check",
-		Description: "Preflight a Task Package BEFORE sharing: lint the manifest + dry-run it once on this box, " +
-			"returning pass/warn/fail with reasons. A geo/IP block from this box's vantage is a WARN (the runner's " +
-			"vantage may differ); a broken manifest or unreachable MCP binding is a FAIL. package_allocate refuses " +
-			"to share a package that failed (or was never checked) unless force=true. Owner-only.",
+		Description: "Validate a Task Package before owner execution: lint the manifest + dry-run it once on this box, " +
+			"returning pass/warn/fail with reasons. A geo/IP block from this box's vantage is a WARN; a broken " +
+			"manifest or unreachable MCP binding is a FAIL. Owner-only.",
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"name": map[string]interface{}{"type": "string"},
 		}, "name"),
-		Handler:    packageCheckHandler,
-		AllowGuest: false,
+		Handler:        packageCheckHandler,
+		AllowCompanion: false,
 	})
 }
 

@@ -20,7 +20,7 @@ type opsSessionPayload struct {
 	Op string `json:"op"`
 	// For export:
 	ID      string `json:"id,omitempty"`
-	Runner  string `json:"runner,omitempty"`  // "claude-code" | "codex" | "aider" | ...
+	Runner  string `json:"runner,omitempty"` // "claude-code" | "codex" | "aider" | ...
 	WorkDir string `json:"workDir,omitempty"`
 	// For import/transfer/handoff:
 	Bundle    json.RawMessage `json:"bundle,omitempty"`
@@ -55,9 +55,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsSessionHandler,
-		Streaming:  false,
-		AllowGuest: false, // sessions contain owner-only chat + vault references
+		Handler:        opsSessionHandler,
+		Streaming:      false,
+		AllowCompanion: false, // sessions contain owner-only chat + vault references
 	})
 }
 
@@ -133,26 +133,26 @@ func opsSessionHandler(c OpsContext, payload json.RawMessage) OpsResult {
 			return OpsResult{OK: false, Code: "bad_payload", Error: "runner required for handoff"}
 		}
 		return OpsResult{OK: true, Initial: map[string]interface{}{
-			"hint":      "POST /session/handoff to kick an autodev loop + write sentinel for source exit",
-			"mcpTool":   "session_handoff",
-			"runner":    p.Runner,
-			"workDir":   p.WorkDir,
-			"maxKicks":  p.MaxKicks,
-			"deadline":  p.DeadlineSec,
-			"stopSrc":   p.StopSource,
-			"message":   p.Message,
+			"hint":     "POST /session/handoff to kick an autodev loop + write sentinel for source exit",
+			"mcpTool":  "session_handoff",
+			"runner":   p.Runner,
+			"workDir":  p.WorkDir,
+			"maxKicks": p.MaxKicks,
+			"deadline": p.DeadlineSec,
+			"stopSrc":  p.StopSource,
+			"message":  p.Message,
 		}}
 
 	case "complete":
 		return OpsResult{OK: true, Initial: map[string]interface{}{
-			"hint":      "POST /session/complete to take over the current session and finish its existing objective without branching into suggestions",
-			"mcpTool":   "session_complete",
-			"workDir":   p.WorkDir,
-			"maxKicks":  p.MaxKicks,
-			"deadline":  p.DeadlineSec,
-			"stopSrc":   p.StopSource,
-			"message":   p.Message,
-			"mode":      "session-complete",
+			"hint":     "POST /session/complete to take over the current session and finish its existing objective without branching into suggestions",
+			"mcpTool":  "session_complete",
+			"workDir":  p.WorkDir,
+			"maxKicks": p.MaxKicks,
+			"deadline": p.DeadlineSec,
+			"stopSrc":  p.StopSource,
+			"message":  p.Message,
+			"mode":     "session-complete",
 		}}
 	default:
 		return OpsResult{OK: false, Code: "bad_payload", Error: "unknown op: " + p.Op}

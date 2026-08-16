@@ -283,8 +283,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"refresh": map[string]interface{}{"type": "boolean", "description": "Bypass the cache and re-probe IP + geo (default false)."},
 		}),
-		Handler:    runtimeEgressHandler,
-		AllowGuest: false,
+		Handler:        runtimeEgressHandler,
+		AllowCompanion: false,
 	})
 }
 

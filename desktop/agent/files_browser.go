@@ -1,20 +1,13 @@
 package main
 
-// files_browser.go — read-only filesystem browser exposed over
+// files_browser.go — owner filesystem browser exposed over
 // HTTP so the mobile app can peek into discovered projects from
 // the couch. Scoped hard to the set of project roots the agent
 // already knows about (via PROJECTS.md / repo discovery) so
 // nobody can escape the sandbox and walk /etc/passwd.
 //
-// No writes. The surface is intentionally tiny:
-//
-//   GET /files/roots                      list allowed roots
-//   GET /files/list?root=<id>&path=<sub>  list a directory
-//   GET /files/read?root=<id>&path=<sub>  read a text file
-//
-// Everything goes through the normal auth() middleware. Guests
-// see only the projects their GuestConfigManager.CheckProject
-// accepts; owner sees everything.
+// Everything goes through the normal owner auth() middleware and every path is
+// resolved beneath a server-discovered project root ID.
 
 import (
 	"encoding/base64"
@@ -46,23 +39,12 @@ type FileEntry struct {
 // open 100 MB log files.
 const MaxReadableFileSize = 2 * 1024 * 1024
 
-// listFileRoots returns the project roots the current token may
-// browse. Owner gets everything; guest gets filtered by
-// GuestConfigManager.CheckProject.
+// listFileRoots returns the project roots the owner may browse.
 func (s *HTTPServer) listFileRoots(r *http.Request) []FileRoot {
 	projects := listDiscoveredProjects()
-	guestUID := r.Header.Get("X-Yaver-GuestUserID")
 	out := make([]FileRoot, 0, len(projects))
 	for _, p := range projects {
 		if p.Path == "" {
-			continue
-		}
-		if guestUID != "" && s.guestConfigMgr != nil {
-			if denied := s.guestConfigMgr.CheckProject(guestUID, p.Path); denied != nil {
-				continue
-			}
-		}
-		if r.Header.Get("X-Yaver-HostShare") == "true" && !hostShareCanAccessProject(r, p.Path) {
 			continue
 		}
 		out = append(out, FileRoot{
@@ -91,9 +73,8 @@ func (s *HTTPServer) handleFilesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rootID := r.URL.Query().Get("root")
-	rootPath := r.URL.Query().Get("rootPath")
 	sub := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
-	root := s.resolveHostShareRoot(r, rootID, rootPath)
+	root := s.resolveFileRoot(r, rootID)
 	if root == nil {
 		jsonError(w, http.StatusNotFound, "root not found or not permitted")
 		return
@@ -140,13 +121,12 @@ func (s *HTTPServer) handleFilesRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rootID := r.URL.Query().Get("root")
-	rootPath := r.URL.Query().Get("rootPath")
 	sub := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
 	if sub == "" {
 		jsonError(w, http.StatusBadRequest, "path required")
 		return
 	}
-	root := s.resolveHostShareRoot(r, rootID, rootPath)
+	root := s.resolveFileRoot(r, rootID)
 	if root == nil {
 		jsonError(w, http.StatusNotFound, "root not found or not permitted")
 		return
@@ -212,13 +192,12 @@ func (s *HTTPServer) handleFilesRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rootID := r.URL.Query().Get("root")
-	rootPath := r.URL.Query().Get("rootPath")
 	sub := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
 	if sub == "" {
 		jsonError(w, http.StatusBadRequest, "path required")
 		return
 	}
-	root := s.resolveHostShareRoot(r, rootID, rootPath)
+	root := s.resolveFileRoot(r, rootID)
 	if root == nil {
 		jsonError(w, http.StatusNotFound, "root not found")
 		return
@@ -262,18 +241,13 @@ func (s *HTTPServer) handleFilesRaw(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, abs)
 }
 
-func (s *HTTPServer) handleHostShareFSWrite(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-HostShare") != "true" {
-		jsonError(w, http.StatusForbidden, "host-share session required")
-		return
-	}
+func (s *HTTPServer) handleFilesWrite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
 	}
 	var body struct {
 		Root          string `json:"root"`
-		RootPath      string `json:"rootPath"`
 		Path          string `json:"path"`
 		Content       string `json:"content"`
 		ContentBase64 string `json:"contentBase64"`
@@ -287,7 +261,7 @@ func (s *HTTPServer) handleHostShareFSWrite(w http.ResponseWriter, r *http.Reque
 		jsonError(w, http.StatusBadRequest, "path required")
 		return
 	}
-	root := s.resolveHostShareRoot(r, body.Root, body.RootPath)
+	root := s.resolveFileRoot(r, body.Root)
 	if root == nil {
 		jsonError(w, http.StatusNotFound, "root not found or not permitted")
 		return
@@ -324,20 +298,15 @@ func (s *HTTPServer) handleHostShareFSWrite(w http.ResponseWriter, r *http.Reque
 	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "path": body.Path})
 }
 
-func (s *HTTPServer) handleHostShareFSMkdir(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-HostShare") != "true" {
-		jsonError(w, http.StatusForbidden, "host-share session required")
-		return
-	}
+func (s *HTTPServer) handleFilesMkdir(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
 	}
 	var body struct {
-		Root     string `json:"root"`
-		RootPath string `json:"rootPath"`
-		Path     string `json:"path"`
-		Mode     int    `json:"mode,omitempty"`
+		Root string `json:"root"`
+		Path string `json:"path"`
+		Mode int    `json:"mode,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -347,7 +316,7 @@ func (s *HTTPServer) handleHostShareFSMkdir(w http.ResponseWriter, r *http.Reque
 		jsonError(w, http.StatusBadRequest, "path required")
 		return
 	}
-	root := s.resolveHostShareRoot(r, body.Root, body.RootPath)
+	root := s.resolveFileRoot(r, body.Root)
 	if root == nil {
 		jsonError(w, http.StatusNotFound, "root not found or not permitted")
 		return
@@ -371,19 +340,14 @@ func (s *HTTPServer) handleHostShareFSMkdir(w http.ResponseWriter, r *http.Reque
 	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "path": body.Path})
 }
 
-func (s *HTTPServer) handleHostShareFSDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-HostShare") != "true" {
-		jsonError(w, http.StatusForbidden, "host-share session required")
-		return
-	}
+func (s *HTTPServer) handleFilesDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
 	}
 	var body struct {
-		Root     string `json:"root"`
-		RootPath string `json:"rootPath"`
-		Path     string `json:"path"`
+		Root string `json:"root"`
+		Path string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -393,7 +357,7 @@ func (s *HTTPServer) handleHostShareFSDelete(w http.ResponseWriter, r *http.Requ
 		jsonError(w, http.StatusBadRequest, "path required")
 		return
 	}
-	root := s.resolveHostShareRoot(r, body.Root, body.RootPath)
+	root := s.resolveFileRoot(r, body.Root)
 	if root == nil {
 		jsonError(w, http.StatusNotFound, "root not found or not permitted")
 		return
@@ -475,47 +439,6 @@ func (s *HTTPServer) resolveFileRoot(r *http.Request, id string) *FileRoot {
 		}
 	}
 	return nil
-}
-
-func (s *HTTPServer) resolveHostShareRoot(r *http.Request, id, rootPath string) *FileRoot {
-	if root := s.resolveFileRoot(r, id); root != nil {
-		return root
-	}
-	if r.Header.Get("X-Yaver-HostShare") != "true" {
-		return nil
-	}
-	raw := strings.TrimSpace(rootPath)
-	if raw == "" {
-		return nil
-	}
-	if !filepath.IsAbs(raw) {
-		return nil
-	}
-	abs, err := filepath.Abs(raw)
-	if err != nil {
-		return nil
-	}
-	info, err := os.Stat(abs)
-	if err != nil || !info.IsDir() {
-		return nil
-	}
-	// SECURITY (audit 2026-07-13, P0): a caller-supplied absolute rootPath must
-	// stay inside the projects this host-share grant actually allows. Without
-	// this gate a guest scoped to one workspace could point rootPath at any
-	// directory on disk (~/.ssh, ~/.yaver, app-store keys) and read/write it.
-	// The sibling /files/list handler already filters through the same check
-	// (files_browser.go handleFilesList) — read/raw/write/mkdir/delete now match.
-	// AllowedProjects is server-stamped from the validated grant in
-	// allowHostShare(); a client cannot widen it.
-	if !hostShareCanAccessProject(r, abs) {
-		return nil
-	}
-	root := FileRoot{
-		ID:   projectFSID(abs),
-		Name: filepath.Base(abs),
-		Path: abs,
-	}
-	return &root
 }
 
 // projectFSID is a stable 8-hex ID derived from the project

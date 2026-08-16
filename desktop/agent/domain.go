@@ -28,12 +28,12 @@ type DomainRoute struct {
 type DomainInfo struct {
 	Domain        string        `json:"domain"`
 	IP            string        `json:"ip"`
-	IPType        string        `json:"ipType"`   // static_public / dynamic_public / private_nat
+	IPType        string        `json:"ipType"`    // static_public / dynamic_public / private_nat
 	SSLStatus     string        `json:"sslStatus"` // active / expired / none
 	SSLExpiry     time.Time     `json:"sslExpiry"`
 	SSLIssuer     string        `json:"sslIssuer"`
 	Routes        []DomainRoute `json:"routes"`
-	Provider      string        `json:"provider"`      // cloudflare / manual
+	Provider      string        `json:"provider"` // cloudflare / manual
 	DNSConfigured bool          `json:"dnsConfigured"`
 }
 
@@ -219,8 +219,8 @@ func (m *DomainManager) Add(domain, appOrPort, path string) (string, error) {
 	info, ok := m.domains[domain]
 	if !ok {
 		info = &DomainInfo{
-			Domain:  domain,
-			Routes:  []DomainRoute{},
+			Domain:    domain,
+			Routes:    []DomainRoute{},
 			SSLStatus: "none",
 		}
 		m.domains[domain] = info

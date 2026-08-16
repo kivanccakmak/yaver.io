@@ -43,9 +43,7 @@ package main
 //
 // Preconditions, all checked at MINT time, deny by default:
 //
-//  1. the caller is the OWNER (s.auth already established a valid bearer; we
-//     additionally refuse guests and support sessions, which are precisely the
-//     principals that must never get one);
+//  1. the caller is the OWNER (s.auth already established the owner bearer);
 //  2. IsYaverSelfDevelopmentDir(workDir) is TRUE. This is the structural
 //     guarantee. Attach Mode's capability CANNOT be minted for a third-party
 //     project, because the mint refuses any workDir that is not Yaver's own
@@ -254,7 +252,7 @@ func RevokeAttachSession(sessionID string) bool {
 //
 // The principle: the attached app needs enough to feel at home, which is far
 // less than a session. What is absent is as deliberate as what is present —
-// vault, deploy, auth mutations, device approval, SDK-token and guest creation,
+// vault, deploy, auth mutations, device approval, SDK-token creation,
 // exec/shell/remote-desktop, settings mutation and anything that writes to a
 // DIFFERENT device are all excluded, because their abuse is either irreversible
 // or reaches beyond the box being attached.

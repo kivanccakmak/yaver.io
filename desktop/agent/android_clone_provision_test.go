@@ -99,7 +99,7 @@ func TestAndroidCloneProvisionSchemaHasNoCredentialField(t *testing.T) {
 			t.Fatalf("schema exposes credential-like field %q", k)
 		}
 	}
-	if spec.AllowGuest {
+	if spec.AllowCompanion {
 		t.Fatal("android_clone_provision must be owner-only")
 	}
 }

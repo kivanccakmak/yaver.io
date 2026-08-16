@@ -200,7 +200,7 @@ type MachineRolesPatch = {
 
 // Write-time ownership gate for machine-role rows: every referenced device
 // must belong to the CALLER. Enforcement of what a role can DO stays at each
-// box (bearer + guest scopes, fail-closed), so a forged row grants nothing —
+// box (owner bearer, fail-closed), so a forged row grants nothing —
 // this gate exists so the config store can't even hold another tenant's
 // deviceId, same posture as normalizeOwnedDeviceId for primary/secondary.
 async function assertMachineRolesOwned(

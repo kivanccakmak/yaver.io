@@ -600,15 +600,15 @@ func TestAuthRecoverPairRotatesWhenActiveExpired(t *testing.T) {
 // TestAuthRecoverDeviceCodeSessionRoundTrip walks the full
 // device-code recovery exchange that the mobile app uses:
 //
-//   1. POST /auth/recover {mode:"device-code"} → returns recovery_id +
-//      wait_token alongside the deviceCodeUrl.
-//   2. GET /auth/recover/session?id=&wait_token= → mobile polls this
-//      while the user signs in to surface awaiting / authorized /
-//      expired. Must accept the credentials issued in step 1 and
-//      return the session payload.
-//   3. updateRecoverySession flips state to "recovered" (simulates
-//      completeDeviceCodeInBackground) → poll surfaces the new state.
-//   4. Wrong wait_token → 404, confirms the wait_token is the gate.
+//  1. POST /auth/recover {mode:"device-code"} → returns recovery_id +
+//     wait_token alongside the deviceCodeUrl.
+//  2. GET /auth/recover/session?id=&wait_token= → mobile polls this
+//     while the user signs in to surface awaiting / authorized /
+//     expired. Must accept the credentials issued in step 1 and
+//     return the session payload.
+//  3. updateRecoverySession flips state to "recovered" (simulates
+//     completeDeviceCodeInBackground) → poll surfaces the new state.
+//  4. Wrong wait_token → 404, confirms the wait_token is the gate.
 func TestAuthRecoverDeviceCodeSessionRoundTrip(t *testing.T) {
 	recoveryLimiter.reset()
 	oldVerify := verifyHostTokenFn

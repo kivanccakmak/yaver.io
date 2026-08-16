@@ -49,6 +49,6 @@ func init() {
 				"note":   "first pocket center is the grid origin; the grid pitch is the cell's world frame (anchor fiducials at the corners).",
 			}}
 		},
-		AllowGuest: false,
+		AllowCompanion: false,
 	})
 }

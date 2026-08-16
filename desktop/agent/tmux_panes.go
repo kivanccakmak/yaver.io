@@ -605,7 +605,10 @@ func trimTrailingBlankLines(lines []string) []string {
 }
 
 func isTmuxNoServer(out string) bool {
-	return strings.Contains(out, "no server running") || strings.Contains(out, "no sessions")
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "no server running") ||
+		strings.Contains(lower, "no sessions") ||
+		(strings.Contains(lower, "error connecting to") && strings.Contains(lower, "no such file or directory"))
 }
 
 // anyAdoptedPaneTask returns the task id of the first adopted pane in the set.

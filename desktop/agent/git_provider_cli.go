@@ -34,14 +34,14 @@ import (
 // GitProviderCLI captures one git-provider CLI's discoverability +
 // auth posture. Both gh and glab populate this shape.
 type GitProviderCLI struct {
-	Name      string `json:"name"`        // "gh" or "glab"
-	Available bool   `json:"available"`   // resolved on PATH
-	Path      string `json:"path"`        // absolute, "" when missing
-	Version   string `json:"version"`     // first line of --version, trimmed
-	Authed    bool   `json:"authed"`      // `gh auth status` / `glab auth status` exit zero
-	AuthUser  string `json:"authUser"`    // best-effort parse from auth status
-	AuthHost  string `json:"authHost"`    // github.com / gitlab.com
-	CheckedAt int64  `json:"checkedAt"`   // unix seconds
+	Name      string `json:"name"`      // "gh" or "glab"
+	Available bool   `json:"available"` // resolved on PATH
+	Path      string `json:"path"`      // absolute, "" when missing
+	Version   string `json:"version"`   // first line of --version, trimmed
+	Authed    bool   `json:"authed"`    // `gh auth status` / `glab auth status` exit zero
+	AuthUser  string `json:"authUser"`  // best-effort parse from auth status
+	AuthHost  string `json:"authHost"`  // github.com / gitlab.com
+	CheckedAt int64  `json:"checkedAt"` // unix seconds
 }
 
 var (

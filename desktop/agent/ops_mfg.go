@@ -72,7 +72,7 @@ type mfgPayload struct {
 
 func init() {
 	reg := func(name, desc string, schema map[string]interface{}, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Schema: atvSchema(schema), Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Schema: atvSchema(schema), Handler: h, AllowCompanion: false})
 	}
 	reg("mfg_rfq_import_bom", "Create/update a local RFQ workspace from BOM CSV. Payload {id?, name?, csv? | path?, meta?}.", map[string]interface{}{
 		"id":   map[string]interface{}{"type": "string"},

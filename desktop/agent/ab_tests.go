@@ -119,7 +119,7 @@ func saveExperiments() error {
 // AssignVariant returns the deterministic variant name for a
 // given (experimentKey, userId). The math:
 //
-//   bucket = SHA256(key + "|" + userId)[0..8] mod weightSum
+//	bucket = SHA256(key + "|" + userId)[0..8] mod weightSum
 //
 // and the variant whose cumulative weight covers `bucket` wins.
 // Identical inputs always hash to the same bucket → stable

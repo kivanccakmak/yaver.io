@@ -247,8 +247,9 @@ func describeImageB64(b64, mime, question string) string {
 }
 
 // describeImageFile builds the analysis for an image on disk:
-//   dims → free native OCR (macOS Vision framework) → optional vision-LLM
-//   verdict when a provider is configured.
+//
+//	dims → free native OCR (macOS Vision framework) → optional vision-LLM
+//	verdict when a provider is configured.
 func describeImageFile(path, question string) string {
 	if cached, ok := describeCacheGet(path); ok {
 		return cached

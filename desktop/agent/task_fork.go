@@ -132,9 +132,9 @@ func (s *HTTPServer) handleTaskFork(w http.ResponseWriter, r *http.Request, pare
 		mcpServers = append([]string{}, parent.MCPServers...)
 	}
 	taskOpts := TaskCreateOptions{
-		WorkDir:           firstNonEmpty(strings.TrimSpace(req.ProjectDir), parent.WorkDir),
-		ProjectName:       parent.ProjectName,
-		MCPServers:        mcpServers,
+		WorkDir:     firstNonEmpty(strings.TrimSpace(req.ProjectDir), parent.WorkDir),
+		ProjectName: parent.ProjectName,
+		MCPServers:  mcpServers,
 		// nil = include Yaver's own MCP doorway (default); explicit false
 		// strips it so the forked task runs with ONLY selected externals.
 		IncludeYaverMcp:   req.IncludeYaverMcp == nil || *req.IncludeYaverMcp,
@@ -147,104 +147,89 @@ func (s *HTTPServer) handleTaskFork(w http.ResponseWriter, r *http.Request, pare
 		SeedTurns: parent.Turns,
 	}
 
-	// Inherit guest scoping if the parent was a guest task. A guest
-	// switching agents must stay scoped to their allowed runners +
-	// projects — handled by CreateTaskWithOptions which validates
-	// taskOpts.GuestUserID against guestConfigMgr.
-	if parent.GuestUserID != "" {
-		taskOpts.GuestUserID = parent.GuestUserID
-		taskOpts.GuestUseHostAPIKeys = parent.GuestUseHostAPIKeys
-		taskOpts.GuestRequireIsolation = parent.GuestRequireIsolation
-		taskOpts.GuestAllowGuestProvidedKeys = parent.GuestAllowGuestProvidedKeys
-		taskOpts.GuestCPULimitPercent = parent.GuestCPULimitPercent
-		taskOpts.GuestRAMLimitMB = parent.GuestRAMLimitMB
-	}
-
-	if parent.GuestUserID == "" {
-		meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
-			KindHint:       "unknown",
-			Title:          "Fork task " + parent.ID,
-			Source:         "runner-switch-fork",
-			Runner:         req.Runner,
-			ProjectName:    parent.ProjectName,
-			WorkDir:        firstNonEmpty(parent.WorkDir, s.taskMgr.workDir),
-			TargetDeviceID: s.deviceID,
-		})
-		if previewPlacement, perr := s.previewTaskPlacement(r.Context(), meta); perr != nil {
-			log.Printf("[placement] fork preview skipped before task create: %v", perr)
-		} else if !req.AllowLocalFallback && shouldDeferLocalTaskForPlacement(previewPlacement, s.deviceID) {
-			pendingTaskID := newPendingCloudTaskID()
-			recordedPlacement := previewPlacement
-			if placement, rerr := s.recordTaskPlacement(r.Context(), pendingTaskID, meta); rerr != nil {
-				log.Printf("[placement] fork pending record skipped for %s: %v", pendingTaskID, rerr)
-			} else if placement != nil {
-				recordedPlacement = placement
-			}
-			var activation map[string]any
-			if recordedPlacement != nil && (recordedPlacement.PlacementID != "" || pendingTaskID != "") {
-				if result, aerr := s.activateTaskPlacement(r.Context(), recordedPlacement.PlacementID, pendingTaskID); aerr != nil {
-					activation = activationMapFromError(aerr)
-					log.Printf("[placement] fork activation skipped for %s: %v", pendingTaskID, aerr)
-				} else {
-					activation = result
-				}
-			}
-			bodyJSON, _ := json.Marshal(map[string]any{
-				"title":             handoff,
-				"description":       "forked from " + parent.ID + " (runner switch)",
-				"source":            "runner-switch-fork",
-				"runner":            req.Runner,
-				"model":             req.Model,
-				"mode":              req.Mode,
-				"workDir":           taskOpts.WorkDir,
-				"userPrompt":        req.Input,
-				"initialUserPrompt": req.Input,
-				"placementKind":     meta.Kind,
-			})
-			cloudErr := &CloudWorkspaceRequiredError{
-				PendingTaskID: pendingTaskID,
-				Placement:     recordedPlacement,
-				Activation:    activation,
-				Reason:        "placement selected a Cloud Workspace for this forked task",
-			}
-			authHeader := "Bearer " + strings.TrimSpace(s.token)
-			if _, remoteTask, herr := createTaskOnCloudWorkspace(r.Context(), cloudErr, authHeader, bodyJSON, 20*time.Second); herr == nil && remoteTask != nil {
-				targetDeviceID := ""
-				if recordedPlacement != nil {
-					targetDeviceID = recordedPlacement.TargetDeviceID
-				}
-				jsonReply(w, http.StatusAccepted, map[string]interface{}{
-					"ok":               true,
-					"mode":             "cloud_workspace",
-					"taskId":           remoteTask.TaskID,
-					"runnerId":         remoteTask.RunnerID,
-					"status":           string(remoteTask.Status),
-					"parentTaskId":     parent.ID,
-					"relationship":     "forked-by-yaver",
-					"contextWordsUsed": wordsUsed,
-					"pendingTaskId":    pendingTaskID,
-					"targetDeviceId":   targetDeviceID,
-					"placement":        recordedPlacement,
-				})
-				return
-			} else {
-				reason := "Cloud Workspace is waking or needs attention before this forked task can run."
-				if herr != nil {
-					reason = herr.Error()
-				}
-				jsonReply(w, http.StatusConflict, map[string]interface{}{
-					"ok":            false,
-					"action":        "cloud_workspace_required",
-					"pendingTaskId": pendingTaskID,
-					"placement":     recordedPlacement,
-					"activation":    activation,
-					"reason":        reason,
-				})
-				return
-			}
-		} else if previewPlacement != nil {
-			taskOpts.Placement = previewPlacement
+	meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
+		KindHint:       "unknown",
+		Title:          "Fork task " + parent.ID,
+		Source:         "runner-switch-fork",
+		Runner:         req.Runner,
+		ProjectName:    parent.ProjectName,
+		WorkDir:        firstNonEmpty(parent.WorkDir, s.taskMgr.workDir),
+		TargetDeviceID: s.deviceID,
+	})
+	if previewPlacement, perr := s.previewTaskPlacement(r.Context(), meta); perr != nil {
+		log.Printf("[placement] fork preview skipped before task create: %v", perr)
+	} else if !req.AllowLocalFallback && shouldDeferLocalTaskForPlacement(previewPlacement, s.deviceID) {
+		pendingTaskID := newPendingCloudTaskID()
+		recordedPlacement := previewPlacement
+		if placement, rerr := s.recordTaskPlacement(r.Context(), pendingTaskID, meta); rerr != nil {
+			log.Printf("[placement] fork pending record skipped for %s: %v", pendingTaskID, rerr)
+		} else if placement != nil {
+			recordedPlacement = placement
 		}
+		var activation map[string]any
+		if recordedPlacement != nil && (recordedPlacement.PlacementID != "" || pendingTaskID != "") {
+			if result, aerr := s.activateTaskPlacement(r.Context(), recordedPlacement.PlacementID, pendingTaskID); aerr != nil {
+				activation = activationMapFromError(aerr)
+				log.Printf("[placement] fork activation skipped for %s: %v", pendingTaskID, aerr)
+			} else {
+				activation = result
+			}
+		}
+		bodyJSON, _ := json.Marshal(map[string]any{
+			"title":             handoff,
+			"description":       "forked from " + parent.ID + " (runner switch)",
+			"source":            "runner-switch-fork",
+			"runner":            req.Runner,
+			"model":             req.Model,
+			"mode":              req.Mode,
+			"workDir":           taskOpts.WorkDir,
+			"userPrompt":        req.Input,
+			"initialUserPrompt": req.Input,
+			"placementKind":     meta.Kind,
+		})
+		cloudErr := &CloudWorkspaceRequiredError{
+			PendingTaskID: pendingTaskID,
+			Placement:     recordedPlacement,
+			Activation:    activation,
+			Reason:        "placement selected a Cloud Workspace for this forked task",
+		}
+		authHeader := "Bearer " + strings.TrimSpace(s.token)
+		if _, remoteTask, herr := createTaskOnCloudWorkspace(r.Context(), cloudErr, authHeader, bodyJSON, 20*time.Second); herr == nil && remoteTask != nil {
+			targetDeviceID := ""
+			if recordedPlacement != nil {
+				targetDeviceID = recordedPlacement.TargetDeviceID
+			}
+			jsonReply(w, http.StatusAccepted, map[string]interface{}{
+				"ok":               true,
+				"mode":             "cloud_workspace",
+				"taskId":           remoteTask.TaskID,
+				"runnerId":         remoteTask.RunnerID,
+				"status":           string(remoteTask.Status),
+				"parentTaskId":     parent.ID,
+				"relationship":     "forked-by-yaver",
+				"contextWordsUsed": wordsUsed,
+				"pendingTaskId":    pendingTaskID,
+				"targetDeviceId":   targetDeviceID,
+				"placement":        recordedPlacement,
+			})
+			return
+		} else {
+			reason := "Cloud Workspace is waking or needs attention before this forked task can run."
+			if herr != nil {
+				reason = herr.Error()
+			}
+			jsonReply(w, http.StatusConflict, map[string]interface{}{
+				"ok":            false,
+				"action":        "cloud_workspace_required",
+				"pendingTaskId": pendingTaskID,
+				"placement":     recordedPlacement,
+				"activation":    activation,
+				"reason":        reason,
+			})
+			return
+		}
+	} else if previewPlacement != nil {
+		taskOpts.Placement = previewPlacement
 	}
 
 	child, err := s.taskMgr.CreateTaskWithOptions(

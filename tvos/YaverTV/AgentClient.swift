@@ -245,6 +245,118 @@ actor AgentClient {
         try await ops("runner_sessions", [:], as: RunnerSessions.self)
     }
 
+    /// Stream the classified tail of ONE live tmux session.
+    ///
+    /// This is the constrained-surface lane: a TV/headset does not own a PTY
+    /// or terminal emulator, but it must see output and menu transitions that
+    /// happen after a turn. Polling `runner_sessions` cannot answer either.
+    /// LAN is attempted first and relay second with the same bearer/password
+    /// boundary as every other native SSE stream.
+    func subscribeTmuxPane(
+        session sessionName: String,
+        onPane: @escaping @Sendable (TmuxPaneFrame) -> Void,
+        onDone: (@Sendable (String?) -> Void)? = nil,
+        onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
+    ) -> Task<Void, Never> {
+        var components = URLComponents()
+        components.path = "/tmux/stream"
+        components.queryItems = [URLQueryItem(name: "session", value: sessionName)]
+        let path = components.string ?? "/tmux/stream"
+        let endpoints = requestEndpoints(path: path)
+        let token = self.token
+        let relayPassword = box.relayPassword
+        let urlSession = self.session
+
+        return Task {
+            var lastError = "live session stream unavailable"
+            var connected = false
+            for endpoint in endpoints {
+                if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                var req = URLRequest(url: endpoint.url)
+                req.httpMethod = "GET"
+                req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+                if endpoint.relay, let relayPassword, !relayPassword.isEmpty {
+                    req.setValue(relayPassword, forHTTPHeaderField: "X-Relay-Password")
+                }
+                do {
+                    let (bytes, response) = try await urlSession.bytes(for: req)
+                    guard let http = response as? HTTPURLResponse,
+                          (200..<300).contains(http.statusCode) else {
+                        lastError = Self.sseErrorText(
+                            (response as? HTTPURLResponse)?.statusCode ?? -1,
+                            fallback: "live session stream unavailable"
+                        )
+                        continue
+                    }
+                    connected = true
+                    var eventName = "message"
+                    var dataLines: [String] = []
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                        if line.isEmpty {
+                            if Self.emitTmuxPaneEvent(eventName, dataLines, onPane: onPane, onDone: onDone) {
+                                onEnd?(.done, nil)
+                                return
+                            }
+                            eventName = "message"
+                            dataLines.removeAll(keepingCapacity: true)
+                            continue
+                        }
+                        if line.hasPrefix("event:") {
+                            eventName = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                        } else if line.hasPrefix("data:") {
+                            dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+                        }
+                    }
+                    if Self.emitTmuxPaneEvent(eventName, dataLines, onPane: onPane, onDone: onDone) {
+                        onEnd?(.done, nil)
+                    } else {
+                        onEnd?(.interrupted, "the box closed the live session stream")
+                    }
+                    return
+                } catch {
+                    if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                    lastError = error.localizedDescription
+                    if connected {
+                        onEnd?(.interrupted, lastError)
+                        return
+                    }
+                }
+            }
+            onEnd?(.interrupted, lastError)
+        }
+    }
+
+    /// Returns true only for the stream's explicit terminal event.
+    private nonisolated static func emitTmuxPaneEvent(
+        _ eventName: String,
+        _ dataLines: [String],
+        onPane: @escaping @Sendable (TmuxPaneFrame) -> Void,
+        onDone: (@Sendable (String?) -> Void)?
+    ) -> Bool {
+        guard !dataLines.isEmpty else { return false }
+        let payload = dataLines.joined(separator: "\n")
+        guard let data = payload.data(using: .utf8) else { return false }
+        switch eventName {
+        case "pane":
+            // `null` is the all-mode empty snapshot. A session-targeted stream
+            // never emits it, but decoding it as no frame keeps this parser
+            // correct if the endpoint is reused by a list later.
+            if let frame = try? JSONDecoder().decode(TmuxPaneFrame.self, from: data) {
+                onPane(frame)
+            }
+            return false
+        case "done":
+            let reason = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["reason"] as? String
+            onDone?(reason)
+            return true
+        default:
+            return false // ping and future additive events
+        }
+    }
+
     func platformMatrix() async throws -> PlatformMatrixEnvelope {
         try await ops("mobile_platform_matrix", [:], as: PlatformMatrixEnvelope.self)
     }

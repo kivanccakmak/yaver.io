@@ -5,11 +5,84 @@ import path from "node:path";
 const repoRoot = process.cwd();
 const sourcePath = path.join(repoRoot, "desktop/agent/httpserver.go");
 const source = fs.readFileSync(sourcePath, "utf8");
+const backendHTTPPath = path.join(repoRoot, "backend/convex/http.ts");
+const backendHTTPSource = fs.readFileSync(backendHTTPPath, "utf8");
+const cloudMachinesPath = path.join(repoRoot, "backend/convex/cloudMachines.ts");
+const cloudMachinesSource = fs.readFileSync(cloudMachinesPath, "utf8");
+const ownerDeploySources = [
+  "scripts/deploy-yaver-agent-hetzner.sh",
+  "scripts/provision-machine.sh",
+].map((relativePath) => ({
+  relativePath,
+  source: fs.readFileSync(path.join(repoRoot, relativePath), "utf8"),
+}));
 
 const ROUTE_RE = /mux\.HandleFunc\("([^"]+)",\s*([^\n]+?)\)/g;
+const BACKEND_ROUTE_RE = /path:\s*"([^"]+)"/g;
+
+// Removed account-sharing surfaces are a product invariant, not merely a
+// launch flag. Keep this list exact enough that unrelated concepts such as
+// shared storage and Hermes guest bundles are unaffected.
+const FORBIDDEN_AGENT_ROUTE_PREFIXES = [
+  "/guests",
+  "/guest",
+  "/support",
+  "/chat",
+  "/host-share",
+  "/users",
+  "/sessions",
+  "/teams",
+  "/vibe/sessions",
+  "/vibe/join",
+  "/vibe/heartbeat",
+  "/vibe/role",
+  "/vibe/leave",
+];
+const FORBIDDEN_BACKEND_ROUTE_PREFIXES = [
+  "/guests",
+  "/support",
+  "/chat",
+  "/host-share",
+  "/teams",
+  "/project-shares",
+  "/project-artifacts/public",
+  "/packages/allocation",
+  "/packages/accept",
+  "/packages/shared",
+];
+const FORBIDDEN_REMOVED_FILES = [
+  "desktop/agent/guest_cmd.go",
+  "desktop/agent/guest_config_http.go",
+  "desktop/agent/guest_http.go",
+  "desktop/agent/host_share_cmd.go",
+  "desktop/agent/host_share_workspace_http.go",
+  "desktop/agent/support_cmd.go",
+  "desktop/agent/support_http.go",
+  "web/components/ChatWidget.tsx",
+  "web/lib/guests.ts",
+  "mobile/app/(tabs)/guests.tsx",
+  "mobile/src/lib/guests.ts",
+  "backend/convex/guests.ts",
+  "backend/convex/hostShare.ts",
+  "backend/convex/projectShares.ts",
+  "backend/convex/teams.ts",
+  "desktop/agent/testkit_grow.go",
+  "desktop/agent/testkit_grow_test.go",
+  "web/app/support/page.tsx",
+  "web/app/j/[code]/page.tsx",
+  "yaver-tests/feature-j-code.test.yaml",
+  "yaver-tests/feature-support.test.yaml",
+  ".github/workflows/remote-host-share-verify.yml",
+  ".github/workflows/remote-host-share-agentless.yml",
+  ".github/workflows/remote-host-share-lifecycle.yml",
+  ".github/workflows/remote-guest-docker-verify.yml",
+];
 
 const PUBLIC_ALLOWLIST = new Set([
   "/health",
+  "/identity/prove",
+  "/$dwdsSseHandler",
+  "/$dwdsSseHandler/",
   "/integrations/whatsapp/command",
   "/blobs/public",
   "/changelog.html",
@@ -18,8 +91,6 @@ const PUBLIC_ALLOWLIST = new Set([
   "/auth/pair/session",
   "/auth/pair/submit",
   "/auth/pair/encrypted",
-  "/support/info",
-  "/support/redeem",
   "/auth/recover",
   "/auth/recover/session",
   "/auth/reload-from-disk",
@@ -46,13 +117,9 @@ const PUBLIC_ALLOWLIST = new Set([
   "/meet/",
   "/ab/assign",
   "/ab/events",
-  "/clips/",
   "/webhooks/stripe",
   "/webhooks/lemonsqueezy",
   "/asciinema/",
-  "/chat/messages",
-  "/chat/stream",
-  "/chat/widget.js",
   "/analytics/views",
   "/webhooks/trigger",
   "/dev/native-bundle",
@@ -97,6 +164,7 @@ const OWNER_ONLY_PREFIXES = [
   "/agent/tools",
   "/schedules",
   "/streams",
+  "/clips",
   "/netcapture",
   "/autoideas",
   "/autoinit",
@@ -126,7 +194,6 @@ const OWNER_ONLY_PREFIXES = [
   "/stream",
   "/tunnel",
   "/files",
-  "/host-share/fs",
   "/shared-storage",
   "/project",
   "/imports",
@@ -141,7 +208,7 @@ const OWNER_ONLY_PREFIXES = [
   "/mcp/servers",
 ];
 
-const SDK_OR_GUEST_PREFIXES = [
+const SDK_SCOPED_PREFIXES = [
   "/agent/runners",
   "/agent/runner/switch",
   "/ops",
@@ -205,23 +272,26 @@ const SENSITIVE_HANDLER_NAMES = [
 
 function classifyWrapper(handlerExpr) {
   if (handlerExpr.includes("s.authMCP(")) return "authMCP";
-  if (handlerExpr.includes("s.authSDKOrGuest(")) return "authSDKOrGuest";
+  if (handlerExpr.includes("s.attachOrAuth(")) return "capabilityOrAuth";
   if (handlerExpr.includes("s.authSDK(")) return "authSDK";
   if (handlerExpr.includes("s.auth(")) return "auth";
   if (handlerExpr.includes("s.authBuildLocal(")) return "authBuildLocal";
   if (handlerExpr.includes("s.rateLimit(s.auth(")) return "auth";
   if (handlerExpr.includes("s.rateLimit(s.authSDK(")) return "authSDK";
-  if (handlerExpr.includes("s.rateLimit(s.authSDKOrGuest(")) return "authSDKOrGuest";
   return "public";
 }
 
+function matchesRoutePrefix(value, prefix) {
+  return value === prefix || value.startsWith(`${prefix}/`);
+}
+
 function startsWithAny(value, prefixes) {
-  return prefixes.some((prefix) => value === prefix || value.startsWith(`${prefix}/`) || value.startsWith(prefix));
+  return prefixes.some((prefix) => matchesRoutePrefix(value, prefix));
 }
 
 function routeExpected(pathname) {
   if (PUBLIC_ALLOWLIST.has(pathname)) return "public";
-  if (startsWithAny(pathname, SDK_OR_GUEST_PREFIXES)) return "authSDKOrGuest";
+  if (startsWithAny(pathname, SDK_SCOPED_PREFIXES)) return "authSDK";
   if (startsWithAny(pathname, SDK_PREFIXES)) return "authSDK";
   if (startsWithAny(pathname, OWNER_ONLY_PREFIXES)) return "auth";
   return null;
@@ -230,8 +300,7 @@ function routeExpected(pathname) {
 function weakerThan(actual, expected) {
   if (expected === "public") return false;
   if (expected === "auth") return actual !== "auth" && actual !== "authMCP";
-  if (expected === "authSDK") return actual === "public" || actual === "authSDKOrGuest";
-  if (expected === "authSDKOrGuest") return actual === "public";
+  if (expected === "authSDK") return actual === "public";
   return false;
 }
 
@@ -242,6 +311,72 @@ while ((match = ROUTE_RE.exec(source)) !== null) {
 }
 
 const findings = [];
+
+for (const forbidden of [
+  { pattern: /\.query\("teamMembers"\)/, detail: "team membership must not add machines to an owner's fleet" },
+  { pattern: /teamId:\s*args\.teamId/, detail: "cloud-machine creation must not mint team-owned machines" },
+  { pattern: /multiUser:\s*!!args\.teamId/, detail: "cloud machines are owner-account only" },
+]) {
+  if (forbidden.pattern.test(cloudMachinesSource)) {
+    findings.push({
+      severity: "high",
+      check: "cross-account-cloud-machine-access-restored",
+      path: "backend/convex/cloudMachines.ts",
+      actual: "present",
+      detail: forbidden.detail,
+    });
+  }
+}
+
+for (const { relativePath, source: deploySource } of ownerDeploySources) {
+  if (/--multi-user|--max-users|guest users connect|team members can now/i.test(deploySource)) {
+    findings.push({
+      severity: "high",
+      check: "cross-account-deploy-mode-restored",
+      path: relativePath,
+      actual: "present",
+      detail: "deployment entrypoints must start owner-only agents",
+    });
+  }
+}
+
+for (const relativePath of FORBIDDEN_REMOVED_FILES) {
+  if (fs.existsSync(path.join(repoRoot, relativePath))) {
+    findings.push({
+      severity: "high",
+      check: "removed-account-sharing-file-restored",
+      path: relativePath,
+      actual: "present",
+      detail: "visitor/guest UI, backend modules, and CI flows were permanently removed",
+    });
+  }
+}
+
+for (const route of routes) {
+  if (FORBIDDEN_AGENT_ROUTE_PREFIXES.some((prefix) => matchesRoutePrefix(route.path, prefix))) {
+    findings.push({
+      severity: "high",
+      check: "removed-account-sharing-route",
+      path: route.path,
+      actual: route.actual,
+      detail: "visitor/guest and cross-account machine APIs were permanently removed",
+    });
+  }
+}
+
+let backendMatch;
+while ((backendMatch = BACKEND_ROUTE_RE.exec(backendHTTPSource)) !== null) {
+  const routePath = backendMatch[1];
+  if (FORBIDDEN_BACKEND_ROUTE_PREFIXES.some((prefix) => matchesRoutePrefix(routePath, prefix))) {
+    findings.push({
+      severity: "high",
+      check: "removed-backend-account-sharing-route",
+      path: routePath,
+      actual: "registered",
+      detail: "visitor/guest and cross-account machine APIs were permanently removed",
+    });
+  }
+}
 
 for (const route of routes) {
   const expected = routeExpected(route.path);

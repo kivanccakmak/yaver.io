@@ -11,7 +11,7 @@ import { RecycleBoxDialog } from "@/components/dashboard/RecycleBoxDialog";
 import { DevicePowerModal } from "@/components/dashboard/DevicePowerModal";
 import { ManagedCloudSummary } from "@/components/dashboard/ManagedCloudPanel";
 import WakeProgress, { ParkedSummary } from "@/components/dashboard/WakeProgress";
-import { ENABLE_GUEST_FEATURES, HIDE_PAID_UI } from "@/lib/launchFlags";
+import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { CONVEX_URL } from "@/lib/constants";
 import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type ConnectAttemptDiagnostic, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
@@ -47,7 +47,6 @@ import {
   startManagedCloudMachine,
   stopManagedCloudMachine,
 } from "@/lib/managed-cloud";
-import { leaveSharedAccess } from "@/lib/guests";
 import { classifyDiagnostic, classifyFetchError, summarizeFailures, type ClassifiedFailure } from "@/lib/connection-error";
 import { collapseTopLevelProjects } from "@/lib/projectTopLevel";
 import {
@@ -404,9 +403,8 @@ function deviceReachabilitySummary(
 const DORMANT_DEVICE_HIDE_MS = 10 * 60 * 1000;
 
 function isDormantUnreachableDevice(
-  device: Pick<Device, "online" | "needsAuth" | "lastSeen" | "publicEndpoints" | "tunnelUrl" | "isGuest" | "peerState" | "workspaceLive" | "probeState" | "probeInfo">,
+  device: Pick<Device, "online" | "needsAuth" | "lastSeen" | "publicEndpoints" | "tunnelUrl" | "peerState" | "workspaceLive" | "probeState" | "probeInfo">,
 ): boolean {
-  if (device.isGuest) return false;
   if (device.online) return false;
   if (device.workspaceLive) return false;
   const lifecycleState = String(device.probeInfo?.lifecycle?.state || device.probeInfo?.lifecycleState || "");
@@ -419,8 +417,7 @@ function isDormantUnreachableDevice(
   return age !== null && age >= DORMANT_DEVICE_HIDE_MS;
 }
 
-function duplicateHostKey(device: Pick<Device, "isGuest" | "platform" | "name">): string | null {
-  if (device.isGuest) return null;
+function duplicateHostKey(device: Pick<Device, "platform" | "name">): string | null {
   const platform = String(device.platform || "").trim().toLowerCase();
   const name = String(device.name || "").trim().toLowerCase().replace(/\.local$/, "");
   if (!platform || !name) return null;
@@ -448,12 +445,8 @@ function formatRunnerChipLabel(runner: string): string {
   return cleaned;
 }
 
-function runnerChipsForDevice(device: Pick<Device, "sharedRunners" | "runners">): string[] {
+function runnerChipsForDevice(device: Pick<Device, "runners">): string[] {
   const chips = new Set<string>();
-  for (const runner of device.sharedRunners || []) {
-    const label = formatRunnerChipLabel(runner);
-    if (label) chips.add(label);
-  }
   for (const runner of device.runners || []) {
     const label = formatRunnerChipLabel(String(runner?.runnerId || ""));
     if (label) chips.add(label);
@@ -515,7 +508,7 @@ function normalizeRunnerReportedStatus(status?: string): RunnerReportedStatus | 
 }
 
 function deriveRunnerChipStates(
-  device: Pick<Device, "runners" | "sharedRunners">,
+  device: Pick<Device, "runners">,
 ): RunnerChipState[] {
   const reported = new Map<string, { status?: string; raw?: any }>();
   for (const r of device.runners || []) {
@@ -523,14 +516,6 @@ function deriveRunnerChipStates(
     if (!id) continue;
     reported.set(id, { status: typeof r?.status === "string" ? r.status : undefined, raw: r });
   }
-  // Guests inherit shared runners only — treat them as known-installed
-  // (the host wouldn't share a runner that wasn't actually there).
-  for (const r of device.sharedRunners || []) {
-    const id = formatRunnerChipLabel(String(r));
-    if (!id) continue;
-    if (!reported.has(id)) reported.set(id, {});
-  }
-
   const seen = new Set<string>();
   const out: RunnerChipState[] = [];
 
@@ -756,12 +741,9 @@ function RunnerChipWithTest({
 
   const supportsBrowserAuth = state.id === "claude" || state.id === "codex";
   const isLocalLLM = state.id === "ollama" || state.id === "aider-ollama";
-  // Only owners can run a real generation against this machine — guests
-  // would otherwise spend the host's API credit. Cloud LLMs need an
-  // online device; local LLMs need the agent reachable too.
+  // Cloud LLMs need an online device; local LLMs need the agent reachable too.
   const canTest =
     !!token &&
-    !device.isGuest &&
     (device.online || device.workspaceLive) &&
     state.health !== "not-installed";
   // Install: same access gate as Test, but the inverse health state.
@@ -770,7 +752,6 @@ function RunnerChipWithTest({
   // ensureRunnerInstalledStream); ollama/aider-ollama don't.
   const canInstall =
     !!token &&
-    !device.isGuest &&
     (device.online || device.workspaceLive) &&
     state.health === "not-installed" &&
     (state.id === "claude" || state.id === "codex" || state.id === "opencode");
@@ -1263,31 +1244,6 @@ function CodingAgentModal({
   );
 }
 
-function sharedGuestLabels(device: Pick<Device, "sharedGuests">): string[] {
-  return (device.sharedGuests || [])
-    .map((guest) => guest.name || guest.email || "")
-    .map((label) => String(label).trim())
-    .filter(Boolean);
-}
-
-function deviceShareSummary(device: Pick<Device, "isGuest" | "hostName" | "sharedWithGuests" | "sharedGuests" | "sharesAllProjects" | "sharedProjects" | "sharedRunners" | "runners">) {
-  if (!ENABLE_GUEST_FEATURES) return null;
-  const hasSharedState = device.isGuest || device.sharedWithGuests;
-  if (!hasSharedState) return null;
-  const sharedProjects = Array.isArray(device.sharedProjects) ? device.sharedProjects.filter(Boolean) : [];
-  const guests = sharedGuestLabels(device);
-  const viewerIsGuest = !!device.isGuest;
-  return {
-    viewerIsGuest,
-    hostLabel: viewerIsGuest ? device.hostName || "host" : null,
-    projectLabel: viewerIsGuest ? (device.sharesAllProjects ? "All Resources" : sharedProjects.length > 0 ? "Projects" : null) : null,
-    projectChips: viewerIsGuest && !device.sharesAllProjects ? sharedProjects : [],
-    runnerChips: runnerChipsForDevice(device),
-    guestChips: guests.slice(0, 3),
-    guestOverflow: Math.max(0, guests.length - 3),
-  };
-}
-
 interface DevicesViewProps {
   devices: Device[];
   onRefresh: () => Promise<void>;
@@ -1750,7 +1706,7 @@ function useDeviceRuntimeInfo(device: Device, enabled: boolean, token: string | 
           probeSucceeded(device.id, "info");
           clearLastFailure(device.id);
           const seen = typeof data?.version === "string" ? data.version.trim() : "";
-          if (seen && seen !== device.agentVersion && !device.isGuest && device.id) {
+          if (seen && seen !== device.agentVersion && device.id) {
             fetch(`${CONVEX_URL}/devices/report-version`, {
               method: "POST",
               headers: {
@@ -1789,7 +1745,7 @@ function useDeviceRuntimeInfo(device: Device, enabled: boolean, token: string | 
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, token, device.id, device.host, device.port, device.online, device.workspaceLive, device.agentVersion, device.isGuest]);
+  }, [enabled, token, device.id, device.host, device.port, device.online, device.workspaceLive, device.agentVersion]);
 
   return { info, error, errorDetails, loading, failureCount: failureCountRef.current };
 }
@@ -2645,20 +2601,20 @@ export function isKivancAccount(email: string | null | undefined): boolean {
   return allowed.includes(normalized);
 }
 
-export function isKivancMacBook(device: Pick<Device, "name" | "hostName" | "platform">): boolean {
-  const haystack = `${device.name || ""} ${device.hostName || ""}`.toLowerCase();
+export function isKivancMacBook(device: Pick<Device, "name" | "platform">): boolean {
+	const haystack = String(device.name || "").toLowerCase();
   const isMac = ["darwin", "macos"].includes(String(device.platform || "").trim().toLowerCase());
   if (!isMac) return false;
   return haystack.includes("kivanc") || haystack.includes("cakmak") || haystack.includes("macbook");
 }
 
 export function preferredDefaultRunnerForDevice(
-  device: Pick<Device, "name" | "hostName" | "platform">,
+  device: Pick<Device, "name" | "platform">,
   signedInEmail: string | null | undefined,
   availableRunnerIds: string[],
 ): string | null {
   if (availableRunnerIds.length === 0) return null;
-  const haystack = `${device.name || ""} ${device.hostName || ""}`.toLowerCase();
+	const haystack = String(device.name || "").toLowerCase();
   const platform = String(device.platform || "").trim().toLowerCase();
   const isRemoteLinux =
     platform === "linux" &&
@@ -2688,7 +2644,7 @@ export function preferredDefaultRunnerForDevice(
 
 export function preferredDefaultModelForRunner(
   runnerId: string | null | undefined,
-  device: Pick<Device, "name" | "hostName" | "platform">,
+  device: Pick<Device, "name" | "platform">,
   signedInEmail: string | null | undefined,
 ): string | null {
   const normalized = String(runnerId || "").trim().toLowerCase();
@@ -3422,7 +3378,7 @@ export default function DevicesView({
   const [showDormantDevices, setShowDormantDevices] = useState(false);
   const saveMachineRoleFavorite = useCallback(
     async (slot: "primary-runner" | "secondary-runner" | "primary-render" | "secondary-render", device: Device) => {
-      if (!machineRoles || !token || device.isGuest) return;
+      if (!machineRoles || !token) return;
       const current = machineRoles.favorite;
       const defaultPrimary = activeWorkspaceDeviceId || primaryDeviceId || device.id;
       const currentRunner = current?.runnerDeviceId || defaultPrimary;
@@ -3787,7 +3743,6 @@ export default function DevicesView({
             <ManagedCloudSummary token={token} onOpen={onNavigateCloud} />
           ) : null}
           {renderedDevices.map((device) => {
-            const shareSummary = deviceShareSummary(device);
             const isSelectedWorkspace = activeWorkspaceDeviceId === device.id;
             // The card is "connecting" from the moment its workspace is
             // selected until the handshake lands — NOT only during the brief
@@ -3882,43 +3837,25 @@ export default function DevicesView({
                           @{device.alias}
                         </span>
                       ) : null}
-                      {device.isGuest ? (
-                        <span className="rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-200">
-                          Shared Device
-                        </span>
-                      ) : null}
                       {device.deviceClass ? (
                         <span className="rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200">
                           {device.deviceClass === "edge-mobile" ? "Edge Worker" : device.deviceClass}
                         </span>
                       ) : null}
-                      {!device.isGuest && device.sessionBinding ? (
-                        <span
-                          className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                            device.sessionBinding === "dedicated"
-                              ? "border-info/30 bg-info-soft text-info-softFg dark:border-info/30 dark:bg-info-soft dark:text-info-softFg"
-                              : "border-warning/30 bg-warning-soft text-warning-softFg dark:border-warning/30 dark:bg-warning-soft dark:text-warning-softFg"
-                          }`}
-                        >
-                          {device.sessionBinding === "dedicated" ? "Dedicated Session" : "Legacy Shared Session"}
-                        </span>
-                      ) : null}
-                      {!device.isGuest ? (
-                        <span
-                          className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                            managedDeviceIds.has(device.id)
-                              ? "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-200"
-                              : "border-slate-300 bg-slate-50 text-slate-600 dark:border-surface-700 dark:bg-surface-800/40 dark:text-surface-300"
-                          }`}
-                          title={
-                            managedDeviceIds.has(device.id)
-                              ? "Provisioned or adopted by Yaver managed cloud"
-                              : "Your own hardware or cloud box (self-hosted)"
-                          }
-                        >
-                          {managedDeviceIds.has(device.id) ? "Yaver Managed Cloud" : "Self-hosted"}
-                        </span>
-                      ) : null}
+                      <span
+                        className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                          managedDeviceIds.has(device.id)
+                            ? "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-200"
+                            : "border-slate-300 bg-slate-50 text-slate-600 dark:border-surface-700 dark:bg-surface-800/40 dark:text-surface-300"
+                        }`}
+                        title={
+                          managedDeviceIds.has(device.id)
+                            ? "Provisioned or adopted by Yaver managed cloud"
+                            : "Your own hardware or cloud box (self-hosted)"
+                        }
+                      >
+                        {managedDeviceIds.has(device.id) ? "Yaver Managed Cloud" : "Self-hosted"}
+                      </span>
                       {managedMachine &&
                       (managedMachine.status === "paused" ||
                         managedMachine.status === "suspended") ? (
@@ -4209,7 +4146,7 @@ export default function DevicesView({
                   </div>
 
                   <div className="flex shrink-0 flex-wrap items-center gap-2 xl:justify-end">
-                    {!device.isGuest && token && managedMachine && managedMachine.status === "active" ? (
+                    {token && managedMachine && managedMachine.status === "active" ? (
                       <button
                         disabled={boxBusy === managedMachine.id}
                         onClick={() => {
@@ -4231,7 +4168,7 @@ export default function DevicesView({
                         {boxBusy === managedMachine.id ? "…" : "⏸ Pause box"}
                       </button>
                     ) : null}
-                    {!device.isGuest && token && managedMachine && (managedMachine.status === "paused" || managedMachine.status === "suspended") ? (
+                    {token && managedMachine && (managedMachine.status === "paused" || managedMachine.status === "suspended") ? (
                       <button
                         disabled={boxBusy === managedMachine.id}
                         onClick={() => void pauseResumeBox(managedMachine!.id, "start")}
@@ -4327,7 +4264,6 @@ export default function DevicesView({
                       onSignIn={(runnerId) => setAuthModal({ device, runner: runnerId })}
                       onCodingAgent={() => setCodingAgentModalDeviceId(device.id)}
                       onToggleDetails={() => setExpandedId(expandedId === device.id ? null : device.id)}
-                      onLeftShare={() => { void onRefresh(); }}
                     />
                   </div>
                 </div>
@@ -4425,66 +4361,6 @@ export default function DevicesView({
                     {device.edgeProfile.supportsLocalInference ? "Local inference" : "No local inference"} · max {device.edgeProfile.maxModelClass} model · {device.edgeProfile.preferredTasks.slice(0, 3).join(", ")}
                   </p>
                 ) : null}
-                {shareSummary?.viewerIsGuest && shareSummary?.hostLabel ? (
-                  <div className="mt-3">
-                    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-400">
-                      Shared from
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span
-                        className="inline-flex items-center gap-1.5 rounded-full border border-sky-300 bg-sky-50 py-0.5 pl-0.5 pr-2.5 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100"
-                      >
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-200 text-[10px] font-semibold uppercase text-sky-800 dark:bg-sky-500/30 dark:text-sky-50">
-                          {shareSummary.hostLabel.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "·"}
-                        </span>
-                        <span className="truncate max-w-[12rem]">{shareSummary.hostLabel}</span>
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-                {shareSummary && (shareSummary.projectLabel || shareSummary.projectChips.length > 0) ? (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {shareSummary.projectLabel ? (
-                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                        shareSummary.projectLabel === "All Resources"
-                          ? "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-200"
-                          : "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200"
-                      }`}>
-                        {shareSummary.projectLabel}
-                      </span>
-                    ) : null}
-                    {shareSummary.projectChips.map((project) => (
-                      <span key={`${device.id}:project:${project}`} className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-                        {project}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                {shareSummary && shareSummary.guestChips.length > 0 ? (
-                  <div className="mt-3">
-                    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-400">
-                      Shared with
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {shareSummary.guestChips.map((guest) => (
-                        <span
-                          key={`${device.id}:guest:${guest}`}
-                          className="inline-flex items-center gap-1.5 rounded-full border border-sky-300 bg-sky-50 py-0.5 pl-0.5 pr-2.5 text-xs text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100"
-                        >
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sky-200 text-[10px] font-semibold uppercase text-sky-800 dark:bg-sky-500/30 dark:text-sky-50">
-                            {guest.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "·"}
-                          </span>
-                          <span className="truncate max-w-[12rem]">{guest}</span>
-                        </span>
-                      ))}
-                      {shareSummary.guestOverflow > 0 ? (
-                        <span className="inline-flex items-center rounded-full border border-surface-700 bg-surface-900 px-2.5 py-0.5 text-xs text-surface-400">
-                          +{shareSummary.guestOverflow} more
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
                 {(() => {
                   const states = deriveRunnerChipStates(device);
                   if (states.length === 0) return null;
@@ -4561,9 +4437,7 @@ export default function DevicesView({
                           onClose={() => setCodingAgentModalDeviceId(null)}
                         />
                       ) : null}
-                      {!device.isGuest ? (
-                        <DeviceProjectsRail device={device} token={token ?? null} onShowDetails={() => setExpandedId(device.id)} />
-                      ) : null}
+                      <DeviceProjectsRail device={device} token={token ?? null} onShowDetails={() => setExpandedId(device.id)} />
                     </div>
                   );
                 })()}
@@ -5128,8 +5002,8 @@ function AgentUpdateModal({
 // with a count, expanding to a chip rail. Each chip surfaces a stack
 // badge, a git-configured marker, and a monorepo-app marker; clicking
 // any chip jumps the user into the Details panel where the full per-
-// project view lives. Skipped entirely when the device is offline /
-// guest / has zero projects so the card stays compact for those rows.
+// project view lives. Skipped entirely when the device is offline or has zero
+// projects so the card stays compact for those rows.
 function DeviceProjectsRail({
   device,
   token,
@@ -5139,7 +5013,7 @@ function DeviceProjectsRail({
   token: string | null;
   onShowDetails?: () => void;
 }) {
-  const { projects, error, errorDetails, loading } = useDeviceProjects(device, !device.isGuest, token);
+  const { projects, error, errorDetails, loading } = useDeviceProjects(device, true, token);
   const classifiedFailure: ClassifiedFailure | null = error
     ? classifyFetchError({
         error: errorDetails?.message ?? error,
@@ -5423,7 +5297,6 @@ function DeviceActionsMenu({
   onSignIn,
   onCodingAgent,
   onToggleDetails,
-  onLeftShare,
 }: {
   device: Device;
   token: string | null | undefined;
@@ -5452,16 +5325,12 @@ function DeviceActionsMenu({
   onSignIn: (runnerId: string) => void;
   onCodingAgent: () => void;
   onToggleDetails: () => void;
-  onLeftShare: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [leaveConfirming, setLeaveConfirming] = useState(false);
-  const [leaving, setLeaving] = useState(false);
-  const [leaveError, setLeaveError] = useState<string | null>(null);
   const { pingState, ping } = useDevicePing(device, token);
   const pingFailure = pingState.ok === false ? classifyPingFailure(pingState) : null;
-  const canManage = !device.isGuest && !!token;
+  const canManage = !!token;
   const runnerStates = deriveRunnerChipStates(device);
   const runnerStateById = new Map(runnerStates.map((state) => [state.id, state]));
 
@@ -5481,25 +5350,6 @@ function DeviceActionsMenu({
     }
     onLaunchRunner(runner);
     setOpen(false);
-  }
-
-  async function doLeave() {
-    if (!token) return;
-    setLeaving(true);
-    setLeaveError(null);
-    try {
-      await leaveSharedAccess(token, {
-        hostUserId: device.hostUserIdString,
-        hostEmail: device.hostEmail,
-      });
-      setOpen(false);
-      setLeaveConfirming(false);
-      onLeftShare();
-    } catch (e: any) {
-      setLeaveError(e?.message || "Failed to remove access");
-    } finally {
-      setLeaving(false);
-    }
   }
 
   const itemClass =
@@ -5669,69 +5519,18 @@ function DeviceActionsMenu({
                 {copied ? "copied" : "clipboard"}
               </span>
             </button>
-            {!device.isGuest ? (
-              <button className={itemClass} onClick={() => { onRescue(); setOpen(false); }}>
-                <span>{rescueOpen ? "Hide rescue" : "Rescue"}</span>
-                <span className={hintClass}>wedged agent</span>
-              </button>
-            ) : null}
+            <button className={itemClass} onClick={() => { onRescue(); setOpen(false); }}>
+              <span>{rescueOpen ? "Hide rescue" : "Rescue"}</span>
+              <span className={hintClass}>wedged agent</span>
+            </button>
             {/* Power. Opens the capability report rather than acting: what
                 "reboot" means differs per machine (a container cannot reboot its
                 host at all), so the menu never claims it can — the panel asks
                 the box and renders its answer. Owner-only, like Rescue. */}
-            {!device.isGuest ? (
-              <button className={itemClass} onClick={() => { onPower(); setOpen(false); }}>
-                <span>Power&hellip;</span>
-                <span className={hintClass}>reboot · restart agent</span>
-              </button>
-            ) : null}
-            {/* Guest-side exit. The host's own revoke lives in Guests; this is
-                the mirror for the receiving end — drop a share you never
-                wanted without having to ask the host to pull it. */}
-            {device.isGuest && token ? (
-              <>
-                <div className="my-1 border-t border-slate-200 dark:border-surface-800" />
-                {leaveConfirming ? (
-                  <div className="px-3 py-2">
-                    <p className="text-[11px] leading-snug text-slate-600 dark:text-surface-300">
-                      Remove your access to{" "}
-                      <span className="font-semibold">{device.hostName || "this host"}</span>
-                      &rsquo;s shared machines? They can share again later, and you can accept again.
-                    </p>
-                    {leaveError ? (
-                      <p className="mt-1 text-[10px] text-rose-600 dark:text-rose-400">{leaveError}</p>
-                    ) : null}
-                    <div className="mt-2 flex items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={leaving}
-                        onClick={() => void doLeave()}
-                        className="rounded border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20"
-                      >
-                        {leaving ? "Removing…" : "Yes, remove"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={leaving}
-                        onClick={() => { setLeaveConfirming(false); setLeaveError(null); }}
-                        className="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-surface-700 dark:text-surface-300 dark:hover:bg-surface-800"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    className={`${itemClass} text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-500/10`}
-                    onClick={() => setLeaveConfirming(true)}
-                    title={`Remove your own access to ${device.hostName || "this host"}'s shared machines. Reversible — they can share again.`}
-                  >
-                    <span>Remove my access</span>
-                    <span className={hintClass}>leave share</span>
-                  </button>
-                )}
-              </>
-            ) : null}
+            <button className={itemClass} onClick={() => { onPower(); setOpen(false); }}>
+              <span>Power&hellip;</span>
+              <span className={hintClass}>reboot · restart agent</span>
+            </button>
             {canManage ? (
               <>
                 <div className="my-1 border-t border-slate-200 dark:border-surface-800" />
@@ -5865,7 +5664,7 @@ function ConnectionSection({ device }: { device: Device }) {
 // own bearer; the agent verifies ownership via Convex round-trip
 // (see desktop/agent/auth_factory_reset_http.go) so it works EVEN
 // when the agent's local auth_token belongs to a different user
-// (the bug this is fixing). Hidden for guests — they can't reset
+// (the bug this is fixing). Only the signed-in owner can reset
 // the host's auth.
 function FactoryResetAuthButton({ device }: { device: Device }) {
   const [busy, setBusy] = useState(false);
@@ -5954,11 +5753,8 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
   const effectiveInfo = (info || device.probeInfo || null) as DeviceRuntimeInfo | null;
   const { pingState, ping } = useDevicePing(device, token);
   const pingFailure = pingState.ok === false ? classifyPingFailure(pingState) : null;
-  // Guests list /projects under a host-shared-scope allowlist but we
-  // never want to display raw owner workdir paths to a guest — cap it
-  // to owner sessions for now.
   const { projects: liveProjects, error: projectsError, errorDetails: projectsErrorDetails, loading: projectsLoading } =
-    useDeviceProjects(device, !device.isGuest, token);
+    useDeviceProjects(device, true, token);
   const liveProjectsFailure: ClassifiedFailure | null = projectsError
     ? classifyFetchError({
         error: projectsErrorDetails?.message ?? projectsError,
@@ -5969,8 +5765,6 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
       })
     : null;
   const allRunners = (device.runners || []).map((r) => r?.runnerId || "").filter(Boolean);
-  const allSharedRunners = ENABLE_GUEST_FEATURES ? device.sharedRunners || [] : [];
-  const allGuests = ENABLE_GUEST_FEATURES ? (device.sharedGuests || []).map((g) => g.name || g.email || "").filter(Boolean) : [];
   const sysUnknown = <span className="text-surface-600">—</span>;
   // Runtime/system blobs come back from the agent's /info when LAN-reachable.
   // Accept loose keys since this shape differs between agent versions (cpu,
@@ -6052,15 +5846,13 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
         <NetCaptureModal device={device} token={token} onClose={() => setShowNetcap(false)} />
       )}
       <div className="mb-3 flex flex-wrap justify-end gap-2">
-        {!device.isGuest && (
-          <button
+        <button
             onClick={() => setShowNetcap(true)}
             className="rounded-md border border-surface-700 px-2.5 py-1 text-[11px] font-semibold text-surface-200 hover:border-surface-500 hover:text-surface-50"
             title="Capture and deep-analyze network + serial traffic on this machine (PLC/Modbus/S7/OPC-UA/SQL/HTTP, RS232/RS485). Requires the agent to run with --netcapture."
           >
             Network / Wire Monitor
-          </button>
-        )}
+        </button>
         {outdated && latestVersion ? (
           <button
             onClick={() => {
@@ -6091,9 +5883,7 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
                 ? pingFailure.label
                 : "Ping"}
         </button>
-        {!device.isGuest ? (
-          <FactoryResetAuthButton device={device} />
-        ) : null}
+        <FactoryResetAuthButton device={device} />
       </div>
       {pingFailure ? (
         <div className="mb-3 text-right text-[11px] text-surface-500">{pingFailure.title}</div>
@@ -6109,9 +5899,6 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
           {row("Public endpoints", device.publicEndpoints?.length ? device.publicEndpoints.join(", ") : null)}
           {row("Tunnel URL", device.tunnelUrl ? <span className="break-all font-mono text-[11px]">{device.tunnelUrl}</span> : null)}
           {row("Primary key", device.publicKey ? <span className="font-mono">{String(device.publicKey).slice(0, 16)}…</span> : null)}
-          {row("Session binding", device.sessionBinding)}
-          {row("Access scope", device.accessScope)}
-          {row("Priority mode", device.priorityMode)}
         </div>
         <div>
           <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-surface-500">Hardware</div>
@@ -6213,13 +6000,13 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
           probedAt={device.deployCapabilitiesAt}
         />
       </div>
-      {(allRunners.length || allSharedRunners.length) ? (
+      {allRunners.length ? (
         <div className="mt-3">
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500">
             Agents / Runners
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {(allRunners.length ? allRunners : allSharedRunners).map((r) => (
+            {allRunners.map((r) => (
               <span key={`rr:${device.id}:${r}`} className="rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-violet-700 dark:text-violet-200">
                 {formatRunnerChipLabel(r)}
               </span>
@@ -6227,22 +6014,7 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
           </div>
         </div>
       ) : null}
-      {allGuests.length ? (
-        <div className="mt-3">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500">
-            Shared with
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {allGuests.map((g) => (
-              <span key={`gg:${device.id}:${g}`} className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-sky-700 dark:text-sky-200">
-                {g}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {!device.isGuest ? (
-        <div className="mt-3">
+      <div className="mt-3">
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500">
             Available projects
           </div>
@@ -6281,28 +6053,7 @@ function DeviceDetailsPanel({ device, token }: { device: Device; token: string |
           ) : (
             <p className="text-[11px] text-surface-600">Project list unavailable — agent offline.</p>
           )}
-        </div>
-      ) : null}
-      {device.sharedProjects?.length || device.sharesAllProjects ? (
-        <div className="mt-3">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500">
-            Shared projects
-          </div>
-          {device.sharesAllProjects ? (
-            <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-200">
-              All projects
-            </span>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {(device.sharedProjects || []).map((p) => (
-                <span key={`pp:${device.id}:${p}`} className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-amber-700 dark:text-amber-200">
-                  {p}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : null}
+      </div>
       <div className="mt-3">
         <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-500">
           WiFi-paired phones

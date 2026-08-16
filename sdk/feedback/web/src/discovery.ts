@@ -112,7 +112,7 @@ export class YaverDiscovery {
     preferredDeviceId?: string,
   ): Promise<DiscoveryResult | null> {
     const devices = await listReachableDevices(authToken);
-    const all = [...devices.owned, ...devices.shared];
+    const all = devices.owned;
     if (all.length === 0) return null;
 
     const target =

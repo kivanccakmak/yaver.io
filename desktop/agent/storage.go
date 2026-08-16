@@ -551,7 +551,7 @@ func validateBucketName(name string) error {
 // mcLsEntry is the JSON structure emitted by `mc ls --json`.
 type mcLsEntry struct {
 	Status       string    `json:"status"`
-	Type         string    `json:"type"`   // "folder" for buckets
+	Type         string    `json:"type"` // "folder" for buckets
 	Key          string    `json:"key"`
 	LastModified time.Time `json:"lastModified"`
 	Size         int64     `json:"size"`

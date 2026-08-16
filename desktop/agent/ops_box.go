@@ -54,8 +54,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"domain": map[string]interface{}{"type": "string", "description": "optional filter: rs485|energy|manufacturing|robotics"},
 		}),
-		Handler:    boxProfilesHandler,
-		AllowGuest: false,
+		Handler:        boxProfilesHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "box_profile_plan",
@@ -63,8 +63,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"profile": map[string]interface{}{"type": "string", "description": "profile id or alias, e.g. kalkan, ocpp, talos, jcwelec, cst18d, yh8030h, robotics"},
 		}, "profile"),
-		Handler:    boxProfilePlanHandler,
-		AllowGuest: false,
+		Handler:        boxProfilePlanHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "box_bom",
@@ -72,8 +72,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"sku": map[string]interface{}{"type": "string", "description": "optional filter: lite|pro|max|reference|china"},
 		}),
-		Handler:    boxBOMHandler,
-		AllowGuest: false,
+		Handler:        boxBOMHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "box_status",
@@ -81,8 +81,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"control": map[string]interface{}{"type": "string", "description": "host:port of the box control port (default 192.168.4.1:8347)"},
 		}),
-		Handler:    boxStatusHandler,
-		AllowGuest: false,
+		Handler:        boxStatusHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "box_autoconnect",
@@ -95,8 +95,8 @@ func init() {
 			"start":   map[string]interface{}{"type": "integer", "description": "start register (default 0)"},
 			"count":   map[string]interface{}{"type": "integer", "description": "count (default 1)"},
 		}),
-		Handler:    boxAutoconnectHandler,
-		AllowGuest: false,
+		Handler:        boxAutoconnectHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "box_selftest",
@@ -108,8 +108,8 @@ func init() {
 			"start":   map[string]interface{}{"type": "integer"},
 			"count":   map[string]interface{}{"type": "integer"},
 		}),
-		Handler:    boxSelftestHandler,
-		AllowGuest: false,
+		Handler:        boxSelftestHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "box_cmd",
@@ -118,15 +118,15 @@ func init() {
 			"control": map[string]interface{}{"type": "string"},
 			"line":    map[string]interface{}{"type": "string", "description": "e.g. 'BAUD 19200' or 'LED 0 20 0"},
 		}, "line"),
-		Handler:    boxCmdHandler,
-		AllowGuest: false,
+		Handler:        boxCmdHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "box_tedge_status",
-		Description: "Query Talos tedge mode status and port ownership on the local Yaver Box. Returns which tedge instances are running, their serial/camera paths, and whether Yaver can safely use them.",
-		Schema:      ghostJSONSchema(map[string]interface{}{}),
-		Handler:     boxTedgeStatusHandler,
-		AllowGuest:  false,
+		Name:           "box_tedge_status",
+		Description:    "Query Talos tedge mode status and port ownership on the local Yaver Box. Returns which tedge instances are running, their serial/camera paths, and whether Yaver can safely use them.",
+		Schema:         ghostJSONSchema(map[string]interface{}{}),
+		Handler:        boxTedgeStatusHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "box_software_mode",
@@ -134,8 +134,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"mode": map[string]interface{}{"type": "string", "description": "yaver-only|talos-only|interop"},
 		}),
-		Handler:    boxSoftwareModeHandler,
-		AllowGuest: false,
+		Handler:        boxSoftwareModeHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "box_port_owner",
@@ -144,8 +144,8 @@ func init() {
 			"path":  map[string]interface{}{"type": "string", "description": "serial device path, e.g. /dev/ttyUSB0 or /dev/serial/by-id/..."},
 			"owner": map[string]interface{}{"type": "string", "description": "desired owner: yaver|tedge|shared"},
 		}, "path"),
-		Handler:    boxPortOwnerHandler,
-		AllowGuest: false,
+		Handler:        boxPortOwnerHandler,
+		AllowCompanion: false,
 	})
 }
 

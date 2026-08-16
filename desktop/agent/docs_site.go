@@ -51,16 +51,16 @@ import (
 type DocsConfig struct {
 	Path    string `json:"path"`
 	Title   string `json:"title,omitempty"`
-	Theme   string `json:"theme,omitempty"`   // "light" | "dark"
+	Theme   string `json:"theme,omitempty"` // "light" | "dark"
 	LogoURL string `json:"logoUrl,omitempty"`
 }
 
 var (
-	docsMu     sync.Mutex
-	docsCfg    *DocsConfig
-	docsIndex  map[string]string // slug → absolute path
-	docsTree   []docsNode
-	docsCache  map[string]string // slug → rendered HTML
+	docsMu    sync.Mutex
+	docsCfg   *DocsConfig
+	docsIndex map[string]string // slug → absolute path
+	docsTree  []docsNode
+	docsCache map[string]string // slug → rendered HTML
 )
 
 type docsNode struct {

@@ -345,11 +345,11 @@ func (s *HTTPServer) handleAnalyticsIngest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var body struct {
-		Name     string            `json:"name"`
-		DeviceID string            `json:"deviceId,omitempty"`
-		Route    string            `json:"route,omitempty"`
-		Props    map[string]string `json:"props,omitempty"`
-		Timestamp int64            `json:"timestamp,omitempty"`
+		Name      string            `json:"name"`
+		DeviceID  string            `json:"deviceId,omitempty"`
+		Route     string            `json:"route,omitempty"`
+		Props     map[string]string `json:"props,omitempty"`
+		Timestamp int64             `json:"timestamp,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")

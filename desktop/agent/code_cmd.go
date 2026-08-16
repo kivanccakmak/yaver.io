@@ -47,7 +47,6 @@ func runCode(args []string) {
 	uiMode := fs.Bool("ui", false, "full-screen console mode (currently uses the interactive terminal)")
 	meshMode := fs.Bool("mesh", false, "fan work out across multiple machines using agent graph mode")
 	attachTarget := fs.String("attach", "", "attach terminal mode to a remote device ID or device name")
-	username := fs.String("username", "", "filter remote attach targets by host email")
 	workDir := fs.String("work-dir", "", "project working directory")
 	runner := fs.String("runner", "", "runner ID override")
 	agent := fs.String("agent", "", "terminal coding agent override (alias for --runner)")
@@ -101,7 +100,7 @@ func runCode(args []string) {
 		return
 	}
 	if strings.TrimSpace(*attachTarget) != "" {
-		if err := runRemoteCodeAttach(prompt, *attachTarget, *username, *runner, *model, *mode); err != nil {
+		if err := runRemoteCodeAttach(prompt, *attachTarget, *runner, *model, *mode); err != nil {
 			fmt.Fprintf(os.Stderr, "code: %v\n", err)
 			os.Exit(1)
 		}
@@ -209,7 +208,7 @@ Terminal mode:
   yaver code
       Open the local Yaver terminal.
 
-  yaver code --attach <alias|deviceId|deviceName> [--username <email>]
+  yaver code --attach <alias|deviceId|deviceName>
       Open the Yaver terminal on another machine you already own or can access.
 
   yaver code --attach <device> --pty [--runner codex] [runner args...]
@@ -232,7 +231,6 @@ Remote one-shot mode:
 
 Flags:
   --attach <device>      Attach to a remote Yaver machine by device ID or name
-  --username <email>     Filter remote attach targets by host email
   --agent <runner>       Alias for --runner in terminal coding mode
   --runner <runner>      Runner override: claude, codex, or opencode
   --model <model>        Model override for the chosen runner
@@ -333,12 +331,12 @@ func createCodeTask(prompt, runner, model, mode string) (*taskCreateHTTPResponse
 	return createHTTPTaskWithCloudHandoff(context.Background(), &http.Client{Timeout: 30 * time.Second}, "http://127.0.0.1:18080", "Bearer "+cfg.AuthToken, body, 60*time.Second, newTerminalCloudHandoffProgressPrinter())
 }
 
-func runRemoteCodeAttach(prompt, attachTarget, username, runner, model, mode string) error {
+func runRemoteCodeAttach(prompt, attachTarget, runner, model, mode string) error {
 	cfg, err := LoadConfig()
 	if err != nil || cfg.AuthToken == "" {
 		return fmt.Errorf("not authenticated — run 'yaver auth'")
 	}
-	device, err := resolveCodeAttachDevice(cfg, attachTarget, username)
+	device, err := resolveCodeAttachDevice(cfg, attachTarget)
 	if err != nil {
 		return err
 	}
@@ -361,21 +359,17 @@ func runRemoteCodeAttach(prompt, attachTarget, username, runner, model, mode str
 	return err
 }
 
-func resolveCodeAttachDevice(cfg *Config, attachTarget, username string) (*DeviceInfo, error) {
+func resolveCodeAttachDevice(cfg *Config, attachTarget string) (*DeviceInfo, error) {
 	devices, err := listDevices(cfg.ConvexSiteURL, cfg.AuthToken)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
 	target := strings.TrimSpace(strings.ToLower(attachTarget))
-	wantEmail := strings.TrimSpace(strings.ToLower(username))
 	var exact *DeviceInfo
 	var partial *DeviceInfo
 	for i := range devices {
 		d := &devices[i]
 		if !d.IsOnline {
-			continue
-		}
-		if wantEmail != "" && strings.ToLower(strings.TrimSpace(d.HostEmail)) != wantEmail {
 			continue
 		}
 		if strings.EqualFold(d.DeviceID, attachTarget) || strings.EqualFold(d.Name, attachTarget) ||
@@ -394,9 +388,6 @@ func resolveCodeAttachDevice(cfg *Config, attachTarget, username string) (*Devic
 	}
 	if partial != nil {
 		return partial, nil
-	}
-	if wantEmail != "" {
-		return nil, fmt.Errorf("no online device matched %q for host %q", attachTarget, username)
 	}
 	return nil, fmt.Errorf("no online device matched %q", attachTarget)
 }

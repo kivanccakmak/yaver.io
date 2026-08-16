@@ -113,11 +113,9 @@ const iconStyles = StyleSheet.create({
 
 export interface YaverLoginScreenProps {
   /** Invoked once a session token is issued and the user is loaded. */
-  onLoggedIn: (token: string, opts?: { inviteCode?: string }) => void;
+  onLoggedIn: (token: string) => void;
   /** Optional cancel button shown in header. */
   onCancel?: () => void;
-  /** Optional prefilled guest invite code from config / deep link. */
-  initialInviteCode?: string;
 }
 
 /**
@@ -128,7 +126,6 @@ export interface YaverLoginScreenProps {
 export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
   onLoggedIn,
   onCancel,
-  initialInviteCode,
 }) => {
   const [busyProvider, setBusyProvider] = useState<OAuthProvider | 'apple' | null>(null);
   const [showEmailForm, setShowEmailForm] = useState(false);
@@ -137,7 +134,6 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [inviteCode, setInviteCode] = useState((initialInviteCode ?? '').toUpperCase());
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailError, setEmailError] = useState('');
 
@@ -145,8 +141,7 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
     const user = await validateToken(token);
     await saveToken(token);
     if (user) await saveUser(user);
-    const cleanedInviteCode = inviteCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
-    onLoggedIn(token, cleanedInviteCode ? { inviteCode: cleanedInviteCode } : undefined);
+    onLoggedIn(token);
   };
 
   const handleApple = async () => {
@@ -330,21 +325,6 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
                     secureTextEntry
                   />
                 )}
-                {isSignUp && (
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Invite Code (optional)"
-                    placeholderTextColor="#666"
-                    value={inviteCode}
-                    onChangeText={(value) =>
-                      setInviteCode(value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))
-                    }
-                    autoCapitalize="characters"
-                    autoCorrect={false}
-                    maxLength={6}
-                  />
-                )}
-
                 {emailError ? (
                   <Text style={styles.errorText}>{emailError}</Text>
                 ) : null}

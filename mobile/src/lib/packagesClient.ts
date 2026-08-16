@@ -98,5 +98,4 @@ export const packagesClient = {
     packageOps<{ run: PackageRunResult }>(t, "package_run", { name, confirm }, 120000),
   check: (t: PackageTarget, name: string) =>
     packageOps<{ check: PackageCheckResult }>(t, "package_check", { name }, 60000),
-  status: (t: PackageTarget, name?: string) => packageOps<any>(t, "package_status", { name }, 15000),
 };

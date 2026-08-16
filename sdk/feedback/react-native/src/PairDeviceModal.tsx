@@ -28,9 +28,8 @@ import { getConvexSiteUrl, getToken } from './auth';
  *      report `needsAuth=false` in /devices/list.
  *
  * This avoids making the user bounce to the Yaver mobile app just to
- * adopt a machine. Works for owners and shared-scope guests since the
- * pair endpoint accepts any valid Convex session that matches the
- * expected account type.
+ * adopt one of their own machines. The pair endpoint verifies the signed-in
+ * account as the machine owner.
  */
 export interface PairDeviceModalProps {
   device: RemoteDevice | null;

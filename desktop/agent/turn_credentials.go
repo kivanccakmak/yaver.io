@@ -47,7 +47,7 @@ const turnCredentialTTL = 60 * time.Second
 // handleRemoteRuntimeTURNCredentials backs GET
 // /remote-runtime/turn-credentials. The viewer fetches it once per
 // session, sticks the result into RTCPeerConnection, then forgets
-// about it. Owner-only — guests on the vibing scope cannot mint TURN
+// about it. Owner-only — SDK vibing scope cannot mint TURN
 // credentials (they'd be eligible to relay arbitrary UDP through the
 // operator's bandwidth).
 func (s *HTTPServer) handleRemoteRuntimeTURNCredentials(w http.ResponseWriter, r *http.Request) {

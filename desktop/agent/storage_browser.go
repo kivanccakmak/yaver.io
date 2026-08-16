@@ -14,13 +14,13 @@ import (
 
 // StorageFile is a universal file descriptor across storage backends.
 type StorageFile struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Size       int64  `json:"size"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Size        int64  `json:"size"`
 	ContentType string `json:"contentType,omitempty"`
-	URL        string `json:"url,omitempty"`
-	Bucket     string `json:"bucket,omitempty"`
-	CreatedAt  string `json:"createdAt,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Bucket      string `json:"bucket,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
 }
 
 // ListStorageFiles enumerates files in the project's configured storage.
@@ -49,10 +49,10 @@ func listConvexFiles(projectDir string) ([]StorageFile, string, error) {
 	}
 	var env struct {
 		Value []struct {
-			ID          string `json:"_id"`
-			Size        int64  `json:"size"`
-			ContentType string `json:"contentType"`
-			CreationTime int64 `json:"_creationTime"`
+			ID           string `json:"_id"`
+			Size         int64  `json:"size"`
+			ContentType  string `json:"contentType"`
+			CreationTime int64  `json:"_creationTime"`
 		} `json:"value"`
 	}
 	if err := json.Unmarshal(data, &env); err != nil {
@@ -95,9 +95,11 @@ func listSupabaseFiles(projectDir, bucket string) ([]StorageFile, string, error)
 		return nil, "supabase", fmt.Errorf("supabase storage: %s", string(data))
 	}
 	var items []struct {
-		Name string `json:"name"`
-		ID   string `json:"id"`
-		Metadata struct{ Size int64 `json:"size"` } `json:"metadata"`
+		Name     string `json:"name"`
+		ID       string `json:"id"`
+		Metadata struct {
+			Size int64 `json:"size"`
+		} `json:"metadata"`
 	}
 	_ = json.Unmarshal(data, &items)
 	var out []StorageFile

@@ -12,8 +12,8 @@ import (
 //
 // Query params:
 //   - project: "" (default) → global entries only
-//                "*" → every project
-//                "<name>" → that project's entries
+//     "*" → every project
+//     "<name>" → that project's entries
 func (s *HTTPServer) handleVaultList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -192,7 +192,7 @@ func (s *HTTPServer) handleVaultDigest(w http.ResponseWriter, r *http.Request) {
 //	{"entries": [VaultEntry, ...], "deviceId": "..."}
 //
 // The secret values are in the response body — this endpoint is
-// owner-auth + rate-limited + blocked for guests / support / SDK tokens.
+// owner-auth + rate-limited + blocked for every SDK or constrained token.
 func (s *HTTPServer) handleVaultSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -381,4 +381,3 @@ func (s *HTTPServer) handleVaultPeerSync(w http.ResponseWriter, r *http.Request)
 		},
 	})
 }
-

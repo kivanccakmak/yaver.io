@@ -233,7 +233,7 @@ func armDriverCatalog() []map[string]any {
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 
 	reg("arm_drivers", "List supported arm drivers (Fairino / myCobot / PAROL6 / generic) + default joint tables for the UI", func(c OpsContext, _ json.RawMessage) OpsResult {

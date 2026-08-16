@@ -41,6 +41,7 @@ var tvClientEndpoints = []struct {
 	{http.MethodGet, "/tasks/task-123"},
 	{http.MethodGet, "/projects"},
 	{http.MethodGet, "/tmux/sessions"},
+	{http.MethodGet, "/tmux/stream"},
 	{http.MethodPost, "/ops"},
 	{http.MethodPost, "/runner/session/turn"},
 	{http.MethodGet, "/remote-runtime/sessions"},

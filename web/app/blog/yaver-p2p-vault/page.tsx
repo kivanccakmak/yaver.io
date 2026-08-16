@@ -231,7 +231,7 @@ yaver vault sync --from primary`}
             </p>
             <p className="mt-4">
               Every <code>/vault/*</code> endpoint is behind owner authentication and rate
-              limiting. Guest, support, and SDK tokens are not allowed to open vault values.
+              limiting. Companion and SDK capability tokens are not allowed to open vault values.
               MCP tools that read or write vault entries are local-only on purpose: you can
               sync the vault with a peer, but an arbitrary remote tool call cannot ask a
               different machine to reveal a secret value on its behalf.

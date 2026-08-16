@@ -167,8 +167,8 @@ func healthSchedulePlan(connector, capability, cron, timezone string) map[string
 	return map[string]interface{}{
 		"ok": true,
 		"schedule_task": map[string]interface{}{
-			"title": "Check " + connector + " health results",
-			"cron":  cron,
+			"title":  "Check " + connector + " health results",
+			"cron":   cron,
 			"runner": "routine",
 		},
 		"routine": map[string]interface{}{

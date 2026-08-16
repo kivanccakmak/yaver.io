@@ -12,7 +12,7 @@ package main
 // grep after the fact, regardless of which surface failed.
 //
 // This is intentionally separate from `yaver deploy logs <run-id>`, which
-// reads the agent's HTTP /deploy/ship run store (guest-project deploys with
+// reads the agent's HTTP /deploy/ship run store (project deploys with
 // vault creds). `deploy all` is a local CLI shell-out and never touches that
 // store, so it gets its own on-disk log here.
 

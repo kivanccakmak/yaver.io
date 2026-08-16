@@ -35,14 +35,14 @@ import (
 
 // WaitlistEntry is one row.
 type WaitlistEntry struct {
-	Slot       int       `json:"slot"`
-	Email      string    `json:"email"`
-	Name       string    `json:"name,omitempty"`
-	Code       string    `json:"code"`           // their own referral code
-	Referrer   string    `json:"referrer,omitempty"` // code of whoever brought them
-	JoinedAt   time.Time `json:"joinedAt"`
-	Invited    int       `json:"invited"`        // count of signups they referred
-	Source     string    `json:"source,omitempty"`
+	Slot     int       `json:"slot"`
+	Email    string    `json:"email"`
+	Name     string    `json:"name,omitempty"`
+	Code     string    `json:"code"`               // their own referral code
+	Referrer string    `json:"referrer,omitempty"` // code of whoever brought them
+	JoinedAt time.Time `json:"joinedAt"`
+	Invited  int       `json:"invited"` // count of signups they referred
+	Source   string    `json:"source,omitempty"`
 }
 
 var (
@@ -190,8 +190,8 @@ func (s *HTTPServer) handleWaitlistLeaderboard(w http.ResponseWriter, r *http.Re
 		})
 	}
 	jsonReply(w, http.StatusOK, map[string]interface{}{
-		"ok":         true,
-		"total":      len(list),
+		"ok":          true,
+		"total":       len(list),
 		"leaderboard": redacted,
 	})
 }

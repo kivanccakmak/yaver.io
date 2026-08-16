@@ -246,8 +246,8 @@ class P2PClient {
   /// and `full` → stdin "R" (hot restart, resets state).
   ///
   /// Auth: the SAME bearer used for the feedback upload. `/dev/reload` sits
-  /// behind `authSDKOrGuest` on the agent and is already inside the
-  /// `guest-reload` SDK-token scope — no new secret, no widened gate.
+  /// behind `authSDK` on the agent and is already inside the
+  /// `reload` SDK-token scope — no new secret, no widened gate.
   Future<Map<String, dynamic>> reloadWithMode(
     ReloadWireMode mode, {
     DevServerSnapshot? snapshot,

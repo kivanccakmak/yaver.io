@@ -391,10 +391,9 @@ func runMeshStatus() {
 	}
 	var resp struct {
 		Peers []struct {
-			DeviceID    string `json:"deviceId"`
-			MeshIPv4    string `json:"meshIPv4"`
-			Online      bool   `json:"online"`
-			AccessScope string `json:"accessScope"`
+			DeviceID string `json:"deviceId"`
+			MeshIPv4 string `json:"meshIPv4"`
+			Online   bool   `json:"online"`
 		} `json:"peers"`
 	}
 	_ = json.Unmarshal(raw, &resp)
@@ -409,7 +408,7 @@ func runMeshStatus() {
 		if p.Online {
 			live = "online"
 		}
-		fmt.Printf("    - %s  %s  %s  (%s)\n", p.MeshIPv4, p.DeviceID, live, p.AccessScope)
+		fmt.Printf("    - %s  %s  %s\n", p.MeshIPv4, p.DeviceID, live)
 	}
 	if others == 0 {
 		fmt.Println("    (none yet — bring another device up with `yaver mesh up`)")

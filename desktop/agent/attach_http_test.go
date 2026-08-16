@@ -9,31 +9,6 @@ import (
 	"time"
 )
 
-// A guest or support bearer reached this handler only because s.auth() accepted
-// it. Attach Mode must still refuse: being allowed to use the box is not being
-// allowed to render its source and run coding turns against it.
-func TestAttachStartRefusesGuestAndSupportPrincipals(t *testing.T) {
-	s := &HTTPServer{}
-	for _, header := range []string{"X-Yaver-Guest", "X-Yaver-Support"} {
-		body := strings.NewReader(`{"workDir":"/tmp"}`)
-		r := httptest.NewRequest(http.MethodPost, "/attach/start", body)
-		r.Header.Set(header, "true")
-		w := httptest.NewRecorder()
-		s.handleAttachStart(w, r)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("%s: status %d, want 403", header, w.Code)
-		}
-		var resp attachStartResponse
-		_ = json.Unmarshal(w.Body.Bytes(), &resp)
-		if resp.Code != "ATTACH_OWNER_ONLY" {
-			t.Fatalf("%s: code %q, want ATTACH_OWNER_ONLY", header, resp.Code)
-		}
-		if resp.Remedy == "" {
-			t.Fatalf("%s: refusal carried no remedy", header)
-		}
-	}
-}
-
 // A non-Yaver workDir is refused at the HTTP boundary too, with a stable code
 // so no surface has to regex the sentence.
 func TestAttachStartRefusesForeignWorkDirWithAStableCode(t *testing.T) {

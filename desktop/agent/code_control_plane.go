@@ -85,7 +85,7 @@ func buildCodeStatusPayload() (map[string]interface{}, error) {
 	return payload, nil
 }
 
-func applyCodeAttach(target, username string) (*CodeAttachResult, error) {
+func applyCodeAttach(target string) (*CodeAttachResult, error) {
 	cfg, profile, err := loadCodeConfig()
 	if err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func applyCodeAttach(target, username string) (*CodeAttachResult, error) {
 			return nil, fmt.Errorf("multiple online devices; pass device_id or device name")
 		}
 	} else {
-		device, err = resolveCodeAttachDevice(cfg, target, username)
+		device, err = resolveCodeAttachDevice(cfg, target)
 		if err != nil {
 			return nil, err
 		}

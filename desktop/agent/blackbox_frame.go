@@ -123,9 +123,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsDeviceScreenshotHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsDeviceScreenshotHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

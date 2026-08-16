@@ -1118,8 +1118,8 @@ func init() {
 			"platform": map[string]interface{}{"type": "string", "description": "IOS | MAC_OS | TV_OS | VISION_OS (default IOS)."},
 			"locale":   map[string]interface{}{"type": "string", "description": "Primary locale to check in detail (default en-US)."},
 		}),
-		Handler:    storeSubmitStatusHandler,
-		AllowGuest: false,
+		Handler:        storeSubmitStatusHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_metadata_set",
@@ -1137,8 +1137,8 @@ func init() {
 			"marketingUrl":    map[string]interface{}{"type": "string"},
 			"whatsNew":        map[string]interface{}{"type": "string", "description": "Release notes. Only accepted once the app has a released version."},
 		}),
-		Handler:    storeMetadataSetHandler,
-		AllowGuest: false,
+		Handler:        storeMetadataSetHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_screenshots_set",
@@ -1153,8 +1153,8 @@ func init() {
 			"files":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Absolute paths to the PNG/JPEG screenshots on the target machine, in display order."},
 			"replace":     map[string]interface{}{"type": "boolean", "description": "Delete the screenshots already in this set before uploading (default false = append)."},
 		}, "displayType", "files"),
-		Handler:    storeScreenshotsSetHandler,
-		AllowGuest: false,
+		Handler:        storeScreenshotsSetHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_review_details_set",
@@ -1173,8 +1173,8 @@ func init() {
 			"contactPhone":        map[string]interface{}{"type": "string"},
 			"contactEmail":        map[string]interface{}{"type": "string"},
 		}),
-		Handler:    storeReviewDetailsSetHandler,
-		AllowGuest: false,
+		Handler:        storeReviewDetailsSetHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_build_attach",
@@ -1188,8 +1188,8 @@ func init() {
 			"build":    map[string]interface{}{"type": "string", "description": "Build number (CFBundleVersion). Omit for the newest processed build."},
 			"buildId":  map[string]interface{}{"type": "string", "description": "Explicit App Store Connect build id — skips resolution."},
 		}),
-		Handler:    storeBuildAttachHandler,
-		AllowGuest: false,
+		Handler:        storeBuildAttachHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_submit_for_review",
@@ -1200,8 +1200,8 @@ func init() {
 			"appId":    map[string]interface{}{"type": "string"},
 			"platform": map[string]interface{}{"type": "string", "description": "IOS | MAC_OS | TV_OS | VISION_OS (default IOS)."},
 		}),
-		Handler:    storeSubmitForReviewHandler,
-		AllowGuest: false,
+		Handler:        storeSubmitForReviewHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_submit_cancel",
@@ -1212,8 +1212,8 @@ func init() {
 			"appId":    map[string]interface{}{"type": "string"},
 			"platform": map[string]interface{}{"type": "string", "description": "IOS | MAC_OS | TV_OS | VISION_OS (default IOS)."},
 		}),
-		Handler:    storeSubmitCancelHandler,
-		AllowGuest: false,
+		Handler:        storeSubmitCancelHandler,
+		AllowCompanion: false,
 	})
 }
 

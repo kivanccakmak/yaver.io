@@ -32,15 +32,15 @@ import (
 
 // DeepHealthReport is what /health/deep + yaver_health_deep return.
 type DeepHealthReport struct {
-	OK               bool                     `json:"ok"`
-	GeneratedAt      string                   `json:"generatedAt"`
-	Agent            DeepHealthComponent      `json:"agent"`
-	Tmux             DeepHealthComponent      `json:"tmux"`
-	RunnerKeeper     DeepHealthComponent      `json:"runnerKeeper"`
-	RemoteRuntime    DeepHealthComponent      `json:"remoteRuntime"`
-	Sessions         []DeepHealthSession      `json:"sessions,omitempty"`
-	RecoveryHints    []string                 `json:"recoveryHints,omitempty"`
-	Notes            []string                 `json:"notes,omitempty"`
+	OK            bool                `json:"ok"`
+	GeneratedAt   string              `json:"generatedAt"`
+	Agent         DeepHealthComponent `json:"agent"`
+	Tmux          DeepHealthComponent `json:"tmux"`
+	RunnerKeeper  DeepHealthComponent `json:"runnerKeeper"`
+	RemoteRuntime DeepHealthComponent `json:"remoteRuntime"`
+	Sessions      []DeepHealthSession `json:"sessions,omitempty"`
+	RecoveryHints []string            `json:"recoveryHints,omitempty"`
+	Notes         []string            `json:"notes,omitempty"`
 }
 
 // DeepHealthComponent is a small green/yellow/red view of one subsystem.
@@ -51,14 +51,14 @@ type DeepHealthComponent struct {
 
 // DeepHealthSession describes one supervised runner session.
 type DeepHealthSession struct {
-	SessionName       string `json:"sessionName"`
-	Mode              string `json:"mode"`
-	LastActivity      string `json:"lastActivity,omitempty"`
-	LastActivityAgeS  int    `json:"lastActivityAgeSeconds"`
-	QueuedCount       int    `json:"queuedCount"`
-	NudgesTotal       int    `json:"nudgesTotal"`
-	Status            string `json:"status"` // ok | idle | stalled | draining
-	RecoveryHint      string `json:"recoveryHint,omitempty"`
+	SessionName      string `json:"sessionName"`
+	Mode             string `json:"mode"`
+	LastActivity     string `json:"lastActivity,omitempty"`
+	LastActivityAgeS int    `json:"lastActivityAgeSeconds"`
+	QueuedCount      int    `json:"queuedCount"`
+	NudgesTotal      int    `json:"nudgesTotal"`
+	Status           string `json:"status"` // ok | idle | stalled | draining
+	RecoveryHint     string `json:"recoveryHint,omitempty"`
 }
 
 // composeDeepHealth builds the report. Split from the HTTP handler

@@ -14,7 +14,7 @@
 //   More     → secondary tools    (Runtime · Apple TV · capture · feedback)
 //
 // The profile menu (top-right) owns the account-level actions: Sign out,
-// Update agent, Shared with. The connected PC is shown as a first-class card
+// Update agent. The connected PC is shown as a first-class card
 // under the header — name, host, live status — so "which box am I on" is the
 // first thing the initial screen answers, exactly like web/mobile.
 
@@ -25,7 +25,6 @@ struct DashboardView: View {
     @State private var showPicker = false
     @State private var showMore = false
     @State private var showUpdateAgent = false
-    @State private var showSharedGuests = false
     @StateObject private var lifecycle = BoxLifecycle()
 
     /// Open the TV directly on a screen instead of the tile grid.
@@ -127,7 +126,6 @@ struct DashboardView: View {
             .sheet(isPresented: $showPicker) { MachinePickerView() }
             .sheet(isPresented: $showMore) { MoreToolsView() }
             .sheet(isPresented: $showUpdateAgent) { UpdateAgentView() }
-            .sheet(isPresented: $showSharedGuests) { SharedGuestsView(token: store.token) }
             .task(id: store.selectedBox?.id) {
                 await store.refreshSelectedRelaySettings()
                 guard let box = store.selectedBox else { return }
@@ -227,9 +225,6 @@ struct DashboardView: View {
                 Button { showUpdateAgent = true } label: {
                     Label("Update agent", systemImage: "arrow.down.circle")
                 }
-                Button { showSharedGuests = true } label: {
-                    Label("Shared with", systemImage: "person.2.fill")
-                }
             } label: {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 40))
@@ -321,7 +316,6 @@ struct DashboardView: View {
             Text("Choose one of the machines on your account, or type a LAN address. A machine appears here once it's running `yaver serve` signed in as you.")
                 .font(.system(size: 19)).foregroundStyle(.secondary).frame(maxWidth: 720, alignment: .leading)
             Button("Choose machine") { showPicker = true }.padding(.top, 8)
-            Button("Shared with") { showSharedGuests = true }
         }
     }
 
@@ -342,7 +336,6 @@ struct DashboardView: View {
                 showPicker = true
             }
             .padding(.top, 8)
-            Button("Shared with") { showSharedGuests = true }
         }
     }
 }
@@ -422,126 +415,3 @@ private struct Tile: View {
 // AddBoxView moved to ../AddBoxView.swift — the shared client layer — so the
 // visionOS target can present it too. It was the only caller of store.addBox()
 // in the repo, and living here made it unreachable from the headset.
-
-private struct SharedGuestsView: View {
-    let token: String
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var guests: [MachineRegistry.HostGuest] = []
-    @State private var loading = true
-    @State private var error: String?
-    @State private var revoking: String?
-    @State private var revokeTarget: MachineRegistry.HostGuest?
-
-    private var acceptedGuests: [MachineRegistry.HostGuest] {
-        guests.filter(\.isAccepted)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if loading {
-                    VStack(spacing: 16) {
-                        ProgressView().scaleEffect(1.5)
-                        Text("Loading people you shared with…").foregroundStyle(.secondary)
-                    }
-                } else if let error {
-                    errorView(error)
-                } else if acceptedGuests.isEmpty {
-                    emptyView
-                } else {
-                    guestList
-                }
-            }
-            .navigationTitle("Shared with")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .confirmationDialog("Remove access?",
-                                isPresented: Binding(get: { revokeTarget != nil },
-                                                     set: { if !$0 { revokeTarget = nil } }),
-                                titleVisibility: .visible) {
-                Button("Remove access", role: .destructive) {
-                    if let guest = revokeTarget { Task { await revoke(guest) } }
-                }
-                Button("Cancel", role: .cancel) { revokeTarget = nil }
-            } message: {
-                if let guest = revokeTarget {
-                    Text("\(guest.displayName) loses access to every machine you shared. They'd need a fresh invitation to come back.")
-                }
-            }
-        }
-        .task { await load() }
-    }
-
-    private var guestList: some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                ForEach(acceptedGuests) { guest in
-                    HStack(spacing: 20) {
-                        Image(systemName: "person.crop.circle").font(.system(size: 30)).frame(width: 44)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(guest.displayName).font(.system(size: 26, weight: .semibold))
-                            Text(guest.detail).font(.system(size: 16)).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if revoking == guest.id {
-                            ProgressView()
-                        } else {
-                            Button("Remove access", role: .destructive) { revokeTarget = guest }
-                                .buttonStyle(.bordered)
-                        }
-                    }
-                    .padding(.horizontal, 28).padding(.vertical, 20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-                }
-            }
-            .padding(32)
-        }
-    }
-
-    private var emptyView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "person.2.slash").font(.system(size: 56)).foregroundStyle(.secondary)
-            Text("Nobody has access right now").font(.title2)
-            Text("When you share your machines, the people who accepted your invitation appear here.")
-                .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 640)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func errorView(_ msg: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 48)).foregroundStyle(.orange)
-            Text(msg).multilineTextAlignment(.center).frame(maxWidth: 640)
-            Button("Try again") { Task { await load() } }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func load() async {
-        loading = true
-        error = nil
-        do {
-            guests = try await MachineRegistry.listGuests(token: token)
-        } catch {
-            self.error = error.localizedDescription
-        }
-        loading = false
-    }
-
-    private func revoke(_ guest: MachineRegistry.HostGuest) async {
-        revokeTarget = nil
-        revoking = guest.id
-        defer { revoking = nil }
-        do {
-            try await MachineRegistry.revokeGuest(email: guest.email, userId: guest.userId, token: token)
-            await load()
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-}

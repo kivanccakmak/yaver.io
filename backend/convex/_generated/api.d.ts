@@ -9,7 +9,6 @@
  */
 
 import type * as access from "../access.js";
-import type * as accessSigPolicy from "../accessSigPolicy.js";
 import type * as admin from "../admin.js";
 import type * as agentRescue from "../agentRescue.js";
 import type * as agentSync from "../agentSync.js";
@@ -60,12 +59,9 @@ import type * as gatewaySecret from "../gatewaySecret.js";
 import type * as gatewayTokens from "../gatewayTokens.js";
 import type * as githubAppAuth from "../githubAppAuth.js";
 import type * as gpuRentals from "../gpuRentals.js";
-import type * as guests from "../guests.js";
-import type * as hostShare from "../hostShare.js";
 import type * as http from "../http.js";
 import type * as inferenceBackends from "../inferenceBackends.js";
 import type * as inferencePlacement from "../inferencePlacement.js";
-import type * as launchFlags from "../launchFlags.js";
 import type * as machineLinkFix from "../machineLinkFix.js";
 import type * as managedMeter from "../managedMeter.js";
 import type * as managedRelays from "../managedRelays.js";
@@ -82,7 +78,6 @@ import type * as plans from "../plans.js";
 import type * as platformConfig from "../platformConfig.js";
 import type * as privacyMigrations from "../privacyMigrations.js";
 import type * as projectArtifacts from "../projectArtifacts.js";
-import type * as projectShares from "../projectShares.js";
 import type * as providerCatalog from "../providerCatalog.js";
 import type * as providerTroubleshooting from "../providerTroubleshooting.js";
 import type * as provisionRelay from "../provisionRelay.js";
@@ -100,14 +95,12 @@ import type * as seed from "../seed.js";
 import type * as serverlessPool from "../serverlessPool.js";
 import type * as shortcuts from "../shortcuts.js";
 import type * as subscriptions from "../subscriptions.js";
-import type * as support_link from "../support_link.js";
 import type * as survey from "../survey.js";
 import type * as taskDispatchIntents from "../taskDispatchIntents.js";
 import type * as taskPackages from "../taskPackages.js";
 import type * as taskPlacement from "../taskPlacement.js";
 import type * as taskPlacementClassifier from "../taskPlacementClassifier.js";
 import type * as taskPlacementPolicy from "../taskPlacementPolicy.js";
-import type * as teams from "../teams.js";
 import type * as tmuxSessions from "../tmuxSessions.js";
 import type * as totp from "../totp.js";
 import type * as trials from "../trials.js";
@@ -126,7 +119,6 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   access: typeof access;
-  accessSigPolicy: typeof accessSigPolicy;
   admin: typeof admin;
   agentRescue: typeof agentRescue;
   agentSync: typeof agentSync;
@@ -177,12 +169,9 @@ declare const fullApi: ApiFromModules<{
   gatewayTokens: typeof gatewayTokens;
   githubAppAuth: typeof githubAppAuth;
   gpuRentals: typeof gpuRentals;
-  guests: typeof guests;
-  hostShare: typeof hostShare;
   http: typeof http;
   inferenceBackends: typeof inferenceBackends;
   inferencePlacement: typeof inferencePlacement;
-  launchFlags: typeof launchFlags;
   machineLinkFix: typeof machineLinkFix;
   managedMeter: typeof managedMeter;
   managedRelays: typeof managedRelays;
@@ -199,7 +188,6 @@ declare const fullApi: ApiFromModules<{
   platformConfig: typeof platformConfig;
   privacyMigrations: typeof privacyMigrations;
   projectArtifacts: typeof projectArtifacts;
-  projectShares: typeof projectShares;
   providerCatalog: typeof providerCatalog;
   providerTroubleshooting: typeof providerTroubleshooting;
   provisionRelay: typeof provisionRelay;
@@ -217,14 +205,12 @@ declare const fullApi: ApiFromModules<{
   serverlessPool: typeof serverlessPool;
   shortcuts: typeof shortcuts;
   subscriptions: typeof subscriptions;
-  support_link: typeof support_link;
   survey: typeof survey;
   taskDispatchIntents: typeof taskDispatchIntents;
   taskPackages: typeof taskPackages;
   taskPlacement: typeof taskPlacement;
   taskPlacementClassifier: typeof taskPlacementClassifier;
   taskPlacementPolicy: typeof taskPlacementPolicy;
-  teams: typeof teams;
   tmuxSessions: typeof tmuxSessions;
   totp: typeof totp;
   trials: typeof trials;

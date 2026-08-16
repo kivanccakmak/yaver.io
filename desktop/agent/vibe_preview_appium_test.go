@@ -120,7 +120,7 @@ func TestAppiumBugHunter_emitsCrashOnRedBox(t *testing.T) {
 	ch, _, unsub := mgr.Subscribe("p")
 	defer unsub()
 	// Drain the start + initial frame events.
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case <-ch:
@@ -140,7 +140,7 @@ func TestAppiumBugHunter_emitsCrashOnRedBox(t *testing.T) {
 	// Crash event should land on the SSE channel.
 	gotCrash := false
 	deadline := time.After(1 * time.Second)
-	collect:
+collect:
 	for {
 		select {
 		case ev := <-ch:

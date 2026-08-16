@@ -35,7 +35,6 @@ export interface DeviceSummary {
   lastSeen?: number;
   isPrimary: boolean;
   isSecondary: boolean;
-  isGuest?: boolean;
 }
 
 export interface ResolveDeviceArgs {
@@ -121,7 +120,6 @@ function summarizeDevice(d: Device, primaryId: string | null, secondaryId: strin
     lastSeen: d.lastSeen,
     isPrimary: d.id === primaryId,
     isSecondary: d.id === secondaryId,
-    isGuest: !!d.isGuest,
   };
 }
 

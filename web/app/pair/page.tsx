@@ -370,9 +370,10 @@ export default function PairPage() {
           </button>
 
           <p className="mt-3 text-xs text-surface-500">
-            Your token is sent directly to the target agent — never stored on yaver.io. To revoke
-            later, run <code className="rounded bg-surface-900 px-1 py-0.5">yaver auth pair revoke</code>{" "}
-            on that machine.
+            Your token is sent directly to the target agent — never stored on yaver.io. Pairing
+            replaces that machine&apos;s primary owner session; pair it again or run{" "}
+            <code className="rounded bg-surface-900 px-1 py-0.5">yaver auth factory-reset</code>{" "}
+            to replace or clear it.
           </p>
         </>
       )}

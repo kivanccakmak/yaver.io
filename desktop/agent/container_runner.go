@@ -128,7 +128,7 @@ func validateContainerMount(spec string) error {
 }
 
 // ContainerRunner executes tasks inside Docker containers for isolation.
-// Used for both guest (security) and host (optional clean builds) tasks.
+// Used for optional clean-build and untrusted-input task isolation.
 type ContainerRunner struct {
 	mu         sync.Mutex
 	imageReady bool
@@ -398,9 +398,6 @@ func CollectAPIKeys() map[string]string {
 }
 
 func CollectAPIKeysForTask(task *Task) map[string]string {
-	if task != nil && task.GuestUserID != "" && !task.GuestUseHostAPIKeys {
-		return map[string]string{}
-	}
 	return CollectAPIKeys()
 }
 

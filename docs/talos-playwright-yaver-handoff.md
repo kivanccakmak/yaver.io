@@ -475,7 +475,8 @@ This is the current split in code:
 
 - **Chromedp web path exists and is UI-wired.**
   - Backend: `desktop/agent/ops_testkit.go` registers `project_test_run`,
-    `project_test_report`, `project_test_artifact`, and `project_test_grow`.
+    `project_test_report`, and `project_test_artifact`. Automatic test growth and
+    `project_test_grow` were removed on 2026-08-16.
   - Runner: `desktop/agent/testkit/runner.go` dispatches `target: web` to
     chromedp.
   - Driver: `desktop/agent/testkit/driver_chromecdp.go` provides the lower-level

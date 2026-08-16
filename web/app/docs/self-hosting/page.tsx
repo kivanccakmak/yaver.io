@@ -23,7 +23,7 @@ const options = [
         {
           title: "Relay Pro",
           description:
-            "A private managed relay for daily remote work, guest feedback sessions, and higher limits without running network infrastructure yourself.",
+            "A private managed relay for daily remote work and higher limits without running network infrastructure yourself.",
           action: "Open billing",
           href: "/dashboard?tab=billing",
         },

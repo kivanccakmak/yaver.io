@@ -81,17 +81,15 @@ func runDeployRunsCmd(args []string) {
 	}
 	var decoded struct {
 		Runs []struct {
-			ID          string `json:"id"`
-			App         string `json:"app"`
-			Target      string `json:"target"`
-			StartedAt   int64  `json:"started_at"`
-			DurationMs  int64  `json:"duration_ms"`
-			ExitCode    int    `json:"exit_code"`
-			OK          bool   `json:"ok"`
-			InProgress  bool   `json:"in_progress"`
-			ErrorClass  string `json:"error_class"`
-			RequestedBy string `json:"requested_by"`
-			IsGuest     bool   `json:"is_guest"`
+			ID         string `json:"id"`
+			App        string `json:"app"`
+			Target     string `json:"target"`
+			StartedAt  int64  `json:"started_at"`
+			DurationMs int64  `json:"duration_ms"`
+			ExitCode   int    `json:"exit_code"`
+			OK         bool   `json:"ok"`
+			InProgress bool   `json:"in_progress"`
+			ErrorClass string `json:"error_class"`
 		} `json:"runs"`
 	}
 	_ = json.Unmarshal(body, &decoded)
@@ -100,7 +98,7 @@ func runDeployRunsCmd(args []string) {
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tAPP\tTARGET\tSTATUS\tDURATION\tCLASS\tBY\tSTARTED")
+	fmt.Fprintln(w, "ID\tAPP\tTARGET\tSTATUS\tDURATION\tCLASS\tSTARTED")
 	for _, r := range decoded.Runs {
 		status := "ok"
 		if r.InProgress {
@@ -112,21 +110,13 @@ func runDeployRunsCmd(args []string) {
 		if r.DurationMs > 0 {
 			dur = time.Duration(r.DurationMs * int64(time.Millisecond)).Round(time.Second).String()
 		}
-		by := "owner"
-		if r.IsGuest {
-			if r.RequestedBy != "" {
-				by = "guest:" + r.RequestedBy
-			} else {
-				by = "guest"
-			}
-		}
 		class := r.ErrorClass
 		if class == "" {
 			class = "-"
 		}
 		started := time.UnixMilli(r.StartedAt).Format("2006-01-02 15:04:05")
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.ID, r.App, r.Target, status, dur, class, by, started)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.ID, r.App, r.Target, status, dur, class, started)
 	}
 	w.Flush()
 }

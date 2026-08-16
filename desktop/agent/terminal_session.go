@@ -49,15 +49,13 @@ type terminalSession struct {
 	authTail       []byte
 	authFlagged    bool
 	detachTimer    *time.Timer
-	hostShareID    string
-	guestUserID    string
 	workspaceDir   string
 	runnerID       string
 	createdAt      time.Time
 	lastAttachedAt time.Time
 }
 
-func (s *HTTPServer) newTerminalSession(cmd *exec.Cmd, onTouch func(bool), hostShareID, guestUserID, workspaceDir string) (*terminalSession, error) {
+func (s *HTTPServer) newTerminalSession(cmd *exec.Cmd, onTouch func(bool), workspaceDir string) (*terminalSession, error) {
 	ptmx, err := ptyStart(cmd)
 	if err != nil {
 		return nil, err
@@ -68,8 +66,6 @@ func (s *HTTPServer) newTerminalSession(cmd *exec.Cmd, onTouch func(bool), hostS
 		ptmx:         ptmx,
 		srv:          s,
 		onTouch:      onTouch,
-		hostShareID:  hostShareID,
-		guestUserID:  guestUserID,
 		workspaceDir: workspaceDir,
 		createdAt:    time.Now(),
 	}
@@ -84,7 +80,7 @@ func (s *HTTPServer) newTerminalSession(cmd *exec.Cmd, onTouch func(bool), hostS
 // shell (helper_client_fd_unix.go). There is no local *exec.Cmd to Wait on; the
 // session closes when the master hits EOF (the remote shell exited), handled in
 // readLoop.
-func (s *HTTPServer) newTerminalSessionFromPTY(ptmx *os.File, onTouch func(bool), hostShareID, guestUserID, workspaceDir string) (*terminalSession, error) {
+func (s *HTTPServer) newTerminalSessionFromPTY(ptmx *os.File, onTouch func(bool), workspaceDir string) (*terminalSession, error) {
 	if ptmx == nil {
 		return nil, fmt.Errorf("nil pty master")
 	}
@@ -94,8 +90,6 @@ func (s *HTTPServer) newTerminalSessionFromPTY(ptmx *os.File, onTouch func(bool)
 		ptmx:         newUnixPTYMaster(ptmx),
 		srv:          s,
 		onTouch:      onTouch,
-		hostShareID:  hostShareID,
-		guestUserID:  guestUserID,
 		workspaceDir: workspaceDir,
 		createdAt:    time.Now(),
 	}
@@ -147,8 +141,6 @@ func (ts *terminalSession) emitSessionMeta(resumed bool) {
 		"sessionId":    ts.id,
 		"resumed":      resumed,
 		"createdAt":    ts.createdAt.UTC().Format(time.RFC3339),
-		"hostShareId":  ts.hostShareID,
-		"guestUserId":  ts.guestUserID,
 		"workspaceDir": ts.workspaceDir,
 	})
 	_ = ts.writeWS(websocket.TextMessage, frame)

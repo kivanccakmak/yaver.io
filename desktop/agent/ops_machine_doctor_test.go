@@ -77,12 +77,6 @@ func TestTargetFromDeviceClassifiesRemoteBoxKinds(t *testing.T) {
 			wantHosting: "self-hosted",
 			wantPath:    "tailscale-or-relay",
 		},
-		{
-			name:        "shared",
-			device:      DeviceInfo{IsGuest: true, AccessScope: "shared-scoped"},
-			wantHosting: "shared",
-			wantPath:    "lan-or-relay",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

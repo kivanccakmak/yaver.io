@@ -131,3 +131,20 @@ func TestVerifyDevBundleSigAcceptsCookieForWeb(t *testing.T) {
 		t.Errorf("verify rejected cookie-authed web bundle fetch: %v", err)
 	}
 }
+
+func TestDevBundleBearerCacheRequiresOwnerIdentity(t *testing.T) {
+	previous := devBundleServerRef
+	t.Cleanup(func() { devBundleServerRef = previous })
+
+	srv := &HTTPServer{ownerUserID: "owner-user"}
+	SetDevBundleServerRef(srv)
+	srv.tokenCache.Store("owner-sdk", &cachedTokenInfo{userID: "owner-user", isSdk: true})
+	srv.tokenCache.Store("foreign-sdk", &cachedTokenInfo{userID: "another-user", isSdk: true})
+
+	if !devBundleBearerCacheHit("owner-sdk") {
+		t.Fatal("owner-minted cached SDK token should authenticate its own dev bundle")
+	}
+	if devBundleBearerCacheHit("foreign-sdk") {
+		t.Fatal("foreign-account cached token authenticated the owner's dev bundle")
+	}
+}

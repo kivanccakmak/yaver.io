@@ -100,6 +100,24 @@ struct RunnerSessions: Decodable {
     var sessions: [RunnerSession]?
 }
 
+/// One privacy-narrow frame from GET /tmux/stream.
+///
+/// The agent's wire object also contains `currentPath`, PID and tmux topology.
+/// A TV/headset needs none of those to paint the live session, and absolute
+/// paths identify the local account. Deliberately omit them from the native
+/// model so adding the stream cannot accidentally put them on a shared screen.
+struct TmuxPaneFrame: Decodable {
+    let paneId: String
+    let sessionName: String
+    let agent: String?
+    let model: String?
+    let status: String
+    let statusReason: String?
+    let options: [String]?
+    let title: String?
+    let preview: String?
+}
+
 /// A task as it appears in the glanceable list (GET /tasks). Only the fields a
 /// lean-back list needs; the full model (turns, cost, output) lives on mobile.
 struct TaskSummary: Decodable, Identifiable {

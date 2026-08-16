@@ -150,9 +150,9 @@ func TestJavaMajorVersion_Parse(t *testing.T) {
 		t.Skip("shell stub trick is unix-only")
 	}
 	cases := map[string]int{
-		`openjdk version "17.0.8" 2023-07-18`: 17,
-		`java version "1.8.0_281"`:            8,
-		`openjdk version "21" 2023-09-19`:     21,
+		`openjdk version "17.0.8" 2023-07-18`:  17,
+		`java version "1.8.0_281"`:             8,
+		`openjdk version "21" 2023-09-19`:      21,
 		`openjdk version "11.0.20" 2023-07-18`: 11,
 	}
 	for body, want := range cases {

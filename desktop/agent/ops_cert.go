@@ -10,9 +10,9 @@ package main
 import "encoding/json"
 
 type opsCertPayload struct {
-	Op     string `json:"op"`               // status | renew
+	Op     string `json:"op"` // status | renew
 	Domain string `json:"domain"`
-	Port   int    `json:"port,omitempty"`   // defaults 443
+	Port   int    `json:"port,omitempty"` // defaults 443
 }
 
 func init() {
@@ -29,9 +29,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCertHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCertHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

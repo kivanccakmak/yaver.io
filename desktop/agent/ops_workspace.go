@@ -47,9 +47,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsWorkspaceHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsWorkspaceHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

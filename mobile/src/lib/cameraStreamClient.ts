@@ -1,6 +1,6 @@
 // cameraStreamClient — push THIS phone's camera frames to a box's stream plane
 // (M10). The box buffers them and serves them via stream_list / stream_snapshot,
-// so the phone camera becomes a shareable source (own account or a guest watch
+// so the phone camera becomes a source for the owner's own surfaces
 // link) with no inbound connection to the phone. Posts to the agent's
 // /stream/push over the existing mesh transport (LAN-direct or relay).
 import { quicClient } from "./quic";

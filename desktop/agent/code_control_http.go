@@ -24,14 +24,13 @@ func (s *HTTPServer) handleCodeAttach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Target   string `json:"target"`
-		Username string `json:"username"`
+		Target string `json:"target"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	out, err := applyCodeAttach(body.Target, body.Username)
+	out, err := applyCodeAttach(body.Target)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "code attach: "+err.Error())
 		return

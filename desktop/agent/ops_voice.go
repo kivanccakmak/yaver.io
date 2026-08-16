@@ -8,9 +8,9 @@ package main
 //
 // Owner-only. Voice keys NEVER reach Convex — they live in the local
 // vault + ~/.yaver/config.json (privacy contract enforced by
-// convex_privacy_test.go's forbidden-keys fence). Guests refused even
-// for op="status" so that a guest token can't enumerate which providers
-// the host has configured.
+// convex_privacy_test.go's forbidden-keys fence). Companion sessions are
+// refused even for op="status" so constrained surface tokens cannot enumerate
+// which providers the owner has configured.
 
 import (
 	"encoding/json"
@@ -83,9 +83,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsVoiceHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsVoiceHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

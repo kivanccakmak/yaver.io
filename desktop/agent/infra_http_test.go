@@ -27,9 +27,6 @@ func TestInfraSummaryEndpoint(t *testing.T) {
 	if _, ok := body["capabilities"].(map[string]interface{}); !ok {
 		t.Fatalf("expected capabilities payload")
 	}
-	if _, ok := body["sharing"].(map[string]interface{}); !ok {
-		t.Fatalf("expected sharing payload")
-	}
 }
 
 func TestInfraPowerRequiresConfirm(t *testing.T) {

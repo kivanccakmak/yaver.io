@@ -17,11 +17,11 @@ import (
 // and admin key so the rest of the switch steps can run non-interactively.
 //
 // Tries two paths:
-//   1. `npx convex deploy --cmd-url-env-var-name TMP` to trigger interactive
-//      login if needed — but we want non-interactive. If a token is already
-//      stored (~/.convex), `npx convex deployment` returns the URL silently.
-//   2. Reads ~/.convex for the dev token and creates a deployment via the
-//      Convex dashboard API.
+//  1. `npx convex deploy --cmd-url-env-var-name TMP` to trigger interactive
+//     login if needed — but we want non-interactive. If a token is already
+//     stored (~/.convex), `npx convex deployment` returns the URL silently.
+//  2. Reads ~/.convex for the dev token and creates a deployment via the
+//     Convex dashboard API.
 //
 // Captured fields are persisted into .env.local under a YAVER SWITCH block
 // and returned in the step output.
@@ -113,7 +113,9 @@ func seamlessSupabaseCloud(projectDir, projectName string) (map[string]string, e
 func waitSupabaseReady(token, projectID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		var out struct{ Status string `json:"status"` }
+		var out struct {
+			Status string `json:"status"`
+		}
 		if err := doJSON("GET",
 			fmt.Sprintf("https://api.supabase.com/v1/projects/%s", projectID),
 			map[string]string{"Authorization": "Bearer " + token}, nil, &out); err == nil {

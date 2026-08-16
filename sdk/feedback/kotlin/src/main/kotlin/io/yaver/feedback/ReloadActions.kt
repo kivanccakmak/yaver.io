@@ -34,10 +34,10 @@ import org.json.JSONObject
 //
 // ── Auth ─────────────────────────────────────────────────────────────────────
 //
-// No new secret. /dev/reload is registered under `authSDKOrGuest` in
+// No new secret. /dev/reload is registered under `authSDK` in
 // desktop/agent/httpserver.go — the same middleware that already admits the
 // bearer this SDK sends with its feedback POST — and the scope-limited
-// `guest-reload` SDK token already lists the route.
+// `reload` SDK token already lists the route.
 
 /** Stable identifier for each action the UI can render. */
 enum class ReloadActionId { HOT, FULL }

@@ -1,8 +1,7 @@
 package main
 
 // deploy_history.go — in-memory record of recent /deploy/ship runs.
-// Lets the host (and, subject to the usual owner/guest scoping, a
-// guest) see "what happened with the last N deploys on this machine"
+// Lets the owner see "what happened with the last N deploys on this machine"
 // without needing to re-open the SSE stream for a finished run.
 //
 // Intentionally *not* persistent across agent restart: the run
@@ -11,18 +10,12 @@ package main
 // persistence later it belongs on the host's filesystem under
 // ~/.yaver/deploys/<id>/stdout, never in Convex.
 //
-// Access model:
-//
-//   - Owner: sees every run.
-//   - Guest (scope=full or scope=deploy): sees runs they themselves
-//     initiated. Runs initiated by the owner or by another guest are
-//     hidden — a guest-triggered TestFlight on your Mac mini is your
-//     business, not another guest's.
+// Access is owner-only at the HTTP authentication boundary.
 
 import (
 	cryptorand "crypto/rand"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
@@ -46,28 +39,26 @@ const deployDiskQuotaBytes = 500 * 1024 * 1024
 // DeployRun is one historical entry. Kept flat + JSON-friendly so
 // the endpoint just serializes it verbatim.
 type DeployRun struct {
-	ID          string           `json:"id"`
-	Slot        string           `json:"slot,omitempty"`
-	App         string           `json:"app"`
-	Target      string           `json:"target"`
-	Stack       string           `json:"stack,omitempty"`
-	Path        string           `json:"path,omitempty"`
-	Status      string           `json:"status,omitempty"`
-	RequestedBy string           `json:"requested_by,omitempty"` // "owner" or guest userID
-	IsGuest     bool             `json:"is_guest,omitempty"`
-	StartedAt   int64            `json:"started_at"` // unix millis
-	FinishedAt  int64            `json:"finished_at,omitempty"`
-	DurationMs  int64            `json:"duration_ms,omitempty"`
-	ExitCode    int              `json:"exit_code"`
-	OK          bool             `json:"ok,omitempty"`
-	InProgress  bool             `json:"in_progress,omitempty"`
-	OutputTail  string           `json:"output_tail,omitempty"` // last ~8KB of stdout+stderr
-	ErrorClass  DeployErrorClass `json:"error_class,omitempty"` // set by Finish() via classifier
-	TimedOut    bool             `json:"timed_out,omitempty"`
-	LogPath     string           `json:"log_path,omitempty"`    // on-disk full log (server-side; not surfaced to guests)
-	LogBytes    int64            `json:"log_bytes,omitempty"`
-	outputBuf   []byte           // ring buffer backing OutputTail (internal)
-	logFile     *os.File         // open handle during the run
+	ID         string           `json:"id"`
+	Slot       string           `json:"slot,omitempty"`
+	App        string           `json:"app"`
+	Target     string           `json:"target"`
+	Stack      string           `json:"stack,omitempty"`
+	Path       string           `json:"path,omitempty"`
+	Status     string           `json:"status,omitempty"`
+	StartedAt  int64            `json:"started_at"` // unix millis
+	FinishedAt int64            `json:"finished_at,omitempty"`
+	DurationMs int64            `json:"duration_ms,omitempty"`
+	ExitCode   int              `json:"exit_code"`
+	OK         bool             `json:"ok,omitempty"`
+	InProgress bool             `json:"in_progress,omitempty"`
+	OutputTail string           `json:"output_tail,omitempty"` // last ~8KB of stdout+stderr
+	ErrorClass DeployErrorClass `json:"error_class,omitempty"` // set by Finish() via classifier
+	TimedOut   bool             `json:"timed_out,omitempty"`
+	LogPath    string           `json:"log_path,omitempty"` // on-disk full log (server-side only)
+	LogBytes   int64            `json:"log_bytes,omitempty"`
+	outputBuf  []byte           // ring buffer backing OutputTail (internal)
+	logFile    *os.File         // open handle during the run
 }
 
 // DeployHistory is a bounded FIFO of DeployRun. Safe for concurrent
@@ -328,18 +319,13 @@ func deployLogDirSize(root string) int64 {
 }
 
 // List returns up to `limit` runs (most recent first). limit=0 means
-// every run. If guestFilter is non-empty, only runs where
-// RequestedBy == guestFilter are returned — this is how we keep one
-// guest's deploys invisible to another guest.
-func (h *DeployHistory) List(limit int, guestFilter string) []DeployRun {
+// every run.
+func (h *DeployHistory) List(limit int) []DeployRun {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	out := make([]DeployRun, 0, len(h.runs))
 	for i := len(h.runs) - 1; i >= 0; i-- {
 		r := h.runs[i]
-		if guestFilter != "" && r.RequestedBy != guestFilter {
-			continue
-		}
 		out = append(out, *r)
 		if limit > 0 && len(out) >= limit {
 			break
@@ -350,18 +336,12 @@ func (h *DeployHistory) List(limit int, guestFilter string) []DeployRun {
 }
 
 // Get returns one run by ID. The second return is false when the ID
-// is unknown. If guestFilter is non-empty, also returns false when
-// the run belongs to someone else — handler layer turns this into a
-// 404 (indistinguishable from "unknown", which is correct for
-// information-hiding).
-func (h *DeployHistory) Get(id string, guestFilter string) (DeployRun, bool) {
+// is unknown.
+func (h *DeployHistory) Get(id string) (DeployRun, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	r, ok := h.byID[id]
 	if !ok {
-		return DeployRun{}, false
-	}
-	if guestFilter != "" && r.RequestedBy != guestFilter {
 		return DeployRun{}, false
 	}
 	return *r, true

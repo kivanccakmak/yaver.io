@@ -44,8 +44,9 @@ func fakeBinary(t *testing.T, path, version string, good bool) {
 }
 
 // setupHome creates a fake HOME with an existing versioned install:
-//   $HOME/.yaver/bin/1.99.100/darwin-arm64/yaver   (the "running" binary)
-//   $HOME/.yaver/bin/current -> 1.99.100            (the stale current link)
+//
+//	$HOME/.yaver/bin/1.99.100/darwin-arm64/yaver   (the "running" binary)
+//	$HOME/.yaver/bin/current -> 1.99.100            (the stale current link)
 //
 // Returns the dir, the running binary path, and a cleanup.
 func setupHome(t *testing.T) (home, runningBin string) {

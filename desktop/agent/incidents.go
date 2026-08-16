@@ -55,13 +55,13 @@ type IncidentFilter struct {
 }
 
 type IncidentSummary struct {
-	Total            int            `json:"total"`
-	Open             int            `json:"open"`
-	Resolved         int            `json:"resolved"`
-	ByCategory       map[string]int `json:"byCategory"`
-	BySeverity       map[string]int `json:"bySeverity"`
-	TopReasonCodes   []string       `json:"topReasonCodes,omitempty"`
-	LastIncidentAt   int64          `json:"lastIncidentAt,omitempty"`
+	Total          int            `json:"total"`
+	Open           int            `json:"open"`
+	Resolved       int            `json:"resolved"`
+	ByCategory     map[string]int `json:"byCategory"`
+	BySeverity     map[string]int `json:"bySeverity"`
+	TopReasonCodes []string       `json:"topReasonCodes,omitempty"`
+	LastIncidentAt int64          `json:"lastIncidentAt,omitempty"`
 }
 
 type incidentStore struct {

@@ -144,7 +144,7 @@ func startDrizzleStudio(projectDir string) (*DashboardRecord, error) {
 	rec := &DashboardRecord{
 		ProjectDir: projectDir, Backend: "postgres", StudioID: "drizzle",
 		Port: 4983, URL: "http://127.0.0.1:4983",
-		Status: "external",
+		Status:    "external",
 		StartedAt: time.Now(),
 	}
 	if !probeStudio(rec.URL) {

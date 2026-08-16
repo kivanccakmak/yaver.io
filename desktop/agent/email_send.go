@@ -44,7 +44,7 @@ type SendEmailRequest struct {
 	HTMLBody  string            `json:"htmlBody,omitempty"` // optional HTML alternative
 	From      string            `json:"from,omitempty"`     // overrides cfg.SMTPFrom
 	ReplyTo   string            `json:"replyTo,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"` // extra custom headers
+	Headers   map[string]string `json:"headers,omitempty"`   // extra custom headers
 	RequestID string            `json:"requestId,omitempty"` // for dedup / idempotency
 }
 

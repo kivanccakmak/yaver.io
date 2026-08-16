@@ -35,7 +35,7 @@ func TestDeployHistoryPersistentLogs(t *testing.T) {
 	}
 	h.Finish(run.ID, 0, false)
 
-	got, _ := h.Get(run.ID, "")
+	got, _ := h.Get(run.ID)
 	if len(got.OutputTail) > deployOutputTailCap+64 {
 		t.Errorf("tail exceeds cap: %d > %d", len(got.OutputTail), deployOutputTailCap)
 	}

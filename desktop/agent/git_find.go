@@ -243,7 +243,8 @@ var errStopFindRepo = fmt.Errorf("find-repo: walk stopped early")
 //
 // Body: `{"remoteUrl": "https://github.com/owner/repo.git"}`
 // Reply: `{"ok": true, "match": {"path": ..., "remoteUrl": ...}}`
-//        or `{"ok": true, "match": null}` when nothing was found.
+//
+//	or `{"ok": true, "match": null}` when nothing was found.
 func (s *HTTPServer) handleGitFindRepo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")

@@ -3,7 +3,7 @@ package main
 // ops_glass_pc.go — verbs for the "PC UI in glasses" surface.
 //
 // Five verbs, all owner-only (the browser holds session cookies +
-// keystrokes for the wearer — guest scope must not pick them up):
+// keystrokes for the wearer — constrained scopes must not pick them up):
 //
 //   glass_pc_open     — open a remote browser window pointed at URL,
 //                        register a remote-runtime session, return id
@@ -43,8 +43,8 @@ func init() {
 			"required":             []string{},
 			"additionalProperties": false,
 		},
-		Handler:    opsGlassPCOpenHandler,
-		AllowGuest: false,
+		Handler:        opsGlassPCOpenHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "glass_pc_navigate",
@@ -58,8 +58,8 @@ func init() {
 			"required":             []string{"sessionId", "url"},
 			"additionalProperties": false,
 		},
-		Handler:    opsGlassPCNavigateHandler,
-		AllowGuest: false,
+		Handler:        opsGlassPCNavigateHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "glass_pc_focus",
@@ -73,8 +73,8 @@ func init() {
 			"required":             []string{"sessionId"},
 			"additionalProperties": false,
 		},
-		Handler:    opsGlassPCFocusHandler,
-		AllowGuest: false,
+		Handler:        opsGlassPCFocusHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "glass_pc_close",
@@ -87,8 +87,8 @@ func init() {
 			"required":             []string{"sessionId"},
 			"additionalProperties": false,
 		},
-		Handler:    opsGlassPCCloseHandler,
-		AllowGuest: false,
+		Handler:        opsGlassPCCloseHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "glass_pc_list",
@@ -98,8 +98,8 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsGlassPCListHandler,
-		AllowGuest: false,
+		Handler:        opsGlassPCListHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "glass_hud",
@@ -113,8 +113,8 @@ func init() {
 			"required":             []string{"view", "payload"},
 			"additionalProperties": false,
 		},
-		Handler:    opsGlassHUDHandler,
-		AllowGuest: false,
+		Handler:        opsGlassHUDHandler,
+		AllowCompanion: false,
 	})
 }
 

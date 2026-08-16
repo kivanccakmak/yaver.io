@@ -51,8 +51,8 @@ type OAuthSetupStep struct {
 	StepNumber  int      `json:"stepNumber"`
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
-	URL         string   `json:"url,omitempty"`       // link to the relevant console
-	Action      string   `json:"action"`              // what the user must do
+	URL         string   `json:"url,omitempty"`         // link to the relevant console
+	Action      string   `json:"action"`                // what the user must do
 	InputNeeded []string `json:"inputNeeded,omitempty"` // env var names to paste back
 }
 
@@ -187,10 +187,10 @@ func (w *OAuthWizardManager) setupApple(domain string) []OAuthSetupStep {
 			Description: "You need four values. The private key is the full contents of the .p8 file (multi-line).",
 			Action:      "Open your .p8 file in a text editor. Copy the full contents including the BEGIN/END PRIVATE KEY lines.",
 			InputNeeded: []string{
-				"APPLE_CLIENT_ID",    // your Services ID (e.g. com.yourapp.web)
-				"APPLE_TEAM_ID",      // 10-char team ID visible in top-right of developer.apple.com
-				"APPLE_KEY_ID",       // Key ID from the key detail page
-				"APPLE_PRIVATE_KEY",  // full .p8 file contents
+				"APPLE_CLIENT_ID",   // your Services ID (e.g. com.yourapp.web)
+				"APPLE_TEAM_ID",     // 10-char team ID visible in top-right of developer.apple.com
+				"APPLE_KEY_ID",      // Key ID from the key detail page
+				"APPLE_PRIVATE_KEY", // full .p8 file contents
 			},
 		},
 	}

@@ -12,10 +12,10 @@ import (
 // GitLab subgroups (owner may contain slashes).
 func TestParseGitRemote(t *testing.T) {
 	cases := []struct {
-		name                              string
-		raw                               string
-		provider, host, owner, repo       string
-		wantErr                           bool
+		name                        string
+		raw                         string
+		provider, host, owner, repo string
+		wantErr                     bool
 	}{
 		{"github ssh", "git@github.com:acme/app.git", "github", "github.com", "acme", "app", false},
 		{"github https", "https://github.com/acme/app.git", "github", "github.com", "acme", "app", false},

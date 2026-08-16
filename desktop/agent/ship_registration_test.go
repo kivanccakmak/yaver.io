@@ -31,16 +31,16 @@ func TestShipVerbsAreRegistered(t *testing.T) {
 	}
 }
 
-// The barrier is owner-only. A guest with a deploy scope must not be able to
-// freeze the owner's whole fleet.
+// The barrier is owner-only. A signed companion must not be able to freeze the
+// owner's whole fleet.
 func TestShipVerbsAreOwnerOnly(t *testing.T) {
 	for _, name := range []string{"ship", "autorun_pause_all", "autorun_resume_all"} {
 		spec, ok := lookupOpsVerb(name)
 		if !ok {
 			t.Fatalf("%s not registered", name)
 		}
-		if spec.AllowGuest {
-			t.Errorf("%q allows guests; freezing the fleet and deploying must stay owner-only", name)
+		if spec.AllowCompanion {
+			t.Errorf("%q allows companions; freezing the fleet and deploying must stay owner-only", name)
 		}
 	}
 }

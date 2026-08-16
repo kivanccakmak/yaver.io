@@ -14,15 +14,15 @@ import (
 // YaverUptimeAlert pings an HTTP endpoint on an interval and fires notifications
 // via the existing Yaver notification system when a target flips up→down.
 type YaverUptimeAlert struct {
-	ID              string `json:"id"`
-	URL             string `json:"url"`
-	Name            string `json:"name"`
-	IntervalSeconds int    `json:"intervalSeconds"`
-	Timeout         int    `json:"timeoutSeconds"`
-	Status          string `json:"status"` // up, down, unknown
+	ID              string    `json:"id"`
+	URL             string    `json:"url"`
+	Name            string    `json:"name"`
+	IntervalSeconds int       `json:"intervalSeconds"`
+	Timeout         int       `json:"timeoutSeconds"`
+	Status          string    `json:"status"` // up, down, unknown
 	LastCheck       time.Time `json:"lastCheck"`
-	LastLatencyMS   int    `json:"lastLatencyMs"`
-	AlertOnDown     bool   `json:"alertOnDown"`
+	LastLatencyMS   int       `json:"lastLatencyMs"`
+	AlertOnDown     bool      `json:"alertOnDown"`
 }
 
 type uptimeStore struct {
@@ -284,7 +284,9 @@ func (s *HTTPServer) handleUptimeRemove(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})
 		return
 	}
-	var b struct{ ID string `json:"id"` }
+	var b struct {
+		ID string `json:"id"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if err := u.Remove(b.ID); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})

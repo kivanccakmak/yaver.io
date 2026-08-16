@@ -34,15 +34,15 @@ import (
 
 // Flag is one entry in the ledger.
 type Flag struct {
-	Key             string            `json:"key"`
-	Description     string            `json:"description,omitempty"`
-	Type            string            `json:"type"` // "bool" | "string"
-	DefaultBool     bool              `json:"defaultBool,omitempty"`
-	DefaultString   string            `json:"defaultString,omitempty"`
-	RolloutPercent  int               `json:"rolloutPercent"`  // 0..100, for bool flags
-	StringVariant   string            `json:"stringVariant,omitempty"` // when in rollout, the string value returned
-	Overrides       map[string]string `json:"overrides,omitempty"` // userId -> "on"/"off" for bool, or literal string value
-	UpdatedAt       string            `json:"updatedAt"`
+	Key            string            `json:"key"`
+	Description    string            `json:"description,omitempty"`
+	Type           string            `json:"type"` // "bool" | "string"
+	DefaultBool    bool              `json:"defaultBool,omitempty"`
+	DefaultString  string            `json:"defaultString,omitempty"`
+	RolloutPercent int               `json:"rolloutPercent"`          // 0..100, for bool flags
+	StringVariant  string            `json:"stringVariant,omitempty"` // when in rollout, the string value returned
+	Overrides      map[string]string `json:"overrides,omitempty"`     // userId -> "on"/"off" for bool, or literal string value
+	UpdatedAt      string            `json:"updatedAt"`
 }
 
 // flagStore is the persistent ledger.

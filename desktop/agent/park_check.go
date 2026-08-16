@@ -72,9 +72,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsMachineParkCheckHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMachineParkCheckHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "machine_keepalive",
@@ -84,9 +84,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsMachineKeepAliveHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMachineKeepAliveHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

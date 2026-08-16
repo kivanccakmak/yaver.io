@@ -955,7 +955,7 @@ func resolveProjectRuntimeRole(machines []MachineInfo, roleName string, role Man
 	}
 	if allowManagedCloud {
 		for _, machine := range machines {
-			if !machine.IsOnline || machine.IsShared {
+			if !machine.IsOnline {
 				continue
 			}
 			if !projectRuntimeMachineSupports(machine, reqs) {
@@ -975,16 +975,6 @@ func resolveProjectRuntimeRole(machines []MachineInfo, roleName string, role Man
 func projectRuntimeMachineMatches(machine MachineInfo, mode string, reqs []string) bool {
 	if !machine.IsOnline {
 		return false
-	}
-	switch mode {
-	case "owned":
-		if machine.IsShared {
-			return false
-		}
-	case "owned-or-cloud", "always-on", "optional":
-		if machine.IsShared {
-			return false
-		}
 	}
 	return projectRuntimeMachineSupports(machine, reqs)
 }
@@ -1018,9 +1008,7 @@ func projectRuntimeMachineScore(machine MachineInfo, roleName string, primaryDev
 	if machine.DeviceID == primaryDeviceID && primaryDeviceID != "" {
 		score += 40
 	}
-	if !machine.IsShared {
-		score += 20
-	}
+	score += 20
 	if machine.Capabilities != nil && !machine.Capabilities.LowPower {
 		score += 10
 	}

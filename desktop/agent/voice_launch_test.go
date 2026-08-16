@@ -96,4 +96,3 @@ func TestFuzzyMatchLaunchProject(t *testing.T) {
 		t.Errorf("no match should return empty, got %q", got)
 	}
 }
-

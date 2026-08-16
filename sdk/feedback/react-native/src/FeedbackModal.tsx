@@ -308,9 +308,8 @@ export const FeedbackModal: React.FC = () => {
 
     try {
       const devices = await listReachableDevices(cfg.authToken);
-      const all = [...devices.owned, ...devices.shared];
       const device =
-        all.find((candidate) => candidate.deviceId === cfg.preferredDeviceId) ?? null;
+        devices.owned.find((candidate) => candidate.deviceId === cfg.preferredDeviceId) ?? null;
 
       if (!device) {
         if (mountedRef.current) {
@@ -332,9 +331,8 @@ export const FeedbackModal: React.FC = () => {
         reachable = await client.health();
       }
 
-      const hostHint = device.hostEmail ? ` via ${device.hostEmail}` : '';
       let status: MachineCardState['status'] = 'live';
-      let detail = `${device.platform}${hostHint}`;
+      let detail = device.platform;
 
       if (!device.isOnline) {
         status = 'offline';

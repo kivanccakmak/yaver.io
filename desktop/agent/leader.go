@@ -118,9 +118,9 @@ func (l *LeaderTracker) LeaderAt(now time.Time) DeviceID {
 
 // IAmLeader is a convenience wrapper for guard-style checks:
 //
-//     if leaderTracker.IAmLeader() {
-//         doTheSingleton()
-//     }
+//	if leaderTracker.IAmLeader() {
+//	    doTheSingleton()
+//	}
 func (l *LeaderTracker) IAmLeader() bool {
 	return l.LeaderAt(l.nowFn()) == l.self
 }
@@ -128,10 +128,10 @@ func (l *LeaderTracker) IAmLeader() bool {
 // LeaderInfo is a snapshot surfaceable via /bus/status. Contains
 // enough context to debug a "why isn't my box the leader" question.
 type LeaderInfo struct {
-	Self      DeviceID       `json:"self"`
-	Leader    DeviceID       `json:"leader"`
-	AmLeader  bool           `json:"amLeader"`
-	Alive     []PeerPresence `json:"alivePeers"`
+	Self     DeviceID       `json:"self"`
+	Leader   DeviceID       `json:"leader"`
+	AmLeader bool           `json:"amLeader"`
+	Alive    []PeerPresence `json:"alivePeers"`
 }
 
 func (l *LeaderTracker) Info() LeaderInfo {

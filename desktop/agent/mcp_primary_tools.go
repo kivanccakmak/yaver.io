@@ -50,12 +50,7 @@ func resolvePrimaryDeviceIDForMCP() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("list devices: %w", err)
 	}
-	owned := make([]DeviceInfo, 0, len(devices))
-	for _, d := range devices {
-		if !d.IsGuest {
-			owned = append(owned, d)
-		}
-	}
+	owned := devices
 	switch len(owned) {
 	case 0:
 		return "", fmt.Errorf("no registered owner devices yet — run 'yaver serve' on a machine to register it")

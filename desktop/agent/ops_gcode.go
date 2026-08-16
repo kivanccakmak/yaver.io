@@ -3,7 +3,7 @@ package main
 // ops_gcode.go — G-code / CNC verbs. Separate protocol from Modbus (line-based
 // ok/error flow control), so it gets its own handlers; it shares the machine
 // Engine only for the serial port + half-duplex bus arbitration. Owner-only
-// (AllowGuest defaults false). Motion-safety posture:
+// (AllowCompanion defaults false). Motion-safety posture:
 //   - gcode_estop is realtime + un-gated (stopping never needs approval);
 //   - gcode_send/stream of a MOTION line are refused without a soft-limit
 //     envelope unless allowHighRisk is set, and any out-of-envelope move is

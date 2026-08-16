@@ -62,9 +62,9 @@ func TestDerivedTurnURLFromRelayURL(t *testing.T) {
 	t.Setenv("YAVER_TURN_URL", "")
 	t.Setenv("YAVER_TURN_PORT", "")
 	for _, tc := range []struct {
-		name    string
-		relay   string
-		want    string
+		name  string
+		relay string
+		want  string
 	}{
 		{name: "https relay → default TURN port", relay: "https://relay.yaver.io", want: "turn:relay.yaver.io:3478"},
 		{name: "http relay with path", relay: "http://relay.example.com:8080/", want: "turn:relay.example.com:3478"},
@@ -233,11 +233,8 @@ func TestStreamWebRTCICECredentialsRouteRejectsNonOwnerTokens(t *testing.T) {
 	srv := &HTTPServer{
 		token:       "owner-token",
 		ownerUserID: "owner-user",
-		guestUserIDs: []string{
-			"guest-user",
-		},
 	}
-	srv.tokenCache.Store("guest-token", &cachedTokenInfo{userID: "guest-user"})
+	srv.tokenCache.Store("foreign-token", &cachedTokenInfo{userID: "foreign-user"})
 	srv.tokenCache.Store("stream-token", &cachedTokenInfo{
 		userID: "owner-user",
 		isSdk:  true,
@@ -248,7 +245,7 @@ func TestStreamWebRTCICECredentialsRouteRejectsNonOwnerTokens(t *testing.T) {
 		name  string
 		token string
 	}{
-		{name: "approved guest", token: "guest-token"},
+		{name: "foreign account", token: "foreign-token"},
 		{name: "stream scoped SDK", token: "stream-token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

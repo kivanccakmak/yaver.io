@@ -16,7 +16,6 @@ type MeshPeer = {
   meshIPv4?: string;
   online?: boolean;
   isExitNode?: boolean;
-  accessScope?: "owner" | "shared" | "peer";
   endpoints?: string[];
   advertisedRoutes?: string[];
   wantEnabled?: boolean | null;
@@ -32,15 +31,6 @@ type ACLRule = {
   dst: string;
   ports: string[];
   action: "accept" | "drop";
-};
-
-type SupportConn = {
-  grantId: string;
-  deviceId: string | null;
-  counterpartName: string;
-  counterpartEmail?: string;
-  allowDesktopControl: boolean;
-  expiresAt: number | null;
 };
 
 function Icon({ path, className }: { path: string; className?: string }) {
@@ -74,10 +64,6 @@ export default function NetworkView({ token }: { token: string | null }) {
   const [peers, setPeers] = useState<MeshPeer[]>([]);
   const [rules, setRules] = useState<ACLRule[]>([]);
   const [tags, setTags] = useState<Record<string, string[]>>({});
-  const [supportLink, setSupportLink] = useState<string | null>(null);
-  const [supporting, setSupporting] = useState<SupportConn[]>([]);
-  const [supportedBy, setSupportedBy] = useState<SupportConn[]>([]);
-  const [linkCopied, setLinkCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -111,12 +97,6 @@ export default function NetworkView({ token }: { token: string | null }) {
           (byDevice[t.deviceId] ??= []).push(t.tag);
         }
         setTags(byDevice);
-      }
-      const cRes = await fetch(`${CONVEX_URL}/support/connections`, { headers: authHeaders() });
-      if (cRes.ok) {
-        const cJson = await cRes.json();
-        setSupporting(cJson.supporting ?? []);
-        setSupportedBy(cJson.supportedBy ?? []);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -185,42 +165,6 @@ export default function NetworkView({ token }: { token: string | null }) {
     [authHeaders, load]
   );
 
-  const createSupportLink = useCallback(
-    async (offerTerminal: boolean, offerDesktopControl: boolean) => {
-      setError(null);
-      try {
-        const res = await fetch(`${CONVEX_URL}/support/invite`, {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ offerTerminal, offerDesktopControl }),
-        });
-        if (!res.ok) throw new Error(`invite: HTTP ${res.status}`);
-        const json = await res.json();
-        const base = typeof window !== "undefined" ? window.location.origin : "https://yaver.io";
-        setSupportLink(`${base}/j/${json.code}`);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    },
-    [authHeaders]
-  );
-
-  const revokeSupportGrant = useCallback(
-    async (grantId: string) => {
-      try {
-        await fetch(`${CONVEX_URL}/support/grant/revoke`, {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ grantId }),
-        });
-        void load();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    },
-    [authHeaders, load]
-  );
-
   const addRule = () =>
     saveRules([
       ...rules,
@@ -274,7 +218,6 @@ export default function NetworkView({ token }: { token: string | null }) {
         ) : (
           <div className="mt-3 space-y-2">
             {peers.map((p) => {
-              const isOwner = p.accessScope === "owner";
               const advertisingExit = p.isExitNode || p.wantExitNode;
               const currentRoutes = p.wantRoutes ?? (p.advertisedRoutes ?? []).filter((r) => r !== "0.0.0.0/0");
               const bridgingTailnet = currentRoutes.includes(TAILSCALE_BRIDGE_CIDR);
@@ -299,11 +242,6 @@ export default function NetworkView({ token }: { token: string | null }) {
                       {p.meshIPv4 || "—"}
                     </code>
                     {p.alias && <code className="text-xs text-surface-500">{meshDnsName(p.alias)}</code>}
-                    {p.accessScope === "shared" && (
-                      <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] text-violet-700 dark:text-violet-200">
-                        shared to you
-                      </span>
-                    )}
                     {advertisingExit && (
                       <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-700 dark:text-amber-200">
                         exit node
@@ -322,8 +260,7 @@ export default function NetworkView({ token }: { token: string | null }) {
                         {r}
                       </span>
                     ))}
-                    {isOwner && (
-                      <input
+                    <input
                         defaultValue={(tags[p.deviceId] ?? []).join(", ")}
                         onBlur={(e) => {
                           const next = e.target.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -332,12 +269,10 @@ export default function NetworkView({ token }: { token: string | null }) {
                         placeholder="tags…"
                         className="ml-auto w-36 rounded-lg border border-surface-700 bg-surface-950 px-2 py-1 text-[11px] text-surface-300"
                         title="Comma-separated tags for ACL rules (e.g. prod, db)"
-                      />
-                    )}
+                    />
                   </div>
 
-                  {isOwner && (
-                    <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-surface-800/60 pt-2 text-xs text-surface-400">
+                  <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-surface-800/60 pt-2 text-xs text-surface-400">
                       <label className="flex items-center gap-1.5">
                         <input
                           type="checkbox"
@@ -393,85 +328,10 @@ export default function NetworkView({ token }: { token: string | null }) {
                       >
                         Disable
                       </button>
-                    </div>
-                  )}
+                  </div>
                 </div>
               );
             })}
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-3xl border border-surface-800 bg-surface-900/70 p-5">
-        <h2 className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-surface-500">
-          Support a friend
-        </h2>
-        <p className="mb-3 text-xs text-surface-400">
-          Send a link — your friend installs Yaver, approves access, and their machine joins your
-          mesh so you can help them (SSH / your AI agent / screen). Default access is view + files;
-          they opt into more on their own consent screen.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => void createSupportLink(false, false)}
-            className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-200 hover:bg-emerald-500/20"
-          >
-            Create view-only link
-          </button>
-          <button
-            onClick={() => void createSupportLink(true, true)}
-            className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-200 hover:bg-amber-500/20"
-          >
-            Create full-support link
-          </button>
-        </div>
-        {supportLink && (
-          <div className="mt-3 flex items-center gap-2 rounded-xl border border-surface-800 bg-surface-950 p-3">
-            <code className="flex-1 break-all text-xs text-emerald-700 dark:text-emerald-300">{supportLink}</code>
-            <button
-              onClick={() => {
-                navigator.clipboard?.writeText(supportLink);
-                setLinkCopied(true);
-                setTimeout(() => setLinkCopied(false), 1500);
-              }}
-              className="shrink-0 rounded-lg border border-surface-700 px-3 py-1 text-xs text-surface-200 hover:bg-surface-800"
-            >
-              {linkCopied ? "Copied" : "Copy"}
-            </button>
-          </div>
-        )}
-        {(supporting.length > 0 || supportedBy.length > 0) && (
-          <div className="mt-4 space-y-3 border-t border-surface-800/60 pt-3">
-            {supporting.length > 0 && (
-              <div>
-                <p className="mb-1 text-[11px] uppercase tracking-wide text-surface-500">You can support</p>
-                {supporting.map((c) => (
-                  <div key={c.grantId} className="flex items-center gap-2 text-xs text-surface-300">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    {c.counterpartName}
-                    {c.allowDesktopControl && <span className="text-amber-700 dark:text-amber-300">· desktop</span>}
-                    <span className="text-surface-500">{c.expiresAt ? "· time-boxed" : "· until revoked"}</span>
-                    <button onClick={() => void revokeSupportGrant(c.grantId)} className="ml-auto text-surface-500 hover:text-red-700 dark:hover:text-red-300">
-                      end
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {supportedBy.length > 0 && (
-              <div>
-                <p className="mb-1 text-[11px] uppercase tracking-wide text-rose-700 dark:text-rose-300/80">Who can access your machines</p>
-                {supportedBy.map((c) => (
-                  <div key={c.grantId} className="flex items-center gap-2 text-xs text-surface-300">
-                    <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
-                    {c.counterpartName}
-                    <button onClick={() => void revokeSupportGrant(c.grantId)} className="ml-auto rounded border border-rose-500/30 px-2 text-rose-700 dark:text-rose-200 hover:bg-rose-500/10">
-                      revoke
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         )}
       </section>

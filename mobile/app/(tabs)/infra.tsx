@@ -7,7 +7,7 @@ import { useAuth } from "../../src/context/AuthContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import ManagedCloudCard from "../../src/components/ManagedCloudCard";
-import { ENABLE_GUEST_FEATURES, HIDE_PAID_UI } from "../../src/lib/launchFlags";
+import { HIDE_PAID_UI } from "../../src/lib/launchFlags";
 import {
   deriveWakeView,
   isParkedStatus,
@@ -19,7 +19,6 @@ import {
 } from "../../src/lib/parkedMachines";
 import type { ManagedCloudMachineSummary } from "../../src/lib/subscription";
 import { quicClient, type CapabilitySnapshot, type CompanionStatus, type IncidentEvent, type InfraSummary, type MicroserviceWrapResult } from "../../src/lib/quic";
-import { listGuests, type GuestInfo } from "../../src/lib/guests";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 
@@ -31,7 +30,7 @@ const TOOL_META: Record<string, { emoji: string; tagline: string }> = {
   "claude-code": { emoji: "🤖", tagline: "Anthropic's CLI agent — the frontier-quality runner." },
   codex: { emoji: "🧠", tagline: "OpenAI Codex CLI — token-efficient daily driver." },
   opencode: { emoji: "🪄", tagline: "Open-source coding agent — BYOK Anthropic / OpenAI / OpenRouter / GLM / Ollama, or any other provider." },
-  docker: { emoji: "🐳", tagline: "Containerise tasks — required for guest isolation + sandbox mode." },
+  docker: { emoji: "🐳", tagline: "Containerise tasks for isolated sandbox execution." },
   node: { emoji: "🟢", tagline: "Node.js runtime — required for Expo, Vite, Next.js builds." },
   python: { emoji: "🐍", tagline: "Python 3 — required for ML tooling, some CLIs." },
   go: { emoji: "🐹", tagline: "Go toolchain — needed to rebuild the agent or relay from source." },
@@ -74,7 +73,6 @@ export default function InfraScreen() {
   const [connectivityIncidents, setConnectivityIncidents] = useState<IncidentEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [guests, setGuests] = useState<GuestInfo[]>([]);
 
   // --- tooling catalogue -------------------------------------------------
   // `target` is the deviceId we want to inspect / install onto. Defaults
@@ -220,25 +218,10 @@ export default function InfraScreen() {
     }
   }
 
-  async function refreshGuests() {
-    if (!ENABLE_GUEST_FEATURES || !token) {
-      setGuests([]);
-      return;
-    }
-    try {
-      const list = await listGuests(token);
-      setGuests(list);
-    } catch {
-      /* soft-fail: counts from summary still render */
-    }
-  }
-
   useEffect(() => {
     refresh();
-    void refreshGuests();
     const iv = setInterval(() => {
       refresh();
-      void refreshGuests();
     }, 15000);
     return () => clearInterval(iv);
   }, [token]);
@@ -293,7 +276,7 @@ export default function InfraScreen() {
     }
   }
 
-  async function enableContainers(mode: "guests" | "host") {
+  async function enableContainers(mode: "host") {
     setBusy(`sandbox:${mode}`);
     try {
       const res = await quicClient.sandboxQuickstart(mode, true);
@@ -906,47 +889,16 @@ export default function InfraScreen() {
             )}
           </Section>
 
-          {ENABLE_GUEST_FEATURES ? (
-            <Section c={c} title="Sharing" subtitle="Guest access posture — who has a key to this machine">
-              <View style={styles.metricGrid}>
-                <Metric c={c} label="Accepted" value={`${summary.sharing.acceptedGuests}`} sub="active guests" />
-                <Metric c={c} label="Pending" value={`${summary.sharing.pendingGuests}`} sub="pending invites" />
-              </View>
-              {guests.length > 0 ? (
-                <View style={{ gap: 8, marginTop: 10 }}>
-                  {guests.slice(0, 12).map((g) => (
-                    <View key={g.email} style={[card(c), { gap: 4 }]}>
-                      <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700" }} numberOfLines={1}>
-                        {g.fullName?.trim() || g.email}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
-              <Pressable onPress={() => router.navigate("/(tabs)/guests" as any)} style={[actionBtn(c), { backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, marginTop: 8 }]}>
-                <Text style={{ color: c.textPrimary, fontWeight: "700" }}>Open guest controls</Text>
-              </Pressable>
-            </Section>
-          ) : null}
-
           <Section c={c} title="Containerization" subtitle="Whether remote Yaver tasks run directly on the host or inside Docker">
             <View style={styles.metricGrid}>
               <Metric
                 c={c}
                 label="Mode"
                 value={
-                  summary.sandbox.enabledMode === "host"
-                    ? "All tasks"
-                    : summary.sandbox.enabledMode === "guests"
-                      ? ENABLE_GUEST_FEATURES ? "Guests only" : "Direct host"
-                      : "Direct host"
+                  summary.sandbox.enabledMode === "host" ? "All tasks" : "Direct host"
                 }
                 sub={
-                  summary.sandbox.enabledMode === "host"
-                    ? "all agent tasks isolated"
-                    : summary.sandbox.enabledMode === "guests"
-                      ? ENABLE_GUEST_FEATURES ? "shared infra isolated" : "tasks run on host"
-                      : "tasks run on host"
+                  summary.sandbox.enabledMode === "host" ? "all agent tasks isolated" : "tasks run on host"
                 }
               />
               <Metric
@@ -963,9 +915,7 @@ export default function InfraScreen() {
               <Text style={{ color: c.textMuted, fontSize: 11 }}>
                 {summary.sandbox.enabledMode === "off"
                   ? "Remote dev tasks are currently running directly on the host."
-                  : `Yaver is configured to containerize ${
-                      summary.sandbox.enabledMode === "host" || !ENABLE_GUEST_FEATURES ? "all tasks" : "guest-triggered tasks"
-                    } on this machine.`}
+                  : "Yaver is configured to containerize all tasks on this machine."}
               </Text>
               {!!summary.sandbox.recommendedReason && (
                 <Text style={{ color: c.textMuted, fontSize: 11 }}>
@@ -974,15 +924,6 @@ export default function InfraScreen() {
               )}
             </View>
             <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-              {ENABLE_GUEST_FEATURES ? (
-                <Pressable
-                  onPress={() => enableContainers("guests")}
-                  disabled={!!busy || !summary.sandbox.docker}
-                  style={[actionBtn(c), { backgroundColor: c.accent + "22", flex: 1, opacity: busy || !summary.sandbox.docker ? 0.6 : 1 }]}
-                >
-                  <Text style={{ color: c.accent, fontWeight: "700" }}>Enable guest isolation</Text>
-                </Pressable>
-              ) : null}
               <Pressable
                 onPress={() => enableContainers("host")}
                 disabled={!!busy || !summary.sandbox.docker}

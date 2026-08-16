@@ -117,9 +117,9 @@ docker pull ghcr.io/kivanccakmak/yaver-sandbox-slim:latest
 # or via Docker Hub (shorter)
 docker pull yaver/sandbox-slim:latest
 
-# wire into Yaver's config.json for --containerize-* tasks
+# wire into Yaver's config.json for owner-task isolation
 {
-  "containerize_guests": true,
+  "containerize_host": true,
   "container_image": "ghcr.io/kivanccakmak/yaver-sandbox-slim:latest"
 }`}
             </pre>

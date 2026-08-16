@@ -67,8 +67,8 @@ Own cloud box (BYO Hetzner, scale-to-zero — you pay your provider directly):
   yaver machine list              Show your boxes and their power state
   yaver machine status <name>     One box's detail
 
-Default is OFF: nothing runs until you create/up a box, and `+"`down`"+` returns it to a
-cheap snapshot. `+"`yaver codex --machine=<name>`"+` auto-wakes a stopped box.
+Default is OFF: nothing runs until you create/up a box, and ` + "`down`" + ` returns it to a
+cheap snapshot. ` + "`yaver codex --machine=<name>`" + ` auto-wakes a stopped box.
 
 Headless hardware:
   yaver machine health            Print the latest disk + SMART snapshot

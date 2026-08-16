@@ -189,8 +189,8 @@ func TestByoVerbs_AreOwnerOnly(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s verb not registered", name)
 		}
-		if spec.AllowGuest {
-			t.Fatalf("%s must be AllowGuest:false (owner-only) — never let a guest spend the host's Hetzner", name)
+		if spec.AllowCompanion {
+			t.Fatalf("%s must be AllowCompanion:false (owner-only) — never let a guest spend the host's Hetzner", name)
 		}
 	}
 }

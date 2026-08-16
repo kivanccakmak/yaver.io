@@ -56,8 +56,8 @@ var saladPublicAPI = "https://api.salad.com/api/public"
 // decides (see VoiceSafeModel).
 type GPURentalPlan struct {
 	Provider        string  `json:"provider"`
-	ID              string  `json:"id"`   // value passed to cloud_provision opts (gpu class id or model id)
-	Kind            string  `json:"kind"` // "gpu-group" | "serverless"
+	ID              string  `json:"id"`       // value passed to cloud_provision opts (gpu class id or model id)
+	Kind            string  `json:"kind"`     // "gpu-group" | "serverless"
 	Workload        string  `json:"workload"` // "llm" | "asr" | "tts" | "any"
 	GPU             string  `json:"gpu,omitempty"`
 	VRAMGb          int     `json:"vramGb,omitempty"`
@@ -310,9 +310,9 @@ func saladCreateContainerGroup(token, org, project string, r saladCreateReq) (sa
 		"container": map[string]interface{}{
 			"image": r.Image,
 			"resources": map[string]interface{}{
-				"cpu":          4,
-				"memory":       16384,
-				"gpu_classes":  []string{r.GPUClass},
+				"cpu":         4,
+				"memory":      16384,
+				"gpu_classes": []string{r.GPUClass},
 			},
 			"command": cmd,
 		},

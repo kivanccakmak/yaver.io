@@ -27,16 +27,16 @@ import (
 // when the queue is empty, the last blob is repeated (so stable-frame
 // collapse can be exercised).
 type fakeBrowser struct {
-	mu       sync.Mutex
-	opens    int
-	closes   int
+	mu        sync.Mutex
+	opens     int
+	closes    int
 	navigates []string
-	queue    [][]byte
-	repeat   []byte
-	openErr  error
-	navErr   error
-	shotErr  error
-	openedID string
+	queue     [][]byte
+	repeat    []byte
+	openErr   error
+	navErr    error
+	shotErr   error
+	openedID  string
 	// The viewport the session was actually opened with. Recorded so a test can
 	// prove the requested size REACHED the browser, rather than only that it
 	// came back in the API response.
@@ -139,8 +139,8 @@ func TestProfileFor_netModeHint(t *testing.T) {
 		{"relay-wifi", "live-relay-wifi"},
 		{"relay-cell", "live-relay-cell"},
 		{"cellular", "live-relay-cell"}, // alias
-		{"", "live-relay-wifi"},          // default
-		{"unknown", "live-relay-wifi"},   // unknown → default
+		{"", "live-relay-wifi"},         // default
+		{"unknown", "live-relay-wifi"},  // unknown → default
 	}
 	for _, c := range cases {
 		got := ProfileFor("", c.netMode)

@@ -1573,4 +1573,3 @@ func (m *SiteManager) saveConfig() error {
 	}
 	return os.WriteFile(m.configPath, data, 0o644)
 }
-

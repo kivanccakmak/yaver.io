@@ -220,8 +220,8 @@ func (fm *FeedbackManager) ReceiveFeedback(metadata json.RawMessage, files map[s
 	// the upload sent. The ID is later joined to fm.baseDir to compute
 	// the on-disk report directory; trusting client input here was the
 	// C-7 path-traversal vector ("metadata.id":"../../../tmp/x" → write
-	// outside baseDir). UUIDs are unique across guests so collisions
-	// can't be used as a guest-on-guest overwrite primitive either.
+	// outside baseDir). UUIDs are unique across reports so collisions
+	// cannot be used as an overwrite primitive either.
 	report.ID = uuid.New().String()[:8]
 	if report.CreatedAt == "" {
 		report.CreatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -677,7 +677,7 @@ func feedbackFirstNonEmpty(values ...string) string {
 // fm.baseDir/<reportID>/. Returns "" when the input cannot be made
 // safe (path separators, traversal segments, hidden files, empty).
 //
-// A guest sending a multipart Filename like "../../../tmp/x" would
+// An SDK client sending a multipart Filename like "../../../tmp/x" would
 // previously be joined verbatim by filepath.Join, which collapses
 // internal "../" segments but does NOT block traversal out of the
 // parent directory. This helper closes that hole by:

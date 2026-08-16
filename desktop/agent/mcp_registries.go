@@ -6,8 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	osexec "os/exec"
 	"os"
+	osexec "os/exec"
 	"strings"
 	"time"
 )
@@ -84,13 +84,13 @@ func mcpPyPIInfo(pkg string) interface{} {
 	if m, ok := data.(map[string]interface{}); ok {
 		info, _ := m["info"].(map[string]interface{})
 		return map[string]interface{}{
-			"name":        info["name"],
-			"version":     info["version"],
-			"summary":     info["summary"],
-			"author":      info["author"],
-			"license":     info["license"],
-			"home_page":   info["home_page"],
-			"project_url": info["project_url"],
+			"name":            info["name"],
+			"version":         info["version"],
+			"summary":         info["summary"],
+			"author":          info["author"],
+			"license":         info["license"],
+			"home_page":       info["home_page"],
+			"project_url":     info["project_url"],
 			"requires_python": info["requires_python"],
 		}
 	}
@@ -411,11 +411,11 @@ func mcpGemInfo(gem string) interface{} {
 	data := registryGET(u, nil)
 	if m, ok := data.(map[string]interface{}); ok {
 		return map[string]interface{}{
-			"name":        m["name"],
-			"version":     m["version"],
-			"info":        m["info"],
-			"downloads":   m["downloads"],
-			"homepage_uri": m["homepage_uri"],
+			"name":            m["name"],
+			"version":         m["version"],
+			"info":            m["info"],
+			"downloads":       m["downloads"],
+			"homepage_uri":    m["homepage_uri"],
 			"source_code_uri": m["source_code_uri"],
 		}
 	}
