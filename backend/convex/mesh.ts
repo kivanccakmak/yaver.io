@@ -7,20 +7,14 @@
 // in the agent vault). `wgPrivateKey` is on the Convex forbidden-field list and
 // desktop/agent/convex_privacy_test.go pins that the join payload is clean.
 //
-// Mesh membership mirrors the EXISTING sharing model: a peer is visible to you
-// if it is your own device OR a device shared to you through an active
-// infraAccessGrant. There is no new sharing primitive — `listMeshPeers` derives
-// the topology from the same grant tables the rest of the app uses.
+// Mesh membership is owner-only: a peer is visible only when it belongs to the
+// same Yaver account.
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { resolveUser } from "./agentSync";
 import { validateSessionInternal } from "./auth";
-import {
-  listActiveInfraGrantsForGuest,
-  listGrantedDeviceIdsForGrant,
-} from "./access";
 
 // webUser resolves the session-token-hash the web/mobile console sends into a
 // userId (the agent uses ctx.auth identity via resolveUser; the console uses a
@@ -260,72 +254,13 @@ export const updateMeshEndpoints = mutation({
 });
 
 /**
- * List the mesh peers visible to the caller: their own devices' mesh nodes plus
- * any nodes belonging to devices shared to them via an active infra grant. This
- * is the agent's source of truth for which WireGuard peers to configure.
+ * List the caller's own mesh peers.
  */
 async function meshPeersForUser(ctx: any, userId: Id<"users">) {
     const own = await ctx.db
       .query("meshNodes")
       .withIndex("by_user", (q: any) => q.eq("userId", userId))
       .collect();
-
-    // Devices shared TO this user through active infra grants.
-    const grants = await listActiveInfraGrantsForGuest(ctx, userId);
-    const sharedDeviceIds = new Set<string>();
-    for (const grant of grants) {
-      if (grant.shareAllDevices) {
-        const hostNodes = await ctx.db
-          .query("meshNodes")
-          .withIndex("by_user", (q: any) => q.eq("userId", grant.hostUserId))
-          .collect();
-        for (const n of hostNodes) sharedDeviceIds.add(n.deviceId);
-      } else {
-        const ids = await listGrantedDeviceIdsForGrant(ctx, grant._id);
-        for (const id of ids) sharedDeviceIds.add(id);
-      }
-    }
-
-    const sharedNodes = [];
-    const seenDevice = new Set<string>(own.map((n: any) => n.deviceId));
-    for (const deviceId of sharedDeviceIds) {
-      const node = await ctx.db
-        .query("meshNodes")
-        .withIndex("by_device", (q: any) => q.eq("deviceId", deviceId))
-        .first();
-      if (node && node.userId !== userId && !seenDevice.has(node.deviceId)) {
-        seenDevice.add(node.deviceId);
-        sharedNodes.push(node);
-      }
-    }
-
-    // Reverse direction: for grants where I'm the HOST, the GUEST's nodes must
-    // also be WG peers, or the return path fails — WireGuard requires BOTH ends
-    // to list each other. This is what lets a supporter actually reach a friend
-    // who shared a device to them (and vice-versa for any infra grant).
-    const now = Date.now();
-    const hostGrants = (
-      await ctx.db
-        .query("infraAccessGrants")
-        .withIndex("by_hostUserId", (q: any) => q.eq("hostUserId", userId))
-        .filter((q: any) => q.eq(q.field("status"), "active"))
-        .collect()
-    ).filter((g: any) => !g.expiresAt || g.expiresAt > now);
-    const counterpartNodes = [];
-    const counterpartSeen = new Set<string>();
-    for (const g of hostGrants) {
-      if (counterpartSeen.has(String(g.guestUserId))) continue;
-      counterpartSeen.add(String(g.guestUserId));
-      const guestNodes = await ctx.db
-        .query("meshNodes")
-        .withIndex("by_user", (q: any) => q.eq("userId", g.guestUserId))
-        .collect();
-      for (const n of guestNodes) {
-        if (n.userId === userId || seenDevice.has(n.deviceId)) continue;
-        seenDevice.add(n.deviceId);
-        counterpartNodes.push(n);
-      }
-    }
 
     // Resolve display/telemetry metadata from the device row (alias, platform,
     // agent version). The meshNodes row holds only the WireGuard-relevant state;
@@ -343,7 +278,7 @@ async function meshPeersForUser(ctx: any, userId: Id<"users">) {
       return { alias: dev.alias ?? dev.name, os: dev.platform, clientVersion: dev.agentVersion };
     };
 
-    const shape = async (n: any, scope: "owner" | "shared" | "peer") => {
+    const shape = async (n: any) => {
       const meta = await deviceMetaFor(n.deviceId);
       return {
       deviceId: n.deviceId,
@@ -362,7 +297,6 @@ async function meshPeersForUser(ctx: any, userId: Id<"users">) {
       isExitNode: n.isExitNode ?? false,
       online: n.online,
       lastHandshake: n.lastHandshake,
-      accessScope: scope,
       // Desired state (console intent) — echoed so the agent converges and the
       // UI reflects pending changes.
       wantEnabled: n.wantEnabled,
@@ -375,9 +309,7 @@ async function meshPeersForUser(ctx: any, userId: Id<"users">) {
 
     return {
       peers: [
-        ...(await Promise.all(own.map((n: any) => shape(n, "owner")))),
-        ...(await Promise.all(sharedNodes.map((n: any) => shape(n, "shared")))),
-        ...(await Promise.all(counterpartNodes.map((n: any) => shape(n, "peer")))),
+        ...(await Promise.all(own.map((n: any) => shape(n)))),
       ],
     };
 }

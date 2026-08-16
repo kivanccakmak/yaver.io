@@ -22,14 +22,14 @@ import (
 
 // PackageRegistryEntry mirrors the Convex `packages:list` row shape.
 type PackageRegistryEntry struct {
-	Name         string                 `json:"name"`
-	Kind         string                 `json:"kind"`
-	Description  string                 `json:"description"`
-	Tags         []string               `json:"tags,omitempty"`
-	Installs     []PackageRegistryStep  `json:"installs"`
-	CheckCommand string                 `json:"checkCommand,omitempty"`
-	DocURL       string                 `json:"docUrl,omitempty"`
-	UpdatedAt    int64                  `json:"updatedAt"`
+	Name         string                `json:"name"`
+	Kind         string                `json:"kind"`
+	Description  string                `json:"description"`
+	Tags         []string              `json:"tags,omitempty"`
+	Installs     []PackageRegistryStep `json:"installs"`
+	CheckCommand string                `json:"checkCommand,omitempty"`
+	DocURL       string                `json:"docUrl,omitempty"`
+	UpdatedAt    int64                 `json:"updatedAt"`
 }
 
 // PackageRegistryStep is one install route for a registry entry.

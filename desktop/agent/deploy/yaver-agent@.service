@@ -1,0 +1,32 @@
+[Unit]
+Description=Yaver agent for %i
+After=network-online.target time-sync.target
+Wants=network-online.target systemd-timesyncd.service
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i
+Environment=HOME=/home/%i
+ExecStart=/usr/local/bin/yaver serve --debug --work-dir=/home/%i
+Restart=always
+RestartSec=10s
+KillMode=control-group
+TimeoutStopSec=30s
+
+# Keep an AI runner from consuming the whole 4 GB host. These are cgroup-v2
+# controls; the agent is restarted if it reaches the hard memory limit.
+CPUAccounting=true
+CPUQuota=180%
+MemoryAccounting=true
+MemoryHigh=3G
+MemoryMax=3584M
+MemorySwapMax=1G
+TasksMax=512
+OOMPolicy=stop
+OOMScoreAdjust=100
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

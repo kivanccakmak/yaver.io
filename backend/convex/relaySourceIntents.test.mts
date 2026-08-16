@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   normalizeRelayBranch,
+  normalizeRelayRepoUrl,
   parseRelaySourceProviderTarget,
   relaySourceSlug,
 } from "./relaySourceIntents.js";
@@ -51,4 +52,9 @@ test("parseRelaySourceProviderTarget stores only non-secret branch metadata", ()
     },
   );
   assert.deepEqual(parseRelaySourceProviderTarget("https://token@github.com/acme/app.git", "yaver/source/x"), {});
+});
+
+test("owner relay repo urls are normalized and credentials are rejected", () => {
+  assert.equal(normalizeRelayRepoUrl("git@github.com:acme/app.git"), "https://github.com/acme/app.git");
+  assert.throws(() => normalizeRelayRepoUrl("https://token@github.com/acme/app.git"), /credential-free/);
 });

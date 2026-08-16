@@ -221,7 +221,7 @@ func TestCollectionVerbsRegistered(t *testing.T) {
 			t.Errorf("verb %q not registered", name)
 			continue
 		}
-		if spec.AllowGuest {
+		if spec.AllowCompanion {
 			t.Errorf("verb %q must be owner-only", name)
 		}
 	}

@@ -35,9 +35,9 @@ func TestCheckWorkDirWritable_CodexNonWritable(t *testing.T) {
 	msg := err.Error()
 	for _, want := range []string{
 		"codex sandbox cannot write",
-		dir,                    // surfaces the offending path
-		"chown -R",             // surfaces the fix command
-		"CAP_DAC_OVERRIDE",     // explains why root in bwrap can't write either
+		dir,                // surfaces the offending path
+		"chown -R",         // surfaces the fix command
+		"CAP_DAC_OVERRIDE", // explains why root in bwrap can't write either
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error message missing %q; got: %s", want, msg)

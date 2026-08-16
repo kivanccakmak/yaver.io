@@ -20,6 +20,9 @@
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
+const rendererOrigin = window.location.origin;
+const trustedRenderer = ipcRenderer.sendSync("yaver:is-trusted-renderer-origin", rendererOrigin) === true;
+const appVersion = trustedRenderer ? ipcRenderer.sendSync("yaver:get-app-version") : "unknown";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "stopped", "review"]);
 
@@ -91,18 +94,21 @@ function ensureObserver() {
   setTimeout(scanStatusTextNodes, 4000);
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", ensureObserver, { once: true });
-} else {
-  ensureObserver();
+if (trustedRenderer) {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ensureObserver, { once: true });
+  } else {
+    ensureObserver();
+  }
 }
 
-contextBridge.exposeInMainWorld("yaver", Object.freeze({
+if (trustedRenderer) contextBridge.exposeInMainWorld("yaver", Object.freeze({
+  surface: "desktop-gui",
   platform: process.platform,
   versions: {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
-    app: "0.1.0",
+    app: typeof appVersion === "string" ? appVersion : "unknown",
   },
   /**
    * Manual notification hook for the dashboard to adopt later
@@ -111,9 +117,52 @@ contextBridge.exposeInMainWorld("yaver", Object.freeze({
   notify(title, body = "") {
     ipcRenderer.send("yaver:task-status", { kind: "notice", title: body ? `${title} — ${body}` : title });
   },
+  /** Structured task lifecycle bridge used by the shared dashboard. */
+  taskStatus(payload) {
+    if (!payload || typeof payload !== "object") return false;
+    ipcRenderer.send("yaver:task-status", {
+      taskId: typeof payload.taskId === "string" ? payload.taskId : "",
+      kind: typeof payload.kind === "string" ? payload.kind : "",
+      title: typeof payload.title === "string" ? payload.title : "",
+    });
+    return true;
+  },
   /** Toggle tray task notifications. Returns the new state. */
   setTaskNotifications(enabled) {
     ipcRenderer.send("yaver:set-task-notifications", Boolean(enabled));
     return Boolean(enabled);
+  },
+  /** Process-scoped availability; never mutates the OS power plan. */
+  setKeepAwake(enabled) {
+    ipcRenderer.send("yaver:set-keep-awake", Boolean(enabled));
+    return Boolean(enabled);
+  },
+  setLaunchAtLogin(enabled) {
+    ipcRenderer.send("yaver:set-launch-at-login", Boolean(enabled));
+    return Boolean(enabled);
+  },
+  getDesktopStatus() {
+    return ipcRenderer.invoke("yaver:get-desktop-status");
+  },
+  setAutomaticUpdates(enabled) {
+    return ipcRenderer.invoke("yaver:set-automatic-updates", Boolean(enabled));
+  },
+  checkForUpdates() {
+    return ipcRenderer.invoke("yaver:check-for-updates");
+  },
+  openDiagnosticLogs() {
+    return ipcRenderer.invoke("yaver:open-diagnostic-logs");
+  },
+  onUpdateStatus(listener) {
+    if (typeof listener !== "function") return () => {};
+    const handler = (_event, status) => listener(status);
+    ipcRenderer.on("yaver:update-status", handler);
+    return () => ipcRenderer.removeListener("yaver:update-status", handler);
+  },
+  onAgentStatus(listener) {
+    if (typeof listener !== "function") return () => {};
+    const handler = (_event, status) => listener(status);
+    ipcRenderer.on("yaver:agent-status", handler);
+    return () => ipcRenderer.removeListener("yaver:agent-status", handler);
   },
 }));

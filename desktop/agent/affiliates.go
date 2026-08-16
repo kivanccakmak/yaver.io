@@ -80,8 +80,8 @@ type Payout struct {
 }
 
 var (
-	affMu        sync.Mutex
-	affCache     []Affiliate
+	affMu    sync.Mutex
+	affCache []Affiliate
 )
 
 func affFile() (string, error) {
@@ -153,8 +153,8 @@ func (s *HTTPServer) handleAffiliates(w http.ResponseWriter, r *http.Request) {
 		_ = saveAffiliates()
 		affMu.Unlock()
 		jsonReply(w, http.StatusCreated, map[string]interface{}{
-			"ok":         true,
-			"affiliate":  a,
+			"ok":          true,
+			"affiliate":   a,
 			"referralUrl": fmt.Sprintf("?ref=%s", a.Code),
 		})
 	default:

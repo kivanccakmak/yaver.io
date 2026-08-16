@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+HEALTH_URL="${HEALTH_URL:-https://public.yaver.io/health}"
+LOCAL_HEALTH_URL="${LOCAL_HEALTH_URL:-http://127.0.0.1:8080/health}"
+STATE_DIR="${STATE_DIR:-/var/lib/yaver-public-relay-watchdog}"
+MAX_TIME="${MAX_TIME:-8}"
+MAX_RESTARTS="${MAX_RESTARTS:-3}"
+RESTART_WINDOW_SECONDS="${RESTART_WINDOW_SECONDS:-3600}"
+ALERT_TO="${ALERT_TO:-}"
+ALERT_FROM="${ALERT_FROM:-}"
+RESEND_API_KEY="${RESEND_API_KEY:-}"
+HOST_LABEL="${HOST_LABEL:-$(hostname -f 2>/dev/null || hostname)}"
+CHECK_LABEL="${CHECK_LABEL:-Yaver relay}"
+
+install -d -m 0700 "$STATE_DIR"
+exec 9>"$STATE_DIR/lock"
+flock -n 9 || exit 0
+
+read_state() {
+  local file="$1" fallback="$2" value
+  value="$(cat "$STATE_DIR/$file" 2>/dev/null || true)"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "$fallback"
+  fi
+}
+
+write_state() {
+  local file="$1" value="$2" temporary
+  temporary="$(mktemp "$STATE_DIR/.${file}.XXXXXX")"
+  printf '%s\n' "$value" >"$temporary"
+  mv -f "$temporary" "$STATE_DIR/$file"
+}
+
+health_ok() {
+  local url="$1" body
+  body="$(curl --fail --silent --show-error --connect-timeout 3 --max-time "$MAX_TIME" "$url" 2>/dev/null)" || return 1
+  printf '%s' "$body" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'
+}
+
+send_email() {
+  local subject="$1" message="$2" payload
+  [[ -n "$RESEND_API_KEY" && -n "$ALERT_TO" && -n "$ALERT_FROM" ]] || return 0
+  payload="$(python3 - "$ALERT_FROM" "$ALERT_TO" "$subject" "$message" <<'PY'
+import json, sys
+print(json.dumps({"from": sys.argv[1], "to": [sys.argv[2]], "subject": sys.argv[3], "text": sys.argv[4]}))
+PY
+)"
+  curl --fail --silent --show-error --connect-timeout 3 --max-time 10 \
+    https://api.resend.com/emails \
+    -H "Authorization: Bearer ${RESEND_API_KEY}" \
+    -H "Content-Type: application/json" \
+    --data "$payload" >/dev/null || true
+}
+
+now="$(date +%s)"
+previous="$(cat "$STATE_DIR/status" 2>/dev/null || printf unknown)"
+failures="$(read_state failures 0)"
+restart_log="$STATE_DIR/restarts"
+touch "$restart_log"
+awk -v cutoff="$((now - RESTART_WINDOW_SECONDS))" '$1 >= cutoff' "$restart_log" >"$restart_log.tmp" || true
+mv -f "$restart_log.tmp" "$restart_log"
+restart_count="$(wc -l <"$restart_log" | tr -d ' ')"
+
+if health_ok "$HEALTH_URL"; then
+  if [[ "$previous" == "down" ]]; then
+    send_email "$CHECK_LABEL recovered" "$CHECK_LABEL recovered on $HOST_LABEL."
+  fi
+  write_state status up
+  write_state failures 0
+  exit 0
+fi
+
+failures="$((failures + 1))"
+write_state failures "$failures"
+
+# If the relay itself is healthy, the public path is nginx/DNS/TLS. Reload
+# nginx only after validating its configuration; never restart the relay.
+if health_ok "$LOCAL_HEALTH_URL"; then
+  if nginx -t >/dev/null 2>&1; then
+    timeout 15s systemctl reload nginx.service || true
+    sleep 2
+  fi
+else
+  # A dead or hung relay may be restarted, but only within a strict hourly
+  # budget. Hitting the budget opens the circuit and requires human action.
+  if (( restart_count < MAX_RESTARTS )); then
+    printf '%s\n' "$now" >>"$restart_log"
+    timeout 45s systemctl restart yaver-relay.service || true
+    for _ in $(seq 1 10); do
+      sleep 1
+      health_ok "$LOCAL_HEALTH_URL" && break
+    done
+  else
+    logger -p daemon.crit -t yaver-relay-watchdog \
+      "restart circuit open: ${restart_count} restarts in ${RESTART_WINDOW_SECONDS}s"
+  fi
+fi
+
+if health_ok "$HEALTH_URL"; then
+  send_email "$CHECK_LABEL auto-recovered" "$CHECK_LABEL recovered automatically on $HOST_LABEL."
+  write_state status up
+  write_state failures 0
+  exit 0
+fi
+
+if [[ "$previous" != "down" ]]; then
+  send_email "$CHECK_LABEL is down" \
+    "$CHECK_LABEL failed ${failures} consecutive checks on $HOST_LABEL. Restart budget: ${restart_count}/${MAX_RESTARTS}."
+fi
+write_state status down
+exit 1

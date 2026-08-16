@@ -286,11 +286,14 @@ export default function CarVoiceCodingScreen() {
       surface: glass ? "glass" : "car",
       // Drive the LIVE runner session (claude/codex) the user already has up —
       // not a fresh task, not a cloud voice pipeline.
-      sessionTurn: async (text, choice) => {
+      sessionTurn: async (text, choice, session) => {
         const r = await quicClient.runnerSessionTurn(
           deviceIdRef.current,
           text,
           choice,
+          6000,
+          undefined,
+          session,
         );
         return {
           ok: r.ok === true,
@@ -298,6 +301,8 @@ export default function CarVoiceCodingScreen() {
           runner: r.runner,
           sent: r.sent,
           awaitingChoice: r.awaitingChoice === true,
+          needsChoice: r.needsChoice,
+          available: r.available,
           options: r.options,
           pane: r.pane,
           error: r.error,
@@ -892,14 +897,16 @@ export default function CarVoiceCodingScreen() {
             });
             return runtimeSurfaceClient.waitForRuntimeTurnDone(deviceId, initial);
           },
-          sessionTurn: async (prompt, choice) => {
-            const r = await quicClient.runnerSessionTurn(deviceId, prompt, choice);
+          sessionTurn: async (prompt, choice, session) => {
+            const r = await quicClient.runnerSessionTurn(deviceId, prompt, choice, 6000, undefined, session);
             return {
               ok: r.ok === true,
               session: r.session || "",
               runner: r.runner,
               sent: r.sent,
               awaitingChoice: r.awaitingChoice === true,
+              needsChoice: r.needsChoice,
+              available: r.available,
               options: r.options,
               pane: r.pane,
               error: r.error,

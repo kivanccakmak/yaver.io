@@ -45,8 +45,8 @@ func gatewayBaseURL() string {
 // process. A revoke on the operator side makes the cached token 401 at the
 // gateway; clearTenantGatewayToken drops it so the next session re-mints.
 var (
-	tenantGatewayTokens   sync.Map // tenantUserID -> raw ygw_ token
-	tenantGatewayTokenMu  sync.Mutex
+	tenantGatewayTokens  sync.Map // tenantUserID -> raw ygw_ token
+	tenantGatewayTokenMu sync.Mutex
 )
 
 func clearTenantGatewayToken(tenantUserID string) {

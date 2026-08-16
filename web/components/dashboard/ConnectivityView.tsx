@@ -137,7 +137,7 @@ export default function ConnectivityView({
     };
   }, [connState, connectedDevice?.id]);
 
-  const ownerDevices = devices.filter((device) => !device.isGuest);
+  const ownerDevices = devices;
   const recommended = recommendationLabel({ device: connectedDevice, settings, tailscale, infra });
   const order = transportOrder({ device: connectedDevice, settings, tailscale, infra });
   const cloudflaredInstalled = !!infra?.binaries?.some((item) => item.name === "cloudflared");

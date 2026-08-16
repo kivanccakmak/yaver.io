@@ -180,11 +180,11 @@ func gitBranchName(ctx context.Context, dir string) string {
 // convenience fields handle the common cases.
 type gitStatusFile struct {
 	Path      string `json:"path"`
-	Index     string `json:"index"`     // porcelain X code, 1 char (or "?")
-	Worktree  string `json:"worktree"`  // porcelain Y code, 1 char (or "?")
+	Index     string `json:"index"`    // porcelain X code, 1 char (or "?")
+	Worktree  string `json:"worktree"` // porcelain Y code, 1 char (or "?")
 	Untracked bool   `json:"untracked"`
-	Staged    bool   `json:"staged"`    // X is one of A/M/D/R/C
-	Renamed   bool   `json:"renamed"`   // X is R or C
+	Staged    bool   `json:"staged"`            // X is one of A/M/D/R/C
+	Renamed   bool   `json:"renamed"`           // X is R or C
 	OldPath   string `json:"oldPath,omitempty"` // present on rename/copy
 }
 
@@ -192,10 +192,10 @@ type gitStatusFile struct {
 // It is deliberately the same shape as git_status's `files` so a
 // caller writes one parser, not two.
 type gitWorktreeState struct {
-	Branch string           `json:"branch,omitempty"`
-	Head   string           `json:"head"`
-	Clean  bool             `json:"clean"`
-	Files  []gitStatusFile  `json:"files"`
+	Branch string          `json:"branch,omitempty"`
+	Head   string          `json:"head"`
+	Clean  bool            `json:"clean"`
+	Files  []gitStatusFile `json:"files"`
 	// Ahead/Behind vs upstream — best-effort, omitted when no upstream.
 	Ahead  int `json:"ahead,omitempty"`
 	Behind int `json:"behind,omitempty"`
@@ -515,9 +515,9 @@ func opsGitStashOpsHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 }
 
 type gitCommitPayload struct {
-	Dir    string   `json:"dir,omitempty"`
-	Message string  `json:"message"`
-	Paths  []string `json:"paths"` // REQUIRED, non-empty
+	Dir     string   `json:"dir,omitempty"`
+	Message string   `json:"message"`
+	Paths   []string `json:"paths"` // REQUIRED, non-empty
 }
 
 func init() {
@@ -581,11 +581,11 @@ func opsGitCommitHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 }
 
 type gitRebasePayload struct {
-	Dir       string `json:"dir,omitempty"`
-	Onto      string `json:"onto,omitempty"`      // target branch/tip to rebase onto
-	Upstream  string `json:"upstream,omitempty"`  // upstream ref (with onto, produces `rebase <upstream> <onto>`)
-	Abort     bool   `json:"abort,omitempty"`     // git rebase --abort
-	Continue  bool   `json:"continue,omitempty"`  // git rebase --continue
+	Dir      string `json:"dir,omitempty"`
+	Onto     string `json:"onto,omitempty"`     // target branch/tip to rebase onto
+	Upstream string `json:"upstream,omitempty"` // upstream ref (with onto, produces `rebase <upstream> <onto>`)
+	Abort    bool   `json:"abort,omitempty"`    // git rebase --abort
+	Continue bool   `json:"continue,omitempty"` // git rebase --continue
 }
 
 func init() {

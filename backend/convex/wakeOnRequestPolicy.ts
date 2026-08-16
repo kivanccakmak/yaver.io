@@ -13,17 +13,13 @@
 // one policy into code nobody can change without a deploy, and it defeats the
 // entire product: if only the owner can wake the box, then a small app's actual
 // users can never reach it, and "scale to zero" just means "offline". The owner
-// must be able to say "yes, my five users' requests may wake this" — and to say
-// it for one app, one guest, or one grant at a time, and take it back.
+// must be able to say "yes, this published app's signed service requests may
+// wake this" — and take that permission back.
 //
 // So this file decides on a PERMISSION (`callerMayWake`), never on identity.
 // Where that permission comes from is resolved by the caller:
 //
 //   * the machine's owner holds it implicitly;
-//   * a guest / host-share / project-share holds it only if the owner set
-//     `allowWake` on the grant — same family as the existing owner-controlled
-//     allowDesktopControl / allowTunnelForward / allowBrowserControl flags,
-//     and default OFF like them;
 //   * a published small app's scoped token carries it when the owner published
 //     the app as wake-on-request.
 //

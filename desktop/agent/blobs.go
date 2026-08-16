@@ -422,8 +422,8 @@ func (s *HTTPServer) handleBlobs(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusOK, map[string]interface{}{
 			"ok":         true,
 			"bucket":     parts[0],
-			"keys":       page,      // preferred
-			"items":      page,      // back-compat
+			"keys":       page,       // preferred
+			"items":      page,       // back-compat
 			"nextCursor": nextCursor, // empty when no more pages
 			"total":      len(all),
 		})

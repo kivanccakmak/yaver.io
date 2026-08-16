@@ -38,7 +38,7 @@ func TestSetupInventory_OwnerOnly(t *testing.T) {
 	if !ok {
 		t.Fatal("setup_inventory not registered")
 	}
-	if spec.AllowGuest {
-		t.Fatal("setup_inventory must be AllowGuest:false (a guest must not enumerate the owner's config)")
+	if spec.AllowCompanion {
+		t.Fatal("setup_inventory must be AllowCompanion:false (a guest must not enumerate the owner's config)")
 	}
 }

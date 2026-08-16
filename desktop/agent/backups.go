@@ -230,7 +230,9 @@ func (s *HTTPServer) handleBackupRestore(w http.ResponseWriter, r *http.Request)
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ ID string `json:"id"` }
+	var b struct {
+		ID string `json:"id"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	res, err := RestoreBackup(s.dirParam(r), b.ID)
 	if err != nil {
@@ -245,7 +247,9 @@ func (s *HTTPServer) handleBackupDelete(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ ID string `json:"id"` }
+	var b struct {
+		ID string `json:"id"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if err := DeleteBackup(s.dirParam(r), b.ID); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})

@@ -22,9 +22,9 @@ type ScaleRecommendation struct {
 // ScaleStatus is a snapshot of current resource utilisation plus any recommendations.
 type ScaleStatus struct {
 	CurrentPlan     string
-	CPU             float64       // usage %
-	Memory          float64       // usage %
-	Disk            float64       // usage %
+	CPU             float64 // usage %
+	Memory          float64 // usage %
+	Disk            float64 // usage %
 	RequestsPerMin  int
 	AvgLatency      time.Duration
 	ErrorRate       float64 // fraction, e.g. 0.012 = 1.2 %

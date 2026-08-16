@@ -181,27 +181,6 @@ export interface PhoneTemplate {
   description: string;
 }
 
-// Friends-preview share: a host mints `code`; a friend resolves it and
-// Hermes-loads `bundleUrl`, pointed at `dataUrl` on the host origin. Mirrors
-// the agent's /phone/projects/share|join.
-export interface PhoneShare {
-  code: string;
-  slug: string;
-  name: string;
-  runtime?: "yaver-serverless-lite" | string;
-  dataUrl?: string;
-  // Scoped READ-ONLY data token + embedded schema/app so a friend can render
-  // and read the app without owner auth (set by CreatePhoneShare on the host).
-  dataToken?: string;
-  schema?: PhoneSchema | null;
-  app?: PhoneAppSpec | null;
-  // Legacy optional field kept while older app builds age out.
-  hostedConvexUrl?: string;
-  bundleUrl: string;
-  createdAt: string;
-  expiresAt: string;
-}
-
 export interface PhoneCreateSpec {
   slug?: string;
   name: string;
@@ -913,32 +892,6 @@ export async function listPhoneProjects(): Promise<PhoneProject[]> {
   local.forEach((project) => merged.set(project.slug, project));
   remote.forEach((project) => merged.set(project.slug, project));
   return Array.from(merged.values());
-}
-
-// sharePhoneProject mints a friends-preview join code on the connected
-// agent. ttlMinutes ≤ 0 ⇒ agent default (24h).
-export async function sharePhoneProject(
-  slug: string,
-  ttlMinutes = 0,
-): Promise<PhoneShare> {
-  const r = await post<PhoneShare>("/phone/projects/share", {
-    slug,
-    ttlMinutes,
-  });
-  if (!r) throw new Error("Not connected to a Yaver agent.");
-  return r;
-}
-
-// joinPhoneShare resolves a code → {slug, runtime, dataUrl, bundleUrl}. The
-// caller then fetches bundleUrl and points the app's data adapter at dataUrl on
-// the host origin.
-export async function joinPhoneShare(code: string): Promise<PhoneShare> {
-  const r = await get<PhoneShare & { error?: string }>(
-    `/phone/projects/join?code=${encodeURIComponent(code.trim())}`,
-  );
-  if (!r) throw new Error("Invalid or expired code (or not connected).");
-  if (r.error) throw new Error(r.error);
-  return r;
 }
 
 export async function listPhoneTemplates(): Promise<PhoneTemplate[]> {

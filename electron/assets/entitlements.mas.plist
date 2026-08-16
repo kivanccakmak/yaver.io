@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Every Mac App Store app must use App Sandbox. -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+  <!-- Chromium/V8 needs JIT in the main application on current Electron. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!-- Client-only Store build: HTTPS/SSE/WebSocket/WebRTC-outbound only. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>

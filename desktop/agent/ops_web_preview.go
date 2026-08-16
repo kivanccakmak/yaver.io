@@ -37,9 +37,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsWebPreviewHandler,
-		Streaming:  false,
-		AllowGuest: false, // dev-server start modifies project state
+		Handler:        opsWebPreviewHandler,
+		Streaming:      false,
+		AllowCompanion: false, // dev-server start modifies project state
 	})
 }
 

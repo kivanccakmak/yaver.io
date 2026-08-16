@@ -183,7 +183,7 @@ func (b *browserInterceptor) cleanup() {
 // shQuoteShimPath single-quotes a path for embedding in the generated /bin/sh
 // shim. Paths come from os.MkdirTemp so they are tame, but an unquoted path in
 // a generated script is how command injection starts, and a temp dir is
-// attacker-adjacent on a shared machine. Named distinctly from env.go's
+// attacker-adjacent on an operator fleet machine. Named distinctly from env.go's
 // shellQuote so the two never drift into each other.
 func shQuoteShimPath(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"

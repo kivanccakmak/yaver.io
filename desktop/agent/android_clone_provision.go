@@ -59,8 +59,8 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsAndroidCloneProvisionHandler,
-		AllowGuest: false,
+		Handler:        opsAndroidCloneProvisionHandler,
+		AllowCompanion: false,
 	})
 }
 

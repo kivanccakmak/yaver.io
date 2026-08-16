@@ -113,7 +113,7 @@ func runGitPushCreds(args []string) {
 	}
 	if all {
 		for _, d := range known {
-			if d.IsGuest || d.DeviceID == selfID || !d.IsOnline {
+			if d.DeviceID == selfID || !d.IsOnline {
 				continue
 			}
 			targetIDs = append(targetIDs, d.DeviceID)
@@ -291,7 +291,7 @@ func mcpGitPushCreds(a gitPushCredsMCPArgs) interface{} {
 			return map[string]any{"error": "cannot list devices: " + err.Error()}
 		}
 		for _, d := range known {
-			if d.IsGuest || !d.IsOnline || d.DeviceID == selfID {
+			if !d.IsOnline || d.DeviceID == selfID {
 				continue
 			}
 			targetIDs = append(targetIDs, d.DeviceID)

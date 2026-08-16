@@ -18,7 +18,6 @@ import { isRunnerSeat, listTmuxRunnerSessions, type TmuxRunnerSessionRecord } fr
 import { CONVEX_URL } from "@/lib/constants";
 import { useMachineRoles } from "@/lib/useMachineRoles";
 import { planConnectionFanout } from "@/lib/connectionFanout";
-import { fetchGuestHosts, acceptGuestInvitation, type GuestInvitation } from "@/lib/guests";
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { useRouter } from "next/navigation";
@@ -43,11 +42,7 @@ import ToolPanelView from "@/components/dashboard/ToolPanelView";
 import OverviewView from "@/components/dashboard/OverviewView";
 import ExtrasView from "@/components/dashboard/ExtrasView";
 import ShareView from "@/components/dashboard/ShareView";
-import GuestsStatusView from "@/components/dashboard/GuestsStatusView";
 import FeedbackWorkQueueView from "@/components/dashboard/FeedbackWorkQueueView";
-import CollabView from "@/components/dashboard/CollabView";
-import CoVibeCard from "@/components/dashboard/CoVibeCard";
-import HousekeepingCard from "@/components/dashboard/HousekeepingCard";
 import InfraView from "@/components/dashboard/InfraView";
 import ConnectivityView from "@/components/dashboard/ConnectivityView";
 import NetworkView from "@/components/dashboard/NetworkView";
@@ -81,7 +76,7 @@ import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth"
 import { usableTunnelUrls } from "@/lib/endpoints";
 import { classifyFetchError, summarizeFailures } from "@/lib/connection-error";
 import { clearLastFailure, recordLastFailure } from "@/lib/probe-backoff";
-import { HIDE_PAID_UI, ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
+import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { parseDashboardChatIntent } from "@/lib/dashboard-chat-intent";
 import {
   loadLastProjectFromConvex,
@@ -139,6 +134,7 @@ import WebTestsPanel from "@/components/dashboard/WebTestsPanel";
 import SettingsView from "@/components/dashboard/SettingsView";
 import { PlanUsageCard } from "@/components/dashboard/PlanUsageCard";
 import { MachineRolesCard } from "@/components/dashboard/MachineRolesCard";
+import { WEB_SURFACE_INFO, type DesktopSurfaceInfo } from "@/lib/desktopSurface";
 import type { RunnerBrowserAuthSession } from "@/lib/agent-client";
 import webPkg from "../../package.json";
 import { buildLabel } from "@/lib/buildStamp";
@@ -162,8 +158,8 @@ const DASHBOARD_TABS = [
   "home", "chat", "projects", "runtime", "vibe", "devices", "git", "todos",
   "feedback", "artifacts", "builds", "webview", "preview", "web-reload",
   "health", "quality", "convex", "data", "switch", "accounts", "company-ai",
-  "companion", "observ", "ops", "autoruns", "extras", "share", "guests",
-  "collab", "infra", "connect", "network", "tools", "security", "storage",
+  "companion", "observ", "ops", "autoruns", "extras", "share",
+  "infra", "connect", "network", "tools", "security", "storage",
   "vault", "apikeys", "schedules", "exec", "phone", "vibe-preview",
   "domains", "screenlog", "settings", "billing", "stores", "cloud", "build",
   "arm", "appletv", "packages", "verbs", "downloads",
@@ -172,11 +168,6 @@ type DashboardTab = typeof DASHBOARD_TABS[number];
 
 function isDashboardTab(value: string | null): value is DashboardTab {
   return DASHBOARD_TABS.includes(value as DashboardTab);
-}
-
-function isLaunchEnabledDashboardTab(value: DashboardTab): boolean {
-  if (value === "guests") return ENABLE_GUEST_FEATURES;
-  return true;
 }
 
 function runnerModelOptions(runner?: Runner | null, runnerId?: string) {
@@ -324,9 +315,8 @@ function deviceReachabilitySummary(
 const DORMANT_DEVICE_HIDE_MS = 10 * 60 * 1000;
 
 function isDormantUnreachableDevice(
-  device: Pick<Device, "online" | "needsAuth" | "lastSeen" | "publicEndpoints" | "tunnelUrl" | "isGuest" | "peerState" | "workspaceLive" | "probeState" | "probeInfo">,
+  device: Pick<Device, "online" | "needsAuth" | "lastSeen" | "publicEndpoints" | "tunnelUrl" | "peerState" | "workspaceLive" | "probeState" | "probeInfo">,
 ): boolean {
-  if (device.isGuest) return false;
   if (device.online) return false;
   if (device.workspaceLive) return false;
   const lifecycleState = String(device.probeInfo?.lifecycle?.state || device.probeInfo?.lifecycleState || "");
@@ -339,8 +329,7 @@ function isDormantUnreachableDevice(
   return age !== null && age >= DORMANT_DEVICE_HIDE_MS;
 }
 
-function duplicateHostKey(device: Pick<Device, "isGuest" | "platform" | "name">): string | null {
-  if (device.isGuest) return null;
+function duplicateHostKey(device: Pick<Device, "platform" | "name">): string | null {
   const platform = String(device.platform || "").trim().toLowerCase();
   const name = String(device.name || "").trim().toLowerCase().replace(/\.local$/, "");
   if (!platform || !name) return null;
@@ -446,73 +435,6 @@ function runnerAuthIssue(
   return null;
 }
 
-function runnerChipsForDevice(device: Pick<Device, "sharedRunners" | "runners">): string[] {
-  const chips = new Set<string>();
-  for (const runner of device.sharedRunners || []) {
-    const label = formatRunnerChipLabel(runner);
-    if (label) chips.add(label);
-  }
-  for (const runner of device.runners || []) {
-    const label = formatRunnerChipLabel(String(runner?.runnerId || ""));
-    if (label) chips.add(label);
-  }
-  return [...chips];
-}
-
-// FeatureOffNotice — what a user sees where a launch-gated feature used to be.
-// A blank panel reads as breakage; this says the feature is off by policy, not
-// broken, and that nothing is required of them. Same principle as the agent's
-// featureDisabledMessage: a refusal the user cannot act on is a silent wall.
-function FeatureOffNotice({ name }: { name: string }) {
-  return (
-    <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full">
-      <div className="rounded-lg border border-surface-800/60 bg-surface-900/40 p-6">
-        <h2 className="text-sm font-medium text-surface-100">{name} is not available yet</h2>
-        <p className="mt-2 text-xs text-surface-400">
-          {name} is turned off for this release and will arrive in a later one.
-          Nothing is wrong with your account and there is nothing to configure.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function sharedGuestLabels(device: Pick<Device, "sharedGuests">): string[] {
-  return (device.sharedGuests || [])
-    .map((guest) => guest.name || guest.email || "")
-    .map((label) => String(label).trim())
-    .filter(Boolean);
-}
-
-function deviceAccessSummary(device: Pick<Device, "isGuest" | "sharedWithGuests" | "sharedGuests" | "sharesAllProjects" | "sharedProjects" | "sharedRunners" | "runners">) {
-  if (!ENABLE_GUEST_FEATURES) return null;
-  const hasSharedState = device.isGuest || device.sharedWithGuests;
-  if (!hasSharedState) return null;
-  const sharedProjects = Array.isArray(device.sharedProjects) ? device.sharedProjects.filter(Boolean) : [];
-  const guests = sharedGuestLabels(device);
-  return {
-    projectLabel: device.sharesAllProjects ? "All Resources" : sharedProjects.length > 0 ? "Projects" : null,
-    projectChips: device.sharesAllProjects ? [] : sharedProjects,
-    runnerChips: runnerChipsForDevice(device),
-    guestChips: guests.slice(0, 3),
-    guestOverflow: Math.max(0, guests.length - 3),
-  };
-}
-
-function accessScopeTone(device: Pick<Device, "accessScope" | "isGuest">) {
-  if (device.accessScope === "shared-scoped") return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-200";
-  if (device.accessScope === "shared-legacy") return "border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-200";
-  if (device.isGuest) return "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-200";
-  return "";
-}
-
-function accessScopeLabel(device: Pick<Device, "accessScope" | "isGuest">) {
-  if (device.accessScope === "shared-scoped") return "Scoped Access";
-  if (device.accessScope === "shared-legacy") return "Legacy Shared";
-  if (device.isGuest) return "Shared Device";
-  return null;
-}
-
 function lanIpsForDevice(device: Pick<Device, "host" | "localIps">): string[] {
   const ips = new Set<string>();
   if (device.host && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(device.host)) ips.add(device.host);
@@ -523,9 +445,9 @@ function lanIpsForDevice(device: Pick<Device, "host" | "localIps">): string[] {
 }
 
 // Inline alias editor: click the chip to edit, Enter to save, Esc
-// to cancel. Shown only for devices the caller owns (the API rejects
-// alias writes on guest devices). When no alias is set we render a
-// muted "+ alias" affordance so the slot is still discoverable.
+// to cancel. Device discovery is owner-only, so every rendered row is writable
+// by the authenticated account. When no alias is set we render a muted
+// "+ alias" affordance so the slot is still discoverable.
 function DeviceAliasChip({
   device,
   token,
@@ -657,7 +579,6 @@ function DeviceConnectCard({
   token?: string | null;
   compact?: boolean;
 }) {
-  const shareSummary = deviceAccessSummary(device);
   const heartbeatAge = formatHeartbeatAge(device.lastSeen);
   const reachability = deviceReachabilitySummary(device);
   const liveSignal = hasRecentLiveSignal(device);
@@ -708,14 +629,12 @@ function DeviceConnectCard({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <h3 className="truncate text-[15px] font-semibold text-surface-100">{device.name}</h3>
-            {!device.isGuest && token ? (
+            {token ? (
               <DeviceAliasChip
                 device={device}
                 token={token}
                 onSaved={() => { if (onAliasSaved) onAliasSaved(); }}
               />
-            ) : device.alias ? (
-              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 font-mono text-[10px] text-emerald-700 dark:text-emerald-300/80">@{device.alias}</span>
             ) : null}
             <span className={`inline-flex h-2 w-2 rounded-full ${connectionError ? "bg-red-400" : isConnecting ? "bg-amber-400" : statusTone}`} />
             <span className="text-[11px] text-surface-400">
@@ -729,7 +648,6 @@ function DeviceConnectCard({
           <p className="mt-1 text-[11px] leading-5 text-surface-500">
             {devicePlatformLabel(device)}
             {device.host ? ` · ${device.host}:${device.port}` : ""}
-            {device.isGuest && device.hostName ? ` · from ${device.hostName}` : ""}
           </p>
           {!connectionError && lifecycleState !== "connected" ? (
             <p className="mt-1 text-[11px] leading-5 text-amber-700 dark:text-amber-300/80">{reachability}</p>
@@ -741,38 +659,14 @@ function DeviceConnectCard({
       </div>
 
       <div className="mt-2.5 flex flex-wrap gap-1.5">
-        {accessScopeLabel(device) ? (
-          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${accessScopeTone(device)}`}>
-            {accessScopeLabel(device)}
-          </span>
-        ) : null}
-        {ENABLE_GUEST_FEATURES && !device.isGuest && device.sharedWithGuests ? (
-          <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:text-sky-200">
-            Shared
-          </span>
-        ) : null}
         {device.deviceClass ? (
           <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:text-sky-200">
             {device.deviceClass === "edge-mobile" ? "Edge Worker" : device.deviceClass}
           </span>
         ) : null}
-        {device.sessionBinding ? (
-          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-            device.sessionBinding === "dedicated"
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
-              : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200"
-          }`}>
-            {device.sessionBinding === "dedicated" ? "Dedicated Session" : "Legacy Session"}
-          </span>
-        ) : null}
         {isPrimary ? (
           <span className="rounded-full border border-indigo-500/40 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-indigo-700 dark:text-indigo-200">
             Primary
-          </span>
-        ) : null}
-        {device.priorityMode === "spare-capacity" ? (
-          <span className="rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-700 dark:text-violet-200">
-            Spare Capacity
           </span>
         ) : null}
         {lanIps.map((ip) => (
@@ -781,56 +675,6 @@ function DeviceConnectCard({
           </span>
         ))}
       </div>
-
-      {ENABLE_GUEST_FEATURES && shareSummary ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {shareSummary.projectLabel ? (
-            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-              shareSummary.projectLabel === "All Resources"
-                ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-200"
-                : "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-200"
-            }`}>
-              {shareSummary.projectLabel}
-            </span>
-          ) : null}
-          {shareSummary.projectChips.map((project) => (
-            <span key={`${device.id}:project:${project}`} className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-100">
-              {project}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {ENABLE_GUEST_FEATURES && shareSummary && shareSummary.guestChips.length > 0 ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:text-sky-200">
-            Shared With
-          </span>
-          {shareSummary.guestChips.map((guest) => (
-            <span key={`${device.id}:guest:${guest}`} className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-800 dark:text-sky-100">
-              {guest}
-            </span>
-          ))}
-          {shareSummary.guestOverflow > 0 ? (
-            <span className="rounded-full border border-surface-700 bg-surface-950 px-2 py-0.5 text-[10px] font-medium text-surface-300">
-              +{shareSummary.guestOverflow} more
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      {ENABLE_GUEST_FEATURES && shareSummary && shareSummary.runnerChips.length > 0 ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span className="rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-700 dark:text-violet-200">
-            Agents
-          </span>
-          {shareSummary.runnerChips.map((runner) => (
-            <span key={`${device.id}:runner:${runner}`} className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-800 dark:text-violet-100">
-              {runner}
-            </span>
-          ))}
-        </div>
-      ) : null}
 
       {device.edgeProfile ? (
         <p className="mt-2 text-[11px] text-surface-500">
@@ -897,8 +741,8 @@ function DeviceConnectCard({
 // agent-client's assertConnected(); instead we render the shared connect
 // guidance panel (the same device-picker the chat tab uses). Tabs that work
 // without a connected agent (devices, connect, network/Mesh — Convex-direct,
-// billing, cloud, build, settings, security, home, domains, share, guests,
-// collab, company-ai, infra) and the self-gating preview tabs (vibe, webview,
+// billing, cloud, build, settings, security, home, domains, company-ai, infra)
+// and the self-gating preview tabs (vibe, webview,
 // preview, web-reload) are intentionally excluded.
 const CONNECTION_REQUIRED_TABS = new Set<string>([
   "chat", "projects", "runtime", "storage", "ops", "data", "convex",
@@ -994,12 +838,46 @@ export default function DashboardPage() {
   const { pending: pendingClaims, refreshPending, claimPending } = usePendingClaims(token);
   const { theme, toggle: toggleTheme } = useTheme();
   const router = useRouter();
+  const [desktopSurface, setDesktopSurface] = useState<DesktopSurfaceInfo>(WEB_SURFACE_INFO);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const bridge = (window as typeof window & {
+      yaver?: {
+        surface?: string;
+        getDesktopStatus?: () => Promise<{ surface?: string; localDeviceId?: string | null }>;
+        onAgentStatus?: (listener: () => void) => (() => void);
+      };
+    }).yaver;
+    if (bridge?.surface !== "desktop-gui" || typeof bridge.getDesktopStatus !== "function") return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const status = await bridge.getDesktopStatus?.();
+        if (!cancelled && status?.surface === "desktop-gui") {
+          setDesktopSurface({
+            isDesktop: true,
+            localDeviceId: typeof status.localDeviceId === "string" && status.localDeviceId ? status.localDeviceId : null,
+          });
+        }
+      } catch {
+        if (!cancelled) setDesktopSurface({ isDesktop: true, localDeviceId: null });
+      }
+    };
+    void refresh();
+    const unsubscribe = bridge.onAgentStatus?.(() => { void refresh(); });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
 
   const [connState, setConnState] = useState<ConnectionState>("disconnected");
   const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [taskActionBusy, setTaskActionBusy] = useState<string | null>(null);
   const pendingDispatchRef = useRef<Set<string>>(new Set());
   // ── raw-lane note ─────────────────────────────────────────
   // Every runner (opencode, codex, claude, …) streams its RAW stdout
@@ -1107,9 +985,6 @@ export default function DashboardPage() {
   // mid-stream. So we mirror what claude-code / codex / opencode do
   // interactively: keep typing, queue up, dispatch on completion.
   const [pendingFollowUps, setPendingFollowUps] = useState<string[]>([]);
-  const [guestCode, setGuestCode] = useState("");
-  const [pendingInvites, setPendingInvites] = useState<GuestInvitation[]>([]);
-  const [invitesBusy, setInvitesBusy] = useState<string | null>(null);
   const [reauthBusy, setReauthBusy] = useState<string | null>(null);
   const [reauthMsg, setReauthMsg] = useState<{ deviceId: string; ok: boolean; text: string } | null>(null);
   // Browser-shell modal state. We track the device the user clicked
@@ -1190,7 +1065,7 @@ export default function DashboardPage() {
   useEffect(() => {
     const isOnline = (id: string | null | undefined) => {
       if (!id) return false;
-      const d = devices.find((device) => device.id === id && !device.isGuest);
+      const d = devices.find((device) => device.id === id);
       if (!d) return false;
       const probe = probeStates[id];
       const peer = peerStates[id];
@@ -1225,7 +1100,7 @@ export default function DashboardPage() {
     const applyUrlTab = () => {
       const params = new URLSearchParams(window.location.search);
       const tab = params.get("tab");
-      if (isDashboardTab(tab) && isLaunchEnabledDashboardTab(tab)) setActiveTab(tab);
+      if (isDashboardTab(tab)) setActiveTab(tab);
     };
     applyUrlTab();
     window.addEventListener("popstate", applyUrlTab);
@@ -1926,6 +1801,22 @@ export default function DashboardPage() {
     });
   }, [token, activeTask?.placementId, activeTask?.status]);
 
+  // Electron gets an explicit task event instead of having to infer state by
+  // scraping rendered text. The bridge is absent in normal browsers, so this
+  // is a no-op there and the shared task protocol remains unchanged.
+  useEffect(() => {
+    if (!activeTask) return;
+    if (!["completed", "review", "failed", "stopped"].includes(activeTask.status)) return;
+    const bridge = (window as Window & {
+      yaver?: { taskStatus?: (payload: { taskId: string; kind: string; title: string }) => boolean };
+    }).yaver;
+    bridge?.taskStatus?.({
+      taskId: activeTask.id,
+      kind: activeTask.status,
+      title: displayTaskTitle(activeTask.title || ""),
+    });
+  }, [activeTask?.id, activeTask?.status, activeTask?.title]);
+
   // Keep selectedRunner valid: prefer the connected device's chosen
   // primary runner, then the agent's default/active runner, then a
   // sensible installed fallback. Clears when the picker's choice
@@ -2024,22 +1915,6 @@ export default function DashboardPage() {
     setSelectedModel(preferredModel);
   }, [connectedDevice, primaryModelByDevice, runners, selectedRunner, selectedModel, user?.email]);
 
-  useEffect(() => {
-    if (!ENABLE_GUEST_FEATURES || !token) { setPendingInvites([]); return; }
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await fetchGuestHosts(token);
-        if (!cancelled) setPendingInvites(res.pending || []);
-      } catch {
-        if (!cancelled) setPendingInvites([]);
-      }
-    };
-    load();
-    const iv = setInterval(load, 30000);
-    return () => { cancelled = true; clearInterval(iv); };
-  }, [token]);
-
   const reauthDevice = async (d: Device) => {
     if (!token) return;
     const lifecycle = deriveDeviceLifecycleState(d);
@@ -2123,23 +1998,6 @@ export default function DashboardPage() {
       });
     } finally {
       setReauthBusy(null);
-    }
-  };
-
-  const acceptInvite = async (invite: GuestInvitation) => {
-    if (!token) return;
-    const key = invite.inviteId || invite.inviteCode || invite.hostUserId;
-    setInvitesBusy(key);
-    try {
-      await acceptGuestInvitation(token, invite.hostUserId);
-      setPendingInvites((prev) =>
-        prev.filter((p) => (p.inviteId || p.inviteCode || p.hostUserId) !== key),
-      );
-      refreshDevices();
-    } catch (e: any) {
-      alert(e?.message || "Failed to accept invitation");
-    } finally {
-      setInvitesBusy(null);
     }
   };
 
@@ -2289,7 +2147,6 @@ export default function DashboardPage() {
     const lifecycle = deriveDeviceLifecycleState(device);
     if (
       lifecycle === "bootstrap" &&
-      !device.isGuest &&
       agentClient.configuredRelayServers.length > 0 &&
       sinceLast > reauthRateMs
     ) {
@@ -2334,7 +2191,7 @@ export default function DashboardPage() {
         // own change-or-24h gate inside report-version dedups repeat
         // calls so this is cheap.
         const liveVersion = typeof info?.version === "string" ? info.version.trim() : "";
-        if (liveVersion && liveVersion !== device.agentVersion && !device.isGuest && device.id && token) {
+        if (liveVersion && liveVersion !== device.agentVersion && device.id && token) {
           fetch(`${CONVEX_URL}/devices/report-version`, {
             method: "POST",
             headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -2649,18 +2506,16 @@ export default function DashboardPage() {
     };
     const pick = async (id: string | null) => {
       if (!id) return undefined;
-      const d = devices.find((x) => x.id === id && !x.isGuest);
+      const d = devices.find((x) => x.id === id);
       return d && (await browserReachable(d)) ? d : undefined;
     };
     void (async () => {
       const hasPref = Boolean(primaryDeviceId || secondaryDeviceId);
       const candidates = hasPref
         ? ([primaryDeviceId, secondaryDeviceId]
-            .map((id) => (id ? devices.find((d) => d.id === id && !d.isGuest) : undefined))
+            .map((id) => (id ? devices.find((d) => d.id === id) : undefined))
             .filter(Boolean) as Device[])
-        : devices
-            .filter((d) => !d.isGuest)
-            .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+		: [...devices].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
       for (const candidate of candidates) {
         if (cancelled || autoConnectTriedRef.current) return;
         const target = await pick(candidate.id);
@@ -3225,6 +3080,50 @@ export default function DashboardPage() {
       });
     }).catch(() => {});
   };
+
+  const stopTaskFromUI = async (task: Task) => {
+    if (task.id.startsWith("pending-cloud:")) {
+      setConnectError("This task has not reached an agent yet; manage the pending cloud action shown in the task.");
+      return;
+    }
+    setTaskActionBusy(`stop:${task.id}`);
+    try {
+      await agentClient.stopTask(task.id);
+      const stopped = { ...task, status: "stopped" as const, updatedAt: Date.now() };
+      setTasks((prev) => prev.map((row) => row.id === task.id ? stopped : row));
+      setActiveTask((current) => current?.id === task.id ? { ...current, ...stopped } : current);
+      setPendingFollowUps([]);
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : "Failed to stop task.");
+    } finally {
+      setTaskActionBusy(null);
+    }
+  };
+
+  const deleteTaskFromUI = async (task: Task) => {
+    if (task.id.startsWith("pending-cloud:")) {
+      setConnectError("Pending cloud dispatches cannot be deleted from the agent task history.");
+      return;
+    }
+    if (!window.confirm(`Delete “${displayTaskTitle(task.title || "this task")}”? This removes its local task history.`)) return;
+    setTaskActionBusy(`delete:${task.id}`);
+    try {
+      await agentClient.deleteTask(task.id);
+      setTasks((prev) => prev.filter((row) => row.id !== task.id));
+      if (activeTask?.id === task.id) {
+        setActiveTask(null);
+        setOutputLines([]);
+        setRawOutput([]);
+        setRawSince(0);
+        setChatMsgs([]);
+        setPendingFollowUps([]);
+      }
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : "Failed to delete task.");
+    } finally {
+      setTaskActionBusy(null);
+    }
+  };
   const onTaskCreated = () => { setActiveTab("chat"); agentClient.listTasks().then(setTasks).catch(() => {}); };
   const handleSelectPreviewTarget = async (deviceId: string | null) => {
     const target = deviceId ? devices.find((d) => d.id === deviceId) || null : null;
@@ -3432,7 +3331,7 @@ export default function DashboardPage() {
               yaver<span className="font-normal text-surface-500">.io</span>
             </span>
             <span className="mt-0.5 font-mono text-[10px] tracking-wide text-surface-400">
-              {WEB_BUILD_LABEL}
+              {WEB_BUILD_LABEL} · {desktopSurface.isDesktop ? "Desktop GUI" : "Web UI"}
             </span>
           </a>
 
@@ -3498,24 +3397,54 @@ export default function DashboardPage() {
               {sidebarVibingOpen ? (
               <div className="max-h-40 space-y-1 overflow-y-auto">
                 {isConnected ? sidebarTmux.slice(0, 6).map((t) => (
-                  <button
+                  <div
                     key={t.name}
-                    onClick={() => {
-                      if (connectedDevice) {
-                        setShellTmuxSession(t.name);
-                        setShellTmuxTaskId(t.taskId || null);
-                        setShellDevice(connectedDevice);
-                      }
-                    }}
                     className="flex w-full items-center gap-2 rounded-md border border-surface-800 bg-surface-900/60 px-2 py-1.5 text-left transition-colors hover:border-brand/40"
                     title={`Attach to tmux session ${t.name}`}
                   >
-                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${t.attached ? "bg-success animate-live-pulse" : "bg-surface-600"}`} />
-                    <span className="truncate text-[11px] text-surface-200">{t.name}</span>
-                    <span className="ml-auto shrink-0 text-[9px] text-surface-500">
-                      {t.agentType ? t.agentType : `${t.windows ?? 1}w`}
-                    </span>
-                  </button>
+                    <button
+                      onClick={() => {
+                        if (connectedDevice) {
+                          setShellTmuxSession(t.name);
+                          setShellTmuxTaskId(t.taskId || null);
+                          setShellDevice(connectedDevice);
+                        }
+                      }}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    >
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${t.attached ? "bg-success animate-live-pulse" : "bg-surface-600"}`} />
+                      <span className="truncate text-[11px] text-surface-200">{t.name}</span>
+                      <span className="ml-auto shrink-0 text-[9px] text-surface-500">
+                        {t.agentType ? t.agentType : `${t.windows ?? 1}w`}
+                      </span>
+                    </button>
+                    {/* Adopt an un-adopted session straight from the sidebar —
+                        previously the helper existed but no UI called it. One
+                        click brings the live pane under task management (poll +
+                        follow-up composer). */}
+                    {!t.taskId ? (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const { taskId } = await agentClient.adoptTmuxSession(t.name, t.paneId);
+                            setShellTmuxTaskId(taskId);
+                            setSidebarTmux(await agentClient.listTmuxSessions());
+                          } catch (err) {
+                            setConnectError(err instanceof Error ? err.message : "Failed to adopt session.");
+                          }
+                        }}
+                        className="shrink-0 rounded border border-surface-700 px-1.5 py-0.5 text-[9px] text-surface-400 transition-colors hover:border-brand/50 hover:text-brand-300"
+                        title={`Adopt ${t.name} as a Yaver task`}
+                      >
+                        Adopt
+                      </button>
+                    ) : (
+                      <span className="shrink-0 rounded border border-success/30 px-1.5 py-0.5 text-[9px] text-success">
+                        task
+                      </span>
+                    )}
+                  </div>
                 )) : null}
                 {isConnected && sidebarTmux.length > 6 ? (
                   <p className="px-2 text-[9px] text-surface-500">+{sidebarTmux.length - 6} more in Vibing</p>
@@ -3620,7 +3549,7 @@ export default function DashboardPage() {
                 // a separate piece of state that never syncs unless we
                 // look it up here.
                 const liveDevice = devices.find((d) => d.id === connectedDevice.id) ?? connectedDevice;
-                const connectedNeedsAuth = !!liveDevice.needsAuth && !liveDevice.isGuest;
+                const connectedNeedsAuth = !!liveDevice.needsAuth;
                 const connectedIsReauthing = reauthBusy === liveDevice.id;
                 const connectedReauthMsg =
                   reauthMsg && reauthMsg.deviceId === liveDevice.id ? reauthMsg : null;
@@ -3790,9 +3719,6 @@ export default function DashboardPage() {
                           {primaryDeviceId === d.id ? (
                             <span className="shrink-0 text-[9px] text-indigo-400" title="Primary">&#9733;</span>
                           ) : null}
-                          {d.isGuest ? (
-                            <span className="shrink-0 rounded bg-sky-500/15 px-1 text-[9px] uppercase text-sky-700 dark:text-sky-300">shared</span>
-                          ) : null}
                         </button>
                         {needsRecovery ? (
                           <button
@@ -3842,37 +3768,55 @@ export default function DashboardPage() {
             )}
           </div>
 
+          {/* Task history is shared with mobile: these are the agent's real
+              task rows, not an Electron-only cache. Active/review/completed
+              tasks stay selectable across GUI, web, and mobile reconnects. */}
+          {isConnected ? (
+            <div className="min-h-0 shrink border-t border-surface-800 pt-3">
+              <div className="mb-1 flex items-center justify-between">
+                <button
+                  onClick={() => setActiveTab("chat")}
+                  className="text-[10px] font-semibold uppercase tracking-widest text-surface-500 hover:text-surface-300"
+                  title="Open task chat and live console"
+                >
+                  Tasks
+                </button>
+                <span className="rounded-full bg-surface-800 px-1.5 text-[9px] text-surface-400">{tasks.length}</span>
+              </div>
+              <div className="max-h-52 space-y-0.5 overflow-y-auto pr-0.5">
+                {tasks.length === 0 ? (
+                  <p className="px-2 py-1 text-[10px] text-surface-600">No tasks yet</p>
+                ) : tasks.map((task) => {
+                  const live = task.status === "running" || task.status === "queued";
+                  const selected = activeTask?.id === task.id;
+                  return (
+                    <button
+                      key={task.id}
+                      onClick={() => selectTask(task)}
+                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                        selected ? "bg-brand-soft/60 text-brand-softFg" : "text-surface-400 hover:bg-surface-800/70 hover:text-surface-200"
+                      }`}
+                      title={`${displayTaskTitle(task.title)} · ${task.status}`}
+                    >
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        live ? "animate-pulse bg-amber-400"
+                          : task.status === "review" ? "bg-violet-400"
+                          : task.status === "completed" ? "bg-emerald-400"
+                          : "bg-surface-600"
+                      }`} />
+                      <span className="min-w-0 flex-1 truncate text-[11px]">{displayTaskTitle(task.title)}</span>
+                      <span className={`shrink-0 text-[9px] ${statusColor(task.status)}`}>
+                        {live ? "ongoing" : task.status}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           <div className="min-h-6 flex-1" />
 
-          <div className="shrink-0 space-y-3 border-t border-surface-800/60 pt-4">
-            {ENABLE_GUEST_FEATURES && <button
-              onClick={() => setActiveTab("guests")}
-              className="w-full rounded-md border border-brand/30 bg-brand-soft/60 px-3 py-1.5 text-xs font-medium text-brand-softFg hover:bg-brand-soft hover:border-brand/50 transition-colors"
-              title="Invite someone to share this machine"
-            >
-              Invite a guest
-            </button>}
-
-            {ENABLE_GUEST_FEATURES ? (
-              <div>
-                <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-surface-500">Join as a guest</p>
-                <div className="flex gap-1.5">
-                  <input value={guestCode} onChange={e => setGuestCode(e.target.value.toUpperCase())} maxLength={6}
-                    placeholder="CODE" className="min-w-0 flex-[1_1_0%] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-center font-mono tracking-widest text-slate-700 placeholder-slate-400 outline-none focus:border-indigo-500 dark:border-surface-800 dark:bg-surface-900 dark:text-surface-200 dark:placeholder-surface-600" />
-                  <button onClick={async () => {
-                    if (guestCode.trim().length < 4) return;
-                    try {
-                      const res = await fetch(`${CONVEX_URL}/guests/accept-code`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ code: guestCode.trim() }) });
-                      const data = await res.json();
-                      if (data.ok || data.hostName) { alert(`Joined ${data.hostName || "host"}'s machine!`); setGuestCode(""); refreshDevices(); }
-                      else alert(data.error || "Invalid code");
-                    } catch (e: any) { alert(e.message); }
-                  }} disabled={guestCode.trim().length < 4}
-                    className="shrink-0 rounded-md bg-indigo-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-30 dark:bg-indigo-500 dark:hover:bg-indigo-400">Join</button>
-                </div>
-              </div>
-            ) : null}
-          </div>
         </div>
         </div>
         </div>
@@ -4234,7 +4178,7 @@ export default function DashboardPage() {
                           onOpenShell={() => { setShellTmuxSession(null); setShellDevice(d); }}
                           onOpenRemoteDesktop={() => setRemoteDesktopDevice(d)}
                           onConnect={() => connectToDevice(d)}
-                          onTogglePrimary={!d.isGuest && token ? async () => {
+                          onTogglePrimary={token ? async () => {
                             const nextId = primaryDeviceId === d.id ? null : d.id;
                             const prev = primaryDeviceId;
                             setPrimaryDeviceId(nextId);
@@ -4250,8 +4194,8 @@ export default function DashboardPage() {
                               alert(`Could not update primary: ${e?.message ?? e}`);
                             }
                           } : undefined}
-                          canTogglePrimary={!d.isGuest && !!token}
-                          onToggleSecondary={!d.isGuest && token ? async () => {
+                          canTogglePrimary={!!token}
+                          onToggleSecondary={token ? async () => {
                             const nextId = secondaryDeviceId === d.id ? null : d.id;
                             const prev = secondaryDeviceId;
                             setSecondaryDeviceId(nextId);
@@ -4267,7 +4211,7 @@ export default function DashboardPage() {
                               alert(`Could not update secondary: ${e?.message ?? e}`);
                             }
                           } : undefined}
-                          canToggleSecondary={!d.isGuest && !!token && primaryDeviceId !== d.id}
+                          canToggleSecondary={!!token && primaryDeviceId !== d.id}
                         />
                       ))}
                     </div>
@@ -4297,6 +4241,7 @@ export default function DashboardPage() {
                 machineRoles={machineRoles.favorite}
                 onSaveMachineRoles={machineRoles.save}
                 onClearMachineRoles={machineRoles.clear}
+                desktopSurface={desktopSurface}
                 onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined}
                 onOpenTmux={(sessionName) => {
                   if (!connectedDevice) {
@@ -4453,26 +4398,6 @@ export default function DashboardPage() {
                 <WebTestsPanel />
               </div>
             </div>
-          ) : activeTab === "guests" ? (
-            // LAUNCH KILL SWITCH (@/lib/launchFlags). Guest sharing ships off at
-            // stage one; Convex refuses the mutations and the agent refuses the
-            // token, so offering the UI would only produce a dead end.
-            ENABLE_GUEST_FEATURES
-              ? <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full"><GuestsStatusView /></div>
-              : <FeatureOffNotice name="Guest sharing" />
-          ) : activeTab === "collab" ? (
-            <div className="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full space-y-6">
-              {/* Live co-vibe roster first: who is here NOW, and who may type.
-                  Sharing controls (below) are the "invite" half of the same story. */}
-              <CoVibeCard ownerUserId={user?.id} />
-              {/* What the machine is doing to itself, next to who is on it. The
-                  custodian's findings had no surface at all until now — a
-                  self-healing layer nobody can see is indistinguishable from
-                  none, and it is exactly what answers "why does this box say
-                  it is full when it is idle?". */}
-              <HousekeepingCard enabled={isConnected} />
-              <CollabView />
-            </div>
           ) : activeTab === "convex" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full"><ConvexView /></div>
           ) : activeTab === "security" ? (
@@ -4482,7 +4407,7 @@ export default function DashboardPage() {
               {/* Account plan + relay usage — profile clicks land here. */}
               <PlanUsageCard deviceNames={Object.fromEntries(devices.map((d) => [d.id, d.name]))} />
               {/* Optional runner/render machine slicing — the favorite config. */}
-              <MachineRolesCard token={token} devices={devices.map((d) => ({ id: d.id, name: d.name, platform: d.platform }))} roles={machineRoles} />
+              <MachineRolesCard token={token} devices={devices.map((d) => ({ id: d.id, name: d.name, platform: d.platform }))} roles={machineRoles} desktopSurface={desktopSurface} />
               {/* Mesh lives here now — set-up-once plumbing, not a nav tab. */}
               <button
                 type="button"
@@ -4559,6 +4484,7 @@ export default function DashboardPage() {
                 hiddenCount={hiddenIds.size}
                 onNavigateCloud={() => setActiveTab("settings")}
                 machineRoles={machineRoles}
+                desktopSurface={desktopSurface}
               />
             </div>
           ) : (
@@ -4596,6 +4522,26 @@ export default function DashboardPage() {
                             className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-400/15"
                           >
                             Complete
+                          </button>
+                        ) : null}
+                        {activeTask.status === "running" || activeTask.status === "queued" ? (
+                          <button
+                            type="button"
+                            disabled={taskActionBusy === `stop:${activeTask.id}`}
+                            onClick={() => void stopTaskFromUI(activeTask)}
+                            className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-700 hover:bg-amber-400/15 disabled:opacity-40 dark:text-amber-300"
+                          >
+                            {taskActionBusy === `stop:${activeTask.id}` ? "Stopping…" : "Stop"}
+                          </button>
+                        ) : null}
+                        {!["running", "queued"].includes(activeTask.status) && !activeTask.id.startsWith("pending-cloud:") ? (
+                          <button
+                            type="button"
+                            disabled={taskActionBusy === `delete:${activeTask.id}`}
+                            onClick={() => void deleteTaskFromUI(activeTask)}
+                            className="rounded-lg border border-red-400/25 px-2 py-1 text-[10px] font-semibold text-red-700 hover:bg-red-500/10 disabled:opacity-40 dark:text-red-300"
+                          >
+                            {taskActionBusy === `delete:${activeTask.id}` ? "Deleting…" : "Delete"}
                           </button>
                         ) : null}
                         {activeTask.costUsd != null && <span className="text-[10px] text-surface-600">${activeTask.costUsd.toFixed(3)}</span>}
@@ -5506,7 +5452,7 @@ export default function DashboardPage() {
                       // chat to that machine — an MCP attaches by name on
                       // the task machine, and repo paths are machine-local.
                       const remoteMcpRows = devices
-                        .filter((d) => d.id !== connectedDevice?.id && !d.isGuest)
+                        .filter((d) => d.id !== connectedDevice?.id)
                         .flatMap((d) => (mcpCatalogByDevice[d.id] || []).map((server) => ({
                           device: d,
                           deviceId: d.id,
@@ -5515,7 +5461,7 @@ export default function DashboardPage() {
                         })))
                         .sort((a, b) => (a.deviceLabel + a.server.name).localeCompare(b.deviceLabel + b.server.name));
                       const remoteProjectRows = devices
-                        .filter((d) => d.id !== connectedDevice?.id && !d.isGuest)
+                        .filter((d) => d.id !== connectedDevice?.id)
                         .flatMap((d) => (projectCatalogByDevice[d.id] || []).map((proj) => ({
                           device: d,
                           deviceId: d.id,

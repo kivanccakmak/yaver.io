@@ -237,8 +237,8 @@ yaver code set byok ollama \\
             BYOK keys are written to the agent&apos;s{" "}
             <code className="rounded bg-surface-900 px-1.5 py-0.5 text-[12px] text-surface-200">~/.yaver/</code>{" "}
             on your dev machine. They never touch Yaver&apos;s Convex backend, never go through the
-            relay, and are not visible to guests on the same machine — the OpenCode config endpoint
-            is owner-only, and guest scopes don&apos;t include it. If you want to rotate, repaste in
+            relay, and are only visible to the signed-in owner — the OpenCode config endpoint
+            rejects companion and SDK capability scopes. If you want to rotate, repaste in
             the picker (or run{" "}
             <code className="rounded bg-surface-900 px-1.5 py-0.5 text-[12px] text-surface-200">yaver code set byok &lt;provider&gt; --api-key …</code>{" "}
             again) — the new key overwrites the old one in place.

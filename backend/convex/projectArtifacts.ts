@@ -1,4 +1,4 @@
-// projectArtifacts.ts — privacy-safe shareable build/output artifact ledger.
+// projectArtifacts.ts — private owner build/output artifact ledger.
 //
 // Stores metadata and URL/object pointers only. Do not put local filesystem
 // paths, build stdout, prompts, secrets, provider credentials, or VM internals
@@ -68,12 +68,6 @@ export function normalizeObjectKey(value: unknown): string | undefined {
   return raw;
 }
 
-function randomShareToken(): string {
-  const bytes = new Uint8Array(18);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 export function normalizeArtifactSizeBytes(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined;
   const n = Number(value);
@@ -95,16 +89,6 @@ function meteredArtifactBytes(row: { provider?: string; sizeBytes?: number; stat
   return Math.max(0, Math.floor(row.sizeBytes || 0));
 }
 
-export function isPublicArtifactVisible(
-  row: { status?: string; visibility?: string; shareUrlExpiresAt?: number; expiresAt?: number } | null | undefined,
-  now = Date.now(),
-): boolean {
-  if (!row || row.status !== "active" || row.visibility !== "public-link") return false;
-  if (row.shareUrlExpiresAt && row.shareUrlExpiresAt <= now) return false;
-  if (row.expiresAt && row.expiresAt <= now) return false;
-  return true;
-}
-
 export function summarizeArtifactUsage(
   rows: Array<{ kind?: string; provider?: string; sizeBytes?: number; visibility?: string; status?: string; expiresAt?: number; createdAt?: number }>,
   now = Date.now(),
@@ -113,7 +97,6 @@ export function summarizeArtifactUsage(
 ) {
   const byKind: Record<string, number> = {};
   let activeCount = 0;
-  let publicLinkCount = 0;
   let storageBytes = 0;
   let oldestCreatedAt: number | null = null;
   let newestCreatedAt: number | null = null;
@@ -123,7 +106,6 @@ export function summarizeArtifactUsage(
     activeCount += 1;
     const kind = normalizeArtifactKind(row.kind);
     byKind[kind] = (byKind[kind] || 0) + 1;
-    if (row.visibility === "public-link") publicLinkCount += 1;
     storageBytes += meteredArtifactBytes(row, now);
     if (typeof row.createdAt === "number") {
       oldestCreatedAt = oldestCreatedAt === null ? row.createdAt : Math.min(oldestCreatedAt, row.createdAt);
@@ -141,7 +123,6 @@ export function summarizeArtifactUsage(
     remainingBytes,
     quotaPercent: quotaBytes > 0 ? Math.min(1, totalMeteredBytes / quotaBytes) : 0,
     overQuota: quotaBytes > 0 && totalMeteredBytes > quotaBytes,
-    publicLinkCount,
     byKind,
     oldestCreatedAt,
     newestCreatedAt,
@@ -187,51 +168,10 @@ async function enforceOwnerStorageQuota(
   }
 }
 
-async function resolveShareForUser(
-  ctx: any,
-  userId: Id<"users">,
-  args: { shareId?: Id<"projectShares">; projectSlug?: string },
-) {
-  let share = args.shareId ? await ctx.db.get(args.shareId) : null;
-  const projectSlug = normalizeProjectSlug(args.projectSlug);
-  if (!share && projectSlug) {
-    share = await ctx.db
-      .query("projectShares")
-      .withIndex("by_owner", (q: any) => q.eq("ownerUserId", userId))
-      .filter((q: any) => q.eq(q.field("slug"), projectSlug))
-      .filter((q: any) => q.eq(q.field("status"), "active"))
-      .first();
-    if (!share) {
-      const memberships = await ctx.db
-        .query("projectMemberships")
-        .withIndex("by_user", (q: any) => q.eq("userId", userId))
-        .collect();
-      for (const membership of memberships) {
-        if (membership.status !== "active") continue;
-        const candidate = await ctx.db.get(membership.shareId);
-        if (candidate?.status === "active" && candidate.slug === projectSlug) {
-          share = candidate;
-          break;
-        }
-      }
-    }
-  }
-  if (!share || share.status !== "active") throw new Error("project share not found");
-
-  const owner = String(share.ownerUserId) === String(userId);
-  let membership = null;
-  if (!owner) {
-    membership = await ctx.db
-      .query("projectMemberships")
-      .withIndex("by_share_user", (q: any) => q.eq("shareId", share._id).eq("userId", userId))
-      .first();
-    if (!membership || membership.status !== "active") throw new Error("project membership not active");
-  }
-  return { share, membership, owner };
-}
-
-function canCreateArtifact(role: string | undefined, owner: boolean): boolean {
-  return owner || role === "dev" || role === "normie";
+function requireProjectSlug(value: string | undefined): string {
+  const slug = normalizeProjectSlug(value);
+  if (!slug) throw new Error("projectSlug required");
+  return slug;
 }
 
 async function requireManagedArtifactStorageEntitlement(ctx: any, userId: Id<"users">) {
@@ -241,10 +181,9 @@ async function requireManagedArtifactStorageEntitlement(ctx: any, userId: Id<"us
   }
 }
 
-function serialize(row: any, includePrivate = false, includeShareToken = false) {
+function serialize(row: any, includePrivate = false) {
   return {
     id: row._id,
-    shareId: row.shareId,
     taskId: row.taskId ?? null,
     localTaskId: row.localTaskId ?? null,
     projectSlug: row.projectSlug,
@@ -257,41 +196,33 @@ function serialize(row: any, includePrivate = false, includeShareToken = false) 
     sizeBytes: row.sizeBytes ?? null,
     checksum: row.checksum ?? null,
     visibility: row.visibility,
-    shareUrlExpiresAt: row.shareUrlExpiresAt ?? null,
     expiresAt: row.expiresAt ?? null,
     status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     lastAccessedAt: row.lastAccessedAt ?? null,
-    ...(includeShareToken && row.visibility === "public-link" ? { shareToken: row.shareToken ?? null } : {}),
-    ...(includePrivate ? { storageId: row.storageId ?? null, objectKey: row.objectKey ?? null, shareToken: row.shareToken ?? null } : {}),
+    ...(includePrivate ? { storageId: row.storageId ?? null, objectKey: row.objectKey ?? null } : {}),
   };
 }
 
 export const generateUploadUrl = mutation({
   args: {
     tokenHash: v.string(),
-    shareId: v.optional(v.id("projectShares")),
-    projectSlug: v.optional(v.string()),
+    projectSlug: v.string(),
     sizeBytes: v.number(),
   },
   handler: async (ctx, args) => {
     const userId = await userFromToken(ctx, args.tokenHash);
-    const { share, membership, owner } = await resolveShareForUser(ctx, userId, {
-      shareId: args.shareId,
-      projectSlug: args.projectSlug,
-    });
-    if (!canCreateArtifact(membership?.role, owner)) throw new Error("viewer role cannot upload artifacts");
+    const projectSlug = requireProjectSlug(args.projectSlug);
     await requireManagedArtifactStorageEntitlement(ctx, userId);
     const sizeBytes = normalizeArtifactSizeBytes(args.sizeBytes);
     if (!sizeBytes || sizeBytes <= 0) throw new Error("upload sizeBytes must be positive");
     const now = Date.now();
-    await enforceOwnerStorageQuota(ctx, share.ownerUserId, sizeBytes, now);
+    await enforceOwnerStorageQuota(ctx, userId, sizeBytes, now);
     const uploadIntentId = await ctx.db.insert("projectArtifactUploadIntents", {
       userId,
-      ownerUserId: share.ownerUserId,
-      shareId: share._id,
-      projectSlug: share.slug,
+      ownerUserId: userId,
+      projectSlug,
       sizeBytes,
       status: "pending" as const,
       createdAt: now,
@@ -308,8 +239,7 @@ export const generateUploadUrl = mutation({
 export const create = mutation({
   args: {
     tokenHash: v.string(),
-    shareId: v.optional(v.id("projectShares")),
-    projectSlug: v.optional(v.string()),
+    projectSlug: v.string(),
     taskId: v.optional(v.string()),
     localTaskId: v.optional(v.string()),
     kind: v.optional(v.string()),
@@ -323,22 +253,16 @@ export const create = mutation({
     contentType: v.optional(v.string()),
     sizeBytes: v.optional(v.number()),
     checksum: v.optional(v.string()),
-    visibility: v.optional(v.union(v.literal("private"), v.literal("project"), v.literal("public-link"))),
-    shareTtlMs: v.optional(v.number()),
+    visibility: v.optional(v.union(v.literal("private"), v.literal("project"))),
     expiresAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await userFromToken(ctx, args.tokenHash);
-    const { share, membership, owner } = await resolveShareForUser(ctx, userId, {
-      shareId: args.shareId,
-      projectSlug: args.projectSlug,
-    });
-    if (!canCreateArtifact(membership?.role, owner)) throw new Error("viewer role cannot create artifacts");
+    const projectSlug = requireProjectSlug(args.projectSlug);
     const title = trimLabel(args.title, 140);
     if (!title) throw new Error("title required");
     const visibility = args.visibility ?? "project";
     const now = Date.now();
-    const ttl = Math.max(5 * 60_000, Math.min(args.shareTtlMs ?? 7 * 24 * 60 * 60_000, 90 * 24 * 60 * 60_000));
     let provider = normalizeArtifactProvider(args.provider);
     let url = normalizeArtifactUrl(args.url);
     let objectKey = normalizeObjectKey(args.objectKey);
@@ -378,9 +302,8 @@ export const create = mutation({
         uploadIntent &&
         uploadIntent.status === "pending" &&
         String(uploadIntent.userId) === String(userId) &&
-        String(uploadIntent.ownerUserId) === String(share.ownerUserId) &&
-        String(uploadIntent.shareId) === String(share._id) &&
-        uploadIntent.projectSlug === share.slug &&
+        String(uploadIntent.ownerUserId) === String(userId) &&
+        uploadIntent.projectSlug === projectSlug &&
         Math.max(0, Math.floor(uploadIntent.sizeBytes || 0)) >= (actualStorageSizeBytes || sizeBytes || 0);
       if (!uploadIntentValid) {
         try {
@@ -402,7 +325,7 @@ export const create = mutation({
     );
     if (!uploadIntent) {
       try {
-        await enforceOwnerStorageQuota(ctx, share.ownerUserId, storageBytes, now);
+        await enforceOwnerStorageQuota(ctx, userId, storageBytes, now);
       } catch (err) {
         if (args.storageId) {
           try {
@@ -426,12 +349,10 @@ export const create = mutation({
     }
     const patch = {
       userId,
-      ownerUserId: share.ownerUserId,
-      shareId: share._id,
-      membershipId: membership?._id,
+      ownerUserId: userId,
       taskId: trimLabel(args.taskId, 160),
       localTaskId: trimLabel(args.localTaskId, 160),
-      projectSlug: share.slug,
+      projectSlug,
       kind: normalizeArtifactKind(args.kind),
       title,
       description: trimLabel(args.description, 280),
@@ -443,8 +364,6 @@ export const create = mutation({
       sizeBytes,
       checksum: trimLabel(args.checksum, 160),
       visibility,
-      shareToken: visibility === "public-link" ? randomShareToken() : undefined,
-      shareUrlExpiresAt: visibility === "public-link" ? now + ttl : undefined,
       expiresAt: args.expiresAt,
       status: "active" as const,
       createdAt: now,
@@ -469,31 +388,26 @@ export const create = mutation({
 export const usage = query({
   args: {
     tokenHash: v.string(),
-    shareId: v.optional(v.id("projectShares")),
-    projectSlug: v.optional(v.string()),
+    projectSlug: v.string(),
   },
   handler: async (ctx, args) => {
     const userId = await userFromToken(ctx, args.tokenHash);
-    const { share } = await resolveShareForUser(ctx, userId, {
-      shareId: args.shareId,
-      projectSlug: args.projectSlug,
-    });
+    const projectSlug = requireProjectSlug(args.projectSlug);
     const now = Date.now();
     const quotaBytes = includedArtifactStorageBytes();
     const projectRows = await ctx.db
       .query("projectArtifacts")
-      .withIndex("by_share_created", (q: any) => q.eq("shareId", share._id))
+      .withIndex("by_owner_project_created", (q: any) => q.eq("ownerUserId", userId).eq("projectSlug", projectSlug))
       .collect();
-    const ownerRows = await ownerArtifactRows(ctx, share.ownerUserId);
+    const ownerRows = await ownerArtifactRows(ctx, userId);
     const projectReservedUploadBytes = await ctx.db
       .query("projectArtifactUploadIntents")
-      .withIndex("by_share_status", (q: any) => q.eq("shareId", share._id).eq("status", "pending"))
+      .withIndex("by_owner_project_status", (q: any) => q.eq("ownerUserId", userId).eq("projectSlug", projectSlug).eq("status", "pending"))
       .collect()
       .then((rows: any[]) => rows.reduce((sum, row) => sum + Math.max(0, Math.floor(row.sizeBytes || 0)), 0));
-    const ownerReservedUploadBytes = await ownerPendingUploadBytes(ctx, share.ownerUserId);
+    const ownerReservedUploadBytes = await ownerPendingUploadBytes(ctx, userId);
     return {
-      shareId: share._id,
-      projectSlug: share.slug,
+      projectSlug,
       project: summarizeArtifactUsage(projectRows, now, quotaBytes, projectReservedUploadBytes),
       owner: summarizeArtifactUsage(ownerRows, now, quotaBytes, ownerReservedUploadBytes),
     };
@@ -503,23 +417,18 @@ export const usage = query({
 export const cleanupExpired = mutation({
   args: {
     tokenHash: v.string(),
-    shareId: v.optional(v.id("projectShares")),
-    projectSlug: v.optional(v.string()),
+    projectSlug: v.string(),
     limit: v.optional(v.number()),
     deleteStorage: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await userFromToken(ctx, args.tokenHash);
-    const { share, owner } = await resolveShareForUser(ctx, userId, {
-      shareId: args.shareId,
-      projectSlug: args.projectSlug,
-    });
-    if (!owner) throw new Error("only the project owner can clean up artifacts");
+    const projectSlug = requireProjectSlug(args.projectSlug);
     const now = Date.now();
     const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
     const rows = await ctx.db
       .query("projectArtifacts")
-      .withIndex("by_share_created", (q: any) => q.eq("shareId", share._id))
+      .withIndex("by_owner_project_created", (q: any) => q.eq("ownerUserId", userId).eq("projectSlug", projectSlug))
       .collect();
     const expired = rows
       .filter((row: any) => row.status === "active")
@@ -541,8 +450,7 @@ export const cleanupExpired = mutation({
     }
     return {
       ok: true,
-      shareId: share._id,
-      projectSlug: share.slug,
+      projectSlug,
       scanned: rows.length,
       expired: expired.length,
       storageDeleteAttempted,
@@ -555,35 +463,31 @@ export const cleanupExpired = mutation({
 export const list = query({
   args: {
     tokenHash: v.string(),
-    shareId: v.optional(v.id("projectShares")),
-    projectSlug: v.optional(v.string()),
+    projectSlug: v.string(),
     kind: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await userFromToken(ctx, args.tokenHash);
-    const { share } = await resolveShareForUser(ctx, userId, {
-      shareId: args.shareId,
-      projectSlug: args.projectSlug,
-    });
+    const projectSlug = requireProjectSlug(args.projectSlug);
     const limit = Math.max(1, Math.min(args.limit ?? 50, 100));
     const kind = args.kind ? normalizeArtifactKind(args.kind) : undefined;
     const rows = kind
       ? await ctx.db
           .query("projectArtifacts")
-          .withIndex("by_share_kind_created", (q: any) => q.eq("shareId", share._id).eq("kind", kind))
+          .withIndex("by_owner_project_kind_created", (q: any) => q.eq("ownerUserId", userId).eq("projectSlug", projectSlug).eq("kind", kind))
           .order("desc")
           .take(limit)
       : await ctx.db
           .query("projectArtifacts")
-          .withIndex("by_share_created", (q: any) => q.eq("shareId", share._id))
+          .withIndex("by_owner_project_created", (q: any) => q.eq("ownerUserId", userId).eq("projectSlug", projectSlug))
           .order("desc")
           .take(limit);
     const now = Date.now();
     return rows
       .filter((row: any) => row.status === "active")
       .filter((row: any) => !row.expiresAt || row.expiresAt > now)
-      .map((row: any) => serialize(row, false, true));
+      .map((row: any) => serialize(row, false));
   },
 });
 
@@ -602,38 +506,5 @@ export const hide = mutation({
     const now = Date.now();
     await ctx.db.patch(row._id, { status: "hidden", updatedAt: now });
     return serialize({ ...row, status: "hidden", updatedAt: now });
-  },
-});
-
-export const publicByToken = query({
-  args: { shareToken: v.string() },
-  handler: async (ctx, args) => {
-    const token = String(args.shareToken || "").trim();
-    if (!token) return null;
-    const row = await ctx.db
-      .query("projectArtifacts")
-      .withIndex("by_shareToken", (q: any) => q.eq("shareToken", token))
-      .first();
-    const now = Date.now();
-    if (!row) return null;
-    if (!isPublicArtifactVisible(row, now)) return null;
-    return serialize(row);
-  },
-});
-
-export const touchPublic = mutation({
-  args: { shareToken: v.string() },
-  handler: async (ctx, args) => {
-    const token = String(args.shareToken || "").trim();
-    if (!token) return null;
-    const row = await ctx.db
-      .query("projectArtifacts")
-      .withIndex("by_shareToken", (q: any) => q.eq("shareToken", token))
-      .first();
-    const now = Date.now();
-    if (!row) return null;
-    if (!isPublicArtifactVisible(row, now)) return null;
-    await ctx.db.patch(row._id, { lastAccessedAt: now });
-    return { ok: true };
   },
 });

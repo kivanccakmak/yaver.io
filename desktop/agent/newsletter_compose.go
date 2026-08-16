@@ -39,13 +39,13 @@ import (
 // so "more sources" (linear, jira, …) just append into the
 // same lists.
 type GitActivity struct {
-	Repo        string           `json:"repo"`
-	SinceMs     int64            `json:"sinceMs"`
-	UntilMs     int64            `json:"untilMs"`
-	Commits     []CommitEntry    `json:"commits"`
-	PRs         []PREntry        `json:"prs,omitempty"`
-	Issues      []IssueEntry     `json:"issues,omitempty"`
-	Highlights  []string         `json:"highlights,omitempty"`
+	Repo       string        `json:"repo"`
+	SinceMs    int64         `json:"sinceMs"`
+	UntilMs    int64         `json:"untilMs"`
+	Commits    []CommitEntry `json:"commits"`
+	PRs        []PREntry     `json:"prs,omitempty"`
+	Issues     []IssueEntry  `json:"issues,omitempty"`
+	Highlights []string      `json:"highlights,omitempty"`
 }
 
 type CommitEntry struct {
@@ -72,15 +72,15 @@ type IssueEntry struct {
 
 // ComposeNewsletterOptions drives what the composer collects.
 type ComposeNewsletterOptions struct {
-	Repo         string `json:"repo"`                   // project path (from /files/roots) or absolute
-	SinceDays    int    `json:"sinceDays,omitempty"`    // default 7
-	IncludePRs   bool   `json:"includePrs,omitempty"`   // gh/glab pr list
-	IncludeIssues bool  `json:"includeIssues,omitempty"`
-	Subject      string `json:"subject,omitempty"`      // optional override
-	Instructions string `json:"instructions,omitempty"` // AI tone hint
-	Execute      bool   `json:"execute,omitempty"`      // run inline
-	Runner       string `json:"runner,omitempty"`
-	SaveDraft    bool   `json:"saveDraft,omitempty"`    // persist as newsletter campaign
+	Repo          string `json:"repo"`                 // project path (from /files/roots) or absolute
+	SinceDays     int    `json:"sinceDays,omitempty"`  // default 7
+	IncludePRs    bool   `json:"includePrs,omitempty"` // gh/glab pr list
+	IncludeIssues bool   `json:"includeIssues,omitempty"`
+	Subject       string `json:"subject,omitempty"`      // optional override
+	Instructions  string `json:"instructions,omitempty"` // AI tone hint
+	Execute       bool   `json:"execute,omitempty"`      // run inline
+	Runner        string `json:"runner,omitempty"`
+	SaveDraft     bool   `json:"saveDraft,omitempty"` // persist as newsletter campaign
 }
 
 // CollectGitActivity shells out to git/gh/glab and returns the
@@ -156,11 +156,11 @@ func CollectGitActivity(opts ComposeNewsletterOptions) (*GitActivity, error) {
 			).CombinedOutput()
 			if err == nil {
 				var mrs []struct {
-					Iid    int    `json:"iid"`
-					Title  string `json:"title"`
+					Iid    int                       `json:"iid"`
+					Title  string                    `json:"title"`
 					Author struct{ Username string } `json:"author"`
-					State  string `json:"state"`
-					WebURL string `json:"web_url"`
+					State  string                    `json:"state"`
+					WebURL string                    `json:"web_url"`
 				}
 				if err := json.Unmarshal(glabOut, &mrs); err == nil {
 					for _, m := range mrs {

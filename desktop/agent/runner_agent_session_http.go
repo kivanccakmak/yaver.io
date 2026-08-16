@@ -10,10 +10,7 @@ package main
 //   POST   /runner/agent/sessions/{id}/message   Append a follow-up user message
 //   POST   /runner/agent/sessions/{id}/cancel    Stop the in-flight task
 //
-// Phase 2 is owner-only; agent sessions can write code and call any
-// runner the owner has configured, so a guest tier here would mean
-// "give me arbitrary code execution on someone else's box." That
-// gate stays closed until we have proper per-session sandboxing.
+// Agent sessions are owner-only and are registered behind owner auth.
 
 import (
 	"encoding/json"
@@ -35,10 +32,6 @@ func (s *HTTPServer) ensureAgentSessionManager() *AgentSessionManager {
 }
 
 func (s *HTTPServer) handleRunnerAgentSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		jsonReply(w, http.StatusForbidden, map[string]string{"error": "agent sessions are owner-only in Phase 2"})
-		return
-	}
 	mgr := s.ensureAgentSessionManager()
 	if mgr == nil {
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{
@@ -71,10 +64,6 @@ func (s *HTTPServer) handleRunnerAgentSessions(w http.ResponseWriter, r *http.Re
 }
 
 func (s *HTTPServer) handleRunnerAgentSessionByID(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		jsonReply(w, http.StatusForbidden, map[string]string{"error": "agent sessions are owner-only in Phase 2"})
-		return
-	}
 	tail := strings.TrimPrefix(r.URL.Path, "/runner/agent/sessions/")
 	tail = strings.TrimSuffix(tail, "/")
 	if tail == "" {

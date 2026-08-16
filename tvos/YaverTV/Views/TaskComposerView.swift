@@ -8,11 +8,11 @@
 // plus the opencode mode/goal/askMode fields so a TV-started task is
 // indistinguishable from one started in the dashboard.
 //
-// Project + MCP pickers reuse VibeTurnPanel's Convex-remembered pattern
-// (defaultRuntimeProjectByDevice / mcpServersByDevice via YaverStore), so a
-// project picked on the phone shows up pre-selected on the TV.
+// Project + MCP context is restored silently from the same Convex rows as
+// mobile/web. Its controls live in Settings, never in the one-step Chat flow.
 
 import SwiftUI
+import UIKit
 
 struct TaskComposerView: View {
     @EnvironmentObject var store: YaverStore
@@ -21,73 +21,56 @@ struct TaskComposerView: View {
     /// Optional project to preselect (e.g. "Start a vibe" from a project's
     /// dead-end preview screen). Matched by name against /projects.
     private let initialProjectName: String?
+    private let onCreated: (TaskSummary) -> Void
 
-    init(initialProjectName: String? = nil) {
+    init(
+        initialProjectName: String? = nil,
+        onCreated: @escaping (TaskSummary) -> Void = { _ in }
+    ) {
         self.initialProjectName = initialProjectName
+        self.onCreated = onCreated
     }
 
     @State private var prompt = ""
     @State private var creating = false
-    @State private var createdTask: TaskSummary?
     @State private var error: String?
-    // Project/MCP picker state (runner box /projects, same as VibeTurnPanel).
+    @State private var keyboardActivation = 0
+    // Project/MCP picker state (runner box /projects, same as mobile/web).
+    // Both are optional task context: a prompt can be sent immediately with
+    // the per-device default runner and no project/MCP setup ceremony.
     @State private var availableProjects: [ProjectSummary] = []
     @State private var pickedProjectPath: String?
     @State private var availableMCPServers: [String] = []
     @State private var pickedMCPServers: Set<String> = []
     @State private var yaverMcpOn = true
-    // opencode mode (build/plan/custom) and the explain-first askMode frame.
-    @State private var mode = ""
-    @State private var askMode = false
-
-    /// The composer opens focused on the prompt so the Siri Remote's mic
-    /// button dictates into it immediately — the only speech input a TV has.
-    @FocusState private var promptFocused: Bool
-
     private var runnerBoxId: String? { store.runnerBox()?.id }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 22) {
             header
 
-            TextField("What should I build or change?", text: $prompt, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 22))
-                .lineLimit(3, reservesSpace: true)
-                .focused($promptFocused)
-                .onSubmit { create() }
+            // New vibe is a one-action surface: selecting it opens the system
+            // keyboard immediately and Done submits. A second "Start vibe"
+            // page made the couch flow Select → type → dismiss → move → Select,
+            // and duplicated defaults that already live in Settings.
+            AutoSubmittingVibeField(
+                text: $prompt,
+                activation: keyboardActivation,
+                enabled: !creating,
+                onSubmit: create
+            )
+            .frame(height: 66)
 
-            Text("Press the mic button on the Siri Remote to dictate — or type with the remote's keyboard.")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 10) {
-                projectChip
-                mcpChip
-                modeChip
-                askChip
-            }
-
-            HStack(spacing: 14) {
-                Button(creating ? "Starting…" : "Start vibe") {
-                    create()
+            if creating {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("Starting Deep Audit…")
+                        .font(.system(size: 17, weight: .semibold))
                 }
-                .disabled(creating || prompt.trimmingCharacters(in: .whitespaces).isEmpty)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-            }
-
-            if let createdTask {
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    Text("Started — \(createdTask.safeTitle)")
-                        .font(.system(size: 16))
-                }
-                .padding(.top, 4)
+            } else {
+                Text("Dictate or type, then press Done. Your remembered project, runner, and MCP settings are used automatically.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
             }
             if let error {
                 Text(error)
@@ -100,156 +83,22 @@ struct TaskComposerView: View {
         .padding(40)
         .frame(maxWidth: 900)
         .task { await loadPickerState() }
-        .onAppear { promptFocused = true }
-        // tvOS 17 default-focus: the prompt is the first thing focus lands on,
-        // so the Siri Remote mic button dictates immediately (the only STT a
-        // TV has) — YouTube-style, no navigation first (2026-08-13).
-        .defaultFocus($promptFocused, true)
+        .onAppear { keyboardActivation += 1 }
     }
 
     private var header: some View {
         HStack {
             Image(systemName: "wand.and.stars").font(.system(size: 26)).foregroundStyle(.blue)
-            Text("New vibe").font(.system(size: 30, weight: .bold))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("New vibe").font(.system(size: 30, weight: .bold))
+                Text("Deep Audit").font(.system(size: 15, weight: .semibold)).foregroundStyle(.blue)
+            }
             Spacer()
         }
     }
 
-    // ── Project / MCP / mode / ask chips ───────────────────────────────────
-
-    private var projectChip: some View {
-        Menu {
-            ForEach(availableProjects) { p in
-                Button {
-                    pickedProjectPath = p.path
-                    if let boxId = runnerBoxId {
-                        store.rememberProject(p, for: boxId)
-                    }
-                } label: {
-                    if p.path == pickedProjectPath {
-                        Label(p.name, systemImage: "checkmark")
-                    } else {
-                        Text(p.name)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                Text(currentProjectLabel)
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-        }
-        .disabled(availableProjects.isEmpty)
-    }
-
-    private var currentProjectLabel: String {
-        if let path = pickedProjectPath {
-            return availableProjects.first(where: { $0.path == path })?.name
-                ?? path.split(separator: "/").last.map(String.init)
-                ?? path
-        }
-        return "Project ▾"
-    }
-
-    private var mcpChip: some View {
-        Menu {
-            Button {
-                yaverMcpOn.toggle()
-                persistMCP()
-            } label: {
-                if yaverMcpOn {
-                    Label("yaver (on)", systemImage: "checkmark")
-                } else {
-                    Text("yaver (off)")
-                }
-            }
-            if !availableMCPServers.isEmpty {
-                Divider()
-                ForEach(availableMCPServers, id: \.self) { name in
-                    Button {
-                        if pickedMCPServers.contains(name) {
-                            pickedMCPServers.remove(name)
-                        } else {
-                            pickedMCPServers.insert(name)
-                        }
-                        persistMCP()
-                    } label: {
-                        if pickedMCPServers.contains(name) {
-                            Label(name, systemImage: "checkmark")
-                        } else {
-                            Text(name)
-                        }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "platter.2.filled.ipad")
-                Text(yaverMcpOn ? "yaver" : "yaver (off)")
-                if !pickedMCPServers.isEmpty {
-                    Text("· \(pickedMCPServers.count) MCP")
-                }
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-        }
-    }
-
-    /// opencode agent mode: build/plan/custom. Empty = the account's default
-    /// agent. Only shown when the user wants it — most TV vibes want the
-    /// default.
-    private var modeChip: some View {
-        Menu {
-            Button { mode = "" } label: {
-                if mode.isEmpty { Label("Default agent", systemImage: "checkmark") } else { Text("Default agent") }
-            }
-            ForEach(["build", "plan"], id: \.self) { m in
-                Button { mode = m } label: {
-                    if mode == m { Label(m, systemImage: "checkmark") } else { Text(m) }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "gearshape.2")
-                Text(mode.isEmpty ? "Mode ▾" : mode)
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-        }
-    }
-
-    /// Explain-first frame (askMode): grounded file:line answer, no changes
-    /// without confirmation. The couch's "deep audit this repo" toggle.
-    private var askChip: some View {
-        Button {
-            askMode.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: askMode ? "checkmark.seal.fill" : "checkmark.seal")
-                Text(askMode ? "Deep audit (ask)" : "Deep audit")
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(askMode ? Color.blue.opacity(0.25) : Color.clear, in: Capsule())
-            .overlay(Capsule().stroke(askMode ? Color.blue : Color.secondary.opacity(0.4), lineWidth: 1.5))
-        }
-    }
-
-    private func persistMCP() {
-        guard let boxId = runnerBoxId else { return }
-        store.rememberMCPServers(Array(pickedMCPServers), includeYaverMcp: yaverMcpOn, for: boxId)
-    }
-
     private func loadPickerState() async {
         guard let boxId = runnerBoxId else { return }
-        if let prefs = store.lastProjectByDevice[boxId], let name = prefs.projectName {
-            pickedProjectPath = availableProjects.first(where: { $0.name == name })?.path
-        }
         if let mcpPref = store.lastMCPServersByDevice[boxId] {
             yaverMcpOn = mcpPref.includeYaverMcp ?? true
             pickedMCPServers = Set(mcpPref.mcpServers ?? [])
@@ -257,21 +106,24 @@ struct TaskComposerView: View {
         guard let client = store.runnerClient() else { return }
         if let list = try? await client.listProjects() {
             availableProjects = list
-            // Remembered project may name a path the /projects list matches.
-            if pickedProjectPath == nil, let prefs = store.lastProjectByDevice[boxId] {
-                pickedProjectPath = availableProjects.first(where: { $0.name == prefs.projectName })?.path
-            }
             // Explicit "start a vibe in THIS project" wins over the remembered
             // one (2026-08-13) — comes from a project's preview dead-end.
-            if pickedProjectPath == nil, let name = initialProjectName {
+            if let name = initialProjectName {
                 pickedProjectPath = availableProjects.first(where: { $0.name == name })?.path
                 if let path = pickedProjectPath, let proj = availableProjects.first(where: { $0.path == path }) {
                     store.rememberProject(proj, for: boxId)
                 }
+            } else {
+                // No explicit project: restore the cross-surface last choice,
+                // but never fall back to the first discovered repo. Discovery
+                // order is inventory, not user intent.
+                pickedProjectPath = store.lastProject(for: boxId, projects: availableProjects)?.path
             }
         }
         if let servers = try? await client.listMCPServers() {
             availableMCPServers = servers.map(\.name)
+            let known = Set(availableMCPServers)
+            pickedMCPServers = pickedMCPServers.intersection(known)
         }
     }
 
@@ -282,6 +134,10 @@ struct TaskComposerView: View {
         error = nil
         Task {
             do {
+                // Typing can be quicker than both /projects and /mcp finish.
+                // Re-hydrate before POST so the one-step UI still respects the
+                // same remembered project/MCP context as mobile and web.
+                await loadPickerState()
                 guard let client = store.runnerClient() else {
                     throw AgentError(message: store.machineSplitActive
                         ? "Your AI runner machine needs the relay to be reachable from this TV."
@@ -294,21 +150,105 @@ struct TaskComposerView: View {
                     projectName: pickedProjectPath.flatMap { path in
                         availableProjects.first(where: { $0.path == path })?.name
                     } ?? "",
-                    mode: mode,
-                    askMode: askMode,
+                    mode: "",
+                    // Chat → New vibe is the TV's Deep Audit doorway. There is
+                    // no per-run toggle on this quick path: Settings owns
+                    // defaults, while this action always requests the grounded
+                    // explain-first audit contract from the agent.
+                    askMode: true,
                     mcpServers: Array(pickedMCPServers),
                     includeYaverMcp: yaverMcpOn
                 )
-                createdTask = task
-                prompt = ""
-                // A moment of confirmation, then the TV drops back to the list
-                // where the new task is visible at the top of Active.
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                onCreated(task)
                 dismiss()
             } catch {
                 self.error = error.localizedDescription
+                // POST failures stay recoverable without resurrecting the old
+                // Start page: put the user straight back in the keyboard with
+                // their text intact.
+                keyboardActivation += 1
             }
             creating = false
+        }
+    }
+}
+
+/// A tvOS text field that enters editing immediately when presented.
+///
+/// SwiftUI FocusState only highlights a tvOS TextField; the user still has to
+/// press Select before the system keyboard appears. `becomeFirstResponder()`
+/// is the missing product action here. The retry is bounded because a newly
+/// presented sheet needs a few run-loop turns before its field has a window.
+private struct AutoSubmittingVibeField: UIViewRepresentable {
+    @Binding var text: String
+    let activation: Int
+    let enabled: Bool
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField(frame: .zero)
+        field.delegate = context.coordinator
+        field.placeholder = "What should I deeply audit?"
+        field.font = .systemFont(ofSize: 22)
+        field.textColor = .label
+        field.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        field.layer.cornerRadius = 14
+        field.layer.masksToBounds = true
+        field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 20, height: 1))
+        field.leftViewMode = .always
+        field.returnKeyType = .send
+        field.accessibilityIdentifier = "chat.prompt"
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        context.coordinator.requestActivation(for: field, value: activation)
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.parent = self
+        if field.text != text { field.text = text }
+        field.isEnabled = enabled
+        context.coordinator.requestActivation(for: field, value: activation)
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: AutoSubmittingVibeField
+        private var handledActivation = Int.min
+
+        init(_ parent: AutoSubmittingVibeField) {
+            self.parent = parent
+        }
+
+        @objc func changed(_ field: UITextField) {
+            parent.text = field.text ?? ""
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            parent.text = textField.text ?? ""
+            guard !(textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+            textField.resignFirstResponder()
+            DispatchQueue.main.async { self.parent.onSubmit() }
+            return false
+        }
+
+        func requestActivation(for field: UITextField, value: Int) {
+            guard value != handledActivation else { return }
+            handledActivation = value
+            activate(field, remainingAttempts: 8)
+        }
+
+        private func activate(_ field: UITextField, remainingAttempts: Int) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self, weak field] in
+                guard let self, let field, self.parent.enabled else { return }
+                if field.window != nil {
+                    field.becomeFirstResponder()
+                } else if remainingAttempts > 0 {
+                    self.activate(field, remainingAttempts: remainingAttempts - 1)
+                }
+            }
         }
     }
 }

@@ -87,8 +87,7 @@ export async function openDevicePickerModal(token: string): Promise<RemoteDevice
   injectStyles();
   const devices = await listReachableDevices(token);
   const owned = devices.owned;
-  const shared = devices.shared;
-  if (owned.length === 0 && shared.length === 0) {
+  if (owned.length === 0) {
     throw new Error('No reachable Yaver machines found for this account.');
   }
 
@@ -140,8 +139,7 @@ export async function openDevicePickerModal(token: string): Promise<RemoteDevice
                     : device.runnerDown
                       ? 'Runner issue — click to fix'
                       : 'Online';
-                const host =
-                  device.isGuest && device.hostName ? `Shared by ${device.hostName}` : device.platform;
+                const host = device.platform;
                 return `
                   <button
                     class="yvr-fb-device-row"
@@ -169,7 +167,6 @@ export async function openDevicePickerModal(token: string): Promise<RemoteDevice
       </div>
       <div class="yvr-fb-device-groups">
         ${renderGroup('Your Machines', owned)}
-        ${renderGroup('Shared With You', shared)}
       </div>
       <div class="yvr-fb-device-error" style="display:none;"></div>
     `;
@@ -179,7 +176,7 @@ export async function openDevicePickerModal(token: string): Promise<RemoteDevice
     card.querySelectorAll<HTMLButtonElement>('[data-device-id]').forEach((button) => {
       button.onclick = () => {
         const deviceId = button.dataset.deviceId;
-        const device = [...owned, ...shared].find((candidate) => candidate.deviceId === deviceId);
+        const device = owned.find((candidate) => candidate.deviceId === deviceId);
         if (!device) return;
         select(device);
       };

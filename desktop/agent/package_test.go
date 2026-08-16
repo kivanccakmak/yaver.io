@@ -255,35 +255,7 @@ func TestPackageActingTierRequiresConfirm(t *testing.T) {
 	}
 }
 
-func TestPackageAllocateMobileRejectsBrowserEngine(t *testing.T) {
-	resetPackageStoreForTest("")
-	manifest := map[string]interface{}{
-		"metadata": map[string]interface{}{"name": "pw"},
-		"spec": map[string]interface{}{
-			"task": map[string]interface{}{
-				"kind": "collect", "engines": []string{"playwright"},
-				"steps": []map[string]interface{}{{"run": "node x.js"}},
-			},
-		},
-	}
-	if r := runVerb(t, packagePublishHandler, manifest); !r.OK {
-		t.Fatalf("publish: %s", r.Error)
-	}
-	// force=true skips the preflight gate so this test exercises engine eligibility.
-	r := runVerb(t, packageAllocateHandler, map[string]interface{}{
-		"packageName": "pw", "device": "dev1", "target": "mobile", "force": true,
-	})
-	if r.OK {
-		t.Fatalf("playwright package must not allocate to mobile target")
-	}
-	if r2 := runVerb(t, packageAllocateHandler, map[string]interface{}{
-		"packageName": "pw", "device": "box1", "target": "agent", "force": true,
-	}); !r2.OK {
-		t.Fatalf("playwright package should allocate to agent: %s", r2.Error)
-	}
-}
-
-func TestPackageCheckGatesSharing(t *testing.T) {
+func TestPackageCheckValidatesRunnablePackage(t *testing.T) {
 	resetPackageStoreForTest("")
 	resetCollectionStoreForTest("")
 	stubEgress(t)
@@ -310,13 +282,6 @@ func TestPackageCheckGatesSharing(t *testing.T) {
 		t.Fatalf("publish: %s", r.Error)
 	}
 
-	// share before preflight -> blocked
-	pre := runVerb(t, packageAllocateHandler, map[string]interface{}{"packageName": "ok-pkg", "device": "d1"})
-	if pre.OK || pre.Code != "check_required" {
-		t.Fatalf("allocate before check should be check_required, got ok=%v code=%q", pre.OK, pre.Code)
-	}
-
-	// preflight -> pass
 	ch := runVerb(t, packageCheckHandler, map[string]interface{}{"name": "ok-pkg"})
 	if !ch.OK {
 		t.Fatalf("check: %s", ch.Error)
@@ -324,12 +289,6 @@ func TestPackageCheckGatesSharing(t *testing.T) {
 	res := ch.Initial.(map[string]interface{})["check"].(*PackageCheckResult)
 	if res.Status != "pass" {
 		t.Fatalf("clean fetch package should pass preflight, got %q (%+v)", res.Status, res.Findings)
-	}
-
-	// share after a passing preflight -> allowed
-	post := runVerb(t, packageAllocateHandler, map[string]interface{}{"packageName": "ok-pkg", "device": "d1"})
-	if !post.OK {
-		t.Fatalf("allocate after passing check should succeed: %s", post.Error)
 	}
 }
 
@@ -355,15 +314,6 @@ func TestPackageCheckFailsOnBadMCP(t *testing.T) {
 	res := ch.Initial.(map[string]interface{})["check"].(*PackageCheckResult)
 	if res.Status != "fail" {
 		t.Fatalf("unreachable MCP binding should FAIL preflight, got %q", res.Status)
-	}
-	// share blocked unless forced
-	blocked := runVerb(t, packageAllocateHandler, map[string]interface{}{"packageName": "broken", "device": "d1"})
-	if blocked.OK || blocked.Code != "check_failed" {
-		t.Fatalf("allocate after failed check should be check_failed, got ok=%v code=%q", blocked.OK, blocked.Code)
-	}
-	forced := runVerb(t, packageAllocateHandler, map[string]interface{}{"packageName": "broken", "device": "d1", "force": true})
-	if !forced.OK {
-		t.Fatalf("force allocate should override the gate: %s", forced.Error)
 	}
 }
 

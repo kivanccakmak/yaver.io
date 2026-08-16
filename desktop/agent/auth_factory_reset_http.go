@@ -8,10 +8,9 @@
 //
 //   1. Convex GET /auth/me with caller's bearer → caller's userId
 //   2. Convex GET /devices/list with caller's bearer → list of
-//      devices Convex says this user owns / has access to
+//      devices Convex says this user owns
 //   3. accept the reset only if THIS agent's deviceId is in that
-//      list AND the caller's accessScope == "owner". Guests cannot
-//      factory-reset; only the owner can.
+//      owner list. No non-owner credential can factory-reset it.
 //
 // This works regardless of what the agent's local auth_token says —
 // Convex is the trust anchor for who-owns-what. Once verified, we
@@ -78,10 +77,7 @@ func (s *HTTPServer) handleAuthFactoryReset(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Step 2: is THIS device in the caller's owner-scope list?
-	// "owner" — caller paired the box (or Convex transferred it).
-	// "shared-scoped" / "shared-legacy" — caller is a guest. Guests
-	// can't factory-reset; that's a host privilege.
+	// Step 2: is THIS device in the caller's owner-only device list?
 	var match *DeviceInfo
 	for i := range devices {
 		if devices[i].DeviceID == cfg.DeviceID {
@@ -91,17 +87,10 @@ func (s *HTTPServer) handleAuthFactoryReset(w http.ResponseWriter, r *http.Reque
 	}
 	if match == nil {
 		jsonReply(w, http.StatusForbidden, map[string]string{
-			"error": "Convex does not list this device under your account — you don't own it and aren't a guest",
+			"error": "Convex does not list this device under your account",
 		})
 		return
 	}
-	if match.IsGuest || (match.AccessScope != "" && match.AccessScope != "owner") {
-		jsonReply(w, http.StatusForbidden, map[string]string{
-			"error": "guests cannot factory-reset auth — only the device owner can. Ask the host (" + match.HostName + ") to reset.",
-		})
-		return
-	}
-
 	// Step 3: ownership confirmed. Spawn the factory-reset in
 	// headless mode. The agent will exit; systemd / launchd
 	// restarts it in bootstrap mode within seconds.

@@ -34,7 +34,9 @@ func (s *HTTPServer) handleAccountDisconnect(w http.ResponseWriter, r *http.Requ
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ Provider string `json:"provider"` }
+	var b struct {
+		Provider string `json:"provider"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	writeJSON(w, http.StatusOK, mcpAccountDisconnect(b.Provider))
 }

@@ -47,7 +47,7 @@ const (
 	masterKeyFilename = "master.key"
 	masterKeyMetaName = "master.key.meta"
 	// macOS keychain service / account labels. Per-user (account ==
-	// userID prefix) so multi-user-same-machine doesn't collide.
+	// userID prefix) so operator-fleet account state cannot collide.
 	keychainService = "io.yaver.vault"
 )
 
@@ -171,7 +171,7 @@ func readMasterKeyMeta(metaPath string) (*masterKeyMeta, error) {
 }
 
 // keychainAccount derives the macOS keychain "account" attribute for a
-// given Yaver user. Per-user so a multi-user macOS install doesn't share.
+// given Yaver owner. Account-scoped so operator-fleet state never overlaps.
 // Falls back to "default" when userID is empty (offline mode).
 func keychainAccount(userID string) string {
 	userID = strings.TrimSpace(userID)

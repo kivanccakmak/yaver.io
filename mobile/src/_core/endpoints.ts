@@ -65,13 +65,6 @@ export const CONVEX_ENDPOINTS = {
   authLogin: '/auth/login',
   userSettings: '/settings',
   platformConfig: '/config',
-  guestsList: '/guests/list',
-  guestsHosts: '/guests/hosts',
-  guestsAllowed: '/guests/allowed',
-  guestsInvite: '/guests/invite',
-  guestsAccept: '/guests/accept',
-  guestsAcceptCode: '/guests/accept-code',
-  guestsRevoke: '/guests/revoke',
 } as const;
 
 /** Routes on a relay server. */

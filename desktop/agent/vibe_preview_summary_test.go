@@ -144,7 +144,7 @@ func TestQueueSummary_callsSummarizerOnDistinctFrames(t *testing.T) {
 	ch, _, unsub := mgr.Subscribe("p")
 	defer unsub()
 	// Drain the started + frame events.
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case <-ch:
@@ -161,7 +161,7 @@ func TestQueueSummary_callsSummarizerOnDistinctFrames(t *testing.T) {
 	// Wait for the goroutine to finish + emit the summary event.
 	got := false
 	deadline := time.After(2 * time.Second)
-	collect:
+collect:
 	for {
 		select {
 		case ev := <-ch:
@@ -217,7 +217,7 @@ func TestQueueSummary_summarizerErrorEmitsEvent(t *testing.T) {
 
 	ch, _, unsub := mgr.Subscribe("p")
 	defer unsub()
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case <-ch:
@@ -231,7 +231,7 @@ func TestQueueSummary_summarizerErrorEmitsEvent(t *testing.T) {
 	}
 	gotFailureEvent := false
 	deadline := time.After(2 * time.Second)
-	collect:
+collect:
 	for {
 		select {
 		case ev := <-ch:

@@ -34,9 +34,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsGitPushHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGitPushHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "git_connect",
@@ -51,9 +51,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsGitConnectHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGitConnectHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "git_connect_status",
@@ -67,9 +67,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsGitConnectStatusHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsGitConnectStatusHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

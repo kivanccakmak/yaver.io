@@ -174,7 +174,6 @@ type terminalDiscoveredMachine struct {
 	DeviceID       string
 	Name           string
 	Platform       string
-	HostEmail      string
 	State          string
 	CurrentWorkDir string
 	Capabilities   *MachineCapabilities
@@ -237,12 +236,11 @@ func terminalDiscoveryMachinesFromDevices(devices []DeviceInfo) []terminalDiscov
 			note = "Capability probe still loading..."
 		}
 		out = append(out, terminalDiscoveredMachine{
-			DeviceID:  strings.TrimSpace(d.DeviceID),
-			Name:      firstNonEmpty(strings.TrimSpace(d.Name), strings.TrimSpace(d.DeviceID)),
-			Platform:  strings.TrimSpace(d.Platform),
-			HostEmail: strings.TrimSpace(d.HostEmail),
-			State:     state,
-			Note:      note,
+			DeviceID: strings.TrimSpace(d.DeviceID),
+			Name:     firstNonEmpty(strings.TrimSpace(d.Name), strings.TrimSpace(d.DeviceID)),
+			Platform: strings.TrimSpace(d.Platform),
+			State:    state,
+			Note:     note,
 		})
 	}
 	return out
@@ -401,7 +399,7 @@ func (s *codeTerminalSession) run() error {
 
 	// Discoverability hint: bare-word + `yaver <verb>` work in this
 	// prompt. Press / for the full menu including all wrapped verbs.
-	s.writeRaw(rawifyLines("\033[2mTip: type any yaver verb (e.g. `machines`, `guests`, `vault list`, `deploy templates`) — press / to discover more.\033[0m\n\r\n"))
+	s.writeRaw(rawifyLines("\033[2mTip: type any yaver verb (e.g. `machines`, `vault list`, `deploy templates`) — press / to discover more.\033[0m\n\r\n"))
 
 	if !s.offline {
 		if tasks, err := attachListTasks(s.baseURL, s.token); err == nil {
@@ -785,8 +783,8 @@ func (s *codeTerminalSession) submit() (bool, bool, error) {
 		return false, false, nil
 	}
 
-	// Bare-word yaver subcommand (`guests list`, `vault projects`,
-	// also `yaver guests list`). Runs in-process as a subprocess of
+	// Bare-word yaver subcommand (`vault projects`, `machines`,
+	// also `yaver vault projects`). Runs in-process as a subprocess of
 	// yaver itself with output captured into the TUI scrollback.
 	if out, handled, err := MaybeRunYaverArgv(input); handled {
 		if strings.TrimSpace(out) != "" {
@@ -952,9 +950,6 @@ func (s *codeTerminalSession) renderDiscoveryReport() string {
 		}
 		if m.Platform != "" {
 			b.WriteString("    platform: " + m.Platform + "\n")
-		}
-		if m.HostEmail != "" {
-			b.WriteString("    host: " + m.HostEmail + "\n")
 		}
 		if m.CurrentWorkDir != "" {
 			b.WriteString("    cwd: " + m.CurrentWorkDir + "\n")

@@ -5,7 +5,6 @@ import { agentClient, type FeedbackWorkAgentConfig } from "@/lib/agent-client";
 import {
   listFeedbackWorkItems,
   listRelaySourceIntents,
-  queueFeedbackWorkItemRelaySource,
   routeFeedbackWorkItem,
   updateFeedbackWorkItemStatus,
   type FeedbackWorkItem,
@@ -154,7 +153,7 @@ export default function FeedbackWorkQueueView({
   const loadRelaySourceIntents = useCallback(async () => {
     if (!token) return;
     try {
-      setRelaySourceIntents(await listRelaySourceIntents(token, { limit: 12, includeTerminal: true, scope: "owned" }));
+      setRelaySourceIntents(await listRelaySourceIntents(token, { limit: 12, includeTerminal: true }));
     } catch {
       setRelaySourceIntents([]);
     }
@@ -257,7 +256,7 @@ export default function FeedbackWorkQueueView({
         <div>
           <h2 className="text-lg font-semibold">Feedback Work</h2>
           <p className="mt-1 text-xs leading-5 text-surface-500">
-            Review guest feedback and route it to owner-machine tasks, private issue drafts, or branch-scoped relay work.
+            Review project feedback and route it to owner-machine tasks, private issue drafts, or branch-scoped relay work.
           </p>
         </div>
         <button
@@ -425,14 +424,6 @@ export default function FeedbackWorkQueueView({
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={isBusy || !canRoute}
-                  onClick={() => void runAction(item, "Branch work", () => queueFeedbackWorkItemRelaySource(token, { itemId: item.id, workerId: "web-dashboard" }))}
-                  className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
-                >
-                  Branch
-                </button>
                 <button
                   type="button"
                   disabled={isBusy || !canRoute}

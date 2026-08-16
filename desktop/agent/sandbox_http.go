@@ -16,7 +16,6 @@ type ContainerSandboxSummary struct {
 	ImageReady          bool     `json:"imageReady"`
 	ImageName           string   `json:"imageName,omitempty"`
 	GPUAvailable        bool     `json:"gpuAvailable,omitempty"`
-	ContainerizeGuests  bool     `json:"containerizeGuests"`
 	ContainerizeHost    bool     `json:"containerizeHost"`
 	NetworkMode         string   `json:"networkMode,omitempty"`
 	ReadOnly            bool     `json:"readOnly,omitempty"`
@@ -31,7 +30,6 @@ type ContainerSandboxSummary struct {
 func (s *HTTPServer) sandboxSummary() ContainerSandboxSummary {
 	result := ContainerSandboxSummary{
 		OK:                  true,
-		ContainerizeGuests:  s.containerizeGuests,
 		ContainerizeHost:    s.containerizeHost,
 		QuickstartAvailable: true,
 	}
@@ -39,8 +37,6 @@ func (s *HTTPServer) sandboxSummary() ContainerSandboxSummary {
 	switch {
 	case s.containerizeHost:
 		result.EnabledMode = "host"
-	case s.containerizeGuests:
-		result.EnabledMode = "guests"
 	default:
 		result.EnabledMode = "off"
 	}
@@ -68,11 +64,8 @@ func (s *HTTPServer) sandboxSummary() ContainerSandboxSummary {
 		result.ImageReady = false
 	}
 
-	result.RecommendedMode = "guests"
-	result.RecommendedReason = "shared infra should isolate guest-triggered tasks without changing your own hot-reload flow"
-	if !result.ContainerizeGuests && !result.ContainerizeHost {
-		result.RecommendedMode = "guests"
-	}
+	result.RecommendedMode = "host"
+	result.RecommendedReason = "containerize owner tasks when project isolation is required"
 	return result
 }
 
@@ -81,7 +74,6 @@ func (s *HTTPServer) persistSandboxConfig() {
 	if err != nil {
 		return
 	}
-	cfg.ContainerizeGuests = s.containerizeGuests
 	cfg.ContainerizeHost = s.containerizeHost
 	if s.taskMgr != nil {
 		cfg.ContainerCPU = s.taskMgr.ContainerCPU
@@ -120,22 +112,17 @@ func (s *HTTPServer) startSandboxBuild() error {
 }
 
 func (s *HTTPServer) applySandboxQuickstart(mode string, buildImage bool) (ContainerSandboxSummary, string, error) {
+	switch mode {
+	case "", "host":
+		s.containerizeHost = true
+	default:
+		return ContainerSandboxSummary{}, "", fmt.Errorf("mode must be 'host'; guest containerization has been removed")
+	}
 	if err := s.ensureContainerRunner(); err != nil {
 		return ContainerSandboxSummary{}, "", err
 	}
-	switch mode {
-	case "", "guests":
-		s.containerizeGuests = true
-		s.containerizeHost = false
-	case "host":
-		s.containerizeGuests = false
-		s.containerizeHost = true
-	default:
-		return ContainerSandboxSummary{}, "", fmt.Errorf("mode must be 'guests' or 'host'")
-	}
 	if s.taskMgr != nil {
 		s.taskMgr.ContainerRunner = s.containerRunner
-		s.taskMgr.ContainerizeGuests = s.containerizeGuests
 		s.taskMgr.ContainerizeHost = s.containerizeHost
 		if s.taskMgr.ContainerNetwork == "" {
 			s.taskMgr.ContainerNetwork = "host"
@@ -171,6 +158,8 @@ func (s *HTTPServer) handleSandboxConfig(w http.ResponseWriter, r *http.Request)
 	}
 
 	var body struct {
+		// Keep a decode-only tombstone so obsolete clients get an explicit
+		// rejection instead of a false-success response.
 		ContainerizeGuests *bool    `json:"containerizeGuests,omitempty"`
 		ContainerizeHost   *bool    `json:"containerizeHost,omitempty"`
 		CPULimit           string   `json:"cpuLimit,omitempty"`
@@ -181,6 +170,10 @@ func (s *HTTPServer) handleSandboxConfig(w http.ResponseWriter, r *http.Request)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.ContainerizeGuests != nil {
+		jsonError(w, http.StatusGone, "containerizeGuests has been removed; Yaver accepts owner tasks only")
 		return
 	}
 
@@ -207,13 +200,6 @@ func (s *HTTPServer) handleSandboxConfig(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	if body.ContainerizeGuests != nil {
-		s.containerizeGuests = *body.ContainerizeGuests
-		if s.taskMgr != nil {
-			s.taskMgr.ContainerizeGuests = *body.ContainerizeGuests
-			s.taskMgr.ContainerRunner = s.containerRunner
-		}
-	}
 	if body.ContainerizeHost != nil {
 		s.containerizeHost = *body.ContainerizeHost
 		if s.taskMgr != nil {

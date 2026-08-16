@@ -1,10 +1,9 @@
 // TasksView.swift — a glanceable list of what's running on the box.
 //
-// tvOS deliberately does NOT reimplement mobile's full task queue (create,
-// fork, chain, model pickers) — that's a phone-in-hand workflow, wrong for a
-// D-pad across the room. What a TV wants is to SEE what's queued / running /
-// awaiting review, and to jump into a live one. This is that: read-only status,
-// grouped by state, titles path-redacted, tap a live task to drive its session.
+// Chat follows mobile's conversation mechanics while keeping TV navigation
+// lean: one default-focused New vibe card, recent threads, and an in-thread
+// reply field. Project/MCP configuration is optional and never sits between
+// entering Chat and dictating the first prompt.
 
 import SwiftUI
 
@@ -12,10 +11,15 @@ struct TasksView: View {
     @EnvironmentObject var store: YaverStore
 
     @State private var tasks: [TaskSummary] = []
+    @State private var runnerSessions: [RunnerSession] = []
     @State private var loading = true
     @State private var error: String?
-    @State private var filter: Filter = .active
+    @State private var sessionError: String?
+    @State private var filter: Filter = .all
     @State private var showComposer = false
+    @State private var createdTask: TaskSummary?
+    @State private var showCreatedTask = false
+    @FocusState private var newVibeFocused: Bool
 
     enum Filter: String, CaseIterable, Identifiable {
         case active = "Active", review = "Review", done = "Done", failed = "Failed", all = "All"
@@ -35,86 +39,163 @@ struct TasksView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Picker("Filter", selection: $filter) {
-                ForEach(Filter.allCases) { f in Text(f.rawValue).tag(f) }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 48).padding(.bottom, 12)
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    // This control is intentionally independent of the task
+                    // history request. A slow/failed GET /tasks must never
+                    // remove the one action the user came to Chat to perform.
+                    newVibeButton
 
-            Group {
-                if loading {
-                    center { ProgressView().scaleEffect(1.4) }
-                } else if let error {
-                    center {
+                    runnerSessionSection
+
+                    if loading {
+                        ProgressView().scaleEffect(1.4).padding(.top, 32)
+                    } else if let error {
                         VStack(spacing: 14) {
                             Text(error).foregroundStyle(.orange).multilineTextAlignment(.center)
-                            Button("Try again") { Task { await load() } }
+                            Button("Try loading conversations again") { Task { await load() } }
                         }
-                    }
+                        .padding(.top, 24)
+                } else if filtered.isEmpty {
+                        Text("No \(filter.rawValue.lowercased()) tasks.")
+                            .foregroundStyle(.secondary).padding(.top, 32)
                 } else {
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            // The big, dashed, FIRST card (2026-08-13): "New
-                            // vibe" is the action the couch reaches for — a
-                            // styled card (like the active task cards, but
-                            // dashed + wand) that opens the blank composer
-                            // with the prompt focused so the Siri Remote mic
-                            // dictates immediately (the one STT path a TV has).
-                            Button {
-                                showComposer = true
-                            } label: {
-                                HStack(spacing: 18) {
-                                    Image(systemName: "wand.and.stars")
-                                        .font(.system(size: 30, weight: .semibold))
-                                        .foregroundStyle(.blue)
-                                        .frame(width: 52, height: 52)
-                                        .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("New vibe").font(.system(size: 26, weight: .bold))
-                                        Text("Press the mic button on the Siri Remote to dictate — the composer opens mic-ready.")
-                                            .font(.system(size: 15)).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.system(size: 30)).foregroundStyle(.blue)
-                                }
-                                .padding(.horizontal, 24).padding(.vertical, 18)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
-                                        .foregroundStyle(Color.blue.opacity(0.5))
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("New vibe — dictate with the Siri Remote mic")
-
-                            if filtered.isEmpty {
-                                Text("No \(filter.rawValue.lowercased()) tasks.")
-                                    .foregroundStyle(.secondary).padding(.top, 32)
-                            } else {
-                                ForEach(filtered) { t in row(t) }
-                            }
-                        }
-                        .padding(48)
+                        ForEach(filtered) { t in row(t) }
                     }
                 }
+                .padding(48)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .task { await load() }
         .sheet(isPresented: $showComposer) {
-            TaskComposerView()
+            TaskComposerView { task in
+                createdTask = task
+            }
                 .environmentObject(store)
         }
-        // The composer dismisses itself after a successful POST — reload so the
-        // new task is visible at the top of Active instead of a stale list.
         .onChange(of: showComposer) { _, open in
-            if !open { Task { await load() } }
+            guard !open else { return }
+            if createdTask != nil {
+                // Done on the keyboard starts the audit and continues straight
+                // into its conversation. Returning to the list made a one-step
+                // prompt feel as though nothing had happened.
+                showCreatedTask = true
+            } else {
+                Task { await load() }
+            }
         }
+        .navigationDestination(isPresented: $showCreatedTask) {
+            if let createdTask {
+                TaskDetailView(task: createdTask)
+            }
+        }
+        .onChange(of: showCreatedTask) { _, open in
+            if !open {
+                createdTask = nil
+                Task { await load() }
+            }
+        }
+        .defaultFocus($newVibeFocused, true)
+    }
+
+    private var runnerSessionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Console sessions")
+                    .font(.system(size: 21, weight: .bold))
+                Text("tmux · live on \(store.runnerBox()?.name ?? "runner")")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+
+            if runnerSessions.isEmpty {
+                HStack(spacing: 12) {
+                    Image(systemName: "terminal")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("No live tmux sessions")
+                            .font(.system(size: 17, weight: .semibold))
+                        Text(sessionError ?? "Runner sessions appear here as soon as OpenCode, Codex, or Claude opens one.")
+                            .font(.system(size: 14))
+                            .foregroundStyle(sessionError == nil ? Color.secondary : Color.orange)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+                .accessibilityIdentifier("chat.no-live-sessions")
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 14) {
+                        ForEach(runnerSessions) { session in
+                            NavigationLink(destination: SessionView(preselect: session.name)) {
+                                HStack(spacing: 14) {
+                                    Image(systemName: "terminal.fill")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(.green)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(session.name)
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .lineLimit(1)
+                                        Text("\(runnerDisplayName(session.runner)) · \(session.attached == true ? "attached" : "active")")
+                                            .font(.system(size: 14))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 16)
+                                .frame(width: 360, alignment: .leading)
+                            }
+                            .buttonStyle(.card)
+                            .accessibilityIdentifier("chat.session.\(session.name)")
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.top, 10)
     }
 
     private var filtered: [TaskSummary] { tasks.filter { filter.matches($0.status) } }
+
+    private var newVibeButton: some View {
+        Button {
+            createdTask = nil
+            showComposer = true
+        } label: {
+            HStack(spacing: 18) {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 52, height: 52)
+                    .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("New vibe").font(.system(size: 26, weight: .bold))
+                    Text("Keyboard opens now · starts Deep Audit with your defaults")
+                        .font(.system(size: 15)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 30)).foregroundStyle(.blue)
+            }
+            .padding(.horizontal, 24).padding(.vertical, 18)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                    .foregroundStyle(Color.blue.opacity(0.5))
+            )
+        }
+        .buttonStyle(.plain)
+        .focused($newVibeFocused)
+        .accessibilityIdentifier("chat.new-vibe")
+        .accessibilityLabel("New vibe — opens the keyboard and starts Deep Audit")
+    }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -123,14 +204,22 @@ struct TasksView: View {
                 Text("Chat").font(.system(size: 30, weight: .bold))
                 Text("Tasks & vibes").font(.system(size: 17)).foregroundStyle(.secondary)
                 Spacer()
-                Button {
-                    showComposer = true
+                Menu {
+                    ForEach(Filter.allCases) { option in
+                        Button {
+                            filter = option
+                        } label: {
+                            if filter == option {
+                                Label(option.rawValue, systemImage: "checkmark")
+                            } else {
+                                Text(option.rawValue)
+                            }
+                        }
+                    }
                 } label: {
-                    Label("New vibe", systemImage: "wand.and.stars")
-                        .font(.system(size: 17, weight: .semibold))
+                    Label(filter.rawValue, systemImage: "line.3.horizontal.decrease.circle")
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .accessibilityLabel("Task filter, \(filter.rawValue)")
                 Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(loading)
             }
@@ -145,10 +234,8 @@ struct TasksView: View {
     }
 
     @ViewBuilder private func row(_ t: TaskSummary) -> some View {
-        // Tap a task to stream its LIVE console (raw runner stdout over
-        // /tasks/{id}/output?rawSince=) — the tvOS twin of mobile's
-        // LiveConsoleSection. A task with a tmux session additionally offers
-        // "Drive session" from the detail's footer.
+        // Tap a task to open its conversation. Raw runner output remains one
+        // optional disclosure inside the detail, matching mobile's hierarchy.
         NavigationLink(destination: TaskDetailView(task: t)) { rowBody(t) }
             .buttonStyle(.card)
     }
@@ -158,7 +245,11 @@ struct TasksView: View {
             statusDot(t.status)
             VStack(alignment: .leading, spacing: 4) {
                 Text(t.safeTitle).font(.system(size: 22, weight: .medium)).lineLimit(2)
-                Text([t.runner, t.status].compactMap { $0 }.joined(separator: " · "))
+                Text([
+                    runnerDisplayName(t.runner),
+                    shortModel(t.model),
+                    statusLabel(t.status),
+                ].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.system(size: 15)).foregroundStyle(.secondary)
             }
             Spacer()
@@ -181,10 +272,6 @@ struct TasksView: View {
         }
     }
 
-    private func center<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        content().frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     private func load() async {
         loading = true
         error = nil
@@ -195,10 +282,41 @@ struct TasksView: View {
                     ? "Your AI runner machine needs the relay to be reachable from this TV — nothing was read from the wrong box."
                     : "No machine selected")
             }
-            tasks = try await client.listTasks()
+            async let taskRows: [TaskSummary]? = try? client.listTasks()
+            async let sessionRows: RunnerSessions? = try? client.runnerSessions()
+            let loadedTasks = await taskRows
+            let loadedSessions = await sessionRows
+            tasks = loadedTasks ?? []
+            runnerSessions = loadedSessions?.sessions ?? []
+            if loadedTasks == nil {
+                error = "Couldn't load recent conversations."
+            }
+            if loadedSessions == nil {
+                sessionError = "Couldn't refresh live tmux sessions."
+            }
         } catch {
             self.error = error.localizedDescription
         }
         loading = false
+    }
+
+    private func runnerDisplayName(_ runner: String?) -> String {
+        switch runner?.lowercased() {
+        case "claude", "claude-code": return "Claude Code"
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        case .some(let value) where !value.isEmpty: return value
+        default: return "Runner"
+        }
+    }
+
+    private func shortModel(_ model: String?) -> String {
+        guard let model, !model.isEmpty else { return "" }
+        return model.split(separator: "/").last.map(String.init) ?? model
+    }
+
+    private func statusLabel(_ status: String?) -> String {
+        guard let status, !status.isEmpty else { return "" }
+        return status.prefix(1).uppercased() + status.dropFirst()
     }
 }

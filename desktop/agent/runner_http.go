@@ -2,8 +2,7 @@ package main
 
 // runner_http.go — HTTP surface for the unified Runner (RUNNER_DEV.md).
 //
-// Routes (all owner-auth in Phase 1; guest scope tiers added in
-// guest_scope.go for read-only + manual-trigger operations):
+// Routes are owner-authenticated.
 //
 //   GET  /runner/jobs                          List declared jobs
 //   POST /runner/jobs                          Create / upsert a job (RunnerJob body)
@@ -18,7 +17,7 @@ package main
 //   GET  /runner/pools                         Capability tags this agent advertises
 //
 // Concurrency: every triggering path acquires from runnerLimiter
-// (owner cap = 8, guest cap = 2). Read-only paths are not limited.
+// (cap = 8). Read-only paths are not limited.
 
 import (
 	"encoding/json"
@@ -44,16 +43,6 @@ func (s *HTTPServer) ensureRunnerLimiter() *runnerLimiter {
 	return s.runnerLimiter
 }
 
-// runnerGuestFilter extracts the guest's userID from the request when
-// the auth middleware tagged the request as a guest. Owner requests
-// return "" — meaning "no filter, see everything."
-func runnerGuestFilter(r *http.Request) string {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		return r.Header.Get("X-Yaver-GuestUserID")
-	}
-	return ""
-}
-
 // handleRunnerJobs dispatches GET (list) and POST (upsert) on
 // /runner/jobs.
 func (s *HTTPServer) handleRunnerJobs(w http.ResponseWriter, r *http.Request) {
@@ -66,17 +55,6 @@ func (s *HTTPServer) handleRunnerJobs(w http.ResponseWriter, r *http.Request) {
 			"count": len(jobs),
 		})
 	case http.MethodPost:
-		// Guests are not allowed to create jobs in Phase 1 — only
-		// owner can author specs (the trigger endpoint is the guest
-		// surface). The auth middleware handles this for the
-		// `feedback-only` tier; the explicit check here covers the
-		// `runner-submit` future scope.
-		if r.Header.Get("X-Yaver-Guest") == "true" {
-			jsonReply(w, http.StatusForbidden, map[string]string{
-				"error": "guests cannot author runner jobs — owner only",
-			})
-			return
-		}
 		var job RunnerJob
 		if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
 			jsonReply(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -134,10 +112,6 @@ func (s *HTTPServer) handleRunnerJobOne(w http.ResponseWriter, r *http.Request, 
 		}
 		jsonReply(w, http.StatusOK, j)
 	case http.MethodDelete:
-		if r.Header.Get("X-Yaver-Guest") == "true" {
-			jsonReply(w, http.StatusForbidden, map[string]string{"error": "guests cannot delete runner jobs"})
-			return
-		}
 		if err := s.ensureRunnerStore().RemoveJob(name); err != nil {
 			jsonReply(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 			return
@@ -173,26 +147,10 @@ func (s *HTTPServer) handleRunnerJobTrigger(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	isGuest := r.Header.Get("X-Yaver-Guest") == "true"
-	guestUID := r.Header.Get("X-Yaver-GuestUserID")
-	if isGuest {
-		// Guests can only trigger projects within their allowedProjects.
-		if s.guestConfigMgr != nil && job.Project != "" && !s.guestConfigMgr.GuestCanAccessProject(guestUID, job.Project) {
-			jsonReply(w, http.StatusForbidden, map[string]string{
-				"error": "guest is not authorised for this project",
-			})
-			return
-		}
-	}
-
 	// Acquire a concurrency slot.
 	limiter := s.ensureRunnerLimiter()
 	limiterKey := "owner"
-	maxRuns := runnerLimits.Owner
-	if isGuest {
-		limiterKey = "guest:" + guestUID
-		maxRuns = runnerLimits.Guest
-	}
+	maxRuns := runnerMaxInFlight
 	if !limiter.tryAcquire(limiterKey, maxRuns) {
 		jsonReply(w, http.StatusTooManyRequests, map[string]interface{}{
 			"error": "runner concurrency cap reached — wait for an in-flight run to finish",
@@ -212,11 +170,7 @@ func (s *HTTPServer) handleRunnerJobTrigger(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	triggeredBy := "owner"
-	if isGuest {
-		triggeredBy = guestUID
-	}
-	final, err := runJobShell(r.Context(), store, job, triggeredBy, isGuest, s.vaultStore)
+	final, err := runJobShell(r.Context(), store, job, "owner", s.vaultStore)
 	if err != nil {
 		jsonReply(w, http.StatusInternalServerError, map[string]string{
 			"error": "run failed: " + err.Error(),
@@ -235,10 +189,6 @@ func (s *HTTPServer) handleRunnerJobTrigger(w http.ResponseWriter, r *http.Reque
 func (s *HTTPServer) handleRunnerJobPause(w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodPost {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		jsonReply(w, http.StatusForbidden, map[string]string{"error": "guests cannot pause runner jobs"})
 		return
 	}
 	var body struct {
@@ -260,8 +210,7 @@ func (s *HTTPServer) handleRunnerJobRuns(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	limit := runnerLimitFromQuery(r, 50, 500)
-	guestFilter := runnerGuestFilter(r)
-	runs := s.ensureRunnerStore().ListRuns(name, guestFilter, limit)
+	runs := s.ensureRunnerStore().ListRuns(name, limit)
 	for i := range runs {
 		runs[i].OutputTail = ""
 		runs[i].LogPath = ""
@@ -279,8 +228,7 @@ func (s *HTTPServer) handleRunnerRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := runnerLimitFromQuery(r, 50, 500)
-	guestFilter := runnerGuestFilter(r)
-	runs := s.ensureRunnerStore().ListRuns("", guestFilter, limit)
+	runs := s.ensureRunnerStore().ListRuns("", limit)
 	for i := range runs {
 		runs[i].OutputTail = ""
 		runs[i].LogPath = ""
@@ -311,8 +259,7 @@ func (s *HTTPServer) handleRunnerRunByID(w http.ResponseWriter, r *http.Request)
 		sub = parts[1]
 	}
 
-	guestFilter := runnerGuestFilter(r)
-	run, ok := s.ensureRunnerStore().GetRun(id, guestFilter)
+	run, ok := s.ensureRunnerStore().GetRun(id)
 	if !ok {
 		jsonReply(w, http.StatusNotFound, map[string]string{"error": "run not found"})
 		return

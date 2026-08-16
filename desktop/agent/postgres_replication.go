@@ -178,13 +178,13 @@ func (s *HTTPServer) handleReplicaSetup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var b struct {
-		Role                 string `json:"role"` // "primary" or "replica"
-		SlotName             string `json:"slotName"`
-		ReplicationUser      string `json:"replicationUser"`
-		ReplicationPassword  string `json:"replicationPassword"`
-		PrimaryHost          string `json:"primaryHost"`
-		PrimaryPort          int    `json:"primaryPort"`
-		Confirm              bool   `json:"confirm"`
+		Role                string `json:"role"` // "primary" or "replica"
+		SlotName            string `json:"slotName"`
+		ReplicationUser     string `json:"replicationUser"`
+		ReplicationPassword string `json:"replicationPassword"`
+		PrimaryHost         string `json:"primaryHost"`
+		PrimaryPort         int    `json:"primaryPort"`
+		Confirm             bool   `json:"confirm"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	switch b.Role {

@@ -176,10 +176,10 @@ func mcpHTTPTiming(url string) interface{} {
 	}
 	defer resp.Body.Close()
 	return map[string]interface{}{
-		"url":         url,
-		"status":      resp.StatusCode,
-		"latency_ms":  duration.Milliseconds(),
-		"server":      resp.Header.Get("Server"),
+		"url":          url,
+		"status":       resp.StatusCode,
+		"latency_ms":   duration.Milliseconds(),
+		"server":       resp.Header.Get("Server"),
 		"content_type": resp.Header.Get("Content-Type"),
 	}
 }

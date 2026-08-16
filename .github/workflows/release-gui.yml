@@ -11,6 +11,11 @@ on:
         type: boolean
         default: false
         required: false
+      ensure_macos_app_record:
+        description: "Create the io.yaver.gui App Store Connect record if missing."
+        type: boolean
+        default: false
+        required: false
 
 # Only repo owner can push tags (configure tag protection rules in GitHub).
 # Release jobs require the "production" environment.
@@ -21,9 +26,29 @@ concurrency:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
+  ensure-macos-app-record:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ensure_macos_app_record }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test App Store Connect bootstrap
+        run: node --test scripts/appstore-connect-ensure-app.test.mjs
+      - name: Ensure Yaver desktop app record
+        env:
+          ASC_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: node scripts/appstore-connect-ensure-app.mjs
+
   validate:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.ensure_macos_app_record != true }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -53,7 +78,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: electron/package-lock.json
       - name: Install
@@ -72,21 +97,33 @@ jobs:
         include:
           - os: macos-latest
             platform: mac
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
           - os: windows-latest
             platform: win
+            arch: x64
           - os: ubuntu-latest
             platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: electron/package-lock.json
       - name: Install
         working-directory: electron
         run: npm ci
+      - name: Install Linux packaging tools
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopenjp2-tools rpm
       - name: Download agent binary into the bundle
         if: ${{ !inputs.skip_agent_bundle }}
         working-directory: electron
@@ -105,29 +142,95 @@ jobs:
         env:
           APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
 
-      - name: Package
+      - name: Package macOS
+        if: matrix.platform == 'mac'
         working-directory: electron
         env:
-          # macOS signing (hardened runtime) via the Developer ID cert.
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # Notarization via notarytool — APPLE_API_KEY is the .p8 file path
-          # (written above); ID/ISSUER come from the existing
-          # APP_STORE_CONNECT_* secrets (same ones release-cli.yml uses).
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_API_KEY: ${{ env.APPLE_API_KEY_PATH }}
           APPLE_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          # Windows signing: only present when the owner configures
-          # WIN_CSC_LINK (base64 .pfx) + WIN_CSC_KEY_PASSWORD. Without them
-          # electron-builder ships an unsigned exe (SmartScreen warning).
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-        run: npx electron-builder --${{ matrix.platform }} --publish never
+        run: |
+          if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" || -z "$APPLE_API_KEY" || -z "$APPLE_API_KEY_ID" || -z "$APPLE_API_ISSUER" ]]; then
+            echo "macOS Developer ID and notarization credentials are required; refusing an unsigned/unnotarized DMG." >&2
+            exit 1
+          fi
+          npx electron-builder --mac --${{ matrix.arch }} --publish never
+          app_path=$(find dist -type d -name Yaver.app -print -quit)
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type exec --verbose=2 "$app_path"
+          xcrun stapler validate "$app_path"
+          test -x "$app_path/Contents/Resources/bin/yaver"
+      - name: Package Windows (signed, standard-user install)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        working-directory: electron
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CSC_LINK) -or [string]::IsNullOrWhiteSpace($env:CSC_KEY_PASSWORD)) {
+            throw "WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD are required. Refusing to publish an unsigned Windows GUI."
+          }
+          npx electron-builder --win --${{ matrix.arch }} --publish never
+          if ($LASTEXITCODE -ne 0) { throw "electron-builder failed with exit code $LASTEXITCODE" }
+      - name: Verify every shipped Windows executable is Authenticode-valid
+        if: matrix.platform == 'win'
+        shell: pwsh
+        working-directory: electron
+        run: |
+          $executables = Get-ChildItem dist -Recurse -File -Filter *.exe
+          if (-not $executables) { throw "No Windows executables were produced" }
+          foreach ($file in $executables) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Unsigned/invalid executable: $($file.FullName) — $($signature.Status): $($signature.StatusMessage)"
+            }
+            if ($signature.SignerCertificate.Subject -notmatch '(?i)simkab') {
+              throw "Unexpected Windows publisher on $($file.FullName): $($signature.SignerCertificate.Subject). Expected the Simkab signing identity."
+            }
+            Write-Host "Valid Authenticode: $($file.FullName)"
+          }
+      - name: Package Linux
+        if: matrix.platform == 'linux'
+        working-directory: electron
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --linux --${{ matrix.arch }} --publish never
+      - name: Verify Linux package contents and AppImage operation
+        if: matrix.platform == 'linux'
+        run: node scripts/verify-desktop-linux.mjs electron/dist ${{ matrix.arch }}
+      - name: Stage macOS/Linux architecture update metadata
+        if: matrix.platform != 'win'
+        shell: bash
+        working-directory: electron
+        run: |
+          mkdir -p dist/update-metadata
+          if [[ "${{ matrix.platform }}" == "mac" ]]; then
+            test -f dist/latest-mac.yml
+            cp dist/latest-mac.yml "dist/update-metadata/latest-${{ matrix.arch }}-mac.yml"
+          else
+            test -f dist/latest-linux.yml
+            cp dist/latest-linux.yml "dist/update-metadata/latest-${{ matrix.arch }}-linux.yml"
+          fi
+      - name: Stage Windows architecture update metadata
+        if: matrix.platform == 'win'
+        shell: pwsh
+        working-directory: electron
+        run: |
+          if (-not (Test-Path dist/latest.yml)) { throw "electron-builder did not produce latest.yml" }
+          New-Item -ItemType Directory -Force dist/update-metadata | Out-Null
+          Copy-Item dist/latest.yml "dist/update-metadata/latest-${{ matrix.arch }}.yml"
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: yaver-gui-${{ matrix.platform }}
+          # macOS and Linux each have two architecture jobs. Artifact names
+          # must be unique or the parallel upload jobs race and one gets a
+          # 409 conflict before the release can merge them.
+          name: yaver-gui-${{ matrix.platform }}-${{ matrix.arch }}
           # Installers only — explicitly exclude blockmaps (matched by
           # dist/yaver-gui-*) so the release stays clean. Multiline path
           # lists are the supported upload-artifact form (brace globs are not
@@ -140,6 +243,9 @@ jobs:
             electron/dist/yaver-gui-*.deb
             electron/dist/yaver-gui-*.rpm
             electron/dist/yaver-gui-*.tar.gz
+            electron/dist/yaver-gui-*.blockmap
+            electron/dist/yaver-gui-*.AppImage.zsync
+            electron/dist/update-metadata/*
           if-no-files-found: error
 
   release:
@@ -153,6 +259,16 @@ jobs:
         with:
           path: dist-artifacts
           merge-multiple: true
+      - name: Write release checksums
+        shell: bash
+        run: |
+          cd dist-artifacts
+          sha256sum * > checksums.txt
+          cat checksums.txt
+      - name: Attest desktop release provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: "dist-artifacts/*"
       - name: Cut GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -164,17 +280,19 @@ jobs:
             itself a Yaver node (vibe it directly, or from phone/TV/watch/web).
 
             ## Downloads
-            - **macOS** — `yaver-gui-<version>-mac.dmg` (Apple Silicon & Intel, signed + notarized)
-            - **Windows** — `yaver-gui-<version>-win-setup.exe` (x64)
-            - **Linux** — `yaver-gui-<version>-linux.AppImage` · `.deb` (apt-get) · `.rpm` · `.tar.gz`
+            - **macOS** — `yaver-gui-<version>-mac-arm64.dmg` or `-mac-x64.dmg` (signed + notarized)
+            - **Windows** — `yaver-gui-<version>-win-x64-setup.exe` (Authenticode-signed, per-user)
+            - **Linux** — `yaver-gui-<version>-linux-<x64|arm64>.AppImage` · `.deb` · `.rpm` · `.tar.gz`
 
             apt-get (Debian/Ubuntu):
             ```
-            wget <release_url>/download/gui/v<version>/yaver-gui-<version>-linux.deb
-            sudo apt-get install ./yaver-gui-<version>-linux.deb
+            wget <release_url>/download/gui/v<version>/yaver-gui-<version>-linux-x64.deb
+            sudo apt-get install ./yaver-gui-<version>-linux-x64.deb
             ```
             The embedded agent means a fresh machine needs no npm/node install — the app
             carries `yaver serve` (with embedded hermesc) and self-provisions runners on demand.
+            Verify downloads against `checksums.txt` or with
+            `gh attestation verify <file> -R yaver-io/yaver.io`.
 
             See [yaver.io/download](https://yaver.io/download) for the landing page.
           files: dist-artifacts/*

@@ -162,10 +162,10 @@ func EnqueueJob(handler string, payload interface{}, opts ...JobOption) (*Job, e
 // JobOption tweaks a job before it lands on disk.
 type JobOption func(*Job)
 
-func WithRunAt(t time.Time) JobOption       { return func(j *Job) { j.RunAt = t } }
-func WithDelay(d time.Duration) JobOption   { return func(j *Job) { j.RunAt = time.Now().UTC().Add(d) } }
-func WithMaxAttempts(n int) JobOption       { return func(j *Job) { j.MaxAttempts = n } }
-func WithBackoffSec(sec int) JobOption      { return func(j *Job) { j.BackoffSec = sec } }
+func WithRunAt(t time.Time) JobOption     { return func(j *Job) { j.RunAt = t } }
+func WithDelay(d time.Duration) JobOption { return func(j *Job) { j.RunAt = time.Now().UTC().Add(d) } }
+func WithMaxAttempts(n int) JobOption     { return func(j *Job) { j.MaxAttempts = n } }
+func WithBackoffSec(sec int) JobOption    { return func(j *Job) { j.BackoffSec = sec } }
 
 // --- worker loop -----------------------------------------------------------
 

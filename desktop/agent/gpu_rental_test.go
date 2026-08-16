@@ -317,12 +317,12 @@ func TestAutoscalerTransitionHookFires(t *testing.T) {
 
 func TestSaladSafeName(t *testing.T) {
 	cases := map[string]string{
-		"Voice Box!":   "voice-box",
-		"my_app":       "my-app",
-		"  --x--  ":    "x",
-		"":             "yaver-gpu",
-		"!!!":          "yaver-gpu",
-		"UPPER":        "upper",
+		"Voice Box!": "voice-box",
+		"my_app":     "my-app",
+		"  --x--  ":  "x",
+		"":           "yaver-gpu",
+		"!!!":        "yaver-gpu",
+		"UPPER":      "upper",
 	}
 	for in, want := range cases {
 		if got := saladSafeName(in); got != want {

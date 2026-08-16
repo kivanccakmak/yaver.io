@@ -1410,9 +1410,9 @@ func updateDeploymentStatus(d *CloudDeployment, raw string) {
 			continue
 		}
 		var obj struct {
-			Name   string `json:"Name"`
-			State  string `json:"State"`
-			ID     string `json:"ID"`
+			Name  string `json:"Name"`
+			State string `json:"State"`
+			ID    string `json:"ID"`
 		}
 		if err := json.Unmarshal([]byte(line), &obj); err == nil {
 			statusMap[obj.Name] = obj.State

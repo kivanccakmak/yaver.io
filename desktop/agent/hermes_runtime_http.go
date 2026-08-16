@@ -6,8 +6,8 @@ package main
 //   POST /hermes/run        {bundlePath, timeoutSec, …}    → HermesResult
 //   POST /hermes/smoke      {bundleDir}                    → HermesSmokeResult
 //
-// All routes require the agent-token or a paired token; SDK tokens are
-// rejected because hermes invocation is a privileged op (can read
+// All routes require the owner agent token; SDK tokens are rejected because
+// Hermes invocation is a privileged op (can read
 // arbitrary files via -emit-binary args).
 
 import (

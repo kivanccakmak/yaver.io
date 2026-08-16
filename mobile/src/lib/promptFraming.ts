@@ -86,7 +86,6 @@ export function containsYaverFraming(text: string): boolean {
     text.includes(YAVER_PROMPT_BOUNDARY) ||
     text.includes("[Yaver wrapper capabilities]") ||
     text.includes("[Yaver — decision policy]") ||
-    text.includes("[Yaver Agent Context]") ||
-    text.includes("[SECURITY CONTEXT — GUEST SESSION]")
+    text.includes("[Yaver Agent Context]")
   );
 }

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 027
+
+source_dir="/etc/letsencrypt/live/public.yaver.io"
+target_dir="/etc/turnserver/tls"
+
+install -d -o root -g turnserver -m 0750 "$target_dir"
+install -o root -g turnserver -m 0640 "$source_dir/fullchain.pem" "$target_dir/fullchain.pem"
+install -o root -g turnserver -m 0640 "$source_dir/privkey.pem" "$target_dir/privkey.pem"
+
+runuser -u turnserver -- test -r "$target_dir/fullchain.pem"
+runuser -u turnserver -- test -r "$target_dir/privkey.pem"
+
+if systemctl is-active --quiet coturn.service; then
+  systemctl restart coturn.service
+fi

@@ -14,6 +14,7 @@ func TestPreferredCaptureMethod(t *testing.T) {
 		"android-emulator":   CaptureJPEGScreenshot,
 		"android-device":     CaptureJPEGScreenshot,
 		"android-redroid":    CaptureJPEGScreenshot,
+		"desktop-screen":     CaptureH264Desktop,
 		"browser-window":     CaptureJPEGScreenshot,
 	}
 	for target, want := range cases {
@@ -29,6 +30,9 @@ func TestPreferredCaptureMethod(t *testing.T) {
 		if !captureIsRealtime(preferredCaptureMethod(ios)) {
 			t.Errorf("%s capture must be realtime video", ios)
 		}
+	}
+	if !captureIsRealtime(preferredCaptureMethod("desktop-screen")) {
+		t.Fatal("desktop-screen must select its native H.264 RTP capture path")
 	}
 }
 

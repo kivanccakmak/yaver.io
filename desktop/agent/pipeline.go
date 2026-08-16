@@ -32,7 +32,7 @@ type HardwareProfile struct {
 	RAMHuman    string `json:"ramHuman"` // "16 GB"
 	DiskFree    int64  `json:"diskFree"` // bytes
 	DiskHuman   string `json:"diskHuman"`
-	GPU         string `json:"gpu"`      // "Apple M2", "NVIDIA RTX 4090", or "none"
+	GPU         string `json:"gpu"` // "Apple M2", "NVIDIA RTX 4090", or "none"
 	OS          string `json:"os"`
 	Arch        string `json:"arch"`
 	DockerOK    bool   `json:"dockerOk"`
@@ -322,17 +322,17 @@ type yamlMatrix struct {
 }
 
 type yamlJob struct {
-	Name       string                     `yaml:"name"`
-	RunsOn     string                     `yaml:"runs-on"`
-	If         string                     `yaml:"if"`
-	Needs      interface{}                `yaml:"needs"` // string or []string
-	Env        map[string]string          `yaml:"env"`
-	Steps      []yamlStep                 `yaml:"steps"`
-	Outputs    map[string]string          `yaml:"outputs"`
-	Services   map[string]yamlService     `yaml:"services"`
-	Container  interface{}                `yaml:"container"` // string or map
-	Strategy   *yamlStrategy              `yaml:"strategy"`
-	TimeoutMin int                        `yaml:"timeout-minutes"`
+	Name       string                 `yaml:"name"`
+	RunsOn     string                 `yaml:"runs-on"`
+	If         string                 `yaml:"if"`
+	Needs      interface{}            `yaml:"needs"` // string or []string
+	Env        map[string]string      `yaml:"env"`
+	Steps      []yamlStep             `yaml:"steps"`
+	Outputs    map[string]string      `yaml:"outputs"`
+	Services   map[string]yamlService `yaml:"services"`
+	Container  interface{}            `yaml:"container"` // string or map
+	Strategy   *yamlStrategy          `yaml:"strategy"`
+	TimeoutMin int                    `yaml:"timeout-minutes"`
 }
 
 type yamlStrategy struct {
@@ -365,8 +365,8 @@ type yamlStep struct {
 // ---------------------------------------------------------------------------
 
 type gitlabCI struct {
-	Stages    []string            `yaml:"stages"`
-	Variables map[string]string   `yaml:"variables"`
+	Stages    []string          `yaml:"stages"`
+	Variables map[string]string `yaml:"variables"`
 	Jobs      map[string]gitlabJob
 }
 
@@ -410,12 +410,12 @@ type gitlabRule struct {
 
 // PipelineRunner executes GitHub Actions / GitLab CI YAML workflows locally.
 type PipelineRunner struct {
-	mu       sync.RWMutex
-	status   PipelineStatus
-	cancel   context.CancelFunc
-	cfg      *PipelineConfig
-	hw       HardwareProfile
-	secrets  map[string]string
+	mu         sync.RWMutex
+	status     PipelineStatus
+	cancel     context.CancelFunc
+	cfg        *PipelineConfig
+	hw         HardwareProfile
+	secrets    map[string]string
 	jobOutputs map[string]map[string]string // jobKey → output map
 }
 
@@ -2007,8 +2007,8 @@ func (r *PipelineRunner) ReportStatus(provider string, result *PipelineResult) e
 
 func (r *PipelineRunner) checkDiskSpace() error {
 	diskFree := r.hw.DiskFree
-	const warnThreshold = 10 * 1024 * 1024 * 1024  // 10 GB
-	const failThreshold = 2 * 1024 * 1024 * 1024   // 2 GB
+	const warnThreshold = 10 * 1024 * 1024 * 1024 // 10 GB
+	const failThreshold = 2 * 1024 * 1024 * 1024  // 2 GB
 
 	if diskFree > 0 && diskFree < failThreshold {
 		return fmt.Errorf("insufficient disk space: %s free (need at least 2 GB)", humanBytes(diskFree))

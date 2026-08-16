@@ -18,11 +18,11 @@ import (
 //     this list in sync if those strings change.
 //
 //  2. Strip Codex CLI scaffolding around the answer:
-//       - leading "Reading additional input from stdin…" hint
-//       - "OpenAI Codex vX.Y.Z" banner + the `workdir/model/provider/
-//         approval/sandbox/reasoning` config dump that follows it
-//         (until the first blank line after the banner block)
-//       - trailing "tokens used N" footer
+//     - leading "Reading additional input from stdin…" hint
+//     - "OpenAI Codex vX.Y.Z" banner + the `workdir/model/provider/
+//     approval/sandbox/reasoning` config dump that follows it
+//     (until the first blank line after the banner block)
+//     - trailing "tokens used N" footer
 //
 // Mirrors the mobile-side `stripPromptEcho` in mobile/app/(tabs)/
 // tasks.tsx — we apply the same logic on both ends so:
@@ -338,6 +338,7 @@ func collapseRepeatedLeadInFence(s string) string {
 //	yaverDevServerContext         → "Kill any stale expo/metro processes before retrying."
 //	yaverWrapperCapabilityContext → "or related Yaver preview tools instead of asking them to guess."
 //	autopilotContext              → "pick up where you left off."
+//
 // promptEchoSentinel is appended as the LAST line of every assembled prompt
 // (tasks.go, before args build). Runners that echo the prompt (codex raw mode)
 // reproduce it verbatim, giving stripPromptEcho a deterministic boundary to slice

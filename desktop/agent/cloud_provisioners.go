@@ -12,14 +12,14 @@ import (
 
 // ProvisionResult is returned by every provisioner.
 type ProvisionResult struct {
-	OK          bool              `json:"ok"`
-	Provider    string            `json:"provider"`
-	Resource    string            `json:"resource"`
-	ID          string            `json:"id,omitempty"`
-	ConnectionString string       `json:"connectionString,omitempty"`
-	Details     map[string]string `json:"details,omitempty"`
-	Notes       string            `json:"notes,omitempty"`
-	Manual      string            `json:"manual,omitempty"`
+	OK               bool              `json:"ok"`
+	Provider         string            `json:"provider"`
+	Resource         string            `json:"resource"`
+	ID               string            `json:"id,omitempty"`
+	ConnectionString string            `json:"connectionString,omitempty"`
+	Details          map[string]string `json:"details,omitempty"`
+	Notes            string            `json:"notes,omitempty"`
+	Manual           string            `json:"manual,omitempty"`
 	// OrphanSnapshots: snapshots left on the cloud account after a
 	// server delete (e.g. an opted-in "snapshot first" recovery image,
 	// or pre-resize backups). Hetzner never auto-deletes these — they

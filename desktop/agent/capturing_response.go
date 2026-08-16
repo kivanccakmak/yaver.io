@@ -17,7 +17,7 @@ func newCapturingResponseWriter() *capturingResponseWriter {
 	return &capturingResponseWriter{header: http.Header{}, status: http.StatusOK}
 }
 
-func (w *capturingResponseWriter) Header() http.Header { return w.header }
+func (w *capturingResponseWriter) Header() http.Header  { return w.header }
 func (w *capturingResponseWriter) WriteHeader(code int) { w.status = code }
 func (w *capturingResponseWriter) Write(b []byte) (int, error) {
 	w.body = append(w.body, b...)

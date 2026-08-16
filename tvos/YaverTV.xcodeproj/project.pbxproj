@@ -1,0 +1,762 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0AEECA73B0908A0415B8654C /* WakeProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76EA211ABDF521DD6CC22C3 /* WakeProgressView.swift */; };
+		0F3AD5C101105E22CCC5C114 /* AppleSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */; };
+		16587396CA5360A34F2C4342 /* Backend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62AA4F93DB55D50601FA4253 /* Backend.swift */; };
+		18F7F25A9DC46548215628BB /* YaverTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 053F14BB4784ACE0F6940C93 /* YaverTVApp.swift */; };
+		1A6CB9DFD7829D4144D6A82D /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 276D29BCA1F4A3A8DD33A6D3 /* Models.swift */; };
+		1DF8243D967F35FF81A77D85 /* RuntimeDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E202BFD986DE7C7B55C7F3F4 /* RuntimeDashboardView.swift */; };
+		229C96D90BE4C06BFCD7F34E /* TaskDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE9E4B8D55E6F9BE758452A /* TaskDetailView.swift */; };
+		22B21BB28D6FC910AA51413E /* AppleTVRemoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */; };
+		28F88FA5024DEAE3CEBE040F /* MachineRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B47351433BB0B87175F60EA /* MachineRegistry.swift */; };
+		2B768810EB7C0232820C5AAB /* TaskComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10853B34BB3F067BDF0C02E9 /* TaskComposerView.swift */; };
+		3338C731056621FCCE8FE13A /* BoxLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB2DF3A66DAE025B2B780C8 /* BoxLifecycle.swift */; };
+		34141A6D2B59625100F05D4A /* SessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A96BEDB7B91310E39E99DED2 /* SessionClient.swift */; };
+		488D514BBC3C001E04D2228B /* yaver-login-wordmark-light.png in Resources */ = {isa = PBXBuildFile; fileRef = FF8D286AA1E6B188684F21DA /* yaver-login-wordmark-light.png */; };
+		61443E7517C16C82728D68E7 /* LanApprovalBeacon.swift in Sources */ = {isa = PBXBuildFile; fileRef = C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */; };
+		6ADE17F0073254B1F4424366 /* RemoteRuntimeWebRTCView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F656E1723EA3FA1FA0C7CE46 /* RemoteRuntimeWebRTCView.swift */; };
+		6EEAC350F5A3D4E89CE1C473 /* DroidStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFF6CEE51B6A221D57E35F68 /* DroidStreamView.swift */; };
+		7379174AE578C3B3EE112B4E /* TVSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59F5766C895CDA0075AE65E7 /* TVSettingsView.swift */; };
+		7BFF477EEDD5FEA7E3696C93 /* YaverNativeCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EB3210C08FB622ECCBF15C /* YaverNativeCatalog.swift */; };
+		7E0CEDAA389C30B231F33D93 /* MachinePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC389C91C8B5382905D6194B /* MachinePickerView.swift */; };
+		81DB028736C4430E2622C6F9 /* SessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4A93B698F49F0230F8DABF /* SessionView.swift */; };
+		852CC39FBF2CFDEF2DCD3BB1 /* AddBoxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3856FA2ADBC347EA996932EA /* AddBoxView.swift */; };
+		859933A9F2FF6DBD55DA507D /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0279D581187CF7B6DAB53B5 /* DashboardView.swift */; };
+		8D8ABF84CE07DFF5DCA0C28A /* WebPreviewStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B09883C3220F3715E4F3DF /* WebPreviewStreamView.swift */; };
+		8F7FD72900FD7A382640EDAA /* VibingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5FCD77426D42F65FEB0D0A /* VibingView.swift */; };
+		928CCC06D104DE0E15FC5A18 /* UpdateAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FAE4341960BE9EA05DE082D /* UpdateAgentView.swift */; };
+		9D0BB56F661FC19E222F21AC /* TVChatPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E917EDECD2B19968A57D16 /* TVChatPlan.swift */; };
+		A2031FCCF6C82A44E0A3478B /* TVWebPreviewLoopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925084532D186202A5CA57D2 /* TVWebPreviewLoopTests.swift */; };
+		A652521801330E483E8F0DEE /* FailureSignals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9383688971427E7DF15B2D1C /* FailureSignals.swift */; };
+		A7B9CB81DB7E411F73C9F730 /* TVChatNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6E50DABA5FE87AF986E197 /* TVChatNavigationTests.swift */; };
+		AD43610B33A8368A49E512B9 /* YaverStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC27F01B0DAD177B10DAC04 /* YaverStore.swift */; };
+		AEF06908D4ADCB0FE0759040 /* TasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706F27D55F944D59C8ECD555 /* TasksView.swift */; };
+		B4DB41408F8DDBA62F1BEF7F /* FrameworkStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E883FFE32672CAF75087F1E5 /* FrameworkStyle.swift */; };
+		BA1C4E5FB968311F8B9C37C7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */; };
+		BA38FFCFED1DC4D4EE799E82 /* OAuthSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */; };
+		C925CDA83769C16357214E99 /* AgentClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30B780D2E7490982C5B7E328 /* AgentClient.swift */; };
+		CAF1C4F283907ED5436FC317 /* FeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */; };
+		D299F8FE54C7BF349DB540D5 /* Speech.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */; };
+		D35115170BD592449BB9E6A2 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 44E779189DD0B98EC6AC2052 /* LiveKitWebRTC */; };
+		D7BD4B86D4F7E9BB55EFDC13 /* TokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2168C1CC5D76DE846256CFAD /* TokenStore.swift */; };
+		DC2819DC5C2145D82D127460 /* VibingPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */; };
+		E6360E3A224D67440371A632 /* ProjectsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */; };
+		EEEB8D804BA1E102F39CD2E0 /* RemoteRuntimeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */; };
+		F6D6FD0612F8F2E9DD6D3A5C /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 407EAB8C318A209F3AE94A17 /* SignInView.swift */; };
+		F7BEBB07F0E592CAFCFD739E /* VibeTurnPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ED0118C15F635CF31061B51 /* VibeTurnPanel.swift */; };
+		F94318B025A3D905717E944B /* VibingPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13160FC9012BA60947E3FE74 /* VibingPlan.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		24CCE55CD27C392D79FB36C1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DB69EF3315842A65C9348810 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7835308793289F13FBFA79E5;
+			remoteInfo = YaverTV;
+		};
+		F215A4E4651D3F19FBED24FA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DB69EF3315842A65C9348810 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7835308793289F13FBFA79E5;
+			remoteInfo = YaverTV;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		053F14BB4784ACE0F6940C93 /* YaverTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YaverTVApp.swift; sourceTree = "<group>"; };
+		10853B34BB3F067BDF0C02E9 /* TaskComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskComposerView.swift; sourceTree = "<group>"; };
+		13160FC9012BA60947E3FE74 /* VibingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibingPlan.swift; sourceTree = "<group>"; };
+		13B09883C3220F3715E4F3DF /* WebPreviewStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPreviewStreamView.swift; sourceTree = "<group>"; };
+		2168C1CC5D76DE846256CFAD /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
+		276D29BCA1F4A3A8DD33A6D3 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		2F558EBFDD66510DEF9FEFB4 /* YaverTVUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = YaverTVUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		30B780D2E7490982C5B7E328 /* AgentClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentClient.swift; sourceTree = "<group>"; };
+		35EB3210C08FB622ECCBF15C /* YaverNativeCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YaverNativeCatalog.swift; sourceTree = "<group>"; };
+		3856FA2ADBC347EA996932EA /* AddBoxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddBoxView.swift; sourceTree = "<group>"; };
+		3DB2DF3A66DAE025B2B780C8 /* BoxLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoxLifecycle.swift; sourceTree = "<group>"; };
+		407EAB8C318A209F3AE94A17 /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
+		4B5FCD77426D42F65FEB0D0A /* VibingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibingView.swift; sourceTree = "<group>"; };
+		4ED0118C15F635CF31061B51 /* VibeTurnPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeTurnPanel.swift; sourceTree = "<group>"; };
+		51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		59F5766C895CDA0075AE65E7 /* TVSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSettingsView.swift; sourceTree = "<group>"; };
+		5E6E50DABA5FE87AF986E197 /* TVChatNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVChatNavigationTests.swift; sourceTree = "<group>"; };
+		62AA4F93DB55D50601FA4253 /* Backend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend.swift; sourceTree = "<group>"; };
+		6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speech.swift; sourceTree = "<group>"; };
+		701043D706CE4793A50A17DD /* YaverTVTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = YaverTVTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		706F27D55F944D59C8ECD555 /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasksView.swift; sourceTree = "<group>"; };
+		72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibingPlanTests.swift; sourceTree = "<group>"; };
+		8B47351433BB0B87175F60EA /* MachineRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineRegistry.swift; sourceTree = "<group>"; };
+		8FE9E4B8D55E6F9BE758452A /* TaskDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskDetailView.swift; sourceTree = "<group>"; };
+		925084532D186202A5CA57D2 /* TVWebPreviewLoopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVWebPreviewLoopTests.swift; sourceTree = "<group>"; };
+		9383688971427E7DF15B2D1C /* FailureSignals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FailureSignals.swift; sourceTree = "<group>"; };
+		9FAE4341960BE9EA05DE082D /* UpdateAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAgentView.swift; sourceTree = "<group>"; };
+		A7D4D91DB76D5F6AEBDD3D48 /* YaverTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = YaverTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A96BEDB7B91310E39E99DED2 /* SessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionClient.swift; sourceTree = "<group>"; };
+		AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVRemoteView.swift; sourceTree = "<group>"; };
+		B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthSignIn.swift; sourceTree = "<group>"; };
+		C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsView.swift; sourceTree = "<group>"; };
+		C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanApprovalBeacon.swift; sourceTree = "<group>"; };
+		CC389C91C8B5382905D6194B /* MachinePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachinePickerView.swift; sourceTree = "<group>"; };
+		CCC27F01B0DAD177B10DAC04 /* YaverStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YaverStore.swift; sourceTree = "<group>"; };
+		CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteRuntimeModels.swift; sourceTree = "<group>"; };
+		D76EA211ABDF521DD6CC22C3 /* WakeProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeProgressView.swift; sourceTree = "<group>"; };
+		D9E917EDECD2B19968A57D16 /* TVChatPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVChatPlan.swift; sourceTree = "<group>"; };
+		DB4A93B698F49F0230F8DABF /* SessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionView.swift; sourceTree = "<group>"; };
+		DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackView.swift; sourceTree = "<group>"; };
+		DFF6CEE51B6A221D57E35F68 /* DroidStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroidStreamView.swift; sourceTree = "<group>"; };
+		E0279D581187CF7B6DAB53B5 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		E202BFD986DE7C7B55C7F3F4 /* RuntimeDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeDashboardView.swift; sourceTree = "<group>"; };
+		E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignIn.swift; sourceTree = "<group>"; };
+		E883FFE32672CAF75087F1E5 /* FrameworkStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameworkStyle.swift; sourceTree = "<group>"; };
+		F305D583F562FDFA98285065 /* YaverTV.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = YaverTV.entitlements; sourceTree = "<group>"; };
+		F656E1723EA3FA1FA0C7CE46 /* RemoteRuntimeWebRTCView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteRuntimeWebRTCView.swift; sourceTree = "<group>"; };
+		FF8D286AA1E6B188684F21DA /* yaver-login-wordmark-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "yaver-login-wordmark-light.png"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		868C4BDD0FCC01B114707A7C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D35115170BD592449BB9E6A2 /* LiveKitWebRTC in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		04030A85432F4E287B1A04E7 /* YaverTV */ = {
+			isa = PBXGroup;
+			children = (
+				3856FA2ADBC347EA996932EA /* AddBoxView.swift */,
+				30B780D2E7490982C5B7E328 /* AgentClient.swift */,
+				E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */,
+				51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */,
+				62AA4F93DB55D50601FA4253 /* Backend.swift */,
+				3DB2DF3A66DAE025B2B780C8 /* BoxLifecycle.swift */,
+				9383688971427E7DF15B2D1C /* FailureSignals.swift */,
+				E883FFE32672CAF75087F1E5 /* FrameworkStyle.swift */,
+				C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */,
+				8B47351433BB0B87175F60EA /* MachineRegistry.swift */,
+				276D29BCA1F4A3A8DD33A6D3 /* Models.swift */,
+				B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */,
+				CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */,
+				A96BEDB7B91310E39E99DED2 /* SessionClient.swift */,
+				6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */,
+				2168C1CC5D76DE846256CFAD /* TokenStore.swift */,
+				D9E917EDECD2B19968A57D16 /* TVChatPlan.swift */,
+				13160FC9012BA60947E3FE74 /* VibingPlan.swift */,
+				35EB3210C08FB622ECCBF15C /* YaverNativeCatalog.swift */,
+				CCC27F01B0DAD177B10DAC04 /* YaverStore.swift */,
+				F305D583F562FDFA98285065 /* YaverTV.entitlements */,
+				053F14BB4784ACE0F6940C93 /* YaverTVApp.swift */,
+				71282555B3437D21B4A181FA /* Views */,
+			);
+			path = YaverTV;
+			sourceTree = "<group>";
+		};
+		2735A7C7C60089638C70371B /* YaverTVUITests */ = {
+			isa = PBXGroup;
+			children = (
+				5E6E50DABA5FE87AF986E197 /* TVChatNavigationTests.swift */,
+				925084532D186202A5CA57D2 /* TVWebPreviewLoopTests.swift */,
+			);
+			path = YaverTVUITests;
+			sourceTree = "<group>";
+		};
+		666242C9D217FAF4E9850CFE /* yaver-main-final.jnQdoI */ = {
+			isa = PBXGroup;
+			children = (
+				7F45DCE8AB29536AFE738CB8 /* mobile */,
+			);
+			name = "yaver-main-final.jnQdoI";
+			path = ..;
+			sourceTree = "<group>";
+		};
+		6E4FD83FAB664174150A1D03 /* assets */ = {
+			isa = PBXGroup;
+			children = (
+				B4D08A264B204CBC7A2EB47A /* branding */,
+			);
+			path = assets;
+			sourceTree = "<group>";
+		};
+		71282555B3437D21B4A181FA /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */,
+				E0279D581187CF7B6DAB53B5 /* DashboardView.swift */,
+				DFF6CEE51B6A221D57E35F68 /* DroidStreamView.swift */,
+				DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */,
+				CC389C91C8B5382905D6194B /* MachinePickerView.swift */,
+				C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */,
+				F656E1723EA3FA1FA0C7CE46 /* RemoteRuntimeWebRTCView.swift */,
+				E202BFD986DE7C7B55C7F3F4 /* RuntimeDashboardView.swift */,
+				DB4A93B698F49F0230F8DABF /* SessionView.swift */,
+				407EAB8C318A209F3AE94A17 /* SignInView.swift */,
+				10853B34BB3F067BDF0C02E9 /* TaskComposerView.swift */,
+				8FE9E4B8D55E6F9BE758452A /* TaskDetailView.swift */,
+				706F27D55F944D59C8ECD555 /* TasksView.swift */,
+				59F5766C895CDA0075AE65E7 /* TVSettingsView.swift */,
+				9FAE4341960BE9EA05DE082D /* UpdateAgentView.swift */,
+				4ED0118C15F635CF31061B51 /* VibeTurnPanel.swift */,
+				4B5FCD77426D42F65FEB0D0A /* VibingView.swift */,
+				D76EA211ABDF521DD6CC22C3 /* WakeProgressView.swift */,
+				13B09883C3220F3715E4F3DF /* WebPreviewStreamView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		7F45DCE8AB29536AFE738CB8 /* mobile */ = {
+			isa = PBXGroup;
+			children = (
+				6E4FD83FAB664174150A1D03 /* assets */,
+			);
+			path = mobile;
+			sourceTree = "<group>";
+		};
+		AD227DAE013B4D6B7FE365D1 = {
+			isa = PBXGroup;
+			children = (
+				666242C9D217FAF4E9850CFE /* yaver-main-final.jnQdoI */,
+				04030A85432F4E287B1A04E7 /* YaverTV */,
+				FFF5EADFCBAE2A1555B317FD /* YaverTVTests */,
+				2735A7C7C60089638C70371B /* YaverTVUITests */,
+				D6587CEE72510E3268F9262F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B4D08A264B204CBC7A2EB47A /* branding */ = {
+			isa = PBXGroup;
+			children = (
+				FF8D286AA1E6B188684F21DA /* yaver-login-wordmark-light.png */,
+			);
+			path = branding;
+			sourceTree = "<group>";
+		};
+		D6587CEE72510E3268F9262F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A7D4D91DB76D5F6AEBDD3D48 /* YaverTV.app */,
+				701043D706CE4793A50A17DD /* YaverTVTests.xctest */,
+				2F558EBFDD66510DEF9FEFB4 /* YaverTVUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		FFF5EADFCBAE2A1555B317FD /* YaverTVTests */ = {
+			isa = PBXGroup;
+			children = (
+				72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */,
+			);
+			path = YaverTVTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		131EC50E8717FA0CB24F5C65 /* YaverTVTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4F42334930DEBC7461BABC96 /* Build configuration list for PBXNativeTarget "YaverTVTests" */;
+			buildPhases = (
+				38F4D631FBD7A12D4F622C16 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				3D8DB15C7AC9F0B0ED86ECC2 /* PBXTargetDependency */,
+			);
+			name = YaverTVTests;
+			packageProductDependencies = (
+			);
+			productName = YaverTVTests;
+			productReference = 701043D706CE4793A50A17DD /* YaverTVTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		7835308793289F13FBFA79E5 /* YaverTV */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 42B7A340A48D784025763161 /* Build configuration list for PBXNativeTarget "YaverTV" */;
+			buildPhases = (
+				C20486C5E5B6D2A762D60A8A /* Sources */,
+				496A973DD04F8CA31B15267F /* Resources */,
+				868C4BDD0FCC01B114707A7C /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = YaverTV;
+			packageProductDependencies = (
+				44E779189DD0B98EC6AC2052 /* LiveKitWebRTC */,
+			);
+			productName = YaverTV;
+			productReference = A7D4D91DB76D5F6AEBDD3D48 /* YaverTV.app */;
+			productType = "com.apple.product-type.application";
+		};
+		EE0A387E3B19636573B84C33 /* YaverTVUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5B405349795106B41190513F /* Build configuration list for PBXNativeTarget "YaverTVUITests" */;
+			buildPhases = (
+				EFDF6EB8F81DB7B9F718820E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8864E4F96C971E149212B722 /* PBXTargetDependency */,
+			);
+			name = YaverTVUITests;
+			packageProductDependencies = (
+			);
+			productName = YaverTVUITests;
+			productReference = 2F558EBFDD66510DEF9FEFB4 /* YaverTVUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DB69EF3315842A65C9348810 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					131EC50E8717FA0CB24F5C65 = {
+						DevelopmentTeam = 5SJZ4KA39A;
+					};
+					7835308793289F13FBFA79E5 = {
+						DevelopmentTeam = 5SJZ4KA39A;
+					};
+					EE0A387E3B19636573B84C33 = {
+						DevelopmentTeam = 5SJZ4KA39A;
+						TestTargetID = 7835308793289F13FBFA79E5;
+					};
+				};
+			};
+			buildConfigurationList = 3ECC688BA9EA7A321F3832AC /* Build configuration list for PBXProject "YaverTV" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = AD227DAE013B4D6B7FE365D1;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E99B115601E2359F3CF1153A /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = D6587CEE72510E3268F9262F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7835308793289F13FBFA79E5 /* YaverTV */,
+				EE0A387E3B19636573B84C33 /* YaverTVUITests */,
+				131EC50E8717FA0CB24F5C65 /* YaverTVTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		496A973DD04F8CA31B15267F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA1C4E5FB968311F8B9C37C7 /* Assets.xcassets in Resources */,
+				488D514BBC3C001E04D2228B /* yaver-login-wordmark-light.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		38F4D631FBD7A12D4F622C16 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DC2819DC5C2145D82D127460 /* VibingPlanTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C20486C5E5B6D2A762D60A8A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				852CC39FBF2CFDEF2DCD3BB1 /* AddBoxView.swift in Sources */,
+				C925CDA83769C16357214E99 /* AgentClient.swift in Sources */,
+				0F3AD5C101105E22CCC5C114 /* AppleSignIn.swift in Sources */,
+				22B21BB28D6FC910AA51413E /* AppleTVRemoteView.swift in Sources */,
+				16587396CA5360A34F2C4342 /* Backend.swift in Sources */,
+				3338C731056621FCCE8FE13A /* BoxLifecycle.swift in Sources */,
+				859933A9F2FF6DBD55DA507D /* DashboardView.swift in Sources */,
+				6EEAC350F5A3D4E89CE1C473 /* DroidStreamView.swift in Sources */,
+				A652521801330E483E8F0DEE /* FailureSignals.swift in Sources */,
+				CAF1C4F283907ED5436FC317 /* FeedbackView.swift in Sources */,
+				B4DB41408F8DDBA62F1BEF7F /* FrameworkStyle.swift in Sources */,
+				61443E7517C16C82728D68E7 /* LanApprovalBeacon.swift in Sources */,
+				7E0CEDAA389C30B231F33D93 /* MachinePickerView.swift in Sources */,
+				28F88FA5024DEAE3CEBE040F /* MachineRegistry.swift in Sources */,
+				1A6CB9DFD7829D4144D6A82D /* Models.swift in Sources */,
+				BA38FFCFED1DC4D4EE799E82 /* OAuthSignIn.swift in Sources */,
+				E6360E3A224D67440371A632 /* ProjectsView.swift in Sources */,
+				EEEB8D804BA1E102F39CD2E0 /* RemoteRuntimeModels.swift in Sources */,
+				6ADE17F0073254B1F4424366 /* RemoteRuntimeWebRTCView.swift in Sources */,
+				1DF8243D967F35FF81A77D85 /* RuntimeDashboardView.swift in Sources */,
+				34141A6D2B59625100F05D4A /* SessionClient.swift in Sources */,
+				81DB028736C4430E2622C6F9 /* SessionView.swift in Sources */,
+				F6D6FD0612F8F2E9DD6D3A5C /* SignInView.swift in Sources */,
+				D299F8FE54C7BF349DB540D5 /* Speech.swift in Sources */,
+				9D0BB56F661FC19E222F21AC /* TVChatPlan.swift in Sources */,
+				7379174AE578C3B3EE112B4E /* TVSettingsView.swift in Sources */,
+				2B768810EB7C0232820C5AAB /* TaskComposerView.swift in Sources */,
+				229C96D90BE4C06BFCD7F34E /* TaskDetailView.swift in Sources */,
+				AEF06908D4ADCB0FE0759040 /* TasksView.swift in Sources */,
+				D7BD4B86D4F7E9BB55EFDC13 /* TokenStore.swift in Sources */,
+				928CCC06D104DE0E15FC5A18 /* UpdateAgentView.swift in Sources */,
+				F7BEBB07F0E592CAFCFD739E /* VibeTurnPanel.swift in Sources */,
+				F94318B025A3D905717E944B /* VibingPlan.swift in Sources */,
+				8F7FD72900FD7A382640EDAA /* VibingView.swift in Sources */,
+				0AEECA73B0908A0415B8654C /* WakeProgressView.swift in Sources */,
+				8D8ABF84CE07DFF5DCA0C28A /* WebPreviewStreamView.swift in Sources */,
+				7BFF477EEDD5FEA7E3696C93 /* YaverNativeCatalog.swift in Sources */,
+				AD43610B33A8368A49E512B9 /* YaverStore.swift in Sources */,
+				18F7F25A9DC46548215628BB /* YaverTVApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EFDF6EB8F81DB7B9F718820E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7B9CB81DB7E411F73C9F730 /* TVChatNavigationTests.swift in Sources */,
+				A2031FCCF6C82A44E0A3478B /* TVWebPreviewLoopTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		3D8DB15C7AC9F0B0ED86ECC2 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7835308793289F13FBFA79E5 /* YaverTV */;
+			targetProxy = F215A4E4651D3F19FBED24FA /* PBXContainerItemProxy */;
+		};
+		8864E4F96C971E149212B722 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7835308793289F13FBFA79E5 /* YaverTV */;
+			targetProxy = 24CCE55CD27C392D79FB36C1 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		21FF14096E972212B37F9915 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				CODE_SIGN_ENTITLEMENTS = YaverTV/YaverTV.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = YaverTV/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile;
+				PRODUCT_MODULE_NAME = YaverTV;
+				PRODUCT_NAME = Yaver;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Release;
+		};
+		269C3353A5861113B7DD4673 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 5SJZ4KA39A;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Release;
+		};
+		49219457787CBCE1CACCB5A1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.tv.tests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Yaver.app/Yaver";
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Debug;
+		};
+		494F8EB13AE34CDF9D45ADD5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.tv.uitests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = YaverTV;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Release;
+		};
+		698B960884AA0722287A6248 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				CODE_SIGN_ENTITLEMENTS = YaverTV/YaverTV.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = YaverTV/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile;
+				PRODUCT_MODULE_NAME = YaverTV;
+				PRODUCT_NAME = Yaver;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Debug;
+		};
+		9EFF97650FDF8AE8DB216369 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.tv.tests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Yaver.app/Yaver";
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Release;
+		};
+		A90A85EEF3FC3A297ECB10BA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 5SJZ4KA39A;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Debug;
+		};
+		E23CA906513897FF804F0EAD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.tv.uitests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = YaverTV;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3ECC688BA9EA7A321F3832AC /* Build configuration list for PBXProject "YaverTV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A90A85EEF3FC3A297ECB10BA /* Debug */,
+				269C3353A5861113B7DD4673 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		42B7A340A48D784025763161 /* Build configuration list for PBXNativeTarget "YaverTV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				698B960884AA0722287A6248 /* Debug */,
+				21FF14096E972212B37F9915 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4F42334930DEBC7461BABC96 /* Build configuration list for PBXNativeTarget "YaverTVTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				49219457787CBCE1CACCB5A1 /* Debug */,
+				9EFF97650FDF8AE8DB216369 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		5B405349795106B41190513F /* Build configuration list for PBXNativeTarget "YaverTVUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E23CA906513897FF804F0EAD /* Debug */,
+				494F8EB13AE34CDF9D45ADD5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		E99B115601E2359F3CF1153A /* XCRemoteSwiftPackageReference "webrtc-xcframework" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/livekit/webrtc-xcframework.git";
+			requirement = {
+				kind = exactVersion;
+				version = 144.7559.13;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		44E779189DD0B98EC6AC2052 /* LiveKitWebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E99B115601E2359F3CF1153A /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
+			productName = LiveKitWebRTC;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = DB69EF3315842A65C9348810 /* Project object */;
+}

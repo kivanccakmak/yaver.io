@@ -12,8 +12,8 @@ package main
 //     exec/file/device/cloud/shell tools regardless of scope — this is a security
 //     control, not the product owner-gate. Enforced via the server-stamped
 //     X-Yaver-AllowedTools header that MCP dispatch already checks.
-//   - The owner's own bearer (and paired/guest tokens) keep FULL access through
-//     the existing s.auth path — this layer only ADDS the OAuth connector path.
+//   - The owner's own bearer keeps FULL access through the existing s.auth path;
+//     this layer only adds the separately scoped OAuth connector path.
 //
 // Discovery (RFC 9728 / RFC 8414) lets the client find the AS from a 401 on /mcp.
 
@@ -187,15 +187,14 @@ func (s *HTTPServer) handleMCPAuthServerMetadata(w http.ResponseWriter, r *http.
 	})
 }
 
-// authMCP guards /mcp. It ADDS an OAuth-connector path on top of the existing
-// owner/paired/guest auth (s.auth):
+// authMCP guards /mcp. It adds an OAuth-connector path on top of primary-owner
+// auth (s.auth):
 //   - no bearer, or a JWT-shaped bearer that fails verification → 401 with a
 //     WWW-Authenticate challenge pointing at the protected-resource metadata (so
 //     a fresh connector client can discover the AS and start the OAuth flow);
 //   - a valid AS-minted JWT → CONNECTOR path: strip any client-supplied scope
 //     header and stamp the hard default-deny allowlist, then dispatch;
-//   - any other (non-JWT) bearer → delegate to s.auth unchanged (owner / paired /
-//     guest keep full access exactly as before).
+//   - any other (non-JWT) bearer → delegate to primary-owner auth unchanged.
 func (s *HTTPServer) authMCP(next http.HandlerFunc) http.HandlerFunc {
 	ownerPath := s.auth(next)
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +239,7 @@ func (s *HTTPServer) authMCP(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		// Non-JWT bearer → owner / paired / guest path, full access as today.
+		// Non-JWT bearer → primary-owner path.
 		ownerPath(w, r)
 	}
 }

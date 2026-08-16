@@ -74,7 +74,7 @@ func TestRenderPhoneStatus_AgentTier(t *testing.T) {
 		Slug:     "agt",
 		Name:     "Agent Project",
 		Template: "blank",
-			Schema:   &PhoneSchema{Tables: []PhoneTable{{Name: "X", Columns: []PhoneColumn{{Name: "id", Type: "string"}}}}},
+		Schema:   &PhoneSchema{Tables: []PhoneTable{{Name: "X", Columns: []PhoneColumn{{Name: "id", Type: "string"}}}}},
 	}, WriteOptions{}); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}

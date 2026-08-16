@@ -172,7 +172,9 @@ func parseDDGHTML(html string, limit int) []WebSearchResult {
 }
 
 // extractDDGRedirect unwraps DDG's tracking redirect:
-//   //duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpath&rut=…
+//
+//	//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpath&rut=…
+//
 // → https://example.com/path
 func extractDDGRedirect(href string) string {
 	if !strings.Contains(href, "duckduckgo.com/l/") {

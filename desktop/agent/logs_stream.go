@@ -12,7 +12,7 @@ import (
 // handleLogsStream is an SSE endpoint that tails a specific Docker-Compose
 // service's logs. Subscribers receive one `data:` line per log entry.
 //
-//   GET /logs/stream?service=postgres&tail=50
+//	GET /logs/stream?service=postgres&tail=50
 //
 // Piggybacks on `docker compose logs -f` so whatever stdout/stderr the service
 // writes flows through.
@@ -109,4 +109,3 @@ func streamBinaryLog(w http.ResponseWriter, flusher http.Flusher, r *http.Reques
 		}
 	}
 }
-

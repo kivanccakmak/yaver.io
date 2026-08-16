@@ -14,7 +14,7 @@ package main
 //
 // This is intentionally NOT `yaver deploy ship --targets ...` — that
 // command runs through the agent's HTTP API for shared-machine deploys
-// of *guest* projects with vault-supplied credentials. `deploy all` is
+// of projects with vault-supplied credentials. `deploy all` is
 // for shipping Yaver itself: it shells out to the canonical
 // scripts/*.sh files directly so the same code path that works
 // manually works here, and the output is identical to running each
@@ -358,6 +358,7 @@ func streamLines(r io.Reader, prefix string, dst io.Writer) {
 //   - origin/main ahead of HEAD    → abort (would race the tag)
 //   - no `github` remote           → abort (CI is wired to that remote)
 //   - tag already exists locally   → abort (would re-publish same version)
+//
 // sweepAll selects how the release commit is staged:
 //   - false (standalone `yaver deploy npm`): require a clean tree and stage
 //     only the cli version files, so the release commit is exactly the bump.

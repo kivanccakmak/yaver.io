@@ -3,7 +3,7 @@ package main
 // stream_push.go — M10: a phone (or any client) pushes its OWN camera frames to
 // a box, which buffers them and serves them through the same stream plane
 // (stream_list / stream_snapshot) — so a phone camera becomes a shareable source
-// to the owner's account or a guest watch link, with no inbound connection to
+// to the owner's account or a signed companion link, with no inbound connection to
 // the phone. Mirrors the robot external-camera push, but lives in the neutral
 // stream plane (not robot-framed).
 //

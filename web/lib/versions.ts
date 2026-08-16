@@ -7,15 +7,21 @@
  * versions.json's `gui` key changes.
  *
  * Desktop GUI release artifacts are named deterministically by
- * electron/package.json's artifactName pattern; GitHub's
- * /releases/latest/download/ URL shape resolves each by its exact asset name.
+ * electron/package.json's artifactName pattern. URLs pin the component tag;
+ * the repository's generic "latest" release can be a CLI/mobile release and
+ * must never decide which desktop bytes a user downloads.
  */
-export const GUI_VERSION = "0.1.2";
+export const GUI_VERSION = "0.1.3";
 export const GUI_BASE_URL =
-  "https://github.com/yaver-io/yaver.io/releases/latest/download";
+  `https://github.com/yaver-io/yaver.io/releases/download/gui/v${GUI_VERSION}`;
 export const GUI_DOWNLOADS = {
-  mac: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-mac.dmg`,
-  win: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-win-setup.exe`,
-  linux: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux.AppImage`,
-  deb: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux.deb`,
+  macArm64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-mac-arm64.dmg`,
+  macX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-mac-x64.dmg`,
+  winX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-win-x64-setup.exe`,
+  linuxX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-x64.AppImage`,
+  linuxArm64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-arm64.AppImage`,
+  debX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-x64.deb`,
+  debArm64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-arm64.deb`,
+  rpmX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-x64.rpm`,
+  rpmArm64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-arm64.rpm`,
 } as const;

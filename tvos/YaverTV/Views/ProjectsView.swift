@@ -160,9 +160,6 @@ struct ProjectsView: View {
             DroidStreamView()
         case .web:
             WebPreviewStreamView(project: p, form: form)
-        case .flutter:
-            unsupported("Flutter previews aren't streamable to the TV yet — run it on a device or the web.",
-                        project: p)
         case .unknown:
             // Dead-end audit fix (2026-08-13): the old text said "Open it in
             // Session to run it" with NO button — a route with no tap. A

@@ -12,11 +12,10 @@ package main
 //     that forgets is worse than no idea queue, because the user stops keeping
 //     their own notes.
 //
-//   - Listing was global. runtimeQueue.list() returned every item on the box
-//     regardless of who created it, so on a multi-user agent (multiuser.go) one
-//     tenant's spoken utterances — raw task input prompts — rendered on another
-//     tenant's watch. Items are now stamped with the acting user and filtered on
-//     read; an empty owner matches only an empty owner.
+//   - Listing was global. runtimeQueue.list() returned every item on an operator
+//     box regardless of who created it, so one tenant's raw task prompt could
+//     render on another tenant's watch. Items are now stamped with the acting
+//     account and filtered on read; an empty owner matches only an empty owner.
 //
 //   - Polling reordered the list. runtime_turns refreshed every task-backed item
 //     on every call, and update() unconditionally bumped UpdatedAt, which is the

@@ -69,14 +69,14 @@ func emitAgentUpdateProgress(phase string, bytes, total int64, text string) {
 // flush() — call it from a defer in the caller so a download
 // that fails midway still gets a "stalled at 67%" final reading.
 type agentUpdateProgressReader struct {
-	r            io.Reader
-	total        int64
-	phase        string
-	mu           sync.Mutex
-	read         int64
-	lastEmitAt   time.Time
-	lastEmitPct  int
-	flushed      bool
+	r           io.Reader
+	total       int64
+	phase       string
+	mu          sync.Mutex
+	read        int64
+	lastEmitAt  time.Time
+	lastEmitPct int
+	flushed     bool
 }
 
 func newAgentUpdateProgressReader(r io.Reader, total int64, phase string) *agentUpdateProgressReader {

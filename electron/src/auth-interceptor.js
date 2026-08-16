@@ -16,8 +16,13 @@
  */
 function stripAuthFromUrl(urlString) {
   const u = new URL(urlString);
-  const token = u.searchParams.get("token");
   const rp = u.searchParams.get("__rp");
+  // `token` is also a legitimate application parameter (for example
+  // /account/merge?token=...). AgentClient marks its native EventSource URLs
+  // with caller=web-dashboard, and Relay Pro URLs carry __rp. Never strip a
+  // generic app/OAuth/reset token merely because it shares the same name.
+  const isAgentAuth = Boolean(rp) || u.searchParams.get("caller") === "web-dashboard";
+  const token = isAgentAuth ? u.searchParams.get("token") : null;
   if (token || rp) {
     if (token) u.searchParams.delete("token");
     if (rp) u.searchParams.delete("__rp");
@@ -63,15 +68,33 @@ function applyAuthHeaders({ url: urlString, headers, authByOrigin }) {
     authByOrigin.set(origin, entry);
   }
 
-  const known = origin ? authByOrigin.get(origin) : null;
-  if (known && known.token && !next["Authorization"]) {
-    next["Authorization"] = `Bearer ${known.token}`;
+  return { headers: applyKnownAuthHeaders({ url, headers: next, authByOrigin }), url };
+
+}
+
+function hasHeader(headers, name) {
+  const needle = name.toLowerCase();
+  return Object.keys(headers || {}).some((key) => key.toLowerCase() === needle);
+}
+
+/** Header-only half used from Electron's onBeforeSendHeaders callback. */
+function applyKnownAuthHeaders({ url, headers, authByOrigin }) {
+  const next = { ...headers };
+  let origin = null;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return next;
   }
-  if (known && known.rp && !next["X-Relay-Password"]) {
+  const known = authByOrigin.get(origin);
+  if (known && known.token && !hasHeader(next, "Authorization")) {
+    next.Authorization = `Bearer ${known.token}`;
+  }
+  if (known && known.rp && !hasHeader(next, "X-Relay-Password")) {
     next["X-Relay-Password"] = known.rp;
   }
 
-  return { headers: next, url };
+  return next;
 }
 
-module.exports = { stripAuthFromUrl, applyAuthHeaders };
+module.exports = { stripAuthFromUrl, applyAuthHeaders, applyKnownAuthHeaders, hasHeader };

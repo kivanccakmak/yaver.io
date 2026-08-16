@@ -33,18 +33,21 @@ func TestRDControlEnforce(t *testing.T) {
 }
 
 func TestRDViewEnforce(t *testing.T) {
-	if ok, _ := rdViewEnforce(RemoteDesktopPolicy{ViewEnabled: true}); !ok {
+	if ok, _ := rdViewEnforce(RemoteDesktopPolicy{ViewEnabled: true, ViewConsentSet: true}); !ok {
 		t.Fatal("view should be allowed when enabled")
 	}
-	if ok, reason := rdViewEnforce(RemoteDesktopPolicy{ViewEnabled: false}); ok || reason == "" {
+	if ok, reason := rdViewEnforce(RemoteDesktopPolicy{ViewEnabled: false, ViewConsentSet: true}); ok || reason == "" {
 		t.Fatalf("view should be denied with a reason when disabled (ok=%v reason=%q)", ok, reason)
+	}
+	if ok, reason := rdViewEnforce(RemoteDesktopPolicy{ViewEnabled: true}); ok || reason == "" {
+		t.Fatalf("view without local consent should be denied (ok=%v reason=%q)", ok, reason)
 	}
 }
 
 func TestRDDefaultPolicy(t *testing.T) {
 	p := defaultRemoteDesktopPolicy()
-	if !p.ViewEnabled {
-		t.Error("view should default ON")
+	if p.ViewEnabled || p.ViewConsentSet {
+		t.Error("view and consent must default OFF")
 	}
 	if p.ControlEnabled {
 		t.Error("control must default OFF — input injection is opt-in")
@@ -54,10 +57,29 @@ func TestRDDefaultPolicy(t *testing.T) {
 	}
 }
 
+func TestRDViewPolicyUpdateEnforce(t *testing.T) {
+	on := true
+	off := false
+	unset := RemoteDesktopPolicy{}
+	if ok, _ := rdViewPolicyUpdateEnforce(unset, false, &on); !ok {
+		t.Fatal("a local caller must be able to establish first consent")
+	}
+	if ok, reason := rdViewPolicyUpdateEnforce(unset, true, &on); ok || reason == "" {
+		t.Fatalf("a remote caller must not establish first consent (ok=%v reason=%q)", ok, reason)
+	}
+	if ok, _ := rdViewPolicyUpdateEnforce(unset, true, &off); !ok {
+		t.Fatal("a remote caller must be able to fail closed")
+	}
+	consented := RemoteDesktopPolicy{ViewConsentSet: true}
+	if ok, _ := rdViewPolicyUpdateEnforce(consented, true, &on); !ok {
+		t.Fatal("remote toggle should work after local consent is recorded")
+	}
+}
+
 func TestRDScalePoint(t *testing.T) {
 	disp := ghost.Display{Index: 0, X: 0, Y: 0, Width: 1920, Height: 1080, Primary: true}
 	cases := []struct {
-		nx, ny     float64
+		nx, ny       float64
 		wantX, wantY int
 	}{
 		{0, 0, 0, 0},

@@ -19,7 +19,7 @@ import (
 //     socket. Only http/https are allowed.
 //
 // Loopback and RFC1918 are intentionally NOT blocked: http_request is an
-// owner-only tool (guest scopes exclude /mcp) and `curl localhost:3000` /
+// owner-only tool (constrained scopes exclude /mcp) and `curl localhost:3000` /
 // LAN dev is a legitimate, common use. The credential-theft vector is
 // link-local, and that is what we cut off.
 //

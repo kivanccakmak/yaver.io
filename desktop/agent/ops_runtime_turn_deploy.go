@@ -36,9 +36,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRuntimeTurnEvidenceHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRuntimeTurnEvidenceHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "runtime_turn_deploy_preflight",
@@ -52,9 +52,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRuntimeTurnDeployPreflightHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRuntimeTurnDeployPreflightHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

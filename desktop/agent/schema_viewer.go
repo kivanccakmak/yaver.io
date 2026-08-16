@@ -24,20 +24,20 @@ type SchemaColumn struct {
 
 // BuildSchema returns table+column info across backends (best-effort).
 func BuildSchema(projectDir string) (*struct {
-	Backend string         `json:"backend"`
-	Tables  []SchemaTable  `json:"tables"`
-	Mermaid string         `json:"mermaid"`
-	Source  string         `json:"source"`
+	Backend string        `json:"backend"`
+	Tables  []SchemaTable `json:"tables"`
+	Mermaid string        `json:"mermaid"`
+	Source  string        `json:"source"`
 }, error) {
 	cfg, err := LoadProjectConfig(projectDir)
 	if err != nil {
 		return nil, err
 	}
 	out := struct {
-		Backend string         `json:"backend"`
-		Tables  []SchemaTable  `json:"tables"`
-		Mermaid string         `json:"mermaid"`
-		Source  string         `json:"source"`
+		Backend string        `json:"backend"`
+		Tables  []SchemaTable `json:"tables"`
+		Mermaid string        `json:"mermaid"`
+		Source  string        `json:"source"`
 	}{Backend: string(cfg.Backend)}
 
 	switch cfg.Backend {

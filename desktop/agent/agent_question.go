@@ -53,16 +53,16 @@ type AgentQuestion struct {
 	ID          string   `json:"id"`
 	TaskID      string   `json:"taskId"`
 	Prompt      string   `json:"prompt"`
-	Header      string   `json:"header,omitempty"`      // short chip label (≤12 chars), Claude-Code-style; UI renders it as a tag above the prompt
-	Kind        string   `json:"kind"`                  // "text" (default) | "choice" | "secret"
-	Choices     []string `json:"choices,omitempty"`     // populated only when kind=choice
-	Multi       bool     `json:"multi,omitempty"`       // kind=choice only: allow selecting multiple options; answer is the picks joined by "; "
-	VaultHint   string   `json:"vaultHint,omitempty"`   // suggested vault entry name; UI offers "use stored value"
+	Header      string   `json:"header,omitempty"`    // short chip label (≤12 chars), Claude-Code-style; UI renders it as a tag above the prompt
+	Kind        string   `json:"kind"`                // "text" (default) | "choice" | "secret"
+	Choices     []string `json:"choices,omitempty"`   // populated only when kind=choice
+	Multi       bool     `json:"multi,omitempty"`     // kind=choice only: allow selecting multiple options; answer is the picks joined by "; "
+	VaultHint   string   `json:"vaultHint,omitempty"` // suggested vault entry name; UI offers "use stored value"
 	CreatedAtMs int64    `json:"createdAtMs"`
 	TimeoutSec  int      `json:"timeoutSec"`
 	// --- F3 human-in-the-loop handoff (Access Layer): optional, backward-compatible ---
-	Screenshot  string   `json:"screenshot,omitempty"`  // base64 PNG of the relevant page region; UI shows it above the prompt ("UI transformation")
-	Step        string   `json:"step,omitempty"`        // handoff step type: login|two_factor|captcha|kyc_upload|payment_confirm|region_confirm|tap_relay; drives card rendering
+	Screenshot string `json:"screenshot,omitempty"` // base64 PNG of the relevant page region; UI shows it above the prompt ("UI transformation")
+	Step       string `json:"step,omitempty"`       // handoff step type: login|two_factor|captcha|kyc_upload|payment_confirm|region_confirm|tap_relay; drives card rendering
 }
 
 // pendingQuestion is the in-memory record. answerCh resolves with the
@@ -91,9 +91,9 @@ var (
 // All access is through the package-level mu. Entries are removed when an
 // answer arrives, when the question expires, or when CancelTask wipes them.
 type pendingQuestionRegistry struct {
-	mu       sync.Mutex
-	byTask   map[string]*pendingQuestion // taskID -> question (1:1)
-	byID     map[string]string           // questionID -> taskID
+	mu     sync.Mutex
+	byTask map[string]*pendingQuestion // taskID -> question (1:1)
+	byID   map[string]string           // questionID -> taskID
 }
 
 var globalQuestionRegistry = &pendingQuestionRegistry{

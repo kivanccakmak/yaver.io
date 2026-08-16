@@ -40,11 +40,6 @@ export const OPTIONAL_MORE_TOOLS = [
     description: "Portable collection/operation task bundles.",
   },
   {
-    id: "package-accept",
-    label: "Accept Shared Tasks",
-    description: "Enter an invite code to run shared packages.",
-  },
-  {
     id: "screw-cell",
     label: "Screw Cell",
     description: "Shop-floor screw-cell analytics.",

@@ -68,7 +68,7 @@ func deployQuotaUsage(h *DeployHistory, now time.Time) map[string]int {
 	cutoff := now.Add(-deployQuotaWindow).UnixMilli()
 	// A generous window: enough history to cover a day of uploads without
 	// walking the whole file.
-	for _, run := range h.List(500, "") {
+	for _, run := range h.List(500) {
 		if run.StartedAt < cutoff {
 			continue
 		}

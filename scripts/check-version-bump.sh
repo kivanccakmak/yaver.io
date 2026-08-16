@@ -16,7 +16,7 @@ file_to_component() {
   local file="$1"
   case "$file" in
     desktop/agent/*) echo "cli" ;;
-    desktop/installer/*) echo "installer" ;;
+    electron/*) echo "gui" ;;
     mobile/*) echo "mobile" ;;
     relay/*) echo "relay" ;;
     web/*) echo "web" ;;
@@ -43,31 +43,39 @@ should_exclude() {
   esac
 }
 
-# Collect components that had code changes
-declare -A COMPONENTS_CHANGED
-for file in $CHANGED_FILES; do
+# Collect components that had code changes. macOS still ships Bash 3.2, which
+# has no associative arrays; this guard is part of the canonical Mac release
+# path, so keep the representation portable instead of requiring Homebrew.
+COMPONENTS_CHANGED=""
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
   if should_exclude "$file"; then
     continue
   fi
   component=$(file_to_component "$file")
   if [ -n "$component" ]; then
-    COMPONENTS_CHANGED[$component]=1
+    case " $COMPONENTS_CHANGED " in
+      *" $component "*) ;;
+      *) COMPONENTS_CHANGED="${COMPONENTS_CHANGED}${COMPONENTS_CHANGED:+ }$component" ;;
+    esac
   fi
-done
+done <<EOF
+$CHANGED_FILES
+EOF
 
-if [ ${#COMPONENTS_CHANGED[@]} -eq 0 ]; then
+if [ -z "$COMPONENTS_CHANGED" ]; then
   echo "No component code changes detected — version bump not required."
   exit 0
 fi
 
-echo "Components with code changes: ${!COMPONENTS_CHANGED[*]}"
+echo "Components with code changes: $COMPONENTS_CHANGED"
 
 # Compare versions.json between base and HEAD
 BASE_VERSIONS=$(git show "$BASE_BRANCH":versions.json 2>/dev/null || echo "{}")
 HEAD_VERSIONS=$(cat "$REPO_ROOT/versions.json")
 
 failed=0
-for component in "${!COMPONENTS_CHANGED[@]}"; do
+for component in $COMPONENTS_CHANGED; do
   base_ver=$(echo "$BASE_VERSIONS" | node -e "
     let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
       try { console.log(JSON.parse(d)['$component']||'0.0.0'); }

@@ -72,10 +72,10 @@ type mcpWirePushArgs struct {
 // captures stdout/stderr to a log file under ~/.yaver/logs/ and returns
 // a structured result. The caller gets:
 //
-//   {
-//     ok, exit_code, device, platform, stack, log_path,
-//     log_tail (last ~30 lines), elapsed_sec
-//   }
+//	{
+//	  ok, exit_code, device, platform, stack, log_path,
+//	  log_tail (last ~30 lines), elapsed_sec
+//	}
 //
 // On timeout we kill the subprocess and return ok=false with
 // exit_code=-1; the partial log is still readable.

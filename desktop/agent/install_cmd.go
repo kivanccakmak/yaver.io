@@ -257,6 +257,11 @@ var integrations = []installPlan{
 		runFunc:     runSupabaseInstall,
 	},
 	{
+		name:        "firebase",
+		description: "Firebase CLI — projects, emulators, Hosting, Functions, and App Distribution",
+		runFunc:     runFirebaseInstall,
+	},
+	{
 		name:        "mqtt-broker",
 		description: "Mosquitto MQTT broker — lightweight pub/sub for devices, automations, and app events",
 		macOS:       []string{"brew install mosquitto"},
@@ -626,7 +631,7 @@ func checkInstalled(name string) string {
 			return "✓"
 		}
 		return "—"
-	case "vercel", "convex", "supabase", "wrangler":
+	case "vercel", "convex", "supabase", "firebase", "wrangler":
 		if home, err := os.UserHomeDir(); err == nil {
 			if _, err := os.Stat(filepath.Join(home, ".local", "bin", name)); err == nil {
 				return "✓"
@@ -661,6 +666,7 @@ func checkInstalled(name string) string {
 		"redis-tools":       {"redis-cli"},
 		"redis-server":      {"redis-server"},
 		"supabase":          {"supabase"},
+		"firebase":          {"firebase"},
 		"mqtt-broker":       {"mosquitto"},
 		"mqtt-clients":      {"mosquitto_pub", "mosquitto_sub"},
 		"chrome":            {"google-chrome", "google-chrome-stable", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"},
@@ -1318,6 +1324,12 @@ func metaInstallPlan(name string) (installPlan, bool) {
 			description: "Supabase local tooling — npx-backed CLI wrapper for Docker-based local stacks",
 			runFunc:     runSupabaseInstall,
 		}, true
+	case "firebase":
+		return installPlan{
+			name:        "firebase",
+			description: "Firebase CLI — projects, emulators, Hosting, Functions, and App Distribution",
+			runFunc:     runFirebaseInstall,
+		}, true
 	case "mqtt-broker":
 		return installPlan{
 			name:        "mqtt-broker",
@@ -1584,13 +1596,24 @@ func installNodeGlobalPackageStream(ctx context.Context, pkg string, progress fu
 	if runtime.GOOS == "linux" {
 		ensureLinuxRunnerSandboxSupport()
 	}
-	nodeBin, err := installNodeRuntime(ctx, progress)
-	if err != nil {
-		return err
-	}
-	npmPath := filepath.Join(nodeBin, "npm")
+	var nodeBin, npmPath string
 	if runtime.GOOS == "windows" {
-		npmPath += ".cmd"
+		// A global yaver-cli install necessarily arrived through npm, but a
+		// standalone signed GUI may not have Node. Use the user's real npm when
+		// it exists; never advertise the Unix tarball installer on Windows.
+		var err error
+		npmPath, err = exec.LookPath("npm.cmd")
+		if err != nil {
+			return fmt.Errorf("Node.js/npm is required to install %s on Windows; install Node.js LTS from https://nodejs.org/ or `winget install OpenJS.NodeJS.LTS`, then retry", pkg)
+		}
+		nodeBin = filepath.Dir(npmPath)
+	} else {
+		var err error
+		nodeBin, err = installNodeRuntime(ctx, progress)
+		if err != nil {
+			return err
+		}
+		npmPath = filepath.Join(nodeBin, "npm")
 	}
 	if progress != nil {
 		progress(fmt.Sprintf("$ %s install -g %s", npmPath, pkg))
@@ -1669,6 +1692,10 @@ func runConvexInstall(ctx context.Context, progress func(string)) error {
 
 func runSupabaseInstall(ctx context.Context, progress func(string)) error {
 	return installNodeBackedCLI(ctx, "supabase", "supabase", progress)
+}
+
+func runFirebaseInstall(ctx context.Context, progress func(string)) error {
+	return installNodeBackedCLI(ctx, "firebase", "firebase-tools", progress)
 }
 
 // nodeBackedCLIScript builds the shim `installNodeBackedCLI` writes.

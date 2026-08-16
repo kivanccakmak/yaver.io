@@ -19,17 +19,17 @@ import (
 
 // ConsoleContainer is the universal container descriptor returned by the console API.
 type ConsoleContainer struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Image   string            `json:"image"`
-	State   string            `json:"state"` // running, exited, paused, etc.
-	Status  string            `json:"status"` // "Up 14 days"
-	Ports   []ConsolePort     `json:"ports"`
-	Labels  map[string]string `json:"labels,omitempty"`
-	Project string            `json:"project,omitempty"` // yaver project hint
-	CPUPct  float64           `json:"cpuPct,omitempty"`
-	RAMMB   float64           `json:"ramMb,omitempty"`
-	CreatedAt string          `json:"createdAt"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Image     string            `json:"image"`
+	State     string            `json:"state"`  // running, exited, paused, etc.
+	Status    string            `json:"status"` // "Up 14 days"
+	Ports     []ConsolePort     `json:"ports"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Project   string            `json:"project,omitempty"` // yaver project hint
+	CPUPct    float64           `json:"cpuPct,omitempty"`
+	RAMMB     float64           `json:"ramMb,omitempty"`
+	CreatedAt string            `json:"createdAt"`
 }
 
 type ConsolePort struct {

@@ -195,8 +195,8 @@ func init() {
 			"goal": map[string]interface{}{"type": "string", "description": "Natural-language description of the task."},
 			"name": map[string]interface{}{"type": "string", "description": "Optional package name; derived from the goal if omitted."},
 		}, "goal"),
-		Handler:    packageComposeHandler,
-		AllowGuest: false,
+		Handler:        packageComposeHandler,
+		AllowCompanion: false,
 	})
 }
 

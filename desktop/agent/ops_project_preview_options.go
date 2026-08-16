@@ -27,9 +27,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsProjectPreviewOptionsHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsProjectPreviewOptionsHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

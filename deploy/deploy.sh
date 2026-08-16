@@ -86,6 +86,11 @@ Targets:
   android-auto Android Auto Play AAB upload
   npm          CLI npm release via `yaver deploy npm`
   cli          Alias for npm
+  desktop      Signed macOS/Windows + Linux GUI release via protected gui/v* tag
+  gui          Alias for desktop
+  desktop-mas  Build + locally verify the sandboxed macOS App Store package
+  desktop-testflight
+               Build, validate, and upload macOS desktop to TestFlight
   mcp          Publish/sync MCP registry metadata
 
 Common:
@@ -189,6 +194,38 @@ case "$target" in
       exit 2
     fi
     run yaver deploy npm ${pass_args[@]+"${pass_args[@]}"}
+    ;;
+  desktop|gui)
+    require_deploy_boundary
+    gui_version="$(node -e "console.log(require('./versions.json').gui)")"
+    package_version="$(node -e "console.log(require('./electron/package.json').version)")"
+    if [ "$gui_version" != "$package_version" ]; then
+      echo "ERROR: versions.json gui=$gui_version but electron/package.json=$package_version." >&2
+      echo "Run ./scripts/sync-versions.sh and review the result before releasing." >&2
+      exit 2
+    fi
+    if [ -n "$(git status --porcelain)" ]; then
+      echo "ERROR: desktop release requires a clean committed worktree." >&2
+      exit 2
+    fi
+    if [ "$(git branch --show-current)" != "main" ]; then
+      echo "ERROR: desktop release must run from main after review/merge." >&2
+      exit 2
+    fi
+    gui_tag="gui/v${gui_version}"
+    if git ls-remote --exit-code --tags origin "refs/tags/$gui_tag" >/dev/null 2>&1; then
+      echo "ERROR: remote tag $gui_tag already exists; versions are immutable." >&2
+      exit 2
+    fi
+    run git push origin "HEAD:refs/tags/$gui_tag"
+    ;;
+  desktop-mas)
+    require_deploy_boundary
+    run "$ROOT/scripts/deploy-macos-testflight.sh"
+    ;;
+  desktop-testflight|macos-testflight|mac-testflight)
+    require_deploy_boundary
+    run_shell 'source ~/.appstoreconnect/yaver.env 2>/dev/null; bash "$ROOT/scripts/deploy-macos-testflight.sh" --upload'
     ;;
   mcp)
     require_deploy_boundary

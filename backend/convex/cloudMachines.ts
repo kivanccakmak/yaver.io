@@ -1,7 +1,6 @@
 import { mutation, query, internalMutation, internalAction, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
-import { listGrantedMachineIdsForGrant, listVisibleInfraGrantsForGuest } from "./access";
 import { isOwnerUserId } from "./ownerAllowlist";
 import { randomHex, sha256Hex } from "./auth";
 import { selectComputeProvider } from "./cloudProviders/selection";
@@ -245,7 +244,6 @@ type ManagedCloudBootstrapSpec = {
 type CreateCloudMachineArgs = {
   userId: string;
   machineType: string;
-  teamId?: string;
   region?: string;
   repoUrl?: string;
   sshPublicKey?: string;
@@ -842,7 +840,7 @@ runcmd:
 
   # ── Managed Yaver agent bootstrap (operator tenant runtime) ────────
   # The agent runs as a dedicated unprivileged 'yaver' user. Claude/Codex
-  # beta guests are launched as separate yv-* Unix users with isolated
+  # operator-fleet tenants are launched as separate yv-* Unix users with isolated
   # HOME/CLAUDE_CONFIG_DIR/CODEX_HOME under /srv/yaver/tenants/<id>.
   # The TLS reconciler below stays a separate root unit (nginx/certbot
   # need root); it only proxies to the agent on loopback:18080.
@@ -991,7 +989,7 @@ ${hostedSnippet}${gpuSnippet}`;
 
 // ─── Queries ────────────────────────────────────────────────────
 
-/** Get all machines for a user (owned + team-shared). */
+/** Get all machines owned by a user. */
 // internalQuery: returns a user's machines (IPs, hostnames, provider IDs).
 // Public exposure let any caller read ANY user's fleet by passing their userId.
 // Callers are server-side HTTP routes that pass the authenticated session's own
@@ -999,59 +997,10 @@ ${hostedSnippet}${gpuSnippet}`;
 export const listForUser = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, { userId }) => {
-    // Direct machines
-    const owned = await ctx.db
+    return await ctx.db
       .query("cloudMachines")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
-
-    // Team machines (find user's teams, then machines for those teams)
-    const memberships = await ctx.db
-      .query("teamMembers")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .collect();
-
-    const teamMachines: typeof owned = [];
-    for (const m of memberships) {
-      const machines = await ctx.db
-        .query("cloudMachines")
-        .withIndex("by_team", (q) => q.eq("teamId", m.teamId))
-        .collect();
-      teamMachines.push(...machines);
-    }
-
-    const grantedMachines: typeof owned = [];
-    // Machine LIST (UI) drops hidden beta grants — beta users never see the
-    // owner's box here. Routing/access paths keep the active variant.
-    const grants = await listVisibleInfraGrantsForGuest(ctx, userId);
-    for (const grant of grants) {
-      if (grant.shareAllMachines) {
-        const hostMachines = await ctx.db
-          .query("cloudMachines")
-          .withIndex("by_user", (q) => q.eq("userId", grant.hostUserId))
-          .collect();
-        grantedMachines.push(...hostMachines);
-        continue;
-      }
-      const machineIds = await listGrantedMachineIdsForGrant(ctx, grant._id);
-      for (const machineId of machineIds) {
-        const machine = await ctx.db.get(machineId);
-        if (!machine) continue;
-        if (machine.userId !== grant.hostUserId) continue;
-        grantedMachines.push(machine);
-      }
-    }
-
-    // Deduplicate (user might own a team machine or receive the same machine twice)
-    const seen = new Set<string>();
-    const all = [...owned, ...teamMachines, ...grantedMachines].filter((m) => {
-      const id = m._id.toString();
-      if (seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    });
-
-    return all;
   },
 });
 
@@ -1158,7 +1107,6 @@ async function createCloudMachine(
 
   const machineId = await ctx.db.insert("cloudMachines", {
     userId: args.userId,
-    teamId: args.teamId,
     subscriptionId: args.subscriptionId,
     machineType,
     origin: "managed", // every cloudMachines row is a Yaver-side box
@@ -1168,7 +1116,6 @@ async function createCloudMachine(
     provisionProgress: 5,
     provisionPhaseAt: now,
     runnersAuthorized: false,
-    multiUser: !!args.teamId,
     region: args.region ?? "eu",
     tools,
     repoUrl: args.repoUrl,
@@ -1197,7 +1144,6 @@ export const create = internalMutation({
   args: {
     userId: v.id("users"),
     machineType: v.string(),        // "standard" | "heavy" | "build" | legacy "cpu" | "gpu"
-    teamId: v.optional(v.string()), // if team-owned
     region: v.optional(v.string()), // "eu" | "us", default "eu"
     repoUrl: v.optional(v.string()),
     sshPublicKey: v.optional(v.string()),
@@ -1225,7 +1171,6 @@ export const createPreviewSharedMachine = internalMutation({
       machineType: "standard",
       origin: "managed",
       status: "active",
-      multiUser: false,
       region: args.region ?? "eu",
       tools: [],
       specs: {
@@ -1264,7 +1209,6 @@ export const adoptExisting = internalMutation({
       machineType: "standard",
       origin: "managed",
       status: "active",
-      multiUser: false,
       hetznerServerId: args.hetznerServerId,
       serverIp: args.serverIp,
       hostname: args.hostname,
@@ -1289,7 +1233,6 @@ export const ensureForSubscription = internalMutation({
   args: {
     userId: v.id("users"),
     machineType: v.string(),
-    teamId: v.optional(v.string()),
     region: v.optional(v.string()),
     repoUrl: v.optional(v.string()),
     sshPublicKey: v.optional(v.string()),
@@ -1503,7 +1446,6 @@ export const createByoRow = internalMutation({
       provisionProgress: 5,
       provisionPhaseAt: now,
       runnersAuthorized: false,
-      multiUser: false,
       region: args.region ?? "eu",
       tools: [],
       specs,

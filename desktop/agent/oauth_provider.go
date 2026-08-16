@@ -55,11 +55,11 @@ import (
 // OAuthClient represents one application registered to sign in
 // against this provider. RedirectURIs is enforced strictly.
 type OAuthClient struct {
-	ID           string   `json:"id"`
-	Secret       string   `json:"secret"` // stored hashed
-	Name         string   `json:"name"`
-	RedirectURIs []string `json:"redirectUris"`
-	Scopes       []string `json:"scopes,omitempty"`
+	ID           string    `json:"id"`
+	Secret       string    `json:"secret"` // stored hashed
+	Name         string    `json:"name"`
+	RedirectURIs []string  `json:"redirectUris"`
+	Scopes       []string  `json:"scopes,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
@@ -87,11 +87,11 @@ type oauthCode struct {
 // --- storage ---------------------------------------------------------------
 
 var (
-	oauthMu       sync.Mutex
-	oauthClients  []OAuthClient
-	oauthUsers    []OAuthUser
-	oauthCodes    = map[string]oauthCode{}
-	oauthKey      *rsa.PrivateKey
+	oauthMu      sync.Mutex
+	oauthClients []OAuthClient
+	oauthUsers   []OAuthUser
+	oauthCodes   = map[string]oauthCode{}
+	oauthKey     *rsa.PrivateKey
 )
 
 func oauthDir() (string, error) {
@@ -283,16 +283,16 @@ func mintAccessToken(userID, audience, scope string, lifetime time.Duration) (st
 func (s *HTTPServer) handleOauthDiscovery(w http.ResponseWriter, r *http.Request) {
 	issuer := strings.TrimSuffix(publicOauthBase(r), "/") + "/oauth"
 	jsonReply(w, http.StatusOK, map[string]interface{}{
-		"issuer":                 issuer,
-		"authorization_endpoint": issuer + "/authorize",
-		"token_endpoint":         issuer + "/token",
-		"userinfo_endpoint":      issuer + "/userinfo",
-		"jwks_uri":               issuer + "/jwks",
-		"response_types_supported": []string{"code"},
-		"grant_types_supported":    []string{"authorization_code", "refresh_token"},
-		"subject_types_supported":  []string{"public"},
+		"issuer":                                issuer,
+		"authorization_endpoint":                issuer + "/authorize",
+		"token_endpoint":                        issuer + "/token",
+		"userinfo_endpoint":                     issuer + "/userinfo",
+		"jwks_uri":                              issuer + "/jwks",
+		"response_types_supported":              []string{"code"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
-		"scopes_supported": []string{"openid", "profile", "email"},
+		"scopes_supported":                      []string{"openid", "profile", "email"},
 	})
 }
 

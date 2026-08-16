@@ -90,7 +90,6 @@ var replCatalog = []replCommand{
 	{"2fa", "Two-factor auth setup/challenge"},
 	{"set-runner", "Set the default AI runner"},
 	{"primary", "Primary device controls"},
-	{"guests", "Guest session controls"},
 }
 
 // runYaverShell is the interactive loop. Returns when the user quits.

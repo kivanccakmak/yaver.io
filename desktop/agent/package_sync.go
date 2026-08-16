@@ -1,10 +1,9 @@
 package main
 
 // package_sync.go — the single privacy seam between the on-device Task Package
-// store and Convex. Convex holds BOOKKEEPING ONLY so an owner and a runner (a
-// different user) can discover / share / track a package across devices: name
-// slug, public hostnames (for the consent screen), schedule intent, consent
-// text, coarse status. The collector spec (selectors, full URLs with tokens),
+// store and Convex. Convex holds BOOKKEEPING ONLY so an owner can list a
+// package from their own devices: name slug, public hostnames, schedule intent,
+// consent text, and coarse status. The collector spec (selectors, full URLs with tokens),
 // output endpoints, secrets, IPs, and absolute paths NEVER leave the device.
 //
 // buildTaskPackagePayload is the ONLY function that constructs the agent→Convex
@@ -34,7 +33,7 @@ func sanitizePackageName(s string) string {
 }
 
 // packageDomains extracts unique HOSTNAMES from the package's sources + MCP
-// bindings — for the runner's consent screen. Hostnames only: a full URL can
+// bindings. Hostnames only: a full URL can
 // carry a query token, a hostname cannot, so this is the privacy boundary.
 func packageDomains(p *TaskPackage) []string {
 	seen := map[string]bool{}

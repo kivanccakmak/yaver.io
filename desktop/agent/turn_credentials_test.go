@@ -1,14 +1,93 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
+
+func TestFetchRelayTURNCredentials_UsesScopedPasswordAndAcceptsAllTURNTransports(t *testing.T) {
+	const password = "scoped-account-password"
+	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ice" || r.Header.Get("X-Relay-Password") != password {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(turnCredentialResponse{
+			TTLSeconds: 60,
+			IceServers: []turnIceServer{
+				{URLs: []string{"stun:relay.example.test:3478"}},
+				{URLs: []string{"turn:relay.example.test:3478?transport=udp", "turn:relay.example.test:3478?transport=tcp", "turns:relay.example.test:5349?transport=tcp"}, Username: "expiry:nonce", Credential: "ephemeral"},
+			},
+		})
+	}))
+	defer broker.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resp, err := fetchRelayTURNCredentials(ctx, broker.Client(), relayICEEndpoint{URL: broker.URL + "/ice", Password: password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.IceServers) != 2 || len(resp.IceServers[1].URLs) != 3 {
+		t.Fatalf("unexpected ICE response: %+v", resp)
+	}
+}
+
+func TestManagedICEServersFromConfig_UsesSameBrokerPathAsDoctorAndRuntime(t *testing.T) {
+	const password = "doctor-scoped-password"
+	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ice" || r.Header.Get("X-Relay-Password") != password {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(turnCredentialResponse{
+			TTLSeconds: 60,
+			IceServers: []turnIceServer{
+				{URLs: []string{"stun:relay.example.test:3478"}},
+				{URLs: []string{"turn:relay.example.test:3478?transport=udp", "turns:relay.example.test:5349?transport=tcp"}, Username: "expiry:nonce", Credential: "ephemeral"},
+			},
+		})
+	}))
+	defer broker.Close()
+
+	cfg := &Config{RelayServers: []RelayServerConfig{{HttpURL: broker.URL, Password: password}}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	servers, err := managedICEServersFromConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 2 || len(servers[1].URLs) != 2 || servers[1].Username == "" || servers[1].Credential == nil {
+		t.Fatalf("managed ICE servers = %+v", servers)
+	}
+}
+
+func TestRelayICEEndpoints_RejectsPlaintextRemotePasswordTransport(t *testing.T) {
+	cfg := &Config{
+		RelayPassword: "secret",
+		RelayServers: []RelayServerConfig{
+			{HttpURL: "http://relay.example.test"},
+			{HttpURL: "https://relay.example.test"},
+			{HttpURL: "http://127.0.0.1:8080"},
+		},
+	}
+	got := relayICEEndpoints(cfg)
+	if len(got) != 2 {
+		t.Fatalf("endpoints = %+v, want HTTPS remote + loopback HTTP only", got)
+	}
+	for _, endpoint := range got {
+		if endpoint.URL == "http://relay.example.test/ice" {
+			t.Fatal("would send relay password over plaintext remote HTTP")
+		}
+	}
+}
 
 func TestIceServersForPeer_STUNOnlyByDefault(t *testing.T) {
 	t.Setenv("YAVER_STUN_URL", "")
@@ -62,9 +141,9 @@ func TestDerivedTurnURLFromRelayURL(t *testing.T) {
 	t.Setenv("YAVER_TURN_URL", "")
 	t.Setenv("YAVER_TURN_PORT", "")
 	for _, tc := range []struct {
-		name    string
-		relay   string
-		want    string
+		name  string
+		relay string
+		want  string
 	}{
 		{name: "https relay → default TURN port", relay: "https://relay.yaver.io", want: "turn:relay.yaver.io:3478"},
 		{name: "http relay with path", relay: "http://relay.example.com:8080/", want: "turn:relay.example.com:3478"},
@@ -233,11 +312,8 @@ func TestStreamWebRTCICECredentialsRouteRejectsNonOwnerTokens(t *testing.T) {
 	srv := &HTTPServer{
 		token:       "owner-token",
 		ownerUserID: "owner-user",
-		guestUserIDs: []string{
-			"guest-user",
-		},
 	}
-	srv.tokenCache.Store("guest-token", &cachedTokenInfo{userID: "guest-user"})
+	srv.tokenCache.Store("foreign-token", &cachedTokenInfo{userID: "foreign-user"})
 	srv.tokenCache.Store("stream-token", &cachedTokenInfo{
 		userID: "owner-user",
 		isSdk:  true,
@@ -248,7 +324,7 @@ func TestStreamWebRTCICECredentialsRouteRejectsNonOwnerTokens(t *testing.T) {
 		name  string
 		token string
 	}{
-		{name: "approved guest", token: "guest-token"},
+		{name: "foreign account", token: "foreign-token"},
 		{name: "stream scoped SDK", token: "stream-token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

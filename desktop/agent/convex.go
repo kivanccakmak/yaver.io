@@ -17,9 +17,9 @@ const defaultConvexAdminKey = "0135d8598650f8f5cb0f30c34ec2e2bb62793bc28717c8eb6
 
 // ConvexAdminClient talks to a self-hosted Convex backend's HTTP API.
 type ConvexAdminClient struct {
-	URL       string
-	AdminKey  string
-	http      *http.Client
+	URL      string
+	AdminKey string
+	http     *http.Client
 }
 
 // NewConvexAdminClient resolves URL + admin key from the project's .env.local,
@@ -368,8 +368,8 @@ func mcpConvexInstallHelper(dir string) interface{} {
 		return map[string]interface{}{"error": err.Error()}
 	}
 	return map[string]interface{}{
-		"ok":      true,
-		"wrote":   filepath.Join(dir, "convex", "yaver_admin.ts"),
-		"next":    "Run `npx convex dev` (or `npx convex deploy`) to push the helper functions.",
+		"ok":    true,
+		"wrote": filepath.Join(dir, "convex", "yaver_admin.ts"),
+		"next":  "Run `npx convex dev` (or `npx convex deploy`) to push the helper functions.",
 	}
 }

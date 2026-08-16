@@ -47,35 +47,35 @@ import (
 // the CLI / HTTP / mobile code never branches on Gmail vs
 // Graph — they all see the same field names.
 type MailMessage struct {
-	ID           string    `json:"id"`
-	ThreadID     string    `json:"threadId,omitempty"`
-	From         string    `json:"from"`
-	FromName     string    `json:"fromName,omitempty"`
-	To           []string  `json:"to,omitempty"`
-	Cc           []string  `json:"cc,omitempty"`
-	Subject      string    `json:"subject"`
-	Snippet      string    `json:"snippet,omitempty"`
-	Body         string    `json:"body,omitempty"`
-	BodyHTML     string    `json:"bodyHtml,omitempty"`
-	Date         time.Time `json:"date"`
-	LabelIDs     []string  `json:"labels,omitempty"`
-	HasUnsub     bool      `json:"hasUnsubscribe,omitempty"`
-	AutoGen      bool      `json:"autoGen,omitempty"`
-	ListID       string    `json:"listId,omitempty"`
-	Classification string  `json:"classification"` // personal | transactional | marketing | bulk
-	Score          int     `json:"score"`          // 0..100, higher = more likely real personal mail
-	ThreadReplies  int     `json:"threadReplies,omitempty"`
-	Provider       string  `json:"provider"` // gmail | o365
+	ID             string    `json:"id"`
+	ThreadID       string    `json:"threadId,omitempty"`
+	From           string    `json:"from"`
+	FromName       string    `json:"fromName,omitempty"`
+	To             []string  `json:"to,omitempty"`
+	Cc             []string  `json:"cc,omitempty"`
+	Subject        string    `json:"subject"`
+	Snippet        string    `json:"snippet,omitempty"`
+	Body           string    `json:"body,omitempty"`
+	BodyHTML       string    `json:"bodyHtml,omitempty"`
+	Date           time.Time `json:"date"`
+	LabelIDs       []string  `json:"labels,omitempty"`
+	HasUnsub       bool      `json:"hasUnsubscribe,omitempty"`
+	AutoGen        bool      `json:"autoGen,omitempty"`
+	ListID         string    `json:"listId,omitempty"`
+	Classification string    `json:"classification"` // personal | transactional | marketing | bulk
+	Score          int       `json:"score"`          // 0..100, higher = more likely real personal mail
+	ThreadReplies  int       `json:"threadReplies,omitempty"`
+	Provider       string    `json:"provider"` // gmail | o365
 }
 
 // MailFetchOptions shapes what the dev wants back.
 type MailFetchOptions struct {
-	Provider    string `json:"provider,omitempty"` // gmail | o365 | auto
-	Folder      string `json:"folder,omitempty"`   // inbox | sent | all
-	Query       string `json:"query,omitempty"`    // vendor-native query (Gmail: "from:bob", Graph: "$search=...")
-	Limit       int    `json:"limit,omitempty"`
-	OnlyPersonal bool  `json:"onlyPersonal,omitempty"` // drop marketing/bulk before returning
-	Since       int64  `json:"sinceMs,omitempty"`      // unix ms — only messages newer
+	Provider     string `json:"provider,omitempty"` // gmail | o365 | auto
+	Folder       string `json:"folder,omitempty"`   // inbox | sent | all
+	Query        string `json:"query,omitempty"`    // vendor-native query (Gmail: "from:bob", Graph: "$search=...")
+	Limit        int    `json:"limit,omitempty"`
+	OnlyPersonal bool   `json:"onlyPersonal,omitempty"` // drop marketing/bulk before returning
+	Since        int64  `json:"sinceMs,omitempty"`      // unix ms — only messages newer
 }
 
 // --- provider dispatch -----------------------------------------------------
@@ -139,9 +139,9 @@ const gmailBase = "https://gmail.googleapis.com/gmail/v1/users/me"
 // refresh token. Google access tokens expire in ~1h so we
 // refresh lazily and cache in-process.
 var (
-	gmailTokenMu      sync.Mutex
-	gmailAccessToken  string
-	gmailExpiry       time.Time
+	gmailTokenMu     sync.Mutex
+	gmailAccessToken string
+	gmailExpiry      time.Time
 )
 
 func gmailAccess(cfg *EmailConfig) (string, error) {
@@ -485,23 +485,24 @@ func fetchGraph(cfg *EmailConfig, opts MailFetchOptions) ([]MailMessage, error) 
 //
 // Scoring (max 100):
 //
-//   +40 if the same thread already has 2+ replies (ongoing convo)
-//   +20 if the subject starts with "Re:" or "Fwd:"
-//   +15 if it's addressed directly to the user (not To/BCC list)
-//   +15 if the sender domain appears in the user's Sent folder
-//        in the last 30 days (tracked via sender index — set by
-//        fetchGmail/fetchGraph when called with folder=sent)
-//   +10 if no List-Unsubscribe header
-//   -40 if List-Unsubscribe is present
-//   -30 if Precedence=bulk or Auto-Submitted is set
-//   -20 if the From name contains marketing keywords
-//   -10 if the subject matches a marketing pattern ("Sale", "%%", "hot deal")
+//	+40 if the same thread already has 2+ replies (ongoing convo)
+//	+20 if the subject starts with "Re:" or "Fwd:"
+//	+15 if it's addressed directly to the user (not To/BCC list)
+//	+15 if the sender domain appears in the user's Sent folder
+//	     in the last 30 days (tracked via sender index — set by
+//	     fetchGmail/fetchGraph when called with folder=sent)
+//	+10 if no List-Unsubscribe header
+//	-40 if List-Unsubscribe is present
+//	-30 if Precedence=bulk or Auto-Submitted is set
+//	-20 if the From name contains marketing keywords
+//	-10 if the subject matches a marketing pattern ("Sale", "%%", "hot deal")
 //
 // Final bucket:
-//    > 60  personal
-//    40–60 transactional
-//    20–40 marketing
-//    < 20  bulk
+//
+//	> 60  personal
+//	40–60 transactional
+//	20–40 marketing
+//	< 20  bulk
 func classifyMessage(m *MailMessage, all []MailMessage) {
 	// Learned allow/deny lists take precedence — the dev told us
 	// their verdict, we respect it. See mail_learning.go for how

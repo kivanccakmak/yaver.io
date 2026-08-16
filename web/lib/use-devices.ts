@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { CONVEX_URL } from "@/lib/constants";
-import { ENABLE_GUEST_FEATURES } from "@/lib/launchFlags";
 import type { RuntimeProjectSeed } from "@/lib/runtimeProjectSettings";
 import {
   resolveIdentityMerge,
@@ -112,7 +111,6 @@ export interface Device {
     isCharging?: boolean;
     thermalState?: "nominal" | "warm" | "hot";
   };
-  isGuest?: boolean;
   /**
    * True when the agent's session token is revoked or expired. The agent
    * itself flips this on the device row via /devices/bootstrap when its
@@ -120,25 +118,8 @@ export interface Device {
    * without the user having to attempt a connect first.
    */
   needsAuth?: boolean;
-  hostName?: string;
-  hostEmail?: string;
-  /** Host's public userId string — identifies the share to POST /guests/leave. */
-  hostUserIdString?: string;
-  accessScope?: "owner" | "shared-scoped" | "shared-legacy";
   tunnelUrl?: string;
   publicEndpoints?: string[];
-  priorityMode?: string;
-  useHostApiKeys?: boolean;
-  allowGuestProvidedApiKeys?: boolean;
-  sharedWithGuests?: boolean;
-  sharedGuests?: Array<{
-    name?: string;
-    email?: string;
-  }>;
-  sharesAllProjects?: boolean;
-  sharedProjects?: string[];
-  sharesAllRunners?: boolean;
-  sharedRunners?: string[];
   runners?: Array<{
     runnerId?: string;
     status?: string;
@@ -158,7 +139,6 @@ export interface Device {
     error?: string;
   }>;
   installedRunnerIds?: string[];
-  sessionBinding?: "dedicated" | "legacy-shared";
   /**
    * Other `yaver serve` instances running on the SAME physical box that were
    * collapsed into this row (same hardwareId, own deviceId/port/version). Set
@@ -229,8 +209,8 @@ export interface Device {
   /** Backend verdict (isMachineWakeable): can this box actually be woken from a snapshot? */
   machineWakeable?: boolean;
   /**
-   * True when this row lacks both hardwareId and publicKey AND is not a
-   * guest. Such rows have unstable identity — a rename or platform
+   * True when this row lacks both hardwareId and publicKey. Such rows have
+   * unstable identity — a rename or platform
    * change splits them, and two unrelated boxes can collapse onto the
    * same (platform, name) key. We never use them as a reconnect target;
    * the UI surfaces a "re-pair from the box" warning instead.
@@ -342,10 +322,6 @@ function normalizedHost(host: string | undefined): string {
 }
 
 function deviceIdentityKey(device: Device): string {
-  if (device.isGuest) {
-    const scope = device.hostEmail || device.hostName || "guest";
-    return `guest:${scope}:${device.id || device.name}`;
-  }
   // Stable cryptographic identity wins. hardwareId is the most stable
   // (survives renames and reinstalls); publicKey survives renames but
   // rotates on factory reset.
@@ -361,7 +337,6 @@ function deviceIdentityKey(device: Device): string {
 }
 
 function deviceAliasKey(device: Device): string | null {
-  if (device.isGuest) return null;
   const name = normalizedName(device.name);
   const platform = String(device.platform || "").trim().toLowerCase();
   if (!name || !platform) return null;
@@ -369,7 +344,6 @@ function deviceAliasKey(device: Device): string | null {
 }
 
 function deviceEndpointKey(device: Device): string | null {
-  if (device.isGuest) return null;
   const host = normalizedHost(device.host);
   if (!host) return null;
   return `${host}:${device.port || 0}`;
@@ -434,18 +408,6 @@ function mergeDeviceEntries(existing: Device, incoming: Device): Device {
       for (const endpoint of base.publicEndpoints || []) if (endpoint) merged.add(endpoint);
       for (const endpoint of other.publicEndpoints || []) if (endpoint) merged.add(endpoint);
       return merged.size > 0 ? [...merged] : undefined;
-    })(),
-    sharedGuests: (() => {
-      const merged = new Map<string, { name?: string; email?: string }>();
-      for (const guest of base.sharedGuests || []) {
-        if (!guest?.name && !guest?.email) continue;
-        merged.set(`${guest.email || ""}:${guest.name || ""}`, guest);
-      }
-      for (const guest of other.sharedGuests || []) {
-        if (!guest?.name && !guest?.email) continue;
-        merged.set(`${guest.email || ""}:${guest.name || ""}`, guest);
-      }
-      return merged.size > 0 ? [...merged.values()] : undefined;
     })(),
     runners:
       Array.isArray(base.runners) && base.runners.length > 0
@@ -644,9 +606,7 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
       }
       const raw = await res.json();
       const rawDevices = Array.isArray(raw) ? raw : (raw.devices ?? []);
-      const arr = ENABLE_GUEST_FEATURES
-        ? rawDevices
-        : rawDevices.filter((d: any) => !Boolean(d?.isGuest));
+      const arr = rawDevices;
 
       // Map API fields to Device interface
       const mapped: Device[] = arr.map((d: any) => {
@@ -674,7 +634,7 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
           })();
         return {
         id: deviceId,
-        name: d.isGuest ? `${d.name || d.hostname || ""} (${d.hostName || "guest"})` : d.name || d.hostname || "",
+        name: d.name || d.hostname || "",
         alias: typeof d.alias === "string" && d.alias.trim() !== "" ? d.alias : undefined,
         platform: d.platform || "",
         host: d.quicHost || d.host || "",
@@ -700,30 +660,15 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
         deployCapabilitiesAt: d.deployCapabilitiesAt ?? undefined,
         deviceClass: d.deviceClass,
         edgeProfile: d.edgeProfile,
-        isGuest: d.isGuest ?? false,
         needsAuth: Boolean(d.needsAuth ?? false),
-        hostName: d.hostName,
-        hostEmail: d.hostEmail,
-        hostUserIdString: d.hostUserIdString,
-        accessScope: d.accessScope,
         tunnelUrl: d.tunnelUrl,
         publicEndpoints: Array.isArray(d.publicEndpoints) ? d.publicEndpoints : undefined,
-        priorityMode: d.priorityMode,
-        useHostApiKeys: d.useHostApiKeys,
-        allowGuestProvidedApiKeys: d.allowGuestProvidedApiKeys,
-        sharedWithGuests: ENABLE_GUEST_FEATURES ? d.sharedWithGuests : undefined,
-        sharedGuests: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedGuests) ? d.sharedGuests : undefined,
-        sharesAllProjects: d.sharesAllProjects,
-        sharedProjects: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedProjects) ? d.sharedProjects : undefined,
-        sharesAllRunners: d.sharesAllRunners,
-        sharedRunners: ENABLE_GUEST_FEATURES && Array.isArray(d.sharedRunners) ? d.sharedRunners : undefined,
         runners: Array.isArray(d.runners) ? d.runners : undefined,
         installedRunnerIds: Array.isArray(d.installedRunnerIds) ? d.installedRunnerIds : undefined,
         // Server-side collapse already found these (backend/convex/devices.ts).
         // Carry them through so the client merge below adds to the list rather
         // than starting a second, disagreeing one.
         secondaryAgents: Array.isArray(d.secondaryAgents) ? d.secondaryAgents : undefined,
-        sessionBinding: d.sessionBinding,
         lastTunnelEvent:
           d.lastTunnelEvent && typeof d.lastTunnelEvent === "object"
             ? {
@@ -748,10 +693,10 @@ export function useDevices(token: string | null): DevicesState & { hiddenIds: Se
         machineId: typeof d.machineId === "string" ? d.machineId : undefined,
         machineStatus: typeof d.machineStatus === "string" ? d.machineStatus : undefined,
         machineWakeable: d.machineWakeable === true,
-        // Ghost: non-guest row lacking both stable identifiers. Cannot
+        // Ghost: row lacking both stable identifiers. Cannot
         // be reliably reconnect-targeted. Surfaced in the UI so the
         // user knows to re-pair from the device.
-        ghost: !(d.hardwareId || d.hwid) && !d.publicKey && !d.isGuest,
+        ghost: !(d.hardwareId || d.hwid) && !d.publicKey,
       }});
 
       const collapsed = collapseDevices(mapped);
@@ -955,7 +900,7 @@ export function usePendingClaims(token: string | null): {
   // waiting to be claimed, so poll fast (10s) to keep the Claim CTA snappy.
   // When there's nothing pending — the overwhelmingly common case — drop to
   // 60s; a freshly-installed remote box then appears within a minute, which
-  // is plenty. Mirrors the agent-side guest-list idle backoff.
+  // is plenty for the device inventory.
   const hasPending = pending.length > 0;
   useVisiblePolling(refreshPending, hasPending ? 10000 : 60000);
 

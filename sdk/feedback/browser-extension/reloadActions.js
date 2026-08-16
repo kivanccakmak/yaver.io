@@ -29,8 +29,8 @@
 //
 // No new secret: the extension sends the SAME `Authorization: Bearer <token>`
 // it already sends when POSTing a design-reference bundle. /dev/reload sits
-// behind `authSDKOrGuest` on the agent and is already inside the
-// `guest-reload` SDK-token scope.
+// behind `authSDK` on the agent and is already inside the
+// `reload` SDK-token scope.
 
 (function attachYaverReloadActions(root) {
   'use strict';

@@ -15,8 +15,8 @@ func TestBuildWebRTCDoctorReport_AlwaysIncludesBuiltins(t *testing.T) {
 	// degrade the report on minimal hosts.
 	r := buildWebRTCDoctorReport(context.Background())
 	wantBuiltins := map[string]bool{
-		"pion/webrtc":               false,
-		"in-tree H.264 extractor":   false,
+		"pion/webrtc":             false,
+		"in-tree H.264 extractor": false,
 	}
 	for _, c := range r.Checks {
 		if _, want := wantBuiltins[c.Name]; want {
@@ -60,11 +60,11 @@ func TestBuildWebRTCDoctorReport_PopulatesMetadata(t *testing.T) {
 
 func TestFirstNonEmptyLine_BasicShapes(t *testing.T) {
 	cases := map[string]string{
-		"":                  "",
-		"   \n  ":           "",
-		"only one line":     "only one line",
-		"\n\n  hi  \nrest":  "hi",
-		"first\nsecond":     "first",
+		"":                 "",
+		"   \n  ":          "",
+		"only one line":    "only one line",
+		"\n\n  hi  \nrest": "hi",
+		"first\nsecond":    "first",
 	}
 	for in, want := range cases {
 		got := firstNonEmptyLine(in)

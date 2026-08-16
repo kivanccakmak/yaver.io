@@ -72,45 +72,34 @@ type OpsContext struct {
 	Server         *HTTPServer
 	RequestHeaders http.Header
 	ActorUserID    string
-	// Caller: "owner" (session-tied), "guest" (scoped guest session),
-	// "support" (TeamViewer-style bearer), or "host-share" (borrowed
-	// workspace / tooling session) — derived from the request's auth.
-	// Verbs can refuse based on caller role.
+	// Caller is "owner", "companion", or "capability", derived from
+	// server-validated authentication state.
 	Caller string
-	// Scope is the guest-scope of a non-owner caller (the X-Yaver-GuestScope
-	// header: "full", "deploy", "circuit", …). Empty for owners. Capability
-	// scopes (see isCapabilityScope) restrict a guest to ONE verb family —
+	// Scope is the companion or service capability scope. Empty for owners.
+	// Capability scopes (see isCapabilityScope) restrict a service token to ONE verb family —
 	// e.g. a "circuit" token can ONLY invoke circuit_* verbs, nothing else.
 	Scope string
 }
 
-// capabilityScopeVerbPrefix maps a capability guest-scope to the single verb
+// capabilityScopeVerbPrefix maps a service capability scope to the single verb
 // family it unlocks. A token with one of these scopes is an ISOLATED service
 // credential: it can reach the named verbs and NOTHING else on the box (no
-// exec, no vault, no AI tasks) — even verbs marked AllowGuest are denied. This
+// exec, no vault, no AI tasks) — even companion-safe verbs are denied. This
 // is how Yaver lets an external product (Talos, OCPP) drive one resource (the
 // circuit simulator) without exposing the rest of the owner's machine.
 var capabilityScopeVerbPrefix = map[string]string{
 	"circuit": "circuit_",
-	// "stream" isolates a guest token to ONLY the read-only stream_* viewer
-	// verbs — enumerate shareable streams + pull snapshot frames of a shared
-	// camera / capture card / Apple TV. No control, no exec, no vault. This is
-	// how a user lends a LIVE VIEW of one of their devices to a friend's
-	// account without exposing the rest of the box.
-	"stream": "stream_",
 }
 
-// isCapabilityScope reports whether a guest-scope is a single-capability
-// service credential (allowlist of exactly one verb family) rather than a
-// broad tier like "full"/"deploy".
+// isCapabilityScope reports whether a scope is a single-capability service
+// credential (allowlist of exactly one verb family).
 func isCapabilityScope(scope string) bool {
 	_, ok := capabilityScopeVerbPrefix[strings.TrimSpace(scope)]
 	return ok
 }
 
 // firstCapabilityScope returns the first capability scope present in an SDK
-// token's scopes (e.g. "circuit"), or "" if none. Used by the auth middleware
-// to demote a capability token to a scoped guest so the per-verb gate applies.
+// token's scopes (e.g. "circuit"), or "" if none.
 func firstCapabilityScope(scopes []string) string {
 	for _, s := range scopes {
 		if isCapabilityScope(s) {
@@ -120,14 +109,19 @@ func firstCapabilityScope(scopes []string) string {
 	return ""
 }
 
-// guestVerbAllowed decides whether a guest caller may invoke verb. Capability
-// scopes are a strict allowlist (only their verb family); all other guest
-// tiers fall back to the per-verb AllowGuest flag.
-func guestVerbAllowed(scope, verb string, spec opsVerbSpec) bool {
-	if prefix, ok := capabilityScopeVerbPrefix[strings.TrimSpace(scope)]; ok {
-		return strings.HasPrefix(verb, prefix)
+// scopedVerbAllowed keeps non-owner credentials narrow. Service capabilities
+// can call only their one verb family; companion surfaces may call only verbs
+// explicitly exposed to those constrained device sessions.
+func scopedVerbAllowed(caller, scope, verb string, spec opsVerbSpec) bool {
+	switch caller {
+	case "capability":
+		prefix, ok := capabilityScopeVerbPrefix[strings.TrimSpace(scope)]
+		return ok && strings.HasPrefix(verb, prefix)
+	case "companion":
+		return spec.AllowCompanion
+	default:
+		return caller == "owner"
 	}
-	return spec.AllowGuest
 }
 
 // VerbHandler is the contract a verb implementation satisfies.
@@ -142,10 +136,9 @@ type opsVerbSpec struct {
 	// Streaming: true when this verb typically returns a streamId.
 	// Only affects documentation; handlers always return OpsResult.
 	Streaming bool
-	// AllowGuest: default false — verbs are owner-only unless the
-	// handler explicitly says otherwise. Matches the guest-scope
-	// middleware's posture on the existing endpoints.
-	AllowGuest bool
+	// AllowCompanion defaults false. A verb is owner-only unless it is
+	// explicitly safe for a signed watch/TV/vision companion session.
+	AllowCompanion bool
 }
 
 var (
@@ -196,16 +189,16 @@ func dispatchOps(octx OpsContext, req OpsRequest) (res OpsResult) {
 		machine = "local"
 	}
 
-	// C-6: gate guests against the per-verb AllowGuest flag BEFORE any
+	// Gate non-owner scoped callers BEFORE any
 	// remote routing happens. The previous order (proxy first, gate
-	// later) was a confused-deputy: a guest's call to /ops on the local
+	// later) was a confused-deputy: a scoped call to /ops on the local
 	// agent would proxy to "primary" with the host's owner token,
 	// reaching the destination as caller="owner" and bypassing the
-	// AllowGuest check entirely. Look up the spec early and refuse if
-	// the caller is a guest and the verb isn't AllowGuest. The same
+	// companion gate entirely. Look up the spec early and refuse when the
+	// scoped credential cannot invoke the verb. The same
 	// check still runs at line ~227 for the local-dispatch path so we
 	// don't depend on the early exit.
-	if octx.Caller == "guest" {
+	if octx.Caller == "capability" || octx.Caller == "companion" {
 		opsRegistryMu.RLock()
 		spec, ok := opsRegistry[req.Verb]
 		opsRegistryMu.RUnlock()
@@ -216,18 +209,18 @@ func dispatchOps(octx OpsContext, req OpsRequest) (res OpsResult) {
 				Error: fmt.Sprintf("unknown verb %q; call ops_verbs to list available verbs", req.Verb),
 			}
 		}
-		if !guestVerbAllowed(octx.Scope, req.Verb, spec) {
+		if !scopedVerbAllowed(octx.Caller, octx.Scope, req.Verb, spec) {
 			return OpsResult{
 				OK:    false,
 				Code:  "unauthorized",
 				Error: fmt.Sprintf("verb %q is not permitted for this scoped session", req.Verb),
 			}
 		}
-		// Guests cannot use machine aliases that resolve via the host's
+		// Scoped callers cannot use machine aliases that resolve via the owner's
 		// own Convex token (machine="primary", machine="auto" when it
-		// resolves elsewhere). Force machine="local" so the guest's
+		// resolves elsewhere). Force machine="local" so the caller's
 		// scope is enforced at the destination it actually called, not
-		// at the host's primaryDeviceId. Explicit deviceIds the guest
+		// at the host's primaryDeviceId. Explicit deviceIds the caller
 		// could legitimately reach (their own host's deviceId) still
 		// work since machine != "primary" / "auto" stays untouched.
 		if machine == "primary" || machine == "auto" {
@@ -237,10 +230,6 @@ func dispatchOps(octx OpsContext, req OpsRequest) (res OpsResult) {
 	}
 
 	executionPlan := buildOpsExecutionPlan(octx, req)
-	if denied := authorizeOpsExecution(octx, req, executionPlan); denied != nil {
-		return *denied
-	}
-
 	autoDecision := autoMachineDecision{}
 	if machine == "auto" {
 		autoDecision = autoMachineDecision{
@@ -329,7 +318,7 @@ func dispatchOps(octx OpsContext, req OpsRequest) (res OpsResult) {
 		}
 	}
 
-	if octx.Caller == "guest" && !guestVerbAllowed(octx.Scope, req.Verb, spec) {
+	if (octx.Caller == "capability" || octx.Caller == "companion") && !scopedVerbAllowed(octx.Caller, octx.Scope, req.Verb, spec) {
 		return OpsResult{
 			OK:    false,
 			Code:  "unauthorized",

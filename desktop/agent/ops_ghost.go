@@ -10,8 +10,8 @@ package main
 //   - Opt-in only: verbs refuse unless the agent was started with --ghost
 //     (config.GhostEnabled). The capability is advertised via
 //     MachineCapabilities.SupportsGhostUI.
-//   - Owner-only: AllowGuest is false on every verb (guests are refused at the
-//     dispatcher). A least-privilege "ghost_ui" SDK-token scope is a follow-up
+//   - Owner-only: AllowCompanion is false on every verb (signed companions are
+//     refused at the dispatcher). A least-privilege "ghost_ui" SDK-token scope is a follow-up
 //     in the Talos-driver phase.
 //   - Auto-remote: ops verbs route to a target device via dispatchOps/
 //     proxyToDevice with no extra wiring, tagged X-Yaver-Proxied-Tool for audit.
@@ -71,8 +71,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"display": map[string]interface{}{"type": "integer", "description": "Display index (default 0 = primary)."},
 		}),
-		Handler:    ghostScreenshotHandler,
-		AllowGuest: false,
+		Handler:        ghostScreenshotHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_click",
@@ -83,8 +83,8 @@ func init() {
 			"button": map[string]interface{}{"type": "string", "enum": []string{"left", "right", "middle"}},
 			"double": map[string]interface{}{"type": "boolean"},
 		}, "x", "y"),
-		Handler:    ghostClickHandler,
-		AllowGuest: false,
+		Handler:        ghostClickHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_type",
@@ -92,8 +92,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"text": map[string]interface{}{"type": "string"},
 		}, "text"),
-		Handler:    ghostTypeHandler,
-		AllowGuest: false,
+		Handler:        ghostTypeHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_key",
@@ -101,8 +101,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"keys": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
 		}, "keys"),
-		Handler:    ghostKeyHandler,
-		AllowGuest: false,
+		Handler:        ghostKeyHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_scroll",
@@ -111,8 +111,8 @@ func init() {
 			"dx": map[string]interface{}{"type": "integer"},
 			"dy": map[string]interface{}{"type": "integer"},
 		}),
-		Handler:    ghostScrollHandler,
-		AllowGuest: false,
+		Handler:        ghostScrollHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_move",
@@ -121,15 +121,15 @@ func init() {
 			"x": map[string]interface{}{"type": "integer"},
 			"y": map[string]interface{}{"type": "integer"},
 		}, "x", "y"),
-		Handler:    ghostMoveHandler,
-		AllowGuest: false,
+		Handler:        ghostMoveHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "ghost_windows",
-		Description: "List top-level windows via the OS accessibility tree (Phase 2; returns unsupported on Phase 1). Requires --ghost.",
-		Schema:      ghostJSONSchema(map[string]interface{}{}),
-		Handler:     ghostWindowsHandler,
-		AllowGuest:  false,
+		Name:           "ghost_windows",
+		Description:    "List top-level windows via the OS accessibility tree (Phase 2; returns unsupported on Phase 1). Requires --ghost.",
+		Schema:         ghostJSONSchema(map[string]interface{}{}),
+		Handler:        ghostWindowsHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_locate",
@@ -142,8 +142,8 @@ func init() {
 			"apiKey":      map[string]interface{}{"type": "string"},
 			"model":       map[string]interface{}{"type": "string"},
 		}, "instruction"),
-		Handler:    ghostLocateHandler,
-		AllowGuest: false,
+		Handler:        ghostLocateHandler,
+		AllowCompanion: false,
 	})
 }
 

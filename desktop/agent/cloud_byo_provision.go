@@ -134,9 +134,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudProvisionHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudProvisionHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_snapshots",
@@ -146,9 +146,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudSnapshotsHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudSnapshotsHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

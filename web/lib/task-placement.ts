@@ -217,8 +217,6 @@ export type RelaySourceIntent = {
   localTaskId: string;
   taskId?: string | null;
   placementId?: string | null;
-  shareId: string;
-  membershipId?: string | null;
   sourceSurface?: string | null;
   projectSlug: string;
   repoUrl: string;
@@ -244,11 +242,10 @@ export type RelaySourceIntent = {
   completedAt?: number | null;
 };
 
-export type ProjectArtifactVisibility = "private" | "project" | "public-link";
+export type ProjectArtifactVisibility = "private" | "project";
 
 export type ProjectArtifact = {
   id: string;
-  shareId: string;
   taskId?: string | null;
   localTaskId?: string | null;
   projectSlug: string;
@@ -263,8 +260,6 @@ export type ProjectArtifact = {
   sizeBytes?: number | null;
   checksum?: string | null;
   visibility: ProjectArtifactVisibility;
-  shareToken?: string | null;
-  shareUrlExpiresAt?: number | null;
   expiresAt?: number | null;
   status: "active" | "hidden" | "expired" | "deleted";
   createdAt: number;
@@ -281,14 +276,12 @@ export type ProjectArtifactUsageBucket = {
   remainingBytes: number;
   quotaPercent: number;
   overQuota: boolean;
-  publicLinkCount: number;
   byKind: Record<string, number>;
   oldestCreatedAt: number | null;
   newestCreatedAt: number | null;
 };
 
 export type ProjectArtifactUsage = {
-  shareId: string;
   projectSlug: string;
   project: ProjectArtifactUsageBucket;
   owner: ProjectArtifactUsageBucket;
@@ -296,7 +289,6 @@ export type ProjectArtifactUsage = {
 
 export type ProjectArtifactCleanupResult = {
   ok: boolean;
-  shareId: string;
   projectSlug: string;
   scanned: number;
   expired: number;
@@ -320,8 +312,6 @@ export type FeedbackWorkStatus =
 
 export type FeedbackWorkItem = {
   id: string;
-  shareId: string;
-  membershipId?: string | null;
   projectSlug: string;
   sourceSurface?: string | null;
   title: string;
@@ -658,8 +648,9 @@ export async function createRelaySourceIntent(
   req: {
     localTaskId: string;
     placementId?: string;
-    shareId?: string;
-    projectSlug?: string;
+    projectSlug: string;
+    repoUrl: string;
+    defaultBranch?: string;
     sourceSurface?: string;
     kind?: string;
     branch?: string;
@@ -704,13 +695,12 @@ export async function claimRelaySourceIntent(
 
 export async function listRelaySourceIntents(
   token: string,
-  opts: { projectSlug?: string; limit?: number; includeTerminal?: boolean; scope?: "mine" | "owned" | "all" } = {},
+  opts: { projectSlug?: string; limit?: number; includeTerminal?: boolean } = {},
 ): Promise<RelaySourceIntent[]> {
   const params = new URLSearchParams();
   if (opts.projectSlug) params.set("projectSlug", opts.projectSlug);
   if (opts.limit) params.set("limit", String(opts.limit));
   if (opts.includeTerminal) params.set("includeTerminal", "1");
-  if (opts.scope) params.set("scope", opts.scope);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return placementFetch<RelaySourceIntent[]>(token, `/tasks/relay-source-intents${suffix}`, { method: "GET" });
 }
@@ -718,8 +708,7 @@ export async function listRelaySourceIntents(
 export async function createProjectArtifact(
   token: string,
   req: {
-    shareId?: string;
-    projectSlug?: string;
+    projectSlug: string;
     taskId?: string;
     localTaskId?: string;
     kind?: string;
@@ -734,7 +723,6 @@ export async function createProjectArtifact(
     sizeBytes?: number;
     checksum?: string;
     visibility?: ProjectArtifactVisibility;
-    shareTtlMs?: number;
     expiresAt?: number;
   },
 ): Promise<ProjectArtifact> {
@@ -746,7 +734,7 @@ export async function createProjectArtifact(
 
 export async function createProjectArtifactUploadUrl(
   token: string,
-  req: { shareId?: string; projectSlug?: string; sizeBytes: number },
+  req: { projectSlug: string; sizeBytes: number },
 ): Promise<{ uploadUrl: string; uploadIntentId: string; sizeBytes: number }> {
   return placementFetch<{ uploadUrl: string; uploadIntentId: string; sizeBytes: number }>(token, "/project-artifacts/upload-url", {
     method: "POST",
@@ -756,11 +744,10 @@ export async function createProjectArtifactUploadUrl(
 
 export async function listProjectArtifacts(
   token: string,
-  opts: { shareId?: string; projectSlug?: string; kind?: string; limit?: number } = {},
+  opts: { projectSlug: string; kind?: string; limit?: number },
 ): Promise<ProjectArtifact[]> {
   const params = new URLSearchParams();
-  if (opts.shareId) params.set("shareId", opts.shareId);
-  if (opts.projectSlug) params.set("projectSlug", opts.projectSlug);
+  params.set("projectSlug", opts.projectSlug);
   if (opts.kind) params.set("kind", opts.kind);
   if (opts.limit) params.set("limit", String(opts.limit));
   const suffix = params.toString() ? `?${params.toString()}` : "";
@@ -769,18 +756,17 @@ export async function listProjectArtifacts(
 
 export async function getProjectArtifactUsage(
   token: string,
-  opts: { shareId?: string; projectSlug?: string } = {},
+  opts: { projectSlug: string },
 ): Promise<ProjectArtifactUsage> {
   const params = new URLSearchParams();
-  if (opts.shareId) params.set("shareId", opts.shareId);
-  if (opts.projectSlug) params.set("projectSlug", opts.projectSlug);
+  params.set("projectSlug", opts.projectSlug);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return placementFetch<ProjectArtifactUsage>(token, `/project-artifacts/usage${suffix}`, { method: "GET" });
 }
 
 export async function cleanupExpiredProjectArtifacts(
   token: string,
-  req: { shareId?: string; projectSlug?: string; limit?: number; deleteStorage?: boolean },
+  req: { projectSlug: string; limit?: number; deleteStorage?: boolean },
 ): Promise<ProjectArtifactCleanupResult> {
   return placementFetch<ProjectArtifactCleanupResult>(token, "/project-artifacts/cleanup", {
     method: "POST",
@@ -795,22 +781,10 @@ export async function hideProjectArtifact(token: string, artifactId: string): Pr
   });
 }
 
-export async function getPublicProjectArtifact(shareToken: string): Promise<ProjectArtifact> {
-  const params = new URLSearchParams({ token: shareToken });
-  const res = await fetch(`${CONVEX_URL}/project-artifacts/public?${params.toString()}`, {
-    headers: { Accept: "application/json" },
-  });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new Error(data?.error || `Project artifact request failed (${res.status})`);
-  return data as ProjectArtifact;
-}
-
 export async function createFeedbackWorkItem(
   sdkToken: string,
   req: {
-    shareId?: string;
-    projectSlug?: string;
+    projectSlug: string;
     title: string;
     body: string;
     kind?: string;
@@ -841,12 +815,10 @@ export async function createFeedbackWorkItem(
 
 export async function listFeedbackWorkItems(
   token: string,
-  opts: { shareId?: string; projectSlug?: string; scope?: "owned" | "mine"; status?: FeedbackWorkStatus; limit?: number } = {},
+  opts: { projectSlug?: string; status?: FeedbackWorkStatus; limit?: number } = {},
 ): Promise<FeedbackWorkItem[]> {
   const params = new URLSearchParams();
-  if (opts.shareId) params.set("shareId", opts.shareId);
   if (opts.projectSlug) params.set("projectSlug", opts.projectSlug);
-  if (opts.scope) params.set("scope", opts.scope);
   if (opts.status) params.set("status", opts.status);
   if (opts.limit) params.set("limit", String(opts.limit));
   const suffix = params.toString() ? `?${params.toString()}` : "";
@@ -855,7 +827,7 @@ export async function listFeedbackWorkItems(
 
 export async function claimFeedbackWorkItem(
   token: string,
-  req: { shareId?: string; projectSlug?: string; workerId?: string } = {},
+  req: { projectSlug?: string; workerId?: string } = {},
 ): Promise<FeedbackWorkItem | { ok: true; item: null }> {
   return placementFetch<FeedbackWorkItem | { ok: true; item: null }>(token, "/feedback-work-items/claim", {
     method: "POST",
@@ -899,7 +871,7 @@ export async function routeFeedbackWorkItem(
 
 export async function queueFeedbackWorkItemRelaySource(
   token: string,
-  req: { itemId: string; branch?: string; workerId?: string; ttlMs?: number },
+  req: { itemId: string; repoUrl: string; defaultBranch?: string; branch?: string; workerId?: string; ttlMs?: number },
 ): Promise<{ item: FeedbackWorkItem; relaySourceIntent: RelaySourceIntent }> {
   return placementFetch<{ item: FeedbackWorkItem; relaySourceIntent: RelaySourceIntent }>(
     token,

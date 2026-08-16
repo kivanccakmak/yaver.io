@@ -297,9 +297,9 @@ func init() {
 			"the policy (enabled, allowed ports, private-target setting), this box's egress identity, " +
 			"and a recent local audit of proxied/refused targets. Owner-only. Lending is opt-in and " +
 			"default OFF; the proxy is reachable only over authenticated peer transport, never as an open proxy.",
-		Schema:     ghostJSONSchema(map[string]interface{}{}),
-		Handler:    egressProxyStatusHandler,
-		AllowGuest: false,
+		Schema:         ghostJSONSchema(map[string]interface{}{}),
+		Handler:        egressProxyStatusHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "egress_proxy_set",
@@ -313,8 +313,8 @@ func init() {
 			"allowPrivateTargets": map[string]interface{}{"type": "boolean", "description": "Permit private/reserved destination IPs (default false; removes the anti-LAN-pivot guard)."},
 			"allowedPorts":        map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}, "description": "Allowed destination ports (default [80,443])."},
 		}),
-		Handler:    egressProxySetHandler,
-		AllowGuest: false,
+		Handler:        egressProxySetHandler,
+		AllowCompanion: false,
 	})
 }
 

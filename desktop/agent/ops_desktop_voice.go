@@ -41,8 +41,8 @@ func init() {
 			"transcript": map[string]interface{}{"type": "string", "description": "What the user said, verbatim."},
 			"dryRun":     map[string]interface{}{"type": "boolean", "description": "Resolve and report the intent without acting."},
 		}, "transcript"),
-		Handler:    desktopVoiceHandler,
-		AllowGuest: false,
+		Handler:        desktopVoiceHandler,
+		AllowCompanion: false,
 	})
 }
 

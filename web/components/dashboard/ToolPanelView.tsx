@@ -19,7 +19,6 @@ type Verb = {
   name: string;
   description?: string;
   streaming?: boolean;
-  allowGuest?: boolean;
   payload?: JSONSchema;
 };
 
@@ -165,9 +164,6 @@ export default function ToolPanelView() {
                     >
                       <span className="truncate font-mono">{titleOf(v)}</span>
                       {v.streaming && <span className="shrink-0 text-[9px] text-amber-500">stream</span>}
-                      {v.allowGuest === false && (
-                        <span className="ml-auto shrink-0 text-[9px] text-surface-600">owner</span>
-                      )}
                     </button>
                   ))}
                 </div>
@@ -187,11 +183,6 @@ export default function ToolPanelView() {
                     {active.streaming && (
                       <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-400">
                         streaming
-                      </span>
-                    )}
-                    {active.allowGuest === false && (
-                      <span className="rounded bg-surface-800 px-1.5 py-0.5 text-[10px] text-surface-400">
-                        owner-only
                       </span>
                     )}
                   </div>

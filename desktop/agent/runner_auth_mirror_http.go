@@ -47,11 +47,11 @@ func (s *HTTPServer) handleRunnerAuthMirrorRequest(w http.ResponseWriter, r *htt
 		// runner_auth_browser_http.go). We emit a structured signal
 		// so glass clients can speak the right next step.
 		jsonReply(w, http.StatusOK, map[string]any{
-			"ok":          false,
-			"runner":      runner,
-			"reason":      "no_local_credential",
-			"nextAction":  "phone_relay_device_auth",
-			"message":     fmt.Sprintf("no signed-in %s on this machine — start phone-relay flow from Yaver mobile", runner),
+			"ok":         false,
+			"runner":     runner,
+			"reason":     "no_local_credential",
+			"nextAction": "phone_relay_device_auth",
+			"message":    fmt.Sprintf("no signed-in %s on this machine — start phone-relay flow from Yaver mobile", runner),
 		})
 		return
 	}
@@ -89,18 +89,11 @@ func (s *HTTPServer) handleRunnerAuthMirrorRequest(w http.ResponseWriter, r *htt
 // from a peer agent (the source). Validates the payload + writes to
 // disk + appends a ledger entry.
 //
-// Owner auth only — SDK tokens cannot push runner credentials.
-// Existing s.auth() middleware enforces this since SDK tokens are
-// distinguished at the auth layer; here we just guard against a
-// guest having somehow reached the route by checking
-// X-Yaver-GuestUserID.
+// Owner auth only — SDK tokens cannot push runner credentials. The registered
+// s.auth() middleware enforces the boundary.
 func (s *HTTPServer) handleRunnerAuthMirrorAccept(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
-		return
-	}
-	if r.Header.Get("X-Yaver-GuestUserID") != "" {
-		jsonError(w, http.StatusForbidden, "mirror accept is owner-only")
 		return
 	}
 	var payload MirrorAcceptPayload

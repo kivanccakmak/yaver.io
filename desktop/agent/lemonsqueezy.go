@@ -64,7 +64,7 @@ type LSStatus struct {
 type LSProduct struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
-	Price          int    `json:"price"`          // cents
+	Price          int    `json:"price"` // cents
 	PriceFormatted string `json:"priceFormatted"`
 	Currency       string `json:"currency"`
 	Status         string `json:"status"`
@@ -112,8 +112,8 @@ type LSDiscount struct {
 }
 
 type LSRevenue struct {
-	TotalRevenue   int `json:"totalRevenue"`   // cents
-	MRR            int `json:"mrr"`            // monthly recurring revenue, cents
+	TotalRevenue   int `json:"totalRevenue"` // cents
+	MRR            int `json:"mrr"`          // monthly recurring revenue, cents
 	ActiveSubs     int `json:"activeSubs"`
 	CancelledSubs  int `json:"cancelledSubs"`
 	TotalOrders    int `json:"totalOrders"`

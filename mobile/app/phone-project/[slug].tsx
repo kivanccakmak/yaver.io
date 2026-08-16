@@ -44,7 +44,6 @@ function pickDevMachines(all: Device[], currentId: string | undefined): Device[]
   return all.filter(
     (d) =>
       d.online &&
-      !d.isGuest &&
       !d.needsAuth &&
       d.id !== currentId &&
       d.deviceClass !== "edge-mobile",

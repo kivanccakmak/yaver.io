@@ -36,7 +36,9 @@ func (a *convexAdapter) ListTables() ([]TableInfo, error) {
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return nil, err
 	}
-	var rows []struct{ Name string `json:"name"` }
+	var rows []struct {
+		Name string `json:"name"`
+	}
 	if err := json.Unmarshal(envelope.Value, &rows); err != nil {
 		return nil, err
 	}
@@ -88,7 +90,9 @@ func (a *convexAdapter) Insert(table string, doc map[string]interface{}) (string
 	if err != nil {
 		return "", err
 	}
-	var env struct{ Value string `json:"value"` }
+	var env struct {
+		Value string `json:"value"`
+	}
 	_ = json.Unmarshal(data, &env)
 	return env.Value, nil
 }

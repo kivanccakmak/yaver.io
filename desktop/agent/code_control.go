@@ -63,8 +63,6 @@ func runCodeControl(args []string) (bool, error) {
 		return true, runCodeGetControl(args[1:])
 	case "set":
 		return true, runCodeSetControl(args[1:])
-	case "user":
-		return true, runCodeUserControl(args[1:])
 	case "repo":
 		return true, runCodeRepoControl(args[1:])
 	case "clone":
@@ -333,7 +331,7 @@ func handleInteractiveCodeCommand(line, attachedDeviceID, attachedDeviceName str
 		if normalizeRunnerID(firstNonEmpty(runner, profile.Runner)) == "opencode" {
 			mode = strings.TrimSpace(profile.Mode)
 		}
-		if err := runRemoteCodeAttach("", profile.AttachedDeviceID, "", runner, model, mode); err != nil {
+		if err := runRemoteCodeAttach("", profile.AttachedDeviceID, runner, model, mode); err != nil {
 			return interactiveCodeResult{Handled: true}, err
 		}
 		return interactiveCodeResult{Handled: true, ShouldExit: true}, nil
@@ -397,12 +395,6 @@ Repo:
   yaver code repo refresh
   yaver code set repo <path|name>
   yaver code get repo
-
-Sharing:
-  yaver code user invite <email> [--scope full|feedback-only|sdk-project]
-  yaver code user remove <email|user-id>
-  yaver code user access <email|user-id> <scope>
-  yaver code user list
 
 Dev:
   yaver code dev start [flags]
@@ -1058,7 +1050,7 @@ func runCodeAttachControl(args []string) error {
 		}
 		target = chosen.DeviceID
 	}
-	device, err := resolveCodeAttachDevice(cfg, target, "")
+	device, err := resolveCodeAttachDevice(cfg, target)
 	if err != nil {
 		return err
 	}
@@ -1122,11 +1114,7 @@ func printAttachDeviceList(cfg *Config, devices []DeviceInfo) {
 		if err != nil || runnerSummary == "" {
 			runnerSummary = "runner info unavailable"
 		}
-		owner := ""
-		if d.HostEmail != "" {
-			owner = " host=" + d.HostEmail
-		}
-		fmt.Printf("  %d. %s (%s, %s%s)\n", i+1, d.Name, d.DeviceID[:min(8, len(d.DeviceID))], d.Platform, owner)
+		fmt.Printf("  %d. %s (%s, %s)\n", i+1, d.Name, d.DeviceID[:min(8, len(d.DeviceID))], d.Platform)
 		fmt.Printf("     %s\n", runnerSummary)
 	}
 }
@@ -1655,28 +1643,6 @@ func runCodeSetOrchestration(args []string) error {
 		return err
 	}
 	fmt.Printf("Orchestration set to %s\n", mode)
-	return nil
-}
-
-func runCodeUserControl(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: yaver code user <invite|remove|access|list> ...")
-	}
-	switch args[0] {
-	case "invite":
-		runGuestsInvite(args[1:])
-	case "remove":
-		runGuestsRemove(args[1:])
-	case "list":
-		runGuestsList()
-	case "access":
-		if len(args) < 3 {
-			return fmt.Errorf("usage: yaver code user access <email|user-id> <scope>")
-		}
-		runGuestsConfig([]string{args[1], "scope=" + args[2]})
-	default:
-		return fmt.Errorf("unknown user command %q", args[0])
-	}
 	return nil
 }
 

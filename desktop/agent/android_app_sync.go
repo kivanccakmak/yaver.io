@@ -297,7 +297,7 @@ func dispatchAndroidAppMCP(s *HTTPServer, name string, raw json.RawMessage) (boo
 
 func init() {
 	reg := func(name, desc string, h func(context.Context, androidAppRequest) (map[string]any, error)) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, AllowGuest: false, Handler: func(c OpsContext, payload json.RawMessage) OpsResult {
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, AllowCompanion: false, Handler: func(c OpsContext, payload json.RawMessage) OpsResult {
 			var req androidAppRequest
 			if len(payload) > 0 {
 				if err := json.Unmarshal(payload, &req); err != nil {

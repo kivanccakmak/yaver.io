@@ -67,7 +67,7 @@ type cadPayload struct {
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 
 	reg("cad_tools", "Report which CAD/slicer tools are installed on this box (openscad, orca/prusa slicer) + install hints.", func(c OpsContext, _ json.RawMessage) OpsResult {

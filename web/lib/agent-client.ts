@@ -15,7 +15,6 @@ import { ParkedTurnError, type ParkedTurnRejection } from "./parkedTurn";
 import { isUsablePublicEndpoint } from "./endpoints";
 import { planReconnect } from "./reconnectLadder";
 import webPkg from "../package.json";
-import type { MachineResourceReport, VibeParticipant, VibeSession } from "./machine-resources";
 import type { TaskFailureWire } from "./runnerFailure";
 
 // X-Yaver-Caller surface identifier sent on every agent request.
@@ -165,6 +164,26 @@ export interface Task {
    *  Vibing surface can render Install + streamed retry instead of prose. */
   capabilityGap?: unknown;
   failure?: TaskFailureWire | null;
+}
+
+export interface RemoteProject {
+  name: string;
+  path: string;
+  branch?: string;
+  framework?: string;
+  frameworks?: string[];
+  stack?: string;
+  stacks?: string[];
+  surfaces?: string[];
+  testSurfaces?: string[];
+  backend?: string;
+  services?: string[];
+  hosting?: string[];
+  role?: string;
+  executionMode?: string;
+  primarySurface?: string;
+  gitRemote?: string;
+  tags?: string[];
 }
 
 /** Wire shape of `GET /tasks/{id}/proof` → `{ok:true, proof:{…}}`. Media URLs
@@ -1056,6 +1075,30 @@ export interface RunnerAuthStatusRow {
   version?: string;
 }
 
+export interface DevelopmentDoctorFix {
+  kind: "install" | "configure" | "open-url";
+  label: string;
+  method?: string;
+  path?: string;
+  stream?: string;
+  tab?: string;
+  url?: string;
+}
+
+export interface DevelopmentDoctorCheck {
+  id?: string;
+  name: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
+  section: string;
+  fix?: DevelopmentDoctorFix;
+}
+
+export interface DevelopmentDoctorReport {
+  ok: boolean;
+  checks: DevelopmentDoctorCheck[];
+}
+
 export interface RunnerBrowserAuthSession {
   id: string;
   runner: "claude" | "codex";
@@ -1469,13 +1512,6 @@ export interface InfraRelaySummary {
   passwordRequired: boolean;
 }
 
-export interface InfraSharingSummary {
-  isShared: boolean;
-  accessScope?: string;
-  pendingGuests: number;
-  acceptedGuests: number;
-}
-
 export interface InfraCapabilities {
   terminal: boolean;
   mcp: boolean;
@@ -1557,7 +1593,6 @@ export interface InfraSummary {
   }>;
   network?: InfraNetworkInterface[];
   relays?: InfraRelaySummary[];
-  sharing: InfraSharingSummary;
   sandbox: SandboxStatus;
   capabilities: InfraCapabilities;
   rebootGrant?: {
@@ -1748,8 +1783,7 @@ export interface VaultPeerSyncResult {
 
 export interface SandboxStatus {
   ok: boolean;
-  enabledMode?: "off" | "guests" | "host";
-  containerizeGuests: boolean;
+  enabledMode?: "off" | "host";
   containerizeHost: boolean;
   docker: boolean;
   imageReady: boolean;
@@ -1761,13 +1795,12 @@ export interface SandboxStatus {
   cpuLimit?: string;
   memoryLimit?: string;
   extraMounts?: string[];
-  recommendedMode?: "guests" | "host";
+  recommendedMode?: "host";
   recommendedReason?: string;
   quickstartAvailable?: boolean;
 }
 
 export interface SandboxConfig {
-  containerizeGuests?: boolean;
   containerizeHost?: boolean;
   cpuLimit?: string;
   memoryLimit?: string;
@@ -1785,50 +1818,6 @@ export interface RelayServer {
   region: string;
   priority: number;
   password?: string;
-}
-
-export interface GuestConfigEntry {
-  guestUserId: string;
-  guestEmail: string;
-  guestName: string;
-  scope?: "full" | "feedback-only" | "sdk-project";
-  dailyTokenLimit?: number;
-  allowedRunners?: string[];
-  usageMode?: string;
-  schedule?: { startHour: number; endHour: number; timezone?: string };
-  shareAllDevices?: boolean;
-  deviceIds?: string[];
-  shareAllMachines?: boolean;
-  machineIds?: string[];
-  resourcePreset?: string;
-  useHostApiKeys?: boolean;
-  allowGuestProvidedApiKeys?: boolean;
-  allowDesktopControl?: boolean;
-  allowBrowserControl?: boolean;
-  allowTunnelForward?: boolean;
-  requireIsolation?: boolean;
-  cpuLimitPercent?: number;
-  ramLimitMb?: number;
-  priorityMode?: string;
-  allowedProjects?: string[];
-  allowedSharedStorage?: string[];
-}
-
-export interface GuestUsageEntry {
-  guestEmail: string;
-  guestName: string;
-  date: string;
-  secondsUsed: number;
-}
-
-export interface GuestInfo {
-  email: string;
-  status: "pending" | "accepted" | "revoked" | "expired";
-  fullName?: string;
-  createdAt: number;
-  expiresAt?: number;
-  acceptedAt?: number;
-  revokedAt?: number;
 }
 
 export type OutputCallback = (taskId: string, line: string) => void;
@@ -2323,11 +2312,12 @@ export class AgentClient {
 
   // ── Task API ───────────────────────────────────────────────────────
 
-  async sendTask(title: string, description: string, opts?: { runner?: string; model?: string }): Promise<Task> {
+  async sendTask(title: string, description: string, opts?: { runner?: string; model?: string; reasoningEffort?: "low" | "medium" | "high" }): Promise<Task> {
     this.assertConnected();
     const body: Record<string, unknown> = { title, description, source: "web" };
     if (opts?.runner) body.runner = opts.runner;
     if (opts?.model) body.model = opts.model;
+    if (opts?.reasoningEffort) body.reasoningEffort = opts.reasoningEffort;
     const res = await fetch(`${this.taskBaseUrl}/tasks`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
@@ -2351,6 +2341,7 @@ export class AgentClient {
       description,
       status: data.status,
       runnerId: data.runnerId || opts?.runner,
+      model: data.model || opts?.model,
       output: [],
       capabilityGap: data.capabilityGap,
       createdAt: Date.now(),
@@ -2847,7 +2838,7 @@ export class AgentClient {
    * param-less verbs).
    */
   async getOpsVerbs(): Promise<
-    Array<{ name: string; description?: string; streaming?: boolean; allowGuest?: boolean; payload?: any }>
+    Array<{ name: string; description?: string; streaming?: boolean; payload?: any }>
   > {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/ops/verbs`, { headers: this.authHeaders });
@@ -3042,9 +3033,7 @@ export class AgentClient {
    *
    * Privacy: the code is only ever held in memory on the host (the
    * machine running the spawned CLI), never on Convex, never on the
-   * bus, never in any log. Do not call from a context where the
-   * caller could be a guest — the agent's authSDK middleware enforces
-   * that, but this comment is the second line of defence.
+   * bus, never in any log. The owner-authenticated agent route enforces this.
    */
   async submitRunnerBrowserAuthCode(sessionId: string, code: string, target?: string): Promise<RunnerBrowserAuthSession> {
     this.assertConnected();
@@ -4450,8 +4439,7 @@ export class AgentClient {
    *  local token is for a different user — which is exactly the case
    *  the dashboard's regular AUTH/recover flow can't handle.
    *
-   *  Only the OWNER of the device per Convex /devices/list can reset.
-   *  Guests get 403 server-side (the host has to do it).
+   *  Only the owner of the device per Convex /devices/list can reset.
    */
   async factoryResetDeviceAuth(
     deviceId: string,
@@ -4470,7 +4458,7 @@ export class AgentClient {
           headers: { Authorization: `Bearer ${userBearer}` },
         }, 12000);
         if (res.ok) return { ok: true };
-        // 401/403 — bearer issue or guest. Don't keep retrying, the
+        // 401/403 — bearer or ownership issue. Don't keep retrying, the
         // next relay won't change the verdict.
         if (res.status === 401 || res.status === 403) {
           const body = await res.text().catch(() => "");
@@ -5025,118 +5013,6 @@ export class AgentClient {
     }, 3000);
   }
 
-  // ── Guest config ──────────────────────────────────────────────────
-
-  async getGuestConfigs(): Promise<GuestConfigEntry[]> {
-    this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/guests/config`, {
-      headers: this.authHeaders,
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.configs || [];
-  }
-
-  async updateGuestConfig(config: {
-    email: string;
-    scope?: "full" | "feedback-only" | "sdk-project";
-    dailyTokenLimit?: number;
-    allowedRunners?: string[];
-    usageMode?: string;
-    schedule?: { startHour: number; endHour: number; timezone?: string };
-    shareAllDevices?: boolean;
-    deviceIds?: string[];
-    shareAllMachines?: boolean;
-    machineIds?: string[];
-    resourcePreset?: string;
-    useHostApiKeys?: boolean;
-    allowGuestProvidedApiKeys?: boolean;
-    allowDesktopControl?: boolean;
-    allowBrowserControl?: boolean;
-    allowTunnelForward?: boolean;
-    requireIsolation?: boolean;
-    cpuLimitPercent?: number;
-    ramLimitMb?: number;
-    priorityMode?: string;
-    allowedProjects?: string[];
-    allowedSharedStorage?: string[];
-  }): Promise<void> {
-    this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/guests/config`, {
-      method: "POST",
-      headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify(config),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Failed to update config");
-    }
-  }
-
-  async getGuestUsage(date?: string): Promise<GuestUsageEntry[]> {
-    this.assertConnected();
-    const url = date
-      ? `${this.baseUrl}/guests/usage?date=${encodeURIComponent(date)}`
-      : `${this.baseUrl}/guests/usage`;
-    const res = await fetch(url, { headers: this.authHeaders });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.usage || [];
-  }
-
-  async getGuestList(): Promise<GuestInfo[]> {
-    this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/guests`, {
-      headers: this.authHeaders,
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.guests || [];
-  }
-
-  async inviteGuest(target: {
-    email?: string;
-    userId?: string;
-    deviceIds?: string[];
-    scope?: "full" | "feedback-only" | "sdk-project";
-    allowedProjects?: string[];
-  } | string): Promise<{ inviteCode: string; guestRegistered: boolean }> {
-    this.assertConnected();
-    const body =
-      typeof target === "string"
-        ? { email: target }
-        : {
-            email: target.email,
-            userId: target.userId,
-            deviceIds: target.deviceIds,
-            scope: target.scope,
-            allowedProjects: target.allowedProjects,
-          };
-    const res = await fetch(`${this.baseUrl}/guests/invite`, {
-      method: "POST",
-      headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Failed to invite");
-    }
-    return res.json();
-  }
-
-  async revokeGuest(email: string): Promise<void> {
-    this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/guests/revoke`, {
-      method: "POST",
-      headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Failed to revoke");
-    }
-  }
-
   // ── Container Sandbox ──────────────────────────────────────────────
 
   async getSandboxStatus(): Promise<SandboxStatus | null> {
@@ -5175,7 +5051,7 @@ export class AgentClient {
     }
   }
 
-  async sandboxQuickstart(mode: "guests" | "host", buildImage = true): Promise<{ ok: boolean; message?: string; sandbox?: SandboxStatus; error?: string }> {
+  async sandboxQuickstart(mode: "host", buildImage = true): Promise<{ ok: boolean; message?: string; sandbox?: SandboxStatus; error?: string }> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/sandbox/quickstart`, {
       method: "POST",
@@ -5189,30 +5065,25 @@ export class AgentClient {
 
   // ── Projects ───────────────────────────────────────────────────────
 
-  async listProjects(): Promise<Array<{
-    name: string;
-    path: string;
-    branch?: string;
-    framework?: string;
-    frameworks?: string[];
-    stack?: string;
-    stacks?: string[];
-    surfaces?: string[];
-    testSurfaces?: string[];
-    backend?: string;
-    services?: string[];
-    hosting?: string[];
-    role?: string;
-    executionMode?: string;
-    primarySurface?: string;
-    gitRemote?: string;
-    tags?: string[];
-  }>> {
+  async listProjects(refresh = false): Promise<RemoteProject[]> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/projects`, { headers: this.authHeaders });
+    const suffix = refresh ? "?refresh=1" : "";
+    const res = await fetch(`${this.baseUrl}/projects${suffix}`, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to load projects: HTTP ${res.status}`);
     return data.projects ?? [];
+  }
+
+  async setWorkDir(path: string): Promise<string> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/work-dir`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const data = await res.json().catch(() => ({})) as { workDir?: string; error?: string };
+    if (!res.ok) throw new Error(data.error || `Failed to select project: ${res.status}`);
+    return data.workDir || path;
   }
 
   /** Project list from the RENDER machine when a runner/render split is
@@ -5249,7 +5120,7 @@ export class AgentClient {
     return data.projects ?? [];
   }
 
-  async listWorkspaceRepos(): Promise<Array<{
+  async listWorkspaceRepos(source: "connected" | "render" = "connected"): Promise<Array<{
     name: string;
     path: string;
     branch?: string;
@@ -5264,7 +5135,8 @@ export class AgentClient {
     };
   }>> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/repos/list`, { headers: this.authHeaders });
+    const base = source === "render" ? this.devBaseUrl : this.baseUrl;
+    const res = await fetch(`${base}/repos/list`, { headers: this.authHeaders });
     if (!res.ok) return [];
     const data = await res.json().catch(() => []);
     return Array.isArray(data) ? data as Array<{
@@ -5293,7 +5165,10 @@ export class AgentClient {
    *
    *  Returns full MobileProject records: name, path, framework,
    *  capability flags, monorepoRoot/monorepoApp lineage. */
-  async listProjectsByCapability(capability: "web" | "mobile" | "all"): Promise<Array<{
+  async listProjectsByCapability(
+    capability: "web" | "mobile" | "all",
+    source: "connected" | "render" = "connected",
+  ): Promise<Array<{
     name: string;
     path: string;
     framework: string;
@@ -5311,7 +5186,8 @@ export class AgentClient {
   }>> {
     this.assertConnected();
     const path = capability === "web" ? "/projects/web" : capability === "all" ? "/projects/all" : "/projects/mobile";
-    const res = await fetch(`${this.baseUrl}${path}`, { headers: this.authHeaders });
+    const base = source === "render" ? this.devBaseUrl : this.baseUrl;
+    const res = await fetch(`${base}${path}`, { headers: this.authHeaders });
     if (!res.ok) return [];
     const data = (await res.json().catch(() => ({}))) as { projects?: unknown };
     return Array.isArray(data?.projects) ? (data.projects as Array<Record<string, unknown>>).map((p) => ({
@@ -5759,7 +5635,7 @@ export class AgentClient {
   }
 
   /** Authed request tuple for a clip's poster JPEG. Same fetch→blob shim as
-   *  vibeClipRequest — the poster route is authSDKOrGuest, so a bare
+   *  vibeClipRequest — the poster route is authSDK, so a bare
    *  `<img src>` 401s over the relay (audit B8). */
   vibeClipPosterRequest(clipId: string): { url: string; headers: Record<string, string> } | null {
     if (!this.baseUrl) return null;
@@ -5906,13 +5782,18 @@ export class AgentClient {
     } catch { return null; }
   }
 
-  async getWorkspaceApps(kind?: string | string[], root?: string): Promise<WorkspaceAppView[]> {
+  async getWorkspaceApps(
+    kind?: string | string[],
+    root?: string,
+    source: "connected" | "render" = "connected",
+  ): Promise<WorkspaceAppView[]> {
     this.assertConnected();
     const params = new URLSearchParams();
     if (kind) params.set("kind", Array.isArray(kind) ? kind.join(",") : kind);
     if (root) params.set("root", root);
     const query = params.toString() ? `?${params.toString()}` : "";
-    const res = await fetch(`${this.baseUrl}/workspace/apps${query}`, { headers: this.authHeaders });
+    const base = source === "render" ? this.devBaseUrl : this.baseUrl;
+    const res = await fetch(`${base}/workspace/apps${query}`, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to load workspace apps: HTTP ${res.status}`);
     return Array.isArray(data?.apps) ? data.apps : [];
@@ -6469,12 +6350,6 @@ export class AgentClient {
   // P2P against the connected agent — never Convex. Status/detection flow
   // straight from the box that runs the crons/services.
 
-  // ─── Co-vibe: who is on this machine, in which session, with what role ────
-  //
-  // One report endpoint (desktop/agent/vibe_sessions_http.go) shared with mobile,
-  // so the dashboard and the phone never disagree about who is driving. Types
-  // live in lib/machine-resources.ts (mirror of mobile's machineResources.ts).
-
   /** Housekeeping feed from the agent's custodian (wardens + failure playbook).
    *  See desktop/agent/custodian.go — the layer's whole point is being VISIBLE,
    *  so a surface that cannot render it makes it worthless. */
@@ -6509,68 +6384,6 @@ export class AgentClient {
       summary: typeof d?.summary === "string" ? d.summary : "",
       findings: Array.isArray(d?.findings) ? d.findings : [],
     };
-  }
-
-  async getVibeSessions(): Promise<MachineResourceReport> {
-    const res = await this.agentFetch("/vibe/sessions");
-    const data = await res.json().catch(() => ({}));
-    return {
-      hostname: typeof data?.hostname === "string" ? data.hostname : undefined,
-      sessions: Array.isArray(data?.sessions) ? (data.sessions as VibeSession[]) : [],
-      unattributed: Array.isArray(data?.unattributed) ? data.unattributed : [],
-      generatedAt: typeof data?.generatedAt === "string" ? data.generatedAt : undefined,
-    };
-  }
-
-  /** Take a seat in a session (creates it for `workDir` when no id is given). */
-  async joinVibeSession(input: { sessionId?: string; workDir?: string; framework?: string; displayName?: string }): Promise<{
-    ok: boolean;
-    participant?: VibeParticipant;
-    session?: VibeSession;
-    heartbeatSeconds?: number;
-    error?: string;
-  }> {
-    const res = await this.agentFetch("/vibe/join", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
-    return { ok: true, ...data };
-  }
-
-  async vibeHeartbeat(sessionId: string, participantId: string): Promise<boolean> {
-    const res = await this.agentFetch("/vibe/heartbeat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, participantId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    return res.ok && data?.alive !== false;
-  }
-
-  /**
-   * Owner-only: grant or revoke drive rights. The AGENT decides whether the
-   * caller may do this — the button being visible is never the permission.
-   */
-  async setVibeRole(sessionId: string, participantId: string, role: "viewer" | "driver"): Promise<{ ok: boolean; error?: string }> {
-    const res = await this.agentFetch("/vibe/role", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, participantId, role }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
-    return { ok: true };
-  }
-
-  async leaveVibeSession(sessionId: string, participantId: string): Promise<void> {
-    await this.agentFetch("/vibe/leave", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, participantId }),
-    }).catch(() => undefined);
   }
 
   async companionListProjects(): Promise<CompanionProjectSummary[]> {
@@ -7594,6 +7407,40 @@ export class AgentClient {
     return Array.isArray(data?.sessions) ? data.sessions : [];
   }
 
+  async listRunnerSessions(): Promise<
+    Array<{ name: string; runner: string; command?: string; confirmed: boolean; attached?: boolean }>
+  > {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/runner/sessions`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Failed to list runner sessions: HTTP ${res.status}`);
+    return Array.isArray(data?.sessions) ? data.sessions : [];
+  }
+
+  /** Deterministic safe sync of a remote repo: pull --rebase --autostash
+   *  against origin/<branch> then push (never force). Aborts on conflict. */
+  async gitSyncRemote(workDir: string): Promise<{
+    ok: boolean;
+    branch?: string;
+    hash?: string;
+    actions?: string[];
+    rebased?: boolean;
+    pushed?: boolean;
+    requiresAgent?: boolean;
+    conflicts?: string[];
+    error?: string;
+    output?: string;
+  }> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/git/sync-remote`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ workDir }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return data;
+  }
+
   async adoptTmuxSession(session: string, pane?: string): Promise<{ taskId: string; session: string; pane?: string }> {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tmux/adopt`, {
@@ -8404,6 +8251,16 @@ export class AgentClient {
   }
 
   // ── Health Monitoring ─────────────────────────────────────────────
+
+  async developmentDoctor(): Promise<DevelopmentDoctorReport> {
+    const res = await this.agentFetch("/agent/doctor", { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Development Doctor failed: HTTP ${res.status}`);
+    return {
+      ok: data?.ok === true,
+      checks: Array.isArray(data?.checks) ? data.checks : [],
+    };
+  }
 
   async listHealthTargets(): Promise<{ id: string; url: string; name?: string; status?: string; responseTime?: number }[]> {
     this.assertConnected();

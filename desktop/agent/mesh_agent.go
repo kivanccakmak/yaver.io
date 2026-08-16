@@ -27,7 +27,6 @@ type meshPeerRow struct {
 	AdvertisedRoutes []string `json:"advertisedRoutes"`
 	IsExitNode       bool     `json:"isExitNode"`
 	Online           bool     `json:"online"`
-	AccessScope      string   `json:"accessScope"`
 	// Desired state set by the console (Tailscale-style intent).
 	WantEnabled     *bool    `json:"wantEnabled"`
 	WantExitNode    bool     `json:"wantExitNode"`

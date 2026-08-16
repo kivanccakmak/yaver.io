@@ -1,13 +1,12 @@
 package main
 
-// tenant_isolation.go — shared per-tenant isolation primitives used by the
-// guest-isolation runtime (tenant_runtime.go) and runner-auth id prefixing.
+// tenant_isolation.go — operator-fleet per-tenant isolation primitives used by
+// tenant_runtime.go and runner-auth id prefixing.
 //
-// These were relocated here from the removed shared-infra "beta" files. In the
-// single-owner production model there is no shared multi-tenant box; the only
-// remaining consumer is GENERAL guest isolation — an isolation-required guest
-// task runs confined as an unprivileged OS user in a partition on the owner's
-// own box (tenant_runtime.go). Kept minimal and dependency-free.
+// These were relocated here from the removed shared-infra "beta" files. They
+// are not a consumer-product account-sharing mechanism. The remaining consumer
+// is the explicit operator-fleet tenant runtime, which confines jobs as
+// unprivileged OS users. Kept minimal and dependency-free.
 
 import (
 	"os/exec"

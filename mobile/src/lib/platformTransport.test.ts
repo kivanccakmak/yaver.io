@@ -11,7 +11,13 @@
  * stays a pure check of the contract: every kind declared, every unsupported
  * kind carrying a reason a user can act on.
  */
-import { TRANSPORT_CAPABILITIES, connectGiveUpMessage, explainNoTransport, type TransportKind } from "./platformTransport";
+import {
+  TRANSPORT_CAPABILITIES,
+  buildTransportCapabilities,
+  connectGiveUpMessage,
+  explainNoTransport,
+  type TransportKind,
+} from "./platformTransport";
 
 let passed = 0;
 let failed = 0;
@@ -24,7 +30,7 @@ function ok(cond: boolean, msg: string) {
   }
 }
 
-const KINDS: TransportKind[] = ["lan-beacon", "direct-http", "quic-relay", "quic-direct"];
+const KINDS: TransportKind[] = ["lan-beacon", "direct-http", "relay-http", "quic-relay", "quic-direct"];
 
 // ── Every transport kind must declare its platform support ───────────────────
 {
@@ -45,9 +51,13 @@ const KINDS: TransportKind[] = ["lan-beacon", "direct-http", "quic-relay", "quic
   }
 }
 
-// ── Direct HTTP is the browser's only lane, so it is always possible ─────────
+// ── Browser HTTP lanes remain possible; only raw QUIC/UDP is unavailable ─────
 {
-  ok(TRANSPORT_CAPABILITIES["direct-http"].supported, "direct HTTP is always available");
+  const web = buildTransportCapabilities(true);
+  ok(web["direct-http"].supported, "direct HTTP is available in a browser");
+  ok(web["relay-http"].supported, "the relay HTTPS proxy is available in a browser");
+  ok(!web["quic-relay"].supported, "raw relay QUIC remains unavailable in a browser");
+  ok(!web["quic-direct"].supported, "raw direct QUIC remains unavailable in a browser");
 }
 
 // ── explainNoTransport stays silent while something is still possible ────────
@@ -67,6 +77,10 @@ const KINDS: TransportKind[] = ["lan-beacon", "direct-http", "quic-relay", "quic
   );
   const bare = connectGiveUpMessage(5, "   ");
   ok(bare === "Could not reach device after 5 attempts", "blank cause → clean base message, no dangling dash");
+  ok(
+    !connectGiveUpMessage(5, "relay: HTTP 502").includes("No connection method available"),
+    "a failed HTTPS relay route is not misreported as browser incapability",
+  );
 }
 
 console.log(`\nplatformTransport: ${passed} passed, ${failed} failed`);

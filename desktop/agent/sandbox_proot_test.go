@@ -92,11 +92,11 @@ func TestBuildProotArgvDefaultWorkDir(t *testing.T) {
 func TestSandboxEnvReplacesHostPathPreservesTermAndYaver(t *testing.T) {
 	cfg := sampleCfg()
 	caller := []string{
-		"PATH=/system/bin:/system/xbin", // host PATH — must be dropped
-		"TERM=xterm-kitty",              // must be preserved
+		"PATH=/system/bin:/system/xbin",   // host PATH — must be dropped
+		"TERM=xterm-kitty",                // must be preserved
 		"HOME=/data/data/io.yaver.mobile", // host HOME — must be dropped
-		"YAVER_HOST_SHARE=1",            // must be preserved
-		"LD_PRELOAD=/evil.so",           // host-specific — must be dropped
+		"YAVER_HOST_SHARE=1",              // must be preserved
+		"LD_PRELOAD=/evil.so",             // host-specific — must be dropped
 	}
 	env := sandboxEnv(cfg, caller)
 	joined := strings.Join(env, "\n")

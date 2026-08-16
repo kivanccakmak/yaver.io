@@ -514,23 +514,19 @@ run_feature_remote_tests() {
 }
 
 run_feature_tests() {
-    header "Feature Tests (vault + blobs + schedules + apikeys + wipe + two-agent)"
+    header "Feature Tests (vault + blobs + schedules + apikeys + wipe)"
 
     # Scoped Go test run — covers every focused HTTP integration the
     # user can hit from web + mobile. No creds, no network, all
     # loopback. Runs in ~5s on a laptop.
     local patterns=(
-        TestVaultHTTP          # full /vault/* CRUD, support-bearer blocked
+        TestVaultHTTP          # full owner-only /vault/* CRUD
         TestSchedulesHTTP      # CRUD + run-now + deadlock repro
         TestScheduleRunNow
         TestBlobsHTTP          # PUT/GET/DELETE, pagination, signed URL
         TestBlobsList
         TestAPIKeys            # registry list + disable + label cap
         TestWipe               # selective + all + --including-auth
-        TestTwoAgent           # cross-agent support + cross-token isolation
-        TestSupport            # support session unit + integration
-        TestGuestAllowlist     # privacy-allowlist tripwires
-        TestSupportAllowlist
         TestConvex             # convex payload privacy tripwires
     )
     local regex
@@ -3293,7 +3289,7 @@ Flags:
   --oauth-mock      Boot mock OAuth providers + local web app, then hit the real callback route
   --hybrid-local    Hybrid mode end-to-end: aider+ollama+qwen builds a calculator, assert it works
   --features        Feature-focused test pack: vault CRUD, blobs HTTP, schedules,
-                    API keys, wipe, two-agent support connect, privacy tripwires.
+                    API keys, wipe, and privacy tripwires.
                     No credentials needed — all over loopback.
   --remote-host IP  Override remote host instead of reading REMOTE_SERVER_IP.
   --remote-ssh-key PATH

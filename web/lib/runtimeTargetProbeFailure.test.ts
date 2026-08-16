@@ -133,6 +133,15 @@ test("RuntimeLabView checks machine-role reachability before render operations",
   assert.match(src, /ensureMachineRolesReady\("web preview"\)/, "Web preview launch must block before using an unreachable render box");
 });
 
+test("split renderer inventory never falls back to or merges the connected box", () => {
+  const src = readFileSync(join(webRoot, "components/dashboard/RuntimeLabView.tsx"), "utf8");
+  assert.match(src, /listWorkspaceRepos\(split \? "render" : "connected"\)/);
+  assert.match(src, /listProjectsByCapability\("mobile", split \? "render" : "connected"\)/);
+  assert.match(src, /No projects from another machine were substituted/);
+  assert.doesNotMatch(src, /listRenderProjects\(\)\.catch\(\(\) => null\)/,
+    "an offline renderer must not silently substitute connected-box projects");
+});
+
 // ── project-missing: the 2026-08-02 cascade ────────────────────────────────
 // Verbatim from the user's failed Vibing run. Before this classification the
 // plan was `other` → showFixWithRunner: true, so a deterministic "that project

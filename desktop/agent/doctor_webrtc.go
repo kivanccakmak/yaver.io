@@ -24,13 +24,13 @@ import (
 // webrtc --json`. Stable shape — the dashboard depends on field
 // names. Extend by adding fields, never by renaming.
 type WebRTCDoctorReport struct {
-	Platform     string                 `json:"platform"`
-	Arch         string                 `json:"arch"`
-	HostClass    string                 `json:"hostClass"`
-	AgentVersion string                 `json:"agentVersion"`
-	Checks       []WebRTCDoctorCheck    `json:"checks"`
-	Targets      map[string]bool        `json:"targets"`
-	NextSteps    []string               `json:"nextSteps,omitempty"`
+	Platform     string              `json:"platform"`
+	Arch         string              `json:"arch"`
+	HostClass    string              `json:"hostClass"`
+	AgentVersion string              `json:"agentVersion"`
+	Checks       []WebRTCDoctorCheck `json:"checks"`
+	Targets      map[string]bool     `json:"targets"`
+	NextSteps    []string            `json:"nextSteps,omitempty"`
 }
 
 // WebRTCDoctorCheck is one OK/missing line in the report. Detail is
@@ -42,10 +42,11 @@ type WebRTCDoctorCheck struct {
 }
 
 // runDoctorWebRTC is the CLI entry point. Flags:
-//   --json       structured output (one line, no headers)
-//   --install    after probing, run `yaver install remote-runtime`
-//                to fix what it can. Idempotent — already-installed
-//                tools are skipped.
+//
+//	--json       structured output (one line, no headers)
+//	--install    after probing, run `yaver install remote-runtime`
+//	             to fix what it can. Idempotent — already-installed
+//	             tools are skipped.
 func runDoctorWebRTC(args []string) {
 	wantJSON := false
 	wantInstall := false
@@ -155,17 +156,27 @@ func buildWebRTCDoctorReport(ctx context.Context) WebRTCDoctorReport {
 		report.Targets["ios-device"] = false
 	}
 
-	// Optional: ffmpeg. Not required by the happy path but useful as
-	// a fallback for unusual screenrecord builds (pre-Marshmallow
-	// emulators that emit non-AVC sequences).
+	// ffmpeg is optional for mobile targets but required for the native
+	// desktop-screen H.264 track. Probe the complete target as well: a binary
+	// on PATH is inventory, while a working grabber + consent is the operation.
 	ffmpegCheck := probeBinary(ctx, "ffmpeg", "-version")
 	if ffmpegCheck.OK {
-		ffmpegCheck.Detail = "optional fallback transcoder available"
+		ffmpegCheck.Detail = "desktop H.264 encoder and mobile fallback available"
 	} else {
-		ffmpegCheck.Detail = "optional — only needed for non-AVC capture sources"
+		ffmpegCheck.Detail = "required for desktop-screen WebRTC; optional for mobile capture"
 	}
-	ffmpegCheck.Name = "ffmpeg (optional)"
 	report.Checks = append(report.Checks, ffmpegCheck)
+	desktopTarget := probeDesktopScreenTarget()
+	desktopDetail := "native screen grab, H.264 encode, and local view consent are ready"
+	if !desktopTarget.Enabled {
+		desktopDetail = desktopTarget.Reason
+	}
+	report.Checks = append(report.Checks, WebRTCDoctorCheck{
+		Name:   desktopScreenTargetID + " RTP encode",
+		OK:     desktopTarget.Enabled,
+		Detail: desktopDetail,
+	})
+	report.Targets[desktopScreenTargetID] = desktopTarget.Enabled
 
 	// Next-steps hints — only emitted when something is actionable.
 	if !adbCheck.OK {
@@ -175,6 +186,9 @@ func buildWebRTCDoctorReport(ctx context.Context) WebRTCDoctorReport {
 	if runtime.GOOS != "darwin" {
 		report.NextSteps = append(report.NextSteps,
 			"Pair a macOS builder for iOS targets: `yaver builder use <alias>` (Phase 5)")
+	}
+	if !desktopTarget.Enabled && desktopTarget.Reason != "" {
+		report.NextSteps = append(report.NextSteps, "Desktop WebRTC: "+desktopTarget.Reason)
 	}
 	return report
 }
@@ -240,7 +254,7 @@ func printWebRTCDoctorReport(r WebRTCDoctorReport) {
 	}
 	fmt.Println()
 	fmt.Println("Targets:")
-	for _, target := range []string{"android-emulator", "android-device", "ios-simulator", "ios-device"} {
+	for _, target := range []string{"desktop-screen", "android-emulator", "android-device", "ios-simulator", "ios-device"} {
 		ok, present := r.Targets[target]
 		mark := "✗"
 		if ok {

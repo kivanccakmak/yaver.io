@@ -156,8 +156,8 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRemoteRepairHandler,
-		AllowGuest: false,
+		Handler:        opsRemoteRepairHandler,
+		AllowCompanion: false,
 	})
 }
 

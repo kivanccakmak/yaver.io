@@ -230,24 +230,24 @@ func composeRunnerStatus(k *RunnerKeeper, args runnerStatusArgs) StatusReport {
 // AutoRunnerCommit is a parsed [auto-runner] commit — used to attribute
 // time / runner / phase across the task.
 type AutoRunnerCommit struct {
-	Hash                 string        `json:"hash"`
-	Subject              string        `json:"subject"`
-	Phase                string        `json:"phase,omitempty"`
-	Runner               string        `json:"runner,omitempty"`
-	Machine              string        `json:"machine,omitempty"`
-	MachineAlias         string        `json:"machineAlias,omitempty"`
-	MachineID            string        `json:"machineId,omitempty"`
-	Mode                 string        `json:"mode,omitempty"`
-	WorkWindowStarted    string        `json:"workWindowStarted,omitempty"`
-	WorkWindowFinished   string        `json:"workWindowFinished,omitempty"`
-	WorkWindowDuration   time.Duration `json:"workWindowDurationNs"`
-	WorkWindowHumanReadable string     `json:"workWindowDuration"`
+	Hash                    string        `json:"hash"`
+	Subject                 string        `json:"subject"`
+	Phase                   string        `json:"phase,omitempty"`
+	Runner                  string        `json:"runner,omitempty"`
+	Machine                 string        `json:"machine,omitempty"`
+	MachineAlias            string        `json:"machineAlias,omitempty"`
+	MachineID               string        `json:"machineId,omitempty"`
+	Mode                    string        `json:"mode,omitempty"`
+	WorkWindowStarted       string        `json:"workWindowStarted,omitempty"`
+	WorkWindowFinished      string        `json:"workWindowFinished,omitempty"`
+	WorkWindowDuration      time.Duration `json:"workWindowDurationNs"`
+	WorkWindowHumanReadable string        `json:"workWindowDuration"`
 }
 
 var (
-	autoRunnerPhaseRE   = regexp.MustCompile(`n2n\s+(P\d+[a-zA-Z_-]*)`)
-	autoRunnerWorkRE    = regexp.MustCompile(`Work window:\s+started\s+([\d-]+ [\d:]+ \+\d+),\s+finished\s+([\d-]+ [\d:]+ \+\d+)`)
-	autoRunnerRunnerRE  = regexp.MustCompile(`Runner:\s+(\S+)\s+on machine\s+(\S+)\s+\(alias\s+([\w-]+),\s*([0-9a-f]+)\)\s+mode:\s+(\S+)`)
+	autoRunnerPhaseRE  = regexp.MustCompile(`n2n\s+(P\d+[a-zA-Z_-]*)`)
+	autoRunnerWorkRE   = regexp.MustCompile(`Work window:\s+started\s+([\d-]+ [\d:]+ \+\d+),\s+finished\s+([\d-]+ [\d:]+ \+\d+)`)
+	autoRunnerRunnerRE = regexp.MustCompile(`Runner:\s+(\S+)\s+on machine\s+(\S+)\s+\(alias\s+([\w-]+),\s*([0-9a-f]+)\)\s+mode:\s+(\S+)`)
 )
 
 // gatherAutoRunnerCommits walks the last N commits and returns the

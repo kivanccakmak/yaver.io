@@ -84,13 +84,8 @@ func (s *HTTPServer) handleImgOptimize(w http.ResponseWriter, r *http.Request) {
 		}
 		abs = joined
 	} else {
-		// Accept absolute paths only from owner requests (no
-		// guest header present) so random visitors can't
-		// target /etc/ssh/ssh_host_rsa_key.
-		if r.Header.Get("X-Yaver-Guest") != "" {
-			jsonError(w, http.StatusForbidden, "guests must specify a root")
-			return
-		}
+		// This route is owner-authenticated, so absolute paths remain an owner
+		// power feature; scoped service credentials cannot reach it.
 		if !filepath.IsAbs(src) {
 			cwd, _ := os.Getwd()
 			abs = filepath.Join(cwd, src)

@@ -27,9 +27,8 @@ import { sessionEndpointDeviceId } from "./codingSession";
  *  Comes from the project the user selected on that device. */
 export interface BoxProjectRef {
   deviceId: string;
-  /** host-share root id + absolute base path on the box. */
+  /** Owner file-root id on the box. */
   root: string;
-  rootPath: string;
 }
 
 /** The phone-local sandbox as an ApplyTarget (expo-file-system under the hood). */
@@ -39,19 +38,18 @@ export const phoneApplyTarget: ApplyTarget = {
 };
 
 /** The ApplyTarget for a session. For `(hermes, box)` you must pass the pinned
- *  box project (root/rootPath) — without it we can't address files on the box.
+ *  box project root id — without it we can't address files on the box.
  *  For `(hermes, phone)` the box ref is ignored. CLI sessions never call this. */
 export function applyTargetForSession(session: CodingSession, boxProject?: BoxProjectRef): ApplyTarget {
   if (session.target.kind === "box") {
     if (!boxProject) {
-      throw new Error("box-target session needs a pinned project (root/rootPath) to apply edits");
+      throw new Error("box-target session needs a pinned project root to apply edits");
     }
     const client = connectionManager.clientFor(boxProject.deviceId);
     return makeRemoteApplyTarget({
       baseUrl: client.baseUrl,
       headers: client.getAuthHeaders(),
       root: boxProject.root,
-      rootPath: boxProject.rootPath,
     });
   }
   return phoneApplyTarget;

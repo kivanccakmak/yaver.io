@@ -499,7 +499,7 @@ Current RN SDK features:
 - native Apple sign-in on iOS
 - in-app browser OAuth
 - cached device/user session
-- guest-token minting for scoped shared access
+- owner SDK tokens scoped to the selected project
 - command stream driven reload/status
 - suppression when the SDK is already running inside Yaver's own host app
 

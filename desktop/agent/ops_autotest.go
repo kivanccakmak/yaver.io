@@ -21,9 +21,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsAutotestHandler,
-		Streaming:  true,
-		AllowGuest: false,
+		Handler:        opsAutotestHandler,
+		Streaming:      true,
+		AllowCompanion: false,
 	})
 }
 

@@ -1,5 +1,5 @@
 // remoteApplyTarget.test.mts — Hermes-only-remote apply layer writes/deletes on
-// the box via /host-share/fs/*. Run: npx tsx src/lib/remoteApplyTarget.test.mts
+// the box via owner-only /files/*. Run: npx tsx src/lib/remoteApplyTarget.test.mts
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -34,44 +34,41 @@ function cfg(fetchImpl: typeof fetch) {
     baseUrl: "https://relay.example/d/box-1/",
     headers: { Authorization: "Bearer tok" },
     root: "ws",
-    rootPath: "/home/u/proj",
     fetchImpl,
   };
 }
 
-test("writeSourceFile POSTs host-share write with root/rootPath/path/content + headers", async () => {
+test("writeSourceFile POSTs owner file write with root/path/content + headers", async () => {
   const { calls, fetchImpl } = recorder(okRes);
   const t = makeRemoteApplyTarget(cfg(fetchImpl));
   await t.writeSourceFile("slug", "src/App.tsx", "export const x = 1;");
 
   assert.equal(calls.length, 1);
   const c = calls[0];
-  assert.match(c.url, /\/host-share\/fs\/write$/);
+  assert.match(c.url, /\/files\/write$/);
   assert.equal(c.method, "POST");
-  assert.equal(c.headers["X-Yaver-HostShare"], "true");
   assert.equal(c.headers["Authorization"], "Bearer tok");
   assert.equal(c.headers["Content-Type"], "application/json");
   assert.deepEqual(c.body, {
     root: "ws",
-    rootPath: "/home/u/proj",
     path: "src/App.tsx",
     content: "export const x = 1;",
   });
 });
 
-test("trailing slash in baseUrl is normalized (no //host-share)", async () => {
+test("trailing slash in baseUrl is normalized", async () => {
   const { calls, fetchImpl } = recorder(okRes);
   const t = makeRemoteApplyTarget(cfg(fetchImpl));
   await t.writeSourceFile("s", "a.ts", "x");
-  assert.ok(!calls[0].url.includes("//host-share"));
-  assert.ok(calls[0].url.startsWith("https://relay.example/d/box-1/host-share/fs/write"));
+  assert.ok(!calls[0].url.includes("//files"));
+  assert.ok(calls[0].url.startsWith("https://relay.example/d/box-1/files/write"));
 });
 
-test("deleteSourceFile POSTs host-share delete and strips a leading slash", async () => {
+test("deleteSourceFile POSTs owner file delete and strips a leading slash", async () => {
   const { calls, fetchImpl } = recorder(okRes);
   const t = makeRemoteApplyTarget(cfg(fetchImpl));
   await t.deleteSourceFile("slug", "/src/old.ts");
-  assert.match(calls[0].url, /\/host-share\/fs\/delete$/);
+  assert.match(calls[0].url, /\/files\/delete$/);
   assert.equal(calls[0].body.path, "src/old.ts"); // leading slash removed
 });
 

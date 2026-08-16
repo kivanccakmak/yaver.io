@@ -73,7 +73,6 @@ function Storage({ directory }: { directory: string }) {
   const [sharedListing, setSharedListing] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchHits, setSearchHits] = useState<any[]>([]);
-  const [guestConfigs, setGuestConfigs] = useState<any[]>([]);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [profileForm, setProfileForm] = useState<any>({ type: "local", name: "", path: "", mount_path: "", remote: "", endpoint: "", bucket: "", region: "", username: "", password: "", access_key: "", secret_key: "", notes: "", container_mount_mode: "none", container_path: "" });
 
@@ -90,17 +89,8 @@ function Storage({ directory }: { directory: string }) {
     }
   }
 
-  async function refreshGuestConfigs() {
-    try {
-      setGuestConfigs(await agentClient.getGuestConfigs());
-    } catch {
-      setGuestConfigs([]);
-    }
-  }
-
   useEffect(() => { refreshProjectStorage(); }, [directory]);
   useEffect(() => { refreshProfiles(); }, []);
-  useEffect(() => { refreshGuestConfigs(); }, []);
   useEffect(() => {
     if (!selectedProfile) {
       setSharedListing(null);
@@ -143,19 +133,6 @@ function Storage({ directory }: { directory: string }) {
     }
     const res = await agentClient.sharedStorageSearch(searchQuery, { id: selectedProfile || undefined, path: sharedPath || undefined, limit: 30 });
     setSearchHits(res.hits || []);
-  }
-
-  async function toggleGuestStorage(email: string, profileId: string, checked: boolean) {
-    const cfg = guestConfigs.find((g: any) => g.guestEmail === email);
-    if (!cfg) return;
-    const current = new Set<string>(cfg.allowedSharedStorage || []);
-    if (checked) current.add(profileId);
-    else current.delete(profileId);
-    await agentClient.updateGuestConfig({
-      email,
-      allowedSharedStorage: Array.from(current),
-    });
-    await refreshGuestConfigs();
   }
 
   if (!data) return <div className="text-sm text-surface-500">Loading…</div>;
@@ -246,8 +223,7 @@ function Storage({ directory }: { directory: string }) {
             <select value={profileForm.container_mount_mode} onChange={(e) => setProfileForm((s: any) => ({ ...s, container_mount_mode: e.target.value }))} className="w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-2 text-sm text-surface-200">
               <option value="none">No container mount</option>
               <option value="host">Host tasks only</option>
-              <option value="guests">Guest tasks only</option>
-              <option value="all">Host and guest tasks</option>
+              <option value="all">All tasks</option>
             </select>
             <input value={profileForm.container_path} onChange={(e) => setProfileForm((s: any) => ({ ...s, container_path: e.target.value }))} placeholder="Container path, e.g. /mnt/storagebox" className="w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-2 text-sm font-mono text-surface-200" />
             <textarea value={profileForm.notes} onChange={(e) => setProfileForm((s: any) => ({ ...s, notes: e.target.value }))} placeholder="Notes: mount command, users, relay path, etc." rows={3} className="w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-2 text-sm text-surface-200" />
@@ -255,29 +231,6 @@ function Storage({ directory }: { directory: string }) {
             {saveMsg && <div className="text-xs text-red-400">{saveMsg}</div>}
           </div>
 
-          <div className="rounded-lg border border-surface-800 bg-surface-900/40 p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="text-xs uppercase text-surface-500">Guest ACL</div>
-              <button onClick={refreshGuestConfigs} className="px-2 py-1 text-[11px] rounded bg-surface-800 text-surface-200 hover:bg-surface-700">Refresh</button>
-            </div>
-            {guestConfigs.length === 0 && <div className="text-xs text-surface-500">No accepted guests with config yet.</div>}
-            {guestConfigs.map((cfg: any) => (
-              <div key={cfg.guestUserId} className="rounded-lg border border-surface-800 bg-surface-900/50 p-2 space-y-2">
-                <div className="text-sm text-surface-200">{cfg.guestEmail}</div>
-                <div className="space-y-1">
-                  {profiles.map((p: any) => {
-                    const checked = (cfg.allowedSharedStorage || []).includes(p.id);
-                    return (
-                      <label key={`${cfg.guestUserId}-${p.id}`} className="flex items-center gap-2 text-xs text-surface-300">
-                        <input type="checkbox" checked={checked} onChange={(e) => toggleGuestStorage(cfg.guestEmail, p.id, e.target.checked)} />
-                        <span className="truncate">{p.name}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
 
         <div className="space-y-3">

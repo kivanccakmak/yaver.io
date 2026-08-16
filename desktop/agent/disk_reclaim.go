@@ -78,18 +78,18 @@ type ReclaimCandidate struct {
 
 // DiskReclaimReport is what the agent hands to any surface.
 type DiskReclaimReport struct {
-	FreeBytes  int64              `json:"freeBytes"`
-	TotalBytes int64              `json:"totalBytes"`
+	FreeBytes  int64 `json:"freeBytes"`
+	TotalBytes int64 `json:"totalBytes"`
 	// PercentUsed is carried so a surface can decide urgency without doing
 	// arithmetic on two numbers it might get wrong.
-	PercentUsed  int                `json:"percentUsed"`
-	Candidates   []ReclaimCandidate `json:"candidates"`
-	ReclaimableBytes int64          `json:"reclaimableBytes"`
+	PercentUsed      int                `json:"percentUsed"`
+	Candidates       []ReclaimCandidate `json:"candidates"`
+	ReclaimableBytes int64              `json:"reclaimableBytes"`
 	// Urgent is true when the machine is close enough to full that builds are
 	// already at risk. Set from measurement, never from a guess.
-	Urgent  bool      `json:"urgent"`
-	Advice  string    `json:"advice"`
-	ScanAt  time.Time `json:"scanAt"`
+	Urgent bool      `json:"urgent"`
+	Advice string    `json:"advice"`
+	ScanAt time.Time `json:"scanAt"`
 }
 
 // diskPressureThreshold — below this much free space, a large link step or an

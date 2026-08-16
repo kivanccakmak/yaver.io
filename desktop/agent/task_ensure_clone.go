@@ -20,10 +20,8 @@ package main
 //              that don't know the event just show the line.)
 //   "never"  — commit only; the line says how to sync manually.
 //
-// Guests can trigger neither path: a guest prompt must not cause this box to
-// clone arbitrary remotes or push anywhere. Both hooks are skipped when the
-// task carries a GuestUserID, and the createTask handler additionally strips
-// the fields from guest requests (belt + suspenders).
+// Both paths are owner-only because task creation itself accepts only the
+// machine owner's authenticated requests.
 
 import (
 	"bufio"
@@ -169,7 +167,7 @@ func taskGitFirstLine(s string) string {
 // clonePlanForTask decides whether this task needs a pre-spawn clone.
 // nil = spawn normally (the overwhelmingly common case).
 func (tm *TaskManager) clonePlanForTask(task *Task) *taskClonePlan {
-	if task == nil || task.GuestUserID != "" {
+	if task == nil {
 		return nil
 	}
 	remote := strings.TrimSpace(task.GitRemote)
@@ -341,7 +339,7 @@ func (tm *TaskManager) failTaskNamed(task *Task, msg string) {
 // is not one.)
 func (tm *TaskManager) autoPushAfterTask(task *Task) {
 	policy := strings.TrimSpace(strings.ToLower(task.AutoPush))
-	if policy == "" || task.GuestUserID != "" {
+	if policy == "" {
 		return
 	}
 	dir := tm.effectiveTaskWorkDir(task)

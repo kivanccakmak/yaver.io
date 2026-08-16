@@ -22,12 +22,12 @@ import { quicClient } from "../../src/lib/quic";
 
 // studio.tsx — bundles the cosmetic self-hosted features that
 // don't fit into the existing Solo Stack screen: screen
-// recording (clips), live chat inbox, invoices, affiliates,
+// recording (clips), invoices, affiliates,
 // A/B experiments, asciinema. Each is a thin pane inside one
 // screen to keep the bottom tab bar uncluttered — everything
 // reaches here from the More tab.
 
-type Pane = "clips" | "chat" | "invoices" | "affiliates" | "ab" | "casts";
+type Pane = "clips" | "invoices" | "affiliates" | "ab" | "casts";
 
 export default function StudioScreen() {
   const c = useColors();
@@ -50,12 +50,6 @@ export default function StudioScreen() {
   const [uploadingMobile, setUploadingMobile] = useState(false);
   const [selectedClip, setSelectedClip] = useState<any | null>(null);
 
-  // Chat
-  const [conversations, setConversations] = useState<any[]>([]);
-  const [activeVid, setActiveVid] = useState<string | null>(null);
-  const [chatHistory, setChatHistory] = useState<any[]>([]);
-  const [replyText, setReplyText] = useState("");
-
   // Invoices
   const [invoices, setInvoices] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -75,7 +69,6 @@ export default function StudioScreen() {
     setLoading(true);
     try {
       if (pane === "clips") setClips(await quicClient.clipList());
-      else if (pane === "chat") setConversations(await quicClient.chatConversations());
       else if (pane === "invoices") {
         setInvoices(await quicClient.invoicesList());
         setCustomers(await quicClient.customersList());
@@ -170,26 +163,12 @@ export default function StudioScreen() {
     Alert.alert("Saved", `Clip ${sessionId} ready.`);
   }, [load, recordTarget, activeSessionId]);
 
-  const openChat = useCallback(async (vid: string) => {
-    setActiveVid(vid);
-    setChatHistory(await quicClient.chatHistory(vid));
-  }, []);
-
-  const sendReply = useCallback(async () => {
-    if (!activeVid || !replyText.trim()) return;
-    const ok = await quicClient.chatReply(activeVid, replyText);
-    if (ok) {
-      setReplyText("");
-      setChatHistory(await quicClient.chatHistory(activeVid));
-    }
-  }, [activeVid, replyText]);
-
   return (
     <View style={[s.container, { backgroundColor: c.bg }]}>
       <AppScreenHeader title="Studio" onBack={() => router.navigate("/(tabs)/more" as any)} style={{ paddingTop: insets.top + 12 }} />
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[s.tabs, { borderBottomColor: c.border }]}>
-        {(["clips", "chat", "invoices", "affiliates", "ab", "casts"] as Pane[]).map((p) => (
+        {(["clips", "invoices", "affiliates", "ab", "casts"] as Pane[]).map((p) => (
           <Pressable key={p} onPress={() => setPane(p)} style={[s.tab, pane === p && { borderBottomColor: c.accent }]}>
             <Text style={{ color: pane === p ? c.accent : c.textMuted, fontWeight: "600", textTransform: "capitalize" }}>
               {p === "ab" ? "A/B" : p === "casts" ? "Casts" : p}
@@ -258,34 +237,6 @@ export default function StudioScreen() {
                   </Pressable>
                 );
               })}
-            </View>
-          ) : pane === "chat" ? (
-            <View>
-              {activeVid ? (
-                <View>
-                  <Pressable onPress={() => { setActiveVid(null); setChatHistory([]); }} style={{ marginBottom: 10 }}>
-                    <Text style={{ color: c.accent }}>{"\u2039"} Back to conversations</Text>
-                  </Pressable>
-                  {chatHistory.map((m: any) => (
-                    <View key={m.id} style={{ alignSelf: m.from === "owner" ? "flex-end" : "flex-start", backgroundColor: m.from === "owner" ? c.accent : c.bgCard, borderRadius: 10, padding: 10, marginBottom: 6, maxWidth: "80%" }}>
-                      <Text style={{ color: m.from === "owner" ? "#fff" : c.textPrimary }}>{m.text}</Text>
-                    </View>
-                  ))}
-                  <View style={{ flexDirection: "row", marginTop: 10 }}>
-                    <TextInput value={replyText} onChangeText={setReplyText} placeholder="Reply…" placeholderTextColor={c.textMuted} style={[s.input, { flex: 1, color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgInput, marginTop: 0 }]} />
-                    <Pressable onPress={sendReply} style={[s.btn, { backgroundColor: c.accent, marginLeft: 8, paddingHorizontal: 18 }]}>
-                      <Text style={s.btnText}>Send</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ) : conversations.length === 0 ? (
-                <Text style={{ color: c.textMuted }}>No chats yet. Paste /chat/widget.js into your landing page and visitors will arrive here.</Text>
-              ) : conversations.map((conv: any) => (
-                <Pressable key={conv.vid} onPress={() => openChat(conv.vid)} style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-                  <Text style={[s.cardTitle, { color: c.textPrimary }]}>{conv.vid}</Text>
-                  <Text style={[s.cardMeta, { color: c.textMuted }]} numberOfLines={1}>{conv.last}</Text>
-                </Pressable>
-              ))}
             </View>
           ) : pane === "invoices" ? (
             <View>
@@ -377,7 +328,7 @@ function ClipPreviewModal({ clip, onClose }: { clip: any | null; onClose: () => 
           <View style={s.modalCopy}>
             <Text style={{ color: c.textPrimary, fontWeight: "600" }}>{clip.title || clip.id}</Text>
             <Text style={{ color: c.textMuted, fontSize: 12 }}>
-              Private replay stays on the authenticated agent path. Public share links remain separate under /clips/{clip.id}.
+              Replay stays on the authenticated owner path.
             </Text>
           </View>
         ) : null}

@@ -918,6 +918,38 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 				},
 			},
 		},
+		{
+			"name":        "tmux_stream",
+			"description": "Return a bounded snapshot of live tmux pane state (working / awaiting-input / idle / dead / no-agent). Pass session, pane (like %37), or leave empty for all panes. MCP calls are request/response; native/web clients needing continuous updates use the authenticated GET /tmux/stream SSE route.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"session": map[string]interface{}{"type": "string", "description": "Optional tmux session name to watch (its active pane)."},
+					"pane":    map[string]interface{}{"type": "string", "description": "Optional tmux pane id (e.g. %37) to watch."},
+				},
+			},
+		},
+		{
+			"name":        "git_sync_remote",
+			"description": "Deterministic safe sync of a remote repo: git pull --rebase --autostash against origin/<branch>, then an explicit non-force push to that origin branch. Active rebase conflicts are aborted and reported. If restoring the autostash conflicts after Git exits 0, nothing is pushed and the retained recovery stash + conflicted files are reported honestly. Pass work_dir for the repo to sync (defaults to the agent work dir).",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"work_dir": map[string]interface{}{"type": "string", "description": "Optional repo directory to sync (default: agent work dir)."},
+				},
+			},
+		},
+		{
+			"name":        "session_intent",
+			"description": "Classify a natural-language utterance as a session-lifecycle intent (English or Turkish) — 'start a new session', 'close the session', 'which sessions are running', 'switch to codex', 'yeni bir oturum başlat', 'tüm oturumları kapat'. Returns the parsed intent {action, runner?, sessionName?, needsChoice?, reason?} or nothing when the text is a coding prompt (which should be sent to a session via runner_turn). Use this from a voice/car/watch surface before routing speech to a runner, so lifecycle commands never get typed as prompts.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"text"},
+				"properties": map[string]interface{}{
+					"text": map[string]interface{}{"type": "string", "description": "The spoken or typed utterance to classify (English or Turkish)."},
+				},
+			},
+		},
 	}
 	tools = append(tools, tmuxTools...)
 
@@ -925,10 +957,29 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	diagnosticTools := []map[string]interface{}{
 		{
 			"name":        "yaver_doctor",
-			"description": "Run a comprehensive system health check — auth, agent, runners, relay servers, tunnels, network, tmux sessions. Like 'yaver doctor' on the CLI.",
+			"description": "Run a comprehensive system health check — auth, agent, runners, provider/API-key readiness, OS-specific development tools, relay servers, tunnels, network, and tmux sessions. Like 'yaver doctor' in the GUI.",
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "development_doctor",
+			"description": "Return the same structured cross-platform development Doctor used by Yaver Desktop: Codex/Claude/OpenCode readiness, provider auth, GitHub/GitLab, Node/npm/React Native/Flutter/Go/Android, and Vercel/Cloudflare/Supabase/Firebase/Convex. Every finding carries a deterministic fix route when one is safe on this OS.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			"name":        "development_doctor_fix",
+			"description": "Apply one deterministic fix advertised by development_doctor. Only known Doctor install IDs are executable; configure/open-url findings return their safe next route and never accept shell text or secrets.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"id"},
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{"type": "string", "description": "Exact check id returned by development_doctor."},
+				},
 			},
 		},
 		{
@@ -1540,7 +1591,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			"name":        "testkit_visual_check",
 			"description": "Run the QA vision inspector on a Selenium session (or an image) and return PASS/WARN/FAIL + issues. The visual-assertion step for automated browser tests: start → navigate → snapshot (DOM/accessibility) → testkit_visual_check (pixel judgment). Requires a vision provider (MISTRAL/OPENAI/ANTHROPIC key) or an explicit provider/model.",
 			"inputSchema": map[string]interface{}{
-				"type":     "object",
+				"type": "object",
 				"properties": map[string]interface{}{
 					"session_id": map[string]interface{}{"type": "string", "description": "Selenium session id to screenshot and judge."},
 					"image":      map[string]interface{}{"type": "string", "description": "Alternative to session_id: path / base64: / data: / URL."},
@@ -2215,7 +2266,6 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 				"properties": map[string]interface{}{
 					"device_id": map[string]interface{}{"type": "string", "description": "Optional remote device ID whose local code-control plane should be updated"},
 					"target":    map[string]interface{}{"type": "string", "description": "Device ID or machine name to attach to"},
-					"username":  map[string]interface{}{"type": "string", "description": "Optional owner email hint when machine names collide"},
 				},
 			},
 		},
@@ -2961,11 +3011,6 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		{"name": "screenlog_events", "description": "Read the input-event companion stream (keystrokes + mouse clicks/scroll) for a session, plus deterministic stats (clicks, keys, actions/min). Events follow a standard AI-training schema (t,type,x,y,button,key,...) and pair 1:1 with frames as a {screenshot,action} trace. Producers POST events to /screenlog/<id>/events (works without the built-in agent loop).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}, "required": []string{"id"}}},
 		{"name": "screenlog_export", "description": "Get the bulk-pull URL for a screenlog session (a tar.gz of index.json + every frame image + events.jsonl). Use this to pull a remote machine's recording down locally; or run `yaver screenlog pull <id>`.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"id": map[string]interface{}{"type": "string"}}, "required": []string{"id"}}},
 
-		// Live chat
-		{"name": "chat_conversations", "description": "List open chat conversations with the visitors from the self-hosted chat widget.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
-		{"name": "chat_history", "description": "Return the full message history for one conversation (by visitor id).", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"vid"}, "properties": map[string]interface{}{"vid": map[string]interface{}{"type": "string"}, "limit": map[string]interface{}{"type": "integer"}}}},
-		{"name": "chat_reply", "description": "Send an owner-side reply to a visitor. Shows up live in the browser widget via SSE.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"vid", "text"}, "properties": map[string]interface{}{"vid": map[string]interface{}{"type": "string"}, "text": map[string]interface{}{"type": "string"}}}},
-
 		// Invoices + Stripe / LemonSqueezy
 		{"name": "customer_create", "description": "Add a billing customer (name, email, address). Required before creating an invoice for them.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"name", "email"}, "properties": map[string]interface{}{"name": map[string]interface{}{"type": "string"}, "email": map[string]interface{}{"type": "string"}, "address": map[string]interface{}{"type": "string"}, "taxId": map[string]interface{}{"type": "string"}}}},
 		{"name": "customer_list", "description": "List billing customers.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
@@ -3025,204 +3070,6 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		{"name": "copilot_models", "description": "List the Ollama models the dev has pulled locally. Handy before calling copilot_complete.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
 	}
 	tools = append(tools, soloStackTools...)
-
-	// --- Guest Access ---
-	guestTools := []map[string]interface{}{
-		{
-			"name":        "guest_invite",
-			"description": "Invite a guest by email or Yaver user id to use your machine. Max 5 guests, invitation expires in 2 days. Default scope is 'feedback-only' — the hardened tier for end-users of your app (no /tasks, no /vibing, no dev-server proxy, no project enumeration; /info is redacted; any fix-triggered task runs inside Docker). Use scope='full' for teammate invites that need task / vibing / dev access, or scope='sdk-project' for Feedback SDK style project-scoped access.",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"email": map[string]interface{}{
-						"type":        "string",
-						"description": "Email address of the person to invite. Provide either email or user_id.",
-					},
-					"user_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Public Yaver user id of the person to invite. Provide either email or user_id.",
-					},
-					"scope": map[string]interface{}{
-						"type":        "string",
-						"description": "Access tier: 'feedback-only' (default, hardened end-user), 'sdk-project' (Feedback SDK style project-scoped access), or 'full' (classic teammate).",
-						"enum":        []string{"full", "feedback-only", "sdk-project"},
-					},
-					"device_ids": map[string]interface{}{
-						"type":        "array",
-						"description": "Optional host device ids to pre-scope the invitation to specific machines. Empty = all host machines.",
-						"items":       map[string]interface{}{"type": "string"},
-					},
-					"projects": map[string]interface{}{
-						"type":        "array",
-						"description": "Narrow this grant to specific project names/slugs on the host. Empty = all. Useful when feedback-only or sdk-project guests should only see Project A, not B/C.",
-						"items":       map[string]interface{}{"type": "string"},
-					},
-				},
-			},
-		},
-		{
-			"name":        "guest_list",
-			"description": "List all guests who have been invited or have access to your machine.",
-			"inputSchema": map[string]interface{}{
-				"type":       "object",
-				"properties": map[string]interface{}{},
-			},
-		},
-		{
-			"name":        "guest_revoke",
-			"description": "Remove SOMEONE ELSE'S access to YOUR machines. You are the host here: this kicks a guest out of your own shared infra, removing both their pending invitation and their active access. Do NOT use this to give up your own access to a machine someone shared with you — that is guest_leave.",
-			"inputSchema": map[string]interface{}{
-				"type":     "object",
-				"required": []string{"email"},
-				"properties": map[string]interface{}{
-					"email": map[string]interface{}{
-						"type":        "string",
-						"description": "Email address of the guest to remove",
-					},
-				},
-			},
-		},
-		{
-			"name":        "guest_delete",
-			"description": "Delete a guest row from YOUR host guest list. This first revokes/cancels any live access, then hides the old invite/access row from normal lists. It is not a block: you can invite the same person again later. Prefer inviteId for exact duplicate-row deletion; email or userId are accepted as fallback.",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"inviteId": map[string]interface{}{
-						"type":        "string",
-						"description": "Exact guest invitation id to hide. Best option when duplicate rows exist.",
-					},
-					"email": map[string]interface{}{
-						"type":        "string",
-						"description": "Email address of the guest row(s) to delete when inviteId is not known.",
-					},
-					"userId": map[string]interface{}{
-						"type":        "string",
-						"description": "Public Yaver user id of the guest to delete when inviteId is not known.",
-					},
-				},
-			},
-		},
-		{
-			"name":        "guest_leave",
-			"description": "Remove YOUR OWN access to SOMEONE ELSE'S machines. You are the guest here: this walks you out of a host's shared infra, so you can no longer use their machines. It does not touch your own machines and does not remove anyone else. Reversible — the host can share again and you can accept again with guest_accept. Do NOT use this to kick a guest off your own machines — that is guest_revoke. Identify the host by their Yaver user id or their email; at least one is required.",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"hostUserId": map[string]interface{}{
-						"type":        "string",
-						"description": "Public Yaver user id of the host whose shared machines you want to stop using. Provide either hostUserId or hostEmail.",
-					},
-					"hostEmail": map[string]interface{}{
-						"type":        "string",
-						"description": "Email address of the host whose shared machines you want to stop using. Provide either hostUserId or hostEmail.",
-					},
-				},
-			},
-		},
-		{
-			"name":        "guest_accept",
-			"description": "Accept an invitation SOMEONE ELSE sent YOU, gaining access to their machines. You are the guest here: after this you can use the host's shared infra. Use the 6-character invite code they shared with you. Optionally scope the grant to specific machines so you only take access to the ones you actually need. To undo it later, use guest_leave.",
-			"inputSchema": map[string]interface{}{
-				"type":     "object",
-				"required": []string{"code"},
-				"properties": map[string]interface{}{
-					"code": map[string]interface{}{
-						"type":        "string",
-						"description": "The 6-character invite code the host shared with you.",
-					},
-					"machines": map[string]interface{}{
-						"type":        "array",
-						"description": "Optional host device ids to scope your grant to specific machines. Empty = every machine the host offered.",
-						"items":       map[string]interface{}{"type": "string"},
-					},
-				},
-			},
-		},
-		{
-			"name":        "guest_config",
-			"description": "View or update guest config (limits, runners, share preset, resource controls). Without email: list all. With email: show/update config.",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"email": map[string]interface{}{
-						"type":        "string",
-						"description": "Guest email to view/update (omit to list all)",
-					},
-					"daily_limit": map[string]interface{}{
-						"type":        "integer",
-						"description": "Max task-seconds per day (0 = unlimited)",
-					},
-					"usage_mode": map[string]interface{}{
-						"type":        "string",
-						"description": "When guest can use: always, idle-only, scheduled",
-						"enum":        []string{"always", "idle-only", "scheduled"},
-					},
-					"allowed_runners": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]interface{}{"type": "string"},
-						"description": "Runner IDs the guest can use (empty = all)",
-					},
-					"resource_preset": map[string]interface{}{
-						"type":        "string",
-						"description": "Share preset: machine-only, machine-with-host-keys, desktop-control, desktop-control-with-host-keys",
-						"enum":        []string{"machine-only", "machine-with-host-keys", "desktop-control", "desktop-control-with-host-keys"},
-					},
-					"use_host_api_keys": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Let the guest consume host-managed API keys without revealing the raw key",
-					},
-					"allow_guest_api_keys": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Allow the guest to bring and use their own API keys on the shared infra",
-					},
-					"allow_desktop_control": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Allow future remote desktop/control sessions on this shared machine",
-					},
-					"allow_browser_control": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Allow browser automation/control sessions on this shared machine",
-					},
-					"allow_tunnel_forward": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Allow guest access to host-approved local tunnel forwards",
-					},
-					"require_isolation": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Require this guest's tasks to run in Docker isolation when available",
-					},
-					"cpu_limit_percent": map[string]interface{}{
-						"type":        "integer",
-						"description": "Soft CPU share cap for the guest on this host (1-100)",
-					},
-					"ram_limit_mb": map[string]interface{}{
-						"type":        "integer",
-						"description": "RAM cap in MB for the guest on this host",
-					},
-					"priority_mode": map[string]interface{}{
-						"type":        "string",
-						"description": "Scheduling policy for guest tasks",
-						"enum":        []string{"same-priority", "spare-capacity", "background"},
-					},
-				},
-			},
-		},
-		{
-			"name":        "guest_usage",
-			"description": "View guest usage stats for today or a specific date.",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"date": map[string]interface{}{
-						"type":        "string",
-						"description": "Date in YYYY-MM-DD format (default: today)",
-					},
-				},
-			},
-		},
-	}
-	tools = append(tools, guestTools...)
 
 	// --- Company AI policy resolver (headless/MCP entry to the runtime resolver) ---
 	companyAITools := []map[string]interface{}{
@@ -3397,7 +3244,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "ops_plan",
-			"description": "Resolve the execution plan for one ops verb without running it. Returns project context, machine placement, and caller access policy so agents can inspect deploy/reload routing and guest/share constraints ahead of time.",
+			"description": "Resolve the execution plan for one ops verb without running it. Returns project context, machine placement, and caller access policy so agents can inspect deploy/reload routing and signed-companion constraints ahead of time.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"verb"},
@@ -3421,7 +3268,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "ops_verbs",
-			"description": "List every registered ops verb with its description, payload schema, whether it streams, and whether guests may call it. Call this once to populate the agent's knowledge of the ops API.",
+			"description": "List every registered ops verb with its description, payload schema, and streaming behavior. Call this once to populate the agent's knowledge of the ops API.",
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
@@ -4117,46 +3964,6 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, managedTools...)
 
-	// --- Remote Support Sessions ---
-	// In-memory, TTL'd, owner-initiated remote-control grant. Think
-	// TeamViewer, not Convex-tied guest access.
-	supportTools := []map[string]interface{}{
-		{
-			"name":        "support_start",
-			"description": "Open a TeamViewer-style remote-support window on this machine. Returns a 6-char code, a scoped bearer token, and shareable URLs. A guest who redeems the code gets terminal / exec / file-browse access for the TTL. Revoke anytime with support_stop.",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"ttl": map[string]interface{}{
-						"type":        "string",
-						"description": "Duration string (e.g. \"30m\", \"2h\"). Default 30m.",
-					},
-					"label": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional tag — e.g. \"cousin\" or \"support-ticket-1234\" — shown in status.",
-					},
-				},
-			},
-		},
-		{
-			"name":        "support_status",
-			"description": "Return the active remote-support session (code, expiry, allowed URL prefixes) or {active:false}.",
-			"inputSchema": map[string]interface{}{
-				"type":       "object",
-				"properties": map[string]interface{}{},
-			},
-		},
-		{
-			"name":        "support_stop",
-			"description": "Revoke the active remote-support session. Any bearer token redeemed from it stops working on the next request.",
-			"inputSchema": map[string]interface{}{
-				"type":       "object",
-				"properties": map[string]interface{}{},
-			},
-		},
-	}
-	tools = append(tools, supportTools...)
-
 	// --- Container Sandbox ---
 	sandboxTools := []map[string]interface{}{
 		{
@@ -4169,14 +3976,10 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "sandbox_config",
-			"description": "Enable/disable container isolation for guest or host tasks. Configure resource limits and network mode. Changes are persisted to config file.",
+			"description": "Enable/disable container isolation for owner tasks. Configure resource limits and network mode. Changes are persisted to config file.",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"containerize_guests": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Run guest tasks in Docker containers",
-					},
 					"containerize_host": map[string]interface{}{
 						"type":        "boolean",
 						"description": "Run host tasks in Docker containers",
@@ -4203,14 +4006,14 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "sandbox_quickstart",
-			"description": "One-step containerization setup for Yaver. Picks a practical default, persists it, and optionally starts building the yaver-sandbox image so remote-dev and shared-infra tasks can use containers without manual setup.",
+			"description": "One-step containerization setup for Yaver owner tasks. Persists the setting and optionally starts building the yaver-sandbox image.",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"mode": map[string]interface{}{
 						"type":        "string",
-						"description": "Quickstart mode: 'guests' for shared infra isolation, or 'host' to containerize all tasks",
-						"enum":        []string{"guests", "host"},
+						"description": "Quickstart mode; only 'host' is supported",
+						"enum":        []string{"host"},
 					},
 					"build_image": map[string]interface{}{
 						"type":        "boolean",
@@ -4679,7 +4482,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "code_mesh_start",
-			"description": "Start a `yaver code --mesh` run: plan → implement → verify chat chain across the available machine pool. Thin wrapper over agent_graph_start with defaults matching the yaver code CLI (template=full, max_parallel=2). Shared-infra machines borrowed from other hosts are automatically considered by the placement planner; use allowed_runners when a shared machine only permits local runners like ollama. Optional custom nodes can request build, deploy, browser, simulator, phone, proof-video, and video-summary self-hosted resources.",
+			"description": "Start a `yaver code --mesh` run: plan → implement → verify chat chain across the owner's available machine pool. Thin wrapper over agent_graph_start with defaults matching the yaver code CLI (template=full, max_parallel=2). Owner-fleet infrastructure is automatically considered by the placement planner; use allowed_runners when a target machine only permits local runners like ollama. Optional custom nodes can request build, deploy, browser, simulator, phone, proof-video, and video-summary self-hosted resources.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"prompt"},

@@ -48,11 +48,11 @@ type AssemblyAISession struct {
 // aaiFrame is the subset of fields we read. Unknown fields are dropped
 // silently (forward-compat with new AAI message types).
 type aaiFrame struct {
-	Type      string  `json:"type"`
-	Text      string  `json:"text,omitempty"`
+	Type       string  `json:"type"`
+	Text       string  `json:"text,omitempty"`
 	Confidence float64 `json:"confidence,omitempty"`
-	EndOfTurn bool    `json:"end_of_turn,omitempty"`
-	Error     string  `json:"error,omitempty"`
+	EndOfTurn  bool    `json:"end_of_turn,omitempty"`
+	Error      string  `json:"error,omitempty"`
 }
 
 // OpenAssemblyAISession dials AAI Universal-Streaming and returns a

@@ -1,6 +1,6 @@
 // Stream camera — turn THIS phone into a live source (M10): capture the camera
 // and push frames to a chosen box, which serves them through the stream plane.
-// Viewers watch on their own account (web dashboard) or via a guest watch link.
+// The signed-in owner watches from the web dashboard or another owned surface.
 // Low-fps JPEG push (snapshot cadence) — neutral tool, like OBS; what you stream
 // and the right to it is yours.
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -95,7 +95,7 @@ export default function StreamCameraScreen() {
         <AppScreenHeader title="Stream camera" onBack={() => router.back()} />
         <ScrollView contentContainerStyle={{ padding: 16 }}>
           <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700", marginBottom: 12 }}>Pick the box to stream to</Text>
-          <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 14 }}>Viewers (your account or a guest link) watch the camera through this box.</Text>
+          <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 14 }}>Your signed-in Yaver surfaces watch the camera through this box.</Text>
           {(devices || []).map((d) => (
             <Pressable key={d.id || d.deviceId} onPress={() => setDeviceId(d.id || d.deviceId)} style={{ flexDirection: "row", justifyContent: "space-between", backgroundColor: c.bgCard, borderColor: c.borderSubtle, borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 10 }}>
               <Text style={{ color: c.textPrimary, fontWeight: "600" }}>{d.name || d.alias || d.id || d.deviceId}</Text>
@@ -131,7 +131,7 @@ export default function StreamCameraScreen() {
           </Pressable>
         </View>
         <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 8 }}>
-          Frames are pushed to the box and served as the "phone" source. Share a view-only link from the box's Apple TV / web dashboard.
+          Frames are pushed to the box and served as the "phone" source for your signed-in surfaces.
         </Text>
         {!!err && <Text style={{ color: c.error || "#f55", fontSize: 12, marginTop: 6 }}>{err}</Text>}
         <Pressable onPress={() => { stop(); setDeviceId(""); }} style={{ marginTop: 8, alignItems: "center" }}>

@@ -126,11 +126,14 @@ export default function VibeScreen() {
     (): Omit<CreateVoiceCoreOptions, "listener"> => ({
       surface: "phone",
       // Commit to the LIVE runner session on the active box — not a new task.
-      sessionTurn: async (text, choice) => {
+      sessionTurn: async (text, choice, session) => {
         const r = await quicClient.runnerSessionTurn(
           deviceIdRef.current,
           text,
           choice,
+          6000,
+          undefined,
+          session,
         );
         return {
           ok: r.ok === true,
@@ -138,6 +141,8 @@ export default function VibeScreen() {
           runner: r.runner,
           sent: r.sent,
           awaitingChoice: r.awaitingChoice === true,
+          needsChoice: r.needsChoice,
+          available: r.available,
           options: r.options,
           pane: r.pane,
           // What the agent could PROVE about a prompt it typed. Dropping this

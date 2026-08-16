@@ -105,15 +105,13 @@ export type {
 } from './policy';
 
 // Composable ACL — the new company policy is ONE layer that intersects with
-// Yaver's existing layers (guest grants, SDK-token scopes, host-share, peer
+// Yaver's existing layers (SDK-token scopes, peer
 // ACL, the user's own prefs). Jointly inclusive, never forcing.
 export {
   composeEntitlements,
   entitlementAllows,
   entitlementFromResolved,
-  entitlementFromGuest,
   entitlementFromSdkToken,
-  entitlementFromHostShare,
   entitlementFromUser,
   LAYER4_DENIED_TOOLS,
 } from './acl';

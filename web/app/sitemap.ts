@@ -32,7 +32,6 @@ const staticRoutes: StaticRoute[] = [
   { path: "/manuals/feedback-loop", changeFrequency: "monthly", priority: 0.5 },
   { path: "/manuals/code-from-beach", changeFrequency: "monthly", priority: 0.5 },
   { path: "/manuals/integrations", changeFrequency: "monthly", priority: 0.6 },
-  { path: "/support", changeFrequency: "monthly", priority: 0.4 },
   { path: "/licensing", changeFrequency: "monthly", priority: 0.6 },
   { path: "/privacy", changeFrequency: "yearly", priority: 0.3 },
   { path: "/terms", changeFrequency: "yearly", priority: 0.3 },

@@ -57,7 +57,7 @@ export interface SessionHandle extends ConnectBundle {
   allowedRunners?: string[];
   runner?: string;
   model?: string;
-  /** Effective entitlement after composing every ACL layer (company + user/guest/host-share). */
+  /** Effective entitlement after composing company, owner, and service-token policy. */
   effective?: EffectiveEntitlement;
 }
 
@@ -135,8 +135,8 @@ export class YaverApp {
 
   /**
    * One call: resolve company policy for a unit of work, COMPOSE it with any
-   * other ACL layers the caller already has (the user's own prefs, a guest
-   * grant, a host-share policy — pass them via `opts.entitlements`), mint a
+   * other policy layers the owner or service token already has (pass them via
+   * `opts.entitlements`), mint a
    * scoped client token carrying the EFFECTIVE allowed-runner scope, and return
    * a ready handle.
    *

@@ -75,7 +75,7 @@ func TestOnCrashDetected_dedupsBurst(t *testing.T) {
 	ch, _, unsub := mgr.Subscribe("p")
 	defer unsub()
 	// Drain the "started" + initial "frame" replay events.
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case <-ch:
@@ -96,7 +96,7 @@ func TestOnCrashDetected_dedupsBurst(t *testing.T) {
 
 	gotCrash := 0
 	deadline := time.After(300 * time.Millisecond)
-	collect:
+collect:
 	for {
 		select {
 		case ev := <-ch:

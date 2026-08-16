@@ -12,13 +12,13 @@ import (
 
 // ThresholdAlert is a "cpu > 80 for 5m" style rule.
 type ThresholdAlert struct {
-	ID            string  `json:"id"`
-	Metric        string  `json:"metric"`        // cpu, ram, disk
-	Threshold     float64 `json:"threshold"`     // percent
-	DurationSecs  int     `json:"durationSecs"`  // sustained over this window
-	Label         string  `json:"label,omitempty"`
-	Active        bool    `json:"active"`
-	LastFiredAt   *time.Time `json:"lastFiredAt,omitempty"`
+	ID           string     `json:"id"`
+	Metric       string     `json:"metric"`       // cpu, ram, disk
+	Threshold    float64    `json:"threshold"`    // percent
+	DurationSecs int        `json:"durationSecs"` // sustained over this window
+	Label        string     `json:"label,omitempty"`
+	Active       bool       `json:"active"`
+	LastFiredAt  *time.Time `json:"lastFiredAt,omitempty"`
 }
 
 type alertsStore struct {
@@ -183,7 +183,9 @@ func (s *HTTPServer) handleAlertRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})
 		return
 	}
-	var b struct{ ID string `json:"id"` }
+	var b struct {
+		ID string `json:"id"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if err := a.Remove(b.ID); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})

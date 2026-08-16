@@ -938,7 +938,8 @@ type TaskSliceContract struct {
 }
 
 type TaskCreateOptions struct {
-	WorkDir string
+	WorkDir          string
+	ProjectSessionID string
 
 	// InitialUserPrompt is WHAT THE USER TYPED (or said, or shook their phone
 	// about). It becomes the first stored ConversationTurn — the chat bubble
@@ -999,17 +1000,6 @@ type TaskCreateOptions struct {
 	// runner default. Other runners ignore it.
 	Mode string
 
-	// Guest policy fields are applied before startProcess runs so per-task
-	// guards (e.g. autoSwitchProject skip) can see GuestUserID atomically.
-	// Setting these after CreateTaskWithOptions returns is a race.
-	GuestUserID                 string
-	GuestUseHostAPIKeys         bool
-	GuestAllowGuestProvidedKeys bool
-	GuestRequireIsolation       bool
-	GuestCPULimitPercent        *int
-	GuestRAMLimitMB             *int
-	GuestSharedStorageMounts    []string
-
 	// Video summary toggle — when true, OnTaskDone triggers the
 	// vibe-preview clip recorder against this task's project once
 	// the runner returns. Source is auto-detected from WorkDir
@@ -1023,8 +1013,7 @@ type TaskCreateOptions struct {
 	// instructs the runner to pick sensible defaults and only stop via
 	// the yaver_ask_user MCP tool. Set true for audits, risky-change
 	// reviews, or any task where the user wants the runner to confirm
-	// decisions in prose. Guests can never set this — it's stripped in
-	// the createTask handler.
+	// decisions in prose.
 	AskFreely bool
 
 	// ResumeLast + ResumeSessionID wire native session resume into the FIRST
@@ -1042,7 +1031,6 @@ type TaskCreateOptions struct {
 	// `yaver ask`, the yaver_ask MCP tool, and the Ask toggle on the
 	// web/mobile console. Mutually exclusive with AskFreely's framing:
 	// ask mode swaps in askModePreamble() in place of noQuestionsPreamble().
-	// Guests can never set this.
 	AskMode bool
 
 	// RedactPII enforces the company dataPolicy.redactPII control on this
@@ -1069,7 +1057,7 @@ type TaskCreateOptions struct {
 	Goal string
 
 	// Runner/render split fields — see the same-named Task fields and
-	// task_ensure_clone.go. Stripped for guests in the createTask handler.
+	// task_ensure_clone.go. The createTask handler is primary-owner only.
 	GitRemote string
 	GitBranch string
 	AutoPush  string
@@ -1117,7 +1105,7 @@ type Task struct {
 	// fields: what the user typed, and what every surface renders.
 	//
 	// Before this field existed the two were the same string. A producer that
-	// needed to brief the runner — the vibing execution context, the guest
+	// needed to brief the runner — the vibing execution context, the
 	// security context, the watch/car surface contract, the feedback-report
 	// body — had exactly one place to put it: Title. So Yaver's own briefing
 	// became the task's name in the list, and (because the first stored
@@ -1136,15 +1124,15 @@ type Task struct {
 	// The json tag is PERSISTENCE only — the wire DTO is TaskInfo, which has
 	// no PromptText field and never will. That is the structural guarantee:
 	// a surface cannot render the scaffolding because it is never sent one.
-	PromptText  string `json:"promptText,omitempty"`
-	Source      string `json:"source,omitempty"`      // "mobile", "mcp", "cli"
-	GuestUserID string `json:"guestUserId,omitempty"` // set when task created by a guest
-	Model       string `json:"model,omitempty"`
-	RunnerID    string `json:"runnerId,omitempty"` // which runner is executing this task
+	PromptText string `json:"promptText,omitempty"`
+	Source     string `json:"source,omitempty"` // "mobile", "mcp", "cli"
+	Model      string `json:"model,omitempty"`
+	RunnerID   string `json:"runnerId,omitempty"` // which runner is executing this task
 	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
 	// one-shot task. Set = persistent goal the runner keeps working toward.
-	Goal      string `json:"goal,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
+	Goal             string `json:"goal,omitempty"`
+	SessionID        string `json:"session_id,omitempty"`
+	ProjectSessionID string `json:"projectSessionId,omitempty"`
 	// ResumeLast asks startProcess to resume the prior session on the FIRST
 	// spawn (not just on follow-ups). Set by the scheduler when a recurring
 	// schedule with resume enabled re-fires, so the run picks up where the
@@ -1220,14 +1208,6 @@ type Task struct {
 
 	SliceContract *TaskSliceContract     `json:"sliceContract,omitempty"`
 	Placement     *TaskPlacementMetadata `json:"placement,omitempty"`
-
-	// Guest execution policy snapshot resolved at task creation time.
-	GuestUseHostAPIKeys         bool     `json:"-"`
-	GuestAllowGuestProvidedKeys bool     `json:"-"`
-	GuestRequireIsolation       bool     `json:"-"`
-	GuestCPULimitPercent        *int     `json:"-"`
-	GuestRAMLimitMB             *int     `json:"-"`
-	GuestSharedStorageMounts    []string `json:"-"`
 
 	// Video summary — when VideoEnabled, after the task finishes the
 	// vibe-preview manager records a short MP4 demonstration of the
@@ -1468,9 +1448,10 @@ type TaskInfo struct {
 	// leaked into every label and a task that ran on a sibling box
 	// looked like it ran on whichever device the phone was focused
 	// on at view time.
-	DeviceName string `json:"deviceName,omitempty"`
-	SessionID  string `json:"sessionId,omitempty"`
-	Output     string `json:"output,omitempty"`
+	DeviceName       string `json:"deviceName,omitempty"`
+	SessionID        string `json:"sessionId,omitempty"`
+	ProjectSessionID string `json:"projectSessionId,omitempty"`
+	Output           string `json:"output,omitempty"`
 	// RawOutput is the tail of the runner's RAW stdout (ANSI escape
 	// sequences, TUI redraws, box-drawing — everything the grooming filters
 	// strip) retained for the console/terminal view. Only populated on the
@@ -1555,15 +1536,14 @@ type TaskManager struct {
 	DummyMode   bool          // If true, use fake responses instead of launching a real runner
 
 	// Container isolation (optional — set by httpserver when enabled)
-	ContainerRunner    *ContainerRunner
-	ContainerizeGuests bool
-	ContainerizeHost   bool
-	ContainerCPU       string
-	ContainerMemory    string
-	ContainerImage     string
-	ContainerNetwork   string   // "host" (default), "bridge", "none"
-	ContainerReadOnly  bool     // read-only root filesystem
-	ContainerMounts    []string // extra volume mounts from config
+	ContainerRunner   *ContainerRunner
+	ContainerizeHost  bool
+	ContainerCPU      string
+	ContainerMemory   string
+	ContainerImage    string
+	ContainerNetwork  string   // "host" (default), "bridge", "none"
+	ContainerReadOnly bool     // read-only root filesystem
+	ContainerMounts   []string // extra volume mounts from config
 
 	// Callbacks (set after construction)
 	OnTaskDone func(task *Task) // called when a task finishes (completed/failed/stopped)
@@ -2039,47 +2019,41 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		isRawRunnerCommand(description) ||
 		isRawRunnerCommand(title)
 	task := &Task{
-		ID:                          id,
-		Title:                       title,
-		Description:                 description,
-		PromptText:                  opts.PromptText,
-		Status:                      TaskStatusQueued,
-		Source:                      source,
-		Model:                       model,
-		RunnerID:                    taskRunner.RunnerID,
-		Goal:                        taskRunner.Goal,
-		runner:                      taskRunner,
-		CreatedAt:                   now,
-		outputCh:                    make(chan string, 512),
-		rawOutputCh:                 make(chan []byte, 256),
-		eventCh:                     make(chan map[string]interface{}, 32),
-		doneCh:                      make(chan struct{}),
-		WorkDir:                     strings.TrimSpace(opts.WorkDir),
-		ProjectName:                 strings.TrimSpace(opts.ProjectName),
-		MCPServers:                  append([]string{}, opts.MCPServers...),
-		IncludeYaverMcp:             opts.IncludeYaverMcp,
-		GitRemote:                   strings.TrimSpace(opts.GitRemote),
-		GitBranch:                   strings.TrimSpace(opts.GitBranch),
-		AutoPush:                    strings.TrimSpace(opts.AutoPush),
-		SliceContract:               opts.SliceContract,
-		Placement:                   opts.Placement,
-		TaskViewport:                opts.Viewport,
-		GuestUserID:                 opts.GuestUserID,
-		GuestUseHostAPIKeys:         opts.GuestUseHostAPIKeys,
-		GuestAllowGuestProvidedKeys: opts.GuestAllowGuestProvidedKeys,
-		GuestRequireIsolation:       opts.GuestRequireIsolation,
-		GuestCPULimitPercent:        opts.GuestCPULimitPercent,
-		GuestRAMLimitMB:             opts.GuestRAMLimitMB,
-		GuestSharedStorageMounts:    append([]string{}, opts.GuestSharedStorageMounts...),
-		VideoEnabled:                opts.VideoEnabled,
-		VideoSource:                 opts.VideoSource,
-		AskFreely:                   opts.AskFreely,
-		AskMode:                     opts.AskMode,
-		RedactPII:                   opts.RedactPII,
-		RawRunnerCommand:            rawRunnerCommand,
-		ResumeLast:                  opts.ResumeLast,
-		SessionID:                   opts.ResumeSessionID,
-		Turns:                       initialTurns,
+		ID:               id,
+		Title:            title,
+		Description:      description,
+		PromptText:       opts.PromptText,
+		Status:           TaskStatusQueued,
+		Source:           source,
+		Model:            model,
+		RunnerID:         taskRunner.RunnerID,
+		Goal:             taskRunner.Goal,
+		runner:           taskRunner,
+		CreatedAt:        now,
+		outputCh:         make(chan string, 512),
+		rawOutputCh:      make(chan []byte, 256),
+		eventCh:          make(chan map[string]interface{}, 32),
+		doneCh:           make(chan struct{}),
+		WorkDir:          strings.TrimSpace(opts.WorkDir),
+		ProjectName:      strings.TrimSpace(opts.ProjectName),
+		MCPServers:       append([]string{}, opts.MCPServers...),
+		IncludeYaverMcp:  opts.IncludeYaverMcp,
+		GitRemote:        strings.TrimSpace(opts.GitRemote),
+		GitBranch:        strings.TrimSpace(opts.GitBranch),
+		AutoPush:         strings.TrimSpace(opts.AutoPush),
+		SliceContract:    opts.SliceContract,
+		Placement:        opts.Placement,
+		TaskViewport:     opts.Viewport,
+		VideoEnabled:     opts.VideoEnabled,
+		VideoSource:      opts.VideoSource,
+		AskFreely:        opts.AskFreely,
+		AskMode:          opts.AskMode,
+		RedactPII:        opts.RedactPII,
+		RawRunnerCommand: rawRunnerCommand,
+		ResumeLast:       opts.ResumeLast,
+		SessionID:        opts.ResumeSessionID,
+		ProjectSessionID: strings.TrimSpace(opts.ProjectSessionID),
+		Turns:            initialTurns,
 	}
 	if len(verbosityCtx) > 0 && verbosityCtx[0] != nil {
 		task.TaskVerbosity = verbosityCtx[0]
@@ -2111,7 +2085,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 	// Existing clone on a split task: fast-forward it first so commits
 	// pushed from the render box (or anywhere) are present before the
 	// runner reads the tree. Bounded + non-fatal (task_ensure_clone.go).
-	if task.GitRemote != "" && task.GuestUserID == "" {
+	if task.GitRemote != "" {
 		tm.pullBeforeSpawn(task)
 	}
 
@@ -2148,6 +2122,27 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 	log.Printf("[task %s] %s process started (PID %d)", id, taskRunner.Name, task.cmd.Process.Pid)
 
 	return task, nil
+}
+
+// CreateTaskInProjectSession binds a task to one isolated checkout while
+// reusing the current task creation pipeline and runner policy.
+func (tm *TaskManager) CreateTaskInProjectSession(title, description, model, reasoningEffort, source, runnerID, customCommand, mode, projectSessionID, workDir string) (*Task, error) {
+	projectSessionID = strings.TrimSpace(projectSessionID)
+	if projectSessionID == "" {
+		return nil, fmt.Errorf("project session ID is required")
+	}
+	info, err := os.Stat(workDir)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("project session checkout is unavailable")
+	}
+	return tm.CreateTaskWithOptions(
+		title, description, model, source, runnerID, customCommand, nil,
+		TaskCreateOptions{
+			WorkDir:          filepath.Clean(workDir),
+			ProjectSessionID: projectSessionID,
+			Mode:             mode,
+		},
+	)
 }
 
 // isRootProcess reports whether the agent runs as uid 0. os.Geteuid returns -1
@@ -2218,26 +2213,6 @@ func taskEnv(task *Task) []string {
 			env = append(env, "TERM=xterm-256color", "CLICOLOR_FORCE=1", "FORCE_COLOR=1")
 		}
 	}
-	if task != nil && task.GuestUserID != "" && !task.GuestUseHostAPIKeys {
-		filtered := make([]string, 0, len(env))
-		for _, entry := range env {
-			name := entry
-			if i := strings.IndexByte(entry, '='); i >= 0 {
-				name = entry[:i]
-			}
-			blocked := false
-			for _, secret := range sharedSecretEnvVars {
-				if name == secret {
-					blocked = true
-					break
-				}
-			}
-			if !blocked {
-				filtered = append(filtered, entry)
-			}
-		}
-		return filtered
-	}
 	existing := make(map[string]int, len(env))
 	for idx, entry := range env {
 		name := entry
@@ -2270,7 +2245,7 @@ func taskEnv(task *Task) []string {
 	// vault carries a runner-provider config, point this runner's endpoint at
 	// it. Appended last so the explicit runtime config wins over any inherited
 	// ANTHROPIC_BASE_URL/OPENAI_BASE_URL. Returns nil (no-op) on the default
-	// OAuth-subscription path. Reached only by owner / guest-with-host-keys.
+	// OAuth-subscription path.
 	if task != nil {
 		runnerID := task.RunnerID
 		if runnerID == "" {
@@ -2279,24 +2254,6 @@ func taskEnv(task *Task) []string {
 		env = append(env, runnerProviderEnv(runnerID)...)
 	}
 	return env
-}
-
-func guestContainerCPULimit(task *Task) string {
-	if task == nil || task.GuestCPULimitPercent == nil || *task.GuestCPULimitPercent <= 0 {
-		return ""
-	}
-	cpus := float64(runtime.NumCPU()) * float64(*task.GuestCPULimitPercent) / 100.0
-	if cpus < 0.1 {
-		cpus = 0.1
-	}
-	return fmt.Sprintf("%.2f", cpus)
-}
-
-func guestContainerMemoryLimit(task *Task) string {
-	if task == nil || task.GuestRAMLimitMB == nil || *task.GuestRAMLimitMB <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("%dm", *task.GuestRAMLimitMB)
 }
 
 // commonExtraPaths returns platform-appropriate extra binary search paths.
@@ -2331,12 +2288,20 @@ func commonExtraPaths() string {
 			filepath.Join(home, ".linuxbrew", "bin"),
 		)
 	}
-	return strings.Join(paths, ":")
+	return strings.Join(paths, string(os.PathListSeparator))
 }
 
 // expandedPath returns PATH with common extra binary locations prepended.
 func expandedPath() string {
-	return commonExtraPaths() + ":" + os.Getenv("PATH")
+	extra := commonExtraPaths()
+	current := os.Getenv("PATH")
+	if extra == "" {
+		return current
+	}
+	if current == "" {
+		return extra
+	}
+	return extra + string(os.PathListSeparator) + current
 }
 
 // CheckRunnerBinary checks if a runner binary is available in PATH or common locations.
@@ -2459,7 +2424,7 @@ func findInExpandedPath(command string) string {
 	if home == "" {
 		return ""
 	}
-	searchDirs := strings.Split(commonExtraPaths(), ":")
+	searchDirs := filepath.SplitList(commonExtraPaths())
 	for _, dir := range searchDirs {
 		if dir == "" {
 			continue
@@ -2635,34 +2600,32 @@ func buildRunnerArgsWithWorkDir(runner RunnerConfig, prompt, workDir string) []s
 			}
 		}
 	}
-	// Opencode-specific: splice `--agent <mode>` immediately after the
-	// `run` subcommand when the user picked a build/plan/custom agent.
-	// Hardcoded here rather than templated because opencode is the only
-	// runner with this concept and we don't want to mint a generic
-	// "drop-paired-args-when-placeholder-empty" syntax that other
-	// runners might trip over later.
-	// "chat"/"chat:<surface>" is the embedded Q&A mode (see chatTaskResponseContext),
-	// NOT an opencode agent name — don't splice it as --agent.
-	if runner.RunnerID == "opencode" && strings.TrimSpace(runner.Mode) != "" &&
-		runner.Mode != "chat" && !strings.HasPrefix(runner.Mode, "chat:") {
-		out := make([]string, 0, len(args)+2)
-		injected := false
-		for _, a := range args {
-			out = append(out, a)
-			if !injected && a == "run" {
-				out = append(out, "--agent", strings.TrimSpace(runner.Mode))
-				injected = true
-			}
-		}
-		if !injected {
-			// Defensive: if `run` wasn't found (custom args), still
-			// surface the agent flag so the choice isn't silently
-			// dropped — opencode tolerates --agent anywhere on the line.
-			out = append([]string{"--agent", strings.TrimSpace(runner.Mode)}, out...)
-		}
-		args = out
+	return applyModeArgs(runner, runner.Mode, args)
+}
+
+// applyModeArgs adds the mode syntax understood by runners that expose modes.
+// "chat"/"chat:<surface>" is the embedded Q&A mode (see
+// chatTaskResponseContext), not an opencode agent name.
+func applyModeArgs(runner RunnerConfig, mode string, args []string) []string {
+	mode = strings.TrimSpace(mode)
+	if runner.RunnerID != "opencode" || mode == "" || mode == "chat" || strings.HasPrefix(mode, "chat:") {
+		return args
 	}
-	return args
+
+	out := make([]string, 0, len(args)+2)
+	injected := false
+	for _, arg := range args {
+		out = append(out, arg)
+		if !injected && arg == "run" {
+			out = append(out, "--agent", mode)
+			injected = true
+		}
+	}
+	if !injected {
+		// Custom opencode args may omit `run`; keep the selected agent visible.
+		out = append([]string{"--agent", mode}, out...)
+	}
+	return out
 }
 
 func insertRunnerFlagAfter(args []string, after, flag, value string) []string {
@@ -2825,13 +2788,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// Auto-detect project from task text and switch workDir if needed.
 	// This enables "start BentoApp" from Yaver mobile when serving from ~.
 	//
-	// Security: never auto-switch for guest tasks — the guest prompt prefix
-	// pins the task to the host's workdir, and allowing prompt keywords to
-	// redirect the task cwd into a neighboring project would let a guest
-	// traverse host projects they were not granted.
 	// Auto-switch only when the caller didn't pin a workDir. Mobile's
 	// feedback flow + the vibingify reshape already resolve the right
-	// project path from yaverInheritedGuestProjectPath / projectName —
+	// project path from projectName —
 	// running autoSwitchProject on top of that lets prompt-word matches
 	// like "codex" (a runner name commonly echoed in the prompt) hijack
 	// the workDir to /root/.codex/.tmp/plugins, which is read-only
@@ -2840,7 +2799,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// workspace-write sandbox treated the actual project as outside
 	// the writable root, and apply_patch failed with "Read-only file
 	// system". Five user iterations later we figured it out.
-	if !rawRunnerCommand && task.GuestUserID == "" && strings.TrimSpace(task.WorkDir) == "" {
+	if !rawRunnerCommand && strings.TrimSpace(task.WorkDir) == "" {
 		tm.autoSwitchProject(task, prompt)
 	}
 
@@ -3026,27 +2985,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	case "opencode":
 		args = append(args, mcpScope.Args...)
 	}
-	// An isolation-required guest task (requireIsolation:true) runs confined as
-	// an unprivileged per-tenant OS user in a partition on this box. Confinement
-	// is Linux-only; tenantRT.prepare() below fails loudly on a host that can't
-	// provide it, rather than silently running the guest unconfined.
-	tenantRT := tenantRuntimeForTask(task)
-	if tenantRT.Enabled {
-		if err := CheckRunnerBinary(runner.Command); err != nil {
-			cancel()
-			return fmt.Errorf("runner not ready: %w", err)
-		}
-		if normalizeRunnerID(runner.RunnerID) == "codex" {
-			if err := codexLinuxSandboxPrereqErrorFunc(); err != "" {
-				cancel()
-				return fmt.Errorf("runner not ready: %s", err)
-			}
-		}
-		if err := tenantRT.prepare(); err != nil {
-			cancel()
-			return fmt.Errorf("tenant runtime: %w", err)
-		}
-	} else if err := CheckRunnerReady(runner, taskDir); err != nil {
+	if err := CheckRunnerReady(runner, taskDir); err != nil {
 		cancel()
 		return fmt.Errorf("runner not ready: %w", err)
 	}
@@ -3055,20 +2994,14 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// If containerization is enabled for this task type, run inside Docker.
 	useContainer := false
 	if tm.ContainerRunner != nil && tm.ContainerRunner.IsAvailable() {
-		if task.GuestUserID != "" && (tm.ContainerizeGuests || task.GuestRequireIsolation) {
+		if tm.ContainerizeHost {
 			useContainer = true
-		} else if task.GuestUserID == "" && tm.ContainerizeHost {
-			useContainer = true
-		}
-		if tenantRT.Enabled {
-			useContainer = false
 		}
 		// Hosted coding CLIs like Codex / Claude Code / OpenCode / Aider are
 		// installed and authenticated on the host machine, not inside Yaver's
 		// generic Docker image. Running them in the container makes even valid
-		// host setups fail with "command not found". Keep guest isolation as-is,
-		// but execute these host-owned runners directly on the host.
-		if useContainer && task.GuestUserID == "" && runnerRequiresHostRuntime(runner.RunnerID) {
+		// host setups fail with "command not found".
+		if useContainer && runnerRequiresHostRuntime(runner.RunnerID) {
 			useContainer = false
 		}
 		// Auto-build image on first use if not ready
@@ -3098,20 +3031,6 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		if tm.ContainerMemory != "" {
 			opts.MemoryLimit = tm.ContainerMemory
 		}
-		if task.GuestUserID != "" {
-			if cpuLimit := guestContainerCPULimit(task); cpuLimit != "" {
-				opts.CPULimit = cpuLimit
-			}
-			if memoryLimit := guestContainerMemoryLimit(task); memoryLimit != "" {
-				opts.MemoryLimit = memoryLimit
-			}
-			if task.GuestRequireIsolation {
-				if opts.NetworkMode == "" || opts.NetworkMode == "host" {
-					opts.NetworkMode = "bridge"
-				}
-				opts.ReadOnly = true
-			}
-		}
 		// Check for project-specific Dockerfile.yaver first, then config override
 		if projectImage := tm.ContainerRunner.DetectProjectImage(ctx, taskDir); projectImage != "" {
 			opts.CustomImage = projectImage
@@ -3119,9 +3038,6 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			opts.CustomImage = tm.ContainerImage
 		}
 		opts.ExtraMounts = append([]string{}, tm.ContainerMounts...)
-		if len(task.GuestSharedStorageMounts) > 0 {
-			opts.ExtraMounts = append(opts.ExtraMounts, task.GuestSharedStorageMounts...)
-		}
 
 		cmd, stdout, stderr, err := tm.ContainerRunner.RunTask(ctx, opts)
 		if err != nil {
@@ -3159,51 +3075,28 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		var err error
 		var tmuxEnvAdditions []string
 		if session := tmuxRunnerReady(); session != "" && tmuxRunnerEligible(runner.RunnerID) {
-			if tenantRT.Enabled {
-				log.Printf("[task %s] tmux mode disabled for tenant runtime %s", task.ID, tenantRT.User)
-				cmd, err = tenantRT.command(ctx, taskDir, runner.Command, args, tenantRT.taskEnv(task))
-				if err != nil {
-					cancel()
-					return fmt.Errorf("tenant command: %w", err)
-				}
-			} else {
-				log.Printf("[task %s] tmux mode: dispatching %s into session %q",
-					task.ID, runner.Command, session)
-				if task.TmuxSession == "" {
-					task.TmuxSession = session
-				}
-				if task.TmuxSessionID == "" {
-					task.TmuxSessionID = getActivePaneIdentity(session).SessionID
-				}
-				cmd, tmuxEnvAdditions = buildTmuxRunnerCommand(ctx, session, task.ID, runner.Command, args, mcpScope.Env)
+			log.Printf("[task %s] tmux mode: dispatching %s into session %q",
+				task.ID, runner.Command, session)
+			if task.TmuxSession == "" {
+				task.TmuxSession = session
 			}
+			if task.TmuxSessionID == "" {
+				task.TmuxSessionID = getActivePaneIdentity(session).SessionID
+			}
+			cmd, tmuxEnvAdditions = buildTmuxRunnerCommand(ctx, session, task.ID, runner.Command, args, mcpScope.Env)
 		} else {
-			if tenantRT.Enabled {
-				cmd, err = tenantRT.command(ctx, taskDir, runner.Command, args, tenantRT.taskEnv(task))
-				if err != nil {
+			if normalizeRunnerID(runner.RunnerID) == "claude" {
+				if err := preflightClaudeMacKeychainForHeadlessLaunch(); err != nil {
 					cancel()
-					return fmt.Errorf("tenant command: %w", err)
+					return fmt.Errorf("runner not ready: %w", err)
 				}
-			} else {
-				if normalizeRunnerID(runner.RunnerID) == "claude" {
-					if err := preflightClaudeMacKeychainForHeadlessLaunch(); err != nil {
-						cancel()
-						return fmt.Errorf("runner not ready: %w", err)
-					}
-				}
-				cmd = exec.CommandContext(ctx, runner.Command, args...)
 			}
+			cmd = exec.CommandContext(ctx, runner.Command, args...)
 		}
-		if !tenantRT.Enabled {
-			cmd.Dir = taskDir
-		}
+		cmd.Dir = taskDir
 
 		// Ensure common tool paths are in PATH for background processes.
-		if tenantRT.Enabled {
-			cmd.Env = append(os.Environ(), "PATH="+expandedPath())
-		} else {
-			cmd.Env = taskEnv(task)
-		}
+		cmd.Env = taskEnv(task)
 		if len(tmuxEnvAdditions) > 0 {
 			cmd.Env = append(cmd.Env, tmuxEnvAdditions...)
 		}
@@ -4697,19 +4590,20 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			output = output[len(output)-2000:]
 		}
 		result = append(result, TaskInfo{
-			ID:           t.ID,
-			Title:        t.Title,
-			Description:  t.Description,
-			Status:       t.Status,
-			RunnerID:     t.RunnerID,
-			SessionID:    t.SessionID,
-			Output:       output,
-			ResultText:   t.ResultText,
-			Failure:      t.Failure,
-			CostUSD:      t.CostUSD,
-			InputTokens:  t.InputTokens,
-			OutputTokens: t.OutputTokens,
-			Turns:        t.Turns,
+			ID:               t.ID,
+			Title:            t.Title,
+			Description:      t.Description,
+			Status:           t.Status,
+			RunnerID:         t.RunnerID,
+			SessionID:        t.SessionID,
+			ProjectSessionID: t.ProjectSessionID,
+			Output:           output,
+			ResultText:       t.ResultText,
+			Failure:          t.Failure,
+			CostUSD:          t.CostUSD,
+			InputTokens:      t.InputTokens,
+			OutputTokens:     t.OutputTokens,
+			Turns:            t.Turns,
 			PendingFollowUps: append([]PendingFollowUp{},
 				t.PendingFollowUps...),
 			Source:          t.Source,

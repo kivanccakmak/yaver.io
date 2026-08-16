@@ -50,8 +50,8 @@ func TestPersistFreshRelayPassword_NoCanonicalCachedDrift(t *testing.T) {
 // CachedRelayPassword first makes this test send "old-cached" and fail.
 func TestTransportHeadersForBase_PrefersCanonicalRelayPassword(t *testing.T) {
 	cfg := &Config{
-		ConvexSiteURL:      "https://convex.example.com",
-		RelayPassword:      "fresh-canonical",
+		ConvexSiteURL:       "https://convex.example.com",
+		RelayPassword:       "fresh-canonical",
 		CachedRelayPassword: "old-cached",
 		CachedRelayServers: []RelayServerConfig{
 			{HttpURL: "https://public.yaver.io"},

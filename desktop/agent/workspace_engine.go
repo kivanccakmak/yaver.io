@@ -18,8 +18,8 @@ import (
 // status line.
 type WorkspaceAction struct {
 	App     string `json:"app"`
-	Action  string `json:"action"`  // "init", "check", "seed-env", ...
-	Status  string `json:"status"`  // "ok", "skip", "warn", "fail"
+	Action  string `json:"action"` // "init", "check", "seed-env", ...
+	Status  string `json:"status"` // "ok", "skip", "warn", "fail"
 	Detail  string `json:"detail,omitempty"`
 	Command string `json:"command,omitempty"`
 }
@@ -41,11 +41,11 @@ type WorkspaceInitOptions struct {
 
 // RunWorkspaceInit walks the manifest and wires every app. Actions:
 //
-//   1. check: app path exists on disk, stack matches expectations
-//   2. seed-env: required env vars are present (warn if missing)
-//   3. init-md: cached-context file init.md exists or is scaffolded
-//   4. autoinit-hint: per-app `yaver autoinit` command so autodev /
-//      autoideas / autotest get richer context on next run
+//  1. check: app path exists on disk, stack matches expectations
+//  2. seed-env: required env vars are present (warn if missing)
+//  3. init-md: cached-context file init.md exists or is scaffolded
+//  4. autoinit-hint: per-app `yaver autoinit` command so autodev /
+//     autoideas / autotest get richer context on next run
 func RunWorkspaceInit(m *WorkspaceManifest, repoRoot string, opts WorkspaceInitOptions) []WorkspaceAction {
 	var out []WorkspaceAction
 	order, err := TopoSortApps(m)

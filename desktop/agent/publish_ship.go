@@ -4,7 +4,7 @@ package main
 //
 // Decision (2026-05-19): the unified publish engine already exists, wired,
 // as /deploy/ship (deploy_run.go) — remote --machine targeting, composite
-// multi-target, vault-env injection, SSE, DeployRun history, the guest
+// multi-target, vault-env injection, SSE, DeployRun history, and the owner
 // security envelope. publish.go's .yaver/publish.yaml system is a second,
 // overlapping path. Rather than build a third engine, this is a thin
 // friendly shim: it maps store-name words a non-developer would type

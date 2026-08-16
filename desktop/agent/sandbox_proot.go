@@ -154,7 +154,7 @@ func sandboxEnv(c sandboxConfig, callerEnv []string) []string {
 			term = strings.TrimPrefix(kv, "TERM=")
 			continue
 		}
-		// Preserve YAVER_* hints (host-share, etc.) so they survive into the
+		// Preserve YAVER_* runtime hints so they survive into the
 		// rootfs, but drop everything host-specific (PATH, HOME, LD_*).
 		if strings.HasPrefix(kv, "YAVER_") {
 			preserved = append(preserved, kv)

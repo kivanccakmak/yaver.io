@@ -38,17 +38,17 @@ import (
 // PDFRenderOptions mirrors the CDP Page.printToPDF shape, minus
 // the knobs solo devs never tweak.
 type PDFRenderOptions struct {
-	HTML         string  `json:"html,omitempty"`
-	URL          string  `json:"url,omitempty"`
-	Format       string  `json:"format,omitempty"` // A4, Letter, Legal, Tabloid
-	Landscape    bool    `json:"landscape,omitempty"`
-	PrintBackground bool `json:"printBackground,omitempty"`
-	MarginTop    string  `json:"marginTop,omitempty"`
-	MarginRight  string  `json:"marginRight,omitempty"`
-	MarginBottom string  `json:"marginBottom,omitempty"`
-	MarginLeft   string  `json:"marginLeft,omitempty"`
-	ScaleFactor  float64 `json:"scale,omitempty"`
-	PageRanges   string  `json:"pageRanges,omitempty"`
+	HTML            string  `json:"html,omitempty"`
+	URL             string  `json:"url,omitempty"`
+	Format          string  `json:"format,omitempty"` // A4, Letter, Legal, Tabloid
+	Landscape       bool    `json:"landscape,omitempty"`
+	PrintBackground bool    `json:"printBackground,omitempty"`
+	MarginTop       string  `json:"marginTop,omitempty"`
+	MarginRight     string  `json:"marginRight,omitempty"`
+	MarginBottom    string  `json:"marginBottom,omitempty"`
+	MarginLeft      string  `json:"marginLeft,omitempty"`
+	ScaleFactor     float64 `json:"scale,omitempty"`
+	PageRanges      string  `json:"pageRanges,omitempty"`
 }
 
 // pageFormat converts the friendly format name to CDP's

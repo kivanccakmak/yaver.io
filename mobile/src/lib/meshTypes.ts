@@ -14,8 +14,6 @@ export const DEFAULT_ROUTE_V6 = "::/0";
 // bridge. (Mirrors the comment that lived in network.tsx.)
 export const TAILSCALE_BRIDGE_CIDR = "100.64.0.0/10";
 
-export type AccessScope = "owner" | "shared" | "peer";
-
 export type MeshPeer = {
   deviceId: string;
   alias?: string;
@@ -24,7 +22,6 @@ export type MeshPeer = {
   magicDns?: string; // <alias>.mesh — populated once backend Gap G1 lands
   online?: boolean;
   isExitNode?: boolean;
-  accessScope?: AccessScope;
   advertisedRoutes?: string[];
   // Desired state set by the console, read by the agent on its reconcile tick.
   wantExitNode?: boolean;
@@ -45,14 +42,6 @@ export type ACLRule = {
   dst: string;
   ports: string[];
   action: "accept" | "drop";
-};
-
-export type SupportConn = {
-  grantId: string;
-  deviceId: string | null;
-  counterpartName: string;
-  allowDesktopControl: boolean;
-  expiresAt: number | null;
 };
 
 /** A node's effective subnet routes = advertised routes minus the default route. */

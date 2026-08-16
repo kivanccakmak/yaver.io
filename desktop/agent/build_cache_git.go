@@ -411,10 +411,10 @@ func readNativeBuildMetaSidecar(buildDir string) (nativeBuildMetaSidecar, error)
 // Metro + hermesc pipeline.
 //
 // All four conditions must hold for a cache hit:
-//   1. YAVER_BUILD_CACHE=1 (intentional opt-in until we burn it in)
-//   2. consumer cache matches (mobile app version / SDK / HBC unchanged)
-//   3. git-state cache matches (no bundle-relevant source changes)
-//   4. cached bundle file + meta sidecar both exist on disk
+//  1. YAVER_BUILD_CACHE=1 (intentional opt-in until we burn it in)
+//  2. consumer cache matches (mobile app version / SDK / HBC unchanged)
+//  3. git-state cache matches (no bundle-relevant source changes)
+//  4. cached bundle file + meta sidecar both exist on disk
 //
 // Any failure falls through to a normal rebuild — never block the user
 // because the cache subsystem hit a snag.

@@ -22,7 +22,7 @@
  *   - Web / Desktop: same.
  *
  * The mobile app may have extra view-model fields it wants to keep on
- * its own Device interface (edgeProfile, sessionBinding, etc.) — those
+ * its own Device interface (edgeProfile, connectivity state, etc.) — those
  * stay as local extensions; the core operates only on the fields
  * declared here.
  */
@@ -41,12 +41,6 @@ export interface CoreDevice {
   runnerDown: boolean;
   /** Unix ms of the latest heartbeat the agent sent to Convex. */
   lastHeartbeat: number;
-  isGuest: boolean;
-  hostName?: string;
-  hostEmail?: string;
-  accessScope?: 'owner' | 'shared-scoped' | 'shared-legacy';
-  /** Optional transport hint for a shared device when the host exposed exactly one box. */
-  tunnelUrl?: string;
   /** Primary LAN IP (or tunnel host) the agent advertised. */
   quicHost: string;
   quicPort: number;
@@ -77,10 +71,6 @@ function normHost(host: string | undefined): string {
 export function deviceIdentityKey(d: CoreDevice): string {
   if (d.hwid) return `hwid:${d.hwid}`;
   if (d.publicKey) return `pub:${d.publicKey}`;
-  if (d.isGuest) {
-    const scope = d.hostEmail || d.hostName || 'guest';
-    return `guest:${scope}:${d.deviceId || d.name}`;
-  }
   const n = normName(d.name);
   const os = String(d.platform || '').trim().toLowerCase();
   if (n && os) return `host:${os}:${n}`;
@@ -89,7 +79,6 @@ export function deviceIdentityKey(d: CoreDevice): string {
 }
 
 export function deviceAliasKey(d: CoreDevice): string | null {
-  if (d.isGuest) return null;
   const n = normName(d.name);
   const os = String(d.platform || '').trim().toLowerCase();
   if (!n || !os) return null;
@@ -97,7 +86,6 @@ export function deviceAliasKey(d: CoreDevice): string | null {
 }
 
 export function deviceEndpointKey(d: CoreDevice): string | null {
-  if (d.isGuest) return null;
   const h = normHost(d.quicHost);
   if (!h) return null;
   return `${h}:${d.quicPort || 0}`;

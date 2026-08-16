@@ -32,7 +32,7 @@ package main
 // Switching Protocols" response and then stream raw bytes.
 //
 // Security: the HTTP endpoint sits behind the existing auth()
-// middleware, so only the owner token + paired tokens can
+// middleware, so only the owner token can
 // open tunnels. The forward record only names a local address
 // on the headless box (no arbitrary remote dialing), and we
 // refuse to forward to obviously privileged / sensitive ports
@@ -60,7 +60,7 @@ import (
 // for a dev with a dozen services.
 type TunnelForward struct {
 	Name      string `json:"name"`
-	Target    string `json:"target"`          // host:port the agent dials
+	Target    string `json:"target"` // host:port the agent dials
 	CreatedAt string `json:"createdAt"`
 	Note      string `json:"note,omitempty"`
 	Disabled  bool   `json:"disabled,omitempty"`
@@ -158,7 +158,7 @@ func (s *HTTPServer) handleTunnelForward(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Only the dev's own token / paired users reach here (the
+	// Only the owner's token reaches here (the
 	// route is wrapped in auth()). Still a last-ditch check on
 	// the target address so a misconfigured tunnel can't dial
 	// externally.
@@ -408,7 +408,7 @@ func handleForwardConn(client net.Conn, targetURL, name, token string) {
 	defer remote.Close()
 
 	// Write the upgrade request. Authorization is the
-	// accepted paired / owner token.
+	// accepted owner token.
 	path := strings.TrimRight(u.Path, "/") + "/tunnel/forward/" + name
 	fmt.Fprintf(remote, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: yaver-tunnel\r\nConnection: Upgrade\r\nAuthorization: Bearer %s\r\n\r\n",
 		path, u.HostOnly, token)

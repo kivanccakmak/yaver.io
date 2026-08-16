@@ -2158,28 +2158,12 @@ git diff --check
 No live Hetzner, Convex production, LemonSqueezy, server, snapshot, or billing
 state was touched for this slice.
 
-## Implementation Evidence: Testkit Grow Placement Guard
+## Removed: Testkit Grow Placement Guard
 
-Testkit self-growth authoring now respects the machine placement layer before
-creating local runner work:
-
-- The `project_test_grow` ops verb checks placement before enqueueing the
-  optional runner-authored spec-writing task.
-- The post-task `maybeGrowTestsAfterTask` hook also attempts placement when
-  local agent config provides backend auth; self-host/local setups without that
-  config keep the previous local behavior.
-- Placement metadata is prompt-free (`sourceSurface=testkit-grow`,
-  `kind=test`, requested runner, coarse project/repo signals only).
-- If placement selects a different Cloud Workspace, the returned grow plan uses
-  a `pending-cloud:*` task id and no local task is created on the relay. The
-  author prompt is stripped from the ops response after cloud deferral so the
-  prompt remains local/client-held.
-
-Regression checks run locally:
-
-```text
-desktop/agent: go test . -run 'TestOpsProjectTestGrowDefersAuthorTaskWhenCloudPlacementSelected|TestBlackBoxFatalCrashDefersWhenCloudPlacementSelected'
-```
+This historical slice was removed on 2026-08-16. Yaver no longer automatically
+authors or grows tests after tasks, and no `project_test_grow` ops/MCP verb,
+planner, placement hook, or Grow control remains. Stale MCP callers receive an
+explicit removal error. Manual user-authored test execution is unchanged.
 
 No live Hetzner, Convex production, LemonSqueezy, server, snapshot, or billing
 state was touched for this slice.

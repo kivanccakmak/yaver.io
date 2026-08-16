@@ -309,9 +309,8 @@ type DevServerManager struct {
 	subsMu sync.Mutex
 	target DevServerTarget
 
-	// OwnerUserID labels this manager's port reservations so a shared machine
-	// can answer "who is on :8083?". Empty in single-user mode. Set by
-	// MultiUserManager.EnsureDevServerMgr.
+	// OwnerUserID labels this manager's port reservations so the owner can answer
+	// "what is on :8083?". Empty uses the current workload attribution.
 	OwnerUserID string
 
 	// VibeSessionID + the brokered-port facts, so /dev/status can tell the client
@@ -637,7 +636,7 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 	// Reserve a port nobody else holds — Yaver session or otherwise. Done HERE,
 	// once, for every framework: each lane used to hard-code its canonical port
 	// (Metro 8081, Expo Web 19006, Flutter 9100, Vite 5173, Next 3000) and then
-	// treat "something answers on it" as readiness, which on a shared machine
+	// treat "something answers on it" as readiness, which on a busy machine
 	// means a foreign listener (an orphan from another project, or on one real
 	// box a four-day-old freeswitch on :8081) gets reported as a healthy dev
 	// server. See devserver_ports.go for the full account.
@@ -835,7 +834,7 @@ func (m *DevServerManager) Start(framework, workDir, platform string, port int, 
 
 		// Create reverse proxy to the dev server
 		target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", ds.Port()))
-		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy := newDevServerReverseProxy(target)
 		// Rewrite the served HTML's <base href> so root-absolute asset paths
 		// resolve THROUGH this /dev/ proxy.
 		//
@@ -2292,7 +2291,7 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 					"Stop that process (lsof -nP -iTCP:%d) or start the preview again to get a free port.\n%s",
 					name, b.port, b.port, tail)
 			}
-			resp, err := http.Get(readyURL)
+            resp, err := devReadinessHTTPClient.Get(readyURL)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {
@@ -3389,7 +3388,7 @@ func (f *FlutterDevServer) startProcessWithStdin(ctx context.Context, name strin
 					"Stop that process (lsof -nP -iTCP:%d) or start the preview again to get a free port.\n%s",
 					name, f.port, f.port, tail)
 			}
-			resp, err := http.Get(readyURL)
+            resp, err := devReadinessHTTPClient.Get(readyURL)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {

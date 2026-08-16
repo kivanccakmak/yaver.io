@@ -11,9 +11,9 @@ import (
 
 func TestDetectTestFramework(t *testing.T) {
 	tests := []struct {
-		file      string
-		wantFw    string
-		wantType  string
+		file     string
+		wantFw   string
+		wantType string
 	}{
 		{"pubspec.yaml", "flutter_test", "unit"},
 		{"jest.config.js", "jest", "unit"},
@@ -149,7 +149,7 @@ func TestResolveClientPlatform(t *testing.T) {
 		{"gradle", "android", "gradle-apk"},
 		{"xcode", "ios", "xcode-ipa"},
 		{"flutter-apk", "ios", "flutter-apk"}, // already specific, unchanged
-		{"custom", "android", "custom"},         // unknown, unchanged
+		{"custom", "android", "custom"},       // unknown, unchanged
 	}
 
 	for _, tt := range tests {

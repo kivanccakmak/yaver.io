@@ -54,9 +54,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsPushHandler,
-		Streaming:  true,
-		AllowGuest: false,
+		Handler:        opsPushHandler,
+		Streaming:      true,
+		AllowCompanion: false,
 	})
 }
 

@@ -45,9 +45,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudReconcileHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudReconcileHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 
@@ -83,9 +83,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsMachineSeedHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMachineSeedHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

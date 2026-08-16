@@ -26,8 +26,8 @@ func init() {
 				"description": "Per-leg transport probe budget. Default 4000. Runner and render probes run independently.",
 			},
 		}),
-		Handler:    machineRolesDoctorHandler,
-		AllowGuest: false,
+		Handler:        machineRolesDoctorHandler,
+		AllowCompanion: false,
 	})
 }
 

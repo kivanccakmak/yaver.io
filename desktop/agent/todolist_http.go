@@ -390,9 +390,9 @@ func (s *HTTPServer) handleTodoListClassify(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req struct {
-		Message    string `json:"message"`
-		Source     string `json:"source"`               // "sdk" or "mobile"
-		AutoAct    bool   `json:"autoAct"`              // if true, automatically queue/execute based on classification
+		Message    string        `json:"message"`
+		Source     string        `json:"source"`  // "sdk" or "mobile"
+		AutoAct    bool          `json:"autoAct"` // if true, automatically queue/execute based on classification
 		DeviceInfo *DeviceFBInfo `json:"deviceInfo,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

@@ -31,34 +31,33 @@ struct RegisteredDevice: Decodable, Identifiable {
     let managed: Bool?
     let machineId: String?
     let lastHeartbeat: Double? // ms epoch
+    let runners: [RegisteredRunner]?
+    let installedRunnerIds: [String]?
 
-    // Sharing. A box someone else owns and shared with this account comes back
-    // from /devices/list looking exactly like an owned one unless we decode
-    // these (devices.ts:1795, :1863). Without them the TV silently renders
-    // another person's machine as if it were yours.
-    let isGuest: Bool?
-    let hostName: String?
-    let hostEmail: String?
-    let hostUserIdString: String?
-    let accessScope: String? // "owner" | "shared-scoped" | "shared-legacy"
+    // Compatibility bit used only to discard legacy non-owner rows returned by
+    // a stale backend. It is never rendered or made selectable.
 
     var id: String { deviceId }
 
-    var shared: Bool { isGuest ?? false }
-
-    /// Who shared it, best-effort — name, else email, else a generic. Shown on
-    /// the row, so it must never be empty on a shared box.
-    var hostLabel: String {
-        if let n = hostName, !n.isEmpty { return n }
-        if let e = hostEmail, !e.isEmpty { return e }
-        return "another account"
-    }
-
-    var displayName: String {
-        if let a = alias, !a.isEmpty { return a }
+    /// Stable machine name from the agent (for example
+    /// `ubuntu-4gb-hel1-1`). Aliases are account-local labels and must not
+    /// replace this identity on a TV: doing so made the same box look like a
+    /// different machine than it did in WebUI.
+    var realName: String {
         if let n = name, !n.isEmpty { return n }
+        if let a = alias, !a.isEmpty { return a }
         return String(deviceId.prefix(8))
     }
+
+    /// Account alias, rendered beside/below the real name as `@alias`.
+    var aliasLabel: String? {
+        guard let alias, !alias.isEmpty, alias != realName else { return nil }
+        return alias.hasPrefix("@") ? alias : "@\(alias)"
+    }
+
+    /// Compatibility label for sorting/narration. The real hostname leads;
+    /// UI that has room also renders `aliasLabel` explicitly.
+    var displayName: String { realName }
 
     /// Heartbeat fresh within 15 min — the same window mobile uses
     /// (HEARTBEAT_STALE_MS = 900_000, devices.ts). We can't call Date.now in a
@@ -85,6 +84,35 @@ struct RegisteredDevice: Decodable, Identifiable {
     var port: Int { quicPort ?? Backend.agentPort }
 }
 
+/// Coding-runner capability reported in the machine heartbeat. Settings uses
+/// this live inventory so it never offers a default the selected machine does
+/// not actually have installed.
+struct RegisteredRunner: Decodable, Identifiable {
+    let runnerId: String
+    let installed: Bool?
+    let ready: Bool?
+    let authConfigured: Bool?
+    let status: String?
+
+    var id: String { Self.canonical(runnerId) }
+
+    static func canonical(_ value: String) -> String {
+        switch value.lowercased() {
+        case "claude-code", "claude_code": return "claude"
+        default: return value.lowercased()
+        }
+    }
+
+    var label: String {
+        switch id {
+        case "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        default: return runnerId
+        }
+    }
+}
+
 /// RFC1918 — the ranges a TV on a home/office LAN can actually reach directly.
 func isPrivateLAN(_ ip: String) -> Bool {
     if ip.hasPrefix("10.") || ip.hasPrefix("192.168.") { return true }
@@ -99,7 +127,6 @@ private func dockerish(_ ip: String) -> Bool { ip.hasPrefix("172.17.") || ip.has
 
 enum MachineRegistry {
     struct DeviceList: Decodable { let devices: [RegisteredDevice] }
-    struct GuestList: Decodable { let guests: [HostGuest] }
     struct UserSettingsEnvelope: Decodable { let settings: UserSettings? }
 
     // ── Relay resolution (2026-08-13) ─────────────────────────────────────
@@ -110,7 +137,14 @@ enum MachineRegistry {
     // The authoritative relay list is GET /config (the SAME source the web
     // dashboard's refreshRelayTopology reads); settings only ever supplies
     // the per-user relay password (and an optional URL override).
-    struct RelayServer: Decodable { let url: String? }
+    struct RelayServer: Decodable {
+        /// Current control-plane payload name.
+        let httpUrl: String?
+        /// Older payloads used `url`; keep accepting it during rollout.
+        let url: String?
+
+        var endpoint: String? { httpUrl ?? url }
+    }
     struct RelayConfigEnvelope: Decodable { let relayServers: [RelayServer]? }
 
     /// Relay server URLs from GET /config (relayServers[].url). Empty on any
@@ -124,7 +158,9 @@ enum MachineRegistry {
             let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
             let env = try? JSONDecoder().decode(RelayConfigEnvelope.self, from: data)
         else { return [] }
-        return (env.relayServers ?? []).compactMap { $0.url?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return (env.relayServers ?? [])
+            .compactMap { $0.endpoint?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     /// The relay leg a BoxTarget should use: settings.relayUrl when the user
@@ -141,6 +177,11 @@ enum MachineRegistry {
     struct UserSettings: Decodable {
         let relayUrl: String?
         let relayPassword: String?
+        /// Explicit auto-connect order shared with mobile/web.
+        let primaryDeviceId: String?
+        let secondaryDeviceId: String?
+        /// Per-device default coding runner shared with mobile/web.
+        let primaryRunnerByDevice: [PrimaryRunnerPref]?
         /// Runner/render machine split rows (same Convex rows the web edits).
         /// Additive decode — older payload shapes leave it nil.
         let machineRolesByProject: [MachineRolesRow]?
@@ -160,6 +201,14 @@ enum MachineRegistry {
         /// Per-device external-MCP selection + the yaver doorway toggle — the
         /// same mcpServersByDevice row mobile and web write.
         let mcpServersByDevice: [MCPServersPref]?
+    }
+
+    struct PrimaryRunnerPref: Decodable {
+        let deviceId: String?
+        let runnerId: String?
+        let model: String?
+        let mode: String?
+        let provider: String?
     }
 
     /// One defaultRuntimeProjectByDevice row (Convex userSettings).
@@ -201,38 +250,6 @@ enum MachineRegistry {
         let updatedAt: Double?
     }
 
-    /// One guest on the HOST side of sharing (`GET /guests/list`).
-    struct HostGuest: Decodable, Identifiable, Equatable {
-        let email: String?
-        let userId: String?
-        let fullName: String?
-        let status: String?
-        let createdAt: Double?
-        let acceptedAt: Double?
-        let revokedAt: Double?
-
-        var id: String {
-            if let userId, !userId.isEmpty { return userId }
-            if let email, !email.isEmpty { return email }
-            return "\(createdAt ?? 0)-\(acceptedAt ?? 0)-\(revokedAt ?? 0)"
-        }
-
-        var displayName: String {
-            if let fullName, !fullName.isEmpty { return fullName }
-            if let email, !email.isEmpty { return email }
-            if let userId, !userId.isEmpty { return userId }
-            return "Unknown guest"
-        }
-
-        var detail: String {
-            if let email, !email.isEmpty { return email }
-            if let userId, !userId.isEmpty { return userId }
-            return "No email available"
-        }
-
-        var isAccepted: Bool { status == "accepted" }
-    }
-
     /// Fetch the account's machines. Throws AgentError with a readable message so
     /// the picker can show WHY it's empty (expired token, offline, etc.) instead
     /// of a silent blank.
@@ -271,7 +288,10 @@ enum MachineRegistry {
             throw AgentError(message: "Couldn't load relay settings (\(http.statusCode)).")
         }
         return (try? JSONDecoder().decode(UserSettingsEnvelope.self, from: data).settings)
-            ?? UserSettings(relayUrl: nil, relayPassword: nil, machineRolesByProject: nil,
+            ?? UserSettings(relayUrl: nil, relayPassword: nil,
+                            primaryDeviceId: nil, secondaryDeviceId: nil,
+                            primaryRunnerByDevice: nil,
+                            machineRolesByProject: nil,
                             connectionMode: nil, defaultRuntimeProjectByDevice: nil,
                             mcpServersByDevice: nil)
     }
@@ -338,6 +358,46 @@ enum MachineRegistry {
                            value: body)
     }
 
+    /// Explicit account defaults edited from the tvOS Settings surface. These
+    /// throw so a settings screen can report a failed save instead of showing
+    /// an optimistic value that never reached the shared mobile/web row.
+    static func savePrimaryDevice(token: String, deviceId: String?) async throws {
+        try await postSettingsChecked(token: token, body: ["primaryDeviceId": deviceId ?? NSNull()])
+    }
+
+    static func savePrimaryRunner(token: String, deviceId: String, runnerId: String?) async throws {
+        try await postSettingsChecked(token: token, body: [
+            "primaryRunnerForDevice": [
+                "deviceId": deviceId,
+                "runnerId": runnerId ?? NSNull(),
+                // A model from another runner is unsafe. Clearing it lets the
+                // chosen CLI use its own configured default, matching mobile.
+                "model": NSNull(),
+                "mode": NSNull(),
+                "provider": NSNull(),
+            ],
+        ])
+    }
+
+    private static func postSettingsChecked(token: String, body: [String: Any]) async throws {
+        guard !token.isEmpty else { throw AgentError(message: "Sign in first.") }
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("settings"))
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 12
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw AgentError(message: "No response while saving Settings.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            throw AgentError(message: message ?? "Couldn't save Settings (\(http.statusCode)).")
+        }
+    }
+
     /// Shared POST /settings writer. Deliberately silent on failure — a
     /// preference write must never surface as an error on a lean-back surface.
     private static func postSettings(token: String, key: String, value: [String: Any]) async {
@@ -355,15 +415,6 @@ enum MachineRegistry {
             // Silent: rememberProject/rememberMCPServers already keep the local
             // value; Convex sync is best-effort.
         }
-    }
-
-    /// GET /guests/list — who this account has shared with. The host-side TV
-    /// surface only acts on accepted guests; pending/revoked rows stay out of
-    /// view because there is nothing useful to do with them from the couch.
-    static func listGuests(token: String) async throws -> [HostGuest] {
-        let data = try await getGuest(path: "guests/list", token: token,
-                                      failure: "Couldn't load shared access")
-        return (try JSONDecoder().decode(GuestList.self, from: data)).guests
     }
 
     /// Ask a machine to update its agent, WITHOUT reaching it.
@@ -409,100 +460,6 @@ enum MachineRegistry {
         }
         struct Ack: Decodable { let requestedVersion: String? }
         return (try? JSONDecoder().decode(Ack.self, from: data))?.requestedVersion ?? "latest"
-    }
-
-    /// Drop this account's OWN access to everything a host shared.
-    ///
-    /// Guest-side only: the backend takes the guest from the session token, so
-    /// this can never remove anyone else's access (http.ts:6480). Note the blast
-    /// radius the UI must state plainly — it is keyed on the HOST, not the row,
-    /// so it removes every machine that host shared, not just the one in hand.
-    /// Reversible: the host can invite again and the guest can accept again.
-    ///
-    /// Convex-direct for the same reason as requestUpdate: a shared box may be
-    /// on someone else's LAN, so there is no address to POST to.
-    static func leaveHost(hostUserId: String?, hostEmail: String?, token: String) async throws {
-        var body: [String: Any] = [:]
-        if let hostUserId, !hostUserId.isEmpty { body["hostUserId"] = hostUserId }
-        if let hostEmail, !hostEmail.isEmpty { body["hostEmail"] = hostEmail }
-        guard !body.isEmpty else {
-            throw AgentError(message: "Can't tell who shared this machine — try again from your phone or the web.")
-        }
-        _ = try await postGuest(path: "guests/leave", body: body, token: token,
-                               failure: "Couldn't remove your access")
-    }
-
-    /// Redeem a 6-char invitation code. The TV has no real keyboard, so the code
-    /// is the ONLY guest-side entry we offer here — the host does the inviting on
-    /// a surface where typing an email isn't hostile.
-    static func acceptInviteCode(_ code: String, token: String) async throws {
-        let clean = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard !clean.isEmpty else { throw AgentError(message: "Enter the invitation code.") }
-        _ = try await postGuest(path: "guests/accept-code", body: ["code": clean], token: token,
-                                failure: "Couldn't accept the invitation")
-    }
-
-    /// POST /guests/revoke — remove someone else's access to every machine this
-    /// account shared with them. Key by the identifiers /guests/list already
-    /// returns; email is preferred because it is the human-visible identity.
-    static func revokeGuest(email: String?, userId: String?, token: String) async throws {
-        var body: [String: Any] = [:]
-        if let email, !email.isEmpty { body["email"] = email }
-        if let userId, !userId.isEmpty { body["userId"] = userId }
-        guard !body.isEmpty else {
-            throw AgentError(message: "Can't tell which guest this is — try again from your phone or the web.")
-        }
-        _ = try await postGuest(path: "guests/revoke", body: body, token: token,
-                                failure: "Couldn't remove access")
-    }
-
-    /// Shared shape of the guest POSTs: bearer token to Convex, {error} carried
-    /// through verbatim (the backend's reasons — "Invitation not found",
-    /// "No shared access found" — beat a bare status code).
-    @discardableResult
-    private static func postGuest(path: String, body: [String: Any], token: String,
-                                  failure: String) async throws -> Data {
-        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent(path))
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        req.timeoutInterval = 12
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response from Yaver") }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw AgentError(message: "Your TV session expired — sign in again.")
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String {
-                throw AgentError(message: err)
-            }
-            throw AgentError(message: "\(failure) (\(http.statusCode)).")
-        }
-        return data
-    }
-
-    private static func getGuest(path: String, token: String, failure: String) async throws -> Data {
-        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent(path))
-        req.httpMethod = "GET"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-        req.timeoutInterval = 12
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse else { throw AgentError(message: "no response from Yaver") }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw AgentError(message: "Your TV session expired — sign in again.")
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String {
-                throw AgentError(message: err)
-            }
-            throw AgentError(message: "\(failure) (\(http.statusCode)).")
-        }
-        return data
     }
 
     /// Probe address candidates and return the first that answers /info within a

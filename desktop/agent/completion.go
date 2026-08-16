@@ -31,7 +31,7 @@ _yaver_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="auth signout connect serve logs stop clear-logs restart shutdown ping attach code status devices config relay tunnel set-runner runner-auth mcp email acl tmux exec session vault build expo debug deploy test repo workspace pipeline feedback voice clean cloud discover purge uninstall doctor completion host-share help version"
+    commands="auth signout connect serve logs stop clear-logs restart shutdown ping attach code status devices config relay tunnel set-runner runner-auth mcp email acl tmux exec session vault build expo debug deploy test repo workspace pipeline feedback voice clean cloud discover purge uninstall doctor completion help version"
 
     case "$prev" in
         yaver)
@@ -120,10 +120,6 @@ _yaver_completions() {
             COMPREPLY=($(compgen -W "create status ssh destroy" -- "$cur"))
             return 0
             ;;
-        host-share)
-            COMPREPLY=($(compgen -W "prepare create join list sessions workspace-status workspace-bootstrap attach-repo sync-repo guest-roots guest-read guest-write guest-pull guest-push end revoke status" -- "$cur"))
-            return 0
-            ;;
         completion)
             COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
             return 0
@@ -181,7 +177,6 @@ _yaver() {
         'purge:Complete wipe'
         'uninstall:Remove config and stop agent'
         'doctor:Diagnose issues'
-        'host-share:Host-backed guest coding shares'
         'completion:Generate shell completions'
         'help:Show help'
         'version:Print version'
@@ -265,10 +260,6 @@ _yaver() {
             subcommands=('create:Create cloud machine' 'status:Show status' 'ssh:SSH into machine' 'destroy:Tear down machine')
             _describe 'subcommand' subcommands
             ;;
-        host-share)
-            subcommands=('prepare:Audit host readiness' 'create:Create invite' 'join:Join invite' 'list:List invites' 'sessions:List active sessions' 'workspace-status:Show borrowed workspace' 'workspace-bootstrap:Seed borrowed workspace' 'attach-repo:Attach a guest repo to a borrowed workspace' 'sync-repo:Sync an attached repo to or from the borrowed workspace' 'guest-roots:List guest roots' 'guest-read:Read guest file' 'guest-write:Write guest file' 'guest-pull:Mirror guest repo into borrowed workspace' 'guest-push:Push borrowed workspace back to guest repo' 'end:End an active session' 'revoke:Revoke invite' 'status:Show capability manifest')
-            _describe 'subcommand' subcommands
-            ;;
         completion)
             subcommands=('bash:Bash completions' 'zsh:Zsh completions' 'fish:Fish completions')
             _describe 'subcommand' subcommands
@@ -318,7 +309,6 @@ complete -c yaver -n '__fish_use_subcommand' -a 'discover' -d 'Discover projects
 complete -c yaver -n '__fish_use_subcommand' -a 'purge' -d 'Complete wipe'
 complete -c yaver -n '__fish_use_subcommand' -a 'uninstall' -d 'Remove config and stop'
 complete -c yaver -n '__fish_use_subcommand' -a 'doctor' -d 'Diagnose issues'
-complete -c yaver -n '__fish_use_subcommand' -a 'host-share' -d 'Host-backed guest coding shares'
 complete -c yaver -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completions'
 complete -c yaver -n '__fish_use_subcommand' -a 'help' -d 'Show help'
 complete -c yaver -n '__fish_use_subcommand' -a 'version' -d 'Print version'
@@ -391,25 +381,6 @@ complete -c yaver -n '__fish_seen_subcommand_from workspace' -a 'init' -d 'Wire 
 complete -c yaver -n '__fish_seen_subcommand_from workspace' -a 'list' -d 'List workspace apps'
 complete -c yaver -n '__fish_seen_subcommand_from workspace' -a 'status' -d 'Show workspace app status'
 complete -c yaver -n '__fish_seen_subcommand_from workspace' -a 'merge' -d 'Merge multiple repos into a Yaver monorepo'
-
-# host-share subcommands
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'prepare' -d 'Audit host readiness'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'create' -d 'Create invite'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'join' -d 'Join invite'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'list' -d 'List invites'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'sessions' -d 'List sessions'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'workspace-status' -d 'Show borrowed workspace'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'workspace-bootstrap' -d 'Seed borrowed workspace'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'attach-repo' -d 'Attach a guest repo to a borrowed workspace'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'sync-repo' -d 'Sync an attached repo to or from the borrowed workspace'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'guest-roots' -d 'List guest roots'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'guest-read' -d 'Read guest file'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'guest-write' -d 'Write guest file'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'guest-pull' -d 'Mirror guest repo into borrowed workspace'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'guest-push' -d 'Push borrowed workspace back to guest repo'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'end' -d 'End an active session'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'revoke' -d 'Revoke invite'
-complete -c yaver -n '__fish_seen_subcommand_from host-share' -a 'status' -d 'Show capability status'
 
 # completion subcommands
 complete -c yaver -n '__fish_seen_subcommand_from completion' -a 'bash' -d 'Bash completions'

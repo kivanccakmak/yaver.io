@@ -56,13 +56,13 @@ func NewAppiumClient(baseURL string) *AppiumClient {
 // just the ones the bug-hunter needs and let callers pass extras
 // through `Extra`.
 type AppiumStartCaps struct {
-	Platform     string `json:"platformName"`              // "iOS" | "Android"
-	Automation   string `json:"automationName,omitempty"`  // "XCUITest" | "UiAutomator2"
-	DeviceName   string `json:"appium:deviceName,omitempty"`
-	BundleID     string `json:"appium:bundleId,omitempty"` // iOS — sticky-attach to a running app
-	AppPackage   string `json:"appium:appPackage,omitempty"` // Android equivalent
-	NoReset      bool   `json:"appium:noReset,omitempty"`  // attach instead of relaunch
-	Extra        map[string]interface{} `json:"-"`         // passthrough
+	Platform   string                 `json:"platformName"`             // "iOS" | "Android"
+	Automation string                 `json:"automationName,omitempty"` // "XCUITest" | "UiAutomator2"
+	DeviceName string                 `json:"appium:deviceName,omitempty"`
+	BundleID   string                 `json:"appium:bundleId,omitempty"`   // iOS — sticky-attach to a running app
+	AppPackage string                 `json:"appium:appPackage,omitempty"` // Android equivalent
+	NoReset    bool                   `json:"appium:noReset,omitempty"`    // attach instead of relaunch
+	Extra      map[string]interface{} `json:"-"`                           // passthrough
 }
 
 // StartSession opens a new Appium WebDriver session. Returns the session
@@ -129,8 +129,8 @@ func (c *AppiumClient) Tap(ctx context.Context, sessionID string, x, y int) erro
 	body := map[string]interface{}{
 		"actions": []map[string]interface{}{
 			{
-				"type": "pointer",
-				"id":   "finger1",
+				"type":       "pointer",
+				"id":         "finger1",
 				"parameters": map[string]string{"pointerType": "touch"},
 				"actions": []map[string]interface{}{
 					{"type": "pointerMove", "duration": 0, "x": x, "y": y},

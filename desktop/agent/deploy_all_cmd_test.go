@@ -16,10 +16,10 @@ func TestBumpSemver(t *testing.T) {
 		{"1.99.152", "minor", "1.100.0", false},
 		{"1.99.152", "major", "2.0.0", false},
 		{"1.99.152", "", "1.99.153", false}, // empty == patch
-		{"v1.2.3", "patch", "", true},        // leading v rejected
-		{"1.2", "patch", "", true},           // not X.Y.Z
-		{"1.2.3-beta", "patch", "", true},    // pre-release not supported
-		{"1.99.152", "weird", "", true},      // unknown bump kind
+		{"v1.2.3", "patch", "", true},       // leading v rejected
+		{"1.2", "patch", "", true},          // not X.Y.Z
+		{"1.2.3-beta", "patch", "", true},   // pre-release not supported
+		{"1.99.152", "weird", "", true},     // unknown bump kind
 	}
 	for _, c := range cases {
 		got, err := bumpSemver(c.in, c.kind)

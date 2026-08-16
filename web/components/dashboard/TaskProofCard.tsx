@@ -152,7 +152,7 @@ const TaskProofCard = memo(function TaskProofCard({
   const clipId = proof?.clipId || task.videoClipId || null;
 
   // ── Poster thumbnail: authed fetch → blob (B8: the poster route is
-  //    authSDKOrGuest; a bare <img src> 401s over the relay). ──
+  //    authSDK; a bare <img src> 401s over the relay). ──
   useEffect(() => {
     if (!clipId) {
       setPosterUrl(null);

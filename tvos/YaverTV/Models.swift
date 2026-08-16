@@ -100,14 +100,109 @@ struct RunnerSessions: Decodable {
     var sessions: [RunnerSession]?
 }
 
-/// A task as it appears in the glanceable list (GET /tasks). Only the fields a
-/// lean-back list needs; the full model (turns, cost, output) lives on mobile.
+/// One privacy-narrow frame from GET /tmux/stream.
+///
+/// The agent's wire object also contains `currentPath`, PID and tmux topology.
+/// A TV/headset needs none of those to paint the live session, and absolute
+/// paths identify the local account. Deliberately omit them from the native
+/// model so adding the stream cannot accidentally put them on a shared screen.
+struct TmuxPaneFrame: Decodable {
+    let paneId: String
+    let sessionName: String
+    let agent: String?
+    let model: String?
+    let status: String
+    let statusReason: String?
+    let options: [String]?
+    let title: String?
+    let preview: String?
+}
+
+/// One user/assistant turn from the same task transcript mobile and web render.
+struct TaskConversationTurn: Decodable, Identifiable, Equatable {
+    let role: String
+    let content: String
+    let timestamp: String?
+
+    var id: String { "\(timestamp ?? ""):\(role):\(content)" }
+}
+
+struct TaskPendingFollowUp: Decodable, Identifiable, Equatable {
+    let input: String
+    var id: String { input }
+}
+
+/// A task as it appears in the list and chat detail.
+///
+/// tvOS used to decode only a title/status and present the raw runner console as
+/// "Chat". That is not the mobile mechanic: mobile renders the conversation,
+/// shows the user's message immediately, and lets a finished task continue by
+/// silently forking to the same runner. Keep the wire DTO rich enough for the
+/// native TV to consume that same contract.
+///
+/// POST /tasks answers `taskId`, while GET /tasks answers `id`. Decoding both is
+/// load-bearing: reporting a decode error after POST has already started work
+/// invites a retry and creates a duplicate task.
 struct TaskSummary: Decodable, Identifiable {
     let id: String
     let title: String?
     let status: String?          // queued | running | review | completed | failed | stopped
-    let runner: String?
+    let runner: String?          // `runnerId` on current agents; `runner` on older ones
+    let model: String?
+    let sessionId: String?
+    let output: String?
+    let resultText: String?
+    let turns: [TaskConversationTurn]?
+    let pendingFollowUps: [TaskPendingFollowUp]?
     let tmuxSession: String?     // present → the task has a live session to drive
+
+    enum CodingKeys: String, CodingKey {
+        case id, taskId, title, status, runner, runnerId, model, sessionId
+        case output, resultText, turns, pendingFollowUps, tmuxSession
+    }
+
+    init(
+        id: String,
+        title: String? = nil,
+        status: String? = nil,
+        runner: String? = nil,
+        model: String? = nil,
+        sessionId: String? = nil,
+        output: String? = nil,
+        resultText: String? = nil,
+        turns: [TaskConversationTurn]? = nil,
+        pendingFollowUps: [TaskPendingFollowUp]? = nil,
+        tmuxSession: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.runner = runner
+        self.model = model
+        self.sessionId = sessionId
+        self.output = output
+        self.resultText = resultText
+        self.turns = turns
+        self.pendingFollowUps = pendingFollowUps
+        self.tmuxSession = tmuxSession
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id)
+            ?? c.decode(String.self, forKey: .taskId)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
+        runner = try c.decodeIfPresent(String.self, forKey: .runnerId)
+            ?? c.decodeIfPresent(String.self, forKey: .runner)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
+        output = try c.decodeIfPresent(String.self, forKey: .output)
+        resultText = try c.decodeIfPresent(String.self, forKey: .resultText)
+        turns = try c.decodeIfPresent([TaskConversationTurn].self, forKey: .turns)
+        pendingFollowUps = try c.decodeIfPresent([TaskPendingFollowUp].self, forKey: .pendingFollowUps)
+        tmuxSession = try c.decodeIfPresent(String.self, forKey: .tmuxSession)
+    }
 
     /// The title is a raw prompt — it carries absolute paths. Redact for a TV.
     var safeTitle: String { redactHomePaths(title ?? "Untitled task") }
@@ -121,6 +216,14 @@ struct TaskList: Decodable { let tasks: [TaskSummary] }
 /// would report an error for work that is running — the worst possible lie,
 /// because the user retries and gets two.
 struct TaskEnvelope: Decodable { let task: TaskSummary }
+
+struct TaskForkResult: Decodable {
+    let taskId: String
+    let runnerId: String
+    let status: String?
+    let parentTaskId: String?
+    let contextWordsUsed: Int?
+}
 
 /// A project the box knows about (GET /projects). The TV lists these to pick one
 /// to preview. `framework` decides how it renders on the TV: an RN/Android app
@@ -136,11 +239,19 @@ struct ProjectSummary: Decodable, Identifiable {
     /// (defaultRuntimeProjectByDevice carries {projectName, gitRemote, branch},
     /// never an absolute path) against the live /projects list.
     let gitRemote: String?
+    /// Repository-wide capability inventory from /projects. Monorepos use
+    /// /workspace/apps for the actionable child list; single apps use these
+    /// fields directly in Vibing's project-first picker.
+    let frameworks: [String]?
+    let surfaces: [String]?
+    let testSurfaces: [String]?
+    let isMonorepo: Bool?
+    let subframeworks: [String]?
 
     var id: String { name }
 
     /// How this project should be previewed on the TV.
-    enum Kind { case android, web, flutter, unknown }
+    enum Kind { case android, web, unknown }
     var kind: Kind {
         switch (framework ?? "").lowercased() {
         // RN/Expo takes the BROWSER lane, matching the agent's own default
@@ -152,7 +263,11 @@ struct ProjectSummary: Decodable, Identifiable {
         case "expo", "react-native", "reactnative", "rn": return .web
         case "kotlin", "android": return .android
         case "nextjs", "next", "vite", "react", "web", "remix", "astro", "svelte": return .web
-        case "flutter": return .flutter
+        // The agent runs Flutter's web target on Linux and captures it in the
+        // same headless browser lane as Next/Vite. Calling Flutter
+        // "unstreamable" on TV contradicted /workspace/apps and hid a working
+        // option from users with a Flutter-only repository.
+        case "flutter": return .web
         default: return .unknown
         }
     }
@@ -161,6 +276,73 @@ struct ProjectSummary: Decodable, Identifiable {
 }
 
 struct ProjectList: Decodable { let projects: [ProjectSummary] }
+
+/// One app declared by a monorepo's yaver.workspace.yaml.
+///
+/// A repository such as Talos can contain mobile + web + backend apps. Vibing
+/// asks /workspace/apps after the repository is selected so it never displays
+/// unrelated projects on the second screen and never guesses from tags.
+struct WorkspaceAppSummary: Decodable, Identifiable {
+    let name: String
+    let path: String?
+    let absPath: String?
+    let stack: String?
+    let surfaces: [String]?
+    let testSurfaces: [String]?
+    let kind: String?
+    let framework: String?
+    let envMissing: [String]?
+    let exists: Bool
+
+    var id: String { absPath ?? name }
+    var isPreviewable: Bool {
+        guard exists else { return false }
+        return ["web", "hybrid", "mobile"].contains((kind ?? "").lowercased())
+            || ["expo", "react-native", "flutter", "kotlin", "android", "nextjs", "vite", "react", "web"]
+                .contains((framework ?? "").lowercased())
+    }
+
+    func asProject(in repository: ProjectSummary) -> ProjectSummary {
+        ProjectSummary(
+            name: name,
+            path: absPath,
+            framework: framework,
+            branch: repository.branch,
+            gitRemote: repository.gitRemote,
+            frameworks: framework.map { [$0] },
+            surfaces: surfaces,
+            testSurfaces: testSurfaces,
+            isMonorepo: false,
+            subframeworks: nil
+        )
+    }
+}
+
+struct WorkspaceAppList: Decodable {
+    let ok: Bool?
+    let root: String?
+    let apps: [WorkspaceAppSummary]
+}
+
+/// Agent-owned project/box capability answer. Every surface renders this list
+/// instead of reimplementing framework conditionals.
+struct ProjectPreviewOption: Decodable, Identifiable {
+    let id: String
+    let label: String
+    let supported: Bool
+    let primary: Bool?
+    let reason: String?
+    let framework: String?
+}
+
+struct ProjectPreviewCapabilities: Decodable {
+    let workDir: String?
+    let framework: String
+    let selfDevelopment: Bool
+    let hasPairedDevice: Bool
+    let options: [ProjectPreviewOption]
+    let reason: String?
+}
 
 /// An external MCP server the box exposes — name is the identity the task body
 /// carries (`mcpServers: [name]`), same contract as mobile/web.
@@ -392,6 +574,8 @@ enum RemoteKey: String, CaseIterable {
 struct BoxTarget: Codable, Identifiable, Equatable {
     var id: String          // deviceId (or a stable local id)
     var name: String
+    /// Account-local alias. Optional/additive so old persisted boxes decode.
+    var alias: String? = nil
     var host: String        // LAN IP / hostname running `yaver serve`
     var port: Int = Backend.agentPort
     /// Set for a managed cloud box that can be woken from the control plane.
@@ -415,32 +599,34 @@ struct BoxTarget: Codable, Identifiable, Equatable {
     var relayBaseUrl: String? = nil
     var relayPassword: String? = nil
 
+    var aliasLabel: String? {
+        guard let alias, !alias.isEmpty, alias != name else { return nil }
+        return alias.hasPrefix("@") ? alias : "@\(alias)"
+    }
+
     /// True when this box can be resumed from the TV (managed + has a machineId).
     var wakeable: Bool { (managed ?? false) && (machineId?.isEmpty == false) }
 
-    /// Ordered ops endpoints to try: LAN first, relay second.
+    /// Ordered ops endpoints to try: direct first, relay second.
     ///
     /// Direct-first / relay-fallback is Yaver's documented connection strategy
     /// (CLAUDE.md "Connection strategy"), and it matters for cost as well as
     /// latency — a LAN hop costs nothing, while every relay byte is metered
     /// against the device's daily allowance.
-    var opsEndpoints: [URL] {
-        var out: [URL] = []
+    var opsEndpoints: [(url: URL, relay: Bool)] {
+        var out: [(url: URL, relay: Bool)] = []
         if !host.isEmpty, let lan = URL(string: "http://\(host):\(port)/ops") {
-            out.append(lan)
+            out.append((lan, false))
         }
         if let base = relayBaseUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
            !base.isEmpty, !id.isEmpty {
             let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
-            var path = "\(trimmed)/d/\(id)/ops"
-            // The relay accepts its password as `__rp` when a header cannot be
-            // set; we DO set the header too, this is the documented fallback
-            // (relay/server.go handleProxy).
-            if let pw = relayPassword, !pw.isEmpty,
-               let esc = pw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
-                path += "?__rp=\(esc)"
-            }
-            if let relay = URL(string: path) { out.append(relay) }
+            // AgentClient can set X-Relay-Password on tvOS, so credentials do
+            // not belong in a URL. Query strings leak into proxy/access logs,
+            // screenshots and crash reports; the header is attached only to
+            // the relay leg below.
+            let path = "\(trimmed)/d/\(id)/ops"
+            if let relay = URL(string: path) { out.append((relay, true)) }
         }
         return out
     }
@@ -455,14 +641,7 @@ struct BoxTarget: Codable, Identifiable, Equatable {
            !base.isEmpty, !id.isEmpty {
             let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
             let relayPath = "\(trimmed)/d/\(id)\(path)"
-            if var comps = URLComponents(string: relayPath) {
-                if let pw = relayPassword, !pw.isEmpty {
-                    var items = comps.queryItems ?? []
-                    items.append(URLQueryItem(name: "__rp", value: pw))
-                    comps.queryItems = items
-                }
-                if let relay = comps.url { out.append((relay, true)) }
-            }
+            if let relay = URL(string: relayPath) { out.append((relay, true)) }
         }
         return out
     }

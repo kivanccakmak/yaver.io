@@ -240,10 +240,10 @@ func (s *HTTPServer) handlePITRRestore(w http.ResponseWriter, r *http.Request) {
 // round-robins across them. The router can be one of the VPSes (active) or a
 // separate tiny VPS.
 type MultiRegionResult struct {
-	Regions []string              `json:"regions"`
-	Servers []ProvisionResult     `json:"servers"`
-	Caddy   string                `json:"caddyConfig,omitempty"`
-	Error   string                `json:"error,omitempty"`
+	Regions []string          `json:"regions"`
+	Servers []ProvisionResult `json:"servers"`
+	Caddy   string            `json:"caddyConfig,omitempty"`
+	Error   string            `json:"error,omitempty"`
 }
 
 func DeployMultiRegion(name string, regions []string, domain string) (*MultiRegionResult, error) {

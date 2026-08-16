@@ -2,8 +2,7 @@ package main
 
 // HTTP surface for monorepo detection: GET /projects/monorepo?dir=<path>.
 // Returns a Monorepo JSON describing the requested directory's framework
-// composition. Owner-auth — guests are blocked because the response includes
-// absolute paths.
+// composition. Owner-auth because the response includes absolute paths.
 
 import (
 	"encoding/json"

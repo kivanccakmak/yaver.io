@@ -105,6 +105,39 @@ func TestRemoteRuntimeCapabilitiesForRNIsWebRTCEligibleButHermesPrimary(t *testi
 	}
 }
 
+// Web apps remain WebView-primary on clients that have a browser, but TV,
+// vision and watch surfaces must still be able to stream that browser window
+// over WebRTC. Returning eligible=false here was the tvOS "data is missing"
+// failure: the nil target slice also serialized as JSON null.
+func TestRemoteRuntimeCapabilitiesForWebOffersBrowserWebRTC(t *testing.T) {
+	for _, fw := range []string{"nextjs", "next", "vite", "react"} {
+		caps := remoteRuntimeCapabilitiesForProject(t.TempDir(), fw)
+		if !caps.RemoteRuntimeEligible {
+			t.Fatalf("%s should expose the browser-window WebRTC lane", fw)
+		}
+		if caps.ExecutionMode != ExecutionModeWebWebview || caps.PrimarySurface != "webview" {
+			t.Fatalf("%s changed primary routing: mode=%q surface=%q", fw, caps.ExecutionMode, caps.PrimarySurface)
+		}
+		if len(caps.Targets) != 1 || caps.Targets[0].ID != "browser-window" {
+			t.Fatalf("%s targets = %+v, want browser-window", fw, caps.Targets)
+		}
+	}
+}
+
+func TestRemoteRuntimeIneligibleTargetsEncodeAsArray(t *testing.T) {
+	caps := remoteRuntimeCapabilitiesForProject(t.TempDir(), "unknown-framework")
+	if caps.Targets == nil {
+		t.Fatal("ineligible capabilities must carry [] targets, not null")
+	}
+	raw, err := json.Marshal(caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"targets":[]`) {
+		t.Fatalf("targets wire shape = %s, want []", raw)
+	}
+}
+
 // A native (non-RN) framework keeps in-app-sdk feedback and its WebRTC-primary
 // surface — the RN change must not have leaked into it.
 func TestRemoteRuntimeNativeFeedbackSurfaceUnchanged(t *testing.T) {

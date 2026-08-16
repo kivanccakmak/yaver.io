@@ -80,7 +80,7 @@ func signDevBundleURL(build, kind string, ttl time.Duration) (string, error) {
 // of relative URLs.
 //
 // Authorization fallback: a valid Authorization: Bearer <token> from
-// owner / paired / SDK / guest is also accepted. The Feedback SDK
+// the owner or an owner-minted SDK is also accepted. The Feedback SDK
 // already sends Bearer headers when fetching the bundle, so a
 // signed-URL miss isn't fatal as long as the request is auth'd.
 func verifyDevBundleSig(build, kind string, r *http.Request) error {
@@ -225,17 +225,15 @@ func signedNativeBundleURLs(s *HTTPServer) (string, string) {
 
 // hasValidYaverBearer reports whether the request carries an
 // Authorization: Bearer header that the agent recognizes as a
-// known token (owner, paired, support, or — pragmatically —
-// "starts with the yv_supp_ prefix and validates"). Used as an
+// known owner or SDK token. Used as an
 // alternative authorisation path for /dev/native-bundle so the
 // Feedback SDK + Yaver mobile app can keep their existing auth'd
 // fetch flow without needing the signed-URL dance.
 //
 // We deliberately do NOT validate against Convex here (that would
 // re-block when the agent is offline). The check matches the same
-// fast paths used by httpserver.go::auth(): exact owner-token
-// equality (constant-time), paired-token presence, and support
-// bearer presence. SDK tokens use authSDK and arrive with the
+// fast path used by httpserver.go::auth(): exact owner-token
+// equality (constant-time). SDK tokens use authSDK and arrive with the
 // same Bearer prefix; they are accepted at the lighter "the agent
 // has SEEN this token before" level by the cache. For an
 // unauthenticated public scanner with no token at all, all three
@@ -251,17 +249,6 @@ func hasValidYaverBearer(r *http.Request) bool {
 	}
 	cfg, _ := LoadConfig()
 	if cfg != nil && cfg.AuthToken != "" && secretEqual(tok, cfg.AuthToken) {
-		return true
-	}
-	if IsPairedToken(tok) {
-		return true
-	}
-	if strings.HasPrefix(tok, "yv_supp_") && supportTokenValidFor(tok, "/info") {
-		// Support sessions are scope-limited; here we only confirm the
-		// token is currently active. The serve handler's path-level
-		// scope check is what actually decides; we just want to admit
-		// "the request has a real bearer" so the signed URL is not
-		// strictly required.
 		return true
 	}
 	// SDK tokens — the Feedback SDK ships its bearer on every fetch.
@@ -286,7 +273,8 @@ func devBundleBearerCacheHit(tok string) bool {
 		return false
 	}
 	if v, ok := srv.tokenCache.Load(tok); ok && v != nil {
-		return true
+		info, ok := v.(*cachedTokenInfo)
+		return ok && info != nil && strings.TrimSpace(info.userID) != "" && info.userID == srv.ownerUserID
 	}
 	return false
 }

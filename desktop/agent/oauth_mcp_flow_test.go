@@ -112,7 +112,10 @@ func TestOauthMCPFullFlow(t *testing.T) {
 
 	// 4. Use the token through authMCP → connector default-deny scope; exec denied.
 	var allowed string
-	next := func(w http.ResponseWriter, r *http.Request) { allowed = r.Header.Get("X-Yaver-AllowedTools"); w.WriteHeader(200) }
+	next := func(w http.ResponseWriter, r *http.Request) {
+		allowed = r.Header.Get("X-Yaver-AllowedTools")
+		w.WriteHeader(200)
+	}
 	mreq := httptest.NewRequest("POST", "/mcp", nil)
 	mreq.Header.Set("Authorization", "Bearer "+at)
 	mrec := httptest.NewRecorder()

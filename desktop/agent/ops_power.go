@@ -46,9 +46,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsInfraPowerHandler,
-		Streaming:  false,
-		AllowGuest: false, // never let a guest reboot the owner's machine
+		Handler:        opsInfraPowerHandler,
+		Streaming:      false,
+		AllowCompanion: false, // never let a constrained companion reboot the owner's machine
 	})
 }
 

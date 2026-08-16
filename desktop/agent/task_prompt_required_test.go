@@ -66,7 +66,7 @@ func TestCreateTask_RefusesAPromptlessBody(t *testing.T) {
 	srv := startTaskTestServer(t)
 
 	res, body := postTask(t, srv, map[string]interface{}{
-		"title":       "   ", // whitespace title — still promptless
+		"title":       "   ",                            // whitespace title — still promptless
 		"input":       "change the background to black", // the key that is NOT read
 		"projectName": "sfmg",
 	})

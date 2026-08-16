@@ -32,7 +32,7 @@ type TodoItem struct {
 	AudioPath     string          `json:"audioPath,omitempty"`
 	BlackBoxSnap  string          `json:"blackboxSnap,omitempty"`
 	Errors        []CapturedError `json:"errors,omitempty"`
-	Source        string          `json:"source"`     // "sdk" or "mobile"
+	Source        string          `json:"source"` // "sdk" or "mobile"
 	DeviceInfo    DeviceFBInfo    `json:"deviceInfo"`
 	Status        TodoStatus      `json:"status"`
 	TaskID        string          `json:"taskId,omitempty"`
@@ -55,8 +55,8 @@ type TodoItemSummary struct {
 type TodoListManager struct {
 	mu          sync.RWMutex
 	items       map[string]*TodoItem
-	baseDir     string // ~/.yaver/todolist/
-	autoConsume bool   // when true, items are implemented immediately on add
+	baseDir     string               // ~/.yaver/todolist/
+	autoConsume bool                 // when true, items are implemented immediately on add
 	onNewItem   func(item *TodoItem) // callback when a new item is added (for auto-consume)
 }
 
@@ -379,4 +379,3 @@ func (tm *TodoListManager) saveItem(item *TodoItem) {
 func (tm *TodoListManager) saveItemLocked(item *TodoItem) {
 	tm.saveItem(item)
 }
-

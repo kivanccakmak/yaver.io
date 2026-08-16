@@ -23,11 +23,11 @@ func ghostEnabledGate(c OpsContext) *OpsResult {
 
 func init() {
 	registerOpsVerb(opsVerbSpec{
-		Name:        "ghost_remote_providers",
-		Description: "List remote-view providers (rustdesk/anydesk/vnc) and whether each is installed. Requires --ghost.",
-		Schema:      ghostJSONSchema(map[string]interface{}{}),
-		Handler:     ghostRemoteProvidersHandler,
-		AllowGuest:  false,
+		Name:           "ghost_remote_providers",
+		Description:    "List remote-view providers (rustdesk/anydesk/vnc) and whether each is installed. Requires --ghost.",
+		Schema:         ghostJSONSchema(map[string]interface{}{}),
+		Handler:        ghostRemoteProvidersHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_remote_connect",
@@ -37,8 +37,8 @@ func init() {
 			"peerId":   map[string]interface{}{"type": "string"},
 			"password": map[string]interface{}{"type": "string"},
 		}, "peerId"),
-		Handler:    ghostRemoteConnectHandler,
-		AllowGuest: false,
+		Handler:        ghostRemoteConnectHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_remote_disconnect",
@@ -46,8 +46,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"provider": map[string]interface{}{"type": "string"},
 		}),
-		Handler:    ghostRemoteDisconnectHandler,
-		AllowGuest: false,
+		Handler:        ghostRemoteDisconnectHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_remote_status",
@@ -55,8 +55,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"provider": map[string]interface{}{"type": "string"},
 		}),
-		Handler:    ghostRemoteStatusHandler,
-		AllowGuest: false,
+		Handler:        ghostRemoteStatusHandler,
+		AllowCompanion: false,
 	})
 }
 

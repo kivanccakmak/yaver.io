@@ -310,7 +310,7 @@ isolation is independent of network isolation.
 
 ```bash
 # Or via CLI
-yaver serve --containerize-guests --container-network bridge
+yaver serve --containerize-host --container-network bridge
 ```
 
 ## Configuration
@@ -319,8 +319,7 @@ yaver serve --containerize-guests --container-network bridge
 
 ```bash
 yaver serve \
-  --containerize-guests           # Guest tasks in containers (default: false)
-  --containerize-host             # Host tasks in containers (default: false)
+  --containerize-host             # Owner tasks in containers (default: false)
   --container-image myimage       # Custom image instead of yaver-sandbox
   --container-cpu 2.0             # CPU core limit per task
   --container-memory 4g           # Memory limit per task
@@ -332,7 +331,6 @@ yaver serve \
 
 ```json
 {
-  "containerize_guests": false,
   "containerize_host": false,
   "container_image": "",
   "container_cpu": "2.0",
@@ -380,23 +378,18 @@ same dependency caches.
 host). If it exists, the container uses it. If not, `npm install` populates it — and
 because `/workspace` is mounted read-write, the installed modules persist on host too.
 
-## Guest vs Host Containerization
+## Owner Containerization
 
-| Aspect | Guest (`--containerize-guests`) | Host (`--containerize-host`) |
-|--------|:---:|:---:|
-| Purpose | Security — prevent guest damage | Clean builds — reproducible env |
-| Default | Off (soft layers still active) | Off |
-| Risk without it | Prompt injection could access host files | Low (host trusts themselves) |
-| Recommended | Yes, when using guest access | Only if reproducibility matters |
-| Network default | `host` | `host` |
-| Resource limits | Enforced (CPU, memory, daily seconds) | Optional |
+`--containerize-host` runs owner tasks in the sandbox for reproducible builds.
+It is off by default, uses the configured network mode, and may apply optional
+CPU and memory limits. Cross-account task containerization was removed with
+guest/shared-machine access.
 
 ### Recommendation
 
-- **Guests enabled + concerned about security** → turn on `--containerize-guests`
-- **Solo developer, no guests** → no containerization needed
+- **Normal owner workflow** → no containerization required
 - **Want clean/reproducible builds** → turn on `--containerize-host`
-- **Shared GPU machine (multi-user)** → `--containerize-guests` + resource limits
+- **Operator fleet tenant** → per-tenant OS-user isolation + resource limits
 
 ## Interaction with Existing Security Layers
 
@@ -407,7 +400,7 @@ Containerization is **additive** — it doesn't replace any existing layer:
 │                                                                  │
 │  Layer 1: HTTP path allowlist (httpserver.go)                    │  ← still active
 │  Layer 2: Custom command block (createTask)                      │  ← still active
-│  Layer 3: Runner restriction (GuestConfigManager.CheckRunner)    │  ← still active
+│  Layer 3: Owner/companion/SDK scope checks                       │  ← still active
 │  Layer 4: WorkDir pinning (tasks.go:1268)                        │  ← still active
 │  Layer 5: AI prompt prefix (guestPromptPrefix)                   │  ← still active
 │  Layer 6: Usage limits (daily seconds, schedule, idle-only)      │  ← still active
@@ -480,8 +473,8 @@ asked for containerization.
 | `DetectProjectImage()` (Dockerfile.yaver) | `container_runner.go` | Done |
 | `Dockerfile.sandbox` base image | `Dockerfile.sandbox` | Done |
 | CLI: `yaver sandbox build/status` | `sandbox_cmd.go` | Done |
-| Config fields (ContainerizeGuests/Host, CPU, Memory, Mounts) | `config.go` | Done |
-| CLI flags (`--containerize-guests`, `--containerize-host`) | `main.go` | Done |
+| Config fields (ContainerizeHost, CPU, Memory, Mounts) | `config.go` | Done |
+| CLI flag (`--containerize-host`) | `main.go` | Done |
 | Startup wiring (ContainerRunner → TaskManager + HTTPServer) | `main.go` | Done |
 | Container decision in `startProcess()` | `tasks.go` | Done |
 | Container execution path (build opts → docker run → stream output) | `tasks.go` | Done |

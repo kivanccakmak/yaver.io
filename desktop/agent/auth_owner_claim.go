@@ -11,15 +11,14 @@
 //   1. Caller reached us through the relay or LAN (path-level
 //      gate from the relay's per-user `__rp=` validation).
 //   2. Convex GET /devices/list with the bearer lists THIS
-//      device with accessScope=="owner" — same check the
+//      device — same check the
 //      factory-reset endpoint uses.
 //   3. We splice the bearer into the active pair session as if
 //      a regular /auth/pair/submit had landed. Once accepted,
 //      the bootstrap loop saves it + re-execs `yaver serve`.
 //
-// Guests cannot owner-claim a host's box (accessScope must be
-// "owner"). A box without an active pair session 409s; the
-// caller should have already started one.
+// A box without an active pair session 409s; the caller should have already
+// started one.
 
 package main
 
@@ -97,13 +96,6 @@ func (bs *bootstrapHTTPServer) handleOwnerClaim(w http.ResponseWriter, r *http.R
 		})
 		return
 	}
-	if match.IsGuest || (match.AccessScope != "" && match.AccessScope != "owner") {
-		jsonReply(w, http.StatusForbidden, map[string]string{
-			"error": "guests cannot owner-claim a box — only the host (" + match.HostName + ") can re-pair it",
-		})
-		return
-	}
-
 	// Splice into the active pair session. activePairingSnapshot()
 	// returns nil if no session is open — caller should have started
 	// one (the agent does this automatically every 10min).
@@ -140,14 +132,6 @@ func (bs *bootstrapHTTPServer) handleOwnerClaim(w http.ResponseWriter, r *http.R
 	_, _ = w.Write(rec.Body())
 
 	if rec.Status() < 300 {
-		hostname := match.HostName
-		if hostname == "" {
-			hostname = match.HostEmail
-		}
-		if hostname == "" {
-			hostname = "(unknown)"
-		}
-		log.Printf("[auth] /auth/pair/owner-claim: paired %s as owner %s",
-			cfg.DeviceID[:8], hostname)
+		log.Printf("[auth] /auth/pair/owner-claim: paired owner device %s", cfg.DeviceID[:8])
 	}
 }

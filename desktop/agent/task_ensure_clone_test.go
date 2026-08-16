@@ -20,7 +20,6 @@ func TestClonePlanForTask(t *testing.T) {
 		want bool
 	}{
 		{"no remote → nil", Task{WorkDir: missing}, false},
-		{"guest → nil even with remote", Task{WorkDir: missing, GitRemote: "https://github.com/yaver-io/yaver-todo-rn.git", GuestUserID: "g1"}, false},
 		{"existing dir → nil", Task{WorkDir: tmp, GitRemote: "https://github.com/yaver-io/yaver-todo-rn.git"}, false},
 		{"missing dir + https remote → plan", Task{WorkDir: missing, GitRemote: "https://github.com/yaver-io/yaver-todo-rn.git", GitBranch: "main"}, true},
 		{"missing dir + scp remote → plan", Task{WorkDir: missing, GitRemote: "git@github.com:yaver-io/yaver-todo-rn.git"}, true},

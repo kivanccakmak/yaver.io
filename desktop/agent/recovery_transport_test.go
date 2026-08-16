@@ -12,16 +12,16 @@ import (
 
 func TestClassifyRecoveryIngressRelayPasswordValidation(t *testing.T) {
 	cfg := &Config{
-		RelayPassword:                  "the-real-password",
-		CachedRelayPassword:            "old-cached-password",
+		RelayPassword:                   "the-real-password",
+		CachedRelayPassword:             "old-cached-password",
 		RequirePrivateRecoveryTransport: true,
 	}
 
 	cases := []struct {
-		name         string
-		header       string
-		remote       string
-		wantAllowed  bool
+		name          string
+		header        string
+		remote        string
+		wantAllowed   bool
 		wantTransport string
 	}{
 		{

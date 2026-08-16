@@ -23,9 +23,7 @@ struct SettingsView: View {
 
     var body: some View {
         // Its OWN NavigationStack: RootView presents this view with
-        // `.sheet(isPresented:)`, and a sheet starts a fresh view hierarchy that
-        // does NOT inherit RootView's stack. Without this, the "Shared access"
-        // NavigationLink below would render and simply do nothing when tapped.
+        // `.sheet(isPresented:)`, and a sheet starts a fresh view hierarchy.
         NavigationStack {
             settings
         }
@@ -58,19 +56,6 @@ struct SettingsView: View {
                     } else {
                         Button("Sign in to a box") { showSignIn = true }
                             .font(.footnote)
-                    }
-
-                    // Gated on the TOKEN, not on hasStandaloneCreds: guest access
-                    // is Convex-direct and account-scoped, so it works with no box
-                    // configured, and keeps working when the box is asleep or
-                    // unreachable. Requiring a box here would hide a screen that
-                    // has no dependency on one.
-                    if !store.token.isEmpty {
-                        Divider()
-                        NavigationLink("Shared access") { GuestAccessView() }
-                            .font(.footnote)
-                        Text("Machines other people shared with you, and invitations waiting for you.")
-                            .font(.caption2).foregroundStyle(.secondary)
                     }
 
                     if store.hasStandaloneCreds {

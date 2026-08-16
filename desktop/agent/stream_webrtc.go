@@ -10,7 +10,7 @@ package main
 // H264 track fed by the source, and answers. Sub-second glass-to-glass vs. the
 // snapshot/MJPEG paths.
 //
-// Egress note (CLAUDE.md): same as the rest of streaming — owner/guest only over
+// Egress note (CLAUDE.md): same as the rest of streaming — owner only over
 // the authed mesh, neutral tool, user's content + responsibility.
 
 import (
@@ -206,7 +206,10 @@ func (s *HTTPServer) handleStreamWebRTCOffer(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServersForPeer()})
+	iceCtx, iceCancel := context.WithTimeout(r.Context(), 5*time.Second)
+	iceServers := s.iceServersForHTTPServer(iceCtx)
+	iceCancel()
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "peer connection: "+err.Error())
 		return

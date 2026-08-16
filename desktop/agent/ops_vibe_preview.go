@@ -51,9 +51,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsVibePreviewHandler,
-		Streaming:  false,
-		AllowGuest: false, // capture/start are mutating; status reads inherit owner-auth here
+		Handler:        opsVibePreviewHandler,
+		Streaming:      false,
+		AllowCompanion: false, // capture/start are mutating; status reads inherit owner-auth here
 	})
 }
 

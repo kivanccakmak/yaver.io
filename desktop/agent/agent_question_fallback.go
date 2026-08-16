@@ -69,8 +69,8 @@ var softQuestionPatterns = []*regexp.Regexp{
 // it's enough context to span a multi-line prose question and small
 // enough to avoid matching across unrelated prose blocks.
 type softQuestionState struct {
-	mu      sync.Mutex
-	tail    []byte
+	mu       sync.Mutex
+	tail     []byte
 	lastFire time.Time
 }
 

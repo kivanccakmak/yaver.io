@@ -57,3 +57,32 @@ func TestIsAddrInUseErr(t *testing.T) {
 		t.Fatal("unrelated error must not be classified as in-use")
 	}
 }
+
+// The remote-box incident had TWO service managers. Each foreground (--debug)
+// process considered the other's healthy listener "stale", killed it, and was
+// then killed on the next restart. This negative control makes the dangerous
+// operation observable: PID discovery panics if reclaim gets past the health
+// answer.
+func TestReclaimPortNeverTouchesHealthyYaver(t *testing.T) {
+	originalProbe := probePortYaverHealth
+	originalHolders := portHolderPIDs
+	t.Cleanup(func() {
+		probePortYaverHealth = originalProbe
+		portHolderPIDs = originalHolders
+	})
+
+	probePortYaverHealth = func(port int) *localAgentHealthInfo {
+		if port != 18080 {
+			t.Fatalf("probe port = %d, want 18080", port)
+		}
+		return &localAgentHealthInfo{OK: true, Version: "test"}
+	}
+	portHolderPIDs = func(port int) []int {
+		t.Fatalf("healthy Yaver must short-circuit before PID discovery")
+		return nil
+	}
+
+	if reclaimPortFromStaleYaver(18080) {
+		t.Fatal("healthy Yaver must never be reclaimed")
+	}
+}

@@ -24,7 +24,7 @@ export default function RemoteDesktopModal({
   onConnect: () => void;
   onOpenRescue?: () => void;
 }) {
-  const reauthRequired = Boolean(device.needsAuth) && !device.isGuest;
+  const reauthRequired = Boolean(device.needsAuth);
   const state: "needs-reauth" | "not-connected" | "connecting" | "ready" = reauthRequired
     ? "needs-reauth"
     : isCurrentDeviceConnected

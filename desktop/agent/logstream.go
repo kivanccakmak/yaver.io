@@ -55,6 +55,7 @@ func (s *LogStream) Append(line string) {
 //   - {"type":"runner_action", "runner":"claude","tool":"Read","detail":"src/foo.tsx"}
 //   - {"type":"runner_text", "runner":"claude","text":"<assistant chatter>"}
 //   - {"type":"runner_result", "runner":"claude","status":"done","duration_ms":12345,"cost_usd":0.012}
+//
 // Mobile / web subscribers render bubbles by `type`.
 func (s *LogStream) AppendEvent(ev map[string]interface{}) {
 	if ev == nil {

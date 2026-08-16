@@ -103,8 +103,8 @@ func init() {
 		Schema: atvSchema(map[string]interface{}{
 			"device": map[string]interface{}{"type": "string"},
 		}),
-		Handler:    atvNowPlayingHandler,
-		AllowGuest: true,
+		Handler:        atvNowPlayingHandler,
+		AllowCompanion: true,
 	})
 
 	// ── Capture card (home A/V source) ────────────────────────────────────────
@@ -133,11 +133,11 @@ func init() {
 		Handler:     captureStopHandler,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "capture_status",
-		Description: "Capture stream status (running, device, fps, hasFrame, hdcpBlocked, URLs).",
-		Schema:      atvSchema(map[string]interface{}{}),
-		Handler:     captureStatusHandler,
-		AllowGuest:  true,
+		Name:           "capture_status",
+		Description:    "Capture stream status (running, device, fps, hasFrame, hdcpBlocked, URLs).",
+		Schema:         atvSchema(map[string]interface{}{}),
+		Handler:        captureStatusHandler,
+		AllowCompanion: true,
 	})
 }
 

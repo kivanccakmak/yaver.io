@@ -337,9 +337,11 @@ export default function HomePage() {
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
               {[
-                { name: "macOS", href: GUI_DOWNLOADS.mac, note: "DMG · Apple Silicon & Intel" },
-                { name: "Windows", href: GUI_DOWNLOADS.win, note: "Installer · x64" },
-                { name: "Linux", href: GUI_DOWNLOADS.linux, note: "AppImage · deb · rpm" },
+                { name: "macOS (Apple Silicon)", href: GUI_DOWNLOADS.macArm64, note: "Signed + notarized DMG · arm64" },
+                { name: "macOS (Intel)", href: GUI_DOWNLOADS.macX64, note: "Signed + notarized DMG · x64" },
+                { name: "Windows", href: GUI_DOWNLOADS.winX64, note: "Signed installer · x64" },
+                { name: "Linux", href: GUI_DOWNLOADS.linuxX64, note: "AppImage · x64" },
+                { name: "Linux ARM", href: GUI_DOWNLOADS.linuxArm64, note: "AppImage · arm64" },
               ].map((d) => (
                 <a
                   key={d.name}

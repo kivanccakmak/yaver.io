@@ -53,7 +53,7 @@ func deleteRule(table, chain string, spec ...string) {
 // return only — NOT a blanket `-i/-o iface ACCEPT`. That stops the box from
 // forwarding arbitrary non-mesh packets that happen to arrive on the interface,
 // and combined with per-user mesh isolation keeps this from acting as an open
-// relay (only this user's own devices + explicitly-granted guests are peers).
+// relay (only this owner's authenticated devices are peers).
 func enableForwarding(iface, meshCIDR string) error {
 	if err := runCmd("sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
 		return err

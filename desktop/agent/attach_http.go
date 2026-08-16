@@ -17,23 +17,6 @@ import (
 	"time"
 )
 
-// attachPrincipalIsOwner rejects the principals that must never hold an attach
-// capability, even though s.auth() accepted their bearer.
-//
-// A guest was invited to a project, not handed the ability to render Yaver's
-// own source and start coding turns against it. A support session is a
-// time-boxed operator channel with a narrow allowlist — widening it via Attach
-// Mode would be a privilege escalation wearing a feature's clothes.
-func attachPrincipalIsOwner(r *http.Request) bool {
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		return false
-	}
-	if r.Header.Get("X-Yaver-Support") == "true" {
-		return false
-	}
-	return true
-}
-
 type attachStartRequest struct {
 	WorkDir string `json:"workDir"`
 }
@@ -55,16 +38,6 @@ func (s *HTTPServer) handleAttachStart(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
-	if !attachPrincipalIsOwner(r) {
-		writeJSON(w, http.StatusForbidden, attachStartResponse{
-			Code:  "ATTACH_OWNER_ONLY",
-			Error: "Attach Mode is owner-only.",
-			Remedy: "Sign in as the account that owns this machine. Guest and support sessions " +
-				"cannot attach.",
-		})
-		return
-	}
-
 	var req attachStartRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")

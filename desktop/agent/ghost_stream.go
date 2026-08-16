@@ -201,22 +201,22 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"fps": map[string]interface{}{"type": "integer", "description": "frames per second 1-10 (default 3)"},
 		}),
-		Handler:    ghostStreamStartHandler,
-		AllowGuest: false,
+		Handler:        ghostStreamStartHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "ghost_stream_stop",
-		Description: "Stop the live ghost screen stream. Requires --ghost.",
-		Schema:      ghostJSONSchema(map[string]interface{}{}),
-		Handler:     ghostStreamStopHandler,
-		AllowGuest:  false,
+		Name:           "ghost_stream_stop",
+		Description:    "Stop the live ghost screen stream. Requires --ghost.",
+		Schema:         ghostJSONSchema(map[string]interface{}{}),
+		Handler:        ghostStreamStopHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "ghost_stream_status",
-		Description: "Live ghost stream status (running, fps, URLs). Requires --ghost.",
-		Schema:      ghostJSONSchema(map[string]interface{}{}),
-		Handler:     ghostStreamStatusHandler,
-		AllowGuest:  false,
+		Name:           "ghost_stream_status",
+		Description:    "Live ghost stream status (running, fps, URLs). Requires --ghost.",
+		Schema:         ghostJSONSchema(map[string]interface{}{}),
+		Handler:        ghostStreamStatusHandler,
+		AllowCompanion: false,
 	})
 }
 

@@ -115,7 +115,7 @@ func TestSSHControlServer_ClosedLoop_TaskScopedVerb(t *testing.T) {
 
 // An UNAUTHORIZED key must be refused at the SSH handshake — never reaches a verb.
 func TestSSHControlServer_RejectsUnauthorizedKey(t *testing.T) {
-	_, authorizedPub := newTestSigner(t) // server authorizes THIS key
+	_, authorizedPub := newTestSigner(t)  // server authorizes THIS key
 	attackerSigner, _ := newTestSigner(t) // attacker holds a DIFFERENT key
 	addr, cleanup := startTestControlServer(t, authorizedPub)
 	defer cleanup()

@@ -19,6 +19,12 @@ flow (`/auth`, `/api/*`, OAuth providers) and the app itself (`/dashboard`,
 `/d/<deviceId>/` agent proxy) may render in the window; everything else is
 bounced to the auth gate by `src/navigation-policy.js` (unit-tested).
 
+The in-app auth journey supports account creation as well as sign-in: passkeys,
+Google, Microsoft, Apple, GitHub, and GitLab OAuth, plus email/password when the
+backend enables that capability. Yaver account auth does not silently grant
+runner, Git-provider, cloud-provider, or Office access; those remain separate
+user-authorized connections.
+
 The web app agrees: on the auth flow and app surfaces the marketing header
 nav (Pricing / FAQ / Docs / Developers / Download / Blog) and footer are not
 rendered at all (`web/lib/app-surface.ts` + `web/components/Header.tsx`,
@@ -33,7 +39,7 @@ respect the latest project + MCP choices on every surface.
 ```bash
 cd electron
 npm install
-npm test           # 20/20 — auth interceptor + navigation policy + agent manager
+npm test           # 33/33 — lifecycle, auth transport, policy, navigation
 npm start          # production dashboard (https://yaver.io/dashboard)
 npm run dev        # localhost:3000 when a web dev server answers, else production
 ```
@@ -44,6 +50,9 @@ Env overrides:
 |---|---|
 | `YAVER_DASHBOARD_URL` | Load this URL instead (https or http). |
 | `YAVER_DEV=1` | Prefer `http://localhost:3000` (probed, 1.2s timeout) over production. |
+| `YAVER_AGENT_BINARY` | Exact absolute executable to supervise in development/automation. |
+| `YAVER_ELECTRON_AUTOMATION=1` | Unpackaged tests only: isolated mock keychain; ignored by packaged builds. |
+| `YAVER_ELECTRON_USER_DATA_DIR` | Absolute isolated profile path used with automation mode. |
 
 ## Embedded agent (adopt-or-spawn)
 
@@ -55,32 +64,115 @@ On app start the GUI probes `127.0.0.1:18080/health`:
 2. **Not healthy → spawn** `yaver serve --debug` as a supervised foreground
    child: health-wait, restart-on-crash with backoff, stop-on-quit.
 
-Binary resolution: bundled `<app>/Resources/bin/yaver` (electron-builder
+A bootstrap `/health` response is shown as **pair this PC**, never as a green
+ready state. Closing the window keeps the node and task streams alive in the
+tray; explicit Quit stops only a child the GUI spawned and leaves an
+independently running adopted agent alone.
+
+Binary resolution: explicit `YAVER_AGENT_BINARY` in development/automation →
+bundled `<app>/Resources/bin/yaver` (electron-builder
 `extraResources`) → `~/.yaver/bin/current/<platform>/yaver` (CLI cache) →
 `PATH`. The bundled binary is fetched at release time by
 `scripts/fetch-agent-binary.mjs` (version from `versions.json` → `cli`), so
 the packaged app carries the agent with **no network dependency at boot**.
+The fetcher requires the matching SHA-256 from the release `checksums.txt`.
+Windows release workflows additionally require valid timestamped Authenticode
+on the raw agent, installed GUI, embedded agent, and outer installer.
 
 **Self-contained, no keychain prompts:** the Go agent **embeds hermesc**
 (`hermesc_embedded.go`, mac-arm64/x64 + linux-x64) so Hermes-bundle reload
-tooling ships inside the app. Runner CLIs (claude / codex / opencode) install
-on demand through the agent's `/install/` route (`ensureRunnerInstalledStream`),
-and doctor/diagnose is served at `/diagnose`, `/agent/doctor`, `/net/doctor`,
+tooling ships inside the app. Runner CLIs (Claude Code / Codex / OpenCode)
+install through the agent's `/install/` route (`ensureRunnerInstalledStream`).
+A global `yaver-cli` install bootstraps all three official npm packages on
+macOS, Linux, WSL, and Windows; a standalone direct GUI exposes the same
+deterministic Doctor install actions. Runner OAuth/API credentials are never
+bundled. Mac App Store/TestFlight is a client-only sandbox and runs runners on
+a connected Yaver node instead of executing downloaded CLIs inside the app.
+Doctor/diagnose is served at `/diagnose`, `/agent/doctor`, `/net/doctor`,
 `/mobile/hermes/doctor` — rendered by the dashboard's HealthView tab (tray →
 "Diagnose"). The spawned agent runs with `YAVER_VAULT_SKIP_KEYCHAIN=1`, which
 the agent honors as a global keychain gate (`vault_keychain.go::keychainAccessDisabled`)
 for the vault mirror AND the runner-auth probe — so the desktop app never
 triggers a macOS "security wants to use your confidential information" prompt.
+Chromium secure storage is a separate layer: production uses macOS Keychain
+under Yaver's stable signed identity, so the OS may ask once on first access.
+Unpackaged browser automation uses an isolated mock keychain so the generic
+Electron development identity cannot create an unanswerable repeated prompt;
+the switch is structurally disabled when `app.isPackaged` is true.
+
+The window deliberately keeps the native OS frame (`frame`, shadow, rounded
+corners and macOS title bar) instead of drawing a square frameless web shell.
+On macOS the Dock icon is also set from the canonical Yaver artwork during
+unpackaged development; packaged builds use `assets/icon.icns`. The canonical
+artwork has a transparent squircle silhouette, and the icon build regenerates
+the macOS ICNS and Windows ICO from that same source.
+
+The Electron bridge exposes a non-secret `localDeviceId`. Only the device row
+with that exact ID is labelled **This PC · Desktop GUI**; ordinary browsers
+remain **Web UI** and never guess from a hostname. Runner/render choices persist
+the real device ID, so “This PC” is a label, not a magic routing target.
+
+## Diagnostic logs
+
+The shell writes structured, credential-redacted diagnostics to its per-user
+data directory. Writes are batched once per second, the memory queue is capped
+at 256 KiB, and files rotate at 2 MiB with at most three files. Agent state,
+renderer/load failures, updater errors and native process failures are covered.
+Tray → **Open diagnostic logs…** reveals the exact file without Terminal.
+
+## Updates
+
+Signed direct builds update from the architecture-specific metadata attached
+to the protected `gui/v*` GitHub release:
+
+- macOS Developer ID ZIP/DMG and Windows NSIS download in the background and
+  install on quit;
+- Linux AppImage uses the same in-place updater; deb/rpm installs remain owned
+  by the Linux package manager and the GUI says so explicitly;
+- Mac App Store/TestFlight never loads the direct updater. Apple manages that
+  build's updates through App Store/TestFlight.
+
+Automatic updates default on and are reversible from the tray or the bounded
+`window.yaver.setAutomaticUpdates()` bridge. “Check for updates” remains an
+explicit one-shot action when background updates are off. The updater requests
+`latest-<arch>{-mac|-linux}.yml`, so x64 and arm64 jobs cannot overwrite each
+other's release metadata.
+
+## macOS TestFlight / Mac App Store
+
+Yaver has two honest macOS distributions:
+
+- **Developer ID DMG** — full local node: embedded Go agent, runners,
+  repositories, rendering/capture and cross-device remote access.
+- **Mac App Store / TestFlight** — App Sandbox client: account/OAuth, tasks,
+  devices and remote previews, connecting to a Yaver node elsewhere. It does
+  not bundle or start the Go agent because arbitrary repo/process/capture
+  access is incompatible with a least-privilege Store sandbox.
+
+Build locally with `./deploy/deploy.sh desktop-mas`. After a separate explicit
+release approval, `./deploy/deploy.sh desktop-testflight` builds a universal
+MAS package, verifies signature/entitlements and absence of the agent, validates
+with App Store Connect, then uploads it to the macOS TestFlight train. Required
+credentials and profiles are listed by
+`scripts/deploy-macos-testflight.sh --help`; private material stays outside the
+repository. The App Store record/App ID must be `io.yaver.gui`.
+
+If the App Store Connect app record is missing, an owner can dispatch
+`release-gui.yml` with `ensure_macos_app_record=true`. The idempotent job uses
+the existing App Store Connect GitHub secrets, creates only the fixed
+`io.yaver.gui` / `Yaver` record, and skips the unrelated desktop release matrix.
 
 ## What it fixes in the shell (not the web app)
 
-The web dashboard passes the bearer token and relay password to SSE streams as
+The web dashboard passes the bearer token and relay password to agent SSE streams as
 query params (`?token=` / `?__rp=`) because `EventSource` cannot set headers
 (`web/lib/agent-client.ts:6135-6164`). On a bare browser that leaks the token
 into agent access logs and browser history. The GUI intercepts every request in
 the main process:
 
-1. strips `?token=` / `?__rp=` from the outgoing URL,
+1. strips agent-marked `?token=` / `?__rp=` from the outgoing URL without
+   consuming application/OAuth/reset parameters that also happen to be named
+   `token`,
 2. captures the material per-origin (process-lifetime, never written to disk),
 3. re-injects it as `Authorization: Bearer <token>` / `X-Relay-Password`
    headers — both already in the agent's CORS allowlist
@@ -93,7 +185,10 @@ the mobile app's transport.
 
 - `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`,
   `webSecurity: true` — the preload exposes a single frozen `window.yaver`
-  object (platform, versions, `notify`, `setTaskNotifications`).
+  object with bounded task/agent/status/settings methods.
+- Camera, microphone, location, notifications, and device permissions requested
+  by remote content are denied by the Electron session. WebAuthn/passkeys and
+  receiving an authorized WebRTC stream do not require those grants.
 - Navigation allowlist: only `yaver.io` / `relay.yaver.io` / `cloud.yaver.io` /
   `localhost:3000` may navigate the window; everything else opens in the
   system browser (`setWindowOpenHandler` + `will-navigate`).
@@ -105,12 +200,16 @@ the mobile app's transport.
 
 ## Native value-adds
 
-- **Task notifications**: a sandboxed DOM observer watches the chat header for
-  terminal statuses (`completed` / `failed` / `stopped` / `review`), dedupes
-  with a 45s cooldown, and shows a native notification. Toggle from the tray.
+- **Shared task lifecycle**: the dashboard lists ongoing/review/completed/
+  failed/stopped agent tasks, hydrates historical turns, resumes the raw console,
+  and exposes Stop / Complete / confirmed Delete. Structured terminal events
+  drive native notifications; DOM observation remains an older-dashboard
+  fallback.
 - **Tray**: show/hide, agent status line, Diagnose (doctor) → health tab,
-  reload, notifications toggle, quit. The window hides instead of closing
-  (close-to-tray) and the app stays alive so tasks keep streaming.
+  tasks, reload, notifications, automatic-update opt-out, **Keep this PC
+  available**, start-at-login, and quit. The window hides instead of closing, so tasks keep streaming. The
+  availability blocker is process-scoped and never edits an OS power plan or
+  asks for administrator access.
 - **Deep links**: `yaver://dashboard?tab=chat|runtime|devices|projects|health`
   (macOS `open-url` + single-instance argv on Windows/Linux). The dashboard
   already syncs `?tab=` on navigation (`page.tsx:1218-1221`).
@@ -129,17 +228,21 @@ Per-platform icons are generated once (`scripts/build-icons.sh`): `icon.icns`
 `gui/v*`) fetches the agent binary, runs `npm test`, builds all three
 platforms, and cuts a GitHub release whose asset names match the
 [yaver.io/download](https://yaver.io/download) landing page
-(`yaver-gui-<version>-mac.dmg` / `-win-setup.exe` / `-linux.AppImage`).
+(`yaver-gui-<version>-mac-<arm64|x64>.dmg` /
+`-win-x64-setup.exe` / `-linux-<arm64|x64>.AppImage`).
 
-## Known limitations (inherited from the web app)
+## Known limitations
 
 The GUI renders the dashboard as-is, so it inherits the web-only findings the
 audit recorded — the GUI's job is to *surface* them, not hide them:
 
-- Web chat still lacks the raw opencode console lane, command cards, and
-  post-task render gating that mobile has (the three parity gaps users hit
-  daily). The dashboard's `?tab=` URL only names tabs; the raw-lane work is a
-  web-app change, tracked in the audit doc §9.6.
+- A clean packaged Windows journey has not yet operation-proven account
+  creation → local-agent owner claim → authenticated `/info`. The shared
+  dashboard can reclaim a bootstrap device, but the first-run native status
+  panel and clean-VM pixel test remain release gates.
+- The GUI system-awake blocker is implemented; AC/battery policy and a
+  display-awake assertion scoped only to an authorized live-view session are
+  not yet unified with the Go agent's cross-platform inhibitor.
 - The 900 ms `onLoad` overlay timer and the green-over-blank "preview live"
   pill are web-app rendering choices; the GUI keeps
   `StreamHealthNotice`/`RawFailureBanner` visible and adds no status chrome of

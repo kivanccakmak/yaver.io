@@ -177,7 +177,7 @@ export function classifyFetchError(input: ClassifyFetchErrorInput): ClassifiedFa
       reason: "forbidden",
       label: "Forbidden",
       detail: "Reached the agent, but it refused this request for the current identity.",
-      suggestedAction: "Check guest scopes or device ownership.",
+      suggestedAction: "Verify device ownership and sign in again.",
       status,
       raw,
     };

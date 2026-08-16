@@ -4,7 +4,7 @@ package main
 // End-user apps poll these through the existing P2P relay, so
 // no inbound ports, no vendor, no central server. Auth reuses
 // the SDK token middleware so releases are scoped to the dev's
-// own devices and any guest who's been explicitly allowed.
+// own authenticated devices.
 //
 // Routes (registered in httpserver.go next to the other /releases*
 // aware handlers):
@@ -59,7 +59,7 @@ type releaseLatestResponse struct {
 	MD5            string        `json:"md5,omitempty"`
 	HermesBC       int           `json:"hermesBcVersion,omitempty"`
 	PublishedAt    string        `json:"publishedAt,omitempty"`
-	BundleURL      string        `json:"bundleUrl,omitempty"`      // same-origin path
+	BundleURL      string        `json:"bundleUrl,omitempty"` // same-origin path
 	RolloutPercent int           `json:"rolloutPercent"`
 	InRollout      bool          `json:"inRollout"`
 	Reason         string        `json:"reason,omitempty"` // "in-rollout" | "not-in-rollout" | "no-latest" | ...

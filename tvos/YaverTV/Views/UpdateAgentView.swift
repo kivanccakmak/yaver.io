@@ -53,6 +53,11 @@ struct UpdateAgentView: View {
                 }
             }
             .navigationTitle("Update agents")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
         .task { await load() }
     }

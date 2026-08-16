@@ -62,6 +62,7 @@ export default function ProjectDetailScreen() {
   const [loading, setLoading] = useState(false);
   const [rendering, setRendering] = useState<"web" | "phone" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [syncingRemote, setSyncingRemote] = useState(false);
 
   const q = dir ? `?directory=${encodeURIComponent(dir)}` : "";
   const slug = dir.split("/").filter(Boolean).pop() || project?.name || "project";
@@ -190,6 +191,28 @@ export default function ProjectDetailScreen() {
     }
   }
 
+  /** Deterministic safe sync of a remote repo (rebase --autostash → explicit
+   *  origin push, never force). Reports conflicts and never pushes through one. */
+  async function syncRemote() {
+    if (!dir.trim()) return;
+    setSyncingRemote(true);
+    try {
+      const r = await quicClient.gitSyncRemote(dir);
+      if (r.requiresAgent) {
+        Alert.alert("Sync: conflicts", `${r.error || "Rebase hit conflicts"} (${r.conflicts?.join(", ") || "files"}). Nothing was pushed. Hand off to a coding agent.`);
+      } else if (!r.ok) {
+        Alert.alert("Sync failed", r.error || r.output || "Unknown error.");
+      } else {
+        Alert.alert("Synced", `Synced ${r.branch} → ${r.hash}.`);
+        void loadAll();
+      }
+    } catch (e) {
+      Alert.alert("Sync failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncingRemote(false);
+    }
+  }
+
   const dirtyCount = (gitStatus?.staged?.length || 0) + (gitStatus?.modified?.length || 0) + (gitStatus?.untracked?.length || 0);
   const canPhoneRender = stackLabels.some((s) => ["expo", "react-native"].includes(s.toLowerCase()));
 
@@ -237,6 +260,13 @@ export default function ProjectDetailScreen() {
               {typeof gitStatus?.ahead === "number" && gitStatus.ahead > 0 ? <Pill c={c} label={`${gitStatus.ahead} ahead`} tone="warn" /> : null}
               {typeof gitStatus?.behind === "number" && gitStatus.behind > 0 ? <Pill c={c} label={`${gitStatus.behind} behind`} tone="warn" /> : null}
             </View>
+            <Pressable
+              onPress={syncRemote}
+              disabled={syncingRemote || !dir}
+              style={[actionBtn(c), { backgroundColor: c.bgCard, borderColor: c.accent, borderWidth: 1, opacity: syncingRemote || !dir ? 0.45 : 1 }]}
+            >
+              <Text style={{ color: c.textPrimary, fontWeight: "700" }}>{syncingRemote ? "Syncing..." : "Sync remote (rebase → push)"}</Text>
+            </Pressable>
           </View>
         </View>
 

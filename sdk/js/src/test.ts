@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
 import {
-  composeEntitlements, entitlementAllows, entitlementFromGuest, entitlementFromResolved,
+  composeEntitlements, entitlementAllows,
   LAYER4_DENIED_TOOLS, type Entitlement,
 } from './acl';
 
@@ -108,15 +108,15 @@ test('buildCandidates orders direct -> tunnel -> relay and brackets IPv6', () =>
 
 test('composeEntitlements intersects present allowlists and leaves absent ones open', () => {
   const company: Entitlement = { source: 'company-policy', allowedRunners: ['opencode', 'codex', 'claude'] };
-  const guest: Entitlement = { source: 'guest:full', allowedRunners: ['opencode', 'codex'], allowedProjects: ['acme-erp'] };
-  const eff = composeEntitlements([company, guest]);
+  const project: Entitlement = { source: 'project-policy', allowedRunners: ['opencode', 'codex'], allowedProjects: ['acme-erp'] };
+  const eff = composeEntitlements([company, project]);
   // runners = intersection of the two layers
   assert.deepEqual(eff.allowedRunners, ['opencode', 'codex']);
-  // only guest constrained projects → that list wins; company didn't force it
+  // only project policy constrained projects → that list wins
   assert.deepEqual(eff.allowedProjects, ['acme-erp']);
   // nobody constrained providers → unconstrained
   assert.equal(eff.allowedProviders, undefined);
-  assert.deepEqual(eff.sources, ['company-policy', 'guest:full']);
+  assert.deepEqual(eff.sources, ['company-policy', 'project-policy']);
 });
 
 test('composeEntitlements never forces: a layer that omits a dimension does not narrow it', () => {
@@ -155,23 +155,6 @@ test('entitlementAllows treats undefined as unconstrained', () => {
   assert.equal(entitlementAllows(undefined, 'anything'), true);
   assert.equal(entitlementAllows(['opencode'], 'codex'), false);
   assert.equal(entitlementAllows(['opencode', 'codex'], 'codex'), true);
-});
-
-test('end-to-end: company allows codex, guest restricts to opencode → codex is blocked', () => {
-  const resolved = {
-    role: 'engineer',
-    runner: { allowedRunners: ['opencode', 'codex', 'claude'] },
-    provider: { allowedProviders: ['openrouter', 'ollama'] },
-    workKind: 'app-code',
-  };
-  const eff = composeEntitlements([
-    entitlementFromResolved(resolved),
-    entitlementFromGuest({ scope: 'full', allowedRunners: ['opencode'] }),
-  ]);
-  assert.equal(entitlementAllows(eff.allowedRunners, 'codex'), false);
-  assert.equal(entitlementAllows(eff.allowedRunners, 'opencode'), true);
-  // providers were only constrained by company → still available
-  assert.equal(entitlementAllows(eff.allowedProviders, 'openrouter'), true);
 });
 
 test('buildCandidates with forceRelay skips direct and tunnel', () => {

@@ -6,7 +6,7 @@
  *
  * Asset shapes mirror the CLI's agent-runtime.js::fetchRemoteAsset:
  *   darwin/linux → yaver-io/yaver.io releases, `yaver-v<ver>-<os>-<arch>.tar.gz`
- *   windows      → kivanccakmak/yaver-cli releases, `yaver-windows-<arch>.exe`
+ *   windows      → yaver-io/yaver.io releases, `yaver-windows-<arch>.exe`
  *
  * The agent version is independent from the GUI version — it is read from
  * versions.json ("cli") unless YAVER_AGENT_VERSION is set.
@@ -14,14 +14,15 @@
  * Usage: node scripts/fetch-agent-binary.mjs   (run from electron/)
  */
 
-import { mkdir, writeFile, rm } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import https from "node:https";
+import { createHash } from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -64,6 +65,38 @@ async function download(url, outPath) {
   await pipeline(res, createWriteStream(outPath, { mode: 0o755 }));
 }
 
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function verifyReleaseChecksum(baseUrl, assetName, filePath, tempDir) {
+  const checksumPath = join(tempDir, "checksums.txt");
+  await download(`${baseUrl}/checksums.txt`, checksumPath);
+  const lines = readFileSync(checksumPath, "utf8").split(/\r?\n/);
+  let expected = "";
+  for (const line of lines) {
+    const match = line.trim().match(/^([a-fA-F0-9]{64})\s+\*?(.+)$/);
+    if (match && match[2] === assetName) {
+      expected = match[1].toLowerCase();
+      break;
+    }
+  }
+  await rm(checksumPath, { force: true });
+  if (!expected) {
+    throw new Error(`checksums.txt has no SHA-256 entry for ${assetName}`);
+  }
+  const actual = await sha256File(filePath);
+  if (actual !== expected) {
+    throw new Error(`SHA-256 mismatch for ${assetName}: expected ${expected}, downloaded ${actual}`);
+  }
+}
+
 /**
  * Resolve the release tag name for a given agent version on a repo. Tags may
  * be `v1.2.3` or `cli/v1.2.3` (the CLI's stripCliTagPrefix accepts both), and
@@ -99,9 +132,12 @@ async function main() {
     // the API (tags may be `v1.2.3` or `cli/v1.2.3` — mirror the CLI's
     // stripCliTagPrefix), then build the asset URL.
     const winTag = await resolveReleaseTag(WINDOWS_REPO, version);
-    const url = `https://github.com/${WINDOWS_REPO}/releases/download/${winTag}/yaver-windows-${goArch()}.exe`;
+    const base = `https://github.com/${WINDOWS_REPO}/releases/download/${winTag}`;
+    const assetName = `yaver-windows-${goArch()}.exe`;
+    const url = `${base}/${assetName}`;
     console.log(`[fetch-agent] windows agent ${version} (tag ${winTag}) → ${targetPath}`);
     await download(url, targetPath);
+    await verifyReleaseChecksum(base, assetName, targetPath, targetDir);
     console.log(`[fetch-agent] done`);
     return;
   }
@@ -121,6 +157,7 @@ async function main() {
     try {
       archivePath = join(targetDir, "agent.tar.gz");
       await download(url, archivePath);
+      await verifyReleaseChecksum(base, new URL(url).pathname.split("/").pop(), archivePath, targetDir);
       console.log(`[fetch-agent] ${osKey}-${archKey} agent ${version} ← ${url}`);
       break;
     } catch {

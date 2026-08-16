@@ -91,3 +91,19 @@ func TestRunnerCandidatePaths_IncludesWellKnownDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerCandidatePathsForWindowsIncludesNPMShim(t *testing.T) {
+	home := t.TempDir()
+	appData := filepath.Join(home, "AppData", "Roaming")
+	env := map[string]string{
+		"APPDATA":      appData,
+		"LOCALAPPDATA": filepath.Join(home, "AppData", "Local"),
+		"USERPROFILE":  home,
+		"ProgramFiles": filepath.Join(home, "Program Files"),
+	}
+	got := runnerCandidatePathsFor("windows", "codex", home, func(key string) string { return env[key] })
+	want := filepath.Join(appData, "npm", "codex.cmd")
+	if !strings.Contains(strings.Join(got, "\n"), want) {
+		t.Fatalf("Windows runner candidates missing npm shim %q\ngot:\n%s", want, strings.Join(got, "\n"))
+	}
+}

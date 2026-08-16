@@ -23,17 +23,17 @@ type OverviewSummary struct {
 		Stopped int `json:"stopped"`
 	} `json:"services"`
 	Alerts struct {
-		Active   int    `json:"active"`
-		Summary  string `json:"summary"`
+		Active  int    `json:"active"`
+		Summary string `json:"summary"`
 	} `json:"alerts"`
 	Cost struct {
-		MonthlyUSD float64 `json:"monthlyUsd"`
+		MonthlyUSD float64    `json:"monthlyUsd"`
 		Breakdown  []CostLine `json:"breakdown"`
 	} `json:"cost"`
 	Uptime struct {
-		Up     int     `json:"up"`
-		Down   int     `json:"down"`
-		Pct    float64 `json:"pct"`
+		Up   int     `json:"up"`
+		Down int     `json:"down"`
+		Pct  float64 `json:"pct"`
 	} `json:"uptime"`
 	RecentActivity []ActivityEntry `json:"recentActivity"`
 }

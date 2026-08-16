@@ -261,7 +261,7 @@ func stripURLCredentials(raw string) string {
 // resetOriginToCleanURL rewrites a freshly-cloned repo's origin remote to a
 // token-free URL. `git clone https://user:token@host/…` persists the token in
 // .git/config remote.origin.url; leaving it there lets anything that can read
-// the working tree — a tester/guest task, a shared container — lift the owner's
+// the working tree — an untrusted task or isolated container — lift the owner's
 // git PAT. Fetch/pull re-inject credentials per-operation (handleRepoPull), so
 // origin never needs to carry the token. Non-fatal: the clone already
 // succeeded, so a failure here is logged, not surfaced.
@@ -370,21 +370,6 @@ func repoInfoForPath(repoPath string) (RepoInfo, error) {
 		return RepoInfo{}, fmt.Errorf("path is not a git repository root")
 	}
 	return getRepoInfo(repoPath, filepath.Base(repoPath)), nil
-}
-
-func guestCanAccessRepoPath(s *HTTPServer, guestUID, repoPath string) bool {
-	if strings.TrimSpace(guestUID) == "" || s.guestConfigMgr == nil {
-		return true
-	}
-	repo, err := repoInfoForPath(repoPath)
-	if err != nil {
-		return false
-	}
-	if s.guestConfigMgr.GuestCanAccessProject(guestUID, repo.Name) {
-		return true
-	}
-	base := filepath.Base(repo.Path)
-	return s.guestConfigMgr.GuestCanAccessProject(guestUID, base)
 }
 
 // scanDirForRepos finds git repositories one level deep in dir.
@@ -587,15 +572,6 @@ func (s *HTTPServer) handleRepoClone(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "url is required")
 		return
 	}
-	guestUID := r.Header.Get("X-Yaver-GuestUserID")
-	if guestUID != "" && s.guestConfigMgr != nil {
-		repoName := repoNameFromURL(req.URL)
-		if !s.guestConfigMgr.GuestCanAccessProject(guestUID, repoName) {
-			jsonError(w, http.StatusForbidden, fmt.Sprintf("repo %q is not accessible for this guest", repoName))
-			return
-		}
-	}
-
 	// Default directory: $HOME/Workspace/{repoName} — matches
 	// kivanc's macOS layout (~/Workspace/talos) + the existing
 	// project-discovery scanner. ResolveWorkspaceParent handles
@@ -645,7 +621,7 @@ func (s *HTTPServer) handleRepoClone(w http.ResponseWriter, r *http.Request) {
 
 	// Credential hygiene: when a token was injected into the clone URL, git
 	// persisted it in .git/config. Reset origin to the token-free URL so a
-	// tester/guest running in this workdir (or a shared container) can't lift
+	// untrusted task running in this workdir (or an isolated container) can't lift
 	// the owner's git PAT out of .git/config. Fetch/pull re-inject per-op.
 	if cloneURL != req.URL {
 		resetOriginToCleanURL(ctx, clonePath, req.URL)
@@ -686,12 +662,6 @@ func (s *HTTPServer) handleRepoPull(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "workDir is required")
 		return
 	}
-	guestUID := r.Header.Get("X-Yaver-GuestUserID")
-	if guestUID != "" && !guestCanAccessRepoPath(s, guestUID, workDir) {
-		jsonError(w, http.StatusForbidden, "repo not accessible for this guest")
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -782,12 +752,6 @@ func (s *HTTPServer) handleRepoDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if !allowed {
 		jsonError(w, http.StatusForbidden, "refusing to delete repo outside allowed roots")
-		return
-	}
-
-	guestUID := r.Header.Get("X-Yaver-GuestUserID")
-	if guestUID != "" && !guestCanAccessRepoPath(s, guestUID, repoPath) {
-		jsonError(w, http.StatusForbidden, "repo not accessible for this guest")
 		return
 	}
 
@@ -909,18 +873,6 @@ func (s *HTTPServer) handleRepoList(w http.ResponseWriter, r *http.Request) {
 	if repos == nil {
 		repos = []RepoInfo{}
 	}
-	guestUID := r.Header.Get("X-Yaver-GuestUserID")
-	if guestUID != "" && s.guestConfigMgr != nil {
-		filtered := make([]RepoInfo, 0, len(repos))
-		for _, repo := range repos {
-			if s.guestConfigMgr.GuestCanAccessProject(guestUID, repo.Name) ||
-				s.guestConfigMgr.GuestCanAccessProject(guestUID, filepath.Base(repo.Path)) {
-				filtered = append(filtered, repo)
-			}
-		}
-		repos = filtered
-	}
-
 	// Update cache
 	repoCache.mu.Lock()
 	repoCache.repos = repos

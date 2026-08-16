@@ -277,8 +277,8 @@ func init() {
 			"role":  map[string]interface{}{"type": "string", "description": "Filter by role, e.g. AXButton / Button / push button. Exact, case-insensitive."},
 			"exact": map[string]interface{}{"type": "boolean", "description": "Require a whole-field match instead of substring."},
 		}),
-		Handler:    ghostElementsHandler,
-		AllowGuest: false,
+		Handler:        ghostElementsHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "ghost_click_element",
@@ -293,8 +293,8 @@ func init() {
 			"double": map[string]interface{}{"type": "boolean"},
 			"expect": map[string]interface{}{"type": "string", "description": "CLOSED LOOP: an element name that must appear after the click. Verified by re-reading the accessibility tree; the verb fails with code=unverified if it does not."},
 		}, "query"),
-		Handler:    ghostClickElementHandler,
-		AllowGuest: false,
+		Handler:        ghostClickElementHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "ghost_type_into_element",
@@ -309,8 +309,8 @@ func init() {
 			"clear":    map[string]interface{}{"type": "boolean", "description": "Select-all then overwrite (cmd/ctrl+a)."},
 			"noVerify": map[string]interface{}{"type": "boolean", "description": "Skip the read-back check. Default false: the value is re-read from the tree and a mismatch fails with code=unverified."},
 		}, "query", "text"),
-		Handler:    ghostTypeIntoElementHandler,
-		AllowGuest: false,
+		Handler:        ghostTypeIntoElementHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "ghost_launch_app",
@@ -319,8 +319,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"app": map[string]interface{}{"type": "string"},
 		}, "app"),
-		Handler:    ghostLaunchAppHandler,
-		AllowGuest: false,
+		Handler:        ghostLaunchAppHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "ghost_focus_app",
@@ -329,8 +329,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"app": map[string]interface{}{"type": "string", "description": "Application name, e.g. \"Safari\", \"AutoCAD\"."},
 		}, "app"),
-		Handler:    ghostFocusAppHandler,
-		AllowGuest: false,
+		Handler:        ghostFocusAppHandler,
+		AllowCompanion: false,
 	})
 }
 

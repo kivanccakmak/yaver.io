@@ -18,7 +18,7 @@ import (
 // DOM + computed-styles JSON + asset URL list. Uploaded by the browser
 // extension at sdk/feedback/browser-extension/ and meant to be fed to a vibing
 // task as an AI-readable design reference. Distinct from FeedbackReport, which
-// describes an in-app bug from a guest device.
+// describes an in-app bug from an SDK-enabled device.
 type DesignReference struct {
 	ID           string                   `json:"id"`
 	URL          string                   `json:"url,omitempty"`
@@ -58,13 +58,13 @@ type DesignReferenceSummary struct {
 // incoming metadata posted by the extension — fields are optional and
 // best-effort. The extension always supplies `mode`, `meta.url`, `meta.title`.
 type designReferenceIncoming struct {
-	Kind         string `json:"kind"`
-	Source       string `json:"source"`
-	Mode         string `json:"mode"`
-	Selector     string `json:"selector"`
-	CapturedAt   string `json:"capturedAt"`
-	Notes        string `json:"notes"`
-	Meta         struct {
+	Kind       string `json:"kind"`
+	Source     string `json:"source"`
+	Mode       string `json:"mode"`
+	Selector   string `json:"selector"`
+	CapturedAt string `json:"capturedAt"`
+	Notes      string `json:"notes"`
+	Meta       struct {
 		URL        string                  `json:"url"`
 		Title      string                  `json:"title"`
 		Viewport   DesignReferenceViewport `json:"viewport"`

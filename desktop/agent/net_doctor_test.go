@@ -9,7 +9,7 @@ func TestNetMediumFromGateway(t *testing.T) {
 		{"172.20.10.1", "en0", "Kıvanç’s iPhone", "wifi", "hotspot-ios"}, // hotspot subnet wins over port
 		{"192.168.43.1", "wlan0", "", "", "hotspot-android"},
 		{"192.168.1.1", "en0", "HomeWiFi", "", "wifi"},
-		{"192.168.1.1", "en0", "", "wifi", "wifi"},     // macOS en0 is Wi-Fi via port hint, not ethernet
+		{"192.168.1.1", "en0", "", "wifi", "wifi"},      // macOS en0 is Wi-Fi via port hint, not ethernet
 		{"10.0.0.1", "en3", "", "ethernet", "ethernet"}, // port hint says ethernet
 		{"10.0.0.1", "eth0", "", "", "ethernet"},        // name fallback when no hint
 		{"", "iPhone USB", "", "", "hotspot-usb"},

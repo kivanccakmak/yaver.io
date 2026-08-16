@@ -37,7 +37,7 @@ type simPayload struct {
 
 func init() {
 	reg := func(name, desc string, h VerbHandler) {
-		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowGuest: false})
+		registerOpsVerb(opsVerbSpec{Name: name, Description: desc, Handler: h, AllowCompanion: false})
 	}
 
 	reg("sim_models", "Catalog of simulator robot arms (UR5e/UR10e, Franka Panda, KUKA iiwa/iiwa14, Kinova Gen3, built-in 6-DOF) — pick one to jog/teach with no hardware", func(c OpsContext, _ json.RawMessage) OpsResult {

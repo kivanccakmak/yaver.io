@@ -22,26 +22,23 @@ import (
 )
 
 type SharedStorageProfileView struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name"`
-	Type               string `json:"type"`
-	Path               string `json:"path,omitempty"`
-	MountPath          string `json:"mountPath,omitempty"`
-	Remote             string `json:"remote,omitempty"`
-	Endpoint           string `json:"endpoint,omitempty"`
-	Bucket             string `json:"bucket,omitempty"`
-	Region             string `json:"region,omitempty"`
-	ReadOnly           bool   `json:"readOnly,omitempty"`
-	Notes              string `json:"notes,omitempty"`
-	Available          bool   `json:"available"`
-	SupportsBrowse     bool   `json:"supportsBrowse"`
-	SupportsRead       bool   `json:"supportsRead"`
-	SupportsSearch     bool   `json:"supportsSearch"`
-	ResolvedLocation   string `json:"resolvedLocation,omitempty"`
-	Status             string `json:"status,omitempty"`
-	ContainerMountMode string `json:"containerMountMode,omitempty"`
-	ContainerPath      string `json:"containerPath,omitempty"`
-	ContainerMountable bool   `json:"containerMountable,omitempty"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Type             string `json:"type"`
+	Path             string `json:"path,omitempty"`
+	MountPath        string `json:"mountPath,omitempty"`
+	Remote           string `json:"remote,omitempty"`
+	Endpoint         string `json:"endpoint,omitempty"`
+	Bucket           string `json:"bucket,omitempty"`
+	Region           string `json:"region,omitempty"`
+	ReadOnly         bool   `json:"readOnly,omitempty"`
+	Notes            string `json:"notes,omitempty"`
+	Available        bool   `json:"available"`
+	SupportsBrowse   bool   `json:"supportsBrowse"`
+	SupportsRead     bool   `json:"supportsRead"`
+	SupportsSearch   bool   `json:"supportsSearch"`
+	ResolvedLocation string `json:"resolvedLocation,omitempty"`
+	Status           string `json:"status,omitempty"`
 }
 
 type SharedStorageEntry struct {
@@ -140,8 +137,6 @@ func normalizeSharedStorageProfile(profile SharedStorageProfile) (SharedStorageP
 	profile.Region = strings.TrimSpace(profile.Region)
 	profile.Username = strings.TrimSpace(profile.Username)
 	profile.Notes = strings.TrimSpace(profile.Notes)
-	profile.ContainerMountMode = strings.ToLower(strings.TrimSpace(profile.ContainerMountMode))
-	profile.ContainerPath = strings.TrimSpace(profile.ContainerPath)
 	if profile.ID == "" {
 		profile.ID = fmt.Sprintf("shared-%d", time.Now().UnixNano())
 	}
@@ -163,11 +158,6 @@ func normalizeSharedStorageProfile(profile SharedStorageProfile) (SharedStorageP
 		return SharedStorageProfile{}, fmt.Errorf("webdav profiles require endpoint")
 	} else if profile.Type == "local" && sharedStorageResolvedPath(profile) == "" {
 		return SharedStorageProfile{}, fmt.Errorf("%s profiles require path or mount_path", profile.Type)
-	}
-	switch profile.ContainerMountMode {
-	case "", "none", "host", "guests", "all":
-	default:
-		return SharedStorageProfile{}, fmt.Errorf("unsupported container_mount_mode %q", profile.ContainerMountMode)
 	}
 	return profile, nil
 }
@@ -220,52 +210,23 @@ func sharedStorageCanSearch(profile SharedStorageProfile) bool {
 	return sharedStorageCanBrowse(profile)
 }
 
-func sharedStorageContainerSourcePath(profile SharedStorageProfile) string {
-	if strings.TrimSpace(profile.MountPath) != "" {
-		return strings.TrimSpace(profile.MountPath)
-	}
-	if profile.Type == "local" {
-		return strings.TrimSpace(profile.Path)
-	}
-	return ""
-}
-
-func sharedStorageContainerTargetPath(profile SharedStorageProfile) string {
-	if strings.TrimSpace(profile.ContainerPath) != "" {
-		return strings.TrimSpace(profile.ContainerPath)
-	}
-	return "/mnt/yaver-shared/" + strings.ToLower(strings.ReplaceAll(profile.ID, " ", "-"))
-}
-
-func sharedStorageContainerMountable(profile SharedStorageProfile) bool {
-	src := sharedStorageContainerSourcePath(profile)
-	if src == "" || profile.ContainerMountMode == "" || profile.ContainerMountMode == "none" {
-		return false
-	}
-	st, err := os.Stat(src)
-	return err == nil && st.IsDir()
-}
-
 func sharedStorageView(profile SharedStorageProfile) SharedStorageProfileView {
 	view := SharedStorageProfileView{
-		ID:                 profile.ID,
-		Name:               profile.Name,
-		Type:               profile.Type,
-		Path:               profile.Path,
-		MountPath:          profile.MountPath,
-		Remote:             profile.Remote,
-		Endpoint:           profile.Endpoint,
-		Bucket:             profile.Bucket,
-		Region:             profile.Region,
-		ReadOnly:           profile.ReadOnly,
-		Notes:              profile.Notes,
-		SupportsBrowse:     sharedStorageCanBrowse(profile),
-		SupportsRead:       sharedStorageCanRead(profile),
-		SupportsSearch:     sharedStorageCanSearch(profile),
-		ResolvedLocation:   sharedStorageResolvedPath(profile),
-		ContainerMountMode: profile.ContainerMountMode,
-		ContainerPath:      sharedStorageContainerTargetPath(profile),
-		ContainerMountable: sharedStorageContainerMountable(profile),
+		ID:               profile.ID,
+		Name:             profile.Name,
+		Type:             profile.Type,
+		Path:             profile.Path,
+		MountPath:        profile.MountPath,
+		Remote:           profile.Remote,
+		Endpoint:         profile.Endpoint,
+		Bucket:           profile.Bucket,
+		Region:           profile.Region,
+		ReadOnly:         profile.ReadOnly,
+		Notes:            profile.Notes,
+		SupportsBrowse:   sharedStorageCanBrowse(profile),
+		SupportsRead:     sharedStorageCanRead(profile),
+		SupportsSearch:   sharedStorageCanSearch(profile),
+		ResolvedLocation: sharedStorageResolvedPath(profile),
 	}
 	switch profile.Type {
 	case "s3":
@@ -322,31 +283,6 @@ func listSharedStorageProfilesView() ([]SharedStorageProfileView, error) {
 		views = append(views, sharedStorageView(p))
 	}
 	return views, nil
-}
-
-func listSharedStorageProfilesForUser(guestUserID string, guestMgr *GuestConfigManager) ([]SharedStorageProfileView, error) {
-	views, err := listSharedStorageProfilesView()
-	if err != nil {
-		return nil, err
-	}
-	if guestUserID == "" || guestMgr == nil {
-		return views, nil
-	}
-	allowedIDs := guestMgr.GetSharedStorageAccess(guestUserID)
-	if len(allowedIDs) == 0 {
-		return []SharedStorageProfileView{}, nil
-	}
-	allowed := map[string]bool{}
-	for _, id := range allowedIDs {
-		allowed[id] = true
-	}
-	out := make([]SharedStorageProfileView, 0, len(views))
-	for _, view := range views {
-		if allowed[view.ID] {
-			out = append(out, view)
-		}
-	}
-	return out, nil
 }
 
 func listSharedStorageEntries(profile SharedStorageProfile, sub string) ([]SharedStorageEntry, error) {
@@ -1043,73 +979,16 @@ func mcpSharedStorageSearch(id, query, sub string, limit int) interface{} {
 	}
 }
 
-func sharedStorageGuestDenied(r *http.Request, guestMgr *GuestConfigManager, profileID string) *AccessDeniedReason {
-	if guestMgr == nil {
-		return nil
-	}
-	guestUserID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID"))
-	if guestUserID == "" {
-		return nil
-	}
-	return guestMgr.CheckSharedStorage(guestUserID, profileID)
-}
-
-func sharedStorageContainerMountsForTask(guestUserID string, guestMgr *GuestConfigManager) ([]string, error) {
-	profiles, err := loadSharedStorageProfiles()
-	if err != nil {
-		return nil, err
-	}
-	out := []string{}
-	for _, profile := range profiles {
-		mode := profile.ContainerMountMode
-		if mode == "" || mode == "none" {
-			continue
-		}
-		if guestUserID == "" {
-			if mode != "host" && mode != "all" {
-				continue
-			}
-		} else {
-			if mode != "guests" && mode != "all" {
-				continue
-			}
-			if guestMgr == nil || guestMgr.CheckSharedStorage(guestUserID, profile.ID) != nil {
-				continue
-			}
-		}
-		src := sharedStorageContainerSourcePath(profile)
-		if src == "" {
-			continue
-		}
-		st, err := os.Stat(src)
-		if err != nil || !st.IsDir() {
-			continue
-		}
-		target := sharedStorageContainerTargetPath(profile)
-		mount := fmt.Sprintf("%s:%s", src, target)
-		if profile.ReadOnly || guestUserID != "" {
-			mount += ":ro"
-		}
-		out = append(out, mount)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
 func (s *HTTPServer) handleSharedStorageProfiles(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		views, err := listSharedStorageProfilesForUser(strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")), s.guestConfigMgr)
+		views, err := listSharedStorageProfilesView()
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "profiles": views})
 	case http.MethodPost:
-		if strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")) != "" {
-			jsonError(w, http.StatusForbidden, "guests cannot manage shared storage profiles")
-			return
-		}
 		var profile SharedStorageProfile
 		if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
 			jsonError(w, http.StatusBadRequest, "invalid json")
@@ -1131,10 +1010,6 @@ func (s *HTTPServer) handleSharedStorageDelete(w http.ResponseWriter, r *http.Re
 		jsonError(w, http.StatusMethodNotAllowed, "use POST")
 		return
 	}
-	if strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")) != "" {
-		jsonError(w, http.StatusForbidden, "guests cannot manage shared storage profiles")
-		return
-	}
 	var body struct {
 		ID string `json:"id"`
 	}
@@ -1151,10 +1026,6 @@ func (s *HTTPServer) handleSharedStorageDelete(w http.ResponseWriter, r *http.Re
 
 func (s *HTTPServer) handleSharedStorageList(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if denied := sharedStorageGuestDenied(r, s.guestConfigMgr, id); denied != nil {
-		jsonError(w, http.StatusForbidden, denied.Reason)
-		return
-	}
 	profile, err := getSharedStorageProfile(id)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, err.Error())
@@ -1176,10 +1047,6 @@ func (s *HTTPServer) handleSharedStorageList(w http.ResponseWriter, r *http.Requ
 
 func (s *HTTPServer) handleSharedStorageRead(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if denied := sharedStorageGuestDenied(r, s.guestConfigMgr, id); denied != nil {
-		jsonError(w, http.StatusForbidden, denied.Reason)
-		return
-	}
 	profile, err := getSharedStorageProfile(id)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, err.Error())
@@ -1196,10 +1063,6 @@ func (s *HTTPServer) handleSharedStorageRead(w http.ResponseWriter, r *http.Requ
 
 func (s *HTTPServer) handleSharedStorageRaw(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if denied := sharedStorageGuestDenied(r, s.guestConfigMgr, id); denied != nil {
-		jsonError(w, http.StatusForbidden, denied.Reason)
-		return
-	}
 	profile, err := getSharedStorageProfile(id)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, err.Error())
@@ -1289,10 +1152,6 @@ func (s *HTTPServer) handleSharedStorageSearch(w http.ResponseWriter, r *http.Re
 	}
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id != "" {
-		if denied := sharedStorageGuestDenied(r, s.guestConfigMgr, id); denied != nil {
-			jsonError(w, http.StatusForbidden, denied.Reason)
-			return
-		}
 		profile, err := getSharedStorageProfile(id)
 		if err != nil {
 			jsonError(w, http.StatusNotFound, err.Error())
@@ -1314,9 +1173,6 @@ func (s *HTTPServer) handleSharedStorageSearch(w http.ResponseWriter, r *http.Re
 	}
 	all := make([]SharedStorageSearchHit, 0, limit)
 	for _, profile := range profiles {
-		if denied := sharedStorageGuestDenied(r, s.guestConfigMgr, profile.ID); denied != nil {
-			continue
-		}
 		hits, err := searchSharedStorage(profile, query, sub, limit-len(all))
 		if err != nil {
 			continue

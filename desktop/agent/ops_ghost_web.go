@@ -64,8 +64,8 @@ func init() {
 			"sessionId": map[string]interface{}{"type": "string", "description": "session name (default 'ghost')"},
 			"headful":   map[string]interface{}{"type": "boolean"},
 		}),
-		Handler:    ghostWebOpenHandler,
-		AllowGuest: false,
+		Handler:        ghostWebOpenHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_web_goto",
@@ -74,8 +74,8 @@ func init() {
 			"sessionId": map[string]interface{}{"type": "string"},
 			"url":       map[string]interface{}{"type": "string"},
 		}, "url"),
-		Handler:    ghostWebGotoHandler,
-		AllowGuest: false,
+		Handler:        ghostWebGotoHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_web_click",
@@ -84,8 +84,8 @@ func init() {
 			"sessionId": map[string]interface{}{"type": "string"},
 			"selector":  map[string]interface{}{"type": "string"},
 		}, "selector"),
-		Handler:    ghostWebClickHandler,
-		AllowGuest: false,
+		Handler:        ghostWebClickHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_web_type",
@@ -96,8 +96,8 @@ func init() {
 			"text":      map[string]interface{}{"type": "string"},
 			"clear":     map[string]interface{}{"type": "boolean"},
 		}, "selector", "text"),
-		Handler:    ghostWebTypeHandler,
-		AllowGuest: false,
+		Handler:        ghostWebTypeHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_web_screenshot",
@@ -105,8 +105,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"sessionId": map[string]interface{}{"type": "string"},
 		}),
-		Handler:    ghostWebScreenshotHandler,
-		AllowGuest: false,
+		Handler:        ghostWebScreenshotHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_web_text",
@@ -115,8 +115,8 @@ func init() {
 			"sessionId": map[string]interface{}{"type": "string"},
 			"selector":  map[string]interface{}{"type": "string"},
 		}, "selector"),
-		Handler:    ghostWebTextHandler,
-		AllowGuest: false,
+		Handler:        ghostWebTextHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "ghost_web_close",
@@ -124,8 +124,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"sessionId": map[string]interface{}{"type": "string"},
 		}),
-		Handler:    ghostWebCloseHandler,
-		AllowGuest: false,
+		Handler:        ghostWebCloseHandler,
+		AllowCompanion: false,
 	})
 }
 

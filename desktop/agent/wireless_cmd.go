@@ -458,8 +458,10 @@ func pickWirelessDevice(ctx context.Context, platform, want string) (wireDevice,
 // ---------- pair-android / connect-android ----------
 
 // runWirelessPairAndroid accepts both forms:
-//   yaver wireless pair-android <ip:port> <code>
-//   yaver wireless pair-android --ip <ip:port> --code <code>
+//
+//	yaver wireless pair-android <ip:port> <code>
+//	yaver wireless pair-android --ip <ip:port> --code <code>
+//
 // The flag form is what the `yaver android pair` alias uses.
 func runWirelessPairAndroid(args []string) {
 	fs := flag.NewFlagSet("wireless pair-android", flag.ExitOnError)
@@ -550,9 +552,10 @@ func findConnectHostPortFromMdns(ctx context.Context) string {
 }
 
 // runWirelessConnectAndroid accepts:
-//   yaver wireless connect-android <ip:port>
-//   yaver wireless connect-android --ip <ip:port>
-//   yaver wireless connect-android                (auto-discover from mDNS)
+//
+//	yaver wireless connect-android <ip:port>
+//	yaver wireless connect-android --ip <ip:port>
+//	yaver wireless connect-android                (auto-discover from mDNS)
 func runWirelessConnectAndroid(args []string) {
 	fs := flag.NewFlagSet("wireless connect-android", flag.ExitOnError)
 	ipFlag := fs.String("ip", "", "connection IP:port (use the connect port shown on the phone, not the pairing port)")
@@ -604,14 +607,14 @@ func runWirelessConnectAndroid(args []string) {
 
 // runWirelessSetupAndroid is the friction-free path for first-time
 // pairing. It:
-//   1. Prompts the user to enable Wireless debugging + tap "Pair device
-//      with pairing code" on the phone.
-//   2. Polls `adb mdns services` for the new `_adb-tls-pairing._tcp`
-//      entry (up to ~120 s).
-//   3. Reads the 6-digit code from stdin (skips prompt if --code given).
-//   4. Runs `adb pair` against the discovered pair host:port.
-//   5. Resolves the matching `_adb-tls-connect._tcp` entry, runs
-//      `adb connect`, and verifies via `adb devices -l`.
+//  1. Prompts the user to enable Wireless debugging + tap "Pair device
+//     with pairing code" on the phone.
+//  2. Polls `adb mdns services` for the new `_adb-tls-pairing._tcp`
+//     entry (up to ~120 s).
+//  3. Reads the 6-digit code from stdin (skips prompt if --code given).
+//  4. Runs `adb pair` against the discovered pair host:port.
+//  5. Resolves the matching `_adb-tls-connect._tcp` entry, runs
+//     `adb connect`, and verifies via `adb devices -l`.
 //
 // Designed so an AI agent can drive the same flow over MCP — see
 // mcpWirelessSetupAndroid for the non-interactive entry point.

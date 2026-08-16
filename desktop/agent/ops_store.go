@@ -9,7 +9,7 @@ package main
 // Multi-tenant: every verb takes a `project` (the customer's project slug).
 // Credentials are read from that project's vault scope (appstoreconnect.go /
 // playpublish_api.go), so a managed-cloud box can manage dev B's app with dev
-// B's keys without ever touching Yaver's own. Owner-only (no guest).
+// B's keys without ever touching Yaver's own. Primary-owner only.
 //
 // Asymmetry to remember: Apple's API fully manages individual beta testers;
 // Google's API manages a track's *Google Groups* and release rollout, NOT the
@@ -28,8 +28,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"project": map[string]interface{}{"type": "string", "description": "Project slug whose vault holds the store credentials. Omit for the global/default project."},
 		}),
-		Handler:    storeCredentialsStatusHandler,
-		AllowGuest: false,
+		Handler:        storeCredentialsStatusHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_group_list",
@@ -41,8 +41,8 @@ func init() {
 			"packageName": map[string]interface{}{"type": "string", "description": "google: the app's package name (e.g. com.acme.app)"},
 			"track":       map[string]interface{}{"type": "string", "description": "google: testing track (default internal)"},
 		}, "store"),
-		Handler:    storeGroupListHandler,
-		AllowGuest: false,
+		Handler:        storeGroupListHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_group_create",
@@ -54,8 +54,8 @@ func init() {
 			"name":       map[string]interface{}{"type": "string", "description": "group name"},
 			"publicLink": map[string]interface{}{"type": "boolean", "description": "apple: enable a public TestFlight join link"},
 		}, "store", "name"),
-		Handler:    storeGroupCreateHandler,
-		AllowGuest: false,
+		Handler:        storeGroupCreateHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_tester_list",
@@ -67,8 +67,8 @@ func init() {
 			"packageName": map[string]interface{}{"type": "string"},
 			"track":       map[string]interface{}{"type": "string", "description": "google: default internal"},
 		}, "store"),
-		Handler:    storeTesterListHandler,
-		AllowGuest: false,
+		Handler:        storeTesterListHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_tester_invite",
@@ -85,8 +85,8 @@ func init() {
 			"groupEmail":  map[string]interface{}{"type": "string", "description": "google: a Google Group email to bind to the track"},
 			"track":       map[string]interface{}{"type": "string", "description": "google: default internal"},
 		}, "store"),
-		Handler:    storeTesterInviteHandler,
-		AllowGuest: false,
+		Handler:        storeTesterInviteHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_tester_remove",
@@ -100,8 +100,8 @@ func init() {
 			"groupEmail":  map[string]interface{}{"type": "string", "description": "google"},
 			"track":       map[string]interface{}{"type": "string"},
 		}, "store"),
-		Handler:    storeTesterRemoveHandler,
-		AllowGuest: false,
+		Handler:        storeTesterRemoveHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_build_list",
@@ -113,8 +113,8 @@ func init() {
 			"packageName": map[string]interface{}{"type": "string"},
 			"track":       map[string]interface{}{"type": "string", "description": "google: default internal"},
 		}, "store"),
-		Handler:    storeBuildListHandler,
-		AllowGuest: false,
+		Handler:        storeBuildListHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "store_release_promote",
@@ -129,8 +129,8 @@ func init() {
 			"status":       map[string]interface{}{"type": "string", "description": "google: completed | inProgress | halted | draft (default completed)"},
 			"userFraction": map[string]interface{}{"type": "number", "description": "google: 0..1 staged rollout fraction (only for inProgress)"},
 		}, "store"),
-		Handler:    storeReleasePromoteHandler,
-		AllowGuest: false,
+		Handler:        storeReleasePromoteHandler,
+		AllowCompanion: false,
 	})
 }
 

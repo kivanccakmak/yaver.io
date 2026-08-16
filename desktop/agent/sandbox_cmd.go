@@ -74,17 +74,15 @@ func runSandboxBuild(args []string) {
 	fmt.Println()
 	if variant == SandboxVariantSlim {
 		fmt.Println("Use the slim image:")
-		fmt.Println("  yaver serve --containerize-guests --container-image yaver-sandbox-slim")
+		fmt.Println("  yaver serve --containerize-host --container-image yaver-sandbox-slim")
 		fmt.Println()
 		fmt.Println("Or set in ~/.yaver/config.json:")
 		fmt.Println(`  "container_image": "yaver-sandbox-slim"`)
 	} else {
 		fmt.Println("Enable containerization:")
-		fmt.Println("  yaver serve --containerize-guests    # Guest tasks in containers")
 		fmt.Println("  yaver serve --containerize-host      # All tasks in containers")
 		fmt.Println()
 		fmt.Println("Or set in ~/.yaver/config.json:")
-		fmt.Println(`  "containerize_guests": true`)
 		fmt.Println(`  "containerize_host": true`)
 	}
 }
@@ -117,8 +115,7 @@ func runSandboxStatus() {
 	cfg, err := LoadConfig()
 	if err == nil {
 		fmt.Println()
-		fmt.Printf("  Guest containerization:  %v\n", cfg.ContainerizeGuests)
-		fmt.Printf("  Host containerization:   %v\n", cfg.ContainerizeHost)
+		fmt.Printf("  Task containerization:   %v\n", cfg.ContainerizeHost)
 		networkMode := cfg.ContainerNetwork
 		if networkMode == "" {
 			networkMode = "host (default)"
@@ -152,11 +149,9 @@ Commands:
   status          Show Docker and sandbox image status
 
 Enabling containerization:
-  yaver serve --containerize-guests    # Guest tasks only (security)
   yaver serve --containerize-host      # All tasks (clean builds)
 
 Or in ~/.yaver/config.json:
-  "containerize_guests": true
   "containerize_host": true
 
 Images:

@@ -47,19 +47,15 @@ type HTTPServer struct {
 	mcpClientVersion string
 	mcpVisionMode    string // "vision" | "text-only" ("" = unresolved)
 
-	// Co-vibe: who is on this machine, in which session, with what role.
-	// Lazily built (vibeRegistry()) so a machine nobody shares pays nothing.
+	// Internal dev-session resource attribution, lazily built.
 	vibeSessions *VibeSessionRegistry
 	vibeOnce     sync.Once
 	deviceID     string
 	convexURL    string
 	hostname     string
-	// operatorMode marks this box as part of a Yaver-operated public compute
-	// fleet (yaver serve --operator). Drives the host-share reaper every cycle
-	// so tenant slices are scrubbed promptly. Also disables the paired-token
-	// owner fast-path so a foreign token can never be owner-equivalent —
-	// every non-operator caller is a scoped host-share/guest tenant. Default
-	// false (normal single-owner behavior untouched).
+	// operatorMode marks this box as part of a Yaver-operated compute fleet.
+	// It disables the paired-token owner fast-path so the operator principal
+	// remains the only owner-equivalent identity. Default false.
 	operatorMode bool
 	// relayOnly binds the direct HTTP/TLS listeners to loopback (127.0.0.1)
 	// instead of 0.0.0.0, so an operator box on a home/office LAN is reachable
@@ -71,84 +67,84 @@ type HTTPServer struct {
 	// work this box can do.
 	localMux *http.ServeMux
 
-	taskMgr        *TaskManager
-	execMgr        *ExecManager
-	scheduler      *Scheduler
-	companion      *CompanionEngine // companion-compute engine (yaver.companion.yaml)
-	analytics      *Analytics
-	aclMgr         *ACLManager
-	emailMgr       *EmailManager
-	notifyMgr      *NotificationManager
-	vaultStore     *VaultStore
-	buildMgr       *BuildManager
-	tunnelMgr      *TunnelManager
-	testMgr        *TestManager
-	feedbackMgr    *FeedbackManager
-	designRefMgr   *DesignReferenceManager
-	blackboxMgr    *BlackBoxManager
-	runnerKeeper   *RunnerKeeper // P7 same-session continuation supervisor
-	devServerMgr   *DevServerManager
-	todolistMgr    *TodoListManager
-	sessionAuditor *SessionAuditor
-	guestConfigMgr *GuestConfigManager
+	taskMgr           *TaskManager
+	projectSessions   *ProjectSessionManager
+	projectPreviewMgr *ProjectPreviewManager
+	validationMgr     *ProjectValidationManager
+	execMgr           *ExecManager
+	scheduler         *Scheduler
+	companion         *CompanionEngine // companion-compute engine (yaver.companion.yaml)
+	analytics         *Analytics
+	aclMgr            *ACLManager
+	emailMgr          *EmailManager
+	notifyMgr         *NotificationManager
+	vaultStore        *VaultStore
+	buildMgr          *BuildManager
+	tunnelMgr         *TunnelManager
+	testMgr           *TestManager
+	feedbackMgr       *FeedbackManager
+	designRefMgr      *DesignReferenceManager
+	blackboxMgr       *BlackBoxManager
+	runnerKeeper      *RunnerKeeper // P7 same-session continuation supervisor
+	devServerMgr      *DevServerManager
+	todolistMgr       *TodoListManager
+	sessionAuditor    *SessionAuditor
 	// Deploy history (in-memory ring buffer of recent /deploy/ship runs)
 	// and per-caller concurrency limiter. Both are always live — lazy
 	// allocation happens on first use via the ensureDeploy* helpers.
-	deployHistory      *DeployHistory
-	deployLimiter      *deployLimiter
-	runnerStore        *RunnerStore         // unified Runner abstraction (RUNNER_DEV.md Phase 1)
-	runnerLimiter      *runnerLimiter       // per-caller in-flight cap (mirror of deployLimiter)
-	sandboxMgr         *SandboxManager      // long-lived Docker sandboxes (RUNNER_DEV.md Phase 2)
-	agentSessionMgr    *AgentSessionManager // Devin-shape coding agent sessions (RUNNER_DEV.md Phase 2)
-	containerRunner    *ContainerRunner     // nil if Docker not available
-	containerizeGuests bool                 // run guest tasks in containers
-	containerizeHost   bool                 // run host tasks in containers
-	browserMgr         *BrowserManager      // nil until first browser_open
-	pipelineRunner     *PipelineRunner      // nil until first pipeline_run
-	analyticsMgr       *AnalyticsManager    // nil until first analytics_start
-	authDevMgr         *AuthDevManager      // nil until first auth_dev_start
-	mailDevMgr         *MailDevManager      // nil until first mail_dev_start
-	exposeMgr          *ExposeManager       // nil until first expose_start
-	relayExposeMgr     *RelayExposeManager  // relay-based subdomain expose (set when relay connected)
-	stripeDevMgr       *StripeDevManager    // nil until first stripe_listen
-	uptimeMonitor      *UptimeMonitor       // nil until first monitor_add
-	modelMgr           *ModelManager        // nil until first models_*
-	lemonMgr           *LemonSqueezyManager // nil until first lemonsqueezy_*
-	servicesMgr        *ServicesManager     // nil until first services_*
-	proxyMgr           *ProxyManager        // nil until first proxy_*
-	dnsMgr             *DNSManager          // nil until first dns_*
-	storageMgr         *StorageManager      // nil until first storage_*
-	mockServer         *MockServer          // nil until first mock_*
-	preCheckMgr        *PreCheckManager     // nil until first check_*
-	perfMgr            *PerfManager         // nil until first perf_lighthouse
-	dbLifecycleMgr     *DBLifecycleManager  // nil until first db_migrate
-	previewMgr         *PreviewManager      // nil until first preview_*
-	vibePreviewMgr     *VibePreviewManager  // nil until first /vibing/preview/start
+	deployHistory    *DeployHistory
+	deployLimiter    *deployLimiter
+	runnerStore      *RunnerStore         // unified Runner abstraction (RUNNER_DEV.md Phase 1)
+	runnerLimiter    *runnerLimiter       // per-caller in-flight cap (mirror of deployLimiter)
+	sandboxMgr       *SandboxManager      // long-lived Docker sandboxes (RUNNER_DEV.md Phase 2)
+	agentSessionMgr  *AgentSessionManager // Devin-shape coding agent sessions (RUNNER_DEV.md Phase 2)
+	containerRunner  *ContainerRunner     // nil if Docker not available
+	containerizeHost bool                 // run host tasks in containers
+	browserMgr       *BrowserManager      // nil until first browser_open
+	pipelineRunner   *PipelineRunner      // nil until first pipeline_run
+	analyticsMgr     *AnalyticsManager    // nil until first analytics_start
+	authDevMgr       *AuthDevManager      // nil until first auth_dev_start
+	mailDevMgr       *MailDevManager      // nil until first mail_dev_start
+	exposeMgr        *ExposeManager       // nil until first expose_start
+	relayExposeMgr   *RelayExposeManager  // relay-based subdomain expose (set when relay connected)
+	stripeDevMgr     *StripeDevManager    // nil until first stripe_listen
+	uptimeMonitor    *UptimeMonitor       // nil until first monitor_add
+	modelMgr         *ModelManager        // nil until first models_*
+	lemonMgr         *LemonSqueezyManager // nil until first lemonsqueezy_*
+	servicesMgr      *ServicesManager     // nil until first services_*
+	proxyMgr         *ProxyManager        // nil until first proxy_*
+	dnsMgr           *DNSManager          // nil until first dns_*
+	storageMgr       *StorageManager      // nil until first storage_*
+	mockServer       *MockServer          // nil until first mock_*
+	preCheckMgr      *PreCheckManager     // nil until first check_*
+	perfMgr          *PerfManager         // nil until first perf_lighthouse
+	dbLifecycleMgr   *DBLifecycleManager  // nil until first db_migrate
+	previewMgr       *PreviewManager      // nil until first preview_*
+	vibePreviewMgr   *VibePreviewManager  // nil until first /vibing/preview/start
 	// windowsSeats is the in-process runner-seat index on native Windows —
 	// the persistence/reattach layer tmux provides on Unix (windows_seat.go).
 	// Nil everywhere else; runner_pty.go consults it through
 	// windowsSeatResume/windowsSeatClaim so the runner-pty path needs no
 	// GOOS switch of its own.
-	windowsSeats *windowsSeatIndex
-	oauthWizardMgr     *OAuthWizardManager  // nil until first auth_oauth_*
-	cloudDeployMgr     *CloudDeployManager  // nil until first cloud_*
-	migrateMgr         *MigrateManager      // nil until first migrate_*
-	remoteMgr          *RemoteManager       // nil until first remote_*
-	scaleMgr           *ScaleManager        // nil until first scale_*
-	pocketBaseMgr      *PocketBaseManager   // nil until first backend_*
-	platformMgr        *PlatformManager     // nil until first platform_*
-	domainMgr          *DomainManager       // nil until first domain_*
-	siteMgr            *SiteManager         // nil until first site_*
-	formMgr            *FormManager         // nil until first form_*
-	seoMgr             *SEOManager          // nil until first seo_*
-	cmsMgr             *CMSManager          // nil until first cms_*
-	templateMgr        *TemplateManager     // nil until first template_*
-	multiUserMgr       *MultiUserManager    // nil in single-user mode
-	wifiHotspotMgr     *WiFiHotspotManager  // nil until first /console/wifi or wifi_* op
-	wifiMeshMgr        *WiFiMeshManager     // nil until first /console/wifi-mesh or wifi_mesh_* op
-	server             *http.Server
-	tlsServer          *http.Server
-	onShutdown         func() // called when mobile requests agent shutdown
+	windowsSeats   *windowsSeatIndex
+	oauthWizardMgr *OAuthWizardManager // nil until first auth_oauth_*
+	cloudDeployMgr *CloudDeployManager // nil until first cloud_*
+	migrateMgr     *MigrateManager     // nil until first migrate_*
+	remoteMgr      *RemoteManager      // nil until first remote_*
+	scaleMgr       *ScaleManager       // nil until first scale_*
+	pocketBaseMgr  *PocketBaseManager  // nil until first backend_*
+	platformMgr    *PlatformManager    // nil until first platform_*
+	domainMgr      *DomainManager      // nil until first domain_*
+	siteMgr        *SiteManager        // nil until first site_*
+	formMgr        *FormManager        // nil until first form_*
+	seoMgr         *SEOManager         // nil until first seo_*
+	cmsMgr         *CMSManager         // nil until first cms_*
+	templateMgr    *TemplateManager    // nil until first template_*
+	wifiHotspotMgr *WiFiHotspotManager // nil until first /console/wifi or wifi_* op
+	wifiMeshMgr    *WiFiMeshManager    // nil until first /console/wifi-mesh or wifi_mesh_* op
+	server         *http.Server
+	tlsServer      *http.Server
+	onShutdown     func() // called when mobile requests agent shutdown
 
 	// lastNativeBundleProject{Path,Name} captures the most recent
 	// successful /dev/build-native compile so a follow-up
@@ -198,23 +194,12 @@ type HTTPServer struct {
 
 	// IP allowlist — if non-empty, only these CIDRs can access the agent
 	allowedCIDRs []*net.IPNet
-	// Extra CIDRs that are only admitted when the request carries a
-	// valid bearer token (owner, guest, or SDK). Used to open the
-	// network-layer gate for authenticated traffic from relay /
-	// Tailscale / Cloudflare while keeping anonymous traffic
-	// restricted to the main allowedCIDRs set.
-	allowedGuestCIDRs []*net.IPNet
-
 	// Track seen IPs per token prefix for new-device notifications
 	seenIPs sync.Map // "tokenPrefix_IP" -> true
 
 	// Short-lived browser-scoped session tokens for websocket and iframe flows.
 	browserSessions  sync.Map
 	terminalSessions sync.Map
-
-	// Guest access: cached list of approved guest userIds (refreshed every 60s)
-	guestUserIDs   []string
-	guestUserIDsMu sync.RWMutex
 
 	// TLS config for HTTPS on LAN
 	tlsPort        int
@@ -246,8 +231,6 @@ type HTTPServer struct {
 	// Named log streams for fan-out of long-running CLI ops
 	// to mobile + web subscribers.
 	streams *LogStreamRegistry
-
-	hostShareWorkspaceMgr *HostShareWorkspaceManager
 
 	// meshMgr owns the optional Yaver Mesh data plane (WireGuard overlay).
 	// nil until `yaver mesh up` / a serve-time restore brings it up; guarded
@@ -307,23 +290,25 @@ func (s *HTTPServer) SetOwnerUserID(uid string) {
 
 func NewHTTPServer(port int, token, ownerUserID, deviceID, convexURL, hostname string, taskMgr *TaskManager) *HTTPServer {
 	currentLocalAgentPort.Store(int64(port))
-	var hostShareWorkspaceMgr *HostShareWorkspaceManager
-	if mgr, err := NewHostShareWorkspaceManager(); err == nil {
-		hostShareWorkspaceMgr = mgr
+	projectSessions, sessionErr := NewProjectSessionManager()
+	if sessionErr != nil {
+		log.Printf("project sessions unavailable: %v", sessionErr)
 	}
 	s := &HTTPServer{
-		port:                  port,
-		token:                 token,
-		ownerUserID:           ownerUserID,
-		deviceID:              deviceID,
-		convexURL:             convexURL,
-		hostname:              hostname,
-		taskMgr:               taskMgr,
-		finalizeMgr:           NewFinalizeManager(taskMgr),
-		streams:               NewLogStreamRegistry(),
-		hostShareWorkspaceMgr: hostShareWorkspaceMgr,
-		heartbeatKick:         make(chan struct{}, 1),
-		windowsSeats:          newWindowsSeatIndex(),
+		port:              port,
+		token:             token,
+		ownerUserID:       ownerUserID,
+		deviceID:          deviceID,
+		convexURL:         convexURL,
+		hostname:          hostname,
+		taskMgr:           taskMgr,
+		projectSessions:   projectSessions,
+		projectPreviewMgr: NewProjectPreviewManager(),
+		validationMgr:     NewProjectValidationManager(),
+		finalizeMgr:       NewFinalizeManager(taskMgr),
+		streams:           NewLogStreamRegistry(),
+		heartbeatKick:     make(chan struct{}, 1),
+		windowsSeats:      newWindowsSeatIndex(),
 	}
 	// Lets a credential recovery re-dispatch whatever the user typed while the
 	// runner was signed out, without threading a TaskManager into the auth paths.
@@ -412,6 +397,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// Authenticated
 	mux.HandleFunc("/tasks", s.auth(s.handleTasks))
 	mux.HandleFunc("/tasks/", s.auth(s.handleTaskByID))
+	mux.HandleFunc("/v2/capabilities", s.auth(s.handleV2Capabilities))
+	mux.HandleFunc("/v2/git/connections", s.auth(s.handleV2GitConnections))
+	mux.HandleFunc("/v2/git/repositories", s.auth(s.handleV2GitRepositories))
+	mux.HandleFunc("/v2/project-sessions", s.auth(s.handleV2ProjectSessions))
+	mux.HandleFunc("/v2/project-sessions/", s.auth(s.handleV2ProjectSessionByID))
 	mux.HandleFunc("/finalize", s.auth(s.handleFinalize))
 	mux.HandleFunc("/finalize/", s.auth(s.handleFinalizeByID))
 	// Mobile Sandbox → remote runner (GLM): edit the phone-only sandbox tree on
@@ -436,7 +426,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/agent/status", s.auth(s.handleAgentStatus))
 	mux.HandleFunc("/agent/capabilities", s.auth(s.handleAgentCapabilities))
 	// Multi-source yaver-binary reconcile (apt/brew/npm/manual/auto-update).
-	// Owner-only; never exposed to guests or SDK tokens. See self_heal.go.
+	// Owner-only; never exposed to SDK or constrained companion tokens. See self_heal.go.
 	mux.HandleFunc("/agent/self-heal", s.auth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			handleSelfHealReport(w, r)
@@ -446,7 +436,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	}))
 	mux.HandleFunc("/agent/graphs", s.auth(s.handleAgentGraphs))
 	mux.HandleFunc("/agent/graphs/", s.auth(s.handleAgentGraphByID))
-	mux.HandleFunc("/agent/runners", s.authSDKOrGuest(s.handleRunners))
+	mux.HandleFunc("/agent/runners", s.authSDK(s.handleRunners))
 	mux.HandleFunc("/agent/runners/test", s.auth(s.handleRunnerTest))
 	mux.HandleFunc("/runner-auth/status", s.auth(s.handleRunnerAuthStatus))
 	mux.HandleFunc("/runner-auth/set", s.auth(s.handleRunnerAuthSet))
@@ -499,7 +489,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/code/deploy", s.auth(s.handleCodeDeploy))
 
 	mux.HandleFunc("/agent/runner/restart", s.auth(s.handleRunnerRestart))
-	mux.HandleFunc("/agent/runner/switch", s.authSDKOrGuest(s.handleRunnerSwitch))
+	mux.HandleFunc("/agent/runner/switch", s.authSDK(s.handleRunnerSwitch))
 	mux.HandleFunc("/agent/update", s.auth(s.handleAgentUpdate))
 	mux.HandleFunc("/agent/shutdown", s.auth(s.handleShutdown))
 	mux.HandleFunc("/machine/remove", s.auth(s.handleMachineRemove))
@@ -591,19 +581,17 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/auth/pair/session", s.rateLimit(s.handlePairSession))
 	mux.HandleFunc("/auth/pair/submit", s.rateLimit(s.handlePairSubmit))
 	mux.HandleFunc("/auth/pair/encrypted", s.rateLimit(s.handlePairEncrypted))
-	// Remote-support sessions (TeamViewer-style, in-memory, TTL'd).
-	// Owner-only control plane:
 	// Grand MCP: unified verb-based ops API. See ops.go.
 	// /ops           — POST {machine, verb, payload} -> {ok, streamId?, initial?, error?, code?}
 	// /ops/plan      — POST {machine, verb, payload} -> execution plan without side effects
 	// /ops/verbs     — GET list of registered verbs + their payload schemas
-	// authSDKOrGuest (not plain auth): owner/agent tokens pass through unchanged,
-	// but capability-scoped SDK tokens (e.g. scopes:["circuit"]) are also accepted
-	// — validated, CIDR-checked, then demoted to a scoped guest so the per-verb
+	// authSDK accepts owner/agent credentials and capability-scoped SDK tokens
+	// (e.g. scopes:["circuit"]). Capability tokens are validated, CIDR-checked,
+	// then restricted to their one verb family by
 	// gate in dispatchOps restricts them to their verb family. This is what lets
 	// an external product (Talos/OCPP) drive ONLY the circuit cell over /ops.
-	mux.HandleFunc("/ops", s.authSDKOrGuest(s.handleOps))
-	mux.HandleFunc("/ops/plan", s.authSDKOrGuest(s.handleOpsPlan))
+	mux.HandleFunc("/ops", s.authSDK(s.handleOps))
+	mux.HandleFunc("/ops/plan", s.authSDK(s.handleOpsPlan))
 	// Remote-view (RustDesk/AnyDesk/VNC) management — first-class in the agent.
 	mux.HandleFunc("/remoteview/providers", s.auth(s.handleRemoteViewProviders))
 	mux.HandleFunc("/remoteview/status", s.auth(s.handleRemoteViewStatus))
@@ -628,13 +616,6 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// so remote (CG-NAT) WebRTC works. Reuses the TURN-credential issuer.
 	mux.HandleFunc("/stream/webrtc/ice", s.auth(s.handleRemoteRuntimeTURNCredentials))
 	mux.HandleFunc("/ops/verbs", s.auth(s.handleOpsVerbs))
-	mux.HandleFunc("/support/start", s.auth(s.handleSupportStart))
-	mux.HandleFunc("/support/stop", s.auth(s.handleSupportStop))
-	mux.HandleFunc("/support/status", s.auth(s.handleSupportStatus))
-	// Unauth probe + redeem — code is the secret, same model as
-	// /auth/pair/submit. Rate-limited to throttle brute force.
-	mux.HandleFunc("/support/info", s.rateLimit(s.handleSupportInfo))
-	mux.HandleFunc("/support/redeem", s.rateLimit(s.handleSupportRedeem))
 	mux.HandleFunc("/auth/browser-session", s.auth(s.handleBrowserSession))
 	mux.HandleFunc("/machine/health", s.auth(s.handleMachineHealth))
 	// Storage reclaim + live process table — the "box is full / what's
@@ -679,9 +660,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/files/list", s.auth(s.handleFilesList))
 	mux.HandleFunc("/files/read", s.auth(s.handleFilesRead))
 	mux.HandleFunc("/files/raw", s.auth(s.handleFilesRaw))
-	mux.HandleFunc("/host-share/fs/write", s.auth(s.handleHostShareFSWrite))
-	mux.HandleFunc("/host-share/fs/mkdir", s.auth(s.handleHostShareFSMkdir))
-	mux.HandleFunc("/host-share/fs/delete", s.auth(s.handleHostShareFSDelete))
+	mux.HandleFunc("/files/write", s.auth(s.handleFilesWrite))
+	mux.HandleFunc("/files/mkdir", s.auth(s.handleFilesMkdir))
+	mux.HandleFunc("/files/delete", s.auth(s.handleFilesDelete))
 	mux.HandleFunc("/shared-storage/profiles", s.auth(s.handleSharedStorageProfiles))
 	mux.HandleFunc("/shared-storage/profile/delete", s.auth(s.handleSharedStorageDelete))
 	mux.HandleFunc("/shared-storage/list", s.auth(s.handleSharedStorageList))
@@ -775,18 +756,15 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/ab/events", s.handleABEvents)
 	mux.HandleFunc("/ab/results", s.auth(s.handleABResults))
 
-	// Clips — screen recording + sharing (share links are public).
-	// Replaces Loom / Tella / Vidyard for the solo dev.
+	// Clips — owner-authenticated screen recording and replay.
 	mux.HandleFunc("/clips/start", s.auth(s.handleClipStart))
 	mux.HandleFunc("/clips/stop", s.auth(s.handleClipStop))
 	mux.HandleFunc("/clips/list", s.auth(s.handleClipList))
 	mux.HandleFunc("/clips/upload/", s.auth(s.handleClipUpload))
 	mux.HandleFunc("/clips/merge/", s.auth(s.handleClipMerge))
 	mux.HandleFunc("/clips/private/", s.auth(s.handleClipPrivateDetail))
-	mux.HandleFunc("/clips/", s.handleClipDetail)
 
-	// screenlog — local-only screen-frame black box. All routes are
-	// authed; nothing is public (unlike clips' share links).
+	// screenlog — local-only screen-frame black box. All routes are authed.
 	mux.HandleFunc("/screenlog/start", s.auth(s.handleScreenlogStart))
 	mux.HandleFunc("/screenlog/stop", s.auth(s.handleScreenlogStop))
 	mux.HandleFunc("/screenlog/kill", s.auth(s.handleScreenlogKill))
@@ -810,7 +788,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/rd/policy", s.auth(s.handleRemoteDesktopPolicy))
 	mux.HandleFunc("/rd/stream", s.auth(s.handleRemoteDesktopStream))
 	mux.HandleFunc("/rd/frame.jpg", s.auth(s.handleRemoteDesktopFrame))
-	mux.HandleFunc("/rd/input", s.auth(s.vibeDriverOnly(s.handleRemoteDesktopInput)))
+	mux.HandleFunc("/rd/input", s.auth(s.handleRemoteDesktopInput))
 
 	// Personal Agent Gateway — resumable human gates (gateway_gate.go). The
 	// broker suspends on an irreducible human factor (captcha / push / code),
@@ -838,13 +816,6 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/asciinema/stop", s.auth(s.handleAsciinemaStop))
 	mux.HandleFunc("/asciinema/", s.handleAsciinemaDetail)
 
-	// Live chat widget — public visitor side, owner side gated
-	mux.HandleFunc("/chat/messages", s.handleChatMessageIngest)
-	mux.HandleFunc("/chat/stream", s.handleChatStream)
-	mux.HandleFunc("/chat/conversations", s.auth(s.handleChatConversations))
-	mux.HandleFunc("/chat/reply", s.auth(s.handleChatReply))
-	mux.HandleFunc("/chat/widget.js", s.handleChatWidgetJS)
-
 	// Copilot-lite — local Ollama autocomplete (replaces Copilot/Cursor)
 	mux.HandleFunc("/copilot/complete", s.auth(s.handleCopilotComplete))
 	mux.HandleFunc("/copilot/models", s.auth(s.handleCopilotModels))
@@ -869,6 +840,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
 	mux.HandleFunc("/tmux/close", s.auth(s.handleTmuxClose))
 	mux.HandleFunc("/tmux/input", s.auth(s.handleTmuxInput))
+	mux.HandleFunc("/tmux/stream", s.auth(s.handleTmuxStream))
 
 	// Notifications
 	mux.HandleFunc("/notifications/config", s.auth(s.handleNotificationsConfig))
@@ -912,7 +884,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/exec", s.auth(s.handleExec))
 	mux.HandleFunc("/exec/", s.auth(s.handleExecByID))
 
-	// Fleet file transfer (owner-only; absent from guest/support allowlists).
+	// Fleet file transfer is primary-owner only.
 	mux.HandleFunc("/fleet/file", s.auth(s.handleFleetFile))
 
 	// Tunnels (TCP port tunneling for hot reload)
@@ -998,7 +970,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/imap/inbox", s.auth(s.handleIMAPInbox))
 
 	// Mobile-app session enumeration + remote-trigger control plane.
-	// Owner-only — guests must not be able to push apps onto a phone.
+	// Owner-only — constrained credentials must not push apps onto a phone.
 	mux.HandleFunc("/mobile/sessions", s.auth(s.handleMobileSessions))
 	mux.HandleFunc("/mobile/insert", s.auth(s.handleMobileInsert))
 
@@ -1008,7 +980,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/watch/result", s.auth(s.handleWatchResult))
 
 	// Dev server (reverse proxy to local Metro/Vite/Flutter dev server)
-	mux.HandleFunc("/dev/status", s.authSDKOrGuest(s.handleDevServerStatus))
+	mux.HandleFunc("/dev/status", s.authSDK(s.handleDevServerStatus))
 
 	// Screen context (screen_context_http.go): the surface reports WHICH screen
 	// the user is looking at in the live preview, so a prompt about "this
@@ -1030,32 +1002,23 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// boundary as /dom-inspect itself.
 	mux.HandleFunc("/dom-inspect/items", s.auth(s.handleDomInspectItems))
 
-	// Co-vibe (vibe_sessions_http.go): one report + four verbs. Readable by any
-	// authenticated participant — seeing who else is driving is what stops two
-	// people fighting over one simulator.
-	mux.HandleFunc("/vibe/sessions", s.auth(s.handleVibeSessions))
-
 	// Housekeeping feed — the custodian's findings, on every surface. See
 	// custodian.go: a janitor nobody can see is indistinguishable from none.
 	mux.HandleFunc("/custodian/status", s.auth(s.handleCustodianStatus))
 	mux.HandleFunc("/custodian/events", s.auth(s.handleCustodianEvents))
 	mux.HandleFunc("/custodian/playbook", s.auth(s.handleCustodianPlaybook))
 	mux.HandleFunc("/custodian/sweep", s.auth(s.handleCustodianSweep))
-	mux.HandleFunc("/vibe/join", s.auth(s.handleVibeJoin))
-	mux.HandleFunc("/vibe/heartbeat", s.auth(s.handleVibeHeartbeat))
-	mux.HandleFunc("/vibe/role", s.auth(s.handleVibeRole))
-	mux.HandleFunc("/vibe/leave", s.auth(s.handleVibeLeave))
-	mux.HandleFunc("/dev/target", s.authSDKOrGuest(s.handleDevServerTarget))
-	mux.HandleFunc("/dev/start", s.auth(s.vibeDriverOnly(s.handleDevServerStart)))
-	mux.HandleFunc("/dev/stop", s.auth(s.vibeDriverOnly(s.handleDevServerStop)))
-	mux.HandleFunc("/dev/reload", s.authSDKOrGuest(s.vibeDriverOnly(s.handleDevServerReload)))
-	mux.HandleFunc("/dev/reload-app", s.authSDKOrGuest(s.vibeDriverOnly(s.handleReloadApp)))
-	mux.HandleFunc("/dev/native-fingerprint", s.authSDKOrGuest(s.handleNativeFingerprintGet))
-	mux.HandleFunc("/dev/native-fingerprint/refresh", s.authSDKOrGuest(s.handleNativeFingerprintRefresh))
-	mux.HandleFunc("/dev/events", s.authSDKOrGuest(s.handleDevServerEvents))
-	mux.HandleFunc("/dev/compatibility", s.authSDKOrGuest(s.handleDevServerCompatibility))
+	mux.HandleFunc("/dev/target", s.authSDK(s.handleDevServerTarget))
+	mux.HandleFunc("/dev/start", s.auth(s.handleDevServerStart))
+	mux.HandleFunc("/dev/stop", s.auth(s.handleDevServerStop))
+	mux.HandleFunc("/dev/reload", s.authSDK(s.handleDevServerReload))
+	mux.HandleFunc("/dev/reload-app", s.authSDK(s.handleReloadApp))
+	mux.HandleFunc("/dev/native-fingerprint", s.authSDK(s.handleNativeFingerprintGet))
+	mux.HandleFunc("/dev/native-fingerprint/refresh", s.authSDK(s.handleNativeFingerprintRefresh))
+	mux.HandleFunc("/dev/events", s.authSDK(s.handleDevServerEvents))
+	mux.HandleFunc("/dev/compatibility", s.authSDK(s.handleDevServerCompatibility))
 	mux.HandleFunc("/dev/builds", s.auth(s.handleDevServerBuilds))
-	mux.HandleFunc("/dev/build-native", s.authSDKOrGuest(s.vibeDriverOnly(s.handleBuildNativeBundle)))
+	mux.HandleFunc("/dev/build-native", s.authSDK(s.handleBuildNativeBundle))
 	mux.HandleFunc("/dev/native-bundle", s.handleServeNativeBundle) // No auth — serves compiled bundle
 	mux.HandleFunc("/dev/native-assets", s.handleServeNativeAssets) // No auth — serves compiled assets
 	// Web build target outputs (target=web-js-bundle / web-hermes-wasm).
@@ -1082,9 +1045,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/diagnose", s.auth(s.handleDiagnose))
 	mux.HandleFunc("/diagnose/stream", s.auth(s.handleDiagnoseStream))
 	mux.HandleFunc("/net/doctor", s.auth(s.handleNetDoctor))
-	mux.HandleFunc("/unity/test", s.authSDKOrGuest(s.handleUnityTest))
-	mux.HandleFunc("/unity/build", s.authSDKOrGuest(s.handleUnityBuild))
-	mux.HandleFunc("/unity/relaunch", s.authSDKOrGuest(s.handleUnityRelaunch))
+	mux.HandleFunc("/unity/test", s.authSDK(s.handleUnityTest))
+	mux.HandleFunc("/unity/build", s.authSDK(s.handleUnityBuild))
+	mux.HandleFunc("/unity/relaunch", s.authSDK(s.handleUnityRelaunch))
 	mux.HandleFunc("/unity/runs", s.auth(s.handleUnityRuns))
 	mux.HandleFunc("/mobile-workers/preview-session", s.authSDK(s.handleMobileWorkerPreviewSession))
 	mux.HandleFunc("/mobile-workers/preview-session/command", s.authSDK(s.handleMobileWorkerPreviewCommand))
@@ -1121,8 +1084,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/projects/web", s.auth(s.handleProjectsByCapability))
 	mux.HandleFunc("/projects/all", s.auth(s.handleProjectsByCapability))
 	mux.HandleFunc("/remote-runtime/capabilities", s.auth(s.handleRemoteRuntimeCapabilities))
-	mux.HandleFunc("/remote-runtime/sessions", s.auth(s.vibeDriverOnly(s.handleRemoteRuntimeSessions)))
-	mux.HandleFunc("/remote-runtime/sessions/", s.auth(s.vibeDriverOnly(s.handleRemoteRuntimeSessionRoute)))
+	mux.HandleFunc("/remote-runtime/sessions", s.auth(s.handleRemoteRuntimeSessions))
+	mux.HandleFunc("/remote-runtime/sessions/", s.auth(s.handleRemoteRuntimeSessionRoute))
 	// Monorepo detection — desktop/agent/monorepo_detect.go
 	mux.HandleFunc("/projects/monorepo", s.auth(s.handleMonorepoDetect))
 	mux.HandleFunc("/projects/switch", s.auth(s.handleProjectSwitch))
@@ -1131,24 +1094,24 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/publish/run", s.auth(s.handlePublishRun))
 	mux.HandleFunc("/publish/runs", s.auth(s.handlePublishRuns))
 	mux.HandleFunc("/publish/runs/", s.auth(s.handlePublishRunByID))
-	mux.HandleFunc("/vibing", s.authSDKOrGuest(s.handleVibing))
-	mux.HandleFunc("/vibing/eligibility", s.authSDKOrGuest(s.handleVibingEligibility))
-	mux.HandleFunc("/vibing/commit", s.authSDKOrGuest(s.handleVibingCommit))
-	mux.HandleFunc("/vibing/deploy", s.authSDKOrGuest(s.handleVibingDeploy))
-	mux.HandleFunc("/vibing/execute", s.authSDKOrGuest(s.handleVibingExecute))
+	mux.HandleFunc("/vibing", s.authSDK(s.handleVibing))
+	mux.HandleFunc("/vibing/eligibility", s.authSDK(s.handleVibingEligibility))
+	mux.HandleFunc("/vibing/commit", s.authSDK(s.handleVibingCommit))
+	mux.HandleFunc("/vibing/deploy", s.authSDK(s.handleVibingDeploy))
+	mux.HandleFunc("/vibing/execute", s.authSDK(s.handleVibingExecute))
 	// SDK-accessible read-back + continue for vibing tasks. /tasks/{id}
 	// itself requires owner-auth, so without these endpoints the
 	// Feedback SDK chat surface couldn't poll its own task once
 	// /vibing/execute returned. Source-gated to "vibing" tasks only.
-	mux.HandleFunc("/vibing/task/", s.authSDKOrGuest(s.handleVibingTaskByID))
-	mux.HandleFunc("/vibing/surprise", s.authSDKOrGuest(s.handleVibingSurprise))
+	mux.HandleFunc("/vibing/task/", s.authSDK(s.handleVibingTaskByID))
+	mux.HandleFunc("/vibing/surprise", s.authSDK(s.handleVibingSurprise))
 	// Vibe Preview — live screenshot stream of a remote dev server, viewed
 	// from the mobile app while vibe-coding (docs/vibe-preview-streaming.md).
-	// /status + /snapshot are read-ish and inherit guest-vibing scope; the
-	// mutating endpoints stay owner-only.
+	// /status + /snapshot admit an owner-minted SDK with vibing scope; the
+	// mutating endpoints stay primary-owner only.
 	mux.HandleFunc("/vibing/preview/start", s.auth(s.handleVibePreviewStart))
 	mux.HandleFunc("/vibing/preview/stop", s.auth(s.handleVibePreviewStop))
-	mux.HandleFunc("/vibing/preview/status", s.authSDKOrGuest(s.handleVibePreviewStatus))
+	mux.HandleFunc("/vibing/preview/status", s.authSDK(s.handleVibePreviewStatus))
 	// tvOS "kumanda" DOM selection: cursor coordinate → real click in the
 	// headless preview browser → element registered for the next prompt turn.
 	// Owner-authenticated: it dispatches a real browser interaction on the box.
@@ -1158,28 +1121,28 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/vibing/preview/dom-mode", s.auth(s.handleVibePreviewDomMode))
 	// tvOS live hover: mouse move only, never stored — the tap is /select.
 	mux.HandleFunc("/vibing/preview/cursor", s.auth(s.handleVibePreviewCursor))
-	mux.HandleFunc("/vibing/preview/snapshot", s.authSDKOrGuest(s.handleVibePreviewSnapshot))
-	mux.HandleFunc("/vibing/preview/events", s.authSDKOrGuest(s.handleVibePreviewEvents))
-	mux.HandleFunc("/vibing/preview/frames/", s.authSDKOrGuest(s.handleVibePreviewFrame))
+	mux.HandleFunc("/vibing/preview/snapshot", s.authSDK(s.handleVibePreviewSnapshot))
+	mux.HandleFunc("/vibing/preview/events", s.authSDK(s.handleVibePreviewEvents))
+	mux.HandleFunc("/vibing/preview/frames/", s.authSDK(s.handleVibePreviewFrame))
 	mux.HandleFunc("/vibing/preview/clip/start", s.auth(s.handleVibePreviewClipStart))
 	mux.HandleFunc("/vibing/preview/clip/stop", s.auth(s.handleVibePreviewClipStop))
-	mux.HandleFunc("/vibing/preview/clips", s.authSDKOrGuest(s.handleVibePreviewClips))
-	mux.HandleFunc("/vibing/preview/clip/", s.authSDKOrGuest(s.handleVibePreviewClip))
-	mux.HandleFunc("/vibing/preview/summaries", s.authSDKOrGuest(s.handleVibePreviewSummaries))
+	mux.HandleFunc("/vibing/preview/clips", s.authSDK(s.handleVibePreviewClips))
+	mux.HandleFunc("/vibing/preview/clip/", s.authSDK(s.handleVibePreviewClip))
+	mux.HandleFunc("/vibing/preview/summaries", s.authSDK(s.handleVibePreviewSummaries))
 	// "Can a new preview session be claimed yet?" — a read, so it rides the
-	// same guest/SDK scope as status. Exists so callers poll a fact instead of
+	// same SDK scope as status. Exists so callers poll a fact instead of
 	// sleeping through the teardown window.
-	mux.HandleFunc("/vibing/preview/release", s.authSDKOrGuest(s.handleVibePreviewRelease))
+	mux.HandleFunc("/vibing/preview/release", s.authSDK(s.handleVibePreviewRelease))
 	mux.HandleFunc("/vibing/preview/clip/upload", s.auth(s.handleVibePreviewClipUpload))
 	mux.HandleFunc("/feedback-work/config", s.auth(s.handleFeedbackWorkConfig))
 
-	// Recaps. Read paths are authSDKOrGuest so a guest can watch what the
-	// agent did; build/config are s.auth — generating one spends CPU and
+	// Recaps. Read paths accept owner-scoped SDK credentials; build/config are
+	// s.auth — generating one spends CPU and
 	// (with narration) inference tokens, which is an owner's decision.
-	mux.HandleFunc("/recaps", s.authSDKOrGuest(s.handleRecaps))
+	mux.HandleFunc("/recaps", s.authSDK(s.handleRecaps))
 	mux.HandleFunc("/recaps/build", s.auth(s.handleRecapBuild))
 	mux.HandleFunc("/recap/config", s.auth(s.handleRecapConfig))
-	mux.HandleFunc("/recap/", s.authSDKOrGuest(s.handleRecap))
+	mux.HandleFunc("/recap/", s.authSDK(s.handleRecap))
 	mux.HandleFunc("/vibing/project/remote", s.auth(s.handleProjectRemote))
 
 	// Recovery: central catalog of fix prompts routed to the wrapped AI agent.
@@ -1231,6 +1194,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/git/identity", s.auth(s.handleGitIdentity))
 	mux.HandleFunc("/git/push", s.auth(s.handleGitPush))
 	mux.HandleFunc("/git/pull", s.auth(s.handleGitPull))
+	mux.HandleFunc("/git/sync-remote", s.auth(s.handleGitSyncRemote))
 	mux.HandleFunc("/git/revert", s.auth(s.handleGitRevert))
 
 	// Repo sync (clone/pull repos, manage git credentials — P2P only)
@@ -1277,11 +1241,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// New repo creation — used by the mobile sandbox wizard's
 	// "Configure now" git step. Owner-only (uses the user's stored
 	// PAT to call the provider API on their behalf + commit a
-	// yaver.workspace.yaml). Not opened to SDK / guest tokens.
+	// yaver.workspace.yaml). Not opened to SDK or constrained companion tokens.
 	mux.HandleFunc("/git/provider/repo/create", s.auth(s.handleGitProviderRepoCreate))
 	// Deploy-token onboarding (Convex / Cloudflare / npm / PyPI /
 	// TestFlight / Play). Vault-backed; values never sync to Convex.
-	// Owner-only — guests can't enumerate or save deploy secrets.
+	// Owner-only — constrained credentials cannot enumerate or save deploy secrets.
 	mux.HandleFunc("/deploy/tokens/catalogue", s.auth(s.handleDeployTokensCatalogue))
 	mux.HandleFunc("/deploy/tokens/status", s.auth(s.handleDeployTokensStatus))
 	mux.HandleFunc("/deploy/tokens/verify", s.auth(s.handleDeployTokensVerify))
@@ -1293,12 +1257,6 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// already cloned the repo manually doesn't end up with a
 	// duplicate clone in a fresh location.
 	mux.HandleFunc("/git/find-repo", s.auth(s.handleGitFindRepo))
-
-	// Multi-user management (shared machines)
-	mux.HandleFunc("/users", s.auth(s.handleMultiUserList))
-	mux.HandleFunc("/users/me", s.auth(s.handleMultiUserMe))
-	mux.HandleFunc("/users/", s.auth(s.handleMultiUserRemove))
-	mux.HandleFunc("/sessions", s.auth(s.handleMultiUserSessions))
 
 	// Container sandbox management
 	mux.HandleFunc("/sandbox/status", s.auth(s.handleSandboxStatus))
@@ -1387,7 +1345,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/ws/logs", s.auth(s.handleContainerLogsStream))
 	mux.HandleFunc("/ws/terminal", s.auth(s.handleTerminalWS))
 	// Owner-only exact-TUI runner wrap (yaver claude|codex|opencode --machine=…);
-	// deliberately NOT in hostShareAllowedPrefixes. See runner_pty.go.
+	// Owner-only: exact TUI exposes a privileged interactive shell.
 	mux.HandleFunc("/ws/runner", s.auth(s.handleRunnerPTYWS))
 	mux.HandleFunc("/runner/sessions/close", s.auth(s.handleRunnerSessionsClose))
 	mux.HandleFunc("/runner/sessions", s.auth(s.handleRunnerSessions))
@@ -1430,8 +1388,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	// Error tracking. /errors/ingest accepts pushes from the
 	// Feedback SDK + 3rd-party app crash hooks, so it goes
-	// through authSDK (accepts owner tokens, paired tokens, and
-	// scoped SDK tokens). H-7 fix: previously unauth — disk-fill
+	// through authSDK (accepts owner and scoped SDK tokens). H-7 fix: previously unauth — disk-fill
 	// + host-existence-leak vector for any unauthenticated scanner.
 	mux.HandleFunc("/errors/ingest", s.rateLimit(s.authSDK(s.handleErrorIngest)))
 	mux.HandleFunc("/errors/groups", s.auth(s.handleErrorGroups))
@@ -1551,21 +1508,6 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/mail/message", s.auth(s.handleMailpitMessage))
 	mux.HandleFunc("/mail/delete", s.auth(s.handleMailpitDelete))
 
-	// Guest access management (host invites guests to use their agent)
-	mux.HandleFunc("/guests", s.auth(s.handleGuestList))
-	mux.HandleFunc("/guests/invite", s.auth(s.handleGuestInvite))
-	mux.HandleFunc("/guests/revoke", s.auth(s.handleGuestRevoke))
-	mux.HandleFunc("/guests/delete", s.auth(s.handleGuestDelete))
-	mux.HandleFunc("/guests/config", s.auth(s.handleGuestConfig))
-	mux.HandleFunc("/guests/usage", s.auth(s.handleGuestUsage))
-	mux.HandleFunc("/guest/testable", s.auth(s.handleGuestTestableProjects))
-	mux.HandleFunc("/guest/vibe-save", s.auth(s.handleGuestVibeSave))
-	mux.HandleFunc("/host-share/workspace/status", s.auth(s.handleHostShareWorkspaceStatus))
-	mux.HandleFunc("/host-share/workspace/bootstrap", s.auth(s.handleHostShareWorkspaceBootstrap))
-	mux.HandleFunc("/host-share/workspace/attach-repo", s.auth(s.handleHostShareWorkspaceAttachRepo))
-	mux.HandleFunc("/host-share/workspace/pull-from-guest", s.auth(s.handleHostShareWorkspacePullFromGuest))
-	mux.HandleFunc("/host-share/workspace/push-to-guest", s.auth(s.handleHostShareWorkspacePushToGuest))
-
 	// Agent context (repo switching)
 	mux.HandleFunc("/agent/workdir", s.auth(s.handleAgentWorkdir))
 	mux.HandleFunc("/agent/context", s.auth(s.handleAgentContext))
@@ -1582,13 +1524,12 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// of /vault/get is the most sensitive single response the agent
 	// can produce, so we make it prohibitively expensive to walk
 	// the namespace by hammering names.
-	// Build toolchain preflight + deploy-script generator. Owner full
-	// access; guests with scope=full or scope=deploy can hit the
-	// preflight and generator. /deploy/ship actually executes the
-	// generated script on the host and streams stdout/stderr; it is
-	// the shared-machine deploy surface, gated by allowedProjects in
-	// the handler itself.
+	// Build toolchain preflight + deploy-script generator. Primary-owner only.
+	// /deploy/ship executes the generated script and streams stdout/stderr.
 	mux.HandleFunc("/doctor/build", s.auth(s.handleDoctorBuild))
+	// Native Windows BYO readiness. GET is inventory-only; POST may opt into
+	// bounded live capture/encode probes and never persists captured pixels.
+	mux.HandleFunc("/doctor/windows-byo", s.auth(s.handleDoctorWindowsBYO))
 	// Live transport self-diagnosis — the endpoint the out-of-band SSH channel's
 	// `doctor-transport` verb reaches so agentic self-heal can learn why the data
 	// path is down and act (see doctor_transport.go + ssh_session_cmd.go).
@@ -1616,10 +1557,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/wire/devices", s.auth(s.handleWireDevices))
 	mux.HandleFunc("/wireless/devices", s.auth(s.handleWirelessDevices))
 
-	// Unified Runner surface (RUNNER_DEV.md Phase 1 + Phase 2). Owner-auth on
-	// every path; guest tiers (RunnerView / RunnerSubmit) defined in
-	// guest_scope.go control which subset a guest can reach. Sandboxes
-	// and agent sessions are owner-only in Phase 2.
+	// Unified Runner surface (RUNNER_DEV.md Phase 1 + Phase 2). Primary-owner
+	// auth on every path, including sandboxes and agent sessions.
 	mux.HandleFunc("/runner/jobs", s.auth(s.handleRunnerJobs))
 	mux.HandleFunc("/runner/jobs/", s.auth(s.handleRunnerJobByID))
 	mux.HandleFunc("/runner/runs", s.auth(s.handleRunnerRuns))
@@ -1651,8 +1590,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/yaver-agent/audit", s.auth(s.handleYaverAgentDeviceAudit))
 
 	// MCP (Model Context Protocol) endpoint — JSON-RPC 2.0 over HTTP.
-	// authMCP adds the per-user OAuth connector path (default-deny tool scope) on
-	// top of the existing owner/paired/guest auth. See oauth_mcp.go.
+	// authMCP adds a default-deny OAuth connector path alongside primary-owner
+	// auth. See oauth_mcp.go.
 	mux.HandleFunc("/mcp", s.authMCP(s.handleMCP))
 	// Manage user-registered external MCP servers (mcp_external.go).
 	mux.HandleFunc("/mcp/servers", s.auth(s.handleMCPServers))
@@ -1683,6 +1622,12 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
+		if s.projectPreviewMgr != nil {
+			s.projectPreviewMgr.StopAll()
+		}
+		if s.validationMgr != nil {
+			s.validationMgr.StopAll()
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		s.server.Shutdown(shutdownCtx)
@@ -1715,9 +1660,6 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 			}
 		}()
 	}
-
-	// Start guest list refresh goroutine (polls Convex every 60s)
-	go s.refreshGuestList(ctx)
 
 	// Proactively probe runner-CLI tokens every 6h so a Claude Code /
 	// Codex token rotation surfaces in the dashboard's [SIGN IN]
@@ -1818,73 +1760,33 @@ func (s *HTTPServer) addOverlayListener(ip string) {
 // ---------------------------------------------------------------------------
 
 type cachedTokenInfo struct {
-	userID               string
-	sessionScope         string
-	isSdk                bool
-	scopes               []string
-	allowedCIDRs         []string
-	delegatedGuestUserID string
-	delegatedGuestScope  string
-	sourceSurface        string
-	targetDeviceID       string
-	allowedProjects      []string
-	hostShare            *HostShareAccessInfo
-	// storedAt records when the cache entry was minted. The auth() middleware
-	// uses this to force a Convex re-validation of any non-owner, non-SDK,
-	// non-paired token (i.e. guest tokens) older than guestTokenCacheTTL —
-	// so host-side revocations show up within a handful of seconds, even if
-	// the 10s refreshGuestList loop is the only channel.
-	storedAt time.Time
-}
-
-// guestTokenCacheTTL is how long a guest's token can live in the validation
-// cache before we re-check with Convex. Keep short so host revocations are
-// effectively immediate.
-const guestTokenCacheTTL = 15 * time.Second
-
-var hostShareAllowedPrefixes = []string{
-	"/info",
-	"/agent/status",
-	"/agent/runners",
-	"/ops",
-	"/ops/plan",
-	"/ws/terminal",
-	"/host-share/workspace/status",
-	"/host-share/workspace/attach-repo",
-	"/host-share/workspace/pull-from-guest",
-	"/host-share/workspace/push-to-guest",
-	"/files/roots",
-	"/files/list",
-	"/files/read",
-	"/files/raw",
-	"/host-share/fs/write",
-	"/host-share/fs/mkdir",
-	"/host-share/fs/delete",
+	userID          string
+	sessionScope    string
+	isSdk           bool
+	scopes          []string
+	allowedCIDRs    []string
+	sourceSurface   string
+	targetDeviceID  string
+	allowedProjects []string
 }
 
 // Scope-to-path mapping: which URL paths each scope grants access to.
 var scopePathPrefixes = map[string][]string{
-	"feedback":     {"/feedback"},
-	"blackbox":     {"/blackbox/"},
-	"voice":        {"/voice/"},
-	"builds":       {"/builds"},
-	"testapp":      {"/test-app/"},
-	"health":       {"/health"},
-	"todolist":     {"/todolist"},
-	"guest-reload": {"/dev/reload", "/dev/reload-app", "/dev/status", "/dev/target", "/dev/events", "/dev/compatibility", "/unity/test", "/unity/build", "/unity/relaunch"},
-	"guest-vibing": {"/vibing"},
+	"feedback": {"/feedback"},
+	"blackbox": {"/blackbox/"},
+	"voice":    {"/voice/"},
+	"builds":   {"/builds"},
+	"testapp":  {"/test-app/"},
+	"health":   {"/health"},
+	"todolist": {"/todolist"},
+	"reload":   {"/dev/reload", "/dev/reload-app", "/dev/status", "/dev/target", "/dev/events", "/dev/compatibility", "/unity/test", "/unity/build", "/unity/relaunch"},
+	"vibing":   {"/vibing"},
 	// circuit: isolated circuit-simulator service credential (Talos/OCPP).
 	// Opens only the ops endpoint + discovery; the verb-level gate in ops.go
 	// (capabilityScopeVerbPrefix) then restricts /ops to circuit_* verbs. Pair
-	// with delegatedGuestScope:"circuit" on the token so the caller is treated
-	// as a scoped guest (not the owner) when it reaches /ops.
+	// with scopes:["circuit"] so the caller is treated as a scoped service
+	// credential when it reaches /ops.
 	"circuit": {"/ops", "/ops/plan", "/info", "/health"},
-	// stream: isolated VIEW-ONLY share credential. Opens only the ops endpoint
-	// (+ discovery); the verb gate (capabilityScopeVerbPrefix["stream"]="stream_")
-	// then restricts /ops to the read-only stream_* verbs. A watch link uses
-	// snapshot-polling (stream_snapshot returns base64) so no browser-session /
-	// MJPEG escalation is needed — the token reaches frames and NOTHING else.
-	"stream": {"/ops", "/info", "/health"},
 	// runner-auth: lets the embedded Feedback SDK inspect runner state
 	// and complete either browser-style auth (codex / claude) or
 	// token-based setup (opencode) without a separate full-session UI.
@@ -1946,12 +1848,12 @@ func spatialSDKRequestAllowed(method, path string) bool {
 // stampSessionScope records the SERVER-VALIDATED session scope on the request so
 // downstream dispatchers (notably /ops) can tell a companion token from the
 // owner. It is set only after the scope came back from Convex, and the inbound
-// copy is stripped in stripGuestRequestHeaders, so a caller cannot forge it.
+// copy is stripped in stripDelegatedRequestHeaders, so a caller cannot forge it.
 //
 // SECURITY (audit 2026-07-28): without this, ops_http.go had no way to see the
-// scope at all — it derived caller purely from the guest/support/host-share
-// headers and so defaulted a tvOS/watch token to caller="owner". Since ops.go
-// only restricts caller=="guest", a stolen TV token reached the `run` verb and
+// scope at all — it derived caller from removed delegation headers and so
+// defaulted a tvOS/watch token to caller="owner". Since ops.go did not yet
+// classify companion callers, a stolen TV token reached the `run` verb and
 // executed commands, directly contradicting the comment in this file promising
 // that it could not.
 func stampSessionScope(r *http.Request, scope string) {
@@ -1993,7 +1895,7 @@ func companionSessionAllowed(method, path, scope string) bool {
 		}
 	case "tv", "vision", "spatial":
 		switch {
-		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/tmux/sessions" || path == "/mcp/servers"):
+		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/tmux/sessions" || path == "/tmux/stream" || path == "/mcp/servers"):
 			return true
 		case method == http.MethodGet && strings.HasPrefix(path, "/tasks/"):
 			return true
@@ -2081,110 +1983,27 @@ func companionScopeDeniedMessage(scope string) string {
 	}
 }
 
-func (s *HTTPServer) applyDelegatedGuestSDKHeaders(w http.ResponseWriter, r *http.Request, info *cachedTokenInfo) bool {
+func (s *HTTPServer) applySDKCapabilityHeaders(w http.ResponseWriter, r *http.Request, info *cachedTokenInfo) bool {
 	if info == nil {
 		return true
 	}
 	// Capability tokens (scopes like "circuit") are isolated single-resource
-	// service credentials minted for another product (Talos, OCPP). They carry
-	// no delegatedGuest binding, but MUST still be demoted to a scoped guest so
+	// service credentials minted for another product (Talos, OCPP). They
+	// MUST be represented as a scoped service caller so
 	// the per-verb gate (capabilityScopeVerbPrefix) applies — otherwise a valid
 	// SDK token would reach /ops AS THE OWNER and bypass the circuit allowlist.
-	// Stamp the guest identity straight from the capability scope, before the
-	// owner fall-through below.
-	// KILL SWITCH (see feature_flags.go). A delegated-guest SDK token is a guest
-	// credential wearing an SDK jacket, so it must die with the guest feature.
-	// Refusing here rather than letting it fall through matters: the
-	// fall-through at the bottom of this function returns true, which means
-	// "proceed AS THE OWNER" — exactly the escalation the capability-scope
-	// branch below was written to prevent.
-	if !GuestAccessEnabled() && strings.TrimSpace(info.delegatedGuestUserID) != "" {
-		jsonError(w, http.StatusForbidden,
-			featureDisabledMessage("Guest access", envEnableGuestAccess))
-		return false
-	}
-	if capScope := firstCapabilityScope(info.scopes); capScope != "" && strings.TrimSpace(info.delegatedGuestUserID) == "" {
+	// Stamp only the validated service capability. Never reuse removed
+	// person-delegation headers for service credentials.
+	if capScope := firstCapabilityScope(info.scopes); capScope != "" {
 		if info.targetDeviceID != "" && strings.TrimSpace(info.targetDeviceID) != strings.TrimSpace(s.deviceID) {
 			jsonError(w, http.StatusForbidden, "SDK token is not valid for this device")
 			return false
 		}
-		stripGuestRequestHeaders(r)
-		r.Header.Set("X-Yaver-Guest", "true")
-		r.Header.Set("X-Yaver-GuestUserID", "svc:"+capScope)
-		r.Header.Set("X-Yaver-GuestScope", capScope)
+		stripDelegatedRequestHeaders(r)
+		r.Header.Set("X-Yaver-Capability", capScope)
 		return true
-	}
-	if strings.TrimSpace(info.delegatedGuestUserID) == "" {
-		return true
-	}
-	if info.targetDeviceID != "" && strings.TrimSpace(info.targetDeviceID) != strings.TrimSpace(s.deviceID) {
-		jsonError(w, http.StatusForbidden, "SDK token is not valid for this device")
-		return false
-	}
-	// Same defensive strip as allowGuest: an SDK token caller can attach
-	// X-Yaver-GuestScope: full or X-Yaver-GuestAllowedProjects: every-app
-	// to their request; we must NOT honor those. Re-stamp every value
-	// from the cached token info, falling back to safe defaults.
-	stripGuestRequestHeaders(r)
-	r.Header.Set("X-Yaver-Guest", "true")
-	r.Header.Set("X-Yaver-GuestUserID", info.delegatedGuestUserID)
-	scope := info.delegatedGuestScope
-	if strings.TrimSpace(scope) == "" {
-		// Default to the safer scope when the token didn't pin one.
-		// Pre-fix this fell through to the legacy "full" default,
-		// silently elevating SDK callers that lacked explicit scope.
-		scope = GuestScopeFeedbackOnly
-	}
-	r.Header.Set("X-Yaver-GuestScope", scope)
-	if info.sourceSurface != "" {
-		r.Header.Set("X-Yaver-SourceSurface", info.sourceSurface)
-	}
-	if len(info.allowedProjects) > 0 {
-		r.Header.Set("X-Yaver-GuestAllowedProjects", strings.Join(info.allowedProjects, ","))
 	}
 	return true
-}
-
-func isHostShareAllowedPath(path string, access *HostShareAccessInfo) bool {
-	if access == nil {
-		return false
-	}
-	if strings.HasPrefix(path, "/ws/terminal") && !access.Policy.AllowTerminal {
-		return false
-	}
-	for _, prefix := range hostShareAllowedPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func hostShareAllowedProjectsFromHeader(r *http.Request) []string {
-	raw := strings.TrimSpace(r.Header.Get("X-Yaver-HostShareAllowedProjects"))
-	if raw == "" {
-		return nil
-	}
-	return cleanProjectList(strings.Split(raw, ","))
-}
-
-func hostShareCanAccessProject(r *http.Request, projectPath string) bool {
-	allowed := hostShareAllowedProjectsFromHeader(r)
-	// SECURITY (audit 2026-07-28): FAIL CLOSED. This returned true on an empty
-	// allowlist, and empty is the DEFAULT (`--projects` is optional), so the
-	// common case granted every project rather than none. "No projects were
-	// granted to you" must mean no access, never all access — the same
-	// fail-open shape as the guest empty-scope grant fixed in Convex today.
-	if len(allowed) == 0 {
-		return false
-	}
-	base := strings.TrimSpace(filepath.Base(projectPath))
-	for _, p := range allowed {
-		if strings.EqualFold(strings.TrimSpace(p), base) || strings.EqualFold(strings.TrimSpace(p), strings.TrimSpace(projectPath)) {
-			return true
-		}
-	}
-	return false
 }
 
 // clientIP extracts the remote IP from the request (strips port).
@@ -2243,22 +2062,12 @@ func parseCIDRs(strs []string) []*net.IPNet {
 // ipAllowlist rejects requests from IPs not in the allowlist.
 // If the allowlist is empty, all IPs are allowed.
 //
-// Two tiers:
-//   - allowedCIDRs is the baseline and applies to every request
-//     (including anonymous probes to /health).
-//   - allowedGuestCIDRs, when set, widens the gate but ONLY for
-//     requests that carry a bearer token. The token itself is
-//     validated later by auth()/authSDK() — here we just verify a
-//     bearer is present so an unauthenticated scan can't walk the
-//     agent. This lets a host keep "owner traffic on LAN only"
-//     (small allowedCIDRs) while still permitting guests who arrive
-//     over relay, Tailscale, or Cloudflare tunnel (broad
-//     allowedGuestCIDRs, typically 0.0.0.0/0). Loopback is always
-//     admitted so relay/cloudflared sidecars terminating on 127.0.0.1
-//     never trip the gate.
+// allowedCIDRs is the single baseline and applies to every request, including
+// anonymous probes to /health. Loopback is always admitted so local relay and
+// tunnel sidecars can reach the authenticated HTTP layer.
 func (s *HTTPServer) ipAllowlist(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(s.allowedCIDRs) == 0 && len(s.allowedGuestCIDRs) == 0 {
+		if len(s.allowedCIDRs) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -2274,30 +2083,9 @@ func (s *HTTPServer) ipAllowlist(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if len(s.allowedGuestCIDRs) > 0 && ipMatchesCIDRs(ip, s.allowedGuestCIDRs) {
-			// Widened gate applies only to bearer-carrying requests.
-			// The bearer is NOT validated here — auth()/authSDK() does
-			// that. We just need proof the caller is claiming an
-			// identity, which turns this from "public ingress" into
-			// "authenticated ingress."
-			if hasBearer(r) {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
 		log.Printf("[IP] %s %s — blocked IP %s (not in allowlist)", r.Method, r.URL.Path, ip)
 		jsonError(w, http.StatusForbidden, "IP not allowed")
 	})
-}
-
-// hasBearer reports whether the request carries an Authorization
-// header with a Bearer scheme. Does not validate the token.
-func hasBearer(r *http.Request) bool {
-	h := r.Header.Get("Authorization")
-	if h == "" {
-		return false
-	}
-	return strings.HasPrefix(h, "Bearer ") || strings.HasPrefix(h, "bearer ")
 }
 
 // auth is for full-access endpoints (tasks, exec, agent commands, vault, etc.).
@@ -2305,6 +2093,7 @@ func hasBearer(r *http.Request) bool {
 // authOrLocalhost allows requests from localhost without auth (for Claude Code tasks running locally).
 func (s *HTTPServer) authOrLocalhost(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		stripDelegatedRequestHeaders(r)
 		// Allow localhost without auth
 		remoteIP := r.RemoteAddr
 		if idx := strings.LastIndex(remoteIP, ":"); idx >= 0 {
@@ -2320,209 +2109,10 @@ func (s *HTTPServer) authOrLocalhost(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Guest-path allow-lists live in guest_scope.go, keyed off the grant's
-// `scope` field so a feedback-only end-user cannot reach the
-// tasks/vibing/dev/projects/builds surface that a "full" teammate can.
-// Per-scope prefixes + helpers: guest_scope.go::isGuestAllowedPathForScope.
-
-func (s *HTTPServer) isApprovedGuest(userID string) bool {
-	s.guestUserIDsMu.RLock()
-	defer s.guestUserIDsMu.RUnlock()
-	for _, gid := range s.guestUserIDs {
-		if gid == userID {
-			return true
-		}
-	}
-	return false
-}
-
-// refreshGuestList periodically fetches the approved guest list and configs from Convex.
-// Uses a short interval (10s) so host-side revocations propagate quickly —
-// combined with per-request cache TTL (see cachedTokenInfo) the end-to-end
-// cutoff is a handful of seconds even if the mobile app never talks to this agent.
-func (s *HTTPServer) refreshGuestList(ctx context.Context) {
-	// The whole guest family ships OFF in v1 (feature_flags.go:
-	// ENABLE_GUEST_FEATURES) — guest sessions, scopes, delegated SDK tokens,
-	// host share and support sessions. Polling Convex for a subsystem that is
-	// switched off is pure cost, and it is cost PER AGENT: two calls every ten
-	// seconds, ~17k/day per machine, on every box every user connects.
-	//
-	// Measured on prod 2026-08-01 with the dashboard closed and the boxes idle:
-	// guests:getGuestUserIds and guests:getGuestConfig were the two busiest
-	// functions in the deployment at 46 calls each per 90 seconds — together
-	// roughly 40% of all function calls, buying nothing. The file's own comment
-	// below records that this poll "dominated our Convex bill (~660K function
-	// calls/period)" once already; the adaptive backoff added then does not
-	// help here, because it only slows down when the host has no guest rows at
-	// all, and a single stale grant (even a REVOKED one) pins it to the fast
-	// cadence forever.
-	//
-	// When the flag opens, this returns to the adaptive behaviour below
-	// unchanged.
-	if !GuestAccessEnabled() {
-		log.Printf("[GUESTS] guest features are disabled — not polling Convex for guest lists or configs")
-		return
-	}
-
-	prevGuests := map[string]bool{}
-	fetchOnce := func() bool {
-		if ids, err := FetchGuestUserIds(s.convexURL, s.token, s.deviceID); err == nil {
-			s.guestUserIDsMu.Lock()
-			s.guestUserIDs = ids
-			s.guestUserIDsMu.Unlock()
-			if len(ids) > 0 {
-				log.Printf("[GUESTS] Loaded %d approved guest(s)", len(ids))
-			}
-			// Detect removals and flush affected token-cache entries so sessions
-			// already in flight get kicked on the next request.
-			newSet := map[string]bool{}
-			for _, id := range ids {
-				newSet[id] = true
-			}
-			for prev := range prevGuests {
-				if !newSet[prev] {
-					s.tokenCache.Range(func(key, value interface{}) bool {
-						info := value.(*cachedTokenInfo)
-						if info.userID == prev {
-							s.tokenCache.Delete(key)
-						}
-						return true
-					})
-				}
-			}
-			prevGuests = newSet
-		}
-		if s.guestConfigMgr != nil {
-			if cfgs, err := FetchGuestConfigs(s.convexURL, s.token); err == nil {
-				s.guestConfigMgr.UpdateConfigs(cfgs)
-			}
-		}
-		// Removable-allocation teardown: hard-kill + wipe any host-share slice
-		// no longer active (revoked/ended/expired). Cheap no-op on normal boxes.
-		s.runHostShareReap()
-
-		// Report whether anyone is actually being shared with, so the caller
-		// can slow the poll down to near-nothing on the (overwhelmingly common)
-		// host that has zero guests.
-		s.guestUserIDsMu.RLock()
-		n := len(s.guestUserIDs)
-		s.guestUserIDsMu.RUnlock()
-		if n == 0 && s.guestConfigMgr != nil {
-			n = len(s.guestConfigMgr.GetAllConfigs())
-		}
-		return n > 0
-	}
-
-	// Adaptive poll interval. The 10s cadence exists only so a host-side
-	// revocation propagates quickly — which is meaningless when there are no
-	// guests to revoke. A 24/7 10s Convex poll on every idle host dominated our
-	// Convex bill (~660K function calls/period). So poll fast ONLY while guests
-	// exist; with none, we just need to notice the FIRST guest being added,
-	// which tolerates minutes. (New-guest flows through THIS agent already call
-	// FetchGuestConfigs immediately, so this only delays guests added from
-	// web/mobile, by at most guestPollIdle.)
-	const (
-		guestPollActive = 10 * time.Second
-		guestPollIdle   = 5 * time.Minute
-	)
-	pollEvery := func(hasGuests bool) time.Duration {
-		if hasGuests {
-			return guestPollActive
-		}
-		return guestPollIdle
-	}
-
-	hasGuests := fetchOnce()
-
-	ticker := time.NewTicker(pollEvery(hasGuests))
-	defer ticker.Stop()
-	// Flush usage less often than the guest-list check — usage is write-heavy.
-	usageTicker := time.NewTicker(60 * time.Second)
-	defer usageTicker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			now := fetchOnce()
-			if now != hasGuests {
-				hasGuests = now
-				ticker.Reset(pollEvery(hasGuests))
-			}
-		case <-usageTicker.C:
-			if s.guestConfigMgr != nil {
-				s.guestConfigMgr.FlushUsage(s.convexURL, s.token)
-			}
-		}
-	}
-}
-
-// allowGuest checks if a non-owner userId is an approved guest and the path is
-// allowed under this guest's scope. Returns true if the request was handled
-// (allowed or rejected), false if the token is not a guest and the caller
-// should fall through.
-//
-// For feedback-only guests we also stamp `X-Yaver-GuestScope: feedback-only`
-// on the forwarded request so downstream handlers (notably /info and any
-// task-spawn path) can apply the extra redaction + force-containerize rules
-// without a second manager lookup.
-func (s *HTTPServer) allowGuest(w http.ResponseWriter, r *http.Request, uid string, next http.HandlerFunc) bool {
-	// KILL SWITCH (see feature_flags.go). Refuse before any scope lookup,
-	// header stamping or path matching — several 2026-07-28 audit findings were
-	// bugs INSIDE that logic, so the switch must short-circuit ahead of it
-	// rather than depend on it being correct. Returning true means "handled":
-	// the caller must not fall through to another authorization path.
-	if !GuestAccessEnabled() {
-		jsonError(w, http.StatusForbidden,
-			featureDisabledMessage("Guest access", envEnableGuestAccess))
-		return true
-	}
-	if !s.isApprovedGuest(uid) {
-		return false
-	}
-	scope := guestScopeDefaultLegacy
-	canVibe := false
-	if s.guestConfigMgr != nil {
-		scope = s.guestConfigMgr.GetScope(uid)
-		canVibe = s.guestConfigMgr.GuestCanVibe(uid)
-	}
-	if !isGuestAllowedPathForScopeVibe(r.URL.Path, scope, canVibe) {
-		jsonError(w, http.StatusForbidden, "guests cannot access this endpoint")
-		return true
-	}
-	// Check guest config limits (usage mode, daily limit, schedule)
-	if s.guestConfigMgr != nil {
-		if denied := s.guestConfigMgr.CheckAccess(uid); denied != nil {
-			jsonError(w, http.StatusForbidden, denied.Reason)
-			return true
-		}
-	}
-	// CRITICAL: strip every X-Yaver-Guest* header the caller might have
-	// pre-stamped on their inbound request. Downstream handlers
-	// (ops_execution_plan, /info redaction, project gate) trust these
-	// headers as if they were set by us, so a guest spoofing
-	// X-Yaver-GuestAllowedProjects (H-13) or X-Yaver-GuestScope (M-1)
-	// can broaden their own scope. Always re-stamp from server-resolved
-	// state below — never honor inbound values.
-	stripGuestRequestHeaders(r)
-	r.Header.Set("X-Yaver-Guest", "true")
-	r.Header.Set("X-Yaver-GuestUserID", uid)
-	r.Header.Set("X-Yaver-GuestScope", scope)
-	if s.guestConfigMgr != nil {
-		if allowed := cleanProjectList(s.guestConfigMgr.AllowedProjects(uid)); len(allowed) > 0 {
-			r.Header.Set("X-Yaver-GuestAllowedProjects", strings.Join(allowed, ","))
-		}
-	}
-	next(w, r)
-	return true
-}
-
-// stripGuestRequestHeaders deletes every X-Yaver-Guest* header from an
-// inbound request before downstream code reads them. The middleware
-// will re-stamp the legitimate values from server-resolved state.
-// Listed explicitly (rather than wildcard-deleting) so a future header
-// not yet in the audit doesn't silently bypass.
-func stripGuestRequestHeaders(r *http.Request) {
+// stripDelegatedRequestHeaders deletes caller-supplied identity or delegation
+// headers before downstream code reads them. Validated middleware may then
+// stamp the narrow companion/capability identity it resolved itself.
+func stripDelegatedRequestHeaders(r *http.Request) {
 	for _, name := range []string{
 		"X-Yaver-Guest",
 		"X-Yaver-GuestUserID",
@@ -2530,6 +2120,7 @@ func stripGuestRequestHeaders(r *http.Request) {
 		"X-Yaver-GuestAllowedProjects",
 		"X-Yaver-GuestAllowedRunners",
 		"X-Yaver-SdkAllowedRunners",
+		"X-Yaver-Capability",
 		// SECURITY (audit 2026-07-28): the HostShare FAMILY, not just the
 		// runners header. Only X-Yaver-HostShareAllowedRunners was stripped, so
 		// a caller could attach X-Yaver-HostShare themselves. Combined with
@@ -2557,77 +2148,9 @@ func stripGuestRequestHeaders(r *http.Request) {
 	}
 }
 
-func (s *HTTPServer) resolveHostShareAccess(guestUserID string) *HostShareAccessInfo {
-	token := s.currentAuthToken()
-	if strings.TrimSpace(guestUserID) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(s.convexURL) == "" {
-		return nil
-	}
-	access, err := FetchHostShareAccess(s.convexURL, token, guestUserID, s.deviceID)
-	if err != nil {
-		log.Printf("[HOST-SHARE] access lookup failed for %s: %v", guestUserID, err)
-		return nil
-	}
-	return access
-}
-
-func (s *HTTPServer) resolveHostSharePeerAccess(hostUserID string) *HostShareAccessInfo {
-	token := s.currentAuthToken()
-	if strings.TrimSpace(hostUserID) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(s.convexURL) == "" {
-		return nil
-	}
-	access, err := FetchHostSharePeerAccess(s.convexURL, token, hostUserID, s.deviceID)
-	if err != nil {
-		log.Printf("[HOST-SHARE] peer access lookup failed for %s: %v", hostUserID, err)
-		return nil
-	}
-	return access
-}
-
-func (s *HTTPServer) currentAuthToken() string {
-	if cfg, err := LoadConfig(); err == nil && cfg != nil {
-		if token := strings.TrimSpace(cfg.AuthToken); token != "" {
-			return token
-		}
-	}
-	return strings.TrimSpace(s.token)
-}
-
-func (s *HTTPServer) allowHostShare(w http.ResponseWriter, r *http.Request, uid string, access *HostShareAccessInfo, next http.HandlerFunc) bool {
-	// KILL SWITCH (see feature_flags.go). Off at launch. This path is also the
-	// one whose trust headers were not stripped from caller input and whose
-	// project allowlist failed open when empty, so it stays shut until both are
-	// fixed AND proven by a test that fails without the fix.
-	if !HostShareEnabled() {
-		jsonError(w, http.StatusForbidden,
-			featureDisabledMessage("Host share", envEnableHostShare))
-		return true
-	}
-	if access == nil {
-		return false
-	}
-	if !isHostShareAllowedPath(r.URL.Path, access) {
-		jsonError(w, http.StatusForbidden, "host-share session cannot access this endpoint")
-		return true
-	}
-	r.Header.Set("X-Yaver-HostShare", "true")
-	r.Header.Set("X-Yaver-HostShareGuestUserID", uid)
-	r.Header.Set("X-Yaver-HostShareSessionID", access.SessionID)
-	r.Header.Set("X-Yaver-HostShareGuestDeviceID", access.GuestDeviceID)
-	r.Header.Set("X-Yaver-HostShareToolingPreset", access.Policy.ToolingPreset)
-	r.Header.Set("X-Yaver-HostShareResourcePreset", access.Policy.ResourcePreset)
-	r.Header.Set("X-Yaver-HostShareAllowedProjects", strings.Join(access.Policy.AllowedProjects, ","))
-	r.Header.Set("X-Yaver-HostShareAllowedRunners", strings.Join(access.Policy.AllowedRunners, ","))
-	r.Header.Set("X-Yaver-HostShareAllowInfra", fmt.Sprintf("%t", access.Policy.AllowInfra))
-	r.Header.Set("X-Yaver-HostShareAllowTerminal", fmt.Sprintf("%t", access.Policy.AllowTerminal))
-	r.Header.Set("X-Yaver-HostShareAllowTunnel", fmt.Sprintf("%t", access.Policy.AllowTunnel))
-	r.Header.Set("X-Yaver-HostShareUseHostAgentTools", fmt.Sprintf("%t", access.Policy.UseHostAgentTools))
-	r.Header.Set("X-Yaver-HostShareUseHostInfra", fmt.Sprintf("%t", access.Policy.UseHostInfra))
-	next(w, r)
-	return true
-}
-
 func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		stripDelegatedRequestHeaders(r)
 		if sessionToken := r.URL.Query().Get("browser_session"); sessionToken != "" {
 			if s.validateBrowserSession(sessionToken, r.URL.Path) {
 				next(w, r)
@@ -2640,7 +2163,7 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 		// WebSocket clients (mobile Terminal, browser) cannot set custom
 		// headers, so they pass the bearer as ?token=<jwt>. Promote it
 		// into the Authorization header before the regular Bearer path
-		// so every downstream check (owner / support / paired / Convex)
+		// so every downstream owner/Convex check
 		// works unchanged.
 		if r.Header.Get("Authorization") == "" {
 			if qt := r.URL.Query().Get("token"); qt != "" {
@@ -2662,90 +2185,31 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Fast path: active support-session bearer. Narrow allowlist,
-		// no Convex round-trip, revoked instantly by `yaver support
-		// stop` / TTL expiry. A support token that misses the
-		// allowlist falls through to the normal owner/guest path so
-		// the caller gets the same 401/403 any unrecognized token
-		// does — we don't want to special-case the rejection.
-		if strings.HasPrefix(token, "yv_supp_") && supportTokenValidFor(token, r.URL.Path) {
-			r.Header.Set("X-Yaver-Support", "true")
-			next(w, r)
+		// Support-session credentials were non-owner access. Reject even an
+		// already-minted, still-live token so removal is immediate rather than
+		// waiting for its TTL or an agent restart.
+		if strings.HasPrefix(token, "yv_supp_") {
+			jsonError(w, http.StatusForbidden, "non-owner access credentials are not accepted")
 			return
 		}
 
-		// Second fast path: paired tokens (multi-user pairing).
-		// A startup that bought one Mac Studio can have 5 phones
-		// paired with it — each gets the same scope as the primary
-		// owner WITHOUT depending on Convex round-tripping. This
-		// lives *before* the Convex check so lag / outage on the
-		// auth broker can't lock out paired users.
-		//
-		// OPERATOR MODE: this owner-equivalent fast-path is DISABLED.
-		// On a public fleet box the only owner is the operator
-		// principal; every other caller must be a scoped host-share /
-		// guest tenant, never owner-equivalent. Skipping the block
-		// lets the request fall through to allowGuest/allowHostShare.
-		if !s.operatorMode && IsPairedToken(token) {
-			TouchPairedToken(token)
-			// If multi-user mode is on, resolve the paired token
-			// to its own userId via Convex (best-effort; the cache
-			// makes this cheap after the first hit) so the
-			// MultiUserManager routes the request to an isolated
-			// workspace. Otherwise just hand the request through
-			// as the owner.
-			if cached, ok := s.tokenCache.Load(token); ok {
-				info := cached.(*cachedTokenInfo)
-				r = withPairedUser(r, info.userID)
-				next(w, r)
-				return
-			}
-			// First paired request — hydrate the cache in the
-			// background, never block the request. If Convex is
-			// reachable we'll know which isolated user slot to
-			// route to on the next call; for this one we treat
-			// the paired token as owner-equivalent.
-			go func() {
-				if uid, err := ValidateTokenUser(s.convexURL, token); err == nil {
-					s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, isSdk: false})
-				}
-			}()
-			next(w, r)
-			return
-		}
-
-		// Check token cache. Guest entries have a TTL so host-side
-		// revocations are honored within guestTokenCacheTTL even if
-		// the revoke doesn't travel through this agent's own API.
+		// Check the validated token cache.
 		if cached, ok := s.tokenCache.Load(token); ok {
 			info := cached.(*cachedTokenInfo)
 			if info.isSdk {
 				jsonError(w, http.StatusForbidden, "SDK tokens cannot access this endpoint")
 				return
 			}
-			stale := info.userID != s.ownerUserID &&
-				!info.storedAt.IsZero() &&
-				time.Since(info.storedAt) > guestTokenCacheTTL
-			if stale {
-				s.tokenCache.Delete(token)
-			} else {
-				if info.userID == s.ownerUserID {
-					if stampSessionScope(r, info.sessionScope); isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
-						companionScopeDenied(w, info.sessionScope)
-						return
-					}
-					next(w, r)
-					return
-				}
-				if s.allowGuest(w, r, info.userID, next) {
-					return
-				}
-				if s.allowHostShare(w, r, info.userID, info.hostShare, next) {
-					return
-				}
+			if info.userID != s.ownerUserID {
 				jsonError(w, http.StatusForbidden, "token belongs to a different user")
 				return
 			}
+			if stampSessionScope(r, info.sessionScope); isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
+				companionScopeDenied(w, info.sessionScope)
+				return
+			}
+			next(w, r)
+			return
 		}
 
 		// Owner's own current token — recognize it WITHOUT a Convex
@@ -2754,8 +2218,7 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 		// self-upgrade / rotation window. tokenIsOwner re-reads disk, so
 		// the owner's local operations (builds, exec/build-log streaming,
 		// tasks) work online OR offline rather than bouncing off a Convex
-		// validation. Sits after the cache check so guest tokens still
-		// resolve through their cached entry / host-share path first.
+		// validation.
 		if s.tokenIsOwner(token) {
 			next(w, r)
 			return
@@ -2769,32 +2232,10 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 			jsonError(w, http.StatusForbidden, "invalid token")
 			return
 		}
-		info := &cachedTokenInfo{userID: uid, sessionScope: sessionScope, isSdk: false, storedAt: time.Now()}
-		if uid != s.ownerUserID {
-			info.hostShare = s.resolveHostShareAccess(uid)
-			if info.hostShare == nil {
-				info.hostShare = s.resolveHostSharePeerAccess(uid)
-			}
-		}
-		cacheToken := true
-		if uid != s.ownerUserID && info.hostShare == nil {
-			// Do not cache a negative non-owner authorization result.
-			// A guest can be granted access moments later via a freshly
-			// accepted host-share invite, and caching the denial makes the
-			// first post-join request fail until the guest token TTL elapses.
-			cacheToken = false
-		}
-		if cacheToken {
-			s.tokenCache.Store(token, info)
-		}
+		info := &cachedTokenInfo{userID: uid, sessionScope: sessionScope, isSdk: false}
+		s.tokenCache.Store(token, info)
 
 		if uid != s.ownerUserID {
-			if s.allowGuest(w, r, uid, next) {
-				return
-			}
-			if s.allowHostShare(w, r, uid, info.hostShare, next) {
-				return
-			}
 			jsonError(w, http.StatusForbidden, "token belongs to a different user")
 			return
 		}
@@ -2804,19 +2245,6 @@ func (s *HTTPServer) auth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
-}
-
-// withPairedUser attaches the resolved userId for a paired
-// token to the request context so downstream handlers
-// (tasks.go, exec.go, etc) can route to an isolated multi-user
-// workspace via s.multiUserMgr.GetOrCreateSession(userID).
-func withPairedUser(r *http.Request, userID string) *http.Request {
-	if userID == "" {
-		return r
-	}
-	ctx := r.Context()
-	ctx = contextWithPairedUser(ctx, userID)
-	return r.WithContext(ctx)
 }
 
 // authSDK is for SDK-accessible endpoints (feedback, blackbox, voice, builds).
@@ -2864,6 +2292,7 @@ func (s *HTTPServer) tokenIsOwner(token string) bool {
 
 func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		stripDelegatedRequestHeaders(r)
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			jsonError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
@@ -2873,24 +2302,6 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 
 		// Fast path: agent's own token (full access)
 		if secretEqual(token, s.token) {
-			next(w, r)
-			return
-		}
-
-		// Multi-user paired tokens — same treatment as the
-		// full auth() middleware. Paired tokens get SDK-scope
-		// access automatically since they come from a user
-		// who's signed in with a full session on another
-		// device. Lives before the Convex / SDK checks so a
-		// paired phone can drive feedback / blackbox /
-		// voice / builds without round-tripping the auth
-		// broker.
-		if IsPairedToken(token) {
-			TouchPairedToken(token)
-			if cached, ok := s.tokenCache.Load(token); ok {
-				info := cached.(*cachedTokenInfo)
-				r = withPairedUser(r, info.userID)
-			}
 			next(w, r)
 			return
 		}
@@ -2925,7 +2336,7 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 				}
 				// Track new device IPs
 				s.trackNewIP(token, r)
-				if !s.applyDelegatedGuestSDKHeaders(w, r, info) {
+				if !s.applySDKCapabilityHeaders(w, r, info) {
 					return
 				}
 			}
@@ -2945,8 +2356,8 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 		// the owner's own token off Convex in that window is exactly
 		// what made offline-and-even-online local builds fail with
 		// "invalid token". tokenIsOwner re-reads the on-disk token, so
-		// this holds with no network at all. Sits after the cache check
-		// so guests still hit their cached entry first.
+		// this holds with no network at all. Sits after the cache check so
+		// non-owner cached credentials are rejected before disk fallback.
 		if s.tokenIsOwner(token) {
 			next(w, r)
 			return
@@ -2977,15 +2388,13 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		info := &cachedTokenInfo{
-			userID:               sdkInfo.UserID,
-			isSdk:                true,
-			scopes:               sdkInfo.Scopes,
-			allowedCIDRs:         sdkInfo.AllowedCIDRs,
-			delegatedGuestUserID: sdkInfo.DelegatedGuestUserID,
-			delegatedGuestScope:  sdkInfo.DelegatedGuestScope,
-			sourceSurface:        sdkInfo.SourceSurface,
-			targetDeviceID:       sdkInfo.TargetDeviceID,
-			allowedProjects:      sdkInfo.AllowedProjects,
+			userID:          sdkInfo.UserID,
+			isSdk:           true,
+			scopes:          sdkInfo.Scopes,
+			allowedCIDRs:    sdkInfo.AllowedCIDRs,
+			sourceSurface:   sdkInfo.SourceSurface,
+			targetDeviceID:  sdkInfo.TargetDeviceID,
+			allowedProjects: sdkInfo.AllowedProjects,
 		}
 		s.tokenCache.Store(token, info)
 
@@ -3014,7 +2423,7 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 
 		// Track new device IPs
 		s.trackNewIP(token, r)
-		if !s.applyDelegatedGuestSDKHeaders(w, r, info) {
+		if !s.applySDKCapabilityHeaders(w, r, info) {
 			return
 		}
 
@@ -3083,157 +2492,6 @@ func (s *HTTPServer) authBuildLocal(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authSDKOrGuest is for endpoints that must remain reachable by SDK tokens
-// but should also allow full-scope guest session tokens. Guests still go
-// through the regular allowGuest scope gate; SDK tokens keep their existing
-// scope/IP checks.
-func (s *HTTPServer) authSDKOrGuest(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authHeader, "Bearer ") {
-			jsonError(w, http.StatusUnauthorized, "missing or invalid Authorization header")
-			return
-		}
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-
-		if secretEqual(token, s.token) {
-			next(w, r)
-			return
-		}
-
-		if IsPairedToken(token) {
-			TouchPairedToken(token)
-			if cached, ok := s.tokenCache.Load(token); ok {
-				info := cached.(*cachedTokenInfo)
-				r = withPairedUser(r, info.userID)
-			}
-			next(w, r)
-			return
-		}
-
-		if cached, ok := s.tokenCache.Load(token); ok {
-			info := cached.(*cachedTokenInfo)
-			if info.isSdk {
-				// SECURITY (audit 2026-07-28): CROSS-TENANT BYPASS. This branch
-				// validated scopes and CIDR but never checked WHOSE token it is,
-				// while authSDK (:2706) rejects a foreign userID outright. The
-				// miss path below made it trivially reachable: it Stored the
-				// cache entry BEFORE the owner check, so request 1 populated the
-				// cache and 403'd, and request 2 hit this branch and was
-				// authorized AS THE OWNER. Any Yaver account could mint an SDK
-				// token, send it twice to a stranger's agent, and reach /ops,
-				// /agent/runner/switch and /dev/reload as that stranger.
-				//
-				// Owner-equality is the correct test, not an approximation: a
-				// legitimately delegated guest SDK token carries the HOST's id
-				// (backend/convex/guests.ts:588 mints with userId: hostUserId)
-				// and is demoted to a scoped guest by
-				// applyDelegatedGuestSDKHeaders below — so guests still work.
-				if info.userID != s.ownerUserID {
-					jsonError(w, http.StatusForbidden, "token belongs to a different user")
-					return
-				}
-				if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
-					sdkScopeDenied(w, r.URL.Path, info.scopes)
-					return
-				}
-				if len(info.allowedCIDRs) > 0 {
-					cidrs := parseCIDRs(info.allowedCIDRs)
-					if !ipMatchesCIDRs(clientIP(r), cidrs) {
-						jsonError(w, http.StatusForbidden, "SDK token not allowed from this IP")
-						return
-					}
-				}
-				s.trackNewIP(token, r)
-				if !s.applyDelegatedGuestSDKHeaders(w, r, info) {
-					return
-				}
-				next(w, r)
-				return
-			}
-			if info.userID == s.ownerUserID {
-				if stampSessionScope(r, info.sessionScope); isCompanionSessionScope(info.sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, info.sessionScope) {
-					companionScopeDenied(w, info.sessionScope)
-					return
-				}
-				next(w, r)
-				return
-			}
-			if s.allowGuest(w, r, info.userID, next) {
-				return
-			}
-			jsonError(w, http.StatusForbidden, "token belongs to a different user")
-			return
-		}
-
-		uid, sessionScope, err := ValidateTokenUserScope(s.convexURL, token)
-		if err == nil {
-			s.tokenCache.Store(token, &cachedTokenInfo{userID: uid, sessionScope: sessionScope, isSdk: false, storedAt: time.Now()})
-			if uid == s.ownerUserID {
-				if stampSessionScope(r, sessionScope); isCompanionSessionScope(sessionScope) && !companionSessionAllowed(r.Method, r.URL.Path, sessionScope) {
-					companionScopeDenied(w, sessionScope)
-					return
-				}
-				next(w, r)
-				return
-			}
-			if s.allowGuest(w, r, uid, next) {
-				return
-			}
-			jsonError(w, http.StatusForbidden, "token belongs to a different user")
-			return
-		}
-
-		sdkInfo, sdkErr := ValidateSdkTokenFull(s.convexURL, token)
-		if sdkErr != nil {
-			log.Printf("[AUTH] %s %s — all token validation failed", r.Method, r.URL.Path)
-			jsonError(w, http.StatusForbidden, "invalid token")
-			return
-		}
-
-		info := &cachedTokenInfo{
-			userID:               sdkInfo.UserID,
-			isSdk:                true,
-			scopes:               sdkInfo.Scopes,
-			allowedCIDRs:         sdkInfo.AllowedCIDRs,
-			delegatedGuestUserID: sdkInfo.DelegatedGuestUserID,
-			delegatedGuestScope:  sdkInfo.DelegatedGuestScope,
-			sourceSurface:        sdkInfo.SourceSurface,
-			targetDeviceID:       sdkInfo.TargetDeviceID,
-			allowedProjects:      sdkInfo.AllowedProjects,
-		}
-		// SECURITY (audit 2026-07-28): the owner check MUST run before the cache
-		// write. Storing first meant a rejected foreign token still populated
-		// the cache, and the cached branch above then authorized it on the very
-		// next request. Never cache a credential you are about to refuse.
-		if info.userID != s.ownerUserID {
-			jsonError(w, http.StatusForbidden, "token belongs to a different user")
-			return
-		}
-		s.tokenCache.Store(token, info)
-		if !requestAllowedByScopes(r.Method, r.URL.Path, info.scopes) {
-			sdkScopeDenied(w, r.URL.Path, info.scopes)
-			return
-		}
-		stampSdkRunnerScope(r, info.scopes)
-		stampMcpToolScope(r, info.scopes)
-		stampSdkDataPolicy(r, info.scopes)
-		if len(info.allowedCIDRs) > 0 {
-			cidrs := parseCIDRs(info.allowedCIDRs)
-			if !ipMatchesCIDRs(clientIP(r), cidrs) {
-				jsonError(w, http.StatusForbidden, "SDK token not allowed from this IP")
-				return
-			}
-		}
-		s.trackNewIP(token, r)
-		if !s.applyDelegatedGuestSDKHeaders(w, r, info) {
-			return
-		}
-		next(w, r)
-	}
-}
-
-// trackNewIP records the first time an SDK token is used from a new IP.
 func (s *HTTPServer) trackNewIP(token string, r *http.Request) {
 	ip := clientIP(r)
 	prefix := token
@@ -3564,57 +2822,7 @@ func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	info["autoStart"] = autoStart
 
-	// Non-owner callers (any guest tier, host-share peer, SDK token,
-	// support session) get a redacted /info. We still need to answer
-	// "is the agent alive + which feedback endpoints are available"
-	// (the SDK probes this on startup), but we strip everything that leaks
-	// the dev-machine's project layout, task activity, auto-start config,
-	// hardware id, workDir, or hostname. A malicious end-user of a host's
-	// app should not learn what projects the dev is working on or how
-	// many tasks are in flight.
-	//
-	// Pre-fix (H-17): only feedback-only guests got the redaction. Full
-	// guests, host-share peers, SDK callers all saw the absolute workDir
-	// (which contains /Users/<owner-username>/), the hostname, the hwid,
-	// the runner config, project list, and task stats. Privacy contract
-	// in CLAUDE.md forbids absolute paths and usernames flowing off-machine.
-	if isNonOwnerInfoCaller(r) {
-		redacted := map[string]interface{}{
-			"ok":      info["ok"],
-			"version": info["version"],
-		}
-		// Sandbox flag is safe — guest tasks get force-containerized,
-		// so the SDK can show "running sandboxed" without surfacing host config.
-		if sb, ok := info["sandbox"].(map[string]interface{}); ok {
-			redacted["sandbox"] = map[string]interface{}{
-				"available": sb["available"],
-			}
-		}
-		jsonReply(w, http.StatusOK, redacted)
-		return
-	}
-
 	jsonReply(w, http.StatusOK, info)
-}
-
-// isNonOwnerInfoCaller reports whether the request is from anyone other
-// than the agent's owner. Used to gate /info redaction. Returns true for
-// any guest scope (feedback-only / full / deploy / sdk-project), any
-// support-session bearer, and any host-share peer.
-func isNonOwnerInfoCaller(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		return true
-	}
-	if r.Header.Get("X-Yaver-Support") == "true" {
-		return true
-	}
-	if r.Header.Get("X-Yaver-HostShare") == "true" {
-		return true
-	}
-	return false
 }
 
 // handleHardwareRefresh re-runs hardware detection (bypassing the in-process
@@ -4151,24 +3359,9 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 
 	var runners []runnerInfoRow
 	seenIDs := make(map[string]bool)
-	guestUID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID"))
-	allowedRunnerSet := map[string]bool{}
-	filterGuestRunners := false
-	if guestUID != "" && s.guestConfigMgr != nil {
-		if cfg := s.guestConfigMgr.GetConfig(guestUID); cfg != nil && len(cfg.AllowedRunners) > 0 {
-			filterGuestRunners = true
-			for _, id := range cfg.AllowedRunners {
-				allowedRunnerSet[normalizeRunnerID(id)] = true
-			}
-		}
-	}
-
 	// Add default runner first, then others sorted by ID
 	defaultID := s.taskMgr.runner.RunnerID
 	addRunner := func(r RunnerConfig) {
-		if filterGuestRunners && !allowedRunnerSet[normalizeRunnerID(r.RunnerID)] {
-			return
-		}
 		if seenIDs[r.RunnerID] {
 			return
 		}
@@ -4225,7 +3418,7 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Include the active runner if it's custom (not in builtinRunners)
-	if !seenIDs[s.taskMgr.runner.RunnerID] && (!filterGuestRunners || allowedRunnerSet[normalizeRunnerID(s.taskMgr.runner.RunnerID)]) {
+	if !seenIDs[s.taskMgr.runner.RunnerID] {
 		models := modelsByRunner[s.taskMgr.runner.RunnerID]
 		authMethod, acpReachable, acpSubMethod, _ := acpAuthStateForRunner(s.taskMgr.runner.RunnerID, true)
 		runners = append(runners, runnerInfoRow{
@@ -4246,15 +3439,6 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responseDefault := s.taskMgr.runner.RunnerID
-	if filterGuestRunners && !allowedRunnerSet[normalizeRunnerID(responseDefault)] {
-		responseDefault = ""
-		if len(runners) > 0 {
-			responseDefault = runners[0].ID
-			for i := range runners {
-				runners[i].IsDefault = runners[i].ID == responseDefault
-			}
-		}
-	}
 
 	jsonReply(w, http.StatusOK, map[string]interface{}{
 		"ok":      true,
@@ -4311,13 +3495,8 @@ func parseRunnerAllowCSV(csv string) map[string]bool {
 	return out
 }
 
-// runnerDeniedByScopeHeaders enforces the runner allowlists carried by
-// server-stamped scope headers — host-share policy (X-Yaver-HostShareAllowedRunners)
-// and SDK-token runner scope (X-Yaver-SdkAllowedRunners). Jointly inclusive: the
-// requested runner must satisfy EVERY present allowlist; an absent/empty header
-// imposes no constraint and never forces a choice. Guest allowlists are enforced
-// separately via GuestConfigManager.CheckRequestedRunner. Returns a denial reason
-// or nil when allowed.
+// runnerDeniedByScopeHeaders enforces the runner allowlist carried by a
+// validated SDK token. An absent/empty header imposes no constraint.
 func runnerDeniedByScopeHeaders(r *http.Request, requestedRunnerID, defaultRunnerID string) *AccessDeniedReason {
 	runner := normalizeRunnerID(strings.TrimSpace(requestedRunnerID))
 	if runner == "" {
@@ -4326,14 +3505,10 @@ func runnerDeniedByScopeHeaders(r *http.Request, requestedRunnerID, defaultRunne
 	if runner == "" {
 		return nil
 	}
-	for _, header := range []string{"X-Yaver-HostShareAllowedRunners", "X-Yaver-SdkAllowedRunners"} {
-		allowed := parseRunnerAllowCSV(r.Header.Get(header))
-		if allowed == nil {
-			continue // layer doesn't constrain runners
-		}
-		if !allowed[runner] {
-			return &AccessDeniedReason{Denied: true, Reason: fmt.Sprintf("runner %q is not permitted by policy (allowed: %s)", runner, r.Header.Get(header))}
-		}
+	header := "X-Yaver-SdkAllowedRunners"
+	allowed := parseRunnerAllowCSV(r.Header.Get(header))
+	if allowed != nil && !allowed[runner] {
+		return &AccessDeniedReason{Denied: true, Reason: fmt.Sprintf("runner %q is not permitted by policy (allowed: %s)", runner, r.Header.Get(header))}
 	}
 	return nil
 }
@@ -4400,18 +3575,7 @@ func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Enforce runner allowlists carried by the caller's scope. Switching the
-	// runner mutates global task-manager state, so a scoped caller (guest,
-	// host-share, or SDK-token runner scope) may only switch to a runner their
-	// policy permits. Jointly inclusive — each present layer must allow it.
-	if s.guestConfigMgr != nil {
-		if guestUID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID")); guestUID != "" {
-			if denied := s.guestConfigMgr.CheckRequestedRunner(guestUID, runnerID, s.taskMgr.runner.RunnerID); denied != nil {
-				jsonError(w, http.StatusForbidden, denied.Reason)
-				return
-			}
-		}
-	}
+	// Service capability scopes are jointly inclusive with owner policy.
 	if denied := runnerDeniedByScopeHeaders(r, runnerID, s.taskMgr.runner.RunnerID); denied != nil {
 		jsonError(w, http.StatusForbidden, denied.Reason)
 		return
@@ -4515,6 +3679,10 @@ func (s *HTTPServer) handleClean(w http.ResponseWriter, r *http.Request) {
 
 // handleTasks handles GET /tasks (list) and POST /tasks (create).
 func (s *HTTPServer) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if s.operatorMode {
+		jsonError(w, http.StatusGone, "managed runners require /v2/project-sessions/{id}/tasks")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		s.listTasks(w, r)
@@ -4898,8 +4066,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// Runner/render machine split (task_ensure_clone.go): the surface
 		// passes the project's git identity so a runner box without the
 		// source can materialize its own clone, plus the push policy that
-		// converges the result back through git. Owner-only — stripped for
-		// guests below.
+		// converges the result back through git. This route is owner-only.
 		GitRemote string `json:"gitRemote,omitempty"`
 		GitBranch string `json:"gitBranch,omitempty"`
 		AutoPush  string `json:"autoPush,omitempty"` // never|ask|always
@@ -5004,58 +4171,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		source = "mobile"
 	}
 
-	// Check guest restrictions before creating task
-	guestUID := r.Header.Get("X-Yaver-GuestUserID")
-	var guestCfg *GuestConfig
-	guestWorkDir := ""
-	// Feedback-only guests ALWAYS require isolation — the scope is designed
-	// for untrusted end-users, so their prompts go through a container even
-	// when the host hasn't globally enabled containerize_guests.
-	forceIsolation := false
-	if guestUID != "" && s.guestConfigMgr != nil {
-		guestCfg = s.guestConfigMgr.GetConfig(guestUID)
-		// Check runner restriction
-		if denied := s.guestConfigMgr.CheckRequestedRunner(guestUID, body.Runner, s.taskMgr.runner.RunnerID); denied != nil {
-			jsonError(w, http.StatusForbidden, denied.Reason)
-			return
-		}
-		// Block custom commands for guests (direct shell access)
-		if body.CustomCommand != "" {
-			jsonError(w, http.StatusForbidden, "guests cannot run custom commands")
-			return
-		}
-		forceIsolation = guestRequireIsolation(guestCfg) || s.guestConfigMgr.IsFeedbackOnly(guestUID)
-		if forceIsolation {
-			if s.containerRunner == nil || !s.containerRunner.IsAvailable() {
-				jsonError(w, http.StatusServiceUnavailable, "guest is configured to require Docker isolation, but Docker is not available on this host")
-				return
-			}
-		}
-		// Project-scope gate: direct guest tasks must carry a project identity
-		// so the host can resolve the exact allowed repo path server-side.
-		// We never trust guest-supplied workDir paths.
-		guestProjectName := strings.TrimSpace(body.ProjectName)
-		allowedProjects := s.guestConfigMgr.AllowedProjects(guestUID)
-		if len(allowedProjects) > 0 && guestProjectName == "" {
-			jsonError(w, http.StatusForbidden, fmt.Sprintf("this guest is scoped to projects %v; projectName is required", allowedProjects))
-			return
-		}
-		if guestProjectName != "" {
-			if !s.guestConfigMgr.GuestCanAccessProject(guestUID, guestProjectName) {
-				jsonError(w, http.StatusForbidden, fmt.Sprintf("project %q is not in the allowed project list %v", guestProjectName, allowedProjects))
-				return
-			}
-			resolvedWorkDir, err := resolveGuestTaskProjectPath(guestProjectName)
-			if err != nil {
-				jsonError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			guestWorkDir = resolvedWorkDir
-		}
-	}
-
-	// Enforce host-share / SDK-token runner scope (guest runners were already
-	// checked in the guest block above). Jointly inclusive with any other layer.
+	// Enforce validated service-capability runner scope.
 	if denied := runnerDeniedByScopeHeaders(r, body.Runner, s.taskMgr.runner.RunnerID); denied != nil {
 		jsonError(w, http.StatusForbidden, denied.Reason)
 		return
@@ -5066,22 +4182,8 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	// given as TaskCreateOptions.PromptText — a transport field with no
 	// counterpart on the wire DTO, so no surface can render it.
 	//
-	// Before this split, both blocks below prepended straight onto `title`,
-	// and `title` is the task's name in every list AND the fallback content of
-	// the user's own first chat bubble. A guest's task was literally named
-	// "[SECURITY CONTEXT — GUEST SESSION] You are running as a GUEST user…".
 	title := body.Title
 	var briefing strings.Builder
-
-	// For guest tasks, brief the runner with the security context so it stays
-	// within the project directory and doesn't access sensitive files.
-	if guestUID != "" {
-		promptWorkDir := s.taskMgr.workDir
-		if guestWorkDir != "" {
-			promptWorkDir = guestWorkDir
-		}
-		briefing.WriteString(guestPromptPrefix(promptWorkDir, guestCfg))
-	}
 
 	// Feedback-source tasks (FeedbackOverlay typed message after a guest
 	// shake, SDK modal "Fix" button, etc.) get reshaped into the same
@@ -5093,18 +4195,9 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	// the loaded sfmg guest bundle still showed the broken version.
 	// See feedback_to_vibe.go.
 	bodyWorkDir := body.WorkDir
-	if guestUID != "" {
-		bodyWorkDir = guestWorkDir
-	}
 	s.vibingifyFeedbackTaskBody(r, source, &title, &briefing, &body.ProjectName, &bodyWorkDir, &body.Runner, &body.Model, body.BundleID)
-	if guestUID == "" {
-		body.WorkDir = bodyWorkDir
-	}
+	body.WorkDir = bodyWorkDir
 
-	// Guests must not be able to redirect the task cwd or inject their own
-	// slice contract — those fields are owner-only mesh orchestration hints
-	// and could otherwise override the guest prompt prefix that keeps the
-	// AI agent inside the host's workdir.
 	taskOpts := TaskCreateOptions{
 		WorkDir:     body.WorkDir,
 		ProjectName: body.ProjectName,
@@ -5122,30 +4215,6 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// Title (+ Description) exactly as it always has.
 		PromptText: composeRunnerPrompt(briefing.String(), title, body.Description),
 	}
-	if guestUID != "" {
-		// Strip owner-only fields. If the host resolved a guest project,
-		// keep that server-approved workDir.
-		taskOpts.WorkDir = guestWorkDir
-		taskOpts.ProjectName = ""
-		taskOpts.MCPServers = nil
-		taskOpts.SliceContract = nil
-		// Snapshot guest policy into the task BEFORE it starts, so runtime
-		// guards (autoSwitchProject, container gating, API-key filtering)
-		// see GuestUserID atomically. Setting these after the call is a
-		// race: startProcess runs synchronously and could pre-observe the
-		// task as owner-authenticated.
-		taskOpts.GuestUserID = guestUID
-		taskOpts.GuestUseHostAPIKeys = guestUseHostAPIKeys(guestCfg)
-		taskOpts.GuestRequireIsolation = forceIsolation
-		taskOpts.GuestAllowGuestProvidedKeys = guestCfg == nil || guestCfg.AllowGuestProvidedAPIKeys == nil || *guestCfg.AllowGuestProvidedAPIKeys
-		if guestCfg != nil {
-			taskOpts.GuestCPULimitPercent = guestCfg.CPULimitPercent
-			taskOpts.GuestRAMLimitMB = guestCfg.RAMLimitMB
-		}
-	}
-	if mounts, err := sharedStorageContainerMountsForTask(taskOpts.GuestUserID, s.guestConfigMgr); err == nil {
-		taskOpts.GuestSharedStorageMounts = mounts
-	}
 	taskOpts.Mode = strings.TrimSpace(body.Mode)
 	taskOpts.Goal = strings.TrimSpace(body.Goal)
 	// Video summary toggle propagates from request → task → OnTaskDone
@@ -5153,32 +4222,22 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	// recorder when status flips to completed.
 	taskOpts.VideoEnabled = body.VideoEnabled
 	taskOpts.VideoSource = strings.TrimSpace(body.VideoSource)
-	// Guests can never opt out of the no-questions preamble — they
-	// shouldn't be able to elicit free-form clarifying prose from the
-	// runner (the host's review of the task assumes the preamble is
-	// in force).
-	if guestUID == "" {
-		taskOpts.AskFreely = body.AskFreely
-		// Ask mode is owner-only too: a guest shouldn't be able to flip a
-		// scoped work task into a free-roaming repo-analysis run.
-		taskOpts.AskMode = body.AskMode
-		// Runner/render split fields are owner-only: a guest prompt must not
-		// make this box clone arbitrary remotes or push anywhere.
-		taskOpts.GitRemote = strings.TrimSpace(body.GitRemote)
-		taskOpts.GitBranch = strings.TrimSpace(body.GitBranch)
-		taskOpts.AutoPush = strings.TrimSpace(body.AutoPush)
-		// Console auto-detect: when a console surface (the attach terminal,
-		// web console, mobile code-mode) sends a plain natural-language
-		// QUESTION with no yaver verb/command in it, treat it as an ask
-		// case — deep grounded analysis, explain-first — even though the
-		// caller didn't set askMode. The user types "how do I test STT/TTS"
-		// and gets a real answer instead of a work run. High-precision
-		// classifier (detectAskIntent) so genuine work instructions are
-		// left alone. Explicit askFreely opts out.
-		if !taskOpts.AskMode && !taskOpts.AskFreely && isConsoleAskSource(source) && detectAskIntent(body.Title) {
-			taskOpts.AskMode = true
-			log.Printf("[ask] auto-detected question intent on %s console task; routing to ask mode", source)
-		}
+	taskOpts.AskFreely = body.AskFreely
+	taskOpts.AskMode = body.AskMode
+	taskOpts.GitRemote = strings.TrimSpace(body.GitRemote)
+	taskOpts.GitBranch = strings.TrimSpace(body.GitBranch)
+	taskOpts.AutoPush = strings.TrimSpace(body.AutoPush)
+	// Console auto-detect: when a console surface (the attach terminal,
+	// web console, mobile code-mode) sends a plain natural-language
+	// QUESTION with no yaver verb/command in it, treat it as an ask
+	// case — deep grounded analysis, explain-first — even though the
+	// caller didn't set askMode. The user types "how do I test STT/TTS"
+	// and gets a real answer instead of a work run. High-precision
+	// classifier (detectAskIntent) so genuine work instructions are
+	// left alone. Explicit askFreely opts out.
+	if !taskOpts.AskMode && !taskOpts.AskFreely && isConsoleAskSource(source) && detectAskIntent(body.Title) {
+		taskOpts.AskMode = true
+		log.Printf("[ask] auto-detected question intent on %s console task; routing to ask mode", source)
 	}
 
 	var verbosityCtx *TaskVerbosity
@@ -5219,50 +4278,48 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	// runtime scrubs PII/secrets from the prompt before the runner sees them.
 	taskOpts.RedactPII = r.Header.Get("X-Yaver-RedactPII") == "1"
 
-	if guestUID == "" {
-		meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
-			KindHint:         body.PlacementKind,
-			Title:            title,
-			Description:      body.Description,
-			CustomCommand:    body.CustomCommand,
-			Source:           source,
-			Runner:           body.Runner,
-			ProjectName:      body.ProjectName,
-			WorkDir:          taskOpts.WorkDir,
-			TargetDeviceID:   s.deviceID,
-			ForceCloud:       body.ForceCloud,
-			ForceRelaySource: body.ForceRelaySource,
-		})
-		if previewPlacement, perr := s.previewTaskPlacement(r.Context(), meta); perr != nil {
-			log.Printf("[placement] HTTP preview skipped before task create: %v", perr)
-		} else if !body.AllowLocalFallback && shouldDeferLocalTaskForPlacement(previewPlacement, s.deviceID) {
-			pendingTaskID := newPendingCloudTaskID()
-			recordedPlacement := previewPlacement
-			if placement, rerr := s.recordTaskPlacement(r.Context(), pendingTaskID, meta); rerr != nil {
-				log.Printf("[placement] HTTP pending record skipped for %s: %v", pendingTaskID, rerr)
-			} else if placement != nil {
-				recordedPlacement = placement
-			}
-			var activation map[string]any
-			if recordedPlacement != nil && (recordedPlacement.PlacementID != "" || pendingTaskID != "") {
-				if result, aerr := s.activateTaskPlacement(r.Context(), recordedPlacement.PlacementID, pendingTaskID); aerr != nil {
-					activation = activationMapFromError(aerr)
-					log.Printf("[placement] HTTP activation skipped for %s: %v", pendingTaskID, aerr)
-				} else {
-					activation = result
-				}
-			}
-			jsonReply(w, http.StatusConflict, map[string]interface{}{
-				"action":        "cloud_workspace_required",
-				"pendingTaskId": pendingTaskID,
-				"placement":     recordedPlacement,
-				"activation":    activation,
-				"reason":        "placement selected a Cloud Workspace that is not ready on this agent; keep the prompt client-side, wait for activation, then dispatch to the assigned workspace",
-			})
-			return
-		} else if previewPlacement != nil {
-			taskOpts.Placement = previewPlacement
+	meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
+		KindHint:         body.PlacementKind,
+		Title:            title,
+		Description:      body.Description,
+		CustomCommand:    body.CustomCommand,
+		Source:           source,
+		Runner:           body.Runner,
+		ProjectName:      body.ProjectName,
+		WorkDir:          taskOpts.WorkDir,
+		TargetDeviceID:   s.deviceID,
+		ForceCloud:       body.ForceCloud,
+		ForceRelaySource: body.ForceRelaySource,
+	})
+	if previewPlacement, perr := s.previewTaskPlacement(r.Context(), meta); perr != nil {
+		log.Printf("[placement] HTTP preview skipped before task create: %v", perr)
+	} else if !body.AllowLocalFallback && shouldDeferLocalTaskForPlacement(previewPlacement, s.deviceID) {
+		pendingTaskID := newPendingCloudTaskID()
+		recordedPlacement := previewPlacement
+		if placement, rerr := s.recordTaskPlacement(r.Context(), pendingTaskID, meta); rerr != nil {
+			log.Printf("[placement] HTTP pending record skipped for %s: %v", pendingTaskID, rerr)
+		} else if placement != nil {
+			recordedPlacement = placement
 		}
+		var activation map[string]any
+		if recordedPlacement != nil && (recordedPlacement.PlacementID != "" || pendingTaskID != "") {
+			if result, aerr := s.activateTaskPlacement(r.Context(), recordedPlacement.PlacementID, pendingTaskID); aerr != nil {
+				activation = activationMapFromError(aerr)
+				log.Printf("[placement] HTTP activation skipped for %s: %v", pendingTaskID, aerr)
+			} else {
+				activation = result
+			}
+		}
+		jsonReply(w, http.StatusConflict, map[string]interface{}{
+			"action":        "cloud_workspace_required",
+			"pendingTaskId": pendingTaskID,
+			"placement":     recordedPlacement,
+			"activation":    activation,
+			"reason":        "placement selected a Cloud Workspace that is not ready on this agent; keep the prompt client-side, wait for activation, then dispatch to the assigned workspace",
+		})
+		return
+	} else if previewPlacement != nil {
+		taskOpts.Placement = previewPlacement
 	}
 
 	task, err := s.taskMgr.CreateTaskWithOptions(title, body.Description, body.Model, source, body.Runner, body.CustomCommand, body.Images, taskOpts, verbosityCtx)
@@ -5321,14 +4378,6 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[HTTP] Sending create response for task %s", task.ID)
 	jsonReply(w, http.StatusCreated, resp)
 	log.Printf("[HTTP] Response sent for task %s", task.ID)
-}
-
-func resolveGuestTaskProjectPath(projectName string) (string, error) {
-	ref, err := resolveProjectRef(projectName, "")
-	if err != nil {
-		return "", fmt.Errorf("could not resolve project %q: %w", strings.TrimSpace(projectName), err)
-	}
-	return ref.Path, nil
 }
 
 // handleTaskByID routes /tasks/{id}, /tasks/{id}/output, /tasks/{id}/stop, /tasks/{id}/continue
@@ -5847,17 +4896,10 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type checkResult struct {
-		Name    string `json:"name"`
-		Status  string `json:"status"` // "pass", "warn", "fail"
-		Detail  string `json:"detail"`
-		Section string `json:"section"`
-	}
-
-	var checks []checkResult
+	var checks []DoctorCheckResult
 
 	addCheck := func(section, name, status, detail string) {
-		checks = append(checks, checkResult{Name: name, Status: status, Detail: detail, Section: section})
+		checks = append(checks, DoctorCheckResult{Name: name, Status: status, Detail: detail, Section: section})
 	}
 
 	// Config
@@ -5905,48 +4947,10 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		addCheck("agent", "HTTP server", "warn", "Not reachable on port 18080")
 	}
 
-	// AI Runners — yaver's three first-class runners.
-	runners := []struct{ id, name, cmd, install string }{
-		{"claude", "Claude Code", "claude", "npm install -g @anthropic-ai/claude-code"},
-		{"codex", "OpenAI Codex", "codex", "npm install -g @openai/codex"},
-		{"opencode", "opencode", "opencode", "curl -fsSL https://opencode.ai/install | bash"},
-	}
-	for _, runner := range runners {
-		p, err := osexec.LookPath(runner.cmd)
-		if err != nil {
-			addCheck("runners", runner.name, "warn", "Not installed — "+runner.install)
-			continue
-		}
-		// Cap each runner --version probe at 800ms. Some runners
-		// (claude, codex) open a network socket on first run and
-		// would otherwise stall the whole /agent/doctor response
-		// past the caller's read timeout.
-		probeCtx, cancel := context.WithTimeout(r.Context(), 800*time.Millisecond)
-		out, verr := osexec.CommandContext(probeCtx, runner.cmd, "--version").CombinedOutput()
-		cancel()
-		if verr == nil {
-			ver := strings.TrimSpace(strings.Split(string(out), "\n")[0])
-			if len(ver) > 60 {
-				ver = ver[:60]
-			}
-			addCheck("runners", runner.name, "pass", fmt.Sprintf("%s (%s)", p, ver))
-		} else {
-			addCheck("runners", runner.name, "pass", p)
-		}
-	}
-
-	onboarding := collectMachineOnboardingStatus()
-	for _, provider := range onboarding.Providers {
-		status := machineOnboardingDoctorLevel(provider)
-		switch status {
-		case "pass":
-			addCheck("onboarding", provider.Name, "pass", machineOnboardingDoctorDetail(provider))
-		case "warn":
-			addCheck("onboarding", provider.Name, "warn", machineOnboardingDoctorDetail(provider))
-		default:
-			addCheck("onboarding", provider.Name, "fail", machineOnboardingDoctorDetail(provider))
-		}
-	}
+	// Shared source of truth for Electron/web/mobile and MCP. Runner readiness
+	// probes auth/provider operation, and platform-specific checks never offer
+	// an installer the current OS cannot execute.
+	checks = append(checks, s.buildDevelopmentDoctorChecks(r.Context())...)
 
 	// Relay servers
 	if cfg != nil && len(cfg.RelayServers) > 0 {
@@ -6897,6 +5901,19 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 	}
 
+	// Product invariant (2026-08-15): stale MCP clients must not be able to
+	// invoke removed visitor/guest capabilities by guessing an old tool name,
+	// even though those tools are no longer advertised by tools/list.
+	switch call.Name {
+	case "guest_invite", "guest_list", "guest_revoke", "guest_delete",
+		"guest_leave", "guest_accept", "guest_config", "guest_usage",
+		"support_start", "support_status", "support_stop",
+		"chat_conversations", "chat_history", "chat_reply":
+		return mcpToolError("visitor and guest access has been removed from Yaver")
+	case "project_test_grow":
+		return mcpToolError("automatic test growth has been removed from Yaver")
+	}
+
 	switch call.Name {
 	case "create_task":
 		var args struct {
@@ -7402,95 +6419,87 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			InitialUserPrompt: req.Input,
 			Mode:              req.Mode,
 		}
-		if parent.GuestUserID != "" {
-			taskOpts.GuestUserID = parent.GuestUserID
-			taskOpts.GuestUseHostAPIKeys = parent.GuestUseHostAPIKeys
-			taskOpts.GuestRequireIsolation = parent.GuestRequireIsolation
-			taskOpts.GuestAllowGuestProvidedKeys = parent.GuestAllowGuestProvidedKeys
-		}
-		if parent.GuestUserID == "" {
-			meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
-				KindHint:       "unknown",
-				Title:          "Fork task " + parent.ID,
-				Source:         "runner-switch-fork",
-				Runner:         req.Runner,
-				WorkDir:        firstNonEmpty(parent.WorkDir, s.taskMgr.workDir),
-				TargetDeviceID: s.deviceID,
-			})
-			if previewPlacement, perr := s.previewTaskPlacement(context.Background(), meta); perr != nil {
-				log.Printf("[placement] MCP fork preview skipped before task create: %v", perr)
-			} else if shouldDeferLocalTaskForPlacement(previewPlacement, s.deviceID) {
-				pendingTaskID := newPendingCloudTaskID()
-				recordedPlacement := previewPlacement
-				if placement, rerr := s.recordTaskPlacement(context.Background(), pendingTaskID, meta); rerr != nil {
-					log.Printf("[placement] MCP fork pending record skipped for %s: %v", pendingTaskID, rerr)
-				} else if placement != nil {
-					recordedPlacement = placement
-				}
-				var activation map[string]any
-				if recordedPlacement != nil && (recordedPlacement.PlacementID != "" || pendingTaskID != "") {
-					if result, aerr := s.activateTaskPlacement(context.Background(), recordedPlacement.PlacementID, pendingTaskID); aerr != nil {
-						activation = activationMapFromError(aerr)
-						log.Printf("[placement] MCP fork activation skipped for %s: %v", pendingTaskID, aerr)
-					} else {
-						activation = result
-					}
-				}
-				bodyJSON, _ := json.Marshal(map[string]any{
-					"title":             handoff,
-					"description":       "forked from " + parent.ID + " (runner switch)",
-					"source":            "runner-switch-fork",
-					"runner":            req.Runner,
-					"model":             req.Model,
-					"mode":              req.Mode,
-					"workDir":           taskOpts.WorkDir,
-					"userPrompt":        req.Input,
-					"initialUserPrompt": req.Input,
-					"placementKind":     meta.Kind,
-				})
-				cloudErr := &CloudWorkspaceRequiredError{
-					PendingTaskID: pendingTaskID,
-					Placement:     recordedPlacement,
-					Activation:    activation,
-					Reason:        "placement selected a Cloud Workspace for this MCP forked task",
-				}
-				if _, remoteTask, herr := createTaskOnCloudWorkspace(context.Background(), cloudErr, "", bodyJSON, 20*time.Second); herr == nil && remoteTask != nil {
-					targetDeviceID := ""
-					if recordedPlacement != nil {
-						targetDeviceID = recordedPlacement.TargetDeviceID
-					}
-					return mcpToolJSON(map[string]interface{}{
-						"ok":               true,
-						"mode":             "cloud_workspace",
-						"taskId":           remoteTask.TaskID,
-						"runnerId":         remoteTask.RunnerID,
-						"status":           remoteTask.Status,
-						"parentTaskId":     parent.ID,
-						"relationship":     "forked-by-yaver",
-						"contextWordsUsed": countWords(handoff),
-						"pendingTaskId":    pendingTaskID,
-						"targetDeviceId":   targetDeviceID,
-						"placement":        recordedPlacement,
-						"next_action":      "Cloud Workspace accepted the MCP forked task.",
-					})
-				} else {
-					reason := "Cloud Workspace is waking or needs attention before this MCP forked task can run."
-					if herr != nil {
-						reason = herr.Error()
-					}
-					return mcpToolJSON(map[string]interface{}{
-						"ok":            false,
-						"action":        "cloud_workspace_required",
-						"pendingTaskId": pendingTaskID,
-						"placement":     recordedPlacement,
-						"activation":    activation,
-						"reason":        reason,
-						"next_action":   "Do not create this fork locally. Wait for the assigned Cloud Workspace, clear any activation blocker, then retry pending Cloud Workspace dispatch.",
-					})
-				}
-			} else if previewPlacement != nil {
-				taskOpts.Placement = previewPlacement
+		meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
+			KindHint:       "unknown",
+			Title:          "Fork task " + parent.ID,
+			Source:         "runner-switch-fork",
+			Runner:         req.Runner,
+			WorkDir:        firstNonEmpty(parent.WorkDir, s.taskMgr.workDir),
+			TargetDeviceID: s.deviceID,
+		})
+		if previewPlacement, perr := s.previewTaskPlacement(context.Background(), meta); perr != nil {
+			log.Printf("[placement] MCP fork preview skipped before task create: %v", perr)
+		} else if shouldDeferLocalTaskForPlacement(previewPlacement, s.deviceID) {
+			pendingTaskID := newPendingCloudTaskID()
+			recordedPlacement := previewPlacement
+			if placement, rerr := s.recordTaskPlacement(context.Background(), pendingTaskID, meta); rerr != nil {
+				log.Printf("[placement] MCP fork pending record skipped for %s: %v", pendingTaskID, rerr)
+			} else if placement != nil {
+				recordedPlacement = placement
 			}
+			var activation map[string]any
+			if recordedPlacement != nil && (recordedPlacement.PlacementID != "" || pendingTaskID != "") {
+				if result, aerr := s.activateTaskPlacement(context.Background(), recordedPlacement.PlacementID, pendingTaskID); aerr != nil {
+					activation = activationMapFromError(aerr)
+					log.Printf("[placement] MCP fork activation skipped for %s: %v", pendingTaskID, aerr)
+				} else {
+					activation = result
+				}
+			}
+			bodyJSON, _ := json.Marshal(map[string]any{
+				"title":             handoff,
+				"description":       "forked from " + parent.ID + " (runner switch)",
+				"source":            "runner-switch-fork",
+				"runner":            req.Runner,
+				"model":             req.Model,
+				"mode":              req.Mode,
+				"workDir":           taskOpts.WorkDir,
+				"userPrompt":        req.Input,
+				"initialUserPrompt": req.Input,
+				"placementKind":     meta.Kind,
+			})
+			cloudErr := &CloudWorkspaceRequiredError{
+				PendingTaskID: pendingTaskID,
+				Placement:     recordedPlacement,
+				Activation:    activation,
+				Reason:        "placement selected a Cloud Workspace for this MCP forked task",
+			}
+			if _, remoteTask, herr := createTaskOnCloudWorkspace(context.Background(), cloudErr, "", bodyJSON, 20*time.Second); herr == nil && remoteTask != nil {
+				targetDeviceID := ""
+				if recordedPlacement != nil {
+					targetDeviceID = recordedPlacement.TargetDeviceID
+				}
+				return mcpToolJSON(map[string]interface{}{
+					"ok":               true,
+					"mode":             "cloud_workspace",
+					"taskId":           remoteTask.TaskID,
+					"runnerId":         remoteTask.RunnerID,
+					"status":           remoteTask.Status,
+					"parentTaskId":     parent.ID,
+					"relationship":     "forked-by-yaver",
+					"contextWordsUsed": countWords(handoff),
+					"pendingTaskId":    pendingTaskID,
+					"targetDeviceId":   targetDeviceID,
+					"placement":        recordedPlacement,
+					"next_action":      "Cloud Workspace accepted the MCP forked task.",
+				})
+			} else {
+				reason := "Cloud Workspace is waking or needs attention before this MCP forked task can run."
+				if herr != nil {
+					reason = herr.Error()
+				}
+				return mcpToolJSON(map[string]interface{}{
+					"ok":            false,
+					"action":        "cloud_workspace_required",
+					"pendingTaskId": pendingTaskID,
+					"placement":     recordedPlacement,
+					"activation":    activation,
+					"reason":        reason,
+					"next_action":   "Do not create this fork locally. Wait for the assigned Cloud Workspace, clear any activation blocker, then retry pending Cloud Workspace dispatch.",
+				})
+			}
+		} else if previewPlacement != nil {
+			taskOpts.Placement = previewPlacement
 		}
 		child, err := s.taskMgr.CreateTaskWithOptions(handoff, "forked from "+parent.ID+" (runner switch)", req.Model, "runner-switch-fork", req.Runner, "", nil, taskOpts)
 		if err != nil {
@@ -7606,25 +6615,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			if m.IsLocal {
 				scope = "local"
 			}
-			if m.IsShared {
-				scope = "shared"
-			}
 			sb.WriteString(fmt.Sprintf("- %s (%s) [%s, %s]", m.Name, m.DeviceID, scope, status))
-			if m.IsShared {
-				hostLabel := firstNonEmpty(m.HostName, m.HostEmail, "unknown host")
-				sb.WriteString(fmt.Sprintf(" shared_from=%s", hostLabel))
-				if strings.TrimSpace(m.PriorityMode) != "" {
-					sb.WriteString(fmt.Sprintf(" priority=%s", m.PriorityMode))
-				}
-				if m.UseHostAPIKeys {
-					sb.WriteString(" host_api_keys=yes")
-				} else {
-					sb.WriteString(" host_api_keys=no")
-				}
-				if strings.TrimSpace(m.AccessScope) != "" {
-					sb.WriteString(fmt.Sprintf(" access=%s", m.AccessScope))
-				}
-			}
 			if m.Provider != "" {
 				sb.WriteString(fmt.Sprintf(" provider=%s", m.Provider))
 			}
@@ -8708,9 +7699,117 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		return mcpToolResult("Input sent to tmux session.")
 
+	case "tmux_stream":
+		var args struct {
+			Session string `json:"session"`
+			Pane    string `json:"pane"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if !tmuxAvailable() {
+			return mcpToolError("tmux is not available on this machine")
+		}
+		// MCP is request/response, not a durable stream: return a bounded
+		// snapshot of the watched pane(s). Callers that need continuous SSE
+		// use GET /tmux/stream directly.
+		target := streamTarget{sessionName: args.Session, paneID: args.Pane, all: args.Session == "" && args.Pane == ""}
+		ctx, cancel := context.WithTimeout(context.Background(), vibeDefaultDeadline)
+		defer cancel()
+		panes, err := ListVibePanes(ctx)
+		if err != nil {
+			return mcpToolError(fmt.Sprintf("list panes: %v", err))
+		}
+		var watched []VibePane
+		for _, p := range panes {
+			if targetMatchesPane(target, p) {
+				watched = append(watched, p)
+			}
+		}
+		if len(watched) == 0 {
+			return mcpToolResult("No matching live tmux panes.")
+		}
+		var sb strings.Builder
+		for _, p := range watched {
+			agent := p.Agent
+			if agent == "" {
+				agent = "shell"
+			}
+			sb.WriteString(fmt.Sprintf("%s %s [%s] agent=%s", p.SessionName, p.PaneID, p.Status, agent))
+			if p.Model != "" {
+				sb.WriteString(" model=" + p.Model)
+			}
+			if p.IdleMs > 0 {
+				sb.WriteString(fmt.Sprintf(" idle=%dms", p.IdleMs))
+			}
+			if p.Status == VibeStatusAwaiting && len(p.Options) > 0 {
+				sb.WriteString("\n  options: " + strings.Join(p.Options, " | "))
+			}
+			if p.StatusReason != "" {
+				sb.WriteString("\n  " + p.StatusReason)
+			}
+			if p.Preview != "" {
+				sb.WriteString("\n  preview: " + strings.ReplaceAll(tailLines(p.Preview, 3), "\n", " "))
+			}
+			sb.WriteString("\n")
+		}
+		return mcpToolResult(sb.String())
+
+	case "git_sync_remote":
+		var args struct {
+			WorkDir string `json:"work_dir"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		workDir := strings.TrimSpace(args.WorkDir)
+		if workDir == "" {
+			workDir = s.taskMgr.workDir
+		}
+		if workDir == "" {
+			return mcpToolError("work_dir is required")
+		}
+		status, resp := runGitSyncRemote(workDir)
+		if status >= 300 || !resp.OK {
+			if resp.RequiresAgent {
+				conflicts := strings.Join(resp.Conflicts, ", ")
+				if conflicts == "" {
+					conflicts = "(none listed)"
+				}
+				return mcpToolError(fmt.Sprintf("rebase conflicts (%s) — aborting; hand off to a coding agent. %s", conflicts, resp.Output))
+			}
+			return mcpToolError(resp.Error + " — " + resp.Output)
+		}
+		return mcpToolResult(fmt.Sprintf("Synced %s on %s: %s → %s", resp.Branch, workDir, strings.Join(resp.Actions, ", "), resp.Hash))
+
+	case "session_intent":
+		var args struct {
+			Text string `json:"text"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if strings.TrimSpace(args.Text) == "" {
+			return mcpToolError("text is required")
+		}
+		intent, ok := detectSessionIntent(args.Text)
+		if !ok {
+			return mcpToolResult("not a session-lifecycle command — send it to a session as a prompt")
+		}
+		data, _ := json.MarshalIndent(intent, "", "  ")
+		return mcpToolResult(string(data))
+
 	// --- Diagnostics & Status ---
 	case "yaver_doctor":
 		return s.mcpDoctor()
+
+	case "development_doctor":
+		checks := s.buildDevelopmentDoctorChecks(context.Background())
+		data, _ := json.MarshalIndent(map[string]interface{}{"ok": true, "checks": checks}, "", "  ")
+		return mcpToolResult(string(data))
+
+	case "development_doctor_fix":
+		var args struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil || strings.TrimSpace(args.ID) == "" {
+			return mcpToolError("id is required; use an exact check id from development_doctor")
+		}
+		return s.mcpDevelopmentDoctorFix(strings.TrimSpace(args.ID))
 
 	case "yaver_status":
 		return s.mcpStatus()
@@ -8728,8 +7827,8 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolResult("No devices registered. Run 'yaver serve' on your dev machine to register it.")
 		}
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("%-10s  %-22s  %-8s  %-8s  %-22s  %s\n",
-			"ID", "NAME", "PLATFORM", "STATUS", "ACCESS", "ADDRESS"))
+		sb.WriteString(fmt.Sprintf("%-10s  %-22s  %-8s  %-8s  %s\n",
+			"ID", "NAME", "PLATFORM", "STATUS", "ADDRESS"))
 		for _, d := range devices {
 			status := "offline"
 			if d.IsOnline {
@@ -8739,21 +7838,8 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			if len(id) > 8 {
 				id = id[:8] + "..."
 			}
-			access := "OWN"
-			if d.IsGuest {
-				label := "SHARED"
-				if d.HostName != "" {
-					label = "SHARED:" + d.HostName
-				} else if d.HostEmail != "" {
-					label = "SHARED:" + d.HostEmail
-				}
-				if len(label) > 22 {
-					label = label[:21] + "…"
-				}
-				access = label
-			}
-			sb.WriteString(fmt.Sprintf("%-10s  %-22s  %-8s  %-8s  %-22s  %s:%d\n",
-				id, d.Name, d.Platform, status, access, d.QuicHost, d.QuicPort))
+			sb.WriteString(fmt.Sprintf("%-10s  %-22s  %-8s  %-8s  %s:%d\n",
+				id, d.Name, d.Platform, status, d.QuicHost, d.QuicPort))
 		}
 		return mcpToolResult(sb.String())
 
@@ -12249,16 +11335,12 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		var a struct {
 			DeviceID string `json:"device_id"`
 			Target   string `json:"target"`
-			Username string `json:"username"`
 		}
 		json.Unmarshal(call.Arguments, &a)
 		if strings.TrimSpace(a.Target) == "" {
 			return mcpToolError("target is required")
 		}
 		payload := map[string]interface{}{"target": strings.TrimSpace(a.Target)}
-		if v := strings.TrimSpace(a.Username); v != "" {
-			payload["username"] = v
-		}
 		if strings.TrimSpace(a.DeviceID) != "" {
 			raw, _ := json.Marshal(payload)
 			status, body, err := proxyToDevice(context.Background(), "code_attach", strings.TrimSpace(a.DeviceID), http.MethodPost, "/code/attach", raw)
@@ -12270,7 +11352,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			}
 			return mcpToolJSON(json.RawMessage(body))
 		}
-		out, err := applyCodeAttach(a.Target, a.Username)
+		out, err := applyCodeAttach(a.Target)
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("code_attach: %v", err))
 		}
@@ -14303,208 +13385,6 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpAuthLog(a.Lines))
 
-	// --- Guest Access ---
-	case "guest_invite":
-		var args struct {
-			Email     string   `json:"email"`
-			UserID    string   `json:"user_id"`
-			Scope     string   `json:"scope"`
-			DeviceIDs []string `json:"device_ids"`
-			Projects  []string `json:"projects"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-		if strings.TrimSpace(args.Email) == "" && strings.TrimSpace(args.UserID) == "" {
-			return mcpToolError("email or user_id is required")
-		}
-		if args.Scope != "" && args.Scope != GuestScopeFull && args.Scope != GuestScopeFeedbackOnly && args.Scope != GuestScopeSDKProject {
-			return mcpToolError("scope must be 'full', 'feedback-only', or 'sdk-project'")
-		}
-		invResult, err := InviteGuestWith(s.convexURL, s.token, InviteGuestOpts{
-			Email:             args.Email,
-			UserID:            args.UserID,
-			ProposedDeviceIDs: args.DeviceIDs,
-			Scope:             args.Scope,
-			AllowedProjects:   args.Projects,
-		})
-		if err != nil {
-			return mcpToolError(err.Error())
-		}
-		// Refresh guest list
-		if ids, err := FetchGuestUserIds(s.convexURL, s.token, s.deviceID); err == nil {
-			s.guestUserIDsMu.Lock()
-			s.guestUserIDs = ids
-			s.guestUserIDsMu.Unlock()
-		}
-		scopeShown := invResult.Scope
-		if scopeShown == "" {
-			scopeShown = args.Scope
-		}
-		if scopeShown == "" {
-			scopeShown = GuestScopeFeedbackOnly
-		}
-		target := strings.TrimSpace(args.Email)
-		if target == "" {
-			target = "user_id:" + strings.TrimSpace(args.UserID)
-		}
-		msg := fmt.Sprintf("Invitation sent to %s.\nInvite code: %s\nScope: %s\n", target, invResult.InviteCode, scopeShown)
-		if scopeShown == GuestScopeFeedbackOnly {
-			msg += "Hardened end-user tier — no /tasks, /vibing, /dev, /projects; /info redacted; fix-triggered tasks force-containerized. Re-invite with scope='full' for teammates.\n"
-		} else if scopeShown == GuestScopeSDKProject {
-			msg += "Project-scoped Feedback SDK tier — delegated guest access is limited to the selected projects and device slice.\n"
-		} else {
-			msg += "Full teammate tier — tasks, vibing, dev-server proxy, builds, projects, plus the feedback/voice surface.\n"
-		}
-		if ids := cleanProjectList(args.DeviceIDs); len(ids) > 0 {
-			msg += fmt.Sprintf("Machine narrowing: %s.\n", strings.Join(ids, ", "))
-		}
-		if projs := cleanProjectList(args.Projects); len(projs) > 0 {
-			msg += fmt.Sprintf("Project narrowing: %s (this guest cannot see/fix feedback or run tasks outside these projects).\n", strings.Join(projs, ", "))
-		}
-		if invResult.GuestRegistered {
-			msg += "This email is already registered — they'll see the invitation in their Yaver app."
-		} else {
-			msg += "This email is not yet registered. Share the invite code — they can accept with any OAuth method after signing up."
-		}
-		msg += "\nExpires in 2 days."
-		return mcpToolResult(msg)
-
-	case "guest_list":
-		guests, err := FetchGuestList(s.convexURL, s.token)
-		if err != nil {
-			return mcpToolError("failed to fetch guests: " + err.Error())
-		}
-		if len(guests) == 0 {
-			return mcpToolResult("No guests. Use guest_invite to invite someone.")
-		}
-		var sb strings.Builder
-		sb.WriteString("Guests:\n")
-		for _, g := range guests {
-			name := g.FullName
-			if name == "" {
-				name = "(not yet signed up)"
-			}
-			sb.WriteString(fmt.Sprintf("- %s [%s] %s\n", g.Email, g.Status, name))
-		}
-		return mcpToolResult(sb.String())
-
-	case "guest_revoke":
-		var args struct {
-			Email string `json:"email"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-		if args.Email == "" {
-			return mcpToolError("email is required")
-		}
-		if err := RevokeGuest(s.convexURL, s.token, args.Email); err != nil {
-			return mcpToolError(err.Error())
-		}
-		// Refresh guest list
-		if ids, err := FetchGuestUserIds(s.convexURL, s.token, s.deviceID); err == nil {
-			s.guestUserIDsMu.Lock()
-			s.guestUserIDs = ids
-			s.guestUserIDsMu.Unlock()
-		}
-		// Clear token cache for non-owner users
-		s.tokenCache.Range(func(key, value interface{}) bool {
-			info := value.(*cachedTokenInfo)
-			if info.userID != s.ownerUserID && !info.isSdk {
-				s.tokenCache.Delete(key)
-			}
-			return true
-		})
-		return mcpToolResult(fmt.Sprintf("Guest access revoked for %s", args.Email))
-
-	case "guest_delete":
-		var args struct {
-			InviteID string `json:"inviteId"`
-			Email    string `json:"email"`
-			UserID   string `json:"userId"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-		if strings.TrimSpace(args.InviteID) == "" && strings.TrimSpace(args.Email) == "" && strings.TrimSpace(args.UserID) == "" {
-			return mcpToolError("inviteId, email, or userId is required")
-		}
-		if err := DeleteGuest(s.convexURL, s.token, args.InviteID, args.Email, args.UserID); err != nil {
-			return mcpToolError(err.Error())
-		}
-		if ids, err := FetchGuestUserIds(s.convexURL, s.token, s.deviceID); err == nil {
-			s.guestUserIDsMu.Lock()
-			s.guestUserIDs = ids
-			s.guestUserIDsMu.Unlock()
-		}
-		s.tokenCache.Range(func(key, value interface{}) bool {
-			info := value.(*cachedTokenInfo)
-			if info.userID != s.ownerUserID && !info.isSdk {
-				s.tokenCache.Delete(key)
-			}
-			return true
-		})
-		target := strings.TrimSpace(args.InviteID)
-		if target == "" {
-			target = strings.TrimSpace(args.Email)
-		}
-		if target == "" {
-			target = strings.TrimSpace(args.UserID)
-		}
-		return mcpToolResult(fmt.Sprintf("Guest row deleted for %s. Any live access was revoked first; they can be invited again later.", target))
-
-	case "guest_leave":
-		var args struct {
-			HostUserID string `json:"hostUserId"`
-			HostEmail  string `json:"hostEmail"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-		if strings.TrimSpace(args.HostUserID) == "" && strings.TrimSpace(args.HostEmail) == "" {
-			return mcpToolError("hostUserId or hostEmail is required")
-		}
-		leaveResult, err := LeaveSharedAccess(s.convexURL, s.token, args.HostUserID, args.HostEmail)
-		if err != nil {
-			return mcpToolError(err.Error())
-		}
-		host := strings.TrimSpace(leaveResult.HostName)
-		if host == "" {
-			host = strings.TrimSpace(args.HostEmail)
-		}
-		if host == "" {
-			host = strings.TrimSpace(leaveResult.HostUserID)
-		}
-		if host == "" {
-			host = strings.TrimSpace(args.HostUserID)
-		}
-		if leaveResult.AlreadyGone {
-			return mcpToolResult(fmt.Sprintf("Nothing to leave — you already had no access to %s's machines. Your own machines are untouched.", host))
-		}
-		return mcpToolResult(fmt.Sprintf("You left %s's shared machines — your access is removed. Your own machines are untouched.\nReversible: %s can share again and you can accept again with guest_accept.", host, host))
-
-	case "guest_accept":
-		var args struct {
-			Code     string   `json:"code"`
-			Machines []string `json:"machines"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-		if strings.TrimSpace(args.Code) == "" {
-			return mcpToolError("code is required")
-		}
-		acceptResult, err := AcceptGuestByCode(s.convexURL, s.token, args.Code, cleanProjectList(args.Machines))
-		if err != nil {
-			return mcpToolError(err.Error())
-		}
-		host := strings.TrimSpace(acceptResult.HostName)
-		if host == "" {
-			host = strings.TrimSpace(acceptResult.HostEmail)
-		}
-		if host == "" {
-			host = "the host"
-		}
-		msg := fmt.Sprintf("Invitation accepted — you now have access to %s's shared machines.\n", host)
-		if ids := cleanProjectList(args.Machines); len(ids) > 0 {
-			msg += fmt.Sprintf("Machine narrowing: %s (you took access to these machines only).\n", strings.Join(ids, ", "))
-		} else {
-			msg += "Scope: every machine the host offered.\n"
-		}
-		msg += "Use guest_leave to give this access back at any time."
-		return mcpToolResult(msg)
-
 	case "company_ai_resolve":
 		var args struct {
 			TeamID            string `json:"teamId"`
@@ -14552,10 +13432,9 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolError("invalid ops request: " + err.Error())
 		}
 		// Callers that reach the MCP dispatch have already cleared
-		// the owner-auth boundary upstream (auth() in /mcp). Guests
-		// and support sessions use their own scoped routes, not /mcp,
-		// so we can safely assume owner here. The dispatcher itself
-		// enforces per-verb policy via AllowGuest on non-owner paths
+		// the owner-auth boundary upstream (auth() in /mcp), so we can safely
+		// assume owner here. The dispatcher itself
+		// enforces per-verb policy via AllowCompanion on non-owner paths
 		// when /ops HTTP is called directly.
 		octx := OpsContext{Ctx: context.Background(), Server: s, Caller: "owner"}
 		out := dispatchOps(octx, req)
@@ -15363,7 +14242,6 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 				"name":        v.Name,
 				"description": v.Description,
 				"streaming":   v.Streaming,
-				"allowGuest":  v.AllowGuest,
 				"payload":     v.Schema,
 			})
 		}
@@ -15461,9 +14339,6 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolError(fmt.Sprintf("%q matches %d devices — use a longer prefix", target, len(matches)))
 		}
 		chosen := matches[0]
-		if chosen.IsGuest {
-			return mcpToolError("shared (guest) devices cannot be marked primary — the host can revoke access at any time")
-		}
 		if err := primarySaveRaw(ctx, s.token, s.convexURL, chosen.DeviceID, false); err != nil {
 			return mcpToolError(err.Error())
 		}
@@ -15490,218 +14365,12 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpPrimaryProjects(a.MobileOnly))
 
-	// --- Remote Support Sessions ---
-	case "support_start":
-		var args struct {
-			TTL   string `json:"ttl"`
-			Label string `json:"label"`
-			Shell bool   `json:"shell"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-		ttl := defaultSupportTTL
-		if strings.TrimSpace(args.TTL) != "" {
-			if d, err := time.ParseDuration(args.TTL); err == nil && d > 0 {
-				ttl = d
-			}
-		}
-		sess := StartSupportSession(SupportStartOptions{
-			Label: args.Label,
-			TTL:   ttl,
-			Shell: args.Shell,
-		})
-		return mcpToolJSON(supportSessionPayload(sess, s.deviceID, true))
-
-	case "support_status":
-		sess := activeSupportSnapshot()
-		if sess == nil {
-			return mcpToolJSON(map[string]interface{}{"active": false})
-		}
-		return mcpToolJSON(supportSessionPayload(sess, s.deviceID, true))
-
-	case "support_stop":
-		stopped := StopSupportSession()
-		return mcpToolJSON(map[string]interface{}{"ok": true, "stopped": stopped})
-
-	case "guest_config":
-		var args struct {
-			Email             string   `json:"email"`
-			DailyLimit        *int     `json:"daily_limit"`
-			UsageMode         string   `json:"usage_mode"`
-			AllowedRunners    []string `json:"allowed_runners"`
-			ResourcePreset    string   `json:"resource_preset"`
-			UseHostAPIKeys    *bool    `json:"use_host_api_keys"`
-			AllowGuestAPIKeys *bool    `json:"allow_guest_api_keys"`
-			AllowDesktop      *bool    `json:"allow_desktop_control"`
-			AllowBrowser      *bool    `json:"allow_browser_control"`
-			AllowTunnel       *bool    `json:"allow_tunnel_forward"`
-			RequireIsolation  *bool    `json:"require_isolation"`
-			CPULimitPercent   *int     `json:"cpu_limit_percent"`
-			RAMLimitMB        *int     `json:"ram_limit_mb"`
-			PriorityMode      string   `json:"priority_mode"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-
-		if args.Email == "" {
-			// List all configs
-			configs, err := FetchGuestConfigs(s.convexURL, s.token)
-			if err != nil {
-				return mcpToolError("failed to fetch configs: " + err.Error())
-			}
-			if len(configs) == 0 {
-				return mcpToolResult("No guest configs. Guests use default settings (unlimited).")
-			}
-			var sb strings.Builder
-			sb.WriteString("Guest Configs:\n")
-			for _, c := range configs {
-				mode := c.UsageMode
-				if mode == "" {
-					mode = "always"
-				}
-				limit := "unlimited"
-				if c.DailyTokenLimit != nil && *c.DailyTokenLimit > 0 {
-					limit = fmt.Sprintf("%ds/day", *c.DailyTokenLimit)
-				}
-				runners := "all"
-				if len(c.AllowedRunners) > 0 {
-					runners = strings.Join(c.AllowedRunners, ",")
-				}
-				hostKeys := "inherit"
-				if c.UseHostAPIKeys != nil {
-					hostKeys = fmt.Sprintf("%v", *c.UseHostAPIKeys)
-				}
-				preset := guestResourcePreset(&c)
-				guestKeys := "inherit"
-				if c.AllowGuestProvidedAPIKeys != nil {
-					guestKeys = fmt.Sprintf("%v", *c.AllowGuestProvidedAPIKeys)
-				}
-				desktop := fmt.Sprintf("%v", guestAllowDesktopControl(&c))
-				tunnels := fmt.Sprintf("%v", guestAllowTunnelForward(&c))
-				isolation := "false"
-				if c.RequireIsolation != nil && *c.RequireIsolation {
-					isolation = "true"
-				}
-				sb.WriteString(fmt.Sprintf("- %s (%s): mode=%s limit=%s runners=%s preset=%s host_keys=%s guest_keys=%s desktop=%s tunnels=%s isolation=%s\n",
-					c.GuestEmail, c.GuestName, mode, limit, runners, preset, hostKeys, guestKeys, desktop, tunnels, isolation))
-			}
-			return mcpToolResult(sb.String())
-		}
-
-		// If no update fields, just show this guest's config
-		isUpdate := args.DailyLimit != nil || args.UsageMode != "" || args.AllowedRunners != nil ||
-			args.ResourcePreset != "" || args.UseHostAPIKeys != nil || args.AllowGuestAPIKeys != nil ||
-			args.AllowDesktop != nil || args.AllowBrowser != nil || args.AllowTunnel != nil || args.RequireIsolation != nil ||
-			args.CPULimitPercent != nil || args.RAMLimitMB != nil || args.PriorityMode != ""
-		if !isUpdate {
-			configs, err := FetchGuestConfigs(s.convexURL, s.token)
-			if err != nil {
-				return mcpToolError("failed to fetch config: " + err.Error())
-			}
-			for _, c := range configs {
-				if c.GuestEmail == args.Email {
-					mode := c.UsageMode
-					if mode == "" {
-						mode = "always"
-					}
-					limit := "unlimited"
-					if c.DailyTokenLimit != nil && *c.DailyTokenLimit > 0 {
-						limit = fmt.Sprintf("%d seconds/day", *c.DailyTokenLimit)
-					}
-					runners := "all"
-					if len(c.AllowedRunners) > 0 {
-						runners = strings.Join(c.AllowedRunners, ", ")
-					}
-					hostKeys := "inherit"
-					if c.UseHostAPIKeys != nil {
-						hostKeys = fmt.Sprintf("%v", *c.UseHostAPIKeys)
-					}
-					preset := guestResourcePreset(&c)
-					guestKeys := "inherit"
-					if c.AllowGuestProvidedAPIKeys != nil {
-						guestKeys = fmt.Sprintf("%v", *c.AllowGuestProvidedAPIKeys)
-					}
-					desktop := fmt.Sprintf("%v", guestAllowDesktopControl(&c))
-					browser := fmt.Sprintf("%v", guestAllowBrowserControl(&c))
-					tunnels := fmt.Sprintf("%v", guestAllowTunnelForward(&c))
-					isolation := "false"
-					if c.RequireIsolation != nil && *c.RequireIsolation {
-						isolation = "true"
-					}
-					cpuCap := "unset"
-					if c.CPULimitPercent != nil {
-						cpuCap = fmt.Sprintf("%d%%", *c.CPULimitPercent)
-					}
-					ramCap := "unset"
-					if c.RAMLimitMB != nil {
-						ramCap = fmt.Sprintf("%d MB", *c.RAMLimitMB)
-					}
-					priority := c.PriorityMode
-					if priority == "" {
-						priority = "default"
-					}
-					return mcpToolResult(fmt.Sprintf("Config for %s (%s):\n  Mode: %s\n  Daily limit: %s\n  Runners: %s\n  Resource preset: %s\n  Host API keys: %s\n  Guest API keys: %s\n  Desktop control: %s\n  Browser control: %s\n  Tunnel forward: %s\n  Docker isolation: %s\n  CPU cap: %s\n  RAM cap: %s\n  Priority: %s",
-						c.GuestEmail, c.GuestName, mode, limit, runners, preset, hostKeys, guestKeys, desktop, browser, tunnels, isolation, cpuCap, ramCap, priority))
-				}
-			}
-			return mcpToolResult(fmt.Sprintf("No config found for %s", args.Email))
-		}
-
-		// Update config
-		payload := map[string]interface{}{"email": args.Email}
-		if args.DailyLimit != nil {
-			payload["dailyTokenLimit"] = *args.DailyLimit
-		}
-		if args.UsageMode != "" {
-			payload["usageMode"] = args.UsageMode
-		}
-		if args.AllowedRunners != nil {
-			payload["allowedRunners"] = args.AllowedRunners
-		}
-		if args.ResourcePreset != "" {
-			payload["resourcePreset"] = args.ResourcePreset
-		}
-		if args.UseHostAPIKeys != nil {
-			payload["useHostApiKeys"] = *args.UseHostAPIKeys
-		}
-		if args.AllowGuestAPIKeys != nil {
-			payload["allowGuestProvidedApiKeys"] = *args.AllowGuestAPIKeys
-		}
-		if args.AllowDesktop != nil {
-			payload["allowDesktopControl"] = *args.AllowDesktop
-		}
-		if args.AllowBrowser != nil {
-			payload["allowBrowserControl"] = *args.AllowBrowser
-		}
-		if args.AllowTunnel != nil {
-			payload["allowTunnelForward"] = *args.AllowTunnel
-		}
-		if args.RequireIsolation != nil {
-			payload["requireIsolation"] = *args.RequireIsolation
-		}
-		if args.CPULimitPercent != nil {
-			payload["cpuLimitPercent"] = *args.CPULimitPercent
-		}
-		if args.RAMLimitMB != nil {
-			payload["ramLimitMb"] = *args.RAMLimitMB
-		}
-		if args.PriorityMode != "" {
-			payload["priorityMode"] = args.PriorityMode
-		}
-		if err := UpdateGuestConfig(s.convexURL, s.token, payload); err != nil {
-			return mcpToolError(err.Error())
-		}
-		// Refresh cached configs
-		if s.guestConfigMgr != nil {
-			if cfgs, err := FetchGuestConfigs(s.convexURL, s.token); err == nil {
-				s.guestConfigMgr.UpdateConfigs(cfgs)
-			}
-		}
-		return mcpToolResult(fmt.Sprintf("Config updated for %s", args.Email))
-
 	case "sandbox_status":
 		return mcpToolJSON(s.sandboxSummary())
 
 	case "sandbox_config":
 		var args struct {
+			// Decode-only tombstone: never accept the removed guest mode.
 			ContainerizeGuests *bool  `json:"containerize_guests"`
 			ContainerizeHost   *bool  `json:"containerize_host"`
 			CPULimit           string `json:"cpu_limit"`
@@ -15710,6 +14379,9 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			ReadOnly           *bool  `json:"read_only"`
 		}
 		json.Unmarshal(call.Arguments, &args)
+		if args.ContainerizeGuests != nil {
+			return mcpToolError("containerize_guests has been removed; Yaver accepts owner tasks only")
+		}
 
 		// Validate network mode
 		if args.NetworkMode != "" {
@@ -15722,13 +14394,6 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 
 		if err := s.ensureContainerRunner(); err != nil {
 			return mcpToolError(err.Error() + " — install Docker first")
-		}
-		if args.ContainerizeGuests != nil {
-			s.containerizeGuests = *args.ContainerizeGuests
-			if s.taskMgr != nil {
-				s.taskMgr.ContainerizeGuests = *args.ContainerizeGuests
-				s.taskMgr.ContainerRunner = s.containerRunner
-			}
 		}
 		if args.ContainerizeHost != nil {
 			s.containerizeHost = *args.ContainerizeHost
@@ -15779,30 +14444,6 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			"message": message,
 			"sandbox": summary,
 		})
-
-	case "guest_usage":
-		var args struct {
-			Date string `json:"date"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-		usage, err := FetchGuestUsage(s.convexURL, s.token, args.Date)
-		if err != nil {
-			return mcpToolError("failed to fetch usage: " + err.Error())
-		}
-		if len(usage) == 0 {
-			date := args.Date
-			if date == "" {
-				date = "today"
-			}
-			return mcpToolResult(fmt.Sprintf("No usage for %s.", date))
-		}
-		var sb strings.Builder
-		sb.WriteString("Guest Usage:\n")
-		for _, u := range usage {
-			sb.WriteString(fmt.Sprintf("- %s (%s): %.0f seconds on %s\n",
-				u.GuestEmail, u.GuestName, u.SecondsUsed, u.Date))
-		}
-		return mcpToolResult(sb.String())
 
 	case "forgot_password":
 		var args struct {
@@ -16481,7 +15122,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		clipMu.Lock()
 		clipActive = &activeSession{session: session, cmd: cmd, stopCh: make(chan struct{})}
 		clipMu.Unlock()
-		return mcpToolJSON(map[string]interface{}{"session": session, "shareUrl": "/clips/" + session.ID})
+		return mcpToolJSON(map[string]interface{}{"session": session})
 	case "clip_stop":
 		clipMu.Lock()
 		active := clipActive
@@ -16811,48 +15452,6 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			"exportUrl": "/screenlog/" + sess.ID + "/export",
 			"hint":      "GET this URL (auth'd) for a tar.gz of index.json + frames + events.jsonl; or `yaver screenlog pull " + sess.ID + "`",
 		})
-
-	case "chat_conversations":
-		dir, _ := chatDir()
-		entries, _ := os.ReadDir(dir)
-		out := []map[string]interface{}{}
-		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".jsonl") {
-				continue
-			}
-			vid := strings.TrimSuffix(e.Name(), ".jsonl")
-			msgs, _ := readChatMessages(vid, 5)
-			last := ""
-			if len(msgs) > 0 {
-				last = msgs[len(msgs)-1].Text
-			}
-			out = append(out, map[string]interface{}{"vid": vid, "last": last, "count": len(msgs)})
-		}
-		return mcpToolJSON(map[string]interface{}{"conversations": out})
-	case "chat_history":
-		var args struct {
-			VID   string `json:"vid"`
-			Limit int    `json:"limit"`
-		}
-		json.Unmarshal(call.Arguments, &args)
-		if args.VID == "" {
-			return mcpToolError("vid required")
-		}
-		if args.Limit == 0 {
-			args.Limit = 100
-		}
-		msgs, _ := readChatMessages(sanitizeVID(args.VID), args.Limit)
-		return mcpToolJSON(map[string]interface{}{"messages": msgs})
-	case "chat_reply":
-		var args struct{ VID, Text string }
-		json.Unmarshal(call.Arguments, &args)
-		if args.VID == "" || args.Text == "" {
-			return mcpToolError("vid and text required")
-		}
-		m := ChatMessage{ID: randomFormID(), VID: sanitizeVID(args.VID), From: "owner", Text: args.Text, At: time.Now().UTC()}
-		_ = appendChatMessage(m)
-		publishChatMessage(m)
-		return mcpToolResult("sent")
 
 	case "customer_create":
 		var c Customer
@@ -18682,6 +17281,81 @@ func firstPositiveFloat(values ...float64) float64 {
 	return 0
 }
 
+// mcpDevelopmentDoctorFix executes only the route the Doctor itself emitted.
+// The caller supplies a stable check id, never a command, URL, or package
+// name, so this MCP tool cannot become an arbitrary-shell escape hatch.
+func (s *HTTPServer) mcpDevelopmentDoctorFix(id string) interface{} {
+	checks := s.buildDevelopmentDoctorChecks(context.Background())
+	var selected *DoctorCheckResult
+	for i := range checks {
+		if checks[i].ID == id {
+			selected = &checks[i]
+			break
+		}
+	}
+	if selected == nil {
+		return mcpToolError("unknown Doctor check id; rerun development_doctor and use an exact id")
+	}
+	if selected.Status == "pass" {
+		return mcpToolResult(selected.Name + " is already ready; no fix was run")
+	}
+	if selected.Fix == nil {
+		return mcpToolError(selected.Name + " has no deterministic automatic fix on this operating system")
+	}
+	if selected.Fix.Kind != "install" {
+		data, _ := json.MarshalIndent(map[string]interface{}{
+			"ok": false, "requires_user_action": true, "check": selected, "fix": selected.Fix,
+		}, "", "  ")
+		return mcpToolResult(string(data))
+	}
+	const prefix = "/install/"
+	if !strings.HasPrefix(selected.Fix.Path, prefix) {
+		return mcpToolError("Doctor emitted an invalid install route; nothing was run")
+	}
+	tool := strings.TrimPrefix(selected.Fix.Path, prefix)
+	if tool == "" || strings.ContainsAny(tool, "/\\?#") {
+		return mcpToolError("Doctor emitted an invalid install target; nothing was run")
+	}
+	plan, ok := lookupIntegration(tool)
+	if !ok {
+		plan, ok = metaInstallPlan(tool)
+	}
+	if !ok {
+		return mcpToolError("Doctor fix is not backed by a built-in install plan; nothing was run")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+	lines := make([]string, 0, 80)
+	err := runInstallPlan(ctx, plan, func(line string) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return
+		}
+		if len(line) > 400 {
+			line = line[:400]
+		}
+		lines = append(lines, line)
+		if len(lines) > 80 {
+			lines = lines[len(lines)-80:]
+		}
+	})
+	if err != nil {
+		return mcpToolError(fmt.Sprintf("%s install failed: %v\n%s", selected.Name, err, strings.Join(lines, "\n")))
+	}
+	var after *DoctorCheckResult
+	afterChecks := s.buildDevelopmentDoctorChecks(context.Background())
+	for i := range afterChecks {
+		if afterChecks[i].ID == id {
+			after = &afterChecks[i]
+			break
+		}
+	}
+	data, _ := json.MarshalIndent(map[string]interface{}{
+		"ok": true, "installed": tool, "check": after, "output": lines,
+	}, "", "  ")
+	return mcpToolResult(string(data))
+}
+
 // mcpDoctor runs a doctor-like health check and returns results as text.
 func (s *HTTPServer) mcpDoctor() interface{} {
 	var sb strings.Builder
@@ -18831,6 +17505,18 @@ func (s *HTTPServer) mcpDoctor() interface{} {
 		check("Local IP", "ok", ip)
 	} else {
 		check("Local IP", "warn", "Could not determine")
+	}
+
+	sb.WriteString("\n── Development Toolchain & Provider Auth ──\n")
+	for _, result := range s.buildDevelopmentDoctorChecks(context.Background()) {
+		if result.Section == "runners" || result.Section == "onboarding" {
+			continue // already rendered above
+		}
+		detail := result.Detail
+		if result.Fix != nil {
+			detail += " · fix: " + result.Fix.Label
+		}
+		check(result.Name, result.Status, detail)
 	}
 
 	sb.WriteString(fmt.Sprintf("\nSummary: %d passed, %d warnings, %d failures\n", ok, warn, fail))

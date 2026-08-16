@@ -8,9 +8,9 @@ package main
 import "encoding/json"
 
 type opsBackupPayload struct {
-	Op        string `json:"op"`               // list | create | restore
-	Target    string `json:"target"`           // db | cloud | project | vault
-	ID        string `json:"id,omitempty"`     // backup id for restore
+	Op        string `json:"op"`                  // list | create | restore
+	Target    string `json:"target"`              // db | cloud | project | vault
+	ID        string `json:"id,omitempty"`        // backup id for restore
 	Directory string `json:"directory,omitempty"` // for project target
 	DryRun    bool   `json:"dryRun,omitempty"`
 }
@@ -31,9 +31,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsBackupHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsBackupHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

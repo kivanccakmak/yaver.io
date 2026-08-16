@@ -62,9 +62,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsSimulatorHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsSimulatorHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

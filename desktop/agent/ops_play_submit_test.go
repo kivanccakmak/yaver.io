@@ -1026,8 +1026,8 @@ func TestPlayVerbsAreRegisteredOwnerOnly(t *testing.T) {
 		}
 		// These publish to a third party's store account with their credentials —
 		// never reachable by a guest token.
-		if spec.AllowGuest {
-			t.Errorf("verb %q must be owner-only (AllowGuest=false)", name)
+		if spec.AllowCompanion {
+			t.Errorf("verb %q must be owner-only (AllowCompanion=false)", name)
 		}
 		if spec.Schema == nil || spec.Description == "" {
 			t.Errorf("verb %q needs a schema + description for MCP self-discovery", name)

@@ -1,6 +1,6 @@
 import { CONVEX_URL } from "@/lib/constants";
 
-// Client for the social graph (the address book). Mirrors lib/guests.ts.
+// Client for the social graph (the address book).
 
 export interface Connection {
   peerUserId: string;

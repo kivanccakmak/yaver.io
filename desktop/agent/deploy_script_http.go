@@ -1,8 +1,7 @@
 package main
 
 // deploy_script_http.go — HTTP endpoints for the deploy-script generator
-// and toolchain doctor. Owner-only (not in any guest allowlist — see
-// httpserver.go::allowGuest). The endpoints are intentionally read-only:
+// and toolchain doctor. Primary-owner only. The endpoints are intentionally read-only:
 // they return a script/report as JSON; actually running the script is
 // a separate, larger concern that belongs in /deploy/run (not shipped
 // yet — see DEPLOY_RUN_TODO notes).

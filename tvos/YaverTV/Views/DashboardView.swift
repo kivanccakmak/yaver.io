@@ -4,17 +4,16 @@
 // Apple TV, Capture, Feedback, Android, Switch, Update agent, Shared with,
 // Sign out). On a TV that is a wall of inventory; the web's sidebar is five
 // items — Devices, Chat, Projects, Vibing — and sign-out lives in the profile.
-// This surface is the same five, plus a "More" tile that hides the secondary
-// tools instead of showing them all at once:
+// This surface is the same five, with defaults collected in Settings:
 //
-//   Devices  → MachinePickerView  (your account's machines, switch/wake)
 //   Chat     → TasksView          (tasks & vibes — the web/mobile chat)
-//   Projects → ProjectsView       (browse & preview on the TV)
-//   Vibing   → SessionView        (drive a live coding session)
-//   More     → secondary tools    (Runtime · Apple TV · capture · feedback)
+//   Vibing   → VibingView         (project → available target → live preview)
+//   Projects → ProjectsView       (browse the selected machine)
+//   Devices  → MachinePickerView  (your account's machines, switch/wake)
+//   Settings → account defaults  (device · runner · project · MCP)
 //
 // The profile menu (top-right) owns the account-level actions: Sign out,
-// Update agent, Shared with. The connected PC is shown as a first-class card
+// Update agent. The connected PC is shown as a first-class card
 // under the header — name, host, live status — so "which box am I on" is the
 // first thing the initial screen answers, exactly like web/mobile.
 
@@ -23,17 +22,21 @@ import SwiftUI
 struct DashboardView: View {
     @EnvironmentObject var store: YaverStore
     @State private var showPicker = false
-    @State private var showMore = false
+    @State private var showSettings = false
     @State private var showUpdateAgent = false
-    @State private var showSharedGuests = false
     @StateObject private var lifecycle = BoxLifecycle()
+    @FocusState private var dashboardFocus: DashboardDestination?
+
+    private enum DashboardDestination: Hashable {
+        case chat, vibing, projects, devices, settings
+    }
 
     /// Open the TV directly on a screen instead of the tile grid.
     ///
     /// Same class of configuration as `yaver.tv.selectedBox` and
     /// `yaver.tv.boxes` above it — read from UserDefaults, so the argument
-    /// domain sets it too. Values: "" (normal), "projects",
-    /// "preview:<projectName>".
+    /// domain sets it too. Values: "" (normal), "chat", "vibing",
+    /// "projects", "preview:<projectName>".
     ///
     /// "preview:<name>" routes THROUGH here to Projects, which then continues
     /// the route to that project (ProjectsView.startAt). Matching this key by
@@ -51,21 +54,32 @@ struct DashboardView: View {
     ///     shape: a route the surface can be sent to, not a sentence describing
     ///     where to go.
     ///
-    ///  2. Testability, honestly stated. The tile grid is
-    ///     `LazyVGrid(GridItem(.adaptive(minimum: 300)))` — its COLUMN COUNT
-    ///     DEPENDS ON WIDTH, so there is no stable press-route to it. Six
-    ///     closed-loop runs were spent discovering that: a `.right` sweep
-    ///     walked focus out of the grid, `hasFocus` reads false while focus is
-    ///     passing through an element, and the accessibility tree order is not
-    ///     the on-screen order (Projects is index 3 in the tree and neither 2
-    ///     nor 3 presses away on screen). Driving an adaptive grid by
-    ///     coordinates is not a test that can be trusted.
+    ///  2. Testability. The dashboard now has fixed focus geometry and a
+    ///     default Chat focus; deep routes still avoid needless remote presses.
     @AppStorage("yaver.tv.startAt") private var startAt: String = ""
-    @State private var routedFromStartAt = false
+    @State private var startRoute: StartRoute?
+    @State private var didHandleStartRoute = false
 
-    /// Both "projects" and "preview:<name>" enter through Projects.
-    private var routesToProjects: Bool {
-        startAt == "projects" || startAt.hasPrefix("preview:")
+    private enum StartRoute: String, Hashable {
+        case chat, vibing, projects
+    }
+
+    /// `preview:<name>` enters through Projects, which owns the second hop.
+    private var requestedStartRoute: StartRoute? {
+        if startAt == "chat" { return .chat }
+        if startAt == "vibing" { return .vibing }
+        if startAt == "projects" || startAt.hasPrefix("preview:") { return .projects }
+        return nil
+    }
+
+    private func applyStartRouteIfReady() {
+        guard store.selectedBox != nil, !didHandleStartRoute,
+              let requestedStartRoute else { return }
+        // Mark it handled before pushing. Otherwise popping back makes
+        // Dashboard.onAppear immediately push again and traps the remote in a
+        // navigation loop.
+        didHandleStartRoute = true
+        startRoute = requestedStartRoute
     }
 
     var body: some View {
@@ -84,29 +98,44 @@ struct DashboardView: View {
                         selectedMachinePanel
                         wakePanel
 
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 24)], spacing: 24) {
-                            // Devices — the account's machines, with liveness +
-                            // wake, same list web's Devices tab shows.
-                            Button { showPicker = true } label: {
-                                Tile(icon: "laptopcomputer", title: "Devices", detail: "Machines on your account · switch or wake")
-                            }
+                        // One predictable horizontal rail: every primary
+                        // surface is visible at once and Left/Right is the only
+                        // navigation axis. Keep the five cards inside the
+                        // standard tvOS safe width. The old 328-pt labels needed ~1736
+                        // logical points on a 1280-pt 1080p TV canvas, so the
+                        // Devices card was visibly cut in half and More lived
+                        // entirely offscreen in the launch screenshot.
+                        HStack(spacing: 16) {
                             NavigationLink(destination: TasksView()) {
-                                Tile(icon: "bubble.left.and.bubble.right.fill", title: "Chat", detail: "Tasks & vibes — what's running, start a vibe")
+                                    Tile(icon: "bubble.left.and.bubble.right.fill", title: "Chat", detail: "Ask now · continue conversations", outerWidth: 216)
                             }
+                            .focused($dashboardFocus, equals: .chat)
+                            .accessibilityIdentifier("dashboard.chat")
+                            NavigationLink(destination: VibingView()) {
+                                    Tile(icon: "play.rectangle.fill", title: "Vibing", detail: "Open the last project · run · stream", outerWidth: 216)
+                            }
+                            .focused($dashboardFocus, equals: .vibing)
+                            .accessibilityIdentifier("dashboard.vibing")
                             NavigationLink(destination: ProjectsView()) {
-                                Tile(icon: "folder.fill", title: "Projects", detail: "Browse & preview on the TV")
+                                    Tile(icon: "folder.fill", title: "Projects", detail: "Browse repositories", outerWidth: 216)
                             }
-                            NavigationLink(destination: SessionView()) {
-                                Tile(icon: "wand.and.stars", title: "Vibing", detail: "Drive a live coding session")
+                            .focused($dashboardFocus, equals: .projects)
+                            .accessibilityIdentifier("dashboard.projects")
+                            Button { showPicker = true } label: {
+                                    Tile(icon: "laptopcomputer", title: "Devices", detail: "Switch or wake", outerWidth: 216)
                             }
-                            // Everything that used to be its own box lives here,
-                            // one level down: Runtime, Apple TV remote, Capture,
-                            // Android, Feedback. Capability is not deleted, it
-                            // just stops crowding the five surfaces.
-                            Button { showMore = true } label: {
-                                Tile(icon: "ellipsis.circle.fill", title: "More", detail: "Runtime · Apple TV · capture · feedback")
+                            .focused($dashboardFocus, equals: .devices)
+                            .accessibilityIdentifier("dashboard.devices")
+                            Button { showSettings = true } label: {
+                                    Tile(icon: "gearshape.fill", title: "Settings", detail: "Device · runner · project · MCP", outerWidth: 216)
                             }
+                            .focused($dashboardFocus, equals: .settings)
+                            .accessibilityIdentifier("dashboard.settings")
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .frame(height: 214)
+                        .defaultFocus($dashboardFocus, .chat)
                     }
                 }
                 .padding(56)
@@ -115,19 +144,23 @@ struct DashboardView: View {
             // Fires once, and only when a box is actually selected: routing into
             // Projects before there is a machine would show an empty screen and
             // read as a broken deep link rather than as "pick a box first".
-            .navigationDestination(isPresented: $routedFromStartAt) { ProjectsView() }
+            .navigationDestination(item: $startRoute) { route in
+                switch route {
+                case .chat: TasksView()
+                case .vibing: VibingView()
+                case .projects: ProjectsView()
+                }
+            }
             .onChange(of: store.selectedBox?.id) { _, id in
-                guard id != nil, routesToProjects, !routedFromStartAt else { return }
-                routedFromStartAt = true
+                guard id != nil else { return }
+                applyStartRouteIfReady()
             }
             .onAppear {
-                guard store.selectedBox != nil, routesToProjects, !routedFromStartAt else { return }
-                routedFromStartAt = true
+                applyStartRouteIfReady()
             }
             .sheet(isPresented: $showPicker) { MachinePickerView() }
-            .sheet(isPresented: $showMore) { MoreToolsView() }
+            .sheet(isPresented: $showSettings) { TVSettingsView() }
             .sheet(isPresented: $showUpdateAgent) { UpdateAgentView() }
-            .sheet(isPresented: $showSharedGuests) { SharedGuestsView(token: store.token) }
             .task(id: store.selectedBox?.id) {
                 await store.refreshSelectedRelaySettings()
                 guard let box = store.selectedBox else { return }
@@ -227,9 +260,6 @@ struct DashboardView: View {
                 Button { showUpdateAgent = true } label: {
                     Label("Update agent", systemImage: "arrow.down.circle")
                 }
-                Button { showSharedGuests = true } label: {
-                    Label("Shared with", systemImage: "person.2.fill")
-                }
             } label: {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 40))
@@ -253,6 +283,13 @@ struct DashboardView: View {
                 HStack(spacing: 12) {
                     Text(store.selectedBox?.name ?? "Selected machine")
                         .font(.system(size: 26, weight: .bold))
+                        .lineLimit(1)
+                    if let alias = store.selectedBox?.aliasLabel {
+                        Text(alias)
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                     statusChip
                 }
                 Text(machineDetail)
@@ -305,13 +342,18 @@ struct DashboardView: View {
 
     private var machineDetail: String {
         guard let box = store.selectedBox else { return "No machine selected" }
-        var parts = [box.host]
+        var parts: [String] = []
+        if !box.host.isEmpty { parts.append(box.host) }
         if box.wakeable { parts.append("wakeable") }
         if box.relayBaseUrl?.isEmpty == false { parts.append("relay fallback") }
+        let runnerDeviceId = store.runnerBox()?.id ?? box.id
+        if let runner = store.primaryRunnerByDevice[runnerDeviceId], !runner.isEmpty {
+            parts.append("default runner: \(runner)")
+        }
         // Runner/render split badge — two silent sources are two
         // unfalsifiable states; the dashboard names both boxes.
         if let badge = store.machineRolesBadge { parts.append(badge) }
-        return parts.joined(separator: " · ")
+        return parts.isEmpty ? "Account relay" : parts.joined(separator: " · ")
     }
 
     private var emptyBoxPrompt: some View {
@@ -321,7 +363,6 @@ struct DashboardView: View {
             Text("Choose one of the machines on your account, or type a LAN address. A machine appears here once it's running `yaver serve` signed in as you.")
                 .font(.system(size: 19)).foregroundStyle(.secondary).frame(maxWidth: 720, alignment: .leading)
             Button("Choose machine") { showPicker = true }.padding(.top, 8)
-            Button("Shared with") { showSharedGuests = true }
         }
     }
 
@@ -342,59 +383,7 @@ struct DashboardView: View {
                 showPicker = true
             }
             .padding(.top, 8)
-            Button("Shared with") { showSharedGuests = true }
         }
-    }
-}
-
-/// The secondary tools, one level below the five surfaces — the tiles that
-/// used to crowd the dashboard (Runtime, Apple TV remote, Capture, Android,
-/// Feedback) live here now. A sheet with its own NavigationStack so each row
-/// pushes its full-screen destination, D-pad friendly.
-private struct MoreToolsView: View {
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    moreRow(icon: "terminal", title: "Runtime", detail: "Claude · Codex · reload · voice") { RuntimeDashboardView() }
-                    moreRow(icon: "appletv", title: "Apple TV", detail: "Remote · now playing") { AppleTVRemoteView() }
-                    moreRow(icon: "video", title: "Capture", detail: "Capture card view") { AppleTVRemoteView(captureFirst: true) }
-                    moreRow(icon: "iphone.gen3", title: "Android", detail: "Watch the redroid screen live") { DroidStreamView() }
-                    moreRow(icon: "bubble.left.and.text.bubble.right", title: "Feedback", detail: "Reports from test devices") { FeedbackView() }
-                }
-                .padding(40)
-            }
-            .navigationTitle("More")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-
-    @Environment(\.dismiss) private var dismiss
-
-    private func moreRow<D: View>(icon: String, title: String, detail: String,
-                                  @ViewBuilder destination: @escaping () -> D) -> some View {
-        NavigationLink(destination: destination()) {
-            HStack(spacing: 18) {
-                Image(systemName: icon)
-                    .font(.system(size: 28))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.system(size: 24, weight: .semibold))
-                    Text(detail).font(.system(size: 16)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 28).padding(.vertical, 18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        }
-        .buttonStyle(.card)
     }
 }
 
@@ -402,6 +391,7 @@ private struct Tile: View {
     let icon: String
     let title: String
     let detail: String
+    let outerWidth: CGFloat
     @Environment(\.isFocused) private var isFocused
 
     var body: some View {
@@ -413,135 +403,12 @@ private struct Tile: View {
                 Text(detail).font(.system(size: 16)).foregroundStyle(.secondary)
             }
         }
-        .frame(width: 280, height: 180, alignment: .leading)
-        .padding(24)
+        .frame(width: max(130, outerWidth - 40), height: 164, alignment: .leading)
+        .padding(20)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
     }
 }
 
 // AddBoxView moved to ../AddBoxView.swift — the shared client layer — so the
-// visionOS target can present it too. It was the only caller of store.addBox()
-// in the repo, and living here made it unreachable from the headset.
-
-private struct SharedGuestsView: View {
-    let token: String
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var guests: [MachineRegistry.HostGuest] = []
-    @State private var loading = true
-    @State private var error: String?
-    @State private var revoking: String?
-    @State private var revokeTarget: MachineRegistry.HostGuest?
-
-    private var acceptedGuests: [MachineRegistry.HostGuest] {
-        guests.filter(\.isAccepted)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if loading {
-                    VStack(spacing: 16) {
-                        ProgressView().scaleEffect(1.5)
-                        Text("Loading people you shared with…").foregroundStyle(.secondary)
-                    }
-                } else if let error {
-                    errorView(error)
-                } else if acceptedGuests.isEmpty {
-                    emptyView
-                } else {
-                    guestList
-                }
-            }
-            .navigationTitle("Shared with")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .confirmationDialog("Remove access?",
-                                isPresented: Binding(get: { revokeTarget != nil },
-                                                     set: { if !$0 { revokeTarget = nil } }),
-                                titleVisibility: .visible) {
-                Button("Remove access", role: .destructive) {
-                    if let guest = revokeTarget { Task { await revoke(guest) } }
-                }
-                Button("Cancel", role: .cancel) { revokeTarget = nil }
-            } message: {
-                if let guest = revokeTarget {
-                    Text("\(guest.displayName) loses access to every machine you shared. They'd need a fresh invitation to come back.")
-                }
-            }
-        }
-        .task { await load() }
-    }
-
-    private var guestList: some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                ForEach(acceptedGuests) { guest in
-                    HStack(spacing: 20) {
-                        Image(systemName: "person.crop.circle").font(.system(size: 30)).frame(width: 44)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(guest.displayName).font(.system(size: 26, weight: .semibold))
-                            Text(guest.detail).font(.system(size: 16)).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if revoking == guest.id {
-                            ProgressView()
-                        } else {
-                            Button("Remove access", role: .destructive) { revokeTarget = guest }
-                                .buttonStyle(.bordered)
-                        }
-                    }
-                    .padding(.horizontal, 28).padding(.vertical, 20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
-                }
-            }
-            .padding(32)
-        }
-    }
-
-    private var emptyView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "person.2.slash").font(.system(size: 56)).foregroundStyle(.secondary)
-            Text("Nobody has access right now").font(.title2)
-            Text("When you share your machines, the people who accepted your invitation appear here.")
-                .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 640)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func errorView(_ msg: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 48)).foregroundStyle(.orange)
-            Text(msg).multilineTextAlignment(.center).frame(maxWidth: 640)
-            Button("Try again") { Task { await load() } }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func load() async {
-        loading = true
-        error = nil
-        do {
-            guests = try await MachineRegistry.listGuests(token: token)
-        } catch {
-            self.error = error.localizedDescription
-        }
-        loading = false
-    }
-
-    private func revoke(_ guest: MachineRegistry.HostGuest) async {
-        revokeTarget = nil
-        revoking = guest.id
-        defer { revoking = nil }
-        do {
-            try await MachineRegistry.revokeGuest(email: guest.email, userId: guest.userId, token: token)
-            await load()
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-}
+// visionOS target can present it too. Guest/sharing UI is intentionally absent
+// from every v1 client surface.

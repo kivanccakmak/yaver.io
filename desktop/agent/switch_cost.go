@@ -9,20 +9,20 @@ import (
 // CostEstimate is a per-target monthly cost estimate for the user's current
 // project footprint.
 type CostEstimate struct {
-	Target       string  `json:"target"`
-	Label        string  `json:"label"`
-	Monthly      float64 `json:"monthly"` // USD
-	FreeTierOK   bool    `json:"freeTierOk"`
-	Notes        string  `json:"notes,omitempty"`
-	Tier         string  `json:"tier"` // "free", "starter", "pro"
+	Target     string  `json:"target"`
+	Label      string  `json:"label"`
+	Monthly    float64 `json:"monthly"` // USD
+	FreeTierOK bool    `json:"freeTierOk"`
+	Notes      string  `json:"notes,omitempty"`
+	Tier       string  `json:"tier"` // "free", "starter", "pro"
 }
 
 // ProjectUsage captures the measurements we need to estimate cost.
 type ProjectUsage struct {
-	DBSizeMB     float64 `json:"dbSizeMb"`
-	StorageMB    float64 `json:"storageMb"`
-	RowsApprox   int64   `json:"rowsApprox"`
-	HasCompute   bool    `json:"hasCompute"` // project needs app hosting, not just DB
+	DBSizeMB   float64 `json:"dbSizeMb"`
+	StorageMB  float64 `json:"storageMb"`
+	RowsApprox int64   `json:"rowsApprox"`
+	HasCompute bool    `json:"hasCompute"` // project needs app hosting, not just DB
 }
 
 // estimateUsage looks at the project directory to guess DB + storage size.
@@ -123,4 +123,3 @@ func mcpSwitchCost(dir string) interface{} {
 func (s *HTTPServer) handleSwitchCost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mcpSwitchCost(s.dirParam(r)))
 }
-

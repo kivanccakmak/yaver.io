@@ -61,13 +61,12 @@ export function MeshNodeRow({
           {peer.meshIPv4 || "—"}
           {peer.connectionType ? `  · ${peer.connectionType === "relay" ? "Relayed" : "Direct"}` : ""}
         </Text>
-        {(exit || gateway || peer.accessScope === "shared") ? (
+        {(exit || gateway) ? (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 2 }}>
             {exit ? <RoleBadge kind="exit" label="Exit node" icon={<ExitNodeIcon size={12} color="#fcd34d" />} /> : null}
             {gateway ? (
               <RoleBadge kind="gateway" label={`Gateway · ${routeCount}`} icon={<GatewayIcon size={12} color="#22d3ee" />} />
             ) : null}
-            {peer.accessScope === "shared" ? <RoleBadge kind="shared" label="shared" /> : null}
           </View>
         ) : null}
       </View>

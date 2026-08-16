@@ -18,26 +18,24 @@ func powerSpec(t *testing.T) opsVerbSpec {
 }
 
 // The relay is multi-tenant and the repo is public. Rebooting someone's machine
-// is the single most destructive verb we expose; it must never be guest-callable.
-func TestInfraPowerIsNeverGuestCallable(t *testing.T) {
+// is the single most destructive verb we expose; it must remain owner-only.
+func TestInfraPowerIsOwnerOnly(t *testing.T) {
 	spec := powerSpec(t)
-	if spec.AllowGuest {
-		t.Fatal("infra_power must never be reachable by a guest — a guest could power off the owner's box")
+	if spec.AllowCompanion {
+		t.Fatal("infra_power must never be reachable by a companion credential")
 	}
-	// Capability scopes bypass AllowGuest via a verb-name prefix. Make sure this
+	// Capability scopes bypass AllowCompanion via a verb-name prefix. Make sure this
 	// verb cannot be smuggled in by one of them.
 	for scope, prefix := range capabilityScopeVerbPrefix {
 		if strings.HasPrefix("infra_power", prefix) {
-			t.Errorf("infra_power matches capability scope %q prefix %q — it would become guest-reachable", scope, prefix)
+			t.Errorf("infra_power matches capability scope %q prefix %q", scope, prefix)
 		}
-		if guestVerbAllowed(scope, "infra_power", spec) {
-			t.Errorf("guestVerbAllowed(%q, infra_power) = true, want false", scope)
+		if scopedVerbAllowed("capability", scope, "infra_power", spec) {
+			t.Errorf("capability scope %q reached infra_power", scope)
 		}
 	}
-	for _, scope := range []string{"full", "feedback-only", "deploy", "support", "sdk-project", ""} {
-		if guestVerbAllowed(scope, "infra_power", spec) {
-			t.Errorf("guest scope %q must not be allowed to call infra_power", scope)
-		}
+	if scopedVerbAllowed("companion", "watch", "infra_power", spec) {
+		t.Error("companion scope reached infra_power")
 	}
 }
 

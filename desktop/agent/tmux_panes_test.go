@@ -15,6 +15,21 @@ import (
 	"time"
 )
 
+func TestIsTmuxNoServerRecognizesMissingMacOSSocket(t *testing.T) {
+	for _, message := range []string{
+		"no server running on /tmp/tmux-501/default",
+		"no sessions",
+		"error connecting to /private/tmp/ytmux-123/tmux-501/default (No such file or directory)",
+	} {
+		if !isTmuxNoServer(message) {
+			t.Errorf("missing-server output was treated as an operational error: %q", message)
+		}
+	}
+	if isTmuxNoServer("error connecting to /tmp/tmux-501/default (Permission denied)") {
+		t.Fatal("permission denial must stay visible; it is not an empty tmux inventory")
+	}
+}
+
 // splitTestSession creates a session with n panes in one window and returns the
 // pane ids in creation order plus a cleanup func.
 func splitTestSession(t *testing.T, name string, n int) ([]string, func()) {

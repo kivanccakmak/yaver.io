@@ -298,10 +298,6 @@ async function main() {
           workflow: argv.workflow ? String(argv.workflow) : undefined,
           runId: argv["run-id"] ? String(argv["run-id"]) : undefined,
         },
-        sharing: {
-          hostVisible: argv["host-visible"] !== false,
-          guestVisible: !!argv["guest-visible"],
-        },
       };
       const outPath = argv.out ? path.resolve(String(argv.out)) : "";
       if (outPath) {
@@ -323,10 +319,6 @@ async function main() {
         feedbackPlatform: (argv.platform ? String(argv.platform) : "react-native") as any,
         ciTargets: rest.slice(1).length ? rest.slice(1).map(String) : undefined,
       }));
-      break;
-    }
-    case "guests": {
-      out(await mobile.guests.list());
       break;
     }
     case "raw-get": {
@@ -461,7 +453,6 @@ Usage:
   yaver-mobile-headless todo-cloud-bootstrap --name="Todo App" --base-url=<host> [--target-token=...]
   yaver-mobile-headless preview-manifest-create --name="Todo Preview" --bundle-url=<url> [--out=preview.json]
   yaver-mobile-headless repo-bootstrap-remote --repo-url=<url> [--platform=react-native] [hermes feedback]
-  yaver-mobile-headless guests
   yaver-mobile-headless raw-get /info
   yaver-mobile-headless raw-post /some/path --body='{"k":"v"}'
   yaver-mobile-headless mcp                         # stdio MCP server

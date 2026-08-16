@@ -9,9 +9,9 @@ import "testing"
 
 func TestMatchSoftQuestion(t *testing.T) {
 	cases := []struct {
-		name     string
-		input    string
-		wantHit  bool
+		name    string
+		input   string
+		wantHit bool
 	}{
 		// True positives: real prose questions Claude / Codex / OpenCode
 		// have been observed emitting at the end of a turn.

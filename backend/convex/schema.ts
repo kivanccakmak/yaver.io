@@ -1616,7 +1616,7 @@ export default defineSchema({
   // Cloud dev machines (provisioned on Hetzner, subscription required)
   cloudMachines: defineTable({
     userId: v.id("users"),
-    teamId: v.optional(v.string()),   // if team-owned, all team members can access
+    teamId: v.optional(v.string()),   // legacy team-owned-machine tombstone; never grants access
     subscriptionId: v.optional(v.id("subscriptions")),
     machineType: v.string(),          // "cpu" | "gpu"
     // The CONCRETE provider server type this box was actually created on
@@ -1807,7 +1807,7 @@ export default defineSchema({
     // "Unauthorized — Authorize runners" so the user triggers the
     // remote-OAuth push from web/mobile. Never an API key.
     runnersAuthorized: v.optional(v.boolean()),
-    multiUser: v.optional(v.boolean()), // true for shared team machines
+    multiUser: v.optional(v.boolean()), // legacy shared-machine tombstone; new rows omit it
     // Underlying IaaS this resource lives on. The whole stack above this
     // record stays provider-agnostic ("cloud resource"); only Yaver's
     // facade layer (agent ops_cloud.go) knows the concrete API to call.
@@ -1948,7 +1948,10 @@ export default defineSchema({
     .index("by_domain", ["domain"])
     .index("by_target", ["targetType", "targetId"]),
 
-  // Guest access — let other users connect to your agent (peer-to-peer sharing)
+  // LEGACY REMOVED ACCOUNT-SHARING TOMBSTONES.
+  // The tables through guestUsage are retained only so existing deployments can
+  // migrate or delete historical rows. No live route, query, mutation, agent,
+  // MCP tool, web view, or mobile view creates, accepts, or consumes them.
   guestInvitations: defineTable({
     hostUserId: v.id("users"),       // who is sharing their machine
     guestEmail: v.string(),          // invited user's email (hint — code also works). Empty string when invited by userId.
@@ -2070,7 +2073,8 @@ export default defineSchema({
     .index("by_guestUserId", ["guestUserId"])
     .index("by_host_guest", ["hostUserId", "guestUserId"]),
 
-  // Guest → owner conversion attribution. This is the UI-surface synergy
+  // Removed conversion-attribution rows retained for migration only.
+  // This was the UI-surface synergy
   // spine for the "developer invited a normie; normie later buys their
   // own runtime/capabilities" funnel.
   //
@@ -2109,7 +2113,7 @@ export default defineSchema({
     .index("by_host_guest", ["hostUserId", "guestUserId"])
     .index("by_state", ["conversionState", "updatedAt"]),
 
-  // Explicit infra grants — hosts can share selected devices/machines with
+  // Removed infra-grant rows retained for migration only. Hosts used to share selected devices/machines with
   // another user without giving them blanket access to the whole account.
   infraAccessGrants: defineTable({
     hostUserId: v.id("users"),
@@ -2188,7 +2192,7 @@ export default defineSchema({
     .index("by_hostUserId", ["hostUserId"])
     .index("by_machine_guest", ["machineId", "guestUserId"]),
 
-  // Support links (docs/mesh-support-link.md). A supporter mints a shareable
+  // Removed support-link rows retained for migration only. A supporter used to mint a shareable
   // link (yaver.io/j/<code>); when a FRIEND redeems it on their machine, a
   // REVERSE grant is created (host=friend, guest=supporter) so the friend's box
   // joins the supporter's mesh and the supporter can ssh/exec/code into it. The
@@ -2289,7 +2293,7 @@ export default defineSchema({
     .index("by_host_status", ["hostUserId", "status"])
     .index("by_guest_status", ["guestUserId", "status"]),
 
-  // Guest usage tracking — daily task-seconds consumed per guest
+  // Removed usage rows retained for migration only.
   guestUsage: defineTable({
     hostUserId: v.id("users"),
     guestUserId: v.id("users"),
@@ -2300,13 +2304,10 @@ export default defineSchema({
     .index("by_hostUserId_date", ["hostUserId", "date"]),
 
   // ── Social graph ────────────────────────────────────────────────
-  // Reusable address book on top of the one-shot invite edges
-  // (guestInvitations / supportInvites / hostShareInvites). A mutual
-  // connection is modeled as two rows — one per perspective — written
-  // together on accept, the same directionality pattern used by
-  // guestAccess / infraAccessGrants. Carries NO sensitive data: ids,
-  // a display nickname, a source label, timestamps. Privacy-contract
-  // clean by construction.
+  // Reusable contact graph. This does not authorize machine, project, task, or
+  // relay access; those paths are owner-only. A mutual connection is modeled
+  // as two rows, one per perspective. It carries no sensitive content: ids,
+  // a display nickname, a source label, and timestamps.
   connections: defineTable({
     userId: v.id("users"),         // owner of this row's perspective
     peerUserId: v.id("users"),     // the other person
@@ -2332,16 +2333,8 @@ export default defineSchema({
     .index("by_user_peer", ["userId", "peerUserId"])
     .index("by_user_status", ["userId", "status"]),
 
-  // ── Shared projects ─────────────────────────────────────────────
-  // A first-class collaboration object that binds {repo, host, roster,
-  // roles} into one thing you can "ask someone to join". A projectShare
-  // is a thin wrapper: accepting a membership MATERIALIZES an
-  // infraAccessGrant + allowedProjects + role-preset policy via the same
-  // path guests.accept uses. No new enforcement engine.
-  //
-  // Privacy: repoUrl is stored normalized to host/owner/repo (no embedded
-  // creds), slug is a human label NOT a filesystem path. No tokens, no
-  // file contents, no absolute paths.
+  // Removed project-collaboration schema retained only so existing rows can be
+  // migrated or deleted. No route or live mutation creates or consumes it.
   projectShares: defineTable({
     ownerUserId: v.id("users"),
     slug: v.string(),                  // human label, e.g. "acme-app"
@@ -2392,15 +2385,15 @@ export default defineSchema({
     .index("by_share_user", ["shareId", "userId"])
     .index("by_owner", ["ownerUserId"]),
 
-  // Project artifacts are the shareable outputs a normie wants friends to try:
-  // APKs, Hermes bundles, web previews, screenshots, logs, etc. The record is
+  // Owner project artifacts: APKs, Hermes bundles, web previews, screenshots,
+  // logs, etc. The record is
   // metadata + a signed/external URL pointer only. Privacy contract: no local
   // filesystem paths, no build stdout, no secrets, no provider credentials.
   projectArtifacts: defineTable({
     userId: v.id("users"),             // uploader / creator
     ownerUserId: v.id("users"),        // project owner
-    shareId: v.id("projectShares"),
-    membershipId: v.optional(v.id("projectMemberships")),
+    shareId: v.optional(v.id("projectShares")), // removed collaboration tombstone
+    membershipId: v.optional(v.id("projectMemberships")), // removed collaboration tombstone
     taskId: v.optional(v.string()),
     localTaskId: v.optional(v.string()),
     projectSlug: v.string(),
@@ -2425,6 +2418,8 @@ export default defineSchema({
   })
     .index("by_user_created", ["userId", "createdAt"])
     .index("by_owner_created", ["ownerUserId", "createdAt"])
+    .index("by_owner_project_created", ["ownerUserId", "projectSlug", "createdAt"])
+    .index("by_owner_project_kind_created", ["ownerUserId", "projectSlug", "kind", "createdAt"])
     .index("by_share_created", ["shareId", "createdAt"])
     .index("by_share_kind_created", ["shareId", "kind", "createdAt"])
     .index("by_shareToken", ["shareToken"]),
@@ -2432,7 +2427,7 @@ export default defineSchema({
   projectArtifactUploadIntents: defineTable({
     userId: v.id("users"),
     ownerUserId: v.id("users"),
-    shareId: v.id("projectShares"),
+    shareId: v.optional(v.id("projectShares")), // removed collaboration tombstone
     projectSlug: v.string(),
     sizeBytes: v.number(),
     status: v.union(v.literal("pending"), v.literal("consumed")),
@@ -2442,20 +2437,20 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_owner_status", ["ownerUserId", "status"])
+    .index("by_owner_project_status", ["ownerUserId", "projectSlug", "status"])
     .index("by_share_status", ["shareId", "status"])
     .index("by_user_status", ["userId", "status"]),
 
-  // Feedback SDK work queue. This is the bridge from guest/end-user feedback to
-  // owner-reviewed task, issue, or Yaver Git branch work. The row may contain
-  // the user's short feedback text because that is the submitted issue itself,
+  // Feedback SDK work queue for owner SDK tokens. The row may contain the
+  // submitted short feedback text,
   // but it must not contain local filesystem paths, runner output, OAuth,
   // provider credentials, screenshots/base64, or app secrets. Attachments are
   // artifact ids or HTTPS URLs only.
   feedbackWorkItems: defineTable({
-    userId: v.id("users"),             // requester; guest user for delegated SDK tokens, owner otherwise
+    userId: v.id("users"),             // owner that minted the SDK token
     ownerUserId: v.id("users"),
-    shareId: v.id("projectShares"),
-    membershipId: v.optional(v.id("projectMemberships")),
+    shareId: v.optional(v.id("projectShares")), // removed collaboration tombstone
+    membershipId: v.optional(v.id("projectMemberships")), // removed collaboration tombstone
     projectSlug: v.string(),
     sourceSurface: v.optional(v.string()),
     sourceTokenLabel: v.optional(v.string()),
@@ -2495,23 +2490,27 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   }).index("by_user_created", ["userId", "createdAt"])
     .index("by_owner_created", ["ownerUserId", "createdAt"])
+    .index("by_owner_project_created", ["ownerUserId", "projectSlug", "createdAt"])
     .index("by_share_created", ["shareId", "createdAt"])
     .index("by_owner_status", ["ownerUserId", "status"])
+    .index("by_owner_project_status", ["ownerUserId", "projectSlug", "status"])
     .index("by_share_status", ["shareId", "status"])
     .index("by_status_expires", ["status", "expiresAt"]),
 
-  // SDK tokens — long-lived tokens for Feedback SDK (independent from CLI session tokens)
+  // SDK tokens — owner-minted service credentials (independent from CLI
+  // session tokens). delegatedGuest* are legacy tombstones only; validation
+  // rejects every historical row carrying them.
   sdkTokens: defineTable({
     tokenHash: v.string(),        // SHA-256 of the raw token
     userId: v.id("users"),        // owner — must match CLI user
     label: v.optional(v.string()), // human-readable label (e.g. "AcmeStore dev build")
     scopes: v.optional(v.array(v.string())), // allowed scopes: "feedback","blackbox","voice","builds","spatial"
     allowedCIDRs: v.optional(v.array(v.string())), // IP binding: "192.168.1.0/24"
-    delegatedGuestUserId: v.optional(v.id("users")), // guest driving the host through Feedback SDK
-    delegatedGuestScope: v.optional(v.string()), // currently "sdk-project"
+    delegatedGuestUserId: v.optional(v.id("users")), // legacy delegated-account tombstone; always rejected
+    delegatedGuestScope: v.optional(v.string()), // legacy tombstone; never honored
     sourceSurface: v.optional(v.string()), // e.g. "feedback-sdk"
     targetDeviceId: v.optional(v.string()), // host device this token may hit
-    allowedProjects: v.optional(v.array(v.string())), // repo/project allowlist for delegated guest use
+    allowedProjects: v.optional(v.array(v.string())), // owner service-token repo/project allowlist
     replacedBy: v.optional(v.string()),  // tokenHash of replacement (rotation)
     replacedAt: v.optional(v.number()),  // when replaced (5min grace period)
     expiresAt: v.number(),        // 1 year from creation (or custom)
@@ -2745,16 +2744,16 @@ export default defineSchema({
   // reference, or runner OAuth. It stores only ids, branch names scoped under
   // yaver/, coarse status/reason labels, and expiry/attempt counters.
   relaySourceIntents: defineTable({
-    userId: v.id("users"),             // requester / collaborator
+    userId: v.id("users"),             // owner
     ownerUserId: v.id("users"),        // project owner
-    shareId: v.id("projectShares"),
-    membershipId: v.optional(v.id("projectMemberships")),
+    shareId: v.optional(v.id("projectShares")), // removed collaboration tombstone
+    membershipId: v.optional(v.id("projectMemberships")), // removed collaboration tombstone
     placementId: v.optional(v.id("taskPlacements")),
     localTaskId: v.string(),
     taskId: v.optional(v.string()),
     sourceSurface: v.optional(v.string()),
     projectSlug: v.string(),
-    repoUrl: v.string(),               // normalized projectShares.repoUrl
+    repoUrl: v.string(),               // normalized owner repo URL
     baseBranch: v.string(),
     branch: v.string(),                // must be under yaver/
     providerKind: v.optional(v.string()),          // github | gitlab | yaver-git | ...

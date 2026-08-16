@@ -209,19 +209,16 @@ mechanics.
 | **Error aggregation** | `sentry_issues`, `firebase_crashlytics`, `error_list`, `error_resolve` |
 | **Linear / GitHub** | `linear_issues`, `github_issues`, `github_prs`, `github_ci_status`, `github_releases`, `github_repo_info`, `github_stars`, `github_trending`, `create_gist`, `gitlab_issues`, `gitlab_mrs`, `gitlab_pipelines`, `gitlab_ci` |
 
-### 7. Collaboration — guests, teams, support, session transfer
+### 7. Session transfer and communications
 
-Yaver's strength: a human can bring another human (or another AI
-agent) into the SAME machine with **scoped** access. Every collab
-primitive is MCP-exposed.
+Yaver machines are owner-account only. Cross-account guest, shared-machine,
+team-member machine access, remote-support, and anonymous chat MCP tools were
+removed. Stale callers are rejected explicitly.
 
 | Capability | Tools |
 |---|---|
-| **Guest access (share your machine)** | `guest_invite`, `guest_list`, `guest_revoke`, `guest_config`, `guest_usage` |
-| **Teams (shared machine mode)** | `cloud_provision --multi-user --team=<id>`, team membership management via Convex |
-| **Remote support (TeamViewer-style)** | `support_start`, `support_status`, `support_stop` |
 | **AI session transfer** (Claude Code ⇄ Codex ⇄ Opencode) | `session_transfer`, `session_export`, `session_import`, `session_list` |
-| **Chat / comms** | `chat_conversations`, `chat_history`, `chat_reply`, `email_send`, `email_get`, `email_list_inbox`, `email_search`, `email_sync`, `mail_inbox`, `mail_draft`, `mail_dev_*` (7 tools) |
+| **Email / comms** | `email_send`, `email_get`, `email_list_inbox`, `email_search`, `email_sync`, `mail_inbox`, `mail_draft`, `mail_dev_*` (7 tools) |
 
 ### 8. Edge workers & the "mobile is a dev machine too" story
 
@@ -346,7 +343,7 @@ Agent sees: {"ok":true, "bundleBytes":1234567, "elapsedMs":3120}
   -> mcp__yaver__cloud_deploy          (pushes the repo + boots yaver serve)
   -> mcp__yaver__cloud_status          (polls)
 [New remote dev machine]
-  -> running yaver serve --multi-user --team=<id>
+  -> running owner-only yaver serve
   -> shows up in the user's mobile device list immediately
   -> agents (Claude Code, Codex, Aider) pre-installed
 [Agent can now:]
@@ -409,10 +406,8 @@ surface.
 These are non-negotiable. If an MCP tool violates one, we fix the tool.
 
 1. **One tool, one verb, one payload shape.** A tool either does one
-   thing or it's split. `guest_config` without args lists configs;
-   with `email` returns one; with `email` + `daily_limit` writes. That
-   overload is tolerable. But never pack two unrelated operations into
-   one tool — agents can't reason about it.
+   thing or it is split. Never pack unrelated operations into one tool —
+   agents cannot reason about it reliably.
 
 2. **Every long-running tool returns a stream handle.** `install`,
    `cloud_deploy`, `mobile_project_build`
@@ -631,7 +626,7 @@ ops(<machine>, <verb>, <payload>) -> stream<result>
 ```
 
 `<machine>` is either:
-- a Yaver `deviceId` (own, guest-accessed, or team-shared),
+- a Yaver `deviceId` owned by the authenticated account,
 - a device alias (`"primary"`, `"gpu"`, `"mac-mini"`, etc.),
 - the sentinel `"local"` for the machine the agent is running on,
 - a list (`"all"`, `"all-owned"`, `"team:<teamId>"`) for fan-out.
@@ -783,9 +778,9 @@ Every verb. Agents subscribe or don't, but the interface is the same.
    (same logic as `raceDirectCandidates` on the mobile side), and
    forwards the call to the peer agent's `/ops` endpoint. The peer
    runs the verb locally and streams frames back.
-4. **Auth propagation.** Caller's session token rides along;
-   destination enforces owner/guest/support scope against the
-   forwarded request. Reuses existing `auth()` middleware — no new
+4. **Auth propagation.** The caller's session token rides along;
+   the destination requires the same owner identity and applies any signed
+   companion scope to the forwarded request. Reuses existing `auth()` middleware — no new
    trust boundary.
 5. **Schema generation.** Each verb handler registers its payload
    schema once; `tools/list` auto-derives the `ops` tool's

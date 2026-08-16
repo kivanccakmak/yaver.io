@@ -86,15 +86,6 @@ func TestVaultHTTPCRUD(t *testing.T) {
 		t.Errorf("wrong token on /vault/list: expected 401/403, got %d", status)
 	}
 
-	// 8. An active support bearer MUST still be blocked.
-	resetSupport(t)
-	sess := StartSupportSession(SupportStartOptions{Label: "test"})
-	defer StopSupportSession()
-	status, _ = doRequest(t, "GET", baseURL+"/vault/list", sess.Token, "")
-	if status == 200 {
-		t.Error("support bearer should NEVER open /vault/list")
-	}
-
 	// 9. Delete → then 404 on next get.
 	status, _ = doRequest(t, "DELETE", baseURL+"/vault/delete?name=OPENAI_API_KEY", "owner-tok", "")
 	if status != 200 {
@@ -105,4 +96,3 @@ func TestVaultHTTPCRUD(t *testing.T) {
 		t.Errorf("after delete: expected 404, got %d", status)
 	}
 }
-

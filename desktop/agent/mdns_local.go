@@ -59,26 +59,26 @@ const (
 // LocalNameState records the name we set so it can be reverted, and the
 // previous values so `restore` puts the box back exactly as it was.
 type LocalNameState struct {
-	Name       string `json:"name"`                 // current LocalHostName set by yaver
-	PrevName   string `json:"prev_name,omitempty"`  // LocalHostName before yaver touched it
-	PrevComputer string `json:"prev_computer,omitempty"` // ComputerName before yaver touched it
-	SetAt      time.Time `json:"set_at"`
-	ManagedBy  string `json:"managed_by"`
+	Name         string    `json:"name"`                    // current LocalHostName set by yaver
+	PrevName     string    `json:"prev_name,omitempty"`     // LocalHostName before yaver touched it
+	PrevComputer string    `json:"prev_computer,omitempty"` // ComputerName before yaver touched it
+	SetAt        time.Time `json:"set_at"`
+	ManagedBy    string    `json:"managed_by"`
 }
 
 // LocalNameStatus is the read-model for `dns_localname_status` — what the
 // name IS, and the only fact that matters: can the LAN resolve it.
 type LocalNameStatus struct {
-	LocalHostName string   `json:"localHostName"`
-	ComputerName  string   `json:"computerName"`
-	ExpectedName  string   `json:"expectedName,omitempty"`  // the <name>.local we want
-	Resolvable    bool     `json:"resolvable"`              // <name>.local answered on a LAN interface
-	LANAddresses  []string `json:"lanAddresses,omitempty"`  // what <name>.local resolved to
-	AdvertisedLAN bool     `json:"advertisedLan"`           // at least one non-loopback A record
-	ManagedByYaver bool   `json:"managedByYaver"`           // state file exists for this name
-	Platform      string   `json:"platform"`
-	LinuxAvahi    bool     `json:"linuxAvahi,omitempty"`    // linux: avahi-daemon active?
-	Note          string   `json:"note,omitempty"`
+	LocalHostName  string   `json:"localHostName"`
+	ComputerName   string   `json:"computerName"`
+	ExpectedName   string   `json:"expectedName,omitempty"` // the <name>.local we want
+	Resolvable     bool     `json:"resolvable"`             // <name>.local answered on a LAN interface
+	LANAddresses   []string `json:"lanAddresses,omitempty"` // what <name>.local resolved to
+	AdvertisedLAN  bool     `json:"advertisedLan"`          // at least one non-loopback A record
+	ManagedByYaver bool     `json:"managedByYaver"`         // state file exists for this name
+	Platform       string   `json:"platform"`
+	LinuxAvahi     bool     `json:"linuxAvahi,omitempty"` // linux: avahi-daemon active?
+	Note           string   `json:"note,omitempty"`
 }
 
 // LocalNameManager reads/sets the machine's mDNS .local name and persists a
@@ -190,11 +190,11 @@ func (m *LocalNameManager) Set(ctx context.Context, name string) (string, error)
 
 	// Persist state for revert.
 	state := LocalNameState{
-		Name:        name,
-		PrevName:    prevHost,
+		Name:         name,
+		PrevName:     prevHost,
 		PrevComputer: prevComputer,
-		SetAt:       time.Now().UTC(),
-		ManagedBy:   localNameMarker,
+		SetAt:        time.Now().UTC(),
+		ManagedBy:    localNameMarker,
 	}
 	if err := m.saveState(&state); err != nil {
 		return "", fmt.Errorf("set ok but could not persist revert state: %w", err)

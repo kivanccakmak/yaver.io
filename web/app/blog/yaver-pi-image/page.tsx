@@ -204,8 +204,8 @@ journalctl -u yaver-pi-firstboot.service -f`}
             <h2 className="mb-3 text-xl font-semibold text-surface-100">Always-on mode</h2>
             <p>
               The image ships with <code>yaver-agent.service</code> enabled. It runs
-              <code> yaver serve --multi-user --port 18080 --work-dir /var/lib/yaver/workspaces</code>
-              as root, restarts on failure, and is wired into <code>multi-user.target</code> so
+              <code> yaver serve --port 18080 --work-dir /var/lib/yaver/workspaces</code>
+              as root, restarts on failure, and is wired into systemd&apos;s <code>multi-user.target</code> so
               the Pi is immediately reachable after a power cycle.
             </p>
             <p className="mt-4">

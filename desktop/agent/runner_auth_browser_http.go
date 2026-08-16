@@ -1028,9 +1028,6 @@ func (s *HTTPServer) handleRunnerBrowserAuthStart(w http.ResponseWriter, r *http
 		jsonError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if rejectScopedSubscriptionRunnerAuth(w, r, req.Runner) {
-		return
-	}
 	tr := runnerAuthTenantRuntimeFromRequest(r)
 
 	// DON'T REAP A HEALTHY SESSION. Starting a browser-auth flow is destructive
@@ -1087,14 +1084,7 @@ func (s *HTTPServer) handleRunnerBrowserAuthStart(w http.ResponseWriter, r *http
 }
 
 func runnerAuthTenantRuntimeFromRequest(r *http.Request) tenantRuntime {
-	if r == nil {
-		return tenantRuntime{}
-	}
-	guestID := strings.TrimSpace(r.Header.Get("X-Yaver-GuestUserID"))
-	if guestID == "" {
-		return tenantRuntime{}
-	}
-	return tenantRuntimeForGuest(guestID)
+	return tenantRuntime{}
 }
 
 func (s *HTTPServer) handleRunnerBrowserAuthStatus(w http.ResponseWriter, r *http.Request) {
@@ -1157,9 +1147,6 @@ func (s *HTTPServer) handleRunnerBrowserAuthSubmitCode(w http.ResponseWriter, r 
 	sess, ok := lookupRunnerBrowserAuthSession(id)
 	if !ok {
 		jsonError(w, http.StatusNotFound, "auth session not found")
-		return
-	}
-	if rejectScopedSubscriptionRunnerAuth(w, r, sess.Runner) {
 		return
 	}
 	if normalizeRunnerAuthName(sess.Runner) != "claude" {
@@ -1252,9 +1239,6 @@ func (s *HTTPServer) handleRunnerBrowserAuthSubmitCallback(w http.ResponseWriter
 	sess, ok := lookupRunnerBrowserAuthSession(id)
 	if !ok {
 		jsonError(w, http.StatusNotFound, "auth session not found")
-		return
-	}
-	if rejectScopedSubscriptionRunnerAuth(w, r, sess.Runner) {
 		return
 	}
 	sess.mu.Lock()
@@ -1403,9 +1387,6 @@ func (s *HTTPServer) handleRunnerAuthCredentialsImport(w http.ResponseWriter, r 
 	runner := normalizeRunnerAuthName(body.Runner)
 	if runner != "claude" && runner != "codex" && runner != "opencode" {
 		jsonError(w, http.StatusBadRequest, "unsupported runner — claude, codex, or opencode")
-		return
-	}
-	if rejectScopedSubscriptionRunnerAuth(w, r, runner) {
 		return
 	}
 	creds := strings.TrimSpace(body.CredentialsJSON)

@@ -3,10 +3,9 @@ import { v } from "convex/values";
 import { validateSessionInternal } from "./auth";
 import { Id } from "./_generated/dataModel";
 
-// Social graph (the address book). A mutual connection is two rows, one
-// per perspective. Every collaboration surface (device share, project
-// invite, support link) can pick a friend from here instead of re-typing
-// an email or pasting a code. Carries no sensitive data.
+// Social graph/address book only. A mutual connection is two rows, one per
+// perspective. These rows do not authorize device, project, task, relay, or
+// agent access and carry no sensitive content.
 
 interface PeerProfile {
   userId: string;       // public userId string (not the _id)
@@ -342,8 +341,7 @@ export const search = query({
 });
 
 /**
- * Suggested connections — people you already collaborate with via existing
- * guest/support/team edges but haven't added to your address book yet.
+ * Suggested connections — teammates not already in the address book.
  * Zero typing: turns latent relationships into one-tap connect.
  */
 export const suggested = query({
@@ -363,20 +361,6 @@ export const suggested = query({
     known.add(String(me));
 
     const candidates = new Map<string, string>(); // userDocId -> source label
-
-    // guestAccess: people I host, and hosts I'm a guest of.
-    const asHost = await ctx.db
-      .query("guestAccess")
-      .withIndex("by_hostUserId", (q) => q.eq("hostUserId", me))
-      .filter((q) => q.eq(q.field("revokedAt"), undefined))
-      .collect();
-    for (const g of asHost) candidates.set(String(g.guestUserId), "guest");
-    const asGuest = await ctx.db
-      .query("guestAccess")
-      .withIndex("by_guestUserId", (q) => q.eq("guestUserId", me))
-      .filter((q) => q.eq(q.field("revokedAt"), undefined))
-      .collect();
-    for (const g of asGuest) candidates.set(String(g.hostUserId), "host");
 
     // teamMembers: teammates on teams I belong to.
     const myMemberships = await ctx.db

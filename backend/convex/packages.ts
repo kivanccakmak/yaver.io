@@ -203,7 +203,7 @@ export const seed = internalMutation({
       {
         name: "docker",
         kind: "devtool",
-        description: "Containerise tasks — required for guest isolation + sandbox mode.",
+        description: "Containerise owner tasks for sandboxed execution.",
         tags: ["runtime", "container"],
         sortOrder: 50,
         installs: [

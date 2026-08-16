@@ -22,13 +22,13 @@ import (
 
 // TransferBundle is the portable session format transferred between machines.
 type TransferBundle struct {
-	Version      int               `json:"version"`
-	ExportedAt   string            `json:"exportedAt"`
-	SourceDevice string            `json:"sourceDevice"`
-	SourceOS     string            `json:"sourceOS"`
-	AgentType    string            `json:"agentType"`    // "claude", "codex", "aider", "ollama", "goose", "amp", "opencode", "custom"
-	AgentVersion string            `json:"agentVersion,omitempty"`
-	SessionID    string            `json:"sessionId,omitempty"`
+	Version      int    `json:"version"`
+	ExportedAt   string `json:"exportedAt"`
+	SourceDevice string `json:"sourceDevice"`
+	SourceOS     string `json:"sourceOS"`
+	AgentType    string `json:"agentType"` // "claude", "codex", "aider", "ollama", "goose", "amp", "opencode", "custom"
+	AgentVersion string `json:"agentVersion,omitempty"`
+	SessionID    string `json:"sessionId,omitempty"`
 
 	// Task state
 	Task TransferTask `json:"task"`
@@ -41,15 +41,15 @@ type TransferBundle struct {
 }
 
 type TransferTask struct {
-	Title       string            `json:"title"`
-	Description string            `json:"description,omitempty"`
+	Title       string             `json:"title"`
+	Description string             `json:"description,omitempty"`
 	Turns       []ConversationTurn `json:"turns,omitempty"`
-	ResultText  string            `json:"resultText,omitempty"`
-	CostUSD     float64           `json:"costUsd,omitempty"`
-	RunnerID    string            `json:"runnerId"`
-	Model       string            `json:"model,omitempty"`
-	Goal        string            `json:"goal,omitempty"` // opencode goal-mode objective, carried across transfer
-	WorkDir     string            `json:"workDir"`
+	ResultText  string             `json:"resultText,omitempty"`
+	CostUSD     float64            `json:"costUsd,omitempty"`
+	RunnerID    string             `json:"runnerId"`
+	Model       string             `json:"model,omitempty"`
+	Goal        string             `json:"goal,omitempty"` // opencode goal-mode objective, carried across transfer
+	WorkDir     string             `json:"workDir"`
 }
 
 type TransferWorkspace struct {
@@ -67,34 +67,34 @@ type ExportOptions struct {
 }
 
 type ImportOptions struct {
-	WorkDir       string `json:"workDir,omitempty"`       // override work directory
-	ResumeOnImport bool  `json:"resumeOnImport"`
-	GitClone      bool   `json:"gitClone"`                // clone from git remote if available
+	WorkDir        string `json:"workDir,omitempty"` // override work directory
+	ResumeOnImport bool   `json:"resumeOnImport"`
+	GitClone       bool   `json:"gitClone"` // clone from git remote if available
 
 	// HandoffEngine, when non-empty, makes ImportSession's caller hand the
 	// imported task to a fresh autodev loop. Values: "claude" (default,
 	// claude-code end-to-end), "hybrid" (planner+local implementer),
 	// "runner" (single arbitrary runner via HandoffRunner).
-	HandoffEngine  string `json:"handoffEngine,omitempty"`
-	HandoffRunner  string `json:"handoffRunner,omitempty"`  // when HandoffEngine="runner"
-	HandoffMaxKicks int   `json:"handoffMaxKicks,omitempty"`
-	HandoffDeadlineSec int `json:"handoffDeadlineSec,omitempty"`
+	HandoffEngine      string `json:"handoffEngine,omitempty"`
+	HandoffRunner      string `json:"handoffRunner,omitempty"` // when HandoffEngine="runner"
+	HandoffMaxKicks    int    `json:"handoffMaxKicks,omitempty"`
+	HandoffDeadlineSec int    `json:"handoffDeadlineSec,omitempty"`
 }
 
 // TransferableSession describes a session that can be exported.
 type TransferableSession struct {
-	TaskID        string `json:"taskId"`
-	AgentType     string `json:"agentType"`
-	SessionID     string `json:"sessionId,omitempty"`
-	Title         string `json:"title"`
-	WorkDir       string `json:"workDir"`
-	Status        string `json:"status"`
-	Turns         int    `json:"turns"`
-	LastActive    string `json:"lastActive"`
-	BundleSize    int64  `json:"estimatedBundleSize"`
-	GitRemote     string `json:"gitRemote,omitempty"`
-	GitBranch     string `json:"gitBranch,omitempty"`
-	Resumable     bool   `json:"resumable"`
+	TaskID     string `json:"taskId"`
+	AgentType  string `json:"agentType"`
+	SessionID  string `json:"sessionId,omitempty"`
+	Title      string `json:"title"`
+	WorkDir    string `json:"workDir"`
+	Status     string `json:"status"`
+	Turns      int    `json:"turns"`
+	LastActive string `json:"lastActive"`
+	BundleSize int64  `json:"estimatedBundleSize"`
+	GitRemote  string `json:"gitRemote,omitempty"`
+	GitBranch  string `json:"gitBranch,omitempty"`
+	Resumable  bool   `json:"resumable"`
 }
 
 // ListTransferableSessions returns sessions that can be exported.
@@ -408,7 +408,7 @@ func ImportSession(tm *TaskManager, bundle *TransferBundle, opts ImportOptions) 
 		Turns:       bundle.Task.Turns,
 		ResultText:  bundle.Task.ResultText,
 		CostUSD:     bundle.Task.CostUSD,
-		Source:       "transfer",
+		Source:      "transfer",
 		CreatedAt:   time.Now(),
 	}
 
@@ -828,7 +828,7 @@ func readClaudeSessionSummary(fpath string) string {
 		var entry struct {
 			Type    string `json:"type"`
 			Message struct {
-				Role    string `json:"role"`
+				Role    string      `json:"role"`
 				Content interface{} `json:"content"`
 			} `json:"message"`
 		}

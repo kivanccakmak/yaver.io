@@ -19,7 +19,6 @@ import {
   type TKReport,
   type TKTarget,
   type TKTraceInspect,
-  type TKGrowPlan,
 } from "../src/lib/testkitClient";
 
 type RunMode = "chromedp" | "playwright-yaml" | "playwright-native";
@@ -58,7 +57,6 @@ export default function ProjectTestsScreen() {
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<TKJob | null>(null);
   const [report, setReport] = useState<TKReport | null>(null);
-  const [grow, setGrow] = useState<TKGrowPlan | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [deps, setDeps] = useState<{ ready?: boolean; deps?: { name: string; present: boolean }[] } | null>(null);
   const [depsBusy, setDepsBusy] = useState(false);
@@ -136,7 +134,6 @@ export default function ProjectTestsScreen() {
     setErr(null);
     setReport(null);
     setQualityReport(null);
-    setGrow(null);
     const base = {
       project,
       dir,
@@ -277,7 +274,6 @@ export default function ProjectTestsScreen() {
     setErr(null);
     setReport(null);
     setQualityReport(null);
-    setGrow(null);
     const browser = {
       project,
       dir,
@@ -312,18 +308,6 @@ export default function ProjectTestsScreen() {
     setBusy(false);
     if ((j as any)?.error || !j?.id) return setErr((j as any)?.error || "could not start quality run");
     setJob(j);
-  };
-
-  const doGrow = async () => {
-    const t = target();
-    if (!t) return setErr("Pick a remote PC first.");
-    if (!dir) return setErr("No project path.");
-    setBusy(true);
-    setErr(null);
-    const plan = await testkitClient.grow(t, dir, { apply: true, author: true });
-    setBusy(false);
-    if ((plan as any)?.error) return setErr((plan as any).error);
-    setGrow(plan);
   };
 
   const running = job?.state === "running" || job?.state === "queued";
@@ -476,9 +460,6 @@ export default function ProjectTestsScreen() {
               {running ? "Running…" : mode === "playwright-native" ? "Run Native" : mode === "playwright-yaml" ? "Run Playwright" : "Run Web Tests"}
             </Text>
           </Pressable>
-          <Pressable disabled={busy || running} onPress={doGrow} style={[btn(c.bgCard), { flex: 1, borderWidth: 1, borderColor: c.border, opacity: busy ? 0.6 : 1 }]}>
-            <Text style={{ color: c.textPrimary, fontWeight: "700" }}>🌱 Grow Tests</Text>
-          </Pressable>
         </View>
 
         {mode !== "chromedp" ? (
@@ -528,7 +509,6 @@ export default function ProjectTestsScreen() {
 
         {qualityReport ? <QualityView report={qualityReport} c={c} onRepair={repairPreflightDeps} /> : null}
         {report && <ReportView report={report} c={c} target={target()} jobId={qualityReport?.browserJobId || job?.id} playwright={mode !== "chromedp"} />}
-        {grow && <GrowView plan={grow} c={c} />}
       </ScrollView>
     </View>
   );
@@ -695,25 +675,6 @@ function ModePill({ label, active, onPress, c }: { label: string; active: boolea
       style={{ backgroundColor: active ? c.accent : c.bgCard, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, borderWidth: 1, borderColor: c.border }}>
       <Text style={{ color: active ? "#fff" : c.textPrimary, fontSize: 13, fontWeight: "700" }}>{label}</Text>
     </Pressable>
-  );
-}
-
-function GrowView({ plan, c }: { plan: TKGrowPlan; c: any }) {
-  const un = plan.uncovered || [];
-  return (
-    <View style={{ backgroundColor: c.bgCard, borderRadius: 10, padding: 12, gap: 6, borderWidth: 1, borderColor: c.border }}>
-      <Text style={{ color: c.textPrimary, fontWeight: "700" }}>🌱 Self-grow plan</Text>
-      <Text style={{ color: c.textMuted, fontSize: 12 }}>
-        {plan.coveredCount ?? 0} covered · {un.length} uncovered route(s){plan.applied ? " · ledger updated" : ""}
-      </Text>
-      {plan.taskId ? <Text style={{ color: "#2fbf71", fontSize: 12 }}>🤖 runner authoring specs (task {plan.taskId})</Text> : null}
-      {un.slice(0, 30).map((u, i) => (
-        <Text key={i} style={{ color: c.textPrimary, fontSize: 12 }}>• {u.suggestedName}  <Text style={{ color: c.textMuted }}>({u.route})</Text></Text>
-      ))}
-      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>
-        The Yaver runner authors these as new specs (no user YAML). Trigger it during vibe-coding or run "Grow" again after changes.
-      </Text>
-    </View>
   );
 }
 

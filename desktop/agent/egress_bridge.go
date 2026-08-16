@@ -281,8 +281,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"device": map[string]interface{}{"type": "string", "description": "Peer device id or alias whose egress to use."},
 		}, "device"),
-		Handler:    egressViaPeerStartHandler,
-		AllowGuest: false,
+		Handler:        egressViaPeerStartHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "egress_via_peer_stop",
@@ -290,15 +290,15 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"bridge_id": map[string]interface{}{"type": "string", "description": "Bridge id returned by egress_via_peer_start."},
 		}, "bridge_id"),
-		Handler:    egressViaPeerStopHandler,
-		AllowGuest: false,
+		Handler:        egressViaPeerStopHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
-		Name:        "egress_via_peer_list",
-		Description: "List active local peer-egress bridges (their proxy_url and peer).",
-		Schema:      ghostJSONSchema(map[string]interface{}{}),
-		Handler:     egressViaPeerListHandler,
-		AllowGuest:  false,
+		Name:           "egress_via_peer_list",
+		Description:    "List active local peer-egress bridges (their proxy_url and peer).",
+		Schema:         ghostJSONSchema(map[string]interface{}{}),
+		Handler:        egressViaPeerListHandler,
+		AllowCompanion: false,
 	})
 }
 

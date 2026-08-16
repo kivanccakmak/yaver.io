@@ -41,9 +41,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsLogsHandler,
-		Streaming:  true,
-		AllowGuest: false, // logs can contain owner-only secrets/PII
+		Handler:        opsLogsHandler,
+		Streaming:      true,
+		AllowCompanion: false, // logs can contain owner-only secrets/PII
 	})
 }
 

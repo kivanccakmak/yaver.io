@@ -19,6 +19,7 @@ import { join } from "node:path";
  *   E2E_BROWSER_JPEG_ALL=1       run discovered RN/Flutter candidates, not just the active one
  *   E2E_EXPECT_MOBILE_VIEWPORT=1 require RN/Flutter JPEG frames to be portrait/mobile-shaped
  *   E2E_REQUIRE_PIXELS=1         fail NAMED refusals instead of recording them
+ *   E2E_FORCE_TURN=1             require a relay candidate (off-LAN/CG-NAT proof)
  */
 
 type Verdict = "PIXELS" | "NAMED" | "SILENT";
@@ -115,16 +116,43 @@ async function ensureDevServer(project: ProjectCase): Promise<{ ok: boolean; nam
     return { ok: true };
   }
 
-  const started = await agent("/dev/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      framework: project.framework,
-      workDir: project.workDir,
-      platform: "web",
-    }),
-  });
-  if (!started.ok) return { ok: false, named: namedFrom(started, "dev server start refused") };
+  // Expo/RN's primary port is Metro bytecode, not a browser page. A correct
+  // workDir + running Metro is only half-ready for browser-window; explicitly
+  // start the web sibling instead of accepting the generic port as proof.
+  if (
+    status.ok &&
+    status.data?.running === true &&
+    samePath(status.data?.workDir, project.workDir) &&
+    needsSeparateWebPreview(project.framework)
+  ) {
+    const web = await agent("/dev/web-preview/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workDir: project.workDir, framework: project.framework }),
+    });
+    if (!web.ok) return { ok: false, named: namedFrom(web, "web preview start refused") };
+  } else {
+
+    const started = await agent("/dev/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        framework: project.framework,
+        workDir: project.workDir,
+        platform: "web",
+      }),
+    });
+    if (!started.ok) return { ok: false, named: namedFrom(started, "dev server start refused") };
+
+    if (needsSeparateWebPreview(project.framework)) {
+      const web = await agent("/dev/web-preview/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workDir: project.workDir, framework: project.framework }),
+      });
+      if (!web.ok) return { ok: false, named: namedFrom(web, "web preview start refused") };
+    }
+  }
 
   const wrongWorkDirDeadline = Date.now() + 20_000;
   const deadline = Date.now() + Number(process.env.E2E_BROWSER_JPEG_DEV_TIMEOUT_MS || 240_000);
@@ -166,7 +194,12 @@ function hasWebPort(status: any, framework: string): boolean {
   const generic = Number(status.devServerPort || status.port || 0);
   const web = Number(status.webPreviewPort || status.webPort || 0);
   if (framework === "flutter") return generic > 0;
+  if (needsSeparateWebPreview(framework)) return web > 0;
   return web > 0 || generic > 0;
+}
+
+function needsSeparateWebPreview(framework: string): boolean {
+  return ["expo", "react-native", "react_native", "rn"].includes(String(framework || "").toLowerCase());
 }
 
 function samePath(a: unknown, b: unknown): boolean {
@@ -257,8 +290,34 @@ async function installReceiver(page: Page): Promise<void> {
       window.__yv = { frames: 0, ready: false, transport: "", error: "", ice: "" };
       let pc;
       let objectUrl;
-      window.startJPEGDC = async function startJPEGDC(answerCb) {
-        pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const jpegChunks = new Map();
+      function jpegBlobFromMessage(data) {
+        if (typeof data !== "string") return new Blob([data], { type: "image/jpeg" });
+        let payload = null;
+        try { payload = JSON.parse(data); } catch {
+          const bytes = new Uint8Array(data.length);
+          for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 255;
+          return new Blob([bytes], { type: "image/jpeg" });
+        }
+        if (!payload || payload.type !== "jpeg-chunk" || !payload.id ||
+            typeof payload.index !== "number" || typeof payload.total !== "number" ||
+            typeof payload.data !== "string") return null;
+        const entry = jpegChunks.get(payload.id) || { total: payload.total, parts: [] };
+        entry.total = payload.total;
+        entry.parts[payload.index] = payload.data;
+        jpegChunks.set(payload.id, entry);
+        if (entry.parts.filter(Boolean).length < entry.total) return null;
+        jpegChunks.delete(payload.id);
+        const raw = atob(entry.parts.join(""));
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        return new Blob([bytes], { type: "image/jpeg" });
+      }
+      window.startJPEGDC = async function startJPEGDC(answerCb, iceServers, forceRelay) {
+        pc = new RTCPeerConnection({
+          iceServers,
+          iceTransportPolicy: forceRelay ? "relay" : "all",
+        });
         pc.createDataChannel("primer");
         pc.oniceconnectionstatechange = () => { window.__yv.ice = pc.iceConnectionState; };
         pc.ondatachannel = (event) => {
@@ -266,10 +325,13 @@ async function installReceiver(page: Page): Promise<void> {
           if (ch.label === "frames") {
             ch.binaryType = "arraybuffer";
             ch.onmessage = (msg) => {
+              const blob = jpegBlobFromMessage(msg.data);
+              if (!blob) return;
               if (objectUrl) URL.revokeObjectURL(objectUrl);
-              objectUrl = URL.createObjectURL(new Blob([msg.data], { type: "image/jpeg" }));
+              objectUrl = URL.createObjectURL(blob);
               const img = document.getElementById("frame");
               img.onload = () => { window.__yv.frames += 1; };
+              img.onerror = () => { window.__yv.error = "received frame could not be decoded as JPEG"; };
               img.src = objectUrl;
             };
           }
@@ -292,6 +354,19 @@ async function installReceiver(page: Page): Promise<void> {
         });
         const answer = await answerCb(pc.localDescription.type, pc.localDescription.sdp);
         await pc.setRemoteDescription(answer);
+      };
+      window.rtcDebug = function rtcDebug() {
+        return pc ? {
+          connection: pc.connectionState,
+          ice: pc.iceConnectionState,
+          gathering: pc.iceGatheringState,
+          signaling: pc.signalingState,
+          frames: window.__yv.frames,
+          ready: window.__yv.ready,
+          transport: window.__yv.transport,
+          error: window.__yv.error,
+          pendingChunkFrames: jpegChunks.size,
+        } : { connection: "missing" };
       };
       window.sampleFrame = function sampleFrame() {
         const img = document.getElementById("frame");
@@ -319,6 +394,17 @@ async function installReceiver(page: Page): Promise<void> {
 }
 
 async function negotiate(page: Page, sessionId: string): Promise<{ ok: boolean; named?: string; transport?: string }> {
+  // Use the product's authenticated ICE contract. A STUN-only test passes on
+  // a LAN and goes SILENT for a relay-only Hetzner box even when Yaver TURN is
+  // healthy—the exact off-LAN case this live arc exists to prove.
+  const ice = await agent("/stream/webrtc/ice");
+  if (!ice.ok) return { ok: false, named: namedFrom(ice, "ICE configuration unavailable") };
+  const iceServers = Array.isArray(ice.data?.iceServers)
+    ? ice.data.iceServers
+    : Array.isArray(ice.data?.servers)
+      ? ice.data.servers
+      : [];
+  if (iceServers.length === 0) return { ok: false, named: "ICE configuration returned no servers" };
   activeOfferSessionId = sessionId;
   if (!browserJPEGOfferExposed) {
     await page.exposeFunction("yaverBrowserJPEGOffer", async (type: string, sdp: string) => {
@@ -335,16 +421,17 @@ async function negotiate(page: Page, sessionId: string): Promise<{ ok: boolean; 
     browserJPEGOfferExposed = true;
   }
   const result = await page.evaluate(
-    async () => {
+    async ({ servers, forceRelay }) => {
       let outer: any = null;
       await (window as any).startJPEGDC(async (type: string, sdp: string) => {
         const res = await (window as any).yaverBrowserJPEGOffer(type, sdp);
         outer = res;
         if (!res.ok) throw new Error(res.data?.error || `offer HTTP ${res.status}`);
         return { type: res.data?.answer?.type || "answer", sdp: res.data?.answer?.sdp || "" };
-      });
+      }, servers, forceRelay);
       return outer;
     },
+    { servers: iceServers, forceRelay: process.env.E2E_FORCE_TURN === "1" },
   );
   if (!result?.ok) return { ok: false, named: namedFrom({ status: result?.status || 0, data: result?.data || {}, text: "" }, "WebRTC offer refused") };
   return { ok: true, transport: String(result.data?.transport || result.data?.session?.frameTransport || "") };
@@ -376,11 +463,12 @@ async function waitForPixelContent(page: Page): Promise<{ verdict: Verdict; deta
     await page.waitForTimeout(700);
   }
   const last = samples.at(-1);
+  const debug = await page.evaluate(() => (window as any).rtcDebug?.());
   return {
     verdict: "SILENT",
     detail: last
-      ? `frames arrived but looked blank/static: ${JSON.stringify(last)}`
-      : "no JPEG-DC frame decoded into the receiver image",
+      ? `frames arrived but looked blank/static: ${JSON.stringify(last)}; rtc=${JSON.stringify(debug)}`
+      : `no JPEG-DC frame decoded into the receiver image; rtc=${JSON.stringify(debug)}`,
   };
 }
 
@@ -459,10 +547,19 @@ test.describe.serial("remote-runtime browser-window JPEG-DC (§3 live)", () => {
 
           const before = await page.evaluate(() => (window as any).sampleFrame());
           expect(before?.signature, `${project.name}: no frame signature before control input`).toBeTruthy();
-          const token = `yj${Date.now().toString(36).slice(-6)}`;
-          await control(sessionId, { action: "tap", x: 60, y: 115 });
-          await control(sessionId, { action: "text", text: token });
-          await control(sessionId, { action: "tap", x: 1220, y: 115 });
+          // Finish with a deterministic, session-local control effect. A tap,
+          // key, or swipe may legitimately leave an arbitrary app's pixels
+          // unchanged (the old sequence even clicked outside the advertised
+          // viewport). Navigating this disposable browser session proves the
+          // control endpoint reached Chromium and the changed page came back
+          // through the same WebRTC frame channel, without mutating app data.
+          const marker = `Yaver control ${Date.now().toString(36)}`;
+          await control(sessionId, {
+            action: "navigate",
+            url: `data:text/html;charset=utf-8,${encodeURIComponent(
+              `<body style="margin:0;background:#f04;color:#fff;font:700 42px system-ui"><main style="padding:48px">${marker}</main></body>`,
+            )}`,
+          });
           const changed = await waitForSignatureChange(page, before.signature);
           await testInfo.attach(`${project.name.replace(/\W+/g, "-")}-after-control.png`, {
             body: await page.screenshot(),

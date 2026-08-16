@@ -14,25 +14,25 @@ import (
 // CI gate presence, DB migrations, healthcheck target, active env, any
 // obvious footguns.
 type DeployPreview struct {
-	ProjectDir    string          `json:"projectDir"`
-	Branch        string          `json:"branch,omitempty"`
-	Ahead         int             `json:"ahead"`
-	Behind        int             `json:"behind"`
-	Dirty         bool            `json:"dirty"`
-	DirtyFiles    []string        `json:"dirtyFiles,omitempty"`
-	LastCommit    string          `json:"lastCommit,omitempty"`
-	LastMessage   string          `json:"lastMessage,omitempty"`
-	CIConfigured  bool            `json:"ciConfigured"`
-	CISteps       int             `json:"ciSteps"`
-	CIOnFail      string          `json:"ciOnFail,omitempty"`
-	Migrator      string          `json:"migrator,omitempty"`
-	MigratorCmd   string          `json:"migratorCmd,omitempty"`
-	Healthcheck   string          `json:"healthcheck,omitempty"`
-	HealthInferred bool           `json:"healthInferred"`
-	ActiveEnv     string          `json:"activeEnv"`
-	DeployConfig  DeployConfig    `json:"deployConfig"`
-	Warnings      []string        `json:"warnings,omitempty"`
-	LastDeploy    *DeployRecord   `json:"lastDeploy,omitempty"`
+	ProjectDir     string        `json:"projectDir"`
+	Branch         string        `json:"branch,omitempty"`
+	Ahead          int           `json:"ahead"`
+	Behind         int           `json:"behind"`
+	Dirty          bool          `json:"dirty"`
+	DirtyFiles     []string      `json:"dirtyFiles,omitempty"`
+	LastCommit     string        `json:"lastCommit,omitempty"`
+	LastMessage    string        `json:"lastMessage,omitempty"`
+	CIConfigured   bool          `json:"ciConfigured"`
+	CISteps        int           `json:"ciSteps"`
+	CIOnFail       string        `json:"ciOnFail,omitempty"`
+	Migrator       string        `json:"migrator,omitempty"`
+	MigratorCmd    string        `json:"migratorCmd,omitempty"`
+	Healthcheck    string        `json:"healthcheck,omitempty"`
+	HealthInferred bool          `json:"healthInferred"`
+	ActiveEnv      string        `json:"activeEnv"`
+	DeployConfig   DeployConfig  `json:"deployConfig"`
+	Warnings       []string      `json:"warnings,omitempty"`
+	LastDeploy     *DeployRecord `json:"lastDeploy,omitempty"`
 }
 
 // BuildDeployPreview inspects the project and returns a DeployPreview.

@@ -67,4 +67,3 @@ func TestHttpRelayProbe_DeadHostUnreachable(t *testing.T) {
 		t.Error("unreachable probe should carry an error string")
 	}
 }
-

@@ -30,6 +30,10 @@ type abuseGuardConfig struct {
 	QUICRegisterBurstPerIP  int
 	InvalidAuthPerIPPerMin  int
 	InvalidAuthBurstPerIP   int
+	TURNCredPerUserPerMin   int
+	TURNCredBurstPerUser    int
+	TURNCredPerIPPerMin     int
+	TURNCredBurstPerIP      int
 	MaxConcurrentHTTP       int
 	MaxConcurrentPerDevice  int
 	MaxRequestBodyBytes     int64
@@ -54,6 +58,10 @@ func defaultAbuseGuardConfig() abuseGuardConfig {
 		QUICRegisterBurstPerIP:  20,
 		InvalidAuthPerIPPerMin:  12,
 		InvalidAuthBurstPerIP:   6,
+		TURNCredPerUserPerMin:   12,
+		TURNCredBurstPerUser:    6,
+		TURNCredPerIPPerMin:     60,
+		TURNCredBurstPerIP:      20,
 		MaxConcurrentHTTP:       2048,
 		MaxConcurrentPerDevice:  64,
 		MaxRequestBodyBytes:     64 << 20,
@@ -79,6 +87,10 @@ func abuseGuardConfigFromEnv() abuseGuardConfig {
 	cfg.QUICRegisterBurstPerIP = envInt("RELAY_QUIC_REGISTER_BURST_PER_IP", cfg.QUICRegisterBurstPerIP)
 	cfg.InvalidAuthPerIPPerMin = envInt("RELAY_INVALID_AUTH_RATE_PER_IP_PER_MIN", cfg.InvalidAuthPerIPPerMin)
 	cfg.InvalidAuthBurstPerIP = envInt("RELAY_INVALID_AUTH_BURST_PER_IP", cfg.InvalidAuthBurstPerIP)
+	cfg.TURNCredPerUserPerMin = envInt("RELAY_TURN_CREDENTIAL_RATE_PER_USER_PER_MIN", cfg.TURNCredPerUserPerMin)
+	cfg.TURNCredBurstPerUser = envInt("RELAY_TURN_CREDENTIAL_BURST_PER_USER", cfg.TURNCredBurstPerUser)
+	cfg.TURNCredPerIPPerMin = envInt("RELAY_TURN_CREDENTIAL_RATE_PER_IP_PER_MIN", cfg.TURNCredPerIPPerMin)
+	cfg.TURNCredBurstPerIP = envInt("RELAY_TURN_CREDENTIAL_BURST_PER_IP", cfg.TURNCredBurstPerIP)
 	cfg.MaxConcurrentHTTP = envInt("RELAY_MAX_CONCURRENT_HTTP", cfg.MaxConcurrentHTTP)
 	cfg.MaxConcurrentPerDevice = envInt("RELAY_MAX_CONCURRENT_PER_DEVICE", cfg.MaxConcurrentPerDevice)
 	cfg.MaxRequestBodyBytes = envInt64("RELAY_MAX_REQUEST_BODY_BYTES", cfg.MaxRequestBodyBytes)

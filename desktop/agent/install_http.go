@@ -14,10 +14,12 @@ import (
 // to via GET /streams/install:<tool>.
 //
 // POST /install/<tool>
-//   202 Accepted with {ok, tool, stream}
+//
+//	202 Accepted with {ok, tool, stream}
 //
 // GET /install/list
-//   200 OK with [{name, installed, description}, ...]
+//
+//	200 OK with [{name, installed, description}, ...]
 func (s *HTTPServer) handleInstall(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/install/")
 	rest = strings.TrimSuffix(rest, "/")

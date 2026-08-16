@@ -525,8 +525,8 @@ func TestExecuteControl_RejectsEmptyAction(t *testing.T) {
 
 func TestExecuteControl_RejectsUnknownAction(t *testing.T) {
 	// Action name typo or future-version field — must be loud rather
-	// than silently no-op. The CLAUDE.md trust model assumes guests
-	// can hit /control with arbitrary bodies; a silent accept is a
+	// than silently no-op. The trust model assumes a compromised remote-runtime
+	// client can hit /control with arbitrary bodies; a silent accept is a
 	// security smell.
 	mgr, sessionID := newPrimedManager(t, "android-emulator")
 	_, err := mgr.ExecuteControl(sessionID, remoteRuntimeControlRequest{Action: "shake-the-phone"})

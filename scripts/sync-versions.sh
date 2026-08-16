@@ -20,7 +20,6 @@ CLI_VERSION=$(read_version cli)
 MOBILE_VERSION=$(read_version mobile)
 RELAY_VERSION=$(read_version relay)
 WEB_VERSION=$(read_version web)
-INSTALLER_VERSION=$(read_version installer)
 BACKEND_VERSION=$(read_version backend)
 PI_IMAGE_VERSION=$(read_version piImage)
 GUI_VERSION=$(read_version gui)
@@ -39,7 +38,7 @@ update_file() {
 
 echo "Syncing versions from versions.json..."
 echo "  cli=$CLI_VERSION mobile=$MOBILE_VERSION relay=$RELAY_VERSION"
-echo "  web=$WEB_VERSION installer=$INSTALLER_VERSION backend=$BACKEND_VERSION piImage=$PI_IMAGE_VERSION"
+echo "  web=$WEB_VERSION backend=$BACKEND_VERSION piImage=$PI_IMAGE_VERSION"
 echo "  gui=$GUI_VERSION"
 echo ""
 
@@ -110,7 +109,6 @@ update_pkg_version() {
 
 update_pkg_version "$REPO_ROOT/web/package.json" "$WEB_VERSION" "web package.json"
 update_pkg_version "$REPO_ROOT/backend/package.json" "$BACKEND_VERSION" "backend package.json"
-update_pkg_version "$REPO_ROOT/desktop/installer/package.json" "$INSTALLER_VERSION" "installer package.json"
 update_pkg_version "$REPO_ROOT/cli/package.json" "$CLI_VERSION" "cli package.json"
 # mobile/package.json is the 2nd of the 6 mobile version sites (see CLAUDE.md
 # "Version bumping"). It was historically omitted here, which let it drift

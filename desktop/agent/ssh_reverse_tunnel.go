@@ -42,7 +42,7 @@ func chooseSSHTransport(directOverlayRouteAvailable bool) sshTransportChoice {
 const (
 	sshReverseTunnelBaseBackoff  = 1 * time.Second
 	sshReverseTunnelBackoffCap   = 30 * time.Second
-	sshReverseTunnelMaxAttempts  = 8 // then surface to the user; do NOT keep spinning
+	sshReverseTunnelMaxAttempts  = 8                // then surface to the user; do NOT keep spinning
 	sshReverseTunnelKeepAlive    = 10 * time.Second // ServerAliveInterval equivalent
 	sshReverseTunnelKeepAliveMax = 3                // ServerAliveCountMax equivalent
 )

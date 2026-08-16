@@ -2,8 +2,8 @@ package main
 
 // file_transfer_http.go — owner-authed absolute-path file get/put for fleet
 // file transfer (Fleet SDK Machine.upload/download). Registered with s.auth and
-// deliberately absent from every guest/support allowlist, so only the owner
-// bearer passes — the same trust level as /exec, which can already read or
+// primary-owner only, so no constrained bearer passes — the same trust level
+// as /exec, which can already read or
 // write any file the agent user can. Rides whatever transport the SDK resolved
 // (direct-LAN / tunnel / relay / mesh), so transfers work behind NAT with no
 // extra plumbing.

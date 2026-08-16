@@ -220,8 +220,7 @@ func printDeployDiagnose(r DiagnoseReport) {
 	}
 }
 
-// handleDeployDiagnose exposes the same logic over HTTP. Owner and
-// guests (subject to allowedProjects) can call it as a preflight.
+// handleDeployDiagnose exposes the same owner-only logic over HTTP.
 //
 //	GET /deploy/diagnose?app=X&target=Y  → DiagnoseReport JSON
 func (s *HTTPServer) handleDeployDiagnose(w http.ResponseWriter, r *http.Request) {
@@ -234,14 +233,6 @@ func (s *HTTPServer) handleDeployDiagnose(w http.ResponseWriter, r *http.Request
 	if app == "" || target == "" {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "app and target are required"})
 		return
-	}
-	if r.Header.Get("X-Yaver-Guest") == "true" {
-		if s.guestConfigMgr != nil && !s.guestConfigMgr.GuestCanAccessProject(r.Header.Get("X-Yaver-GuestUserID"), app) {
-			jsonReply(w, http.StatusForbidden, map[string]string{
-				"error": "guest is not authorised for this project",
-			})
-			return
-		}
 	}
 	report, err := RunDeployDiagnose(app, target, s.vaultStore)
 	if err != nil {

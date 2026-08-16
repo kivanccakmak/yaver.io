@@ -13,7 +13,7 @@ package main
 //   GET  /mobile/sessions               list connected devices
 //   POST /mobile/insert {app, deviceId} send open_app command
 //
-// Both endpoints are owner-auth and not exposed to guests. Guests
+// Both endpoints require the primary owner bearer. Other credentials
 // pushing arbitrary apps onto a mobile device would be an obvious
 // scope-escalation foothold.
 
@@ -76,9 +76,9 @@ func (s *HTTPServer) handleMobileInsert(w http.ResponseWriter, r *http.Request) 
 	cmd := BlackBoxCommand{
 		Command: "open_app",
 		Data: map[string]interface{}{
-			"app":      app,
-			"reason":   "yaver insert",
-			"sentAt":   time.Now().UnixMilli(),
+			"app":    app,
+			"reason": "yaver insert",
+			"sentAt": time.Now().UnixMilli(),
 		},
 	}
 	if path := strings.TrimSpace(req.ProjectPath); path != "" {
@@ -98,10 +98,10 @@ func (s *HTTPServer) handleMobileInsert(w http.ResponseWriter, r *http.Request) 
 		}
 		s.blackboxMgr.BroadcastCommand(cmd)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"ok":      true,
-			"app":     app,
-			"sentTo":  len(sessions),
-			"target":  "broadcast",
+			"ok":     true,
+			"app":    app,
+			"sentTo": len(sessions),
+			"target": "broadcast",
 		})
 		return
 	}

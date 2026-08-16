@@ -43,7 +43,12 @@
  * transport stays enabled — the existing phone channel is untouched.
  */
 
-export type TransportKind = "lan-beacon" | "direct-http" | "quic-relay" | "quic-direct";
+export type TransportKind =
+  | "lan-beacon"
+  | "direct-http"
+  | "relay-http"
+  | "quic-relay"
+  | "quic-direct";
 
 export interface TransportCapability {
   kind: TransportKind;
@@ -56,35 +61,51 @@ export interface TransportCapability {
 const isWeb = typeof document !== "undefined";
 
 /**
- * Browsers get exactly one lane: plain HTTP to the agent.
+ * Browsers get two HTTP lanes: direct HTTP to the agent and the relay's HTTPS
+ * device proxy (`/d/<deviceId>/...`). They cannot open the relay's raw QUIC
+ * socket, but the mobile client's control plane does not need to: it uses the
+ * authenticated HTTPS proxy for health, tasks, projects, logs, and preview
+ * control. Conflating those two relay transports made a working browser route
+ * read as structurally impossible.
  *
  * Verified 2026-07-25 against the live agent — it already returns
  * `Access-Control-Allow-Origin: http://localhost:8081` and passes preflight
  * with `Authorization`, so the direct-HTTP lane needs no server-side change.
  * The gap was purely that nothing selected it.
  */
-export const TRANSPORT_CAPABILITIES: Record<TransportKind, TransportCapability> = {
-  "lan-beacon": {
-    kind: "lan-beacon",
-    supported: !isWeb,
-    reason: isWeb ? "Browsers cannot send or receive UDP, so LAN discovery is unavailable here." : undefined,
-  },
-  "quic-relay": {
-    kind: "quic-relay",
-    supported: !isWeb,
-    reason: isWeb ? "Browsers cannot open a raw QUIC connection to the relay." : undefined,
-  },
-  "quic-direct": {
-    kind: "quic-direct",
-    supported: !isWeb,
-    reason: isWeb ? "Browsers cannot open a raw QUIC connection to the machine." : undefined,
-  },
-  "direct-http": {
-    kind: "direct-http",
-    supported: true,
-    reason: undefined,
-  },
-};
+export function buildTransportCapabilities(
+  web: boolean,
+): Record<TransportKind, TransportCapability> {
+  return {
+    "lan-beacon": {
+      kind: "lan-beacon",
+      supported: !web,
+      reason: web ? "Browsers cannot send or receive UDP, so LAN discovery is unavailable here." : undefined,
+    },
+    "direct-http": {
+      kind: "direct-http",
+      supported: true,
+      reason: undefined,
+    },
+    "relay-http": {
+      kind: "relay-http",
+      supported: true,
+      reason: undefined,
+    },
+    "quic-relay": {
+      kind: "quic-relay",
+      supported: !web,
+      reason: web ? "Browsers cannot open a raw QUIC connection to the relay." : undefined,
+    },
+    "quic-direct": {
+      kind: "quic-direct",
+      supported: !web,
+      reason: web ? "Browsers cannot open a raw QUIC connection to the machine." : undefined,
+    },
+  };
+}
+
+export const TRANSPORT_CAPABILITIES = buildTransportCapabilities(isWeb);
 
 export function canUseTransport(kind: TransportKind): boolean {
   return TRANSPORT_CAPABILITIES[kind].supported;
@@ -129,7 +150,13 @@ export function connectGiveUpMessage(attempts: number, lastCause?: string | null
   let msg = `Could not reach device after ${attempts} attempts`;
   const cause = (lastCause || "").trim();
   if (cause) msg += ` — ${cause}`;
-  const impossibility = explainNoTransport(["lan-beacon", "quic-relay", "quic-direct"]);
+  const impossibility = explainNoTransport([
+    "lan-beacon",
+    "direct-http",
+    "relay-http",
+    "quic-relay",
+    "quic-direct",
+  ]);
   if (impossibility) msg += `. ${impossibility}`;
   return msg;
 }

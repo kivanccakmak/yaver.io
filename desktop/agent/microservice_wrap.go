@@ -257,7 +257,10 @@ func splitServiceCommand(command string, explicitArgs []string, useShell bool) (
 	}
 	if useShell || needsShell(command) {
 		if runtime.GOOS == "windows" {
-			return "cmd", []string{"/C", command}
+			if spec, err := commandShellSpecFor(runtime.GOOS, "", nil, nil); err == nil {
+				return spec.Executable, append(spec.Prefix, command)
+			}
+			return "cmd.exe", []string{"/D", "/S", "/C", command}
 		}
 		return "sh", []string{"-lc", command}
 	}

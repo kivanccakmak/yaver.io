@@ -72,15 +72,15 @@ const buildBusWaitPollInterval = 5 * time.Second
 // so every surface (MCP tool result, CLI exit, HTTP body, web/mobile
 // banner) renders the same meaning without regexing prose.
 type BuildBusHeld struct {
-	Code        string `json:"code"`                  // "build_bus_held"
-	Key         string `json:"key"`                   // "{app}@{target}"
-	Holder      string `json:"holder,omitempty"`      // "hostname/pidN"
-	Workdir     string `json:"workdir,omitempty"`     // checkout the holder builds from
-	Branch      string `json:"branch,omitempty"`      // git branch being shipped
-	Build       string `json:"build,omitempty"`       // CFBundleVersion / versionCode / sha
-	Stage       string `json:"stage,omitempty"`       // archiving|exporting|uploading|...
-	StartedAt   int64  `json:"started_at,omitempty"`  // unix seconds
-	ExpiresAt   int64  `json:"expires_at,omitempty"`  // unix seconds
+	Code        string `json:"code"`                   // "build_bus_held"
+	Key         string `json:"key"`                    // "{app}@{target}"
+	Holder      string `json:"holder,omitempty"`       // "hostname/pidN"
+	Workdir     string `json:"workdir,omitempty"`      // checkout the holder builds from
+	Branch      string `json:"branch,omitempty"`       // git branch being shipped
+	Build       string `json:"build,omitempty"`        // CFBundleVersion / versionCode / sha
+	Stage       string `json:"stage,omitempty"`        // archiving|exporting|uploading|...
+	StartedAt   int64  `json:"started_at,omitempty"`   // unix seconds
+	ExpiresAt   int64  `json:"expires_at,omitempty"`   // unix seconds
 	WaitSeconds int64  `json:"wait_seconds,omitempty"` // TTL remaining
 }
 

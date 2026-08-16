@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	osexec "os/exec"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -157,11 +157,11 @@ func mcpSimulators() interface{} {
 		}
 	}
 	return map[string]interface{}{
-		"ok":          true,
-		"devices":     devices,
-		"count":       len(devices),
-		"summary":     summary,
-		"booted":      booted,
+		"ok":               true,
+		"devices":          devices,
+		"count":            len(devices),
+		"summary":          summary,
+		"booted":           booted,
 		"tvosSimAvailable": summary["tvos"] != nil && summary["tvos"]["count"] > 0,
 	}
 }
@@ -196,8 +196,8 @@ func mcpPlayStoreStatus(packageName string) interface{} {
 	out, err := runCmd("fastlane", "supply", "init", "--json_key", findGooglePlayKey(), "--package_name", packageName)
 	if err != nil {
 		return map[string]interface{}{
-			"error": "Requires fastlane + Google Play service account key.",
-			"setup": "1. Create service account in Google Cloud Console\n2. Grant access in Google Play Console\n3. Set GOOGLE_PLAY_JSON_KEY env var or place key at keys/google-play-service-account.json",
+			"error":   "Requires fastlane + Google Play service account key.",
+			"setup":   "1. Create service account in Google Cloud Console\n2. Grant access in Google Play Console\n3. Set GOOGLE_PLAY_JSON_KEY env var or place key at keys/google-play-service-account.json",
 			"package": packageName,
 		}
 	}

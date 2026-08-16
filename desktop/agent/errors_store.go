@@ -26,7 +26,7 @@ import (
 // ErrorRecord is one deduped error entry. Occurrences accumulate
 // across every SDK session that hits the same fingerprint.
 type ErrorRecord struct {
-	Fingerprint  string        `json:"fingerprint"`  // sha256 of message + first stack line
+	Fingerprint  string        `json:"fingerprint"` // sha256 of message + first stack line
 	Message      string        `json:"message"`
 	FirstFrame   string        `json:"firstFrame,omitempty"`
 	Stack        []string      `json:"stack,omitempty"`

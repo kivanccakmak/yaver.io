@@ -16,7 +16,7 @@ func (s *HTTPServer) handleOperations(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	jsonReply(w, http.StatusOK, map[string]interface{}{
-		"ok":         true,
+		"ok": true,
 		"operations": GlobalOperationStore().List(OperationFilter{
 			Kind:        q.Get("kind"),
 			Status:      q.Get("status"),

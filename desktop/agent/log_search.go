@@ -194,7 +194,9 @@ func (s *HTTPServer) handleLogIndexStart(w http.ResponseWriter, r *http.Request)
 		jsonError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var b struct{ Project string `json:"project"` }
+	var b struct {
+		Project string `json:"project"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	dir := b.Project
 	if dir == "" {

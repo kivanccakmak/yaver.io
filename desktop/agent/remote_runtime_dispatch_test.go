@@ -349,9 +349,9 @@ func TestForwardSessionRequest_DeleteCleansUpProxyMapping(t *testing.T) {
 
 func TestSplitSessionRoutePath_Suffixes(t *testing.T) {
 	cases := []struct {
-		in        string
-		wantID    string
-		wantSfx   string
+		in      string
+		wantID  string
+		wantSfx string
 	}{
 		{"rr_proxy_173/webrtc/offer", "rr_proxy_173", "/webrtc/offer"},
 		{"rr_proxy_173/control", "rr_proxy_173", "/control"},

@@ -18,11 +18,10 @@ func TestMachineRolesOpsRegistered(t *testing.T) {
 	}
 }
 
-func TestResolveMachineRoleDeviceByNamePrefixAndRejectsGuest(t *testing.T) {
+func TestResolveMachineRoleDeviceByNamePrefix(t *testing.T) {
 	devices := []primaryDevice{
 		{DeviceID: "runner-11111111", Name: "runner-box-linux"},
 		{DeviceID: "render-22222222", Name: "render-mini.local"},
-		{DeviceID: "guest-33333333", Name: "guest-box", IsGuest: true},
 	}
 	runner, err := resolveMachineRoleDevice("runner-box", devices)
 	if err != nil {
@@ -37,9 +36,6 @@ func TestResolveMachineRoleDeviceByNamePrefixAndRejectsGuest(t *testing.T) {
 	}
 	if render.Name != "render-mini.local" {
 		t.Fatalf("render = %s", render.Name)
-	}
-	if _, err := resolveMachineRoleDevice("guest-box", devices); err == nil || !strings.Contains(err.Error(), "no owned device") {
-		t.Fatalf("guest device should be rejected, got %v", err)
 	}
 }
 

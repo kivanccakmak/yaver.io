@@ -6,7 +6,7 @@ package main
 // yet, and the primary "drive a remote box" verb vibe coders reach
 // for.
 //
-// Guest sessions are refused at the dispatcher level — run is too
+// Signed companion sessions are refused at the dispatcher level — run is too
 // broad to be scoped safely. The existing /exec + execMgr plumbing
 // is reused verbatim so we don't fork subprocess handling.
 
@@ -48,9 +48,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRunHandler,
-		Streaming:  true,
-		AllowGuest: false, // never — shell escape is not a guest capability
+		Handler:        opsRunHandler,
+		Streaming:      true,
+		AllowCompanion: false, // never — shell escape is not a companion capability
 	})
 }
 

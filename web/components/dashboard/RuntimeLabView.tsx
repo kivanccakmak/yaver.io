@@ -49,8 +49,8 @@ import { machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineR
 import { probeFailureAllowsBoxAlive } from "@/lib/connection-error";
 import { resolveSeededRole } from "@/lib/connectionFanout";
 import { classifyRuntimeTargetProbeFailure } from "@/lib/runtimeTargetProbeFailure";
-import { detectProjectMachineMismatch } from "@/lib/projectMachineMismatch";
 import { collapseTopLevelProjects } from "@/lib/projectTopLevel";
+import { desktopDeviceLabel, type DesktopSurfaceInfo } from "@/lib/desktopSurface";
 import { openCodeSnapshotFromConfig, usePrimaryRunnerByDevice } from "./DevicesView";
 import { ScreenContextChip } from "./ScreenContextChip";
 import { DomInspectChip } from "./DomInspectChip";
@@ -412,7 +412,7 @@ function isMonorepoProject(project: Project | null): boolean {
 async function monorepoWebAppName(project: Project | null): Promise<string | undefined> {
   if (!project || !isMonorepoProject(project)) return undefined;
   try {
-    const apps = await agentClient.getWorkspaceApps("web", project.path);
+    const apps = await agentClient.getWorkspaceApps("web", project.path, "render");
     const app = apps.find((candidate) => candidate.exists && candidate.name === "web") ||
       apps.find((candidate) => candidate.exists && candidate.kind === "web") ||
       apps.find((candidate) => candidate.exists);
@@ -422,7 +422,10 @@ async function monorepoWebAppName(project: Project | null): Promise<string | und
   }
 }
 
-async function expandMonorepoProjects(rows: Project[]): Promise<Project[]> {
+async function expandMonorepoProjects(
+  rows: Project[],
+  source: "connected" | "render" = "connected",
+): Promise<Project[]> {
   const expanded: Project[] = [];
   const seen = new Set<string>();
   for (const project of rows) {
@@ -434,7 +437,7 @@ async function expandMonorepoProjects(rows: Project[]): Promise<Project[]> {
     if (!isMonorepoProject(project)) continue;
     let apps: WorkspaceAppView[] = [];
     try {
-      apps = await agentClient.getWorkspaceApps(["web", "mobile"], project.path);
+      apps = await agentClient.getWorkspaceApps(["web", "mobile"], project.path, source);
     } catch {
       continue;
     }
@@ -983,6 +986,7 @@ export default function RuntimeLabView({
   machineRoles,
   onSaveMachineRoles,
   onClearMachineRoles,
+  desktopSurface = { isDesktop: false, localDeviceId: null },
 }: {
   intent?: RuntimeLabIntent | null;
   onOpenTmux?: (sessionName: string) => void;
@@ -996,6 +1000,7 @@ export default function RuntimeLabView({
   machineRoles?: MachineRolesRow | null;
   onSaveMachineRoles?: (row: MachineRolesRow) => Promise<void>;
   onClearMachineRoles?: () => Promise<void>;
+  desktopSurface?: DesktopSurfaceInfo;
 }) {
   const { token } = useAuth();
   const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice, setPrimaryRunner, setOpenCodeConfigSnapshot } = usePrimaryRunnerByDevice(token);
@@ -1474,20 +1479,15 @@ export default function RuntimeLabView({
       // render probe will actually ask (devBaseUrl), not the connected/AI
       // box. Before 2026-08-12 the list always came from agentClient
       // (connected box) while Load Targets probed the render box — so the
-      // picker offered /root/Workspace/yaver.io paths that the Mac's agent
-      // answered with "no workspace manifest at …" (inventory from one
-      // machine, operation on another). Fall back to the connected box
-      // when no split is active (byte-identical single-box behavior) or the
-      // render-routed fetch fails (offline render box — still show what the
-      // connected box has).
+      // picker offered projects from one box while another box performed the
+      // operation. A failed render inventory MUST NOT fall back to the
+      // connected box: that recreates the false choice that produced
+      // "sfmg / mobile" on a renderer that never had it.
       const split = machineRolesSplitActive(machineRoles);
-      const renderProjects = split
-        ? await agentClient.listRenderProjects().catch(() => null)
-        : null;
       const [projectRows, repoRows, mobileRows, settings] = await Promise.all([
-        renderProjects ? Promise.resolve(renderProjects) : agentClient.listProjects(),
-        agentClient.listWorkspaceRepos(),
-        agentClient.listProjectsByCapability("mobile").catch(() => []),
+        split ? agentClient.listRenderProjects() : agentClient.listProjects(),
+        agentClient.listWorkspaceRepos(split ? "render" : "connected"),
+        agentClient.listProjectsByCapability("mobile", split ? "render" : "connected"),
         loadRuntimeSettings().catch(() => null),
       ]);
       // MCP servers for the composer chips — same /mcp/servers the Chat tab
@@ -1496,7 +1496,7 @@ export default function RuntimeLabView({
       const merged = collapseTopLevelProjects(
         mergeProjectInventory([...(projectRows as Project[]), ...(mobileRows as Project[])], repoRows),
       );
-      const rows = await expandMonorepoProjects(merged);
+      const rows = await expandMonorepoProjects(merged, split ? "render" : "connected");
       setProjects(rows);
       // Seed the Convex runtimeProjectCatalog with TOP-LEVEL rows only —
       // this function is the catalog's only writer, and previously it
@@ -1516,9 +1516,19 @@ export default function RuntimeLabView({
       }
       appendLog(`projects loaded: ${rows.length}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load projects.");
+      const split = machineRolesSplitActive(machineRoles);
+      if (split) {
+        setProjects([]);
+        setSelectedPath("");
+        const renderId = machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId || "";
+        const renderName = (devices || []).find((device) => device.id === renderId)?.name || renderId.slice(0, 8) || "the renderer";
+        const detail = err instanceof Error ? err.message : "Could not reach its project inventory.";
+        setError(`Could not load projects from ${renderName}. No projects from another machine were substituted. ${detail}`);
+      } else {
+        setError(err instanceof Error ? err.message : "Could not load projects.");
+      }
     }
-  }, [appendLog, connectedDevice?.id, loadRuntimeSettings, machineRoles, seedRuntimeProjectCatalog, selectedPath]);
+  }, [appendLog, connectedDevice?.id, devices, loadRuntimeSettings, machineRoles, seedRuntimeProjectCatalog, selectedPath]);
 
   const refreshRunners = useCallback(async () => {
     const deviceFallback = deviceRunnerFallback;
@@ -1574,7 +1584,7 @@ export default function RuntimeLabView({
     return id ? deviceNameById.get(id) || id.slice(0, 8) : null;
   })();
   const roleEligibleDevices = useMemo(
-    () => (devices || []).filter((d) => !d.isGuest),
+    () => devices || [],
     [devices],
   );
   // The box that will actually answer the target probe / serve previews.
@@ -1603,23 +1613,6 @@ export default function RuntimeLabView({
   const effectiveRenderBoxName = effectiveRenderDeviceId
     ? deviceNameById.get(effectiveRenderDeviceId) || effectiveRenderDeviceId.slice(0, 8)
     : null;
-  // Source/target split for the PROJECT LIST. loadProjects reads it from the
-  // CONNECTED box (agentClient.listProjects); the render probe targets
-  // effectiveRenderDeviceId. When those differ, every project on offer is one
-  // the render box was never asked about — which is exactly how a truthful
-  // "no project named X on this machine" reaches a user who can see the
-  // project in the picker. Knowable before the probe, from data already held.
-  const projectMachineMismatch = useMemo(
-    () =>
-      detectProjectMachineMismatch({
-        projectName: selectedProject?.name || null,
-        sourceDeviceId: connectedDevice?.id || null,
-        sourceName: connectedDevice?.id ? deviceNameById.get(connectedDevice.id) || null : null,
-        renderDeviceId: effectiveRenderDeviceId,
-        renderName: effectiveRenderBoxName,
-      }),
-    [selectedProject?.name, connectedDevice?.id, deviceNameById, effectiveRenderDeviceId, effectiveRenderBoxName],
-  );
   // The warden's last heartbeat word about the render box. Once the box is
   // dark this is the only evidence of WHY — it upgrades "no connection" to
   // "it reported fork exhaustion; power-cycle it" (mac mini, 2026-07-27).
@@ -3372,7 +3365,7 @@ export default function RuntimeLabView({
                 {!machineRoles?.runnerDeviceId ? <option value="">— pick a machine —</option> : null}
                 {roleEligibleDevices.map((device) => (
                   <option key={device.id} value={device.id}>
-                    {device.name || device.id.slice(0, 8)}{device.online === false ? " (offline)" : ""}
+                    {desktopDeviceLabel(device, desktopSurface)}{device.online === false ? " (offline)" : ""}
                   </option>
                 ))}
               </select>
@@ -3395,7 +3388,7 @@ export default function RuntimeLabView({
                 {!effectiveRenderDeviceId ? <option value="">— pick a machine —</option> : null}
                 {roleEligibleDevices.map((device) => (
                   <option key={device.id} value={device.id}>
-                    {device.name || device.id.slice(0, 8)}{device.online === false ? " (offline)" : ""}
+                    {desktopDeviceLabel(device, desktopSurface)}{device.online === false ? " (offline)" : ""}
                   </option>
                 ))}
               </select>
@@ -3501,29 +3494,13 @@ export default function RuntimeLabView({
                   </div>
                 ) : null}
                 {targetProbeFailurePlan.kind === "project-missing" ? (
-                  // The project simply is not on the render box. Deterministic:
-                  // the picker merges every machine's projects by NAME, so it
-                  // can offer one the render box never had. Say WHICH box is
-                  // missing it and point at the runner box, which under a split
-                  // is where the project usually lives. Never "Fix with runner"
-                  // — an LLM cannot create a directory on a machine it is not
-                  // running on, and asking it to burns a real run.
+                  // The project is not on the render box. The picker is now
+                  // sourced exclusively from that renderer, so this can only
+                  // be a stale selection or a checkout removed after inventory.
                   <div className="text-xs">
                     <span className="font-semibold">{effectiveRenderBoxName || "The render machine"}</span> has no
-                    project by that name, so there is nothing there to render — the box itself is fine.
-                    {/* The project list is read from the CONNECTED box
-                        (agentClient.listProjects), while the render probe
-                        targets the render box — so under a split the render box
-                        is answering about a list it never supplied. When the
-                        device ids PROVE that, state it; otherwise say nothing
-                        speculative. (The earlier wording here guessed "usually
-                        lives on <runner>", which was inherited from a stale
-                        note and was not established by the code.) */}
-                    {projectMachineMismatch.mismatch ? (
-                      <> {projectMachineMismatch.reason} {projectMachineMismatch.action}</>
-                    ) : (
-                      <> Pick a project that exists on this machine.</>
-                    )}
+                    project by that name now. Reload its project inventory, or choose another renderer; Yaver will not
+                    substitute a project from a different machine.
                   </div>
                 ) : null}
                 {targetProbeFailurePlan.kind === "agent-verb-skew" ? (
@@ -3566,6 +3543,17 @@ export default function RuntimeLabView({
                       className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-700 disabled:opacity-40 dark:text-emerald-200"
                     >
                       Render on {runnerBoxName} instead
+                    </button>
+                  ) : null}
+                  {desktopSurface.isDesktop && desktopSurface.localDeviceId &&
+                  desktopSurface.localDeviceId !== effectiveRenderDeviceId ? (
+                    <button
+                      type="button"
+                      onClick={() => void setRenderDeviceAndReprobe(desktopSurface.localDeviceId!)}
+                      disabled={busy || machinesBusy || machineRecoverBusy}
+                      className="rounded-md border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs font-semibold text-indigo-700 disabled:opacity-40 dark:text-indigo-200"
+                    >
+                      Render on This PC
                     </button>
                   ) : null}
                 </div>
@@ -4174,7 +4162,7 @@ export default function RuntimeLabView({
                         <option value="">— pick a machine —</option>
                         {roleEligibleDevices.map((device) => (
                           <option key={device.id} value={device.id}>
-                            {device.name || device.id.slice(0, 8)}{device.online === false ? " (offline)" : ""}
+                            {desktopDeviceLabel(device, desktopSurface)}{device.online === false ? " (offline)" : ""}
                           </option>
                         ))}
                       </select>
@@ -4209,7 +4197,7 @@ export default function RuntimeLabView({
                         <option value="">same as runner</option>
                         {roleEligibleDevices.map((device) => (
                           <option key={device.id} value={device.id}>
-                            {device.name || device.id.slice(0, 8)}{device.online === false ? " (offline)" : ""}
+                            {desktopDeviceLabel(device, desktopSurface)}{device.online === false ? " (offline)" : ""}
                           </option>
                         ))}
                       </select>

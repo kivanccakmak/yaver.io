@@ -24,9 +24,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsInfoHandler,
-		Streaming:  false,
-		AllowGuest: true, // guests can read machine specs; they already see device_class in Convex
+		Handler:        opsInfoHandler,
+		Streaming:      false,
+		AllowCompanion: true, // signed owner companions may read the owner's machine summary
 	})
 }
 
@@ -45,16 +45,16 @@ func opsInfoHandler(c OpsContext, _ json.RawMessage) OpsResult {
 	// would be nicer but isn't exported yet; defer to agent version +
 	// pid for caller-side correlation.
 	out := map[string]interface{}{
-		"hostname":    hostname,
-		"platform":    runtime.GOOS,
-		"arch":        runtime.GOARCH,
-		"numCPU":      runtime.NumCPU(),
-		"goroutines":  runtime.NumGoroutine(),
-		"cpuPercent":  cpuPct,
-		"pid":         pid,
+		"hostname":     hostname,
+		"platform":     runtime.GOOS,
+		"arch":         runtime.GOARCH,
+		"numCPU":       runtime.NumCPU(),
+		"goroutines":   runtime.NumGoroutine(),
+		"cpuPercent":   cpuPct,
+		"pid":          pid,
 		"agentVersion": version, // from main.go's const
-		"localIPs":    getLocalIPs(),
-		"queriedAt":   time.Now().UTC().Format(time.RFC3339),
+		"localIPs":     getLocalIPs(),
+		"queriedAt":    time.Now().UTC().Format(time.RFC3339),
 		// Echo back the surface the caller declared (tv/watch/car/…), so a
 		// client can confirm the agent is surface-aware and adapt. Unknown when
 		// the caller didn't send X-Yaver-Surface.

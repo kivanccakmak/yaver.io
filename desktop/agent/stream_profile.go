@@ -153,7 +153,7 @@ func init() {
 			setSourceQuality(p.Source, p.Profile, p.Lock)
 			return OpsResult{OK: true, Initial: map[string]interface{}{"source": p.Source, "profile": p.Profile, "locked": p.Lock, "tiers": streamProfileTiers}}
 		},
-		AllowGuest: false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "stream_quality_get",
@@ -167,6 +167,6 @@ func init() {
 			q := getSourceQuality(p.Source)
 			return OpsResult{OK: true, Initial: map[string]interface{}{"source": p.Source, "quality": q, "tiers": streamProfileTiers, "liveEncodes": sharedEncodeStatus()}}
 		},
-		AllowGuest: true,
+		AllowCompanion: true,
 	})
 }

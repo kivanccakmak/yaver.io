@@ -33,6 +33,11 @@ const (
 	// Do not select this from inventory alone: some valid AVDs return zero bytes
 	// from screenrecord while exiting 0.
 	CaptureH264Scrcpy CaptureMethod = "h264-scrcpy"
+	// CaptureH264Desktop is native host screen capture (gdigrab on Windows,
+	// avfoundation on macOS, x11grab on X11 Linux) encoded by ffmpeg. The
+	// desktop target already implemented this path; naming it here ensures the
+	// WebRTC offer actually selects its RTP video track.
+	CaptureH264Desktop CaptureMethod = "h264-desktop"
 	// CaptureJPEGScreenshot — last resort where no video encoder exists. Slow on
 	// iOS (avoid); acceptable only for a target with no better option.
 	CaptureJPEGScreenshot CaptureMethod = "jpeg-screenshot"
@@ -47,9 +52,9 @@ func preferredCaptureMethod(targetID string) CaptureMethod {
 		return CaptureH264RecordVideo
 	case "android-emulator", "android-device", "android-wear", "android-tv", "android-xr", "android-auto", remoteRuntimeRedroidTargetID:
 		return CaptureJPEGScreenshot
-	case desktopScreenTargetID, "browser-window":
-		// Screen/browser targets keep the existing JPEG-DC path for now; they
-		// don't have the 18s simulator-screenshot pathology.
+	case desktopScreenTargetID:
+		return CaptureH264Desktop
+	case "browser-window":
 		return CaptureJPEGScreenshot
 	default:
 		return CaptureJPEGScreenshot
@@ -61,5 +66,5 @@ func preferredCaptureMethod(targetID string) CaptureMethod {
 // (webrtc-rtp-h264 vs webrtc-datachannel-jpeg) and to warn when a target is
 // stuck on the slow path.
 func captureIsRealtime(m CaptureMethod) bool {
-	return m == CaptureH264RecordVideo || m == CaptureH264Scrcpy
+	return m == CaptureH264RecordVideo || m == CaptureH264Scrcpy || m == CaptureH264Desktop
 }

@@ -221,7 +221,7 @@ func TestEgressProxyVerbsRegistered(t *testing.T) {
 			t.Errorf("ops verb %q not registered", name)
 			continue
 		}
-		if spec.AllowGuest {
+		if spec.AllowCompanion {
 			t.Errorf("ops verb %q must be owner-only (egress lending is sensitive)", name)
 		}
 	}

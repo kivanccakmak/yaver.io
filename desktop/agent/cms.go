@@ -17,13 +17,13 @@ import (
 
 // CMSStatus describes the current state of the CMS process.
 type CMSStatus struct {
-	Running    bool   `json:"running"`
-	Engine     string `json:"engine"`     // keystatic | tina | decap | pocketbase
-	URL        string `json:"url"`        // content preview URL
-	AdminURL   string `json:"admin_url"`  // CMS admin UI URL
-	Port       int    `json:"port"`
-	ContentDir string `json:"content_dir"`
-	Collections int   `json:"collections"`
+	Running     bool   `json:"running"`
+	Engine      string `json:"engine"`    // keystatic | tina | decap | pocketbase
+	URL         string `json:"url"`       // content preview URL
+	AdminURL    string `json:"admin_url"` // CMS admin UI URL
+	Port        int    `json:"port"`
+	ContentDir  string `json:"content_dir"`
+	Collections int    `json:"collections"`
 }
 
 // CMSContent represents a single content entry inside a collection.

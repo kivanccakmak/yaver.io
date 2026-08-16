@@ -86,9 +86,9 @@ func checkCloudflared(ctx context.Context, emit DiagEmit) {
 type tailscaleStatusV2 struct {
 	BackendState string `json:"BackendState"`
 	Self         struct {
-		DNSName    string   `json:"DNSName"`
+		DNSName      string   `json:"DNSName"`
 		TailscaleIPs []string `json:"TailscaleIPs"`
-		Online     bool     `json:"Online"`
+		Online       bool     `json:"Online"`
 	} `json:"Self"`
 	Health []string `json:"Health"`
 }

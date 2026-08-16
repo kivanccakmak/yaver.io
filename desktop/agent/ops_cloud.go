@@ -65,9 +65,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsProvisionHandler,
-		Streaming:  true,
-		AllowGuest: false,
+		Handler:        opsProvisionHandler,
+		Streaming:      true,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "scale",
@@ -83,9 +83,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsScaleHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsScaleHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "destroy",
@@ -99,9 +99,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsDestroyHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsDestroyHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "recycle",
@@ -119,9 +119,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRecycleHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRecycleHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_checkout",
@@ -134,9 +134,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudCheckoutHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudCheckoutHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_status",
@@ -146,9 +146,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudStatusHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudStatusHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_destroy",
@@ -164,9 +164,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudDestroyHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudDestroyHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_list",
@@ -176,9 +176,9 @@ func init() {
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudListHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudListHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_snapshot_delete",
@@ -192,9 +192,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudSnapshotDeleteHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudSnapshotDeleteHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_wake",
@@ -207,9 +207,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudWakeHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudWakeHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "cloud_park",
@@ -222,9 +222,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudParkHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudParkHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

@@ -75,9 +75,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsCloudBakeHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsCloudBakeHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

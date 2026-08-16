@@ -103,12 +103,12 @@ func (s *HTTPServer) handleDBBrowse(w http.ResponseWriter, r *http.Request) {
 }
 
 type dbCallBody struct {
-	Query    string                 `json:"query"`
-	Table    string                 `json:"table"`
-	ID       string                 `json:"id"`
-	Doc      map[string]interface{} `json:"doc"`
-	Fields   map[string]interface{} `json:"fields"`
-	Args     map[string]interface{} `json:"args"`
+	Query  string                 `json:"query"`
+	Table  string                 `json:"table"`
+	ID     string                 `json:"id"`
+	Doc    map[string]interface{} `json:"doc"`
+	Fields map[string]interface{} `json:"fields"`
+	Args   map[string]interface{} `json:"args"`
 }
 
 func (s *HTTPServer) handleDBQuery(w http.ResponseWriter, r *http.Request) {

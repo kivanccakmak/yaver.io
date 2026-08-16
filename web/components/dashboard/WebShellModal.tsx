@@ -155,7 +155,7 @@ export default function WebShellModal({
     return () => clearInterval(t);
   }, []);
 
-  const reauthRequired = Boolean(device.needsAuth) && !device.isGuest;
+  const reauthRequired = Boolean(device.needsAuth);
   const state: "needs-reauth" | "not-connected" | "connecting" | "failed" | "ready" = reauthRequired
     ? "needs-reauth"
     : isCurrentDeviceConnected

@@ -288,9 +288,9 @@ func (s *HTTPServer) handleEnvList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonReply(w, http.StatusOK, map[string]interface{}{
-			"ok":      true,
-			"env":     rows,
-			"origin":  syncOrigin(),
+			"ok":     true,
+			"env":    rows,
+			"origin": syncOrigin(),
 		})
 	case http.MethodPost:
 		var body struct {

@@ -8,7 +8,7 @@ package main
 //
 // Security posture mirrors ops_machine.go:
 //   - Opt-in only: verbs refuse unless started with --netcapture.
-//   - Owner-only: AllowGuest is false on every verb.
+//   - Owner-only: AllowCompanion is false on every verb.
 //   - Privacy: pcap + tty logs stay local (~/.yaver/netcapture); TDS/SQL payloads
 //     are redacted by default. Nothing here is synced to Convex.
 
@@ -42,11 +42,11 @@ func netcaptureEngineForOps(c OpsContext) (*netcapture.Engine, *OpsResult) {
 
 func init() {
 	registerOpsVerb(opsVerbSpec{
-		Name:        "netcapture_status",
-		Description: "List active wire-capture sessions (network + serial) and whether netcapture is enabled.",
-		Schema:      ghostJSONSchema(map[string]interface{}{}),
-		Handler:     netcaptureStatusHandler,
-		AllowGuest:  false,
+		Name:           "netcapture_status",
+		Description:    "List active wire-capture sessions (network + serial) and whether netcapture is enabled.",
+		Schema:         ghostJSONSchema(map[string]interface{}{}),
+		Handler:        netcaptureStatusHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "netcapture_start",
@@ -60,8 +60,8 @@ func init() {
 			"decoder":        map[string]interface{}{"type": "string", "enum": []string{"modbus_rtu", "marlin", "ascii", "auto"}, "description": "serial decoder (default auto = modbus_rtu framing)"},
 			"capturePayload": map[string]interface{}{"type": "boolean", "description": "high-risk: retain raw payloads (TDS/SQL bodies otherwise redacted)"},
 		}),
-		Handler:    netcaptureStartHandler,
-		AllowGuest: false,
+		Handler:        netcaptureStartHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "netcapture_feed",
@@ -70,8 +70,8 @@ func init() {
 			"session": map[string]interface{}{"type": "string"},
 			"hex":     map[string]interface{}{"type": "string", "description": "hex-encoded bytes"},
 		}, "session", "hex"),
-		Handler:    netcaptureFeedHandler,
-		AllowGuest: false,
+		Handler:        netcaptureFeedHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "netcapture_tail",
@@ -80,8 +80,8 @@ func init() {
 			"session": map[string]interface{}{"type": "string"},
 			"n":       map[string]interface{}{"type": "integer"},
 		}, "session"),
-		Handler:    netcaptureTailHandler,
-		AllowGuest: false,
+		Handler:        netcaptureTailHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "netcapture_analyze",
@@ -93,8 +93,8 @@ func init() {
 			"apiKey":   map[string]interface{}{"type": "string"},
 			"model":    map[string]interface{}{"type": "string"},
 		}, "session"),
-		Handler:    netcaptureAnalyzeHandler,
-		AllowGuest: false,
+		Handler:        netcaptureAnalyzeHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "netcapture_stop",
@@ -102,8 +102,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"session": map[string]interface{}{"type": "string"},
 		}, "session"),
-		Handler:    netcaptureStopHandler,
-		AllowGuest: false,
+		Handler:        netcaptureStopHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "netcapture_pcap_decode",
@@ -112,8 +112,8 @@ func init() {
 			"file":       map[string]interface{}{"type": "string", "description": "path to a .pcap file"},
 			"maxPackets": map[string]interface{}{"type": "integer", "description": "cap packets decoded (0 = all)"},
 		}, "file"),
-		Handler:    netcapturePcapDecodeHandler,
-		AllowGuest: false,
+		Handler:        netcapturePcapDecodeHandler,
+		AllowCompanion: false,
 	})
 }
 

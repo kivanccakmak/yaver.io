@@ -33,9 +33,9 @@
 // ── Auth ─────────────────────────────────────────────────────────────────────
 //
 // None of this needs a new secret. `/dev/reload` and `/dev/reload-app` are
-// registered under `authSDKOrGuest` (desktop/agent/httpserver.go), the same
+// registered under `authSDK` (desktop/agent/httpserver.go), the same
 // middleware that already admits the bearer this SDK sends with its feedback
-// POST. A scope-limited SDK token needs the existing `guest-reload` scope,
+// POST. A scope-limited SDK token needs the existing `reload` scope,
 // whose path list already contains both routes — no widening, no new gate.
 
 /** Stable identifier for each action the overlay can render. */

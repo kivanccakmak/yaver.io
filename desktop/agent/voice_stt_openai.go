@@ -41,10 +41,10 @@ type OpenAIWhisperSession struct {
 	apiKey string
 	model  string
 	// audio buffer — appends are cheap, single owner per session
-	mu    sync.Mutex
-	buf   bytes.Buffer
+	mu     sync.Mutex
+	buf    bytes.Buffer
 	events chan DeepgramEvent // reused type from voice_stt_deepgram.go
-	done  bool
+	done   bool
 }
 
 // OpenOpenAIWhisperSession returns a freshly-buffered session and the

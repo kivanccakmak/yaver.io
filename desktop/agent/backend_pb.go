@@ -57,7 +57,7 @@ import (
 
 // PBField describes a single field inside a PocketBase collection schema.
 type PBField struct {
-	Name     string                 `json:"name"`
+	Name string `json:"name"`
 	// Type is one of: text, number, bool, email, url, date, file, relation,
 	// json, select.
 	Type     string                 `json:"type"`
@@ -68,8 +68,8 @@ type PBField struct {
 
 // PBCollection mirrors the PocketBase collection resource.
 type PBCollection struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 	// Type is one of: base, auth, view.
 	Type        string    `json:"type"`
 	Schema      []PBField `json:"schema"`
@@ -100,7 +100,7 @@ type PBUser struct {
 // PBStatus is returned by Status() and describes the runtime state of the
 // PocketBase instance managed by this manager.
 type PBStatus struct {
-	Running     bool   `json:"running"`
+	Running bool `json:"running"`
 	// Mode is one of: embedded, standalone, docker.
 	Mode        string `json:"mode"`
 	Port        int    `json:"port"`
@@ -124,8 +124,8 @@ type PocketBaseManager struct {
 	adminPassword string
 
 	// cached admin JWT so we don't re-authenticate on every API call.
-	adminToken    string
-	tokenExpiry   time.Time
+	adminToken  string
+	tokenExpiry time.Time
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -133,8 +133,9 @@ type PocketBaseManager struct {
 // ──────────────────────────────────────────────────────────────────────────
 
 // NewPocketBaseManager returns a manager with sensible defaults:
-//   port    = 8090
-//   dataDir = ~/.yaver/pb_data
+//
+//	port    = 8090
+//	dataDir = ~/.yaver/pb_data
 func NewPocketBaseManager() *PocketBaseManager {
 	dataDir := filepath.Join(os.TempDir(), "yaver_pb_data") // fallback
 	if home, err := os.UserHomeDir(); err == nil {
@@ -239,10 +240,10 @@ func (m *PocketBaseManager) Collections() ([]PBCollection, error) {
 
 	var resp struct {
 		Items []struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			Schema  []struct {
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Type   string `json:"type"`
+			Schema []struct {
 				Name     string                 `json:"name"`
 				Type     string                 `json:"type"`
 				Required bool                   `json:"required"`
@@ -331,10 +332,10 @@ func (m *PocketBaseManager) CreateCollection(name, collType string, schema []PBF
 
 // Records queries records from a collection.
 //
-//   collection — collection name or ID
-//   filter     — PocketBase filter string, e.g. `status = "active"`
-//   sort       — sort string, e.g. `-created,name`
-//   limit      — max records to return (0 = default 30)
+//	collection — collection name or ID
+//	filter     — PocketBase filter string, e.g. `status = "active"`
+//	sort       — sort string, e.g. `-created,name`
+//	limit      — max records to return (0 = default 30)
 func (m *PocketBaseManager) Records(collection, filter, sort string, limit int) ([]PBRecord, error) {
 	if collection == "" {
 		return nil, fmt.Errorf("collection is required")
@@ -406,9 +407,9 @@ func (m *PocketBaseManager) CreateRecord(collection string, data map[string]inte
 
 // Users manages users in the built-in _pb_users_auth collection.
 //
-//   action  — "list", "create", or "delete"
-//   email   — required for "create" and "delete"
-//   password — required for "create"
+//	action  — "list", "create", or "delete"
+//	email   — required for "create" and "delete"
+//	password — required for "create"
 //
 // Returns []PBUser for "list", a PBUser for "create", and a string for
 // "delete".
@@ -556,7 +557,7 @@ func (m *PocketBaseManager) AdminURL() (string, error) {
 // Setup returns a ready-to-use client SDK code snippet for the given
 // framework.
 //
-//   framework — "javascript", "dart", or "react"
+//	framework — "javascript", "dart", or "react"
 func (m *PocketBaseManager) Setup(framework string) (string, error) {
 	appURL := fmt.Sprintf("http://localhost:%d", m.port)
 	switch framework {

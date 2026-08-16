@@ -13,7 +13,7 @@ package main
 //             Use project="*" on list to see every project.
 //   "op"    — 1Password via the `op` CLI (read-only for now).
 //
-// Guest and support sessions are refused — secrets are owner-private.
+// Secrets are owner-private.
 
 import (
 	"encoding/json"
@@ -82,9 +82,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsSecretsHandler,
-		Streaming:  false,
-		AllowGuest: false, // secrets are always owner-only
+		Handler:        opsSecretsHandler,
+		Streaming:      false,
+		AllowCompanion: false, // secrets are always owner-only
 	})
 }
 

@@ -29,7 +29,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 // installSudoPromptPattern mirrors the stricter one used by the

@@ -91,7 +91,9 @@ const opencodeCmdChunkFlush = 4096
 var opencodeShellLineRE = regexp.MustCompile(`^[ \t]*\$[ \t]+(\S.*?\S|\S)[ \t]*$`)
 
 // OpenCode prints a lightweight banner line near the top of each run:
-//   > build · glm-4.7
+//
+//	> build · glm-4.7
+//
 // That is transport metadata, not assistant output. Once mobile/web
 // started deriving "what is it doing?" from the raw stream, this
 // banner falsely forced trivial commands like `ls` into a

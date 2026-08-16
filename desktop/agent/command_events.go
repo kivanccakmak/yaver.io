@@ -16,8 +16,10 @@ import "time"
 // stderr/path. command_events_privacy_test.go pins this.
 //
 // Wire contract is mirrored, by hand, in:
-//   mobile/src/lib/commandEvents.ts
-//   web/lib/command-events.ts
+//
+//	mobile/src/lib/commandEvents.ts
+//	web/lib/command-events.ts
+//
 // Keep all three in lockstep; bump CommandEventSchema on any breaking
 // change so clients can gate.
 const CommandEventSchema = 1

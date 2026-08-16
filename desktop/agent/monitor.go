@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	uptimeHistorySize   = 1000
-	uptimeRetryCount    = 3
-	uptimeRetryDelay    = 5 * time.Second
-	uptimeHTTPTimeout   = 10 * time.Second
+	uptimeHistorySize = 1000
+	uptimeRetryCount  = 3
+	uptimeRetryDelay  = 5 * time.Second
+	uptimeHTTPTimeout = 10 * time.Second
 )
 
 // UptimeEntry holds configuration and current status for a monitored URL.

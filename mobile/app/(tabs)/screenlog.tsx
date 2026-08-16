@@ -6,7 +6,7 @@
 // + remote start/stop.
 //
 // Device targeting: a picker at the top lets you point the monitor at any
-// OWN/online or SHARED device WITHOUT changing your app-wide active box. Each
+// owned online device WITHOUT changing your app-wide active box. Each
 // target gets its own connectionManager.clientFor(deviceId) client (direct LAN
 // or relay), so watching dad's PC doesn't drop your primary coding box.
 //

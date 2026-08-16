@@ -19,14 +19,14 @@ const (
 // beaconPayload is the JSON broadcast on the LAN.
 type beaconPayload struct {
 	Version          int    `json:"v"`
-	DeviceID         string `json:"id"`            // first 8 chars
+	DeviceID         string `json:"id"` // first 8 chars
 	Port             int    `json:"p"`
 	Name             string `json:"n"`
-	TokenFingerprint string `json:"th"`            // first 8 chars of SHA256(userId)
-	VoiceCapable     bool   `json:"vc,omitempty"`  // true if voice transcription is available
-	TLSFingerprint   string `json:"tf,omitempty"`  // SHA256 of TLS cert
-	TLSPort          int    `json:"tp,omitempty"`  // HTTPS port
-	HardwareID       string `json:"hw,omitempty"`  // stable hardware identifier (P2P only, never sent to Convex)
+	TokenFingerprint string `json:"th"`           // first 8 chars of SHA256(userId)
+	VoiceCapable     bool   `json:"vc,omitempty"` // true if voice transcription is available
+	TLSFingerprint   string `json:"tf,omitempty"` // SHA256 of TLS cert
+	TLSPort          int    `json:"tp,omitempty"` // HTTPS port
+	HardwareID       string `json:"hw,omitempty"` // stable hardware identifier (P2P only, never sent to Convex)
 	// Bootstrap mode fields — only set while the box is running
 	// `yaver serve` with no auth token.
 	NeedsAuth        bool   `json:"na,omitempty"`  // true = waiting for a token via /auth/pair/submit

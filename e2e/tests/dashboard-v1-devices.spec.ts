@@ -169,7 +169,7 @@ async function installDashboardRoutes(page: import("@playwright/test").Page) {
 }
 
 test.describe("v1 devices dashboard", () => {
-  test("keeps guests closed and collapses duplicate auth rows to the real Ubuntu row", async ({ page }) => {
+  test("keeps removed sharing UI absent and collapses duplicate auth rows to the real Ubuntu row", async ({ page }) => {
     await installDashboardRoutes(page);
 
     await page.goto("/dashboard?tab=devices");
@@ -184,7 +184,7 @@ test.describe("v1 devices dashboard", () => {
     await expect(page.getByText("@linux", { exact: true })).toHaveCount(0);
   });
 
-  test("does not deep-link into the guest surface while guest access is launch-disabled", async ({ page }) => {
+  test("does not revive the removed guest surface through a stale deep link", async ({ page }) => {
     await installDashboardRoutes(page);
 
     await page.goto("/dashboard?tab=guests");

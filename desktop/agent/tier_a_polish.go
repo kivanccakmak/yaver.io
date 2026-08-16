@@ -81,7 +81,7 @@ func autoInferHealthcheck(baseURL string) string {
 // detectMigrator sniffs the project for Drizzle or Prisma and returns the
 // migration command to run before swapping services in a deploy.
 func detectMigrator(projectDir string) (string, string) {
-	if fileExists(projectDir + "/drizzle.config.ts") || fileExists(projectDir + "/drizzle.config.js") {
+	if fileExists(projectDir+"/drizzle.config.ts") || fileExists(projectDir+"/drizzle.config.js") {
 		return "drizzle", "npx drizzle-kit migrate"
 	}
 	if fileExists(projectDir + "/prisma/schema.prisma") {
@@ -89,7 +89,6 @@ func detectMigrator(projectDir string) (string, string) {
 	}
 	return "", ""
 }
-
 
 // autoInferDeployHealthcheck walks services.yaml ports and picks the first HTTP
 // service to probe. Called by RunDeploy when cfg.Healthcheck is empty.

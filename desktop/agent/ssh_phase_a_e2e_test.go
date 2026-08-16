@@ -17,8 +17,8 @@ import (
 // the REAL splice glue — the two hops that were only unit-tested separately now
 // carry a real SSH session end to end:
 //
-//   phone ssh.Client ──▶ [relay: write envelope, then splice] ──▶
-//     [agent: decode envelope, sentinel? splice to local SSH] ──▶ box SSH server
+//	phone ssh.Client ──▶ [relay: write envelope, then splice] ──▶
+//	  [agent: decode envelope, sentinel? splice to local SSH] ──▶ box SSH server
 //
 // This is the "spin up a relay and prove Phase A" test, minus two OS processes:
 // the relay and agent halves are the exact code paths (envelope framing + the

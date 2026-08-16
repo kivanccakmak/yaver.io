@@ -12,22 +12,22 @@ import (
 // SSE events on `topic=webview/transport` so the dashboard CONSOLE can
 // render a phase ladder for the post-compile pipeline:
 //
-//   compiled        — bundle written to .yaver-build-web/, manager has
-//                     WebBundleInfo. The HTTP build-native response
-//                     just landed on the caller.
-//   ready_to_serve  — manifest of files+sizes prepped, transport ready
-//                     to ship bytes. Same wall-clock as compiled today
-//                     but a distinct phase so future async pre-warming
-//                     can fit cleanly.
-//   serving         — first GET to /dev/web-bundle/ has arrived. Iframe
-//                     started fetching index.html.
-//   streaming       — a file landed; running totals attached to progress
-//                     payload. Throttled to ≤ 5 events/sec to stay
-//                     polite to slow consumers.
-//   delivered       — iframe POSTed /dev/web-bundle/ack {ms_to_load}.
-//                     Bundle has fully loaded + Hermes/V8 evaluated it.
-//   error           — iframe POSTed /dev/web-bundle/error {message,stack}
-//                     OR a transport-level fault (file 404 / 5xx).
+//	compiled        — bundle written to .yaver-build-web/, manager has
+//	                  WebBundleInfo. The HTTP build-native response
+//	                  just landed on the caller.
+//	ready_to_serve  — manifest of files+sizes prepped, transport ready
+//	                  to ship bytes. Same wall-clock as compiled today
+//	                  but a distinct phase so future async pre-warming
+//	                  can fit cleanly.
+//	serving         — first GET to /dev/web-bundle/ has arrived. Iframe
+//	                  started fetching index.html.
+//	streaming       — a file landed; running totals attached to progress
+//	                  payload. Throttled to ≤ 5 events/sec to stay
+//	                  polite to slow consumers.
+//	delivered       — iframe POSTed /dev/web-bundle/ack {ms_to_load}.
+//	                  Bundle has fully loaded + Hermes/V8 evaluated it.
+//	error           — iframe POSTed /dev/web-bundle/error {message,stack}
+//	                  OR a transport-level fault (file 404 / 5xx).
 //
 // Producer lives entirely on the agent. Consumers (web dashboard,
 // future mobile-side surface) read dev/events and render the phase
@@ -88,12 +88,12 @@ func (t *webTransport) transition(phase string) {
 	log.Printf("[web-bundle:transport] phase=%s target=%s caller=%s served=%d/%d files served_bytes=%d/%d",
 		phase, t.target, t.caller, t.servedFiles, t.totalFiles, t.servedBytes, t.totalBytes)
 	t.emit(DevServerEvent{
-		Type:        "phase",
-		Topic:       "webview/transport",
-		Phase:       phase,
-		Caller:      t.caller,
-		Framework:   t.target,
-		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+		Type:      "phase",
+		Topic:     "webview/transport",
+		Phase:     phase,
+		Caller:    t.caller,
+		Framework: t.target,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 

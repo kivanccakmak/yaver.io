@@ -2,18 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
-    <!-- CarPlay (Case-ID 20875817, VOICE) is a MANAGED capability: this key only
-         signs while "CarPlay Voice Based Conversation" is switched ON for
-         io.yaver.mobile in the Developer portal. It is NOT visible over the App
-         Store Connect API — `capabilityType` has no CarPlay value at all — so the
-         only way to confirm it is to decode the provisioning profile. If an
-         archive ever fails with "Entitlement … carplay-voice-based-conversation
-         not found and could not be included in profile", the portal toggle is off:
-         re-enable it there rather than deleting this key (build 426 / 5a82b7ead).
-         Pairs with CPTemplateApplicationScene in Info.plist +
-         YaverCarPlaySceneDelegate.swift. -->
-    <key>com.apple.developer.carplay-voice-based-conversation</key>
-    <true/>
     <key>aps-environment</key>
     <string>development</string>
     <key>com.apple.developer.applesignin</key>
@@ -24,6 +12,12 @@
     <array>
       <string>applinks:yaver.io</string>
       <string>webcredentials:yaver.io</string>
+    </array>
+    <key>com.apple.developer.carplay-voice-based-conversation</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+      <string>group.io.yaver.mobile</string>
     </array>
   </dict>
 </plist>

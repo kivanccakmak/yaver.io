@@ -28,9 +28,7 @@ export interface YaverMachinePickerProps {
 }
 
 /**
- * List of remote dev machines the signed-in user can reach. Split into
- *   - Owned machines (user is the host)
- *   - Shared machines (host invited them as a guest)
+ * List of remote dev machines owned by the signed-in user.
  *
  * Tapping a device persists it to AsyncStorage and invokes `onPick`. The
  * SDK then uses that device's deviceId for agent discovery (LAN probe +
@@ -45,7 +43,7 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [list, setList] = useState<DeviceList>({ owned: [], shared: [] });
+  const [list, setList] = useState<DeviceList>({ owned: [] });
   const [pairingDevice, setPairingDevice] = useState<RemoteDevice | null>(null);
   const [reachability, setReachability] = useState<Record<string, DeviceReachability | undefined>>({});
 
@@ -57,7 +55,7 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
       setList(result);
       setReachability({});
       void (async () => {
-        const devices = [...result.owned, ...result.shared];
+        const devices = result.owned;
         const settled = await Promise.allSettled(
           devices.map(async (device) => ({
             deviceId: device.deviceId,
@@ -74,10 +72,8 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
           return next;
         });
       })();
-      if (result.owned.length === 0 && result.shared.length === 0) {
-        setError(
-          'No machines found yet. If you do not have your own computer, redeem a host invite code first. Otherwise run `yaver auth` + `yaver serve` on your machine.',
-        );
+      if (result.owned.length === 0) {
+        setError('No machines found yet. Run `yaver auth` + `yaver serve` on your machine.');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -158,13 +154,8 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
     } else if (device.runnerDown) {
       statusLine = 'Runner down — restart the coding agent on the Mac';
     } else {
-      // Happy-path subtitle: platform + optional host/share hint.
+      // Happy-path subtitle.
       statusLine = device.platform;
-      if (device.isGuest && device.hostEmail) {
-        statusLine = `${statusLine} • ${device.hostEmail}`;
-      } else if (device.accessScope === 'shared-scoped') {
-        statusLine = `${statusLine} • paylaşılan`;
-      }
     }
     return (
       <TouchableOpacity
@@ -214,12 +205,6 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Kendi makinelerim</Text>
                 {list.owned.map(renderDevice)}
-              </View>
-            )}
-            {list.shared.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Paylaşılan (guest)</Text>
-                {list.shared.map(renderDevice)}
               </View>
             )}
             {error && <Text style={styles.error}>{error}</Text>}

@@ -125,8 +125,8 @@ func saveRunnerTokenLedgerLocked(entries []RunnerTokenLedgerEntry) error {
 		return err
 	}
 	payload := struct {
-		Version int                       `json:"version"`
-		Tokens  []RunnerTokenLedgerEntry  `json:"tokens"`
+		Version int                      `json:"version"`
+		Tokens  []RunnerTokenLedgerEntry `json:"tokens"`
 	}{Version: 1, Tokens: entries}
 	buf, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

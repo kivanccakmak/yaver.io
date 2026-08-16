@@ -39,8 +39,8 @@ func init() {
 				"description": "Whether task changes should auto-push from runner to renderer. Default ask.",
 			},
 		}),
-		Handler:    machineRolesHandler,
-		AllowGuest: false,
+		Handler:        machineRolesHandler,
+		AllowCompanion: false,
 	})
 }
 
@@ -213,9 +213,6 @@ func resolveMachineRoleDevice(hint string, devices []primaryDevice) (*primaryDev
 	}
 	var matches []primaryDevice
 	for _, d := range devices {
-		if d.IsGuest {
-			continue
-		}
 		if d.DeviceID == hint || strings.EqualFold(d.Name, hint) {
 			copy := d
 			return &copy, nil

@@ -27,19 +27,19 @@ type TestFix struct {
 
 // TestAppSession tracks an autonomous test session.
 type TestAppSession struct {
-	mu               sync.RWMutex
-	Active           bool      `json:"active"`
-	SessionID        string    `json:"sessionId,omitempty"`
-	TaskID           string    `json:"taskId,omitempty"`
-	CurrentScreen    string    `json:"currentScreen,omitempty"`
-	ScreensDiscovered int      `json:"screensDiscovered"`
-	ScreensTested    int       `json:"screensTested"`
-	ErrorsFound      int       `json:"errorsFound"`
-	Fixes            []TestFix `json:"fixes"`
-	StartedAt        string    `json:"startedAt,omitempty"`
-	ElapsedSeconds   float64   `json:"elapsedSeconds,omitempty"`
-	Status           string    `json:"status"`
-	startTime        time.Time
+	mu                sync.RWMutex
+	Active            bool      `json:"active"`
+	SessionID         string    `json:"sessionId,omitempty"`
+	TaskID            string    `json:"taskId,omitempty"`
+	CurrentScreen     string    `json:"currentScreen,omitempty"`
+	ScreensDiscovered int       `json:"screensDiscovered"`
+	ScreensTested     int       `json:"screensTested"`
+	ErrorsFound       int       `json:"errorsFound"`
+	Fixes             []TestFix `json:"fixes"`
+	StartedAt         string    `json:"startedAt,omitempty"`
+	ElapsedSeconds    float64   `json:"elapsedSeconds,omitempty"`
+	Status            string    `json:"status"`
+	startTime         time.Time
 }
 
 func (s *TestAppSession) toJSON() map[string]interface{} {
@@ -142,12 +142,12 @@ func (s *HTTPServer) handleTestAppStart(w http.ResponseWriter, r *http.Request) 
 		task, err := s.taskMgr.CreateTask(
 			"Autonomous App Test",
 			prompt,
-			"",          // model
-			"test-app",  // source
-			"",          // runner
-			"",          // custom command
-			nil,         // images
-			nil,         // speech context
+			"",         // model
+			"test-app", // source
+			"",         // runner
+			"",         // custom command
+			nil,        // images
+			nil,        // speech context
 		)
 		if err == nil {
 			session.mu.Lock()

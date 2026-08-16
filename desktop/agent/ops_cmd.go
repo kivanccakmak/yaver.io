@@ -13,7 +13,7 @@ package main
 //
 // The CLI shells out to the local daemon at localhost:18080 — same
 // self-healing path as every other local-agent CLI command (`yaver
-// primary`, `yaver guests`, etc.). If the daemon isn't running it is
+// primary`, `yaver machines`, etc.). If the daemon isn't running it is
 // spawned and polled for readiness before the request is retried.
 
 import (
@@ -65,7 +65,7 @@ Usage:
 Every verb returns either a sync result (printed as JSON) or a streamId
 (with the initial frame printed; subscribe via 'yaver stream <name>').
 
-Guest sessions cannot call owner-only verbs — the agent enforces.
+Signed companion sessions can call only their explicitly allowlisted verbs.
 `)
 }
 
@@ -87,7 +87,6 @@ func runOpsListVerbs() {
 			Name        string                 `json:"name"`
 			Description string                 `json:"description"`
 			Streaming   bool                   `json:"streaming"`
-			AllowGuest  bool                   `json:"allowGuest"`
 			Payload     map[string]interface{} `json:"payload"`
 		} `json:"verbs"`
 	}
@@ -101,9 +100,6 @@ func runOpsListVerbs() {
 		flags := []string{}
 		if v.Streaming {
 			flags = append(flags, "stream")
-		}
-		if v.AllowGuest {
-			flags = append(flags, "guest-ok")
 		}
 		tag := ""
 		if len(flags) > 0 {

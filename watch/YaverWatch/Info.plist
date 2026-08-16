@@ -17,7 +17,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.18.150</string>
+    <string>1.18.167</string>
     <key>CFBundleURLTypes</key>
     <array>
       <dict>
@@ -58,8 +58,8 @@
     <dict>
       <key>NSAllowsArbitraryLoads</key>
       <true/>
-      <key>NSAllowsLocalNetworking</key>
-      <true/>
+      <key>_comment_NSAllowsLocalNetworking</key>
+      <string>REMOVED DELIBERATELY 2026-08-03: Apple IGNORES NSAllowsArbitraryLoads when NSAllowsLocalNetworking is present, so setting both left the arbitrary-loads flag INERT and kept 100.64/10 (Tailscale/Mesh CGNAT) blocked. Proven by experiment on visionOS. expo prebuild regenerates Info.plist from this file, so the two MUST agree or the next prebuild silently undoes the fix.</string>
     </dict>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Yaver provides Bluetooth access to apps you run for testing.</string>

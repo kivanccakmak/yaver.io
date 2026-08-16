@@ -117,8 +117,8 @@ func ensureRunnerCredentialFreshForTurn(ctx context.Context, runnerID string) co
 	res := refreshCodexCredentialIfNeeded(ctx, false)
 
 	// ABSENCE IS NOT EVIDENCE. `codexAuthPath()` resolves the AGENT's CODEX_HOME.
-	// A box that runs tasks under a different tenant home (tenant_runtime.go sets
-	// CODEX_HOME per guest) legitimately has no credential at the agent's path
+	// A box that runs tasks under a different operator-tenant home
+	// (tenant_runtime.go sets CODEX_HOME per tenant) legitimately has no credential at the agent's path
 	// while the task's runtime has a perfectly good one. Blocking the turn on that
 	// would invent an outage — the exact "don't block a path we can't assess"
 	// rule the preflight already states.

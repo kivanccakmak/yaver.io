@@ -13,14 +13,14 @@ import (
 
 // NotificationConfig holds notification channel settings.
 type NotificationConfig struct {
-	Telegram  *TelegramConfig  `json:"telegram,omitempty"`
-	Discord   *DiscordConfig   `json:"discord,omitempty"`
-	Slack     *SlackConfig     `json:"slack,omitempty"`
-	Teams     *TeamsConfig     `json:"teams,omitempty"`
-	Linear    *LinearConfig    `json:"linear,omitempty"`
-	Jira      *JiraConfig      `json:"jira,omitempty"`
-	PagerDuty *PagerDutyConfig `json:"pagerduty,omitempty"`
-	Opsgenie  *OpsgenieConfig  `json:"opsgenie,omitempty"`
+	Telegram  *TelegramConfig    `json:"telegram,omitempty"`
+	Discord   *DiscordConfig     `json:"discord,omitempty"`
+	Slack     *SlackConfig       `json:"slack,omitempty"`
+	Teams     *TeamsConfig       `json:"teams,omitempty"`
+	Linear    *LinearConfig      `json:"linear,omitempty"`
+	Jira      *JiraConfig        `json:"jira,omitempty"`
+	PagerDuty *PagerDutyConfig   `json:"pagerduty,omitempty"`
+	Opsgenie  *OpsgenieConfig    `json:"opsgenie,omitempty"`
 	Email     *EmailNotifyConfig `json:"email_notify,omitempty"`
 }
 
@@ -46,8 +46,8 @@ type TeamsConfig struct {
 }
 
 type LinearConfig struct {
-	APIKey  string `json:"apiKey"`  // Linear API key
-	TeamID  string `json:"teamId"`  // Linear team ID for issue creation
+	APIKey  string `json:"apiKey"` // Linear API key
+	TeamID  string `json:"teamId"` // Linear team ID for issue creation
 	Enabled bool   `json:"enabled"`
 }
 
@@ -66,13 +66,13 @@ type PagerDutyConfig struct {
 }
 
 type OpsgenieConfig struct {
-	APIKey  string `json:"apiKey"`  // Opsgenie API key
-	Enabled bool   `json:"enabled"`
-	OnFailOnly bool `json:"onFailOnly"` // only alert on task failure
+	APIKey     string `json:"apiKey"` // Opsgenie API key
+	Enabled    bool   `json:"enabled"`
+	OnFailOnly bool   `json:"onFailOnly"` // only alert on task failure
 }
 
 type EmailNotifyConfig struct {
-	To      string `json:"to"`      // recipient email address
+	To      string `json:"to"` // recipient email address
 	Enabled bool   `json:"enabled"`
 }
 

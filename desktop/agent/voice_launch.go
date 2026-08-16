@@ -29,9 +29,10 @@ import (
 )
 
 // launchVerbPattern matches:
-//   "launch sfmg" / "open sfmg" / "start sfmg" / "fire up sfmg" / "run sfmg"
-//   optionally with leading filler ("ok", "hey yaver", "please")
-//   optionally with trailing filler ("please", "on my phone")
+//
+//	"launch sfmg" / "open sfmg" / "start sfmg" / "fire up sfmg" / "run sfmg"
+//	optionally with leading filler ("ok", "hey yaver", "please")
+//	optionally with trailing filler ("please", "on my phone")
 var launchVerbPattern = regexp.MustCompile(`(?i)\b(launch|open|start|fire\s+up|run)\s+([a-z][a-z0-9_\-\.]{0,32})\b`)
 
 // VoiceLaunchIntent describes a parsed launch instruction.
@@ -142,6 +143,7 @@ func HandleVoiceLaunch(ctx context.Context, intent *VoiceLaunchIntent, cfg *Conf
 //   - exact match
 //   - key STARTS WITH the slug
 //   - slug STARTS WITH the key
+//
 // Picks the shortest matching key for stability.
 func fuzzyMatchLaunchProject(slug string, projects map[string]string) string {
 	slug = strings.ToLower(slug)

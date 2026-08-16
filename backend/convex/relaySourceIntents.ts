@@ -126,48 +126,12 @@ export function parseRelaySourceProviderTarget(repoUrl: string | undefined, bran
   };
 }
 
-async function resolveShareForUser(
-  ctx: any,
-  userId: Id<"users">,
-  args: { shareId?: Id<"projectShares">; projectSlug?: string },
-) {
-  let share = args.shareId ? await ctx.db.get(args.shareId) : null;
-  const projectSlug = normalizeProjectSlug(args.projectSlug);
-  if (!share && projectSlug) {
-    share = await ctx.db
-      .query("projectShares")
-      .withIndex("by_owner", (q: any) => q.eq("ownerUserId", userId))
-      .filter((q: any) => q.eq(q.field("slug"), projectSlug))
-      .filter((q: any) => q.eq(q.field("status"), "active"))
-      .first();
-    if (!share) {
-      const memberships = await ctx.db
-        .query("projectMemberships")
-        .withIndex("by_user", (q: any) => q.eq("userId", userId))
-        .collect();
-      for (const membership of memberships) {
-        if (membership.status !== "active") continue;
-        const candidate = await ctx.db.get(membership.shareId);
-        if (candidate?.status === "active" && candidate.slug === projectSlug) {
-          share = candidate;
-          break;
-        }
-      }
-    }
+export function normalizeRelayRepoUrl(value: string | undefined, branch = "yaver/source/validate"): string {
+  const target = parseRelaySourceProviderTarget(value, branch);
+  if (!target.providerHost || !target.providerRepo) {
+    throw new Error("repoUrl must be a credential-free GitHub or GitLab repository URL");
   }
-  if (!share || share.status !== "active") throw new Error("project share not found");
-
-  const owner = String(share.ownerUserId) === String(userId);
-  let membership = null;
-  if (!owner) {
-    membership = await ctx.db
-      .query("projectMemberships")
-      .withIndex("by_share_user", (q: any) => q.eq("shareId", share._id).eq("userId", userId))
-      .first();
-    if (!membership || membership.status !== "active") throw new Error("project membership not active");
-    if (membership.role === "viewer") throw new Error("viewer role cannot create relay source work");
-  }
-  return { share, membership };
+  return `https://${target.providerHost}/${target.providerRepo}.git`;
 }
 
 function serialize(row: any) {
@@ -176,8 +140,6 @@ function serialize(row: any) {
     localTaskId: row.localTaskId,
     taskId: row.taskId ?? null,
     placementId: row.placementId ?? null,
-    shareId: row.shareId,
-    membershipId: row.membershipId ?? null,
     sourceSurface: row.sourceSurface ?? null,
     projectSlug: row.projectSlug,
     repoUrl: row.repoUrl,
@@ -213,8 +175,9 @@ export const create = mutation({
     tokenHash: v.string(),
     localTaskId: v.string(),
     placementId: v.optional(v.id("taskPlacements")),
-    shareId: v.optional(v.id("projectShares")),
-    projectSlug: v.optional(v.string()),
+    projectSlug: v.string(),
+    repoUrl: v.string(),
+    defaultBranch: v.optional(v.string()),
     sourceSurface: v.optional(v.string()),
     kind: v.optional(v.string()),
     branch: v.optional(v.string()),
@@ -232,30 +195,27 @@ export const create = mutation({
       if (placement.lane !== "relay_source") throw new Error("placement is not relay_source");
     }
 
-    const { share, membership } = await resolveShareForUser(ctx, userId, {
-      shareId: args.shareId,
-      projectSlug: args.projectSlug,
-    });
+    const projectSlug = normalizeProjectSlug(args.projectSlug);
+    if (!projectSlug) throw new Error("projectSlug required");
     const now = Date.now();
     const expiresAt = now + Math.max(5 * 60_000, Math.min(args.ttlMs ?? 24 * 60 * 60_000, 7 * 24 * 60 * 60_000));
-    const fallbackSeed = `${share.slug}-${localTaskId}`;
-    const branch = normalizeRelayBranch(args.branch || membership?.branch, fallbackSeed);
-    const baseBranch = trimLabel(share.defaultBranch, 80) || "main";
-    const providerTarget = parseRelaySourceProviderTarget(share.repoUrl, branch);
+    const fallbackSeed = `${projectSlug}-${localTaskId}`;
+    const branch = normalizeRelayBranch(args.branch, fallbackSeed);
+    const baseBranch = trimLabel(args.defaultBranch, 80) || "main";
+    const repoUrl = normalizeRelayRepoUrl(args.repoUrl, branch);
+    const providerTarget = parseRelaySourceProviderTarget(repoUrl, branch);
     const existing = await ctx.db
       .query("relaySourceIntents")
       .withIndex("by_local_task", (q: any) => q.eq("localTaskId", localTaskId))
       .first();
     const patch = {
       userId,
-      ownerUserId: share.ownerUserId,
-      shareId: share._id,
-      membershipId: membership?._id,
+      ownerUserId: userId,
       placementId: args.placementId,
       localTaskId,
       sourceSurface: trimLabel(args.sourceSurface, 80),
-      projectSlug: share.slug,
-      repoUrl: share.repoUrl,
+      projectSlug,
+      repoUrl,
       baseBranch,
       branch,
       ...providerTarget,
@@ -378,30 +338,15 @@ export const listRecent = query({
     projectSlug: v.optional(v.string()),
     limit: v.optional(v.number()),
     includeTerminal: v.optional(v.boolean()),
-    scope: v.optional(v.union(v.literal("mine"), v.literal("owned"), v.literal("all"))),
   },
   handler: async (ctx, args) => {
     const userId = await userFromToken(ctx, args.tokenHash);
     const n = Math.max(1, Math.min(100, args.limit ?? 25));
-    const ownRows = args.scope === "owned"
-      ? []
-      : await ctx.db
-          .query("relaySourceIntents")
-          .withIndex("by_user_created", (q: any) => q.eq("userId", userId))
-          .order("desc")
-          .take(n);
-    const ownerRows = args.scope === "mine"
-      ? []
-      : await ctx.db
-          .query("relaySourceIntents")
-          .withIndex("by_owner_created", (q: any) => q.eq("ownerUserId", userId))
-          .order("desc")
-          .take(n);
-    const byId = new Map<string, any>();
-    for (const row of [...ownRows, ...ownerRows]) byId.set(String(row._id), row);
-    const rows = [...byId.values()]
-      .sort((a: any, b: any) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
-      .slice(0, n);
+    const rows = await ctx.db
+      .query("relaySourceIntents")
+      .withIndex("by_owner_created", (q: any) => q.eq("ownerUserId", userId))
+      .order("desc")
+      .take(n);
     const now = Date.now();
     const projectSlug = normalizeProjectSlug(args.projectSlug);
     return rows

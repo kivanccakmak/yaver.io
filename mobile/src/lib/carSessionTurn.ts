@@ -27,11 +27,19 @@ export interface SessionTurnResult {
   ok: boolean;
   session: string;
   runner?: string;
-  /** "prompt" or "choice" — what we actually delivered. */
+  /** "prompt" or "choice" — what we actually delivered, plus lifecycle
+   *  intents: "start" | "list" | "close" | "stop_all" | "switch". */
   sent?: string;
   /** True when the pane is (still) on a menu. The caller must answer with
    *  `choice` before any prompt will be accepted. */
   awaitingChoice: boolean;
+  /** True when a lifecycle intent (EN/TR, see session_intent.go) was ambiguous
+   *  and the caller must resolve against `available` before acting. */
+  needsChoice?: boolean;
+  /** Multi-session picker when several runner sessions are live and the caller
+   *  did not name one. The driver picks by number; the caller re-sends with an
+   *  explicit `session`. */
+  available?: Array<{ name: string; runner: string; index: number; matched?: boolean }>;
   options?: string[];
   /** Plain text pane tail (ANSI stripped). Enough for a TV to render and
    *  for a car to summarize. */
@@ -50,6 +58,8 @@ export interface SessionTurnResult {
 export type SessionTurnDep = (
   text: string | null,
   choice: string | null,
+  /** Explicit picker resolution when several live sessions exist. */
+  session?: string,
 ) => Promise<SessionTurnResult>;
 
 // ── Choice parsing ───────────────────────────────────────────────────
@@ -125,6 +135,9 @@ export interface CarSessionTurnResult {
   options: string[];
   /** The full pane (for the phone screen / TV). */
   pane: string;
+  /** Multi-session picker: several runner sessions are live and the caller
+   *  did not name one. The driver must pick by number before any turn runs. */
+  available?: Array<{ name: string; runner: string; index: number; matched?: boolean }>;
   error?: string;
 }
 
@@ -132,6 +145,9 @@ export interface CarSessionTurnResult {
  * Drive one turn of the live coding session from a car reply.
  *
  * Flow:
+ *   - If the agent returned a multi-session picker (`available`), speak the
+ *     session names as numbered options and return — the driver picks by
+ *     number, and the caller re-sends with an explicit `session`.
  *   - If there's a pending choice (awaitingChoice) and the text looks like a
  *     number/yes/no → send as {choice}.
  *   - Otherwise → send as {text} (a prompt).
@@ -146,6 +162,7 @@ export async function dispatchSessionTurn(
   text: string,
   sessionTurn: SessionTurnDep,
   pendingChoice: boolean,
+  session?: string,
 ): Promise<CarSessionTurnResult> {
   const clean = text.trim();
   if (!clean) {
@@ -167,7 +184,7 @@ export async function dispatchSessionTurn(
 
   let result: SessionTurnResult;
   try {
-    result = await sessionTurn(prompt, choice);
+    result = await sessionTurn(prompt, choice, session);
   } catch (e) {
     return {
       spoken: "I couldn't reach your box.",
@@ -175,6 +192,30 @@ export async function dispatchSessionTurn(
       options: [],
       pane: "",
       error: e instanceof Error ? e.message : String(e),
+    };
+  }
+
+  // The box could not resolve a session because several are live. Speak the
+  // picker and stop — a driver cannot be asked to guess a tmux name from
+  // memory. The caller re-sends with an explicit `session` name.
+  if (result.available && result.available.length > 1 && !result.session) {
+    const spoken =
+      result.available.length === 1
+        ? `Using the ${result.available[0].runner} session.`
+        : `Several sessions are running. Say the number: ${result.available
+            .slice(0, 5)
+            .map((a) => `${a.index + 1}. ${a.runner} ${a.name}`)
+            .join(". ")}.`;
+    return {
+      spoken,
+      available: result.available,
+      // A session picker is conversational input too. Mark it pending so the
+      // voice completeness judge accepts the next number immediately; the
+      // stateful runner channel resolves it before anything reaches tmux.
+      awaitingChoice: true,
+      options: [],
+      pane: result.pane ?? "",
+      error: result.error,
     };
   }
 

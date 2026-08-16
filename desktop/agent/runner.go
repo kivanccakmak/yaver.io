@@ -111,7 +111,7 @@ type RunnerJob struct {
 	Pool string `json:"pool,omitempty"`
 
 	// Project is the workspace app slug this job belongs to.
-	// Used for vault scoping + guest project filtering. Empty =
+	// Used for vault scoping. Empty =
 	// no project; vault env falls back to globals only.
 	Project string `json:"project,omitempty"`
 
@@ -175,9 +175,8 @@ type RunnerRun struct {
 	InProgress  bool          `json:"inProgress,omitempty"`
 	OutputTail  string        `json:"outputTail,omitempty"` // last ~8KB
 	TimedOut    bool          `json:"timedOut,omitempty"`
-	TriggeredBy string        `json:"triggeredBy,omitempty"` // "owner" | guestUserID | "schedule" | "webhook"
-	IsGuest     bool          `json:"isGuest,omitempty"`
-	LogPath     string        `json:"logPath,omitempty"` // server-side only; stripped before guest replies
+	TriggeredBy string        `json:"triggeredBy,omitempty"` // "owner" | "schedule" | "webhook"
+	LogPath     string        `json:"logPath,omitempty"`     // server-side only
 	LogBytes    int64         `json:"logBytes,omitempty"`
 
 	outputBuf []byte
@@ -597,20 +596,16 @@ func runnerLogDirSize(root string) int64 {
 	return total
 }
 
-// ListRuns returns up to `limit` runs (most recent first) optionally
-// filtered to a single jobName and/or to one TriggeredBy identity
-// (used by the guest filter so a guest only sees their own runs).
+// ListRuns returns up to `limit` runs (most recent first), optionally
+// filtered to a single jobName.
 // limit=0 returns every run.
-func (s *RunnerStore) ListRuns(jobName, triggeredBy string, limit int) []RunnerRun {
+func (s *RunnerStore) ListRuns(jobName string, limit int) []RunnerRun {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]RunnerRun, 0, len(s.runs))
 	for i := len(s.runs) - 1; i >= 0; i-- {
 		r := s.runs[i]
 		if jobName != "" && r.JobName != jobName {
-			continue
-		}
-		if triggeredBy != "" && r.TriggeredBy != triggeredBy {
 			continue
 		}
 		out = append(out, *r)
@@ -621,17 +616,12 @@ func (s *RunnerStore) ListRuns(jobName, triggeredBy string, limit int) []RunnerR
 	return out
 }
 
-// GetRun returns one run by ID. Guest filter behaves identically to
-// DeployHistory.Get — non-matching guests get a "not found" so the
-// existence of someone else's run doesn't leak.
-func (s *RunnerStore) GetRun(id, triggeredBy string) (RunnerRun, bool) {
+// GetRun returns one run by ID.
+func (s *RunnerStore) GetRun(id string) (RunnerRun, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.byID[id]
 	if !ok {
-		return RunnerRun{}, false
-	}
-	if triggeredBy != "" && r.TriggeredBy != triggeredBy {
 		return RunnerRun{}, false
 	}
 	return *r, true
@@ -649,13 +639,7 @@ func (s *RunnerStore) LogPathFor(id string) string {
 	return r.LogPath
 }
 
-// runnerLimits are the per-caller in-flight caps. Mirrors
-// deployShipLimits — owner gets headroom for parallel work, guests
-// get a tight cap so a misbehaving end-user can't saturate the box.
-var runnerLimits = struct {
-	Owner int
-	Guest int
-}{Owner: 8, Guest: 2}
+const runnerMaxInFlight = 8
 
 // runnerLimiter tracks per-caller in-flight runs. Same shape as
 // deployLimiter — kept separate so the two surfaces don't fight for
@@ -732,11 +716,11 @@ func localRunnerCapabilities() []string {
 // job's env merged. Concurrency limit + project access gating happen
 // at the HTTP layer.
 //
-// `triggeredBy` lands on the run as TriggeredBy ("owner" / guestUID
-// / "schedule" / "webhook"). `vault` is the agent-wide vault so the
+// `triggeredBy` lands on the run as TriggeredBy ("owner" / "schedule" /
+// "webhook"). `vault` is the agent-wide vault so the
 // job's env gets its project-scoped secrets without callers having
 // to recompute them.
-func runJobShell(ctx context.Context, store *RunnerStore, job RunnerJob, triggeredBy string, isGuest bool, vault *VaultStore) (RunnerRun, error) {
+func runJobShell(ctx context.Context, store *RunnerStore, job RunnerJob, triggeredBy string, vault *VaultStore) (RunnerRun, error) {
 	if job.Kind != RunnerJobShell {
 		return RunnerRun{}, fmt.Errorf("runJobShell called with kind %q", job.Kind)
 	}
@@ -749,7 +733,6 @@ func runJobShell(ctx context.Context, store *RunnerStore, job RunnerJob, trigger
 		Pool:        job.Pool,
 		Project:     job.Project,
 		TriggeredBy: triggeredBy,
-		IsGuest:     isGuest,
 	})
 
 	timeout := job.TimeoutSec
@@ -761,7 +744,7 @@ func runJobShell(ctx context.Context, store *RunnerStore, job RunnerJob, trigger
 	}
 
 	cmd := exec.CommandContext(cctx, "sh", "-c", job.Command)
-	cmd.Env = composeRunnerEnv(vault, job.Project, job.Env, isGuest)
+	cmd.Env = composeRunnerEnv(vault, job.Project, job.Env)
 	if job.WorkDir != "" {
 		cmd.Dir = job.WorkDir
 	}
@@ -770,20 +753,20 @@ func runJobShell(ctx context.Context, store *RunnerStore, job RunnerJob, trigger
 	if err != nil {
 		store.Append(rec.ID, "[runner] stdout pipe: "+err.Error())
 		store.Finish(rec.ID, -1, false)
-		final, _ := store.GetRun(rec.ID, "")
+		final, _ := store.GetRun(rec.ID)
 		return final, err
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		store.Append(rec.ID, "[runner] stderr pipe: "+err.Error())
 		store.Finish(rec.ID, -1, false)
-		final, _ := store.GetRun(rec.ID, "")
+		final, _ := store.GetRun(rec.ID)
 		return final, err
 	}
 	if err := cmd.Start(); err != nil {
 		store.Append(rec.ID, "[runner] spawn: "+err.Error())
 		store.Finish(rec.ID, -1, false)
-		final, _ := store.GetRun(rec.ID, "")
+		final, _ := store.GetRun(rec.ID)
 		return final, err
 	}
 
@@ -853,28 +836,14 @@ func runJobShell(ctx context.Context, store *RunnerStore, job RunnerJob, trigger
 		}
 	}
 	store.Finish(rec.ID, exitCode, timedOut)
-	final, _ := store.GetRun(rec.ID, "")
+	final, _ := store.GetRun(rec.ID)
 	return final, nil
 }
 
-// composeRunnerEnv builds the subprocess env using the same shape
-// buildDeployShipEnv uses: optional vault overlay, guest sandbox of
-// the parent env. Owner inherits the full agent env; guest gets only
-// the safe-system whitelist (defined in deploy_run.go) plus vault.
-func composeRunnerEnv(vs *VaultStore, project string, jobEnv map[string]string, isGuest bool) []string {
-	var base []string
-	if isGuest {
-		for _, kv := range os.Environ() {
-			if eq := strings.IndexByte(kv, '='); eq > 0 {
-				key := kv[:eq]
-				if safeSystemEnvKeys[key] || strings.HasPrefix(key, "LC_") {
-					base = append(base, kv)
-				}
-			}
-		}
-	} else {
-		base = append(base, os.Environ()...)
-	}
+// composeRunnerEnv builds the owner subprocess env plus an optional
+// project-scoped vault overlay.
+func composeRunnerEnv(vs *VaultStore, project string, jobEnv map[string]string) []string {
+	base := append([]string(nil), os.Environ()...)
 	seen := map[string]int{}
 	for i, kv := range base {
 		if eq := strings.IndexByte(kv, '='); eq > 0 {

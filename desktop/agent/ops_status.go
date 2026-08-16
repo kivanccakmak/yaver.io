@@ -12,15 +12,15 @@ import (
 func init() {
 	registerOpsVerb(opsVerbSpec{
 		Name:        "status",
-		Description: "Rollup of agent state: running tasks, active dev servers, support sessions, tunnel state, relay health. Synchronous.",
+		Description: "Rollup of agent state: running tasks, active dev servers, tunnel state, and relay health. Synchronous.",
 		Schema: map[string]interface{}{
 			"type":                 "object",
 			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
-		Handler:    opsStatusHandler,
-		Streaming:  false,
-		AllowGuest: true,
+		Handler:        opsStatusHandler,
+		Streaming:      false,
+		AllowCompanion: true,
 	})
 }
 
@@ -55,8 +55,7 @@ func opsStatusHandler(c OpsContext, _ json.RawMessage) OpsResult {
 	}
 
 	// Agent version + auth expiry flag (useful for "why aren't my
-	// calls going through?" diagnostics). Support-session details
-	// belong to /support/status, not the generic ops status.
+	// calls going through?" diagnostics).
 	out["agentVersion"] = version
 	out["authExpired"] = c.Server.authExpired.Load()
 

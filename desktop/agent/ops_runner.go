@@ -86,9 +86,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsRunnerHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsRunnerHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 
@@ -161,8 +161,8 @@ func opsRunnerHandler(c OpsContext, payload json.RawMessage) OpsResult {
 		if job.Kind != RunnerJobShell {
 			return OpsResult{OK: false, Code: "kind_unsupported", Error: "Phase 1 ships shell only — see RUNNER_DEV.md"}
 		}
-		// MCP routes are always owner-auth in Phase 1 (AllowGuest:false above).
-		final, err := runJobShell(c.Ctx, store, job, "owner", false, c.Server.vaultStore)
+		// MCP routes are always owner-auth in Phase 1 (AllowCompanion:false above).
+		final, err := runJobShell(c.Ctx, store, job, "owner", c.Server.vaultStore)
 		if err != nil {
 			return OpsResult{OK: false, Code: "exec_failed", Error: err.Error(), Initial: final}
 		}
@@ -173,7 +173,7 @@ func opsRunnerHandler(c OpsContext, payload json.RawMessage) OpsResult {
 		if limit <= 0 {
 			limit = 50
 		}
-		runs := store.ListRuns(p.Name, "", limit)
+		runs := store.ListRuns(p.Name, limit)
 		for i := range runs {
 			runs[i].LogPath = ""
 		}
@@ -185,7 +185,7 @@ func opsRunnerHandler(c OpsContext, payload json.RawMessage) OpsResult {
 		if p.ID == "" {
 			return OpsResult{OK: false, Code: "bad_payload", Error: "id is required for op=log"}
 		}
-		run, ok := store.GetRun(p.ID, "")
+		run, ok := store.GetRun(p.ID)
 		if !ok {
 			return OpsResult{OK: false, Code: "not_found", Error: "run not found"}
 		}

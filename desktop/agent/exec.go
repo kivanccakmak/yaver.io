@@ -45,17 +45,20 @@ type ExecSession struct {
 	FinishedAt string     `json:"finishedAt,omitempty"`
 
 	// Internal — not serialized
-	cmd    *exec.Cmd      `json:"-"`
+	cmd    *exec.Cmd          `json:"-"`
 	cancel context.CancelFunc `json:"-"`
-	stdin  interface{ Write([]byte) (int, error); Close() error } `json:"-"`
-	stdout *cappedBuffer  `json:"-"`
-	stderr *cappedBuffer  `json:"-"`
-	mu     sync.RWMutex   `json:"-"`
-	doneCh chan struct{}   `json:"-"`
+	stdin  interface {
+		Write([]byte) (int, error)
+		Close() error
+	} `json:"-"`
+	stdout *cappedBuffer `json:"-"`
+	stderr *cappedBuffer `json:"-"`
+	mu     sync.RWMutex  `json:"-"`
+	doneCh chan struct{} `json:"-"`
 
 	// SSE listeners
 	listeners   []chan ExecOutputEvent `json:"-"`
-	listenersMu sync.Mutex            `json:"-"`
+	listenersMu sync.Mutex             `json:"-"`
 }
 
 // ExecOutputEvent is sent to SSE listeners.
@@ -120,15 +123,6 @@ func (em *ExecManager) StartExec(command, workDir, shell string, env map[string]
 		return nil, fmt.Errorf("work directory blocked: %w", err)
 	}
 
-	// Resolve shell
-	if shell == "" {
-		if runtime.GOOS == "windows" {
-			shell = "cmd"
-		} else {
-			shell = preferredUnixShell()
-		}
-	}
-
 	// Resolve timeout
 	timeout := defaultExecTimeout
 	if timeoutSec > 0 {
@@ -141,11 +135,10 @@ func (em *ExecManager) StartExec(command, workDir, shell string, env map[string]
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
 	// Build command
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, shell, "/c", command)
-	} else {
-		cmd = exec.CommandContext(ctx, shell, "-c", command)
+	cmd, err := newCommandShellContext(ctx, runtime.GOOS, shell, command)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("resolve command shell: %w", err)
 	}
 	cmd.Dir = workDir
 
@@ -389,11 +382,11 @@ func (em *ExecManager) KillExec(id string) error {
 // never sees the buffered stdout. The fix is to take the listeners
 // lock first, snapshot status + buffered output under it, and either
 //
-//   (a) push everything we already have + the exit event into a
-//       newly-created channel and close it, OR
-//   (b) drain the buffered output into the channel *before* appending
-//       it to the live listener list, so the consumer sees both the
-//       past lines and any future ones the broadcast loop emits.
+//	(a) push everything we already have + the exit event into a
+//	    newly-created channel and close it, OR
+//	(b) drain the buffered output into the channel *before* appending
+//	    it to the live listener list, so the consumer sees both the
+//	    past lines and any future ones the broadcast loop emits.
 //
 // closeListeners must hold the same lock so it cannot run between
 // our snapshot and our append.

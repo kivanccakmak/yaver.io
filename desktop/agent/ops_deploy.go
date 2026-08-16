@@ -61,9 +61,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsDeployHandler,
-		Streaming:  true,
-		AllowGuest: true,
+		Handler:        opsDeployHandler,
+		Streaming:      true,
+		AllowCompanion: false,
 	})
 }
 
@@ -77,28 +77,6 @@ func opsDeployHandler(c OpsContext, payload json.RawMessage) OpsResult {
 		workDir = "."
 	}
 
-	// C-6: guest hardening. The deploy verb is AllowGuest=true so a
-	// shared-machine deploy guest can ship TestFlight/Play/CF builds.
-	// But guests cannot:
-	//   - inject shell metacharacters via Args[] (the join would
-	//     concatenate into `sh -c <cmd>` and metacharacters escape
-	//     the intended argv)
-	//   - point the deploy at an arbitrary workDir on the host
-	//     (must come from the workspace manifest, not the request)
-	if c.Caller == "guest" {
-		for _, a := range p.Args {
-			if argContainsShellMetacharacter(a) {
-				return OpsResult{OK: false, Code: "bad_payload", Error: "guest deploy: args[] entry contains shell metacharacters"}
-			}
-		}
-		// Force workDir resolution server-side. p.WorkDir from a guest
-		// is dropped on the floor — the receiving handler doesn't have
-		// a workspace manifest yet, so the guest path uses cwd. The
-		// HTTP-layer /deploy/ship handler is the canonical guest deploy
-		// entrypoint with full project resolution; for ops/deploy we
-		// keep behaviour conservative.
-		workDir = "."
-	}
 	p.WorkDir = workDir
 
 	resolvedTarget, inferredFrom, resolveErr := resolveDeployTarget(p, stackDetect(workDir))
@@ -326,7 +304,7 @@ func resolveDeployCommand(p opsDeployPayload, det *StackDetection) (cmd, tool st
 
 // opsDeployRollbackHandler routes to the provider-native rollback CLI.
 // All forward-deploy validation already ran in opsDeployHandler (auth,
-// guest gate, preflight); this just maps target → rollback command.
+// auth gate and preflight); this just maps target → rollback command.
 //
 // Provider rollback shapes (verified against each tool's CLI):
 //
@@ -452,20 +430,6 @@ func waitOpsExec(sess *ExecSession) map[string]interface{} {
 		}
 	}
 	return out
-}
-
-// argContainsShellMetacharacter reports whether s contains any byte
-// commonly used to break out of a quoted shell argument when joined
-// into a `sh -c <cmd>` string. Used to gate guest-supplied Args[]
-// entries on ops deploy.
-func argContainsShellMetacharacter(s string) bool {
-	for _, r := range s {
-		switch r {
-		case ';', '|', '&', '$', '`', '<', '>', '\\', '"', '\'', '\n', '\r', '(', ')', '{', '}':
-			return true
-		}
-	}
-	return false
 }
 
 func findDetectedTarget(det *StackDetection, id string) *DetectedTarget {

@@ -1,5 +1,10 @@
 yaver-relay
 yaver-relay-*
+!deploy/yaver-relay-timecheck
+!deploy/yaver-relay-watchdog
+!deploy/yaver-relay-watchdog.service
+!deploy/yaver-relay-watchdog.timer
+!deploy/yaver-relay-network.conf
 /.relay-password
 
 # Compiled relay binaries. relay-linux-amd64 (12 MB) was committed and is a

@@ -7,26 +7,26 @@ import (
 
 // CatalogEntry is a one-click installable service (like a GCP Marketplace item).
 type CatalogEntry struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Category    string         `json:"category"`
-	Tags        []string       `json:"tags"`
-	Image       string         `json:"image,omitempty"`
-	DefaultPort int            `json:"defaultPort,omitempty"`
-	Fields      []CatalogField `json:"fields"`
-	EnvTemplate string         `json:"envTemplate,omitempty"`
-	Dashboard   string         `json:"dashboard,omitempty"` // studio id from studioTargets
-	Memory      string         `json:"memory,omitempty"`
-	Notes       string         `json:"notes,omitempty"`
-	ServicePreset string       `json:"servicePreset,omitempty"` // maps to services.go presets()
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Description   string         `json:"description"`
+	Category      string         `json:"category"`
+	Tags          []string       `json:"tags"`
+	Image         string         `json:"image,omitempty"`
+	DefaultPort   int            `json:"defaultPort,omitempty"`
+	Fields        []CatalogField `json:"fields"`
+	EnvTemplate   string         `json:"envTemplate,omitempty"`
+	Dashboard     string         `json:"dashboard,omitempty"` // studio id from studioTargets
+	Memory        string         `json:"memory,omitempty"`
+	Notes         string         `json:"notes,omitempty"`
+	ServicePreset string         `json:"servicePreset,omitempty"` // maps to services.go presets()
 }
 
 type CatalogField struct {
-	Key     string `json:"key"`
-	Label   string `json:"label"`
-	Default string `json:"default,omitempty"`
-	Secret  bool   `json:"secret,omitempty"`
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Default  string `json:"default,omitempty"`
+	Secret   bool   `json:"secret,omitempty"`
 	Generate string `json:"generate,omitempty"` // random_32, random_16
 }
 
@@ -137,8 +137,10 @@ func CatalogInstall(projectDir, entryID string, fieldValues map[string]string) (
 	return map[string]interface{}{"added": name, "started": start, "entry": entry}, nil
 }
 
-func errUnknownCatalogEntry(id string) error       { return jsonError2("unknown catalog entry " + id) }
-func errUnsupportedInstall(id string) error         { return jsonError2("no installer for " + id + " (add image in catalog entry or services.go preset)") }
+func errUnknownCatalogEntry(id string) error { return jsonError2("unknown catalog entry " + id) }
+func errUnsupportedInstall(id string) error {
+	return jsonError2("no installer for " + id + " (add image in catalog entry or services.go preset)")
+}
 
 type catalogError struct{ msg string }
 

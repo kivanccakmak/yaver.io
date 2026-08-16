@@ -5,9 +5,7 @@
  * semantics where an empty/absent list means "this layer does not constrain
  * that dimension":
  *
- *   - guest grants     (scope + allowedRunners + allowedProjects + deviceIds)
- *   - SDK-token scopes (allowedProjects + allowedCIDRs + delegated guest scope)
- *   - host-share policy(allowedRunners + allowedProjects + tooling preset)
+ *   - SDK-token scopes (allowedProjects + allowedCIDRs)
  *   - peer / PC-sharing ACL (registered peers; layer-4 secret tools never cross)
  *   - company AI policy (allowedRunners + providers + per-role tool policy)  ← new
  *   - the user's own preferences / device-sharing rules
@@ -152,53 +150,15 @@ export function entitlementFromResolved(resolved: {
   };
 }
 
-/** From a guest grant row (guests.ts). Empty lists stay unconstrained. */
-export function entitlementFromGuest(grant: {
-  scope?: string;
-  allowedRunners?: string[];
-  allowedProjects?: string[];
-  deviceIds?: string[];
-  dailyTokenLimit?: number;
-  cpuLimitPercent?: number;
-  ramLimitMb?: number;
-}): Entitlement {
-  return {
-    source: `guest:${grant.scope ?? 'full'}`,
-    allowedRunners: grant.allowedRunners,
-    allowedProjects: grant.allowedProjects,
-    allowedDeviceIds: grant.deviceIds,
-    deniedTools: [...LAYER4_DENIED_TOOLS],
-    dailyTokenLimit: grant.dailyTokenLimit,
-    cpuLimitPercent: grant.cpuLimitPercent,
-    ramLimitMb: grant.ramLimitMb,
-  };
-}
-
 /** From an SDK-token scope (auth.ts sdkTokens row). */
 export function entitlementFromSdkToken(scope: {
   allowedProjects?: string[];
   allowedCIDRs?: string[];
-  delegatedGuestScope?: string;
 }): Entitlement {
   return {
-    source: scope.delegatedGuestScope ? `sdk-token:guest:${scope.delegatedGuestScope}` : 'sdk-token',
+    source: 'sdk-token',
     allowedProjects: scope.allowedProjects,
     allowedCIDRs: scope.allowedCIDRs,
-    deniedTools: [...LAYER4_DENIED_TOOLS],
-  };
-}
-
-/** From a host-share policy (auth.go HostSharePolicy mirrored over the wire). */
-export function entitlementFromHostShare(policy: {
-  allowedRunners?: string[];
-  allowedProjects?: string[];
-  sessionTtlMinutes?: number;
-}): Entitlement {
-  return {
-    source: 'host-share',
-    allowedRunners: policy.allowedRunners,
-    allowedProjects: policy.allowedProjects,
-    sessionTtlMinutes: policy.sessionTtlMinutes,
     deniedTools: [...LAYER4_DENIED_TOOLS],
   };
 }

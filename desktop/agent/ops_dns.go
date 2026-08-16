@@ -8,13 +8,13 @@ package main
 import "encoding/json"
 
 type opsDNSPayload struct {
-	Op     string `json:"op"`                // list | add | remove | lookup | flush | localname-status | localname-set | localname-restore
-	Domain string `json:"domain,omitempty"`  // zone for list/add/remove
-	Name   string `json:"name,omitempty"`    // record name (a.k.a. subdomain) or the desired .local name for localname-set
-	Type   string `json:"type,omitempty"`    // A|AAAA|CNAME|TXT|MX|...
-	Value  string `json:"value,omitempty"`   // record value
+	Op     string `json:"op"`               // list | add | remove | lookup | flush | localname-status | localname-set | localname-restore
+	Domain string `json:"domain,omitempty"` // zone for list/add/remove
+	Name   string `json:"name,omitempty"`   // record name (a.k.a. subdomain) or the desired .local name for localname-set
+	Type   string `json:"type,omitempty"`   // A|AAAA|CNAME|TXT|MX|...
+	Value  string `json:"value,omitempty"`  // record value
 	TTL    int    `json:"ttl,omitempty"`
-	Host   string `json:"host,omitempty"`    // for lookup
+	Host   string `json:"host,omitempty"` // for lookup
 }
 
 func init() {
@@ -35,9 +35,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsDNSHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsDNSHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

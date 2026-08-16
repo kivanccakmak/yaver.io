@@ -22,6 +22,14 @@
  */
 import { defineConfig } from "@playwright/test";
 
+// Local disk cleanup may intentionally remove Playwright's duplicated browser
+// bundle while the system Chrome remains available. Device arcs accept that
+// existing executable explicitly instead of failing before they touch a box.
+// CI keeps Playwright's managed browser by leaving this unset.
+const browserExecutable = process.env.YAVER_CHROMIUM_PATH || undefined;
+const recordVideo = process.env.YAVER_DISABLE_PLAYWRIGHT_VIDEO === "1" ? "off" : "retain-on-failure";
+const recordTrace = process.env.YAVER_DISABLE_PLAYWRIGHT_TRACE === "1" ? "off" : "retain-on-failure";
+
 export default defineConfig({
   testDir: "./tests",
   // Device arcs talk to one box and one dev server. Running them at once would
@@ -33,8 +41,9 @@ export default defineConfig({
   timeout: 300_000,
   expect: { timeout: 30_000 },
   use: {
-    trace: "retain-on-failure",
+    trace: recordTrace,
     screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    video: recordVideo,
+    launchOptions: browserExecutable ? { executablePath: browserExecutable } : undefined,
   },
 });

@@ -181,8 +181,8 @@ func init() {
 			"path":             map[string]interface{}{"type": "string", "description": "Filesystem to report on (default \"/\")."},
 			"thresholdPercent": map[string]interface{}{"type": "integer", "description": "Used-percent considered unhealthy (default 85)."},
 		}),
-		Handler:    diskGuardScanHandler,
-		AllowGuest: false,
+		Handler:        diskGuardScanHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "diskguard_clear",
@@ -195,8 +195,8 @@ func init() {
 			"dryRun":        map[string]interface{}{"type": "boolean", "description": "Default true. Set false to delete."},
 			"minAgeMinutes": map[string]interface{}{"type": "integer", "description": "Only touch artifacts older than this (default 60) so live invocations are never raced."},
 		}),
-		Handler:    diskGuardClearHandler,
-		AllowGuest: false,
+		Handler:        diskGuardClearHandler,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name: "diskguard_sweep",
@@ -208,8 +208,8 @@ func init() {
 			"thresholdPercent": map[string]interface{}{"type": "integer", "description": "Reclaim at or above this used-percent (default 85)."},
 			"dryRun":           map[string]interface{}{"type": "boolean", "description": "Default false for sweep — a threshold breach is the opt-in. Set true to observe only."},
 		}),
-		Handler:    diskGuardSweepHandler,
-		AllowGuest: false,
+		Handler:        diskGuardSweepHandler,
+		AllowCompanion: false,
 	})
 }
 
@@ -491,7 +491,7 @@ func diskGuardClasses() []diskGuardClass {
 		},
 		{
 			Name: "yaver-tmp-dirs",
-			Why: "yaver-* scratch trees in the system temp dir (expo-web exports, preview bundles, repo seeds, hot-swap staging). Each is re-created on demand by the operation that owns it; a crash strands them forever — 2026-07-27 found ~600MB of them on a box at 95%. Only trees whose NEWEST file is older than 7 days qualify, so a live dev server's dir is never taken.",
+			Why:  "yaver-* scratch trees in the system temp dir (expo-web exports, preview bundles, repo seeds, hot-swap staging). Each is re-created on demand by the operation that owns it; a crash strands them forever — 2026-07-27 found ~600MB of them on a box at 95%. Only trees whose NEWEST file is older than 7 days qualify, so a live dev server's dir is never taken.",
 			Collect: func(time.Duration) ([]diskGuardCandidate, error) {
 				return diskGuardCollectYaverTemp()
 			},
@@ -499,7 +499,7 @@ func diskGuardClasses() []diskGuardClass {
 		},
 		{
 			Name: "go-build-cache",
-			Why: "the Go toolchain build cache ($XDG_CACHE_HOME/go-build, ~/Library/Caches/go-build on macOS). Every entry regenerates on demand — a warm cache only saves compile time, and clearing it costs nothing but a rebuild. Proven regenerable 2026-08-10: a 22 GB cache was cleared (`go clean -cache`) and `go build ./...` succeeded immediately after. This is the single largest safe reclaim on any Go-heavy box, and it was the exact artifact that filled a MacBook Air to 100% (454 MiB free) and killed every deploy with `no space left on device` at minute 20. Only entries idle past minAge qualify, so an in-flight build's hot cache is never taken.",
+			Why:  "the Go toolchain build cache ($XDG_CACHE_HOME/go-build, ~/Library/Caches/go-build on macOS). Every entry regenerates on demand — a warm cache only saves compile time, and clearing it costs nothing but a rebuild. Proven regenerable 2026-08-10: a 22 GB cache was cleared (`go clean -cache`) and `go build ./...` succeeded immediately after. This is the single largest safe reclaim on any Go-heavy box, and it was the exact artifact that filled a MacBook Air to 100% (454 MiB free) and killed every deploy with `no space left on device` at minute 20. Only entries idle past minAge qualify, so an in-flight build's hot cache is never taken.",
 			Collect: func(minAge time.Duration) ([]diskGuardCandidate, error) {
 				return diskGuardCollectGoBuildCache(minAge)
 			},

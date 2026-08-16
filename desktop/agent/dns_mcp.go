@@ -17,9 +17,9 @@ package main
 //   ssl_provision  — Let's Encrypt cert via the bundled certbot for
 //                    self-hosted yaver boxes. ACME http-01 challenge.
 //
-// All three are owner-only — none of them are AllowGuest because
-// touching DNS / SSL changes are a footgun if scripted by a malicious
-// guest agent loop.
+// All three are owner-only — none of them are AllowCompanion because
+// touching DNS / SSL changes are a footgun for a constrained service or
+// companion credential.
 
 import (
 	"context"
@@ -35,7 +35,7 @@ func dnsMCPTools() []map[string]interface{} {
 		{
 			"name": "dns_add",
 			"description": "Create a DNS record at the user's DNS provider. Uses Cloudflare API when CF_API_TOKEN is set; otherwise returns paste-at-your-registrar instructions verbatim. " +
-				"Owner-only; never reachable from a guest token. Returns {ok, recordId, manual, instruction?}.",
+				"Owner-only; never reachable from a constrained token. Returns {ok, recordId, manual, instruction?}.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"zone", "type", "name", "content"},
@@ -78,15 +78,15 @@ func dnsMCPTools() []map[string]interface{} {
 			},
 		},
 		{
-			"name": "dns_localname_status",
+			"name":        "dns_localname_status",
 			"description": "Report this machine's mDNS .local LAN name (macOS LocalHostName / Linux hostname) and — the fact that matters — whether <name>.local ACTUALLY resolves on a LAN interface right now (loopback-only is a false green: set but invisible to other devices). Also reports ComputerName, the yaver-managed name if one was set, avahi state on Linux, and a named note when the LAN cannot see the name. Read-only, no root needed.",
 			"inputSchema": map[string]interface{}{
-				"type":     "object",
+				"type":       "object",
 				"properties": map[string]interface{}{},
 			},
 		},
 		{
-			"name": "dns_localname_set",
+			"name":        "dns_localname_set",
 			"description": "Give this machine a stable mDNS LAN name <name>.local so the web dashboard / agent are reachable by name (yaver.local:18080) from every device on the LAN instead of a raw IP — the same trick as a home router or a Raspberry Pi with avahi. macOS: scutil --set LocalHostName + ComputerName (root via YAVER_LOGIN_PASSWORD in ~/.yaver/local-secrets.env). Linux: hostnamectl set-hostname; warns when avahi-daemon is not running (name set but not advertised). Verifies by resolving <name>.local on a LAN interface before returning, and persists the previous name for dns_localname_restore. Owner-only.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
@@ -97,10 +97,10 @@ func dnsMCPTools() []map[string]interface{} {
 			},
 		},
 		{
-			"name": "dns_localname_restore",
+			"name":        "dns_localname_restore",
 			"description": "Revert a yaver-set mDNS local name back to the LocalHostName/ComputerName recorded before dns_localname_set ran. No-op with a clear message when yaver never set a name. Owner-only.",
 			"inputSchema": map[string]interface{}{
-				"type":     "object",
+				"type":       "object",
 				"properties": map[string]interface{}{},
 			},
 		},
@@ -257,11 +257,11 @@ func sslMCPProvision(raw json.RawMessage) interface{} {
 	}
 	// certbot writes the cert to /etc/letsencrypt/live/<domain>/{fullchain.pem, privkey.pem}.
 	return mcpToolJSON(map[string]interface{}{
-		"ok":          true,
-		"domain":      args.Domain,
-		"certPath":    "/etc/letsencrypt/live/" + args.Domain + "/fullchain.pem",
-		"keyPath":     "/etc/letsencrypt/live/" + args.Domain + "/privkey.pem",
-		"renewHint":   "certbot renew runs daily via systemd timer on most distros — `systemctl status certbot.timer` to verify.",
-		"certbotOut":  string(out),
+		"ok":         true,
+		"domain":     args.Domain,
+		"certPath":   "/etc/letsencrypt/live/" + args.Domain + "/fullchain.pem",
+		"keyPath":    "/etc/letsencrypt/live/" + args.Domain + "/privkey.pem",
+		"renewHint":  "certbot renew runs daily via systemd timer on most distros — `systemctl status certbot.timer` to verify.",
+		"certbotOut": string(out),
 	})
 }

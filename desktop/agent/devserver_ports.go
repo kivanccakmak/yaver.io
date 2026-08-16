@@ -125,9 +125,7 @@ func DevPortSnapshot() []devPortReservation {
 	return out
 }
 
-// devPortHeld reports whether a Yaver session holds a reservation on this port.
-// The multi-user slot allocator consults it so the two mechanisms cannot disagree
-// during the window between choosing a port and binding it.
+// devPortHeld reports whether a Yaver workload holds a reservation on this port.
 func devPortHeld(port int) bool {
 	_, ok := devPortClaims.heldBy(port)
 	return ok

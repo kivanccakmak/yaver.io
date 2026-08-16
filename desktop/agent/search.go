@@ -43,22 +43,22 @@ import (
 // into a single indexed text blob; the tokenizer doesn't care
 // about field boundaries at query time.
 type SearchDocument struct {
-	ID     string                 `json:"id"`
-	Title  string                 `json:"title,omitempty"`
-	Body   string                 `json:"body,omitempty"`
-	Tags   []string               `json:"tags,omitempty"`
-	Extra  map[string]interface{} `json:"extra,omitempty"`
-	AddedAt string                `json:"addedAt,omitempty"`
+	ID      string                 `json:"id"`
+	Title   string                 `json:"title,omitempty"`
+	Body    string                 `json:"body,omitempty"`
+	Tags    []string               `json:"tags,omitempty"`
+	Extra   map[string]interface{} `json:"extra,omitempty"`
+	AddedAt string                 `json:"addedAt,omitempty"`
 }
 
 // searchIndex is one on-disk index. Posting list keyed by
 // token → set of doc IDs, with per-doc metadata kept alongside.
 type searchIndex struct {
-	mu       sync.Mutex
-	name     string
-	path     string
-	tokens   map[string]map[string]int // token → docID → freq
-	docs     map[string]SearchDocument
+	mu     sync.Mutex
+	name   string
+	path   string
+	tokens map[string]map[string]int // token → docID → freq
+	docs   map[string]SearchDocument
 }
 
 var (
@@ -116,8 +116,8 @@ func (idx *searchIndex) loadLocked() error {
 		return err
 	}
 	var payload struct {
-		Docs   map[string]SearchDocument   `json:"docs"`
-		Tokens map[string]map[string]int   `json:"tokens"`
+		Docs   map[string]SearchDocument `json:"docs"`
+		Tokens map[string]map[string]int `json:"tokens"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
@@ -341,9 +341,9 @@ func (s *HTTPServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 			fmt.Sscanf(limitParam, "%d", &limit)
 		}
 		jsonReply(w, http.StatusOK, map[string]interface{}{
-			"ok":    true,
-			"q":     q,
-			"hits":  idx.Query(q, limit),
+			"ok":   true,
+			"q":    q,
+			"hits": idx.Query(q, limit),
 		})
 	case rest == "docs" && r.Method == http.MethodPost:
 		var doc SearchDocument

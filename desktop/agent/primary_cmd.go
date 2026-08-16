@@ -17,7 +17,7 @@ package main
 //
 // All commands read ~/.yaver/config.json for the auth token. Partial
 // match on `set` accepts any unique prefix of deviceId OR the exact
-// device name — same ergonomics as `yaver guests remove <email>`.
+// device name.
 
 import (
 	"bufio"
@@ -650,7 +650,6 @@ type primaryDevice struct {
 	LocalIps        []string `json:"localIps,omitempty"`
 	PublicEndpoints []string `json:"publicEndpoints,omitempty"`
 	IsOnline        bool     `json:"isOnline"`
-	IsGuest         bool     `json:"isGuest"`
 	LastHeartbeat   int64    `json:"lastHeartbeat"`
 }
 
@@ -821,11 +820,7 @@ func runPrimaryShow(ctx context.Context) {
 		if d.IsOnline {
 			status = "online"
 		}
-		shared := ""
-		if d.IsGuest {
-			shared = " (shared)"
-		}
-		fmt.Printf("%s%s — %s — %s%s — %s\n", marker, d.DeviceID[:min(8, len(d.DeviceID))], d.Name, status, shared, d.Platform)
+		fmt.Printf("%s%s — %s — %s — %s\n", marker, d.DeviceID[:min(8, len(d.DeviceID))], d.Name, status, d.Platform)
 	}
 }
 
@@ -882,10 +877,6 @@ func runPrimarySet(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 	chosen := matches[0]
-	if chosen.IsGuest {
-		fmt.Fprintln(os.Stderr, "Cannot mark a shared (guest) device as primary — the host can revoke it at any time.")
-		os.Exit(1)
-	}
 	if err := primarySaveRaw(ctx, token, convex, chosen.DeviceID, false); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to set primary: %v\n", err)
 		os.Exit(1)
@@ -936,12 +927,7 @@ func runPrimaryPick(ctx context.Context) {
 		fmt.Fprintf(os.Stderr, "Failed to list devices: %v\n", err)
 		os.Exit(1)
 	}
-	owned := make([]primaryDevice, 0, len(devices))
-	for _, d := range devices {
-		if !d.IsGuest {
-			owned = append(owned, d)
-		}
-	}
+	owned := devices
 	if len(owned) == 0 {
 		fmt.Fprintln(os.Stderr, "No registered owner devices — run `yaver serve` on a machine to register it.")
 		os.Exit(1)

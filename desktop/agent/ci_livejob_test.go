@@ -55,7 +55,7 @@ func TestLiveCIFullJob(t *testing.T) {
 	runnerOS, exitCode, execErr := runEphemeralRunner(ctx, reg, rt, run.ID, store)
 	store.Finish(run.ID, exitCode, false)
 
-	final, _ := store.GetRun(run.ID, "")
+	final, _ := store.GetRun(run.ID)
 	t.Logf("runner os=%s exit=%d err=%v\n----- run log tail -----\n%s\n------------------------",
 		runnerOS, exitCode, execErr, final.OutputTail)
 

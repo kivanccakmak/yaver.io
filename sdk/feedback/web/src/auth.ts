@@ -10,7 +10,7 @@
  *   - Email / password sign-up + login (no 2FA — accounts with TOTP are
  *     directed to OAuth, which completes the second factor on yaver.io).
  *   - Token validation against the same Convex `/auth/validate` endpoint.
- *   - `/devices/list` → owned + shared (guest) remote dev machines.
+ *   - `/devices/list` → owner remote dev machines.
  *
  * Token persistence uses `localStorage`. There is no native browser equivalent
  * of iOS Keychain, so the consumer is expected to scope the SDK to dev/staging
@@ -263,7 +263,7 @@ export async function loginWithEmail(
   return { token: data.token, userId: data.userId };
 }
 
-// ─── Devices (owned + shared) ─────────────────────────────────────────
+// ─── Owner devices ────────────────────────────────────────────────────
 
 export interface RemoteDevice {
   deviceId: string;
@@ -273,10 +273,6 @@ export interface RemoteDevice {
   needsAuth: boolean;
   runnerDown: boolean;
   lastHeartbeat: number;
-  isGuest: boolean;
-  hostName?: string;
-  hostEmail?: string;
-  accessScope: 'owner' | 'shared-scoped' | 'shared-legacy';
   quicHost: string;
   quicPort: number;
   publicKey?: string;
@@ -284,7 +280,6 @@ export interface RemoteDevice {
 
 export interface DeviceList {
   owned: RemoteDevice[];
-  shared: RemoteDevice[];
 }
 
 export async function listReachableDevices(token: string): Promise<DeviceList> {
@@ -292,14 +287,11 @@ export async function listReachableDevices(token: string): Promise<DeviceList> {
     const res = await fetch(`${convexSiteUrl}/devices/list`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) return { owned: [], shared: [] };
+    if (!res.ok) return { owned: [] };
     const data = await res.json();
-    const all = (data.devices ?? []) as RemoteDevice[];
-    return {
-      owned: all.filter((d) => !d.isGuest),
-      shared: all.filter((d) => d.isGuest),
-    };
+    const owned = (data.devices ?? []) as RemoteDevice[];
+    return { owned };
   } catch {
-    return { owned: [], shared: [] };
+    return { owned: [] };
   }
 }

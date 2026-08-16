@@ -191,7 +191,6 @@ func (s *HTTPServer) handleWhatsAppReload(w http.ResponseWriter, original *http.
 	})
 	inner, _ := http.NewRequestWithContext(original.Context(), http.MethodPost, "/dev/reload-app", bytes.NewReader(body))
 	inner.Header.Set("Content-Type", "application/json")
-	// The internal handler only needs guest headers for guest restrictions;
 	// WhatsApp ingress is already authenticated by the shared backend secret.
 	rec := httptest.NewRecorder()
 	s.handleReloadApp(rec, inner)

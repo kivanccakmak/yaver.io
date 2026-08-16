@@ -10,7 +10,7 @@ import (
 func nativeBuildMCPTools() []map[string]interface{} {
 	return []map[string]interface{}{
 		{
-			"name": "native_build",
+			"name":        "native_build",
 			"description": "Build or install a native iOS, Android, or Flutter app. Yaver discovers matching mobile projects under work_dir (including mobile/, app/, apps/*, packages/*). If more than one candidate matches, it returns candidates instead of guessing.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",

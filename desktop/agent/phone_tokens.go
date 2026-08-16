@@ -35,9 +35,9 @@ const phoneTokenPrefix = "pp_"
 // PhoneProjectToken is one issued key — shipped over the wire WITHOUT the
 // raw token. Use PhoneProjectTokenMint for the one-time mint response.
 type PhoneProjectToken struct {
-	ID        string `yaml:"id" json:"id"`                   // short random id (not the secret)
-	Label     string `yaml:"label" json:"label"`             // user-supplied human name
-	Hash      string `yaml:"hash,omitempty" json:"-"`        // sha256(raw), never JSON-serialized
+	ID        string `yaml:"id" json:"id"`            // short random id (not the secret)
+	Label     string `yaml:"label" json:"label"`      // user-supplied human name
+	Hash      string `yaml:"hash,omitempty" json:"-"` // sha256(raw), never JSON-serialized
 	CreatedAt string `yaml:"createdAt" json:"createdAt"`
 	LastUsed  string `yaml:"lastUsed,omitempty" json:"lastUsed,omitempty"`
 	// ReadOnly tokens authorize only GET on /data/<slug>/* — friend-preview

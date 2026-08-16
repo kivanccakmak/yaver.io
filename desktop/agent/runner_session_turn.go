@@ -93,7 +93,26 @@ type runnerSessionTurnResponse struct {
 	// DeliveryNote is the plain-language sentence for an "unconfirmed" verdict,
 	// for a surface to render or speak instead of implying the prompt ran.
 	DeliveryNote string `json:"deliveryNote,omitempty"`
-	Error        string `json:"error,omitempty"`
+	// Available is the picker a constrained surface (car, watch) needs when the
+	// box has SEVERAL live runner sessions and the caller did not name one. It
+	// carries the session names + runners so a voice surface can read them out
+	// and the caller can retry with an explicit `session`. Absent when the
+	// request resolved cleanly.
+	Available []RunnerSessionChoice `json:"available,omitempty"`
+	// NeedsChoice is true when the request was a lifecycle intent (e.g. "close
+	// the session") but the target is ambiguous — the caller must resolve
+	// against Available before acting.
+	NeedsChoice bool   `json:"needsChoice,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// RunnerSessionChoice is one pickable live runner session for a screenless or
+// constrained surface. Identifiers + runner only — never pane content.
+type RunnerSessionChoice struct {
+	Name    string `json:"name"`
+	Runner  string `json:"runner"`
+	Index   int    `json:"index"`
+	Matched bool   `json:"matched,omitempty"` // whether it matched an explicit name/runner
 }
 
 // classifyPromptDelivery turns a before/after pane pair into an honest verdict
@@ -131,38 +150,74 @@ const (
 // wins; then the runner's canonical session; then, if the box has exactly one
 // runner session live, that one — the case a voice surface actually hits, where
 // the user said "the ubuntu session" and meant "the only one".
-func resolveRunnerSession(name, runner string) (string, string, error) {
+//
+// On failure it returns the full candidate list alongside the error so a
+// constrained surface (car, watch) can render a picker and retry with an
+// explicit `session` — erroring with a bare message forces a screenless driver
+// to guess a session name from memory.
+func resolveRunnerSession(name, runner string) (string, string, []RunnerSessionChoice, error) {
 	sessions := listRunnerPTYSessions()
-
-	if n := sanitizeTmuxSessionName(strings.TrimSpace(name)); n != "" {
-		for _, s := range sessions {
-			if s.Name == n {
-				return s.Name, s.Runner, nil
+	// Only confirmed sessions are safe picker targets. An unconfirmed
+	// yaver-codex is a shell with a convincing name; offering it in a picker
+	// invites the caller to execute dictated prose as a command.
+	choices := make([]RunnerSessionChoice, 0, len(sessions))
+	for _, s := range sessions {
+		if s.Confirmed {
+			choices = append(choices, RunnerSessionChoice{Name: s.Name, Runner: s.Runner, Index: len(choices)})
+		}
+	}
+	markMatched := func(n string) {
+		for i := range choices {
+			if choices[i].Name == n || choices[i].Runner == n {
+				choices[i].Matched = true
 			}
 		}
-		return "", "", fmt.Errorf("no live session named %q on this machine", n)
+	}
+
+	if n := sanitizeTmuxSessionName(strings.TrimSpace(name)); n != "" {
+		markMatched(n)
+		for _, s := range sessions {
+			if s.Name == n {
+				return s.Name, s.Runner, choices, nil
+			}
+		}
+		return "", "", choices, fmt.Errorf("no live session named %q on this machine", n)
 	}
 
 	if r := normalizeRunnerID(runner); r != "" {
+		markMatched(r)
+		// Prefer a real observed runner. If only a stale named shell exists,
+		// return it so the confirmation guard below can name the shell hazard.
 		for _, s := range sessions {
-			if s.Runner == r {
-				return s.Name, s.Runner, nil
+			if s.Runner == r && s.Confirmed {
+				return s.Name, s.Runner, choices, nil
 			}
 		}
-		return "", "", fmt.Errorf("no live %s session on this machine — start one with `yaver %s --machine=<this box>`", r, r)
+		for _, s := range sessions {
+			if s.Runner == r {
+				return s.Name, s.Runner, choices, nil
+			}
+		}
+		return "", "", choices, fmt.Errorf("no live %s session on this machine — start one with `yaver %s --machine=<this box>`", r, r)
 	}
 
-	switch len(sessions) {
+	confirmed := make([]RunnerPTYSession, 0, len(sessions))
+	for _, s := range sessions {
+		if s.Confirmed {
+			confirmed = append(confirmed, s)
+		}
+	}
+	switch len(confirmed) {
 	case 0:
-		return "", "", fmt.Errorf("no live runner sessions on this machine")
+		return "", "", choices, fmt.Errorf("no confirmed live runner sessions on this machine")
 	case 1:
-		return sessions[0].Name, sessions[0].Runner, nil
+		return confirmed[0].Name, confirmed[0].Runner, choices, nil
 	default:
-		names := make([]string, 0, len(sessions))
-		for _, s := range sessions {
+		names := make([]string, 0, len(confirmed))
+		for _, s := range confirmed {
 			names = append(names, s.Name)
 		}
-		return "", "", fmt.Errorf("several runner sessions are live (%s) — name the one you mean", strings.Join(names, ", "))
+		return "", "", choices, fmt.Errorf("several runner sessions are live (%s) — name the one you mean", strings.Join(names, ", "))
 	}
 }
 
@@ -209,16 +264,11 @@ func (s *HTTPServer) handleRunnerSessionTurn(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	reply, status := executeRunnerSessionTurn(req)
-	// The success (200) and conflict (409) paths carry the full reply struct so
-	// a caller can loop on a chained menu; the plain error paths (400/404/500)
-	// return a bare message. This mirrors the endpoint's original contract, now
-	// that the core lives in executeRunnerSessionTurn (shared with the
-	// `runner_turn` ops verb).
-	if status == http.StatusOK || status == http.StatusConflict {
-		jsonReply(w, status, reply)
-		return
-	}
-	jsonError(w, status, reply.Error)
+	// Always return the typed reply shape. In particular, an ambiguous target
+	// carries `available` so constrained surfaces can present a picker. The old
+	// 404 path flattened this to {error:"..."}, silently discarding the only
+	// route a car/watch had to resolve the request.
+	jsonReply(w, status, reply)
 }
 
 // executeRunnerSessionTurn is the transport-agnostic core of a runner turn: it
@@ -241,9 +291,26 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		return runnerSessionTurnResponse{Error: "`choice` must be a bare option number"}, http.StatusBadRequest
 	}
 
-	sessionName, runnerID, err := resolveRunnerSession(req.Session, req.Runner)
+	// Natural-language session commands (EN + TR) are routed as lifecycle
+	// intents BEFORE they can reach a session as a typed prompt. "Start a new
+	// session" from the car must create a seat, not get submitted to Claude.
+	if text != "" {
+		if intent, ok := detectSessionIntent(text); ok {
+			return executeSessionIntent(req, *intent)
+		}
+	}
+
+	sessionName, runnerID, choices, err := resolveRunnerSession(req.Session, req.Runner)
 	if err != nil {
-		return runnerSessionTurnResponse{Error: err.Error()}, http.StatusNotFound
+		status := http.StatusNotFound
+		if strings.TrimSpace(req.Session) == "" && strings.TrimSpace(req.Runner) == "" && len(choices) > 1 {
+			status = http.StatusConflict
+		}
+		return runnerSessionTurnResponse{
+			Available:   choices,
+			NeedsChoice: status == http.StatusConflict,
+			Error:       err.Error(),
+		}, status
 	}
 
 	// Never type into a session we only GUESSED was a runner.

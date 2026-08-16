@@ -1058,11 +1058,6 @@ export class YaverFeedback {
           </div>
           <div id="yaver-fb-owned" class="yvr-fb-devices-list"></div>
 
-          <div class="yvr-fb-devices-head">
-            <span class="yvr-fb-group-label">Shared With You</span>
-          </div>
-          <div id="yaver-fb-shared" class="yvr-fb-devices-list"></div>
-
           <p id="yaver-fb-devices-error" class="yvr-fb-devices-error"></p>
         </div>
       `;
@@ -1090,11 +1085,9 @@ export class YaverFeedback {
 
     const loadDevices = async () => {
       const ownedEl = overlay.querySelector<HTMLElement>('#yaver-fb-owned');
-      const sharedEl = overlay.querySelector<HTMLElement>('#yaver-fb-shared');
       const errorEl = overlay.querySelector<HTMLElement>('#yaver-fb-devices-error');
-      if (!ownedEl || !sharedEl || !errorEl) return;
+      if (!ownedEl || !errorEl) return;
       ownedEl.innerHTML = `<div class="yvr-fb-device-loading">Loading…</div>`;
-      sharedEl.innerHTML = '';
       errorEl.textContent = '';
       try {
         const token = YaverFeedback.config?.authToken;
@@ -1108,14 +1101,10 @@ export class YaverFeedback {
           list.owned.length > 0
             ? list.owned.map(renderDeviceRow).join('')
             : `<p class="yvr-fb-empty">None yet. Run <code>yaver auth</code> then <code>yaver serve</code> on your machine.</p>`;
-        sharedEl.innerHTML =
-          list.shared.length > 0
-            ? list.shared.map(renderDeviceRow).join('')
-            : `<p class="yvr-fb-empty">None.</p>`;
-        if (list.owned.length === 0 && list.shared.length === 0) {
+        if (list.owned.length === 0) {
           errorEl.innerHTML = `You have no access to a machine for this project. <a class="yvr-fb-inline-link" href="${escapeHtml(dashboardUrl)}" target="_blank" rel="noopener noreferrer">Open your Yaver dashboard</a>.`;
         }
-        wireDeviceClicks(list.owned.concat(list.shared));
+        wireDeviceClicks(list.owned);
       } catch (err) {
         errorEl.textContent = err instanceof Error ? err.message : 'Failed to load machines.';
         ownedEl.innerHTML = '';
@@ -1174,8 +1163,6 @@ export class YaverFeedback {
         meta = 'Needs pairing — open the Yaver app to adopt';
       } else if (device.runnerDown) {
         meta = 'Runner down — restart the coding agent';
-      } else if (device.isGuest && device.hostName) {
-        meta = `Shared by ${device.hostName}`;
       }
       const selected =
         YaverFeedback.config?.preferredDeviceId === device.deviceId
@@ -1386,7 +1373,7 @@ export class YaverFeedback {
             : null;
           const availableDevices = await YaverFeedback.listAvailableDevices().catch(() => [] as RemoteDevice[]);
           const selectedDevice = availableDevices.find((device) => device.deviceId === YaverFeedback.config?.preferredDeviceId);
-          const selectedMachineOwned = !!selectedDevice && !selectedDevice.isGuest;
+          const selectedMachineOwned = !!selectedDevice;
           const detectedProviders = await YaverFeedback.getClient()
             .then((client) => client.gitProviderDetect())
             .catch(() => []);
@@ -1641,9 +1628,7 @@ export class YaverFeedback {
                 <span class="yvr-fb-runner-card-kicker">Repo access</span>
                 <span class="yvr-fb-runner-card-title">Manual machine setup</span>
                 <span class="yvr-fb-runner-card-meta">${escapeHtml(
-                  selectedMachineOwned
-                    ? 'If direct setup here does not work, finish machine onboarding from Yaver web UI, Yaver mobile settings, or your own SSH session.'
-                    : 'This machine is shared with you. You can link your git account in Yaver here, but machine-side git setup must be done by the host or on one of your own machines.',
+                  'If direct setup here does not work, finish machine onboarding from Yaver web UI, Yaver mobile settings, or your own SSH session.',
                 )}</span>
                 <span class="yvr-fb-runner-card-action">Guide</span>
               </button>
@@ -2944,7 +2929,7 @@ export class YaverFeedback {
   private static async listAvailableDevices() {
     if (!YaverFeedback.config?.authToken) return [];
     const devices = await listReachableDevices(YaverFeedback.config.authToken);
-    return [...devices.owned, ...devices.shared];
+    return devices.owned;
   }
 
   private static async captureScreenshotBlob(opts: {

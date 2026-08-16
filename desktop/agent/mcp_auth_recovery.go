@@ -486,7 +486,6 @@ func mcpDeviceReauthStatus(deviceHint string) map[string]interface{} {
 		"deviceId":          target.DeviceID,
 		"name":              target.Name,
 		"platform":          target.Platform,
-		"hostName":          target.HostName,
 		"isOnline":          target.IsOnline,
 		"state":             probe.State,
 		"reachable":         probe.Reachable,

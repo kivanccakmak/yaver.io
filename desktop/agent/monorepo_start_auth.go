@@ -111,13 +111,6 @@ func runMonorepoAuthInteractive(r *bufio.Reader, loc *runnerLocation, runner str
 		printSelfBrowserHints(runner, loc)
 		fmt.Println("    Re-run `yaver monorepo start` after you've signed in.")
 		return promptChoice(r, "Continue with the wizard now", []string{"yes", "no"}, "yes") == "yes"
-	case authChoiceHostKeys:
-		// Only meaningful when the chosen remote is a guest of the
-		// caller's account — otherwise this flag isn't theirs to set.
-		fmt.Println("    Host-API-key sharing is enabled per-device by the device's host.")
-		fmt.Printf("    From the host account: yaver guests config <email> useHostKeys=true (target=%s)\n", loc.ID)
-		fmt.Println("    The remote runner will then use host's vault keys instead of its own.")
-		return promptChoice(r, "Continue without authing", []string{"yes", "no"}, "yes") == "yes"
 	case authChoicePaste:
 		// fall through — the most common path
 	default:
@@ -169,7 +162,6 @@ type authChoice string
 const (
 	authChoicePaste       authChoice = "paste"
 	authChoiceBrowserSelf authChoice = "browser"
-	authChoiceHostKeys    authChoice = "host"
 	authChoiceSkip        authChoice = "skip"
 )
 
@@ -186,15 +178,9 @@ func promptAuthAction(r *bufio.Reader, runner string, loc *runnerLocation) authC
 	fmt.Println("    How would you like to authenticate?")
 	fmt.Println("      1. Paste an API key / token  (default — Yaver stores it in the vault)")
 	fmt.Println("      2. Open the runner's browser sign-in myself, come back later")
-	if loc != nil && loc.ID != "this" {
-		fmt.Println("      3. Use host's API keys      (only if this remote is a guest of your account)")
-	}
-	fmt.Println("      4. Skip — I'll authenticate before vibing")
+	fmt.Println("      3. Skip — I'll authenticate before vibing")
 
-	choices := []string{"1", "2", "4"}
-	if loc != nil && loc.ID != "this" {
-		choices = []string{"1", "2", "3", "4"}
-	}
+	choices := []string{"1", "2", "3"}
 	pick := promptChoice(r, "Choice", choices, "1")
 	switch pick {
 	case "1":
@@ -202,8 +188,6 @@ func promptAuthAction(r *bufio.Reader, runner string, loc *runnerLocation) authC
 	case "2":
 		return authChoiceBrowserSelf
 	case "3":
-		return authChoiceHostKeys
-	case "4":
 		return authChoiceSkip
 	}
 	return authChoiceSkip

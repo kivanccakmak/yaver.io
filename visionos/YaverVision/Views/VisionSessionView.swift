@@ -54,6 +54,7 @@ struct VisionSessionView: View {
         .frame(minWidth: 760, minHeight: 620)
         .glassBackgroundEffect()
         .task(id: store.selectedBox?.id) { await loadSessions() }
+        .task(id: selectedSession) { await streamSelectedSession() }
     }
 
     private var header: some View {
@@ -260,6 +261,43 @@ struct VisionSessionView: View {
             apply(try await sessionClient.sendText(text, session: selectedSession, surfaceId: "vision"))
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    private func streamSelectedSession() async {
+        guard !selectedSession.isEmpty, let agentClient else { return }
+        let watched = selectedSession
+        let stream = await agentClient.subscribeTmuxPane(
+            session: watched,
+            onPane: { frame in
+                Task { @MainActor in
+                    guard self.selectedSession == frame.sessionName else { return }
+                    self.sessionName = frame.sessionName
+                    self.runnerName = frame.agent ?? self.runnerName
+                    self.pane = frame.preview.map(redactHomePaths) ?? self.pane
+                    self.awaitingChoice = frame.status == "awaiting-input"
+                    self.options = (frame.options ?? []).map(redactHomePaths)
+                    if frame.status == "dead" {
+                        self.error = frame.statusReason ?? "The coding session closed."
+                    }
+                }
+            },
+            onDone: { reason in
+                Task { @MainActor in
+                    self.error = reason ?? "The coding session closed."
+                }
+            },
+            onEnd: { kind, reason in
+                guard case .interrupted = kind else { return }
+                Task { @MainActor in
+                    self.error = reason ?? "The live session stream was interrupted."
+                }
+            }
+        )
+        await withTaskCancellationHandler {
+            await stream.value
+        } onCancel: {
+            stream.cancel()
         }
     }
 

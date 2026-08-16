@@ -38,6 +38,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -51,10 +52,10 @@ import (
 // input (write) and output (read) handles, a resize path through the HPCON,
 // and an explicit ClosePseudoConsole.
 type conptyMaster struct {
-	pc      windows.Handle // the HPCON — resize + close go through this
-	inW     *os.File       // write child stdin here
-	outR    *os.File       // read child stdout here
-	cmd     *exec.Cmd
+	pc        windows.Handle // the HPCON — resize + close go through this
+	inW       *os.File       // write child stdin here
+	outR      *os.File       // read child stdout here
+	cmd       *exec.Cmd
 	closeOnce sync.Once
 }
 
@@ -184,7 +185,11 @@ func platformPTYStart(cmd *exec.Cmd) (ptyMaster, error) {
 		return nil, err
 	}
 	// Build a quoted command line from args (os/exec's own quoting rules).
-	cmdLine, err := windows.UTF16PtrFromString(buildWindowsCommandLine(append([]string{exe}, cmd.Args[1:]...)))
+	args := []string{exe}
+	if len(cmd.Args) > 1 {
+		args = append(args, cmd.Args[1:]...)
+	}
+	cmdLine, err := windows.UTF16PtrFromString(buildWindowsCommandLine(args))
 	if err != nil {
 		windows.ClosePseudoConsole(pc)
 		inR.Close()
@@ -195,9 +200,10 @@ func platformPTYStart(cmd *exec.Cmd) (ptyMaster, error) {
 	}
 
 	// Environment: cmd.Env may be nil (inherit) or a full list.
+	var envStorage []uint16
 	var envBlock *uint16
 	if len(cmd.Env) > 0 {
-		envBlock, err = windows.UTF16PtrFromString(buildWindowsEnvBlock(cmd.Env))
+		envStorage, err = buildWindowsEnvBlock(cmd.Env)
 		if err != nil {
 			windows.ClosePseudoConsole(pc)
 			inR.Close()
@@ -206,6 +212,7 @@ func platformPTYStart(cmd *exec.Cmd) (ptyMaster, error) {
 			outW.Close()
 			return nil, err
 		}
+		envBlock = &envStorage[0]
 	}
 
 	// Working directory.
@@ -225,16 +232,16 @@ func platformPTYStart(cmd *exec.Cmd) (ptyMaster, error) {
 	// StartupInfoEx: EXTENDED_STARTUPINFO_PRESENT + the pseudoconsole attr.
 	si := &windows.StartupInfoEx{}
 	si.Cb = uint32(unsafe.Sizeof(*si))
-	si.Flags = windows.STARTF_USESTDHANDLES
 	si.ProcThreadAttributeList = attrList.List()
 	pi := &windows.ProcessInformation{}
 
-	creationFlags := uint32(0)
-	// CREATE_UNICODE_ENVIRONMENT must match the env we hand over (UTF-16).
-	creationFlags |= windows.CREATE_UNICODE_ENVIRONMENT
+	// EXTENDED_STARTUPINFO_PRESENT is what makes CreateProcessW consume the
+	// pseudoconsole attribute. Without it the call can succeed while the child
+	// never attaches to ConPTY. CREATE_UNICODE_ENVIRONMENT matches envBlock.
+	creationFlags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT)
 
 	if err := windows.CreateProcess(
-		argv0, cmdLine, nil, nil, true, creationFlags,
+		argv0, cmdLine, nil, nil, false, creationFlags,
 		envBlock, dirPtr, &si.StartupInfo, pi,
 	); err != nil {
 		windows.ClosePseudoConsole(pc)
@@ -250,79 +257,23 @@ func platformPTYStart(cmd *exec.Cmd) (ptyMaster, error) {
 	inR.Close()
 	outW.Close()
 
-	cmd.Process = &os.Process{Pid: int(pi.ProcessId)}
 	windows.CloseHandle(pi.Thread)
+	// A hand-written os.Process{Pid: ...} is invalid on Windows: os.Process
+	// also needs its own process HANDLE for Wait/Kill. FindProcess opens that
+	// handle; the raw CreateProcess handle can then be closed without leaking.
+	proc, err := os.FindProcess(int(pi.ProcessId))
+	if err != nil {
+		_ = windows.TerminateProcess(pi.Process, 1)
+		windows.CloseHandle(pi.Process)
+		windows.ClosePseudoConsole(pc)
+		inW.Close()
+		outR.Close()
+		return nil, fmt.Errorf("conpty: open child process handle: %w", err)
+	}
+	windows.CloseHandle(pi.Process)
+	cmd.Process = proc
 
 	return &conptyMaster{pc: pc, inW: inW, outR: outR, cmd: cmd}, nil
-}
-
-// buildWindowsCommandLine quotes a slice of args into a Windows command line,
-// following the same quoting rules os/exec uses (quote arguments containing
-// spaces or special characters; escape embedded quotes and backslashes).
-func buildWindowsCommandLine(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	var out string
-	for i, a := range args {
-		if i > 0 {
-			out += " "
-		}
-		out += quoteWindowsArg(a)
-	}
-	return out
-}
-
-func quoteWindowsArg(a string) string {
-	if a == "" {
-		return `""`
-	}
-	needQuote := false
-	for _, r := range a {
-		if r == ' ' || r == '\t' || r == '"' || r == '&' || r == '(' || r == ')' {
-			needQuote = true
-			break
-		}
-	}
-	if !needQuote {
-		return a
-	}
-	// Escape embedded quotes and trailing backslashes per CommandLineToArgvW.
-	var sb []byte
-	sb = append(sb, '"')
-	backslashes := 0
-	for i := 0; i < len(a); i++ {
-		c := a[i]
-		switch {
-		case c == '\\':
-			backslashes++
-		case c == '"':
-			for ; backslashes > 0; backslashes-- {
-				sb = append(sb, '\\', '\\')
-			}
-			sb = append(sb, '\\', '"')
-		default:
-			for ; backslashes > 0; backslashes-- {
-				sb = append(sb, '\\')
-			}
-			sb = append(sb, c)
-		}
-	}
-	for ; backslashes > 0; backslashes-- {
-		sb = append(sb, '\\', '\\')
-	}
-	sb = append(sb, '"')
-	return string(sb)
-}
-
-// buildWindowsEnvBlock serializes NAME=VALUE entries into the NUL-terminated
-// double-NUL-terminated UTF-16 environment block CreateProcess expects.
-func buildWindowsEnvBlock(env []string) string {
-	var out string
-	for _, kv := range env {
-		out += kv + "\x00"
-	}
-	return out + "\x00"
 }
 
 // Ensure io is imported for the interface satisfaction check on non-windows

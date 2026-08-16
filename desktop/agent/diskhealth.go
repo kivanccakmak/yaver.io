@@ -56,7 +56,7 @@ type SMARTDrive struct {
 	Device          string `json:"device"`
 	Model           string `json:"model,omitempty"`
 	SerialNumber    string `json:"serial,omitempty"`
-	Health          string `json:"health"`              // "passed" | "failing" | "unknown"
+	Health          string `json:"health"` // "passed" | "failing" | "unknown"
 	TemperatureC    int    `json:"temperatureC,omitempty"`
 	PowerOnHours    int    `json:"powerOnHours,omitempty"`
 	ReallocatedSect int    `json:"reallocatedSectors,omitempty"`
@@ -67,12 +67,12 @@ type SMARTDrive struct {
 
 // MachineHealth is the top-level snapshot the mobile card consumes.
 type MachineHealth struct {
-	Hostname   string            `json:"hostname"`
-	OS         string            `json:"os"`
-	UpdatedAt  string            `json:"updatedAt"`
+	Hostname    string           `json:"hostname"`
+	OS          string           `json:"os"`
+	UpdatedAt   string           `json:"updatedAt"`
 	Filesystems []DiskSpaceEntry `json:"filesystems"`
-	Drives     []SMARTDrive      `json:"drives"`
-	Alerts     []string          `json:"alerts,omitempty"`
+	Drives      []SMARTDrive     `json:"drives"`
+	Alerts      []string         `json:"alerts,omitempty"`
 }
 
 var (
@@ -231,12 +231,12 @@ func smartDarwin(now string) []SMARTDrive {
 	}
 	var payload struct {
 		SPStorageDataType []struct {
-			Name         string `json:"_name"`
-			SMARTStatus  string `json:"smart_status"`
+			Name          string `json:"_name"`
+			SMARTStatus   string `json:"smart_status"`
 			PhysicalDrive struct {
-				DeviceName string `json:"device_name"`
-				MediaName  string `json:"media_name"`
-				SmartStatus string `json:"smart_status"`
+				DeviceName   string `json:"device_name"`
+				MediaName    string `json:"media_name"`
+				SmartStatus  string `json:"smart_status"`
 				ProtocolText string `json:"protocol"`
 			} `json:"physical_drive"`
 		} `json:"SPStorageDataType"`

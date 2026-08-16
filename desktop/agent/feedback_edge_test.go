@@ -145,7 +145,7 @@ func TestFeedbackLargeTimeline(t *testing.T) {
 	}
 
 	metadata := FeedbackReport{
-		Source: "stress-test",
+		Source:     "stress-test",
 		DeviceInfo: DeviceFBInfo{Platform: "android", Model: "Pixel", OSVersion: "15"},
 		Timeline:   timeline,
 	}
@@ -411,14 +411,14 @@ func TestFeedbackFileTypes(t *testing.T) {
 
 	// Test various file extensions are categorized correctly
 	files := map[string][]byte{
-		"recording.mp4":   []byte("video"),
-		"screen.mov":      []byte("video2"),
-		"voice.m4a":       []byte("audio"),
-		"narration.aac":   []byte("audio2"),
-		"raw.wav":         []byte("audio3"),
-		"bug1.jpg":        []byte("screenshot1"),
-		"bug2.png":        []byte("screenshot2"),
-		"random.txt":      []byte("other"),
+		"recording.mp4": []byte("video"),
+		"screen.mov":    []byte("video2"),
+		"voice.m4a":     []byte("audio"),
+		"narration.aac": []byte("audio2"),
+		"raw.wav":       []byte("audio3"),
+		"bug1.jpg":      []byte("screenshot1"),
+		"bug2.png":      []byte("screenshot2"),
+		"random.txt":    []byte("other"),
 	}
 
 	report, err := fm.ReceiveFeedback(

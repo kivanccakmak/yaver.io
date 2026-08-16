@@ -53,7 +53,7 @@ const provisionSeedVersion = 1
 // migrates this file off the (removable, FAT) boot partition into the
 // config dir with 0600 perms and deletes the boot-partition copy.
 type ProvisionSeed struct {
-	Version int    `json:"v"`
+	Version int `json:"v"`
 	// DeviceID is the stable id this box will register under. Minted at
 	// flash time so the QR, the provisionedDevices row, and the eventual
 	// devices row all agree.
@@ -122,9 +122,9 @@ func provisionSeedPath() (string, error) {
 // LoadProvisionSeed finds a provisioning seed, migrating a boot-partition
 // copy into the config dir on first boot. Resolution order:
 //
-//	1. $YAVER_PROVISION_SEED (explicit path; used by tests + power users)
-//	2. <config>/provision.json (already migrated)
-//	3. boot-partition well-known paths → migrate to (2), then delete source
+//  1. $YAVER_PROVISION_SEED (explicit path; used by tests + power users)
+//  2. <config>/provision.json (already migrated)
+//  3. boot-partition well-known paths → migrate to (2), then delete source
 //
 // Returns (nil, nil) when no seed exists — i.e. this is an ordinary,
 // non-provisioned install and the normal bootstrap path should run.

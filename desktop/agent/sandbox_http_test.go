@@ -25,7 +25,7 @@ func TestSandboxStatusIncludesEnabledModeAndDefaults(t *testing.T) {
 	}
 }
 
-func TestSandboxQuickstartRejectsMissingDocker(t *testing.T) {
+func TestSandboxQuickstartRejectsRemovedGuestMode(t *testing.T) {
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
 	baseURL, cancel := startTestServer(t, "tok", tm)
 	defer cancel()
@@ -33,22 +33,22 @@ func TestSandboxQuickstartRejectsMissingDocker(t *testing.T) {
 	reqBody := `{"mode":"guests","buildImage":false}`
 	status, body := doRequest(t, "POST", baseURL+"/sandbox/quickstart", "tok", reqBody)
 	if status != http.StatusBadRequest {
-		t.Fatalf("expected 400 when docker missing, got %d body=%v", status, body)
+		t.Fatalf("expected 400 for removed guest mode, got %d body=%v", status, body)
 	}
-	if errText, _ := body["error"].(string); !strings.Contains(strings.ToLower(errText), "docker") {
-		t.Fatalf("expected docker error, got %v", body["error"])
+	if errText, _ := body["error"].(string); !strings.Contains(strings.ToLower(errText), "removed") {
+		t.Fatalf("expected removed-mode error, got %v", body["error"])
 	}
 }
 
-func TestApplySandboxQuickstartConfiguresGuestIsolation(t *testing.T) {
+func TestApplySandboxQuickstartConfiguresOwnerIsolation(t *testing.T) {
 	srv := NewHTTPServer(0, "tok", "user", "device", "", "host", NewTaskManager(t.TempDir(), nil, defaultRunner))
 	srv.containerRunner = &ContainerRunner{}
-	summary, message, err := srv.applySandboxQuickstart("guests", false)
+	summary, message, err := srv.applySandboxQuickstart("host", false)
 	if err != nil {
 		t.Fatalf("applySandboxQuickstart() error = %v", err)
 	}
-	if !srv.containerizeGuests || srv.containerizeHost {
-		t.Fatalf("unexpected flags guests=%v host=%v", srv.containerizeGuests, srv.containerizeHost)
+	if !srv.containerizeHost {
+		t.Fatal("owner containerization was not enabled")
 	}
 	if srv.taskMgr.ContainerNetwork != "host" {
 		t.Fatalf("expected default network host, got %q", srv.taskMgr.ContainerNetwork)
@@ -56,11 +56,21 @@ func TestApplySandboxQuickstartConfiguresGuestIsolation(t *testing.T) {
 	if !srv.taskMgr.ContainerReadOnly {
 		t.Fatal("expected quickstart to default read-only rootfs on")
 	}
-	if summary.EnabledMode != "guests" {
-		t.Fatalf("expected enabled mode guests, got %q", summary.EnabledMode)
+	if summary.EnabledMode != "host" {
+		t.Fatalf("expected enabled mode host, got %q", summary.EnabledMode)
 	}
 	if message == "" {
 		t.Fatal("expected status message")
+	}
+}
+
+func TestSandboxConfigRejectsRemovedGuestField(t *testing.T) {
+	srv := NewHTTPServer(0, "tok", "user", "device", "", "host", NewTaskManager(t.TempDir(), nil, defaultRunner))
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/config", strings.NewReader(`{"containerizeGuests":true}`))
+	rr := httptest.NewRecorder()
+	srv.handleSandboxConfig(rr, req)
+	if rr.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 

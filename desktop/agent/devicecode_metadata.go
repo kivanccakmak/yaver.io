@@ -7,14 +7,14 @@ import (
 )
 
 type deviceCodeRequest struct {
-	MachineName    string `json:"machineName,omitempty"`
-	Platform       string `json:"platform,omitempty"`
-	Arch           string `json:"arch,omitempty"`
-	Shell          string `json:"shell,omitempty"`
-	Environment    string `json:"environment,omitempty"`
-	RuntimeVersion string `json:"runtimeVersion,omitempty"`
+	MachineName       string `json:"machineName,omitempty"`
+	Platform          string `json:"platform,omitempty"`
+	Arch              string `json:"arch,omitempty"`
+	Shell             string `json:"shell,omitempty"`
+	Environment       string `json:"environment,omitempty"`
+	RuntimeVersion    string `json:"runtimeVersion,omitempty"`
 	PreferredProvider string `json:"preferredProvider,omitempty"`
-	IsWSL          bool   `json:"isWsl,omitempty"`
+	IsWSL             bool   `json:"isWsl,omitempty"`
 }
 
 func buildDeviceCodeRequest() deviceCodeRequest {
@@ -35,14 +35,14 @@ func buildDeviceCodeRequest() deviceCodeRequest {
 	}
 
 	return deviceCodeRequest{
-		MachineName:    strings.TrimSpace(host),
-		Platform:       platform,
-		Arch:           runtime.GOARCH,
-		Shell:          shell,
-		Environment:    environment,
-		RuntimeVersion: version,
+		MachineName:       strings.TrimSpace(host),
+		Platform:          platform,
+		Arch:              runtime.GOARCH,
+		Shell:             shell,
+		Environment:       environment,
+		RuntimeVersion:    version,
 		PreferredProvider: detectPreferredAuthProvider(),
-		IsWSL:          rt.IsWSL,
+		IsWSL:             rt.IsWSL,
 	}
 }
 

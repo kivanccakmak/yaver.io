@@ -60,7 +60,7 @@ func TestAutorunOpsRegisteredOwnerOnly(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is not registered", name)
 		}
-		if spec.AllowGuest {
+		if spec.AllowCompanion {
 			t.Fatalf("%s must be owner-only", name)
 		}
 	}

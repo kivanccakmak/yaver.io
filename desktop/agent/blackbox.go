@@ -144,20 +144,20 @@ func (s *BlackBoxSession) PushEvent(event BlackBoxEvent) {
 	if event.Type == "error" || event.IsFatal {
 		GlobalErrorStore().Record(s.DeviceID, event)
 		GlobalIncidentStore().Append(IncidentEvent{
-			Timestamp:      event.Timestamp,
-			Severity:       blackBoxIncidentSeverity(event),
-			Category:       "feedback",
-			Code:           blackBoxIncidentCode(event),
-			Source:         "blackbox",
-			Title:          "SDK error captured",
-			UserMessage:    event.Message,
-			TechnicalInfo:  strings.Join(event.Stack, "\n"),
-			DeviceID:       s.DeviceID,
-			LogsAvailable:  true,
-			LogRefs:        []string{"blackbox:device:" + s.DeviceID},
-			Recoverable:    !event.IsFatal,
-			CorrelationID:  s.DeviceID,
-			Metadata:       event.Metadata,
+			Timestamp:     event.Timestamp,
+			Severity:      blackBoxIncidentSeverity(event),
+			Category:      "feedback",
+			Code:          blackBoxIncidentCode(event),
+			Source:        "blackbox",
+			Title:         "SDK error captured",
+			UserMessage:   event.Message,
+			TechnicalInfo: strings.Join(event.Stack, "\n"),
+			DeviceID:      s.DeviceID,
+			LogsAvailable: true,
+			LogRefs:       []string{"blackbox:device:" + s.DeviceID},
+			Recoverable:   !event.IsFatal,
+			CorrelationID: s.DeviceID,
+			Metadata:      event.Metadata,
 		})
 	}
 

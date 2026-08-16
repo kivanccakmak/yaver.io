@@ -20,7 +20,6 @@ export interface ThirdPartyPreviewCIConfig {
 
 export interface ThirdPartyPreviewSharing {
   hostVisible?: boolean;
-  guestVisible?: boolean;
 }
 
 export interface ThirdPartyPreviewNativeModules {

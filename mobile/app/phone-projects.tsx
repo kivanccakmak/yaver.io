@@ -41,8 +41,6 @@ import {
   generateClarifyingQuestions,
   listPhoneProjects,
   listPhoneTemplates,
-  sharePhoneProject,
-  joinPhoneShare,
   managedGitMirrorAt,
 } from "../src/lib/phoneProjects";
 
@@ -183,7 +181,6 @@ function pickDevMachines(all: Device[], currentId: string | undefined): Device[]
   return all.filter(
     (d) =>
       d.online &&
-      !d.isGuest &&
       !d.needsAuth &&
       d.id !== currentId &&
       d.deviceClass !== "edge-mobile",
@@ -769,82 +766,11 @@ export default function PhoneProjectsScreen() {
     ]);
   }
 
-  async function share(p: PhoneProject) {
-    try {
-      const sh = await sharePhoneProject(p.slug);
-      const where = sh.hostedConvexUrl
-        ? `\n\nFriends see your live backend:\n${sh.hostedConvexUrl}`
-        : "";
-      Alert.alert(
-        "Share with a friend",
-        `Code: ${sh.code}\n\nThey open Yaver → "Join by code" and enter it to try "${p.name}".${where}`,
-        [{ text: "OK" }],
-      );
-    } catch (e: any) {
-      const raw = e instanceof Error ? e.message : "";
-      Alert.alert(
-        "Share",
-        `Couldn't create a share code. Check your connection and try again.${raw ? `\n\n${raw}` : ""}`,
-      );
-    }
-  }
-
   function projectActions(p: PhoneProject) {
     Alert.alert(p.name, undefined, [
-      { text: "Share with a friend", onPress: () => void share(p) },
       { text: "Delete", style: "destructive", onPress: () => void remove(p) },
       { text: "Cancel", style: "cancel" },
     ]);
-  }
-
-  function joinByCode() {
-    const go = async (code: string) => {
-      const trimmed = (code || "").trim();
-      if (!trimmed) return;
-      try {
-        const sh = await joinPhoneShare(trimmed);
-        Alert.alert(
-          "Joined",
-          `"${sh.name}" is ready.${
-            sh.hostedConvexUrl ? `\nBackend: ${sh.hostedConvexUrl}` : ""
-          }`,
-          [
-            {
-              text: "Open",
-              // Run the app (generic serverless-lite renderer, read-only) rather
-              // than the raw data browser — this is the "friend uses the app"
-              // experience.
-              onPress: () => router.navigate(`/run-app?slug=${sh.slug}` as any),
-            },
-            { text: "Later", style: "cancel" },
-          ],
-        );
-        await load();
-      } catch (e: any) {
-        // Friendly fallback FIRST; raw reason only as trailing detail.
-        const raw = e instanceof Error ? e.message : "";
-        Alert.alert(
-          "Join by code",
-          `Couldn't join with that code — it may be invalid or expired. Ask the host to resend.${raw ? `\n\n${raw}` : ""}`,
-        );
-      }
-    };
-    if (Platform.OS === "ios" && (Alert as any).prompt) {
-      (Alert as any).prompt(
-        "Join by code",
-        "Enter the code a friend shared with you.",
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Join", onPress: (v: string) => void go(v) },
-        ],
-        "plain-text",
-      );
-    } else {
-      Alert.alert(
-        "Join by code",
-        "Code entry is available on iOS. On Android, ask the host to push the project to your device.",
-      );
-    }
   }
 
   const header = useMemo(
@@ -877,18 +803,9 @@ export default function PhoneProjectsScreen() {
             </Text>
             {projects.length > 0 ? (
               <Text style={[styles.muted, { color: c.textMuted, marginTop: 4 }]}>
-                Or tap one of your {projects.length === 1 ? "existing project" : `${projects.length} existing projects`} below to open it. Long-press to share.
+                Or tap one of your {projects.length === 1 ? "existing project" : `${projects.length} existing projects`} below to open it. Long-press to delete.
               </Text>
             ) : null}
-            <Pressable
-              onPress={() => joinByCode()}
-              style={[
-                styles.btn,
-                { backgroundColor: "transparent", borderWidth: 1, borderColor: c.border, marginTop: 10 },
-              ]}
-            >
-              <Text style={[styles.btnText, { color: c.textPrimary }]}>Join by code</Text>
-            </Pressable>
           </>
         ) : (
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, marginTop: 12 }]}>

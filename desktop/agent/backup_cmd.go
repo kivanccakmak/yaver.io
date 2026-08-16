@@ -57,12 +57,12 @@ var backupMu sync.Mutex
 // rebuildable (worktrees, compiled artifacts) so we don't waste
 // bytes backing them up.
 var excludedBackupPaths = []string{
-	"loops",        // per-loop worktrees rebuild from git
-	"releases",     // rebuilt from Hermes compile
-	"voice-input",  // transient audio capture
-	".origin",      // sync origin ID — regenerate on restore
+	"loops",       // per-loop worktrees rebuild from git
+	"releases",    // rebuilt from Hermes compile
+	"voice-input", // transient audio capture
+	".origin",     // sync origin ID — regenerate on restore
 	"agent.log",
-	"blackbox",     // cross-device ring, rebuilt from SDK streams
+	"blackbox", // cross-device ring, rebuilt from SDK streams
 }
 
 func backupDir() (string, error) {
@@ -123,7 +123,7 @@ func saveBackupManifest(records []BackupRecord) error {
 // encryptBackupFile wraps an existing backup tarball in a
 // scrypt-derived AES-256-GCM envelope. Layout:
 //
-//   [32-byte salt][12-byte nonce][ciphertext][16-byte tag]
+//	[32-byte salt][12-byte nonce][ciphertext][16-byte tag]
 //
 // The scrypt parameters (N=32768, r=8, p=1) target ~100ms of
 // CPU on a 2026-era laptop, which is enough to make offline

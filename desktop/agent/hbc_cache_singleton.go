@@ -94,10 +94,10 @@ func getHBCCache() (*HBCCache, error) {
 // the cache key so a Hermes upgrade invalidates every previous entry.
 //
 // Strategy:
-//   1. If `hermesc -version` succeeds, use sha256 of its output (most
-//      portable; output strings change per version).
-//   2. Otherwise, fall back to sha256 of the binary's file contents
-//      (cheap, deterministic, but bigger I/O — only used as backup).
+//  1. If `hermesc -version` succeeds, use sha256 of its output (most
+//     portable; output strings change per version).
+//  2. Otherwise, fall back to sha256 of the binary's file contents
+//     (cheap, deterministic, but bigger I/O — only used as backup).
 //
 // Cached process-wide; assume the binary doesn't get swapped under
 // us during a single agent run.
@@ -148,11 +148,11 @@ type HBCCacheCompileOpts struct {
 // HBCCacheEvent is the narrow surface the wrapper exposes to callers
 // that want to forward cache state to a UI / SSE channel.
 type HBCCacheEvent struct {
-	Kind            string // "lookup" | "hit" | "miss" | "corrupt" | "stored" | "skipped" | "fallback"
-	SourceHashHead  string // first 12 hex chars of the JS bundle hash, for diagnostics
-	BCVersion       uint32 // populated on "hit"
-	BytesCached     int64  // populated on "hit" / "stored"
-	FallbackReason  string // populated on "corrupt" / "fallback" / "skipped"
+	Kind           string // "lookup" | "hit" | "miss" | "corrupt" | "stored" | "skipped" | "fallback"
+	SourceHashHead string // first 12 hex chars of the JS bundle hash, for diagnostics
+	BCVersion      uint32 // populated on "hit"
+	BytesCached    int64  // populated on "hit" / "stored"
+	FallbackReason string // populated on "corrupt" / "fallback" / "skipped"
 }
 
 // tryServeFromHBCCache is the cache-hit short-circuit. Returns true if

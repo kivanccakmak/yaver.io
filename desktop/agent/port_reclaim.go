@@ -42,6 +42,15 @@ const (
 	portReclaimKillGrace      = 2 * time.Second
 )
 
+// Seams for the negative-control test below. Port reclaim is deliberately
+// process-level code; injecting only the probe/lister lets the test prove a
+// healthy daemon short-circuits before PID discovery without ever signalling a
+// real process.
+var (
+	probePortYaverHealth = probeLocalAgentHealthInfo
+	portHolderPIDs       = listPortHolders
+)
+
 // isAddrInUseErr reports whether err is the standard "address already
 // in use" wrapped at any depth. Goes through syscall.EADDRINUSE first
 // and falls back to substring on the rendered message — net package
@@ -70,7 +79,15 @@ func reclaimPortFromStaleYaver(port int) bool {
 	if port <= 0 {
 		return false
 	}
-	holders := listPortHolders(port)
+	// A listening Yaver that answers its real health route is not stale. This
+	// check is load-bearing when two service managers own yaver.service: the
+	// loser must exit, not kill the healthy winner and begin a restart duel
+	// that leaks children and eventually OOMs the box.
+	if health := probePortYaverHealth(port); health != nil {
+		log.Printf("[port-reclaim] :%d is held by a healthy Yaver agent (v%s) — reusing it, not terminating it", port, health.Version)
+		return false
+	}
+	holders := portHolderPIDs(port)
 	if len(holders) == 0 {
 		log.Printf("[port-reclaim] no holder PIDs found for :%d (lsof missing or port already free)", port)
 		return false

@@ -487,7 +487,7 @@ export class P2PClient {
    * "Full Reload" must not silently get something else.
    *
    * Auth: the SAME bearer this client already sends with the feedback POST.
-   * `/dev/reload` lives behind `authSDKOrGuest`, and the `guest-reload` SDK
+   * `/dev/reload` lives behind `authSDK`, and the `reload` SDK
    * scope already lists it — no new secret, no widened gate.
    *
    * Throws with a NAMED reason (describeReloadFailure) on any non-2xx, so a
@@ -764,7 +764,7 @@ export class P2PClient {
    * Bind a project name to a canonical git remote URL on the agent. The
    * agent stores the mapping locally and uses it as a fallback when the
    * project on disk has no `git remote` configured (or hasn't been cloned
-   * yet). Owner-only — guests and SDK tokens cannot call this.
+   * yet). Owner-only — SDK tokens cannot call this.
    */
   async setProjectRemote(params: {
     projectName: string;

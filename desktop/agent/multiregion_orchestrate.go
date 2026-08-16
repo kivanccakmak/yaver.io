@@ -19,13 +19,13 @@ type OrchestrateResult struct {
 }
 
 type OrchestratedServer struct {
-	IP        string            `json:"ip"`
-	Region    string            `json:"region"`
-	Role      string            `json:"role"` // app, router
-	Status    string            `json:"status"`
-	Steps     []string          `json:"steps"`
-	Details   map[string]string `json:"details,omitempty"`
-	Error     string            `json:"error,omitempty"`
+	IP      string            `json:"ip"`
+	Region  string            `json:"region"`
+	Role    string            `json:"role"` // app, router
+	Status  string            `json:"status"`
+	Steps   []string          `json:"steps"`
+	Details map[string]string `json:"details,omitempty"`
+	Error   string            `json:"error,omitempty"`
 }
 
 // OrchestrateMultiRegion picks up where DeployMultiRegion leaves off: for each
@@ -217,7 +217,7 @@ func runSSH(ip, rootPassword, script string) (string, error) {
 // bashSingleQuote quotes a string for safe interpolation into a bash
 // command. Renamed from shellEscape to avoid colliding with the
 // runner-sandbox helper of the same name (which has slightly different
-// escape rules — `'\''` vs the `'"'"'` form here, and an empty-string
+// escape rules — `'\”` vs the `'"'"'` form here, and an empty-string
 // special-case). Both are valid POSIX-shell escapes; we keep both to
 // preserve callers' existing tested output.
 func bashSingleQuote(s string) string {
@@ -232,8 +232,8 @@ func DeployMultiRegionWithOrchestration(projectDir, name string, regions []strin
 	}
 	orch := OrchestrateMultiRegion(projectDir, domain, base.Servers, gitRepo)
 	return map[string]interface{}{
-		"provision":    base,
-		"orchestrate":  orch,
+		"provision":   base,
+		"orchestrate": orch,
 	}, nil
 }
 

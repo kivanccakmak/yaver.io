@@ -224,11 +224,11 @@ func mcpNetworkInterfaces() interface{} {
 			addrStrs = append(addrStrs, a.String())
 		}
 		result = append(result, map[string]interface{}{
-			"name":       i.Name,
-			"mac":        i.HardwareAddr.String(),
-			"mtu":        i.MTU,
-			"flags":      i.Flags.String(),
-			"addresses":  addrStrs,
+			"name":      i.Name,
+			"mac":       i.HardwareAddr.String(),
+			"mtu":       i.MTU,
+			"flags":     i.Flags.String(),
+			"addresses": addrStrs,
 		})
 	}
 	return map[string]interface{}{"interfaces": result, "count": len(result)}

@@ -49,10 +49,6 @@ type Device = {
   publicUrl?: string;
   tunnelUrl?: string;
   publicKey?: string;
-  /** Populated for shared/guest devices only. */
-  isGuest?: boolean;
-  hostName?: string;
-  hostEmail?: string;
   lastHeartbeat?: number;
   runners?: Array<{ id?: string; runnerId?: string; status?: string }>;
   installedRunnerIds?: string[];
@@ -301,9 +297,6 @@ export class MobileClient {
       publicUrl: typeof d.publicUrl === "string" ? d.publicUrl : undefined,
       tunnelUrl: typeof d.tunnelUrl === "string" ? d.tunnelUrl : undefined,
       publicKey: typeof d.publicKey === "string" ? d.publicKey : undefined,
-      isGuest: d.isGuest ?? false,
-      hostName: d.hostName,
-      hostEmail: d.hostEmail,
       lastHeartbeat: d.lastHeartbeat,
     }));
   }
@@ -645,7 +638,7 @@ export class MobileClient {
   // ── Auto-connect decision (mirrors DeviceContext.tsx rule) ────
   /** Apply the same ranking the real mobile app uses after probing every
    * owned device: reachable only, coding-ready first, then sticky →
-   * primary → secondary → any reachable by name. Guests are never auto-picked.
+   * primary → secondary → any reachable by name.
    * When `probes` is omitted this falls back to the Convex `online` flag so
    * the CLI remains useful without performing live network probes. */
   pickAutoConnectTarget(
@@ -657,7 +650,7 @@ export class MobileClient {
       probes?: Record<string, HeadlessDeviceStatusProbe | null | undefined>;
     },
   ): Device | null {
-    const candidates = devices.filter((d) => !d.isGuest);
+    const candidates = devices;
     const priorityIds = [opts?.stickyDeviceId, primaryDeviceId, opts?.secondaryDeviceId];
     const ranked = candidates
       .map((device) => ({
@@ -716,7 +709,6 @@ export class MobileClient {
     name: string;
     description: string;
     streaming: boolean;
-    allowGuest: boolean;
     payload: Record<string, unknown>;
   }>> {
     const r = await this.raw.get("/ops/verbs");
@@ -824,36 +816,6 @@ export class MobileClient {
       const r = await this.raw.post("/vibing/execute", body);
       if (r.status >= 400) throw new Error(r.body?.error ?? `executeVibing: HTTP ${r.status}`);
       return r.body as VibingExecuteResult;
-    },
-  };
-
-  // ── Guests (via Convex HTTP) ──────────────────────────────────
-  readonly guests = {
-    list: async () => {
-      const res = await fetch(this.opts.convexUrl + "/guests/list", { headers: this.authHeaders() });
-      if (!res.ok) throw new Error("listGuests: HTTP " + res.status);
-      const body = await res.json() as { guests: any[] };
-      return body.guests ?? [];
-    },
-    invite: async (
-      target:
-        | string
-        | {
-            email?: string;
-            userId?: string;
-            deviceIds?: string[];
-            scope?: "full" | "feedback-only" | "sdk-project";
-            allowedProjects?: string[];
-          },
-    ) => {
-      const body = typeof target === "string" ? { email: target } : target;
-      const res = await fetch(this.opts.convexUrl + "/guests/invite", {
-        method: "POST",
-        headers: { ...this.authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error("invite: HTTP " + res.status);
-      return res.json();
     },
   };
 

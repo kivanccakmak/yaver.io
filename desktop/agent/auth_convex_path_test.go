@@ -2,8 +2,8 @@ package main
 
 // auth_convex_path_test.go — exercises the *slow path* in
 // HTTPServer.auth: a request presents a token that isn't the agent's
-// own, isn't a paired token, isn't a support bearer, and isn't in
-// the cache. The middleware calls ValidateTokenUser against Convex.
+// own and isn't in the cache. The middleware calls ValidateTokenUser against
+// Convex and verifies that it resolves to the owner.
 //
 // The other integration tests only cover the fast path (exact match
 // with s.token). Without this test we'd never catch a regression in
@@ -30,9 +30,9 @@ import (
 //   - Counts how many times /auth/validate was hit so we can assert
 //     the agent is actually caching on repeat calls.
 type mockConvex struct {
-	srv        *httptest.Server
-	tokens     map[string]string // token → userId
-	validateN  int64
+	srv       *httptest.Server
+	tokens    map[string]string // token → userId
+	validateN int64
 }
 
 func newMockConvex(tokens map[string]string) *mockConvex {
@@ -107,11 +107,10 @@ func startAgentAgainstMockConvex(t *testing.T, convexURL, ownerToken, ownerUserI
 
 func TestAgentAuthConvexValidationPath(t *testing.T) {
 	const (
-		ownerUserID   = "user-owner"
-		guestUserID   = "user-guest"
-		otherUserID   = "user-other"
-		ownerSession  = "owner-session-12345"
-		otherSession  = "other-user-session-98765"
+		ownerUserID  = "user-owner"
+		otherUserID  = "user-other"
+		ownerSession = "owner-session-12345"
+		otherSession = "other-user-session-98765"
 	)
 
 	mc := newMockConvex(map[string]string{
@@ -119,8 +118,7 @@ func TestAgentAuthConvexValidationPath(t *testing.T) {
 		// should open owner-only endpoints.
 		ownerSession: ownerUserID,
 		// A session token that resolves to a *different* userId —
-		// auth() must reject because they're not the owner and not
-		// an approved guest.
+		// auth() must reject because they are not the owner.
 		otherSession: otherUserID,
 	})
 	defer mc.close()
@@ -133,9 +131,9 @@ func TestAgentAuthConvexValidationPath(t *testing.T) {
 
 	// 1. Agent's own token — fast path. Convex should NOT be called.
 	before := mc.validateCalls()
-	status, _ := doRequest(t, "GET", baseURL+"/info", "agent-own-token", "")
+	status, _ := doRequest(t, "GET", baseURL+"/tasks?limit=1", "agent-own-token", "")
 	if status != 200 {
-		t.Fatalf("fast path /info with agent token: got %d", status)
+		t.Fatalf("fast path /tasks with agent token: got %d", status)
 	}
 	if mc.validateCalls() != before {
 		t.Errorf("agent's own token should NOT hit Convex (call count changed %d → %d)", before, mc.validateCalls())
@@ -144,9 +142,9 @@ func TestAgentAuthConvexValidationPath(t *testing.T) {
 	// 2. Owner-equivalent session token — SLOW path. Validates via
 	//    Convex, resolves to ownerUserID, allowed through.
 	before = mc.validateCalls()
-	status, _ = doRequest(t, "GET", baseURL+"/info", ownerSession, "")
+	status, _ = doRequest(t, "GET", baseURL+"/tasks?limit=1", ownerSession, "")
 	if status != 200 {
-		t.Fatalf("slow path /info with owner session: got %d", status)
+		t.Fatalf("slow path /tasks with owner session: got %d", status)
 	}
 	if mc.validateCalls() != before+1 {
 		t.Errorf("owner session should have triggered one Convex call, got %d", mc.validateCalls()-before)
@@ -154,7 +152,7 @@ func TestAgentAuthConvexValidationPath(t *testing.T) {
 
 	// 3. Same session — cache hit. Convex NOT called again.
 	before = mc.validateCalls()
-	status, _ = doRequest(t, "GET", baseURL+"/info", ownerSession, "")
+	status, _ = doRequest(t, "GET", baseURL+"/tasks?limit=1", ownerSession, "")
 	if status != 200 {
 		t.Fatalf("cached owner session: got %d", status)
 	}
@@ -163,21 +161,21 @@ func TestAgentAuthConvexValidationPath(t *testing.T) {
 	}
 
 	// 4. Other-user session — validated, but rejected because it's
-	//    not the owner's userId and not on the guest allowlist.
-	status, _ = doRequest(t, "GET", baseURL+"/info", otherSession, "")
+	//    not the owner's userId. There is no cross-account allowlist.
+	status, _ = doRequest(t, "GET", baseURL+"/tasks?limit=1", otherSession, "")
 	if status != 403 {
 		t.Errorf("other-user session: expected 403, got %d", status)
 	}
 
 	// 5. Bogus token — Convex says 401, agent returns 403.
-	status, _ = doRequest(t, "GET", baseURL+"/info", "never-issued-token", "")
+	status, _ = doRequest(t, "GET", baseURL+"/tasks?limit=1", "never-issued-token", "")
 	if status != 403 {
 		t.Errorf("bogus token: expected 403, got %d", status)
 	}
 
 	// 6. Missing Authorization header — agent never even calls Convex.
 	before = mc.validateCalls()
-	status, _ = doRequest(t, "GET", baseURL+"/info", "", "")
+	status, _ = doRequest(t, "GET", baseURL+"/tasks?limit=1", "", "")
 	if status != 401 {
 		t.Errorf("missing auth header: expected 401, got %d", status)
 	}

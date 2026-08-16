@@ -53,7 +53,12 @@ img.save(sys.argv[2], format="ICO", sizes=[(16,16),(24,24),(32,32),(48,48),(64,6
 PY
   echo "  → $ASSETS/icon.ico"
 else
-  echo "  WARN: Python PIL not available — skipping icon.ico (Windows build will fall back to icon.png conversion in electron-builder)" >&2
+  if command -v magick >/dev/null 2>&1; then
+    magick "$ASSETS/icon.png" -define icon:auto-resize=256,128,64,48,32,24,16 "$ASSETS/icon.ico"
+    echo "  → $ASSETS/icon.ico (ImageMagick)"
+  else
+    echo "  WARN: Python PIL/ImageMagick unavailable — skipping icon.ico (electron-builder will convert icon.png)" >&2
+  fi
 fi
 
 echo "done."

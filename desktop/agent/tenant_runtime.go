@@ -27,33 +27,6 @@ func runnerNeedsTenantRuntime(runnerID string) bool {
 	}
 }
 
-func tenantRuntimeForGuest(userID string) tenantRuntime {
-	id := sanitizeTenantRef(userID)
-	if id == "anon" {
-		return tenantRuntime{}
-	}
-	root := filepath.Join(tenantPartitionRoot, id)
-	return tenantRuntime{
-		Enabled: true,
-		UserID:  userID,
-		User:    tenantPartitionUser(userID),
-		Root:    root,
-		Home:    filepath.Join(root, "home"),
-	}
-}
-
-func tenantRuntimeForTask(task *Task) tenantRuntime {
-	if task == nil || strings.TrimSpace(task.GuestUserID) == "" || !task.GuestRequireIsolation {
-		return tenantRuntime{}
-	}
-	// GuestRequireIsolation = this task MUST run confined as a tenant, REGARDLESS
-	// of runner. Beta is opencode-only; the earlier runner gate (claude/codex
-	// only) silently left isolation-required opencode tasks UNCONFINED — a hole.
-	// claude/codex still land here and additionally get their confined HOME
-	// (CLAUDE_CONFIG_DIR/CODEX_HOME) via authEnv.
-	return tenantRuntimeForGuest(task.GuestUserID)
-}
-
 func (tr tenantRuntime) authEnv() []string {
 	if !tr.Enabled {
 		return nil
@@ -84,7 +57,6 @@ func (tr tenantRuntime) taskEnv(task *Task) []string {
 			"YAVER_TASK_SOURCE="+strings.TrimSpace(task.Source),
 			"YAVER_SESSION_MODE=remote",
 			"YAVER_SOURCE_SURFACE="+firstNonEmpty(strings.TrimSpace(task.Source), "unknown"),
-			"YAVER_TENANT_USER_ID="+strings.TrimSpace(task.GuestUserID),
 		)
 		if strings.TrimSpace(task.ID) != "" {
 			env = append(env, "YAVER_TASK_ID="+task.ID)

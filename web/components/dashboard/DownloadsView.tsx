@@ -69,10 +69,12 @@ export default function DownloadsView() {
           node. Includes tray, task notifications, and deep links.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <DownloadCard platform="macOS" detail="DMG · Apple Silicon & Intel" href={GUI_DOWNLOADS.mac} icon="🍎" />
-          <DownloadCard platform="Windows" detail="NSIS installer · x64" href={GUI_DOWNLOADS.win} icon="🪟" />
-          <DownloadCard platform="Linux" detail="AppImage · x64 & arm64" href={GUI_DOWNLOADS.linux} icon="🐧" />
-          <DownloadCard platform="Linux (deb)" detail="Debian / Ubuntu package" href={GUI_DOWNLOADS.deb} icon="📦" />
+          <DownloadCard platform="macOS · Apple Silicon" detail="Signed + notarized DMG" href={GUI_DOWNLOADS.macArm64} icon="🍎" />
+          <DownloadCard platform="macOS · Intel" detail="Signed + notarized DMG" href={GUI_DOWNLOADS.macX64} icon="🍎" />
+          <DownloadCard platform="Windows" detail="Authenticode NSIS · x64" href={GUI_DOWNLOADS.winX64} icon="🪟" />
+          <DownloadCard platform="Linux · x64" detail="AppImage" href={GUI_DOWNLOADS.linuxX64} icon="🐧" />
+          <DownloadCard platform="Linux · arm64" detail="AppImage" href={GUI_DOWNLOADS.linuxArm64} icon="🐧" />
+          <DownloadCard platform="Ubuntu / Debian" detail="x64 .deb (apt-get)" href={GUI_DOWNLOADS.debX64} icon="📦" />
         </div>
         <p className="mt-3 text-[11px] text-surface-500">
           All GUI releases and the full artifact set (rpm, tar.gz, zip):{" "}

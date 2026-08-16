@@ -33,7 +33,7 @@ func TestStripURLCredentials(t *testing.T) {
 
 // TestResetOriginToCleanURL is the real end-to-end proof of the leak fix: after
 // a clone persists a tokenised origin in .git/config, resetOriginToCleanURL
-// must strip it so a tester/guest sharing the workdir can't read the PAT.
+// must strip it so project code or a sandboxed runner cannot read the PAT.
 // Uses a real local git repo (no mocks), matching the repo's test convention.
 func TestResetOriginToCleanURL(t *testing.T) {
 	if _, err := osexec.LookPath("git"); err != nil {

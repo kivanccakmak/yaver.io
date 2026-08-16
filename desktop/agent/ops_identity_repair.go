@@ -13,8 +13,8 @@ func init() {
 		Schema: ghostJSONSchema(map[string]interface{}{
 			"restart": map[string]interface{}{"type": "boolean", "description": "Restart the agent after saving the canonical id. Defaults true."},
 		}),
-		Handler:    agentIdentityRepairHandler,
-		AllowGuest: false,
+		Handler:        agentIdentityRepairHandler,
+		AllowCompanion: false,
 	})
 }
 

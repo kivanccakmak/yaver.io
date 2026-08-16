@@ -15,7 +15,7 @@ func (s *HTTPServer) handleIncidents(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		jsonReply(w, http.StatusOK, map[string]interface{}{
-			"ok":        true,
+			"ok": true,
 			"incidents": GlobalIncidentStore().List(IncidentFilter{
 				Category:        q.Get("category"),
 				Severity:        q.Get("severity"),

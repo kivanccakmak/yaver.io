@@ -14,7 +14,7 @@ import (
 // until the user confirms in the UI. It never writes the target repo.
 
 type DetectedItem struct {
-	Kind       string  `json:"kind"`   // "cron" | "service" | "note"
+	Kind       string  `json:"kind"` // "cron" | "service" | "note"
 	Name       string  `json:"name"`
 	Reason     string  `json:"reason"`
 	Status     string  `json:"status"` // "detected" | "proposed-missing-endpoint" | "note"

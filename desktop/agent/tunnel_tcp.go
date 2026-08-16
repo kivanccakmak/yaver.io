@@ -21,7 +21,7 @@ type TunnelSession struct {
 	CreatedAt string `json:"createdAt"`
 
 	// Internal
-	listener net.Listener `json:"-"`
+	listener net.Listener  `json:"-"`
 	done     chan struct{} `json:"-"`
 }
 

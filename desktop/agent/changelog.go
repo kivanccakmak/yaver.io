@@ -42,9 +42,9 @@ type ChangelogEntry struct {
 	ID          string   `json:"id"`
 	Version     string   `json:"version"`
 	Title       string   `json:"title"`
-	Body        string   `json:"body,omitempty"`       // markdown-lite
-	Channel     string   `json:"channel,omitempty"`    // "production" | "beta" | ...
-	Tags        []string `json:"tags,omitempty"`       // ["fix","feature","breaking"]
+	Body        string   `json:"body,omitempty"`    // markdown-lite
+	Channel     string   `json:"channel,omitempty"` // "production" | "beta" | ...
+	Tags        []string `json:"tags,omitempty"`    // ["fix","feature","breaking"]
 	PublishedAt string   `json:"publishedAt"`
 	Author      string   `json:"author,omitempty"`
 }

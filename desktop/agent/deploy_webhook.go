@@ -4,7 +4,7 @@ package main
 // /deploy/ship. When Config.DeployWebhookURL is set, every finished
 // run POSTs a JSON summary there so the host owner can wire a
 // notification into Slack / Discord / Zapier / a home-grown
-// dashboard — especially useful for overnight guest-triggered
+// dashboard — especially useful for overnight
 // deploys where nobody is watching the terminal.
 //
 // Fire-and-forget: the webhook runs in its own goroutine so a slow
@@ -96,19 +96,17 @@ func parseUnixTimestamp(s string) (int64, error) {
 // deliberately compact — a notification surface doesn't need the
 // full output tail, just enough to decide "page a human or not".
 type DeployWebhookPayload struct {
-	ID          string           `json:"id"`
-	App         string           `json:"app"`
-	Target      string           `json:"target"`
-	Stack       string           `json:"stack,omitempty"`
-	RequestedBy string           `json:"requested_by,omitempty"`
-	IsGuest     bool             `json:"is_guest,omitempty"`
-	StartedAt   int64            `json:"started_at"`
-	DurationMs  int64            `json:"duration_ms"`
-	ExitCode    int              `json:"exit_code"`
-	OK          bool             `json:"ok"`
-	ErrorClass  DeployErrorClass `json:"error_class,omitempty"`
-	TimedOut    bool             `json:"timed_out,omitempty"`
-	Host        string           `json:"host,omitempty"` // hostname for multi-machine setups
+	ID         string           `json:"id"`
+	App        string           `json:"app"`
+	Target     string           `json:"target"`
+	Stack      string           `json:"stack,omitempty"`
+	StartedAt  int64            `json:"started_at"`
+	DurationMs int64            `json:"duration_ms"`
+	ExitCode   int              `json:"exit_code"`
+	OK         bool             `json:"ok"`
+	ErrorClass DeployErrorClass `json:"error_class,omitempty"`
+	TimedOut   bool             `json:"timed_out,omitempty"`
+	Host       string           `json:"host,omitempty"` // hostname for multi-machine setups
 }
 
 // deployWebhookClient is a dedicated http.Client so the webhook
@@ -138,9 +136,9 @@ func shouldFireDeployWebhook(ok bool, filter string) bool {
 //
 // Filter precedence:
 //
-//	1. Config.DeployWebhookOnByTarget[run.Target]  (most specific)
-//	2. Config.DeployWebhookOn                       (global)
-//	3. "all"                                        (default)
+//  1. Config.DeployWebhookOnByTarget[run.Target]  (most specific)
+//  2. Config.DeployWebhookOn                       (global)
+//  3. "all"                                        (default)
 func FireDeployWebhook(run DeployRun) {
 	cfg, err := LoadConfig()
 	if err != nil || cfg == nil || strings.TrimSpace(cfg.DeployWebhookURL) == "" {
@@ -156,19 +154,17 @@ func FireDeployWebhook(run DeployRun) {
 		return
 	}
 	payload := DeployWebhookPayload{
-		ID:          run.ID,
-		App:         run.App,
-		Target:      run.Target,
-		Stack:       run.Stack,
-		RequestedBy: run.RequestedBy,
-		IsGuest:     run.IsGuest,
-		StartedAt:   run.StartedAt,
-		DurationMs:  run.DurationMs,
-		ExitCode:    run.ExitCode,
-		OK:          run.OK,
-		ErrorClass:  run.ErrorClass,
-		TimedOut:    run.TimedOut,
-		Host:        hostnameForWebhook(),
+		ID:         run.ID,
+		App:        run.App,
+		Target:     run.Target,
+		Stack:      run.Stack,
+		StartedAt:  run.StartedAt,
+		DurationMs: run.DurationMs,
+		ExitCode:   run.ExitCode,
+		OK:         run.OK,
+		ErrorClass: run.ErrorClass,
+		TimedOut:   run.TimedOut,
+		Host:       hostnameForWebhook(),
 	}
 	go postDeployWebhookWithRetry(cfg.DeployWebhookURL, cfg.DeployWebhookSecret, payload)
 }

@@ -103,7 +103,7 @@ export default function GamesPage() {
             </p>
 
             <dl className="mt-6">
-              <ContractRow label="Identity" value="Yaver OAuth is the account of record for saves, leagues, guests, and devices." />
+              <ContractRow label="Identity" value="Yaver OAuth is the account of record for saves, leagues, and devices." />
               <ContractRow label="Input" value="Controller, touch, voice, and AI text all resolve to validated game commands." />
               <ContractRow label="State" value="Server reducers own production state; local preview is only for development." />
               <ContractRow label="AI" value="LLMs parse intent, advise, narrate, and test. Reducers still decide legal state." />

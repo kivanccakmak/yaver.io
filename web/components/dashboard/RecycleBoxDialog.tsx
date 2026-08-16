@@ -137,11 +137,11 @@ export function RecycleBoxDialog({ device, devices, primaryDeviceId, token, onCl
   const clientRef = useRef<AgentClient | null>(null);
 
   // Devices that could act as the control agent, best first: never the
-  // target, never a guest, must be online. Primary first, then newest
+  // target must be online. Primary first, then newest
   // agent version (more likely to have the cloud verbs).
   function controlCandidates(): Device[] {
     return devices
-      .filter((d) => d.id !== deviceId && !d.isGuest && d.online)
+      .filter((d) => d.id !== deviceId && d.online)
       .sort((a, b) => {
         if (a.id === primaryDeviceId) return -1;
         if (b.id === primaryDeviceId) return 1;

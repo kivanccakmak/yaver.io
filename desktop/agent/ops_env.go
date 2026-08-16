@@ -38,9 +38,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsEnvHandler,
-		Streaming:  false,
-		AllowGuest: false, // env can leak host identity + tokens
+		Handler:        opsEnvHandler,
+		Streaming:      false,
+		AllowCompanion: false, // env can leak host identity + tokens
 	})
 }
 

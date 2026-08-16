@@ -293,7 +293,7 @@ function RuntimeProjectDefaultsCard({ token, devices }: { token: string | null; 
                 className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
               >
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-surface-200">{device.name || device.hostName || device.id}</div>
+                  <div className="truncate text-sm font-medium text-surface-200">{device.name || device.id}</div>
                   <div className="mt-1 truncate text-xs text-surface-500">
                     {label}{saved ? ` · ${runtimeProjectMeta(saved) || "synced"}` : ""}
                   </div>
@@ -582,7 +582,7 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
         null
       : null;
   const { devices } = useDevices(token);
-  const ownedDevices = devices.filter((device) => !device.isGuest);
+  const ownedDevices = devices;
 
   useEffect(() => {
     if (!token) return;
@@ -951,7 +951,7 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
                       <DeviceSurfaceIcon platform={device.platform} />
                     </span>
                     <div className="min-w-0">
-                      <div className="truncate text-sm text-surface-200">{device.name || device.hostName || device.id}</div>
+                      <div className="truncate text-sm text-surface-200">{device.name || device.id}</div>
                       <div className="text-xs text-surface-500">
                         {platformLabel(device.platform)} · {device.agentVersion || "no version info"}
                       </div>

@@ -43,7 +43,7 @@ export type YaverAppSurface =
   | "remote-runner"
   | "mcp";
 
-export type YaverAppAuthMode = "required" | "optional" | "guest";
+export type YaverAppAuthMode = "required" | "optional";
 
 export type YaverAppBillingMode =
   | "free"
@@ -149,7 +149,6 @@ export interface YaverAppAuthContract {
   readonly mode: YaverAppAuthMode;
   readonly provider: typeof YAVER_NATIVE_AUTH_PROVIDER;
   readonly requiredScopes: readonly string[];
-  readonly guestAccess: "disabled" | "private-test-only" | "public";
   readonly notes: string;
 }
 
@@ -291,7 +290,6 @@ export const SFMG_YAVER_APP: YaverAppManifest = {
     mode: "required",
     provider: YAVER_NATIVE_AUTH_PROVIDER,
     requiredScopes: REQUIRED_YAVER_GAME_SCOPES,
-    guestAccess: "private-test-only",
     notes:
       "The Yaver-integrated SFMG build must not expose a standalone SFMG login. Yaver session identity is the account of record.",
   },
@@ -371,8 +369,7 @@ export const YAVER_FEEDBACK_APP: YaverAppManifest = {
     mode: "required",
     provider: YAVER_NATIVE_AUTH_PROVIDER,
     requiredScopes: REQUIRED_YAVER_APP_SCOPES,
-    guestAccess: "private-test-only",
-    notes: "Feedback reporters can be guest-scoped, but developer triage and agent routing require a Yaver session.",
+    notes: "Feedback intake uses a project capability token; developer triage and agent routing require the project owner's Yaver session.",
   },
   monetization: {
     launchBilling: "subscription-included",
@@ -439,7 +436,6 @@ export const CARROTBET_YAVER_APP: YaverAppManifest = {
     mode: "required",
     provider: YAVER_NATIVE_AUTH_PROVIDER,
     requiredScopes: REQUIRED_YAVER_GAME_SCOPES,
-    guestAccess: "private-test-only",
     notes:
       "Carrotbet can keep its own public app and accounts outside Yaver. The Yaver-native build uses Yaver OAuth as the account of record for catalog saves, multiplayer identity, entitlements, and cross-device surfaces.",
   },
@@ -554,7 +550,6 @@ export const PERSONAL_RUNTIME_APP: YaverAppManifest = {
     mode: "required",
     provider: YAVER_NATIVE_AUTH_PROVIDER,
     requiredScopes: REQUIRED_YAVER_APP_SCOPES,
-    guestAccess: "disabled",
     notes: "User-owned connectors and app sessions stay bound to the user's Yaver identity and local vault.",
   },
   monetization: {
@@ -624,7 +619,6 @@ export const PERSONAL_HEALTH_AGENT_APP: YaverAppManifest = {
     mode: "required",
     provider: YAVER_NATIVE_AUTH_PROVIDER,
     requiredScopes: REQUIRED_YAVER_APP_SCOPES,
-    guestAccess: "disabled",
     notes:
       "Yaver identity owns the automation consent and notification routing. Health portal login remains the user's own account and is bound interactively into the local vault or explicitly approved managed runtime.",
   },

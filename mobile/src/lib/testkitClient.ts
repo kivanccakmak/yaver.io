@@ -1,7 +1,7 @@
 // testkitClient — drives project web tests over the Yaver mesh, mirroring
 // qaClient's LAN-first/relay-fallback transport. Picking a target device =
 // picking the remote PC the suite runs on. Supports chromedp, YAML Playwright,
-// native Playwright projects, self-grow, dependency checks, profiles, and
+// native Playwright projects, dependency checks, profiles, and
 // artifact fetches through desktop/agent/ops_testkit.go.
 
 import { quicClient } from "./quic";
@@ -63,19 +63,6 @@ export type TKJob = {
 };
 
 export type TKSpec = { name: string; target?: string; url?: string; steps?: number; path?: string };
-export type TKGrowPlan = {
-  ok?: boolean;
-  error?: string;
-  projectDir?: string;
-  specsDir?: string;
-  coveredCount?: number;
-  uncovered?: { suggestedName: string; route: string; file: string; why: string }[];
-  ledgerPath?: string;
-  applied?: boolean;
-  authorPrompt?: string;
-  taskId?: string;
-};
-
 export type TKRunArgs = {
   project?: string;
   dir?: string; // repo root ON the remote PC (yaver-tests resolved under it)
@@ -285,10 +272,6 @@ export const testkitClient = {
   /** Fetch the combined Talos quality report after qualityRun completes. */
   qualityReport: (t: TKTarget, jobId: string) =>
     tkOps<TKQualityReport>(t, "talos_quality_report", { jobId } as any, 15000),
-
-  /** Self-grow: plan uncovered Features and (author:true) dispatch the runner to write them. */
-  grow: (t: TKTarget, dir: string, opts?: { apply?: boolean; author?: boolean; runner?: string }) =>
-    tkOps<TKGrowPlan>(t, "project_test_grow", { dir, apply: opts?.apply, author: opts?.author, runner: opts?.runner }, 30000),
 
   /** Check the runner's test dependencies (ffmpeg/chromium/node/playwright/docker/redroid). */
   depsCheck: (t: TKTarget) =>

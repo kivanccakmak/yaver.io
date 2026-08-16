@@ -191,9 +191,9 @@ func mkNAL(b []byte) NALUnit {
 type MP4AnnexBReader struct {
 	r *bufio.Reader
 
-	sps              [][]byte
-	pps              [][]byte
-	nalUnitLen       int    // bytes per AVCC length prefix; defaults to 4
+	sps               [][]byte
+	pps               [][]byte
+	nalUnitLen        int // bytes per AVCC length prefix; defaults to 4
 	parameterSetsSent bool
 
 	queue []NALUnit

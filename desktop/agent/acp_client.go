@@ -85,9 +85,9 @@ type acpRPCRequest struct {
 }
 
 type acpRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      int64           `json:"id,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
+	JSONRPC string           `json:"jsonrpc"`
+	ID      int64            `json:"id,omitempty"`
+	Result  json.RawMessage  `json:"result,omitempty"`
 	Error   *acpJSONRPCError `json:"error,omitempty"`
 	// Notifications carry Method+Params and no ID; dispatched to onNotify.
 	Method string          `json:"method,omitempty"`
@@ -96,11 +96,11 @@ type acpRPCResponse struct {
 
 // acpInitializeResult is the initialize response: what the agent advertises.
 type acpInitializeResult struct {
-	ProtocolVersion    int             `json:"protocolVersion"`
-	AgentInfo          acpAgentInfo    `json:"agentInfo"`
-	AgentCapabilities  acpCapabilities `json:"agentCapabilities"`
-	AuthMethods        []acpAuthMethod `json:"authMethods"`
-	SessionCapabilities map[string]any `json:"-"`
+	ProtocolVersion     int             `json:"protocolVersion"`
+	AgentInfo           acpAgentInfo    `json:"agentInfo"`
+	AgentCapabilities   acpCapabilities `json:"agentCapabilities"`
+	AuthMethods         []acpAuthMethod `json:"authMethods"`
+	SessionCapabilities map[string]any  `json:"-"`
 }
 
 // acpAgentInfo identifies the agent (e.g. OpenCode 1.18.15).
@@ -111,11 +111,11 @@ type acpAgentInfo struct {
 
 // acpCapabilities is the agent-side capability set from initialize.
 type acpCapabilities struct {
-	LoadSession        bool                     `json:"loadSession"`
-	Auth               map[string]any           `json:"auth"`
-	MCPCapabilities    map[string]any           `json:"mcpCapabilities"`
-	PromptCapabilities map[string]any           `json:"promptCapabilities"`
-	SessionCapabilities map[string]any          `json:"sessionCapabilities"`
+	LoadSession         bool           `json:"loadSession"`
+	Auth                map[string]any `json:"auth"`
+	MCPCapabilities     map[string]any `json:"mcpCapabilities"`
+	PromptCapabilities  map[string]any `json:"promptCapabilities"`
+	SessionCapabilities map[string]any `json:"sessionCapabilities"`
 }
 
 // acpAuthMethod is one advertised authentication method. The `agent` type is
@@ -137,15 +137,15 @@ type acpAuthMethod struct {
 // this is derived from initialize (server reachable + auth methods advertised)
 // and the caller layers the probe's verified/proof logic on top.
 type acpAuthState struct {
-	Reachable   bool   `json:"reachable"`
-	AgentName   string `json:"agentName,omitempty"`
+	Reachable    bool   `json:"reachable"`
+	AgentName    string `json:"agentName,omitempty"`
 	AgentVersion string `json:"agentVersion,omitempty"`
 	// AuthMethods present means the agent advertises at least one way to sign
 	// in (terminal login, agent login, env vars...). Absence means "no login
 	// path advertised" — the runner may still work via env/API keys.
-	AuthMethods []acpAuthMethod `json:"authMethods,omitempty"`
-	HasLoginMethod bool         `json:"hasLoginMethod"`
-	Error       string          `json:"error,omitempty"`
+	AuthMethods    []acpAuthMethod `json:"authMethods,omitempty"`
+	HasLoginMethod bool            `json:"hasLoginMethod"`
+	Error          string          `json:"error,omitempty"`
 }
 
 // acpSessionNewParams is the session/new request. mcpServers is REQUIRED by
@@ -153,9 +153,9 @@ type acpAuthState struct {
 // descriptor — this is how yaver MCP + allowed external MCPs ride into the
 // runner in ACP mode (the screenshot-Read-tool path).
 type acpSessionNewParams struct {
-	Cwd         string            `json:"cwd"`
-	MCPServers  []acpMCPServer    `json:"mcpServers"`
-	AdditionalDirectories []string `json:"additionalDirectories,omitempty"`
+	Cwd                   string         `json:"cwd"`
+	MCPServers            []acpMCPServer `json:"mcpServers"`
+	AdditionalDirectories []string       `json:"additionalDirectories,omitempty"`
 }
 
 // acpMCPServer mirrors opencode's MCP server descriptor union:
@@ -229,7 +229,7 @@ type acpMCPEnvVar struct {
 
 // acpSessionNewResult carries the created session id + config options.
 type acpSessionNewResult struct {
-	SessionID    string            `json:"sessionId"`
+	SessionID     string            `json:"sessionId"`
 	ConfigOptions []acpConfigOption `json:"configOptions,omitempty"`
 }
 
@@ -270,9 +270,9 @@ type acpSessionPromptParams struct {
 
 // acpPromptResult is the terminal state of a prompt turn.
 type acpPromptResult struct {
-	StopReason string       `json:"stopReason"`
-	Usage      *acpUsage    `json:"usage,omitempty"`
-	MessageID  string       `json:"messageId,omitempty"`
+	StopReason string    `json:"stopReason"`
+	Usage      *acpUsage `json:"usage,omitempty"`
+	MessageID  string    `json:"messageId,omitempty"`
 }
 
 type acpUsage struct {
@@ -320,10 +320,10 @@ type acpClient struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	mu        sync.Mutex
-	nextID    int64
-	pending   map[int64]chan acpRPCResponse
-	onNotify  acpNotifyHandler
+	mu       sync.Mutex
+	nextID   int64
+	pending  map[int64]chan acpRPCResponse
+	onNotify acpNotifyHandler
 
 	initOnce sync.Once
 	initRes  *acpInitializeResult
@@ -504,8 +504,8 @@ func (c *acpClient) Initialize(ctx context.Context) (*acpInitializeResult, error
 	var err error
 	c.initOnce.Do(func() {
 		raw, cerr := c.call(ctx, "initialize", map[string]any{
-			"protocolVersion":    acpProtocolVersion,
-			"clientInfo":         map[string]any{"name": "yaver-agent", "version": version},
+			"protocolVersion": acpProtocolVersion,
+			"clientInfo":      map[string]any{"name": "yaver-agent", "version": version},
 			"clientCapabilities": map[string]any{
 				// auth.terminal opts us in to terminal-type auth methods
 				// (auth-methods RFD). Without this, agents like

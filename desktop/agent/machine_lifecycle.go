@@ -64,9 +64,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsMachineCreateHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMachineCreateHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "machine_down",
@@ -81,9 +81,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsMachineDownHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMachineDownHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "machine_up",
@@ -100,9 +100,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsMachineUpHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMachineUpHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "machine_rm",
@@ -118,9 +118,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsMachineRmHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMachineRmHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 	registerOpsVerb(opsVerbSpec{
 		Name:        "machine_wake",
@@ -134,9 +134,9 @@ func init() {
 			},
 			"additionalProperties": false,
 		},
-		Handler:    opsMachineWakeHandler,
-		Streaming:  false,
-		AllowGuest: false,
+		Handler:        opsMachineWakeHandler,
+		Streaming:      false,
+		AllowCompanion: false,
 	})
 }
 

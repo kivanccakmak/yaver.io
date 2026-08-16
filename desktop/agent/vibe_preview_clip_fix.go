@@ -164,7 +164,7 @@ func (s *HTTPServer) handleVibePreviewClipFix(w http.ResponseWriter, r *http.Req
 		if s.taskMgr != nil {
 			opts := TaskCreateOptions{}
 			// Use the agent's own work directory — clip-fix is owner-
-			// initiated, not guest-initiated, so no Docker isolation
+			// initiated by the owner, so no extra untrusted-client isolation
 			// is required.
 			opts.WorkDir = s.taskMgr.workDir
 			if deferral, deferred, derr := s.deferIngressTaskToCloudWorkspace(r.Context(), "vibe-clip-fix", "vibe", "", opts.WorkDir); deferred {

@@ -64,6 +64,6 @@ func init() {
 			_ = json.Unmarshal(payload, &p)
 			return OpsResult{OK: true, Initial: planStreamPath(p.Source, p.DeviceClass, p.Net, p.W, p.H, p.Latency, p.Public)}
 		},
-		AllowGuest: true,
+		AllowCompanion: true,
 	})
 }

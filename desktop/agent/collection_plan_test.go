@@ -265,7 +265,7 @@ func TestCollectionPlanVerbsRegisteredOwnerOnly(t *testing.T) {
 		if !ok {
 			t.Fatalf("verb %q not registered", name)
 		}
-		if spec.AllowGuest {
+		if spec.AllowCompanion {
 			t.Fatalf("verb %q must be owner-only", name)
 		}
 	}

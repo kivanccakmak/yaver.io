@@ -61,9 +61,9 @@ func init() {
 			"required":             []string{"workDir"},
 			"additionalProperties": false,
 		},
-		Handler:    opsPrepareHandler,
-		Streaming:  false,
-		AllowGuest: true,
+		Handler:        opsPrepareHandler,
+		Streaming:      false,
+		AllowCompanion: true,
 	})
 }
 

@@ -8,10 +8,11 @@
 
 const { ensureAgentBinary, runAgentCommand } = require("./agent-runtime");
 const { ensureHermesc } = require("./hermesc-runtime");
-const { execSync } = require("child_process");
+const { execFileSync, execSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { desktop, installedDesktopCandidates } = require("./commands/desktop");
 
 const CODING_RUNNER_BOOTSTRAP = [
   { command: "claude", pkg: "@anthropic-ai/claude-code", label: "Claude Code" },
@@ -45,18 +46,29 @@ function log(message) {
 }
 
 function commandExists(name) {
-  try {
-    execSync(`command -v ${name}`, { stdio: ["ignore", "pipe", "ignore"] });
-    return true;
-  } catch (_) {
-    return false;
-  }
+  const probe = process.platform === "win32"
+    ? spawnSync("where.exe", [name], { stdio: "ignore", windowsHide: true })
+    : spawnSync("/bin/sh", ["-c", `command -v ${name}`], { stdio: "ignore" });
+  return !probe.error && probe.status === 0;
 }
 
 function npmGlobalBinDir() {
   const prefix = (process.env.npm_config_prefix || "").trim();
   if (!prefix) return "";
-  return path.join(prefix, "bin");
+  return process.platform === "win32" ? prefix : path.join(prefix, "bin");
+}
+
+function installGlobalNpmPackages(packages) {
+  const args = ["install", "-g", "--no-fund", "--no-audit", ...packages];
+  const npmExecPath = String(process.env.npm_execpath || "").trim();
+  if (npmExecPath && /\.[cm]?js$/i.test(npmExecPath)) {
+    execFileSync(process.execPath, [npmExecPath, ...args], { stdio: "inherit", windowsHide: true });
+    return;
+  }
+  execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", args, {
+    stdio: "inherit",
+    windowsHide: true,
+  });
 }
 
 function addNpmGlobalBinToProcessPath() {
@@ -75,14 +87,10 @@ function installMissingCodingRunners() {
     return;
   }
 
-  const npmCmd = (process.env.npm_execpath || "npm").trim() || "npm";
   const packages = missing.map((entry) => entry.pkg);
   const labels = missing.map((entry) => entry.label).join(", ");
   try {
-    execSync(
-      `"${npmCmd}" install -g --no-fund --no-audit ${packages.join(" ")}`,
-      { stdio: "inherit" },
-    );
+    installGlobalNpmPackages(packages);
     addNpmGlobalBinToProcessPath();
     log(`Installed missing coding runners: ${labels}.`);
   } catch (error) {
@@ -108,6 +116,24 @@ async function setupMCPForInstalledRunners() {
   }
   if (configured.length > 0) {
     log(`Registered Yaver MCP in: ${configured.join(", ")}.`);
+  }
+}
+
+function desktopBootstrapEligible() {
+  if (envEnabled("YAVER_SKIP_POSTINSTALL_DESKTOP")) return false;
+  if (envEnabled("CI") && !envEnabled("YAVER_FORCE_POSTINSTALL_DESKTOP")) return false;
+  if (installedDesktopCandidates().some((candidate) => fs.existsSync(candidate))) return false;
+  if (process.platform === "linux") return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+  return process.platform === "darwin" || process.platform === "win32";
+}
+
+async function installDesktopCompanion() {
+  if (!desktopBootstrapEligible()) return;
+  try {
+    await desktop(["install", "--no-open"]);
+    log("Installed the verified Yaver Desktop companion (set YAVER_SKIP_POSTINSTALL_DESKTOP=1 to opt out).");
+  } catch (error) {
+    log(`Skipping desktop companion bootstrap: ${error.message}`);
   }
 }
 
@@ -514,6 +540,18 @@ async function main() {
   ensureLinuxRunnerSandboxSupport();
   reportLinuxRunnerSandboxStatus();
 
+  if (process.platform === "win32") {
+    // Windows is a first-class Yaver node. The mobile/remote-runtime bootstrap
+    // below still has Unix-only recipes, but the three supported coding
+    // runners are ordinary npm globals and must not disappear merely because
+    // the install came from PowerShell.
+    if (!envEnabled("YAVER_SKIP_POSTINSTALL_RUNNERS")) {
+      installMissingCodingRunners();
+      await setupMCPForInstalledRunners();
+    }
+    await installDesktopCompanion();
+    return;
+  }
   if (process.platform !== "linux" && process.platform !== "darwin") {
     return;
   }
@@ -522,6 +560,7 @@ async function main() {
       installMissingCodingRunners();
       await setupMCPForInstalledRunners();
     }
+    await installDesktopCompanion();
     return;
   }
 
@@ -549,6 +588,8 @@ async function main() {
     installMissingCodingRunners();
     await setupMCPForInstalledRunners();
   }
+
+  await installDesktopCompanion();
 
   // Vibe Preview tool stack — best-effort provisioning so a fresh
   // global npm install gives the user a working chromium-based frame

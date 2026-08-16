@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -46,9 +47,9 @@ type PlatformApp struct {
 // PlatformPaaSConfig holds the platform-level configuration, persisted to YAML.
 // Named PlatformPaaSConfig to avoid collision with the Convex PlatformConfig in auth.go.
 type PlatformPaaSConfig struct {
-	Mode          string        `yaml:"mode"`          // local/relay/vps
+	Mode          string        `yaml:"mode"` // local/relay/vps
 	Domain        string        `yaml:"domain"`
-	SSL           string        `yaml:"ssl"`           // auto/manual/off
+	SSL           string        `yaml:"ssl"` // auto/manual/off
 	Containerized bool          `yaml:"containerized"`
 	Apps          []PlatformApp `yaml:"apps"`
 
@@ -79,15 +80,15 @@ type PlatformWebhook struct {
 
 // PlatformStatus is a point-in-time health summary of the platform.
 type PlatformStatus struct {
-	Mode       string        `json:"mode"`
-	Domain     string        `json:"domain"`
-	SSL        bool          `json:"ssl"`
-	RunningApps int          `json:"runningApps"`
-	TotalApps  int           `json:"totalApps"`
-	Previews   int           `json:"previews"`
-	Uptime     time.Duration `json:"uptime"`
-	Memory     string        `json:"memory"`
-	CPU        string        `json:"cpu"`
+	Mode        string        `json:"mode"`
+	Domain      string        `json:"domain"`
+	SSL         bool          `json:"ssl"`
+	RunningApps int           `json:"runningApps"`
+	TotalApps   int           `json:"totalApps"`
+	Previews    int           `json:"previews"`
+	Uptime      time.Duration `json:"uptime"`
+	Memory      string        `json:"memory"`
+	CPU         string        `json:"cpu"`
 }
 
 // PlatformManager is the central coordinator for the self-hosted PaaS.
@@ -1111,8 +1112,14 @@ func defaultStartCmd(framework string) string {
 
 // shellCommand wraps a command string for execution via the OS shell.
 func shellCommand(cmdStr string) *exec.Cmd {
+	cmd, err := newCommandShellContext(context.Background(), runtime.GOOS, "", cmdStr)
+	if err == nil {
+		return cmd
+	}
+	// Preserve the historical no-error helper signature for internal callers.
+	// StartExec uses the error-returning path and surfaces an actionable cause.
 	if runtime.GOOS == "windows" {
-		return exec.Command("cmd", "/C", cmdStr)
+		return exec.Command("cmd.exe", "/D", "/S", "/C", cmdStr)
 	}
 	return exec.Command("sh", "-c", cmdStr)
 }

@@ -120,17 +120,21 @@ actor AgentClient {
         var repairedOnce = false
         var finalError: Error = AgentError(message: "ops \(verb) failed")
         for _ in 0..<2 {
-            let endpoints = box.opsEndpoints
+            // Preserve the relay bit even when relay is the only endpoint.
+            // Split runner boxes intentionally have no direct host, so their
+            // relay is index zero and still requires X-Relay-Password.
+            let endpoints = box.requestEndpoints(path: "/ops")
             guard !endpoints.isEmpty else { throw AgentError(message: "bad box host") }
 
             var lastError: Error = AgentError(message: "ops \(verb) failed")
-            for (index, url) in endpoints.enumerated() {
+            for endpoint in endpoints {
+                let url = endpoint.url
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
-                if let pw = box.relayPassword, !pw.isEmpty, index > 0 {
+                if let pw = box.relayPassword, !pw.isEmpty, endpoint.relay {
                     req.setValue(pw, forHTTPHeaderField: "X-Relay-Password")
                 }
                 req.httpBody = body
@@ -158,7 +162,7 @@ actor AgentClient {
                 } catch let err as AgentError {
                     // A relay credential deny is self-healable: repair once and
                     // re-run the whole leg. Any other refusal is final.
-                    if index > 0, FailureSignals.isRelayCredentialDeny(err.message), !repairedOnce {
+                    if endpoint.relay, FailureSignals.isRelayCredentialDeny(err.message), !repairedOnce {
                         if let repaired = await relayRepair?() {
                             self.box = repaired
                             repairedOnce = true
@@ -167,7 +171,7 @@ actor AgentClient {
                         }
                     }
                     var flagged = err
-                    if index > 0, FailureSignals.isRelayCredentialDeny(err.message) {
+                    if endpoint.relay, FailureSignals.isRelayCredentialDeny(err.message) {
                         flagged.relayDeny = true
                     }
                     throw flagged
@@ -245,15 +249,167 @@ actor AgentClient {
         try await ops("runner_sessions", [:], as: RunnerSessions.self)
     }
 
+    /// Stream the classified tail of ONE live tmux session.
+    ///
+    /// This is the constrained-surface lane: a TV/headset does not own a PTY
+    /// or terminal emulator, but it must see output and menu transitions that
+    /// happen after a turn. Polling `runner_sessions` cannot answer either.
+    /// LAN is attempted first and relay second with the same bearer/password
+    /// boundary as every other native SSE stream.
+    func subscribeTmuxPane(
+        session sessionName: String,
+        onPane: @escaping @Sendable (TmuxPaneFrame) -> Void,
+        onDone: (@Sendable (String?) -> Void)? = nil,
+        onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
+    ) -> Task<Void, Never> {
+        var components = URLComponents()
+        components.path = "/tmux/stream"
+        components.queryItems = [URLQueryItem(name: "session", value: sessionName)]
+        let path = components.string ?? "/tmux/stream"
+        let endpoints = requestEndpoints(path: path)
+        let token = self.token
+        let relayPassword = box.relayPassword
+        let urlSession = self.session
+
+        return Task {
+            var lastError = "live session stream unavailable"
+            var connected = false
+            for endpoint in endpoints {
+                if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                var req = URLRequest(url: endpoint.url)
+                req.httpMethod = "GET"
+                req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+                if endpoint.relay, let relayPassword, !relayPassword.isEmpty {
+                    req.setValue(relayPassword, forHTTPHeaderField: "X-Relay-Password")
+                }
+                do {
+                    let (bytes, response) = try await urlSession.bytes(for: req)
+                    guard let http = response as? HTTPURLResponse,
+                          (200..<300).contains(http.statusCode) else {
+                        lastError = Self.sseErrorText(
+                            (response as? HTTPURLResponse)?.statusCode ?? -1,
+                            fallback: "live session stream unavailable"
+                        )
+                        continue
+                    }
+                    connected = true
+                    var eventName = "message"
+                    var dataLines: [String] = []
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                        if line.isEmpty {
+                            if Self.emitTmuxPaneEvent(eventName, dataLines, onPane: onPane, onDone: onDone) {
+                                onEnd?(.done, nil)
+                                return
+                            }
+                            eventName = "message"
+                            dataLines.removeAll(keepingCapacity: true)
+                            continue
+                        }
+                        if line.hasPrefix("event:") {
+                            eventName = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                        } else if line.hasPrefix("data:") {
+                            dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+                        }
+                    }
+                    if Self.emitTmuxPaneEvent(eventName, dataLines, onPane: onPane, onDone: onDone) {
+                        onEnd?(.done, nil)
+                    } else {
+                        onEnd?(.interrupted, "the box closed the live session stream")
+                    }
+                    return
+                } catch {
+                    if Task.isCancelled { onEnd?(.cancelled, nil); return }
+                    lastError = error.localizedDescription
+                    if connected {
+                        onEnd?(.interrupted, lastError)
+                        return
+                    }
+                }
+            }
+            onEnd?(.interrupted, lastError)
+        }
+    }
+
+    /// Returns true only for the stream's explicit terminal event.
+    private nonisolated static func emitTmuxPaneEvent(
+        _ eventName: String,
+        _ dataLines: [String],
+        onPane: @escaping @Sendable (TmuxPaneFrame) -> Void,
+        onDone: (@Sendable (String?) -> Void)?
+    ) -> Bool {
+        guard !dataLines.isEmpty else { return false }
+        let payload = dataLines.joined(separator: "\n")
+        guard let data = payload.data(using: .utf8) else { return false }
+        switch eventName {
+        case "pane":
+            // `null` is the all-mode empty snapshot. A session-targeted stream
+            // never emits it, but decoding it as no frame keeps this parser
+            // correct if the endpoint is reused by a list later.
+            if let frame = try? JSONDecoder().decode(TmuxPaneFrame.self, from: data) {
+                onPane(frame)
+            }
+            return false
+        case "done":
+            let reason = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["reason"] as? String
+            onDone?(reason)
+            return true
+        default:
+            return false // ping and future additive events
+        }
+    }
+
     func platformMatrix() async throws -> PlatformMatrixEnvelope {
         try await ops("mobile_platform_matrix", [:], as: PlatformMatrixEnvelope.self)
     }
 
-    /// The task queue on the box (GET /tasks). REST, not an ops verb — a glance
-    /// list for the TV; the full task lifecycle stays on phone/web.
+    /// The task queue on the box (GET /tasks). REST, not an ops verb.
     func listTasks() async throws -> [TaskSummary] {
         let data = try await request("GET", path: "/tasks", failure: "couldn't load tasks")
         return (try JSONDecoder().decode(TaskList.self, from: data)).tasks
+    }
+
+    /// Full task detail — transcript + result — for the native Chat view.
+    func task(_ id: String) async throws -> TaskSummary {
+        let data = try await request("GET", path: "/tasks/\(id)", failure: "couldn't load the conversation")
+        if let wrapped = try? JSONDecoder().decode(TaskEnvelope.self, from: data) {
+            return wrapped.task
+        }
+        return try JSONDecoder().decode(TaskSummary.self, from: data)
+    }
+
+    /// Continue a live task in place, matching mobile's `continueTask` path.
+    func continueTask(_ id: String, input: String, mode: String = "") async throws {
+        var body: [String: Any] = ["input": input]
+        if !mode.isEmpty { body["mode"] = mode }
+        _ = try await request("POST", path: "/tasks/\(id)/continue", jsonBody: body,
+                              failure: "couldn't continue the conversation")
+    }
+
+    /// A terminal runner session is not resumed in place. Fork silently to the
+    /// same recorded runner and carry bounded recent context, exactly as mobile.
+    func forkTask(
+        _ id: String,
+        runner: String,
+        input: String,
+        projectDir: String? = nil,
+        mcpServers: [String] = [],
+        includeYaverMcp: Bool = true
+    ) async throws -> TaskForkResult {
+        var body: [String: Any] = [
+            "runner": runner,
+            "input": input,
+            "contextWords": 1200,
+            "allowLocalFallback": true,
+            "mcpServers": mcpServers,
+            "includeYaverMcp": includeYaverMcp,
+        ]
+        if let projectDir, !projectDir.isEmpty { body["projectDir"] = projectDir }
+        let data = try await request("POST", path: "/tasks/\(id)/fork", jsonBody: body,
+                                     failure: "couldn't continue the finished conversation")
+        return try JSONDecoder().decode(TaskForkResult.self, from: data)
     }
 
     /// Stream a task's live output (GET /tasks/{id}/output?rawSince=…).
@@ -454,10 +610,30 @@ actor AgentClient {
                                      failure: "couldn't start the task")
         // The agent answers either the bare task or {task:{…}} depending on
         // route age; accept both rather than fail a started task on shape.
+        let decoded: TaskSummary
         if let wrapped = try? JSONDecoder().decode(TaskEnvelope.self, from: data) {
-            return wrapped.task
+            decoded = wrapped.task
+        } else {
+            decoded = try JSONDecoder().decode(TaskSummary.self, from: data)
         }
-        return try JSONDecoder().decode(TaskSummary.self, from: data)
+        // Current POST /tasks replies with taskId/status/runnerId but omits the
+        // display title. The work is already running, so enrich the response
+        // locally instead of claiming a decode/display failure and inviting a
+        // duplicate retry.
+        guard decoded.title == nil else { return decoded }
+        return TaskSummary(
+            id: decoded.id,
+            title: title,
+            status: decoded.status,
+            runner: decoded.runner,
+            model: decoded.model,
+            sessionId: decoded.sessionId,
+            output: decoded.output,
+            resultText: decoded.resultText,
+            turns: decoded.turns,
+            pendingFollowUps: decoded.pendingFollowUps,
+            tmuxSession: decoded.tmuxSession
+        )
     }
 
     /// Projects the box knows about (GET /projects → {projects:[…]} or a bare
@@ -466,6 +642,38 @@ actor AgentClient {
         let data = try await request("GET", path: "/projects", failure: "couldn't load projects")
         if let wrapped = try? JSONDecoder().decode(ProjectList.self, from: data) { return wrapped.projects }
         return (try? JSONDecoder().decode([ProjectSummary].self, from: data)) ?? []
+    }
+
+    /// Apps declared inside a selected monorepo. This is queried only after the
+    /// repository is selected, so the next screen contains that repository's
+    /// mobile/web/native targets rather than another global project picker.
+    func workspaceApps(root: String) async throws -> [WorkspaceAppSummary] {
+        var components = URLComponents()
+        components.path = "/workspace/apps"
+        components.queryItems = [URLQueryItem(name: "root", value: root)]
+        guard let path = components.string else { throw AgentError(message: "invalid workspace path") }
+        let data = try await request("GET", path: path, failure: "couldn't inspect this workspace")
+        return try JSONDecoder().decode(WorkspaceAppList.self, from: data).apps
+    }
+
+    /// What this repository/app and this box can actually preview, filtered by
+    /// the client surface. `probe=true` attempts the browser/toolchain instead
+    /// of trusting PATH inventory; a stub browser must not become a live button.
+    func previewCapabilities(for project: ProjectSummary, probe: Bool = true) async throws -> ProjectPreviewCapabilities {
+        guard let workDir = project.path, !workDir.isEmpty else {
+            throw AgentError(message: "This project has no path on the selected machine.")
+        }
+        var components = URLComponents()
+        components.path = "/project/preview-capabilities"
+        components.queryItems = [
+            URLQueryItem(name: "workDir", value: workDir),
+            URLQueryItem(name: "framework", value: project.framework ?? ""),
+            URLQueryItem(name: "surface", value: "tv"),
+            URLQueryItem(name: "probe", value: probe ? "true" : "false"),
+        ]
+        guard let path = components.string else { throw AgentError(message: "invalid project path") }
+        let data = try await request("GET", path: path, failure: "couldn't inspect preview options")
+        return try JSONDecoder().decode(ProjectPreviewCapabilities.self, from: data)
     }
 
     /// External MCP servers the box exposes (GET /mcp/servers or the ops
@@ -478,6 +686,119 @@ actor AgentClient {
             return servers
         }
         return (try? JSONDecoder().decode([McpServerSummary].self, from: data)) ?? []
+    }
+
+    // ---- Interactive remote runtime (WebRTC media + HTTP control) --------
+
+    func remoteRuntimeCapabilities(for project: ProjectSummary, refresh: Bool = false) async throws -> RemoteRuntimeCapabilities {
+        guard let workDir = project.path, !workDir.isEmpty else {
+            throw AgentError(message: "This project has no path on the selected machine.")
+        }
+        var components = URLComponents()
+        components.path = "/remote-runtime/capabilities"
+        components.queryItems = [
+            URLQueryItem(name: "workDir", value: workDir),
+            URLQueryItem(name: "framework", value: project.framework ?? ""),
+        ]
+        if refresh { components.queryItems?.append(URLQueryItem(name: "refresh", value: "1")) }
+        guard let path = components.string else { throw AgentError(message: "invalid remote runtime query") }
+        let data = try await request("GET", path: path, failure: "couldn't inspect interactive runtime targets")
+        return try JSONDecoder().decode(RemoteRuntimeCapabilities.self, from: data)
+    }
+
+    func startRemoteRuntimeSession(
+        for project: ProjectSummary,
+        targetId: String,
+        transportMode: String = "direct-webrtc"
+    ) async throws -> RemoteRuntimeSession {
+        guard let workDir = project.path, !workDir.isEmpty else {
+            throw AgentError(message: "This project has no path on the selected machine.")
+        }
+        let data = try await request(
+            "POST",
+            path: "/remote-runtime/sessions",
+            jsonBody: [
+                "workDir": workDir,
+                "framework": project.framework ?? "",
+                "targetId": targetId,
+                "transportMode": transportMode,
+            ],
+            failure: "couldn't start the interactive runtime"
+        )
+        return try JSONDecoder().decode(RemoteRuntimeSession.self, from: data)
+    }
+
+    func remoteRuntimeICECredentials() async throws -> RemoteRuntimeICECredentials {
+        let data = try await request(
+            "GET",
+            path: "/remote-runtime/turn-credentials",
+            failure: "couldn't load WebRTC relay credentials"
+        )
+        return try JSONDecoder().decode(RemoteRuntimeICECredentials.self, from: data)
+    }
+
+    func answerRemoteRuntimeWebRTC(sessionId: String, offerSDP: String) async throws -> RemoteRuntimeWebRTCAnswer {
+        let data = try await request(
+            "POST",
+            path: "/remote-runtime/sessions/\(sessionId)/webrtc/offer",
+            jsonBody: ["type": "offer", "sdp": offerSDP],
+            failure: "couldn't negotiate the interactive WebRTC stream"
+        )
+        return try JSONDecoder().decode(RemoteRuntimeWebRTCAnswer.self, from: data)
+    }
+
+    func remoteRuntimeFrame(sessionId: String) async throws -> Data {
+        try await request(
+            "GET",
+            path: "/remote-runtime/sessions/\(sessionId)/frame?ts=\(Int(Date().timeIntervalSince1970 * 1000))",
+            failure: "interactive frame unavailable"
+        )
+    }
+
+    @discardableResult
+    func sendRemoteRuntimeControl(
+        sessionId: String,
+        action: String,
+        x: Int? = nil,
+        y: Int? = nil,
+        x2: Int? = nil,
+        y2: Int? = nil,
+        durationMs: Int? = nil,
+        text: String? = nil,
+        key: String? = nil,
+        clientId: String,
+        clientLabel: String = "Apple TV"
+    ) async throws -> RemoteRuntimeSession {
+        var body: [String: Any] = [
+            "action": action,
+            "clientId": clientId,
+            "clientLabel": clientLabel,
+        ]
+        if let x { body["x"] = x }
+        if let y { body["y"] = y }
+        if let x2 { body["x2"] = x2 }
+        if let y2 { body["y2"] = y2 }
+        if let durationMs { body["durationMs"] = durationMs }
+        if let text { body["text"] = text }
+        if let key { body["key"] = key }
+        let data = try await request(
+            "POST",
+            path: "/remote-runtime/sessions/\(sessionId)/control",
+            jsonBody: body,
+            failure: "the guest app didn't accept that remote action"
+        )
+        if let wrapped = try? JSONDecoder().decode(RemoteRuntimeControlEnvelope.self, from: data) {
+            return wrapped.session
+        }
+        return try JSONDecoder().decode(RemoteRuntimeSession.self, from: data)
+    }
+
+    func closeRemoteRuntimeSession(_ sessionId: String) async throws {
+        _ = try await request(
+            "DELETE",
+            path: "/remote-runtime/sessions/\(sessionId)",
+            failure: "couldn't close the interactive runtime"
+        )
     }
 
     // ---- Web preview streaming (headless capture → frames) ----------------
@@ -502,9 +823,16 @@ actor AgentClient {
         let ok: Bool?
         let mode: String?
         let running: Bool?
+        let serving: Bool?
+        let building: Bool?
         let framework: String?
         let url: String?
+        let directUrl: String?
+        let bundleUrl: String?
         let port: Int?
+        let webPort: Int?
+        let error: String?
+        let servingLabel: String?
     }
 
     /// Start the selected project's web lane. `/dev/web-preview/start` only
@@ -512,15 +840,35 @@ actor AgentClient {
     /// that makes the selected project become active in the first place.
     func startDevServer(for project: ProjectSummary) async throws -> DevStartResult {
         var body: [String: Any] = [
-            "surface": "web-reload",
             "caller": "web-ui",
             "platform": "web",
             "projectName": project.name,
         ]
+        // Do not send `surface=web-reload` here. That surface is the web
+        // dashboard's iframe lane, where Expo/RN deliberately resolves to a
+        // static bundle. tvOS owns a live captured-pixel lane: start the real
+        // Expo server here, then `/dev/web-preview/start` below supplies its
+        // browser sibling for the headless capture. Tagging this as Web Reload
+        // returned `mode=static-bundle`, left an older web project active, and
+        // made an SFMG launch capture the wrong project (or time out cold).
         if let workDir = project.path, !workDir.isEmpty { body["workDir"] = workDir }
         if let framework = project.framework, !framework.isEmpty { body["framework"] = framework }
         let data = try await postJSON("/dev/start", body)
-        return (try? JSONDecoder().decode(DevStartResult.self, from: data)) ?? DevStartResult(ok: true, mode: nil, running: nil, framework: project.framework, url: nil, port: nil)
+        return (try? JSONDecoder().decode(DevStartResult.self, from: data))
+            ?? DevStartResult(ok: true, mode: nil, running: nil, serving: nil,
+                              building: nil, framework: project.framework,
+                              url: nil, directUrl: nil, bundleUrl: nil,
+                              port: nil, webPort: nil,
+                              error: nil, servingLabel: nil)
+    }
+
+    /// The start endpoint is intentionally asynchronous. A 200 means the
+    /// compiler was admitted, not that its port is already accepting browser
+    /// traffic. Every preview surface must wait on this real readiness answer
+    /// before asking headless Chrome to navigate.
+    func devServerStatus() async throws -> DevStartResult {
+        let data = try await request("GET", path: "/dev/status", failure: "couldn't read dev server status")
+        return try JSONDecoder().decode(DevStartResult.self, from: data)
     }
 
     /// Start capturing a project's web preview at the given viewport. Returns
