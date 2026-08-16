@@ -188,9 +188,8 @@ struct MachinePickerView: View {
                 resolvedRelayPassword = resolved.password
             }
             nowMs = Date().timeIntervalSince1970 * 1000
-            // Guest/sharing is not a v1 client surface. Keep shared inventory
-            // out of the picker even if an older backend record still exists.
-            devices = list.filter { !$0.shared }
+            // The owner-only registry contract already excludes shared rows.
+            devices = list
         } catch {
             self.error = error.localizedDescription
         }

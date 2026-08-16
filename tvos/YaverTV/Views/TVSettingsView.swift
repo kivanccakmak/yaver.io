@@ -323,7 +323,6 @@ struct TVSettingsView: View {
             async let settings = MachineRegistry.fetchSettings(token: store.token)
             let (loadedDevices, loadedSettings) = try await (deviceRows, settings)
             devices = loadedDevices
-                .filter { !$0.shared }
                 .sorted { $0.realName.localizedCaseInsensitiveCompare($1.realName) == .orderedAscending }
             store.adoptSettings(loadedSettings, devices: loadedDevices)
             await loadRuntimeOptions()

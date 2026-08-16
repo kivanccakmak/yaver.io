@@ -35,17 +35,14 @@ final class VibingPlanTests: XCTestCase {
         id: String,
         name: String,
         online: Bool,
-        lastHeartbeat: Double,
-        guest: Bool = false
+        lastHeartbeat: Double
     ) -> RegisteredDevice {
         RegisteredDevice(
             deviceId: id, name: name, alias: nil, platform: "linux",
             isOnline: online, quicHost: "127.0.0.1", quicPort: 18080,
             localIps: [], relayConnected: online, agentVersion: nil,
             managed: false, machineId: nil, lastHeartbeat: lastHeartbeat,
-            runners: nil, installedRunnerIds: nil,
-            isGuest: guest, hostName: guest ? "Host" : nil, hostEmail: nil,
-            hostUserIdString: nil, accessScope: guest ? "shared-scoped" : "owner"
+            runners: nil, installedRunnerIds: nil
         )
     }
 
@@ -156,18 +153,18 @@ final class VibingPlanTests: XCTestCase {
         XCTAssertEqual(ranked.map(\.1), [.primary, .secondary])
     }
 
-    func testTVAutoConnectDoesNotSilentlySelectSharedMachine() throws {
+    func testTVAutoConnectRanksLiveOwnerBeforeOfflineOwner() throws {
         let now = 10_000_000.0
-        let shared = registryDevice(id: "shared", name: "A Shared Box", online: true, lastHeartbeat: now, guest: true)
-        let owned = registryDevice(id: "owned", name: "Z Owned Box", online: true, lastHeartbeat: now)
+        let offline = registryDevice(id: "offline", name: "A Offline Box", online: false, lastHeartbeat: now)
+        let live = registryDevice(id: "live", name: "Z Live Box", online: true, lastHeartbeat: now)
 
         let ranked = rankedAutoConnectTargets(
-            devices: [shared, owned],
+            devices: [offline, live],
             settings: try userSettings(primary: nil, secondary: nil),
             nowMs: now
         )
 
-        XCTAssertEqual(ranked.map { $0.0.deviceId }, ["owned"])
+        XCTAssertEqual(ranked.map { $0.0.deviceId }, ["live", "offline"])
         XCTAssertEqual(ranked.first?.1, .machine)
     }
 }

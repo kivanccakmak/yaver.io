@@ -502,7 +502,7 @@ final class YaverStore: ObservableObject {
         adoptSettings(settings, devices: list)
         if autoConnectCancelled { return }
         let nowMs = Date().timeIntervalSince1970 * 1000
-        let owned = list.filter { !$0.shared }
+        let owned = list
         let primary = settings?.primaryDeviceId.flatMap { id in
             owned.first(where: { $0.deviceId == id }).map { ($0, AutoConnectRole.primary) }
         }
@@ -568,7 +568,7 @@ func rankedAutoConnectTargets(
     settings: MachineRegistry.UserSettings?,
     nowMs: Double
 ) -> [(RegisteredDevice, AutoConnectRole)] {
-    let owned = devices.filter { !$0.shared }
+    let owned = devices
     let byId = Dictionary(uniqueKeysWithValues: owned.map { ($0.deviceId, $0) })
     var preferred: [(RegisteredDevice, AutoConnectRole)] = []
     for (id, role) in [
