@@ -156,11 +156,10 @@ with App Store Connect, then uploads it to the macOS TestFlight train. Required
 credentials and profiles are listed by
 `scripts/deploy-macos-testflight.sh --help`; private material stays outside the
 repository. The App Store record/App ID must be `io.yaver.gui`.
-
-If the App Store Connect app record is missing, an owner can dispatch
-`release-gui.yml` with `ensure_macos_app_record=true`. The idempotent job uses
-the existing App Store Connect GitHub secrets, creates only the fixed
-`io.yaver.gui` / `Yaver` record, and skips the unrelated desktop release matrix.
+Apple's supported App Store Connect API does not allow creating the initial
+app record. Create that one-time record in App Store Connect (`Yaver`, macOS,
+English (U.S.), bundle ID `io.yaver.gui`, SKU `io-yaver-gui-macos`) before the
+first upload; later builds use the scripted deploy path.
 
 ## What it fixes in the shell (not the web app)
 

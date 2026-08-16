@@ -11,11 +11,6 @@ on:
         type: boolean
         default: false
         required: false
-      ensure_macos_app_record:
-        description: "Create the io.yaver.gui App Store Connect record if missing."
-        type: boolean
-        default: false
-        required: false
 
 # Only repo owner can push tags (configure tag protection rules in GitHub).
 # Release jobs require the "production" environment.
@@ -30,25 +25,7 @@ permissions:
   attestations: write
 
 jobs:
-  ensure-macos-app-record:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.ensure_macos_app_record }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Test App Store Connect bootstrap
-        run: node --test scripts/appstore-connect-ensure-app.test.mjs
-      - name: Ensure Yaver desktop app record
-        env:
-          ASC_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
-          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-        run: node scripts/appstore-connect-ensure-app.mjs
-
   validate:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.ensure_macos_app_record != true }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
