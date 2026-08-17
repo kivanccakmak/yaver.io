@@ -1521,7 +1521,7 @@ interface AgentContextExtras {
   selectedModelId?: string;
   /** Active device descriptor (full object, not just name) for the
    *  preferredDefaultModelForRunner fallback when Task lacks model. */
-  activeDevice?: { id?: string; name?: string | null; os?: string | null };
+  activeDevice?: { id?: string; name?: string | null; hostName?: string | null; os?: string | null };
   /** Signed-in user email — feeds the kivanc-account fallback inside
    *  preferredDefaultModelForRunner. Honest pass-through: any user. */
   userEmail?: string | null;
