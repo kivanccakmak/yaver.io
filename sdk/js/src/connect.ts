@@ -14,6 +14,7 @@
  */
 import type { Task, CreateTaskOptions } from './types';
 import type { DeviceCoords, RelayServer, YaverSettings } from './discovery';
+import { createRemoteDesktopAPI, type RemoteDesktopAPI } from './remote-desktop';
 
 export type TransportKind = 'direct' | 'tunnel' | 'relay';
 
@@ -189,6 +190,11 @@ export class AgentSession {
   async health(): Promise<boolean> {
     try { return (await this.authedFetch('/health')).ok; }
     catch { return false; }
+  }
+
+  /** Consent-gated remote screen/control over the already-selected transport. */
+  get remoteDesktop(): RemoteDesktopAPI {
+    return createRemoteDesktopAPI((path, init = {}, json = false) => this.authedFetch(path, init, json));
   }
 
   /**

@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { selectRunner, selectProvider, isWorkKindEnabled, type CompanyAIOptions } from './policy';
 import { buildCandidates } from './connect';
+import { createRemoteDesktopAPI } from './remote-desktop';
 import { Fleet, Machine, Selection, serviceCmd, pickAgentRunner, terminalWsUrl, type ExecResult, type MachineInfo } from './fleet';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -166,6 +167,32 @@ test('buildCandidates with forceRelay skips direct and tunnel', () => {
     relay: { url: 'https://relay.example', password: 'pw' },
   });
   assert.ok(candidates.every((c) => c.kind === 'relay'));
+});
+
+test('Remote Desktop SDK keeps frames binary and sends normalized event batches', async () => {
+  const calls: Array<{ path: string; init?: RequestInit; json?: boolean }> = [];
+  const api = createRemoteDesktopAPI(async (path, init, json) => {
+    calls.push({ path, init, json });
+    if (path === '/rd/status') return new Response(JSON.stringify({ supported: true, viewEnabled: true }), { status: 200 });
+    if (path === '/rd/frame.jpg') return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+    return new Response(JSON.stringify({ ok: true, applied: 1 }), { status: 200 });
+  });
+  assert.equal((await api.status()).supported, true);
+  const frame = await api.frame();
+  assert.deepEqual([...frame.bytes], [0xff, 0xd8, 0xff, 0xd9]);
+  assert.equal(frame.contentType, 'image/jpeg');
+  await api.sendInput([{ type: 'click', nx: 0.25, ny: 0.75, button: 'left' }]);
+  const input = calls.find((call) => call.path === '/rd/input');
+  assert.equal(input?.json, true);
+  assert.deepEqual(JSON.parse(String(input?.init?.body)), { events: [{ type: 'click', nx: 0.25, ny: 0.75, button: 'left' }] });
+});
+
+test('Remote Desktop SDK preserves the agent consent error', async () => {
+  const api = createRemoteDesktopAPI(async () => new Response(
+    JSON.stringify({ error: 'screen view requires an explicit consent choice on this machine' }),
+    { status: 403 },
+  ));
+  await assert.rejects(() => api.frame(), /explicit consent choice/);
 });
 
 // --- Fleet: the concurrent merge is the subtle part, so pin it network-free ---
