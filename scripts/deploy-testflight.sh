@@ -124,6 +124,13 @@ hydrate_native_dependency_artifacts() {
 
 ensure_mobile_dependencies
 node "$ROOT/scripts/restore-ios-share-extension.js"
+node "$ROOT/scripts/restore-ios-splash-storyboard.js"
+if ! command -v pod >/dev/null 2>&1; then
+  echo "ERROR: CocoaPods is required to regenerate the validated iOS Pods project." >&2
+  echo "       Install CocoaPods, then rerun the deploy; the locked install resumes automatically." >&2
+  exit 1
+fi
+(cd "$ROOT/mobile/ios" && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install)
 hydrate_native_dependency_artifacts
 
 # Load secrets from the Yaver vault (project="mobile" + globals). Vault
