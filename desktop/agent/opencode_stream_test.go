@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -74,6 +76,32 @@ func TestOpencodeStreamFilter_HandlesChunkBoundariesMidLine(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Regression for the 2026-08-16 ubuntu-4gb task crash. readRawOutput feeds
+// one filter from independent stdout and stderr goroutines. Concurrent calls
+// used to race between IndexByte and slicing leftover, panicking the entire
+// agent with "slice bounds out of range" and turning the running task into a
+// reasonless "stopped" task after systemd restarted Yaver.
+func TestOpencodeStreamFilter_ConcurrentStdoutStderr(t *testing.T) {
+	f := &opencodeStreamFilter{}
+	const workers = 16
+	const iterations = 500
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			<-start
+			for iteration := 0; iteration < iterations; iteration++ {
+				f.process([]byte(fmt.Sprintf("worker-%02d-line-%04d\n", worker, iteration)))
+			}
+		}(worker)
+	}
+	close(start)
+	wg.Wait()
+	f.flush()
 }
 
 func TestOpencodeStreamFilter_FlushPartialLineWithoutTrailingNewline(t *testing.T) {

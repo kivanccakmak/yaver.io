@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // opencodeStreamFilter rewrites opencode's raw stdout chunk-by-chunk so
@@ -36,6 +37,13 @@ import (
 // the bash output behind it in the same flush, but the surrounding
 // chunk size is unrelated to opencode's line boundaries.
 type opencodeStreamFilter struct {
+	// readRawOutput deliberately shares one filter between the independent
+	// stdout and stderr reader goroutines. Keep the line buffer and command
+	// capture as one atomic stream: without this lock, one goroutine could
+	// find a newline while the other replaced leftover, then slice using the
+	// stale index and panic the whole agent.
+	mu sync.Mutex
+
 	// leftover holds the trailing bytes of the most recent process()
 	// call that did not yet end with a newline. ANSI is intentionally
 	// kept on the leftover so a CSI sequence split across chunks is
@@ -111,6 +119,8 @@ func (f *opencodeStreamFilter) process(chunk []byte) []byte {
 	if len(chunk) == 0 {
 		return nil
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.leftover = append(f.leftover, chunk...)
 	var out bytes.Buffer
 	for {
@@ -132,6 +142,8 @@ func (f *opencodeStreamFilter) process(chunk []byte) []byte {
 // never lost at EOF (the caller in tasks.go runs flush() after the read
 // loop ends).
 func (f *opencodeStreamFilter) flush() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out bytes.Buffer
 	if len(f.leftover) > 0 {
 		line := f.leftover

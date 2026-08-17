@@ -847,9 +847,13 @@ func TestStoreAdoptedTaskPersistence(t *testing.T) {
 		t.Errorf("adopted task: expected TmuxSession=my-session, got %s", loaded["t1"].TmuxSession)
 	}
 
-	// Normal running task should be stopped on load
-	if loaded["t2"].Status != TaskStatusStopped {
-		t.Errorf("normal task: expected status=stopped, got %s", loaded["t2"].Status)
+	// A normal running task cannot survive the owning agent process. It is a
+	// named failure, not a user-requested stop, and carries the Retry route.
+	if loaded["t2"].Status != TaskStatusFailed {
+		t.Errorf("normal task: expected status=failed, got %s", loaded["t2"].Status)
+	}
+	if failure := loaded["t2"].Failure; failure == nil || failure.Code != ReasonTaskInterruptedByAgentRestart {
+		t.Fatalf("normal task: expected restart diagnosis, got %#v", failure)
 	}
 }
 

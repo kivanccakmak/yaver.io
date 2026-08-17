@@ -127,8 +127,9 @@ func (s *TaskStore) SaveRecords(records []persistedTask) {
 }
 
 // Load reads persisted tasks from disk and returns them as a map.
-// Running/queued tasks from a previous session are marked as stopped since
-// the underlying processes no longer exist.
+// Running/queued tasks from a previous session are marked as failed with a
+// structured restart diagnosis since the underlying processes no longer
+// exist. A bare "stopped" incorrectly describes an agent crash as user intent.
 func (s *TaskStore) Load() map[string]*Task {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -149,15 +150,26 @@ func (s *TaskStore) Load() map[string]*Task {
 	for _, r := range records {
 		status := r.Status
 		finishedAt := r.FinishedAt
+		failure := r.Failure
 		// Tasks that were running or queued when we last exited can never be
-		// resumed — mark them as stopped so they appear as historical records.
+		// resumed — mark them as a named failure so every surface can explain
+		// that the agent restarted and offer the task's existing Retry route.
 		// Exception: adopted tmux tasks are left as-is; TmuxManager.ReAdoptOnStartup()
 		// will check if the session still exists and either re-adopt or mark stopped.
 		if (status == TaskStatusRunning || status == TaskStatusQueued) && !r.IsAdopted {
-			status = TaskStatusStopped
+			status = TaskStatusFailed
 			if finishedAt == nil {
 				now := time.Now()
 				finishedAt = &now
+			}
+			failure = &TaskFailureDiagnosis{
+				Kind:       "agent_lifecycle",
+				Code:       ReasonTaskInterruptedByAgentRestart,
+				Title:      "Task interrupted by an agent restart",
+				Reason:     "The Yaver agent exited while this task was running, so its runner process is no longer attached.",
+				Remedy:     "Review any partial edits left in the project, then use Retry on this task. If it repeats, open machine diagnostics before retrying again.",
+				Probe:      "persisted_running_task_on_startup",
+				DetectedAt: *finishedAt,
 			}
 		}
 		tasks[r.ID] = &Task{
@@ -176,7 +188,7 @@ func (s *TaskStore) Load() map[string]*Task {
 			IsAdopted:       r.IsAdopted,
 			Output:          r.Output,
 			ResultText:      r.ResultText,
-			Failure:         r.Failure,
+			Failure:         failure,
 			CostUSD:         r.CostUSD,
 			Turns:           r.Turns,
 			WorkDir:         r.WorkDir,
