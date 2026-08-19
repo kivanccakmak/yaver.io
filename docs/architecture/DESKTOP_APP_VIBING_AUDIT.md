@@ -3,6 +3,14 @@
 Status: product and software architecture audit, 2026-07-21. Code is source of
 truth; re-grep the referenced routes before implementation.
 
+> **SUPERSEDED 2026-08-19.** This audit predates the canonical desktop GUI.
+> The one shipped desktop product is now `electron/` (hardened shell around the
+> web dashboard). `desktop/app/` and `desktop/installer/` are **frozen and
+> unsupported** — not built, not shipped — and must never be resurrected (see
+> `desktop/app/README.md` and
+> `docs/audits/macos-gui-desktop-code-audit-pass-2-2026-08-19.md`). Read the
+> sections below as history that informed `electron/`, not as current intent.
+
 ## Objective
 
 Build one Yaver desktop app for macOS, Windows, and Linux using Electron.
@@ -64,11 +72,14 @@ Advanced-user escape hatch:
 
 ## Current State In Repo
 
-There are two Electron-ish desktop surfaces:
+There are two Electron-ish desktop surfaces (both now **frozen/unsupported**
+since 2026-08 — the canonical desktop GUI is `electron/`):
 
 - `desktop/app`: richer Yaver desktop shell. It has auth, device selection,
   agent proxy IPC, tasks, runners, projects, dev server, preview, builds,
-  guests, Git, health, quality, sandbox, and settings.
+  guests, Git, health, quality, sandbox, and settings. **Unsafe to ship**
+  (renderer-held bearer tokens, no trusted-origin preload gate, generic IPC,
+  unvalidated OAuth callback).
 - `desktop/installer`: older installer/control-panel style. It installs/starts
   the Go agent, checks service state, handles onboarding/survey, tasks, and
   basic dashboard.
@@ -106,7 +117,8 @@ should be a secure, native shell over the Go agent API plus local OS affordances
 
 Converge `desktop/app` and `desktop/installer` into one product:
 
-- `desktop/app` becomes the canonical app.
+- `desktop/app` becomes the canonical app. *(Historical intent — resolved the
+  other way: `electron/` became canonical and `desktop/app` was frozen, 2026-08.)*
 - Installer responsibilities move into the canonical app's onboarding flow:
   download agent, install service, start/stop service, repair service.
 - `desktop/installer` becomes either deleted later or reduced to packaging-only
@@ -488,7 +500,8 @@ Only advanced/dev tools should expose:
 
 ## Electron Security Requirements
 
-Current `desktop/app` is useful but too permissive for the final app:
+Current `desktop/app` is useful but too permissive for the final app
+*(frozen 2026-08 — the audit's "Target" below is what `electron/` shipped)*:
 
 - `webviewTag: true`;
 - CSP allows `connect-src *`, `img-src *`, `frame-src *`;
@@ -749,7 +762,8 @@ not build from source on the user's machine.
 
 ### Phase 0: Audit And Freeze Contracts
 
-- Decide canonical Electron folder: likely `desktop/app`.
+- Decide canonical Electron folder: ~~likely `desktop/app`~~ → **resolved:
+  `electron/`** (2026-08; `desktop/app` frozen).
 - Inventory routes used by mobile/web that desktop must share.
 - Add typed `desktop/app/src/shared/agentTypes.ts` or import/generate shared
   types.

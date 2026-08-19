@@ -64,6 +64,14 @@ let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let launchHidden = process.argv.includes("--hidden");
+let rendererRecoveryAttempts = 0;
+let lastRendererFailure = null;
+// Deterministic renderer-failure fixture (audit pass-2 DP9): forces the
+// black-screen recovery paths so a packaged/headless smoke can assert them
+// without a live network or agent. "load" → main-frame load fails;
+// "crash" → additionally crash the renderer after the recovery page renders.
+// Harmless in production: it only makes the window show the recovery page.
+const guiFailureFixture = (process.env.GUI_FAILURE_FIXTURE || "").trim();
 /** Embedded yaver Go agent supervisor — makes this desktop a yaver node. */
 let agentManager = null;
 let agentStatus = storeClientOnly ? "client-only" : "starting";
@@ -309,6 +317,11 @@ function probeDevServer(timeoutMs = 1200) {
 }
 
 async function resolveDashboardUrl() {
+  if (guiFailureFixture) {
+    // .invalid is a reserved TLD that never resolves: a deterministic,
+    // network-independent main-frame load failure for the recovery smoke.
+    return "https://guifailure.invalid/dashboard";
+  }
   const explicit = envDashboardUrl();
   if (explicit) return explicit;
   if (process.env.YAVER_DEV === "1") {
@@ -335,11 +348,21 @@ function installAuthInterceptor() {
         callback({});
         return;
       }
-      const origin = new URL(stripped.url).origin;
-      const entry = authByOrigin.get(origin) || {};
-      if (stripped.token) entry.token = stripped.token;
-      if (stripped.rp) entry.rp = stripped.rp;
-      authByOrigin.set(origin, entry);
+      // Secrets are always stripped from the wire URL, but only remembered
+      // for reuse when the URL was a real agent route (never an asset, the
+      // dashboard's own /api, or a marketing page) — the captured bearer must
+      // not be re-attachable to non-agent paths later.
+      if (stripped.capture) {
+        const origin = new URL(stripped.url).origin;
+        const entry = authByOrigin.get(origin) || {};
+        if (stripped.token) entry.token = stripped.token;
+        if (stripped.rp) entry.rp = stripped.rp;
+        if (stripped.deviceId) {
+          if (!entry.deviceIds) entry.deviceIds = new Set();
+          entry.deviceIds.add(stripped.deviceId);
+        }
+        authByOrigin.set(origin, entry);
+      }
       callback({ redirectURL: stripped.url });
     } catch {
       callback({});
@@ -551,7 +574,14 @@ async function createWindow() {
         void mainWindow.loadURL(`${parsed.origin}/auth?return=/dashboard`);
         return;
       }
-      shell.openExternal(target);
+      // Never hand a token-bearing URL to the OS browser (audit pass-2 M3).
+      let externalUrl = target;
+      try {
+        externalUrl = stripAuthFromUrl(target).url;
+      } catch {
+        /* keep original */
+      }
+      shell.openExternal(externalUrl);
     } catch {
       /* malformed URL — leave the navigation prevented */
     }
@@ -583,6 +613,8 @@ async function createWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
+    rendererRecoveryAttempts = 0;
+    lastRendererFailure = null;
     desktopLog.write("info", "renderer_loaded", mainWindow?.webContents.getURL() || "");
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setTitle("Yaver");
@@ -594,10 +626,27 @@ async function createWindow() {
     }
   });
   mainWindow.webContents.on("did-fail-load", (_event, code, description, validatedURL, isMainFrame) => {
-    if (isMainFrame) desktopLog.write("error", "renderer_load_failed", `code=${code} ${description} ${validatedURL}`);
+    if (!isMainFrame) return;
+    lastRendererFailure = { kind: "load", code, description, url: validatedURL };
+    desktopLog.write("error", "renderer_load_failed", `code=${code} ${description} ${validatedURL}`);
+    showRendererFailure(lastRendererFailure);
   });
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     desktopLog.write("error", "renderer_process_gone", JSON.stringify(details));
+    lastRendererFailure = { kind: "renderer", reason: details?.reason || "unknown", exitCode: details?.exitCode };
+    if (rendererRecoveryAttempts < 1 && !isQuitting) {
+      rendererRecoveryAttempts += 1;
+      desktopLog.write("warn", "renderer_recovery_retry", `attempt=${rendererRecoveryAttempts}`);
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed() || isQuitting) return;
+        void mainWindow.loadURL(url).catch((error) => {
+          lastRendererFailure = { kind: "load", code: "exception", description: error?.message || String(error), url };
+          showRendererFailure(lastRendererFailure);
+        });
+      }, 250);
+    } else if (!isQuitting) {
+      showRendererFailure(lastRendererFailure);
+    }
   });
   mainWindow.on("unresponsive", () => desktopLog.write("warn", "window_unresponsive"));
 
@@ -613,7 +662,51 @@ async function createWindow() {
     mainWindow = null;
   });
 
-  await mainWindow.loadURL(url);
+  try {
+    await mainWindow.loadURL(url);
+  } catch (error) {
+    lastRendererFailure = { kind: "load", code: "exception", description: error?.message || String(error), url };
+    showRendererFailure(lastRendererFailure);
+  }
+
+  if (guiFailureFixture === "crash") {
+    // Crash the renderer on the recovery page to exercise render-process-gone
+    // + the single bounded retry path end to end.
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
+        mainWindow.webContents.forcefullyCrashRenderer();
+      }
+    }, 600);
+  }
+}
+
+function showRendererFailure(failure) {
+  if (!mainWindow || mainWindow.isDestroyed() || isQuitting) return;
+  const detail = [
+    failure?.kind === "renderer" ? "The app renderer crashed." : "The dashboard could not be loaded.",
+    failure?.description || failure?.reason || "Unknown renderer failure.",
+    failure?.code !== undefined ? `Error code: ${failure.code}` : "",
+    failure?.exitCode !== undefined ? `Exit code: ${failure.exitCode}` : "",
+  ].filter(Boolean).join("\\n");
+  const safeDetail = JSON.stringify(detail);
+  // The failing URL may itself have carried ?token=/?__rp= (agent stream or
+  // dashboard URL). Strip before embedding so "Open in browser" never hands
+  // the bearer to the OS browser (audit pass-2 M3).
+  let browserUrl = DASHBOARD_PRODUCTION_URL;
+  if (failure?.url && /^(?:https?:)\/\//.test(failure.url)) {
+    try {
+      browserUrl = stripAuthFromUrl(failure.url).url;
+    } catch {
+      browserUrl = DASHBOARD_PRODUCTION_URL;
+    }
+  }
+  const safeUrl = JSON.stringify(browserUrl);
+  const html = `<!doctype html><meta charset="utf-8"><title>Yaver could not open</title>
+    <style>body{margin:0;background:#0a0a0c;color:#f5f5f5;font:15px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}main{width:min(620px,calc(100vw - 48px));padding:32px}h1{font-size:24px;margin:0 0 12px}p{color:#a1a1aa;line-height:1.5;white-space:pre-wrap}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:24px}button,.button{border:0;border-radius:8px;padding:11px 16px;background:#34d399;color:#052e1b;font-weight:650;cursor:pointer}.button{display:inline-block;text-decoration:none}button.secondary,.button.secondary{background:#27272a;color:#f4f4f5}</style>
+    <main><h1>Yaver could not open the dashboard</h1><p id="detail"></p><p>Yaver stopped retrying so it would not leave you with an endless black screen.</p><div class="actions"><button onclick="location.reload()">Retry</button><a class="button secondary" href=${safeUrl}>Open in browser</a></div></main>
+    <script>document.getElementById('detail').textContent=${safeDetail}</script>`;
+  mainWindow.show();
+  void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -698,10 +791,8 @@ function rebuildTray() {
       label: "Tasks",
       click: () => {
         showWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          const origin = new URL(mainWindow.webContents.getURL()).origin;
-          void mainWindow.loadURL(`${origin}/dashboard?tab=chat`);
-        }
+        const target = dashboardUrlForTab("chat");
+        if (target) void mainWindow.loadURL(target).catch((error) => showRendererFailure({ kind: "load", code: "exception", description: error?.message || String(error), url: target }));
       },
     },
     {
@@ -803,6 +894,21 @@ function showWindow() {
   }
   mainWindow.show();
   mainWindow.focus();
+}
+
+function dashboardUrlForTab(tab) {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  try {
+    const current = new URL(mainWindow.webContents.getURL());
+    if (current.protocol !== "http:" && current.protocol !== "https:") return `${DASHBOARD_PRODUCTION_URL}?tab=${encodeURIComponent(tab)}`;
+    current.pathname = "/dashboard";
+    current.searchParams.set("tab", tab);
+    current.hash = "";
+    return current.toString();
+  } catch {
+    desktopLog.write("warn", "tray_navigation_fallback", `tab=${tab}`);
+    return `${DASHBOARD_PRODUCTION_URL}?tab=${encodeURIComponent(tab)}`;
+  }
 }
 
 // ---------------------------------------------------------------------------

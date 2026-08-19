@@ -60,7 +60,7 @@ the package is consumable from:
 - `yaver-feedback-react-native` (React Native)
 - `yaver-feedback-web` (browser)
 - `web/` Next.js dashboard (browser)
-- `desktop/app/` Electron renderer
+- `desktop/app/` Electron renderer *(legacy/frozen — canonical desktop GUI is `electron/`)*
 - `yaver-cli` npm package (Node)
 - Any future JS client
 
@@ -272,7 +272,7 @@ yaver.io/
   web/
     lib/agent-client.ts      uses core
   desktop/app/
-    src/main/                uses core
+    src/main/                uses core (legacy/frozen tree)
 ```
 
 Monorepo setup: a simple npm `workspaces` field in the top-level

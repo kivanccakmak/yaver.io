@@ -96,6 +96,9 @@ person.
 
 ### 3. Electron — an offline host can't be left
 
+*(Historical task; the referenced `desktop/app` surface is now frozen and
+unsupported — the canonical desktop GUI is `electron/`. Kept for the record.)*
+
 `desktop/app/src/renderer/index.html` `refreshDevices()` filters
 `d => d.isOnline` before rendering. If every machine a host shared is offline,
 no card renders and there is no way to leave that host — even though

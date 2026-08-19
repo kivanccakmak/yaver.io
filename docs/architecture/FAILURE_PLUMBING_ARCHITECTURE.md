@@ -416,7 +416,8 @@ Surfaces confirmed to exist: tvOS (`tvos/YaverTV/`, 28 Swift files), watchOS
 (`watch/YaverWatch/`, 21), Wear OS (`wear/app/src/main/kotlin/io/yaver/wear/`,
 20), car (`mobile/app/car-voice-coding.tsx` — **RN only; no native CarPlay
 scene exists anywhere in the repo**), glass (`mobile/app/glass-terminal.tsx`,
-`glass-workspace.tsx`), desktop Electron (`desktop/app/src/`, 3 files), CLI.
+`glass-workspace.tsx`), desktop GUI (`electron/` — canonical; legacy
+`desktop/app/src/` is frozen/unsupported), CLI.
 
 **Route presence, per surface:**
 

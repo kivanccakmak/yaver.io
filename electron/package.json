@@ -12,13 +12,13 @@
     "start": "electron .",
     "dev": "YAVER_DEV=1 electron .",
     "test": "node --test test/*.test.js",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
+    "pack": "node scripts/preflight-pack.mjs && electron-builder --dir",
+    "dist": "node scripts/preflight-pack.mjs && electron-builder",
+    "dist:mac": "node scripts/preflight-pack.mjs && electron-builder --mac",
     "dist:mas": "electron-builder --config electron-builder.mas.cjs --mac mas --universal --publish never",
     "dist:mas-dev": "YAVER_MAS_TARGET=mas-dev electron-builder --config electron-builder.mas.cjs --mac mas-dev --publish never",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux"
+    "dist:win": "node scripts/preflight-pack.mjs && electron-builder --win",
+    "dist:linux": "node scripts/preflight-pack.mjs && electron-builder --linux"
   },
   "devDependencies": {
     "electron": "43.4.0",

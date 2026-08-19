@@ -84,3 +84,46 @@ test("preload bridge is absent on third-party OAuth provider pages", () => {
   assert.match(preload, /if \(trustedRenderer\) contextBridge\.exposeInMainWorld/);
   assert.match(main, /senderOrigin === claimedOrigin && APP_ORIGINS\.has\(senderOrigin\)/);
 });
+
+test("renderer failures become visible and recoverable instead of a black window", () => {
+  assert.match(main, /renderer_load_failed/);
+  assert.match(main, /renderer_process_gone/);
+  assert.match(main, /showRendererFailure\(lastRendererFailure\)/);
+  assert.match(main, /Yaver could not open the dashboard/);
+  assert.match(main, /location\.reload\(\)/);
+  assert.match(main, /Open in browser/);
+});
+
+test("tray navigation has a safe fallback when the current page URL is empty or non-HTTP", () => {
+  assert.match(main, /function dashboardUrlForTab\(tab\)/);
+  assert.match(main, /tray_navigation_fallback/);
+  assert.match(main, /DASHBOARD_PRODUCTION_URL\}\?tab=/);
+  assert.doesNotMatch(main, /const origin = new URL\(mainWindow\.webContents\.getURL\(\)\)\.origin/);
+});
+
+test("recovery page strips auth params from the browser-bound URL (M3)", () => {
+  const recovery = main.slice(main.indexOf("function showRendererFailure"), main.indexOf("function trayIcon"));
+  // The failing URL is stripped before it is embedded into the recovery HTML.
+  assert.match(recovery, /stripAuthFromUrl\(failure\.url\)/);
+  const safeUrlIdx = recovery.indexOf("const safeUrl = JSON.stringify(browserUrl)");
+  assert.ok(
+    recovery.indexOf("stripAuthFromUrl(failure.url)") < safeUrlIdx,
+    "browserUrl must be stripped before safeUrl is built",
+  );
+});
+
+test("external navigation never opens a token-bearing URL (M3)", () => {
+  const lock = main.slice(main.indexOf("const enforceNavigationLock"), main.indexOf("// Top-level navigations"));
+  assert.match(lock, /stripAuthFromUrl\(target\)\.url/);
+  assert.match(lock, /shell\.openExternal\(externalUrl\)/);
+  assert.doesNotMatch(lock, /shell\.openExternal\(target\)/);
+});
+
+test("GUI_FAILURE_FIXTURE makes load and crash failures deterministic (DP9)", () => {
+  assert.match(main, /GUI_FAILURE_FIXTURE \|\| ""\)\.trim\(\)/);
+  const url = main.slice(main.indexOf("async function resolveDashboardUrl"), main.indexOf("// Auth capture"));
+  assert.match(url, /guifailure\.invalid/);
+  const windowCreate = main.slice(main.indexOf("async function createWindow"), main.indexOf("function showRendererFailure"));
+  assert.match(windowCreate, /forcefullyCrashRenderer\(\)/);
+  assert.match(main, /rendererRecoveryAttempts < 1/);
+});

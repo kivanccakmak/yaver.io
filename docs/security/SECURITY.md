@@ -13,7 +13,9 @@ Do **not** open a public GitHub issue for a security vulnerability.
 ## Scope
 
 In-scope:
-- The Yaver agent (`desktop/agent/`), relay server (`relay/`), backend (`backend/`), mobile app (`mobile/`), canonical desktop GUI (`electron/`), legacy desktop trees (`desktop/app/`, `desktop/installer/`), and web app (`web/`).
+- The Yaver agent (`desktop/agent/`), relay server (`relay/`), backend (`backend/`), mobile app (`mobile/`), canonical desktop GUI (`electron/`), and web app (`web/`).
+- Frozen/legacy trees are out of scope unless a finding also affects a shipped
+  surface: `desktop/app/` and `desktop/installer/` are not built or shipped.
 - Any of the open-source SDKs under `cli/` and `sdk/*`.
 - The Raspberry Pi dev-node image (`pi-image/`).
 - `yaver.io` and `public.yaver.io` (the relay) as operated by us.
