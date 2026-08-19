@@ -27,6 +27,7 @@ struct MachinePickerView: View {
     /// this a remote box (Hetzner etc.) had no relay leg at all on the TV.
     @State private var resolvedRelayUrl: String?
     @State private var resolvedRelayPassword: String?
+    @FocusState private var focusedDeviceID: String?
 
     // Captured once per load so liveness is a pure comparison (no Date.now in the model).
     @State private var nowMs: Double = 0
@@ -58,6 +59,10 @@ struct MachinePickerView: View {
             }
         }
         .task { await load() }
+        .onChange(of: devices.map(\.deviceId)) { _, ids in
+            guard focusedDeviceID == nil, let first = sortedDevices.first else { return }
+            DispatchQueue.main.async { focusedDeviceID = first.deviceId }
+        }
         .alert(item: $removalCandidate) { device in
             Alert(
                 title: Text(device.hosting == "yaver-hosted"
@@ -102,6 +107,7 @@ struct MachinePickerView: View {
                                        primary: store.primaryDeviceId == d.deviceId)
                         }
                         .buttonStyle(.card)
+                        .focused($focusedDeviceID, equals: d.deviceId)
                         .disabled(connecting != nil || removing != nil)
                         .contextMenu {
                             Button(role: .destructive) {

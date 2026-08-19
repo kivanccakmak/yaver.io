@@ -264,18 +264,28 @@ struct RemoteRuntimeWebRTCView: View {
                         .frame(width: fit.width, height: fit.height)
                         .clipShape(RoundedRectangle(cornerRadius: mediaCorner))
                         .contentShape(Rectangle())
-                        .focusable()
                         .focusEffectDisabled()
-                        .focused($streamFocused)
                         .prefersDefaultFocus(true, in: defaultFocus)
-                        .onTapGesture {
-                            if domMode {
-                                selectDOMElement()
-                            } else if mode == .pointer {
-                                runtime.tap(normalized: cursor)
-                            } else {
-                                mode = .pointer
+                        // A focused UIView/WebRTC surface does not reliably
+                        // turn the Siri Remote Select press into SwiftUI's
+                        // onTapGesture. Use a real Button as the transparent
+                        // hit target so the circle button always reaches the
+                        // remote runtime.
+                        .overlay {
+                            Button {
+                                activateRemoteSurface()
+                            } label: {
+                                Color.clear
+                                    .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+                            .focused($streamFocused)
+                            #if os(tvOS)
+                            .onMoveCommand { direction in
+                                handleStreamMove(direction)
+                            }
+                            #endif
+                            .accessibilityLabel(domMode ? "Select remote element" : "Activate remote app")
                         }
                     }
                 }
@@ -340,6 +350,16 @@ struct RemoteRuntimeWebRTCView: View {
             }
             await runtime.start(client: client, project: project)
             streamFocused = true
+        }
+    }
+
+    private func activateRemoteSurface() {
+        if domMode {
+            selectDOMElement()
+        } else if mode == .pointer {
+            runtime.tap(normalized: cursor)
+        } else {
+            mode = .pointer
         }
     }
 
@@ -478,6 +498,23 @@ struct RemoteRuntimeWebRTCView: View {
         }
         if domMode { sendDOMHover() }
     }
+
+    #if os(tvOS)
+    private func handleStreamMove(_ direction: MoveCommandDirection) {
+        guard streamFocused else { return }
+        if !domMode && direction == .right && (!runtime.hasMedia || cursor.x >= 0.94) {
+            streamFocused = false
+            chatFocusRequest += 1
+            return
+        }
+        switch mode {
+        case .pointer:
+            movePointer(direction)
+        case .scroll:
+            runtime.scroll(direction, at: cursor)
+        }
+    }
+    #endif
 
     private func sendDOMHover() {
         guard domMode else { return }

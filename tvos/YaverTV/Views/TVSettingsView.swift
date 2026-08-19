@@ -18,6 +18,8 @@ struct TVSettingsView: View {
     @State private var saving = false
     @State private var error: String?
     @State private var savedMessage: String?
+    @State private var showSignOutConfirmation = false
+    @State private var showDeleteAccount = false
 
     private var deviceId: String? {
         store.primaryDeviceId ?? store.selectedBox?.id
@@ -93,6 +95,8 @@ struct TVSettingsView: View {
                             .foregroundStyle(.orange)
                             .padding(.horizontal, 8)
                     }
+
+                    accountSection
                 }
                 .padding(40)
             }
@@ -104,6 +108,44 @@ struct TVSettingsView: View {
             }
         }
         .task { await load() }
+        .alert("Sign out of Yaver?", isPresented: $showSignOutConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Sign out", role: .destructive) {
+                store.signOut()
+                dismiss()
+            }
+        } message: {
+            Text("This Apple TV will forget its session and machine list. Your account and remote machines are not deleted.")
+        }
+        .sheet(isPresented: $showDeleteAccount) {
+            DeleteAccountView { success in
+                guard success else { return }
+                store.signOut()
+                showDeleteAccount = false
+                dismiss()
+            }
+            .environmentObject(store)
+        }
+    }
+
+    private var accountSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Account")
+                .font(.system(size: 24, weight: .bold))
+            Text("Sign out only clears this Apple TV. Account deletion permanently removes the Yaver account and requires typing the confirmation phrase.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 760, alignment: .leading)
+            HStack(spacing: 14) {
+                Button("Sign out") { showSignOutConfirmation = true }
+                    .buttonStyle(.bordered)
+                Button("Delete account", role: .destructive) { showDeleteAccount = true }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(24)
+        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+        .accessibilityIdentifier("settings.account-actions")
     }
 
     private var intro: some View {
@@ -348,5 +390,71 @@ struct TVSettingsView: View {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
         mcpServers = ((await mcpRows) ?? []).map(\.name).sorted()
+    }
+}
+
+private struct DeleteAccountView: View {
+    @EnvironmentObject private var store: YaverStore
+    @Environment(\.dismiss) private var dismiss
+    let onComplete: (Bool) -> Void
+    @State private var confirmation = ""
+    @State private var error: String?
+    @State private var deleting = false
+
+    private var confirmed: Bool {
+        confirmation.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "delete my account"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label("Delete Yaver account", systemImage: "exclamationmark.triangle.fill")
+                .font(.title2.bold())
+                .foregroundStyle(.red)
+            Text("This permanently deletes your account and associated server data. It does not delete repositories or machines in your own cloud accounts.")
+                .foregroundStyle(.secondary)
+            Text("Type: delete my account")
+                .font(.system(.body, design: .monospaced))
+            TextField("Confirmation", text: $confirmation)
+                .textFieldStyle(.plain)
+                .padding(16)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            if let error {
+                Text(error).foregroundStyle(.orange).lineLimit(3)
+            }
+            HStack {
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button("Delete permanently", role: .destructive) {
+                    Task { await delete() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!confirmed || deleting)
+            }
+        }
+        .padding(48)
+        .frame(width: 760, height: 440)
+        .onAppear { DispatchQueue.main.async { } }
+    }
+
+    private func delete() async {
+        deleting = true
+        error = nil
+        defer { deleting = false }
+        guard !store.token.isEmpty else {
+            error = "No active Yaver session. Sign in again before deleting the account."
+            return
+        }
+        var request = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("auth/delete-account"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(store.token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw AgentError(message: "Account deletion was rejected by the server. Nothing was deleted.")
+            }
+            await MainActor.run { onComplete(true) }
+        } catch {
+            await MainActor.run { self.error = error.localizedDescription }
+        }
     }
 }

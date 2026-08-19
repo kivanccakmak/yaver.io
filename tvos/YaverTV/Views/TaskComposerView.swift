@@ -62,7 +62,12 @@ struct TaskComposerView: View {
             // Remote dictation to the system text-input surface (the same
             // path used by YouTube). A UIKit wrapper can accept keyboard text
             // while losing the remote's dictation context.
-            TextField("Speak your task — hold Siri on the remote", text: $prompt, axis: .vertical)
+            // tvOS routes the physical Siri Remote microphone into the
+            // focused native TextField. The multiline axis variant can fall
+            // back to global Siri movie/music search instead of accepting
+            // dictation, so keep this input single-line and let the task
+            // description carry the full dictated text.
+            TextField("Speak your task — hold Siri on the remote", text: $prompt)
                 .textFieldStyle(.plain)
                 .font(.system(size: 24))
                 .lineLimit(3, reservesSpace: true)
@@ -103,7 +108,11 @@ struct TaskComposerView: View {
         .padding(40)
         .frame(maxWidth: 900)
         .task { await loadPickerState() }
-        .onAppear { promptFocused = true }
+        .onAppear {
+            // There is no public Siri Remote microphone-button callback. The
+            // field must be first responder before the user holds Siri.
+            DispatchQueue.main.async { promptFocused = true }
+        }
         .defaultFocus($promptFocused, true)
         .sheet(isPresented: $showTaskSettings) {
             taskSettingsPanel

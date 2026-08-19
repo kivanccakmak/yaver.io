@@ -87,6 +87,7 @@ struct VibeTurnPanel: View {
     @State private var showModelPicker = false
     @State private var showRunnerPicker = false
     @State private var conversationSettingsChanged = false
+    @State private var spokenTaskID: String?
 
     private enum PanelFocus: Hashable {
         case prompt, context, conversation, appConsole, appConsoleLog, taskLog, runner, model, project, mcp
@@ -262,11 +263,22 @@ struct VibeTurnPanel: View {
             prefill = ""
             prompt = text
             expanded = true
+            DispatchQueue.main.async { panelFocus = .prompt }
             send()
         }
         .onChange(of: focusRequest) { _, _ in
             expanded = true
             DispatchQueue.main.async { panelFocus = .prompt }
+        }
+        .onAppear {
+            if expanded {
+                DispatchQueue.main.async { panelFocus = .prompt }
+            }
+        }
+        .onChange(of: expanded) { _, isExpanded in
+            if isExpanded {
+                DispatchQueue.main.async { panelFocus = .prompt }
+            }
         }
     }
 
@@ -692,12 +704,6 @@ struct VibeTurnPanel: View {
             .focusable()
             .focusEffectDisabled()
             .focused($panelFocus, equals: .conversation)
-            #if os(tvOS)
-            .onMoveCommand { direction in
-                if direction == .down { panelFocus = .prompt }
-                if direction == .up { panelFocus = .context }
-            }
-            #endif
             .frame(maxHeight: 400)
             .onChange(of: displayTurns.count) { _, _ in
                 withAnimation(.none) { proxy.scrollTo("vibe-chat-bottom", anchor: .bottom) }
@@ -713,7 +719,12 @@ struct VibeTurnPanel: View {
     /// the agent works, and a second standalone "Agent logs" card that repeats
     /// the conversation and steals vertical space from the prompt.
     private var liveRunnerTurn: some View {
-        HStack {
+        let coding = tvTaskIsRunnerCoding(activeTask?.status)
+        let terminalStatus = activeTask?.status?.lowercased() ?? "unknown"
+        let emptyLogMessage = coding
+            ? "Waiting for the runner's first output…"
+            : "Task \(terminalStatus); no runner output was captured."
+        return HStack {
             if showFullTaskLog {
                 VStack(alignment: .leading, spacing: 6) {
                     Button { showFullTaskLog = false } label: {
@@ -739,7 +750,7 @@ struct VibeTurnPanel: View {
                                 .font(.system(size: 11))
                                 .foregroundStyle(.orange)
                         }
-                        Text(taskLog.isEmpty ? "Waiting for the runner's first output…" : redactHomePaths(taskLog))
+                        Text(taskLog.isEmpty ? emptyLogMessage : redactHomePaths(taskLog))
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(taskLog.isEmpty ? .secondary : .primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -760,7 +771,7 @@ struct VibeTurnPanel: View {
                 Button { showFullTaskLog = true } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 7) {
-                            ProgressView()
+                            if coding { ProgressView() }
                                 Text(activeTask.map { tvTaskIsRunnerCoding($0.status) ? "Yaver · working" : "Yaver · logs" } ?? "Yaver · logs")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundStyle(.secondary)
@@ -774,7 +785,7 @@ struct VibeTurnPanel: View {
                                 .font(.system(size: 11))
                                 .foregroundStyle(.orange)
                         }
-                        Text(taskLog.isEmpty ? "Waiting for the runner's first output…" : redactHomePaths(paneTail(taskLog, lines: 5)))
+                        Text(taskLog.isEmpty ? emptyLogMessage : redactHomePaths(paneTail(taskLog, lines: 5)))
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(taskLog.isEmpty ? .secondary : .primary)
                             .lineLimit(5)
@@ -1104,6 +1115,25 @@ struct VibeTurnPanel: View {
             (detail.turns ?? []).contains { $0.role == optimistic.role && $0.content == optimistic.content }
                 || (detail.pendingFollowUps ?? []).contains { $0.input == optimistic.content }
         }
+        speakCompletedTaskIfNeeded(detail)
+    }
+
+    /// Keep the rendered-preview vibe loop lean-back: once a task reaches a
+    /// terminal state, speak one redacted summary through tvOS TTS. The task
+    /// ID guard prevents every SSE refresh from repeating the answer.
+    @MainActor
+    private func speakCompletedTaskIfNeeded(_ task: TaskSummary) {
+        let terminal = Set(["completed", "review", "failed", "stopped"])
+        guard terminal.contains((task.status ?? "").lowercased()), spokenTaskID != task.id else { return }
+        let text = [task.resultText, task.output, liveAssistantText]
+            .compactMap { value -> String? in
+                guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                return value
+            }
+            .first
+        guard let text else { return }
+        spokenTaskID = task.id
+        Speech.speakSummary(of: text)
     }
 
     private func taskWithStatus(_ task: TaskSummary, _ status: String) -> TaskSummary {

@@ -25,7 +25,7 @@ struct DashboardView: View {
     @FocusState private var dashboardFocus: DashboardDestination?
 
     private enum DashboardDestination: Hashable {
-        case chat, vibing, devices, settings
+        case chat, vibing, devices, settings, profile, machineSwitch
     }
 
     /// Open the TV directly on a screen instead of the tile grid.
@@ -259,6 +259,9 @@ struct DashboardView: View {
                     .font(.system(size: 40))
                     .foregroundStyle(.secondary)
             }
+            .focusable()
+            .focused($dashboardFocus, equals: .profile)
+            .accessibilityIdentifier("dashboard.profile")
         }
     }
 
@@ -298,6 +301,8 @@ struct DashboardView: View {
                     .padding(.horizontal, 22).padding(.vertical, 10)
             }
             .buttonStyle(.bordered)
+            .focused($dashboardFocus, equals: .machineSwitch)
+            .accessibilityIdentifier("dashboard.switch")
         }
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
