@@ -134,6 +134,12 @@ if [ "$DEVICE_MODE" = "1" ]; then
   if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
     set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
   fi
+  # Device installs use automatic development signing. They must authenticate
+  # against the same Apple account/API key as the archive lane and must be
+  # allowed to register the newly paired Apple TV before Xcode can create the
+  # tvOS development profile. Without these flags pairing succeeds, but the
+  # build fails with "No profiles for ... were found" (2026-08-19).
+  apple_configure_xcode_auth
   APPLE_TEAM_ID="${APPLE_TEAM_ID:-5SJZ4KA39A}"
 
   xcodebuild -project "$TVOS_DIR/YaverTV.xcodeproj" \
@@ -145,6 +151,8 @@ if [ "$DEVICE_MODE" = "1" ]; then
     CODE_SIGN_STYLE=Automatic \
     DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
     -allowProvisioningUpdates \
+    -allowProvisioningDeviceRegistration \
+    ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
     ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
     build
 

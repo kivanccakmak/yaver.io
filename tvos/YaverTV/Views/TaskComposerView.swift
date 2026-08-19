@@ -70,7 +70,10 @@ struct TaskComposerView: View {
             TextField("Speak your task — hold Siri on the remote", text: $prompt)
                 .textFieldStyle(.plain)
                 .font(.system(size: 24))
-                .lineLimit(3, reservesSpace: true)
+                // Keep this strictly single-line on tvOS. A multiline text
+                // input can lose the Siri Remote dictation route and send
+                // the microphone press to system search instead.
+                .lineLimit(1)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
                 .background(.gray.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
