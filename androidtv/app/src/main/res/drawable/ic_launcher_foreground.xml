@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple "Yaver" mark: a rounded box with a lightning/play glyph, drawn as a
+     vector so it scales to every launcher bucket. Mirror of the tvOS catalog
+     mark — brand-first, no text (launcher icons must not carry text). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#7C6CF0"
+        android:pathData="M54,20 a34,34 0 1,0 0.001,0 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M47,40 L71,54 L47,68 Z" />
+</vector>

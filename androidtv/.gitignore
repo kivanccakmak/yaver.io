@@ -1,0 +1,20 @@
+# Gradle / build
+.gradle/
+build/
+local.properties
+
+# Kotlin
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Signing — keys live outside the repo (mobile/android/keystore.properties + keychain)
+*.jks
+*.keystore
+keystore.properties
