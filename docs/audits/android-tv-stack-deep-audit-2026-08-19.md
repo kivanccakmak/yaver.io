@@ -29,8 +29,9 @@ separate and does not describe this standalone app.
   prove focus order or 10-foot readability.
 - The standalone release/deploy script still points at the phone AAB and must
   be split or replaced before an Android TV APK/AAB is uploaded.
-- Unit tests require the JUnit artifact to be available to Gradle; offline
-  mode cannot resolve it on this machine.
+- Unit tests pass with the JVM `org.json` test dependency; offline Gradle mode
+  still cannot resolve uncached artifacts, so CI or a connected build is the
+  reliable test path.
 
 ## Acceptance order
 
