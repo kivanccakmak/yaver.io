@@ -1032,6 +1032,44 @@ login password**, and **sudo**. These live in `~/.yaver/local-secrets.env`:
 
 ### Android — Play Store
 
+#### Android local validation (no submission)
+
+The local readiness lane compiles and signs Android artifacts without
+submitting or deploying them. Do not call `./deploy/deploy.sh android`, Play
+APIs, or upload scripts during validation; Google approval is a separate human
+gate.
+
+Run only one build at a time on the 8 GB validation Mac. The checked-in
+Gradle settings cap memory and disable project parallelism: mobile uses a 3 GiB
+heap and two workers; Wear OS and Android TV use a 2 GiB heap and two workers.
+
+Validated commands:
+
+```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Phone/tablet + Android Auto native modules
+(cd "$REPO_ROOT/mobile/android" && ./gradlew --no-daemon :app:assembleRelease)
+
+# Standalone Wear OS and Android TV; use Gradle >= 8.7 (8.14.3 is validated)
+(cd "$REPO_ROOT/wear" && <gradle-8.14.3> --no-daemon bundleRelease)
+(cd "$REPO_ROOT/androidtv" && <gradle-8.14.3> --no-daemon bundleRelease)
+```
+
+The mobile APK is checked with `apksigner verify --verbose --print-certs`.
+The Wear OS and Android TV AABs are checked with
+`jarsigner -verify -verbose -certs` and `keytool -printcert -jarfile`. The
+current Yaver upload certificate SHA-256 is
+`FF:E9:9C:94:63:B0:2A:42:0D:11:42:35:CD:A7:3F:76:7A:5A:0D:18:0F:73:CE:CF:BC:2E:E2:DF:C4:AC:D5:4E`.
+
+After verification, list and remove only generated outputs before starting the
+next surface: `mobile/android/app/build`, `mobile/android/app/.cxx`,
+`wear/app/build`, `androidtv/app/build`, and the corresponding project
+`build/`/`.gradle` directories. Never remove `mobile/android/keystore.properties`,
+`keys/yaver-upload.keystore`, `node_modules`, the Android SDK/NDK, or any
+credential store. A signed local APK/AAB proves compilation and key access; it
+does not authorize a store submission.
+
 CI handles it via `release-mobile.yml` on `mobile/v*` tags using
 `PLAY_STORE_SERVICE_ACCOUNT_JSON`, `ANDROID_KEYSTORE*` secrets. Android
 versionCodes auto-increment.

@@ -27,6 +27,35 @@ After reading the docs, **grep the code for the symbols the docs name** before r
 
 ## Local Deploy Memory
 
+### Android local validation (no submission)
+
+For Android readiness checks, compile and sign locally but do not submit to
+Google Play. This lane is deliberately separate from deployment and must not
+call `./deploy/deploy.sh android`, Play APIs, or upload scripts.
+
+- Run one Gradle build at a time on the 8 GB validation Mac. Keep
+  `org.gradle.parallel=false`, `org.gradle.workers.max=2`, and the mobile
+  Gradle heap capped at 3 GiB; standalone Wear OS/Android TV builds use a 2 GiB
+  heap.
+- Phone/tablet + Android Auto are validated by the mobile release APK:
+  `cd mobile/android && ./gradlew --no-daemon :app:assembleRelease`.
+- Wear OS and Android TV are standalone projects. Use a Gradle >= 8.7 binary
+  (the pinned Android plugins are validated with Gradle 8.14.3), then run
+  `bundleRelease` in `wear/` and `androidtv/` separately.
+- Verify APKs with `apksigner verify --verbose --print-certs`; verify AABs with
+  `jarsigner -verify -verbose -certs` and `keytool -printcert -jarfile`.
+  The Yaver upload certificate fingerprint is
+  `FF:E9:9C:94:63:B0:2A:42:0D:11:42:35:CD:A7:3F:76:7A:5A:0D:18:0F:73:CE:CF:BC:2E:E2:DF:C4:AC:D5:4E`.
+- After recording the verification result, remove only the exact generated
+  build directories (`mobile/android/app/build`, `mobile/android/app/.cxx`,
+  `wear/app/build`, `androidtv/app/build`, and their project `build/` or
+  `.gradle` directories). List each target first; never remove keystores,
+  `node_modules`, the Android SDK/NDK, or credential files.
+
+The Android validation artifacts are disposable. A successful local signature
+does not authorize Play submission; approval and release remain explicit human
+steps.
+
 - **Apple web consoles use Chromium through Yaver MCP only.** For Apple
   Developer and App Store Connect work, use the authenticated Chromium profile
   through Yaver's `browser_*` MCP tools (or a headed Chromium handoff when the

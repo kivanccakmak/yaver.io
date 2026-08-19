@@ -138,7 +138,7 @@ class MainActivity : ComponentActivity() {
         val token = StandaloneStore.token(this)
         if (token.isEmpty()) return
         haptics.click()
-        WatchState.setPhase(WatchState.Phase.Working)
+        WatchState.setPhase(WatchState.Phase.Working("remove-device"))
         WatchState.setLine("Removing box…")
         lifecycleScope.launch {
             try {
