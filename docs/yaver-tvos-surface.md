@@ -33,6 +33,21 @@ inserts dictated text. It is an OS affordance granted to any text field, not an
 API you call. This is the *only* Siri-powered speech input available, and it is
 enough: two D-pad presses, then talk.
 
+**The mic only dictates into an ACTIVE text-input responder.** A field that is
+merely focus-ring-selected is not enough — on a physical Apple TV (measured
+2026-08-19, `docs/audits/tvos-dictation-deep-audit-2026-08-19.md`) every Yaver
+prompt was focus-ring-selected yet the mic did nothing, while YouTube dictated
+fine with the same remote. SwiftUI `TextField` + `@FocusState` does not
+reliably engage the UIKit editing session; all tvOS routes now use the shared
+`YaverDictationField` (`tvos/YaverTV/Views/YaverDictationField.swift`), a
+`UITextField` bridge that claims first responder once per explicit request and
+keeps the keyboard from reopening when focus merely re-asserts.
+
+The tvOS Simulator cannot emit the Siri Remote mic at all. The simulator-valid
+proxy is typing a letter into the field: Mac keyboard events land only when the
+UIKit editing session is active — the same responder dictation routes through.
+Covered by `TVChatNavigationTests.testComposerPromptIsActiveTextResponder`.
+
 ### 1.3 TTS works (VERIFIED)
 
 ```

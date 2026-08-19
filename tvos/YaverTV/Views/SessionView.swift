@@ -48,6 +48,7 @@ struct SessionView: View {
     @State private var boxUnreachable = false
     @StateObject private var lifecycle = BoxLifecycle()
     @FocusState private var promptFocused: Bool
+    @State private var editingRequest = 0
 
     /// The runner PTYs live on the box right now, and which one we drive.
     /// Loaded before the first turn: a surface that cannot name its target has
@@ -107,6 +108,7 @@ struct SessionView: View {
         // output produced ten seconds later — and a menu that appears after
         // that — reaches the TV without polling or another prompt.
         .task(id: selected) { await streamSelectedSession() }
+        .onAppear { InputStateReporter.shared.route = "session" }
         .onChange(of: lifecycle.phase) { _, phase in
             // Box came back — clear the asleep state so the prompt bar returns.
             if phase == .ready {
@@ -291,12 +293,19 @@ struct SessionView: View {
 
     private var promptBar: some View {
         HStack(spacing: 16) {
-            TextField("Dictate a prompt (press and hold Siri)", text: $prompt)
-                .textFieldStyle(.plain)
-                .font(.system(size: 22))
+            // Shared dictation field (see YaverDictationField): claims the
+            // UIKit responder so the Siri Remote mic dictates into the session
+            // prompt. focusPromptIfAvailable() drives its focus binding.
+            YaverDictationField(
+                text: $prompt,
+                editingRequestID: editingRequest,
+                onSubmit: { Task { await sendPrompt() } },
+                placeholder: "Dictate a prompt (press and hold Siri)",
+                font: .systemFont(ofSize: 22)
+            )
+                .focused($promptFocused)
                 .padding(.horizontal, 20).padding(.vertical, 14)
                 .background(.gray.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
-                .focused($promptFocused)
             Button {
                 Task { await sendPrompt() }
             } label: {
@@ -318,6 +327,7 @@ struct SessionView: View {
         guard sessionsLoaded, !awaitingChoice, !sessions.isEmpty else { return }
         DispatchQueue.main.async {
             promptFocused = true
+            editingRequest += 1
         }
     }
 

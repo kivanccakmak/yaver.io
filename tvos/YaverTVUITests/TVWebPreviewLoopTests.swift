@@ -185,11 +185,11 @@ final class TVWebPreviewLoopTests: XCTestCase {
         XCTAssertTrue(latest.waitForExistence(timeout: 20), "The remembered project must be labelled Latest")
         XCTAssertTrue(latest.hasFocus, "The remembered project must receive initial focus")
 
-        XCTAssertFalse(app.buttons["Pointer"].exists, "Entering Vibing must not start streaming before Select")
+        XCTAssertFalse(app.buttons["Activate remote app"].exists, "Entering Vibing must not start streaming before Select")
         snap(app, "vibing-0001-project-choice")
 
         XCUIRemote.shared.press(.select)
-        let opened = app.buttons["Pointer"].waitForExistence(timeout: 20)
+        let opened = app.buttons["Activate remote app"].waitForExistence(timeout: 20)
         snap(app, opened ? "vibing-0002-opened" : "vibing-0002-open-failed")
         XCTAssertTrue(opened, "One Select on Latest must open the interactive runtime")
         XCTAssertTrue(app.buttons["Vibe"].exists)

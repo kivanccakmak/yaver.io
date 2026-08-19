@@ -74,8 +74,8 @@ final class TVChatNavigationTests: XCTestCase {
         let app = launchDashboard()
         XCTAssertTrue(app.buttons["dashboard.chat"].waitForExistence(timeout: 8))
 
-        // One horizontal dashboard rail: Chat → Vibing → Projects → Devices.
-        XCUIRemote.shared.press(.right)
+        // One horizontal dashboard rail: Chat → Vibing → Devices → Settings.
+        // Devices is two Rights from Chat.
         XCUIRemote.shared.press(.right)
         XCUIRemote.shared.press(.right)
         XCUIRemote.shared.press(.select)
@@ -113,6 +113,49 @@ final class TVChatNavigationTests: XCTestCase {
         XCTAssertTrue(newVibe.waitForExistence(timeout: 5), "Menu must dismiss the composer to Chat")
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(chat.waitForExistence(timeout: 5), "Menu must pop Chat to the dashboard")
+    }
+
+    func testComposerPromptIsActiveTextResponder() throws {
+        // Simulator proxy for Siri Remote dictation. tvOS Simulator cannot
+        // emit the mic button at all (hardware-only, see deploy-tvos.sh), but
+        // Mac keyboard events reach a field ONLY when the UIKit editing session
+        // is active — the same responder the mic dictates into on a real TV.
+        // A focused-but-not-editing field (the original defect) inserts nothing.
+        let app = launchChat()
+        let newVibe = app.buttons["chat.new-vibe"]
+        XCTAssertTrue(newVibe.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.select)
+        let prompt = app.textFields["chat.prompt"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForExistence(timeout: 5),
+            "Selecting New vibe must activate the tvOS keyboard without another Select press"
+        )
+
+        prompt.typeText("hello couch")
+        var value = prompt.value as? String ?? ""
+        for _ in 0..<10 where !value.contains("hello") {
+            sleep(1)
+            value = prompt.value as? String ?? ""
+        }
+        XCTAssertTrue(
+            value.contains("hello couch"),
+            "Typing must land in the prompt — the field must be the active text-input responder, not merely focus-ring-selected. Got value: '\(value)'"
+        )
+
+        // Menu closes the keyboard; the field keeps focus so Up still reaches
+        // the header ellipsis (focus must not drop off the field).
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForNonExistence(timeout: 3),
+            "The first Menu press must close the system keyboard"
+        )
+        let more = app.buttons["chat.task-settings"]
+        XCTAssertTrue(more.waitForExistence(timeout: 3))
+        for _ in 0..<3 where !more.hasFocus {
+            XCUIRemote.shared.press(.up)
+        }
+        XCTAssertTrue(more.hasFocus, "Up from the prompt must reach the ellipsis after the keyboard closes")
     }
 
     private func launchDashboard() -> XCUIApplication {

@@ -37,6 +37,7 @@ struct TaskComposerView: View {
     @State private var creating = false
     @State private var error: String?
     @FocusState private var promptFocused: Bool
+    @State private var editingRequest = 0
     @State private var showTaskSettings = false
     // Project/MCP picker state (runner box /projects, same as mobile/web).
     // Both are optional task context: a prompt can be sent immediately with
@@ -58,30 +59,27 @@ struct TaskComposerView: View {
         VStack(alignment: .leading, spacing: 22) {
             header
 
-            // Native SwiftUI TextField is intentional: tvOS attaches Siri
-            // Remote dictation to the system text-input surface (the same
-            // path used by YouTube). A UIKit wrapper can accept keyboard text
-            // while losing the remote's dictation context.
-            // tvOS routes the physical Siri Remote microphone into the
-            // focused native TextField. The multiline axis variant can fall
-            // back to global Siri movie/music search instead of accepting
-            // dictation, so keep this input single-line and let the task
-            // description carry the full dictated text.
-            TextField("Speak your task — hold Siri on the remote", text: $prompt)
-                .textFieldStyle(.plain)
-                .font(.system(size: 24))
-                // Keep this strictly single-line on tvOS. A multiline text
-                // input can lose the Siri Remote dictation route and send
-                // the microphone press to system search instead.
-                .lineLimit(1)
+            // Native text input is the shared YaverDictationField: it claims
+            // the UIKit first-responder state after the sheet is attached, so
+            // holding Siri on the remote dictates into this field instead of
+            // falling to system search. The old multiline SwiftUI axis could
+            // lose the dictation route; the bridge field is single-line by
+            // construction and the task description carries the full text.
+            YaverDictationField(
+                text: $prompt,
+                editingRequestID: editingRequest,
+                onSubmit: { create() },
+                placeholder: "Speak your task — hold Siri on the remote",
+                font: .systemFont(ofSize: 24),
+                accessibilityIdentifier: "chat.prompt"
+            )
+                .focused($promptFocused)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
                 .background(.gray.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
-                .focused($promptFocused)
-                .accessibilityIdentifier("chat.prompt")
                 .disabled(creating)
-                .onSubmit { create() }
                 .frame(minHeight: 66)
+            TVInputStatusLine()
 
             if creating {
                 HStack(spacing: 12) {
@@ -112,9 +110,13 @@ struct TaskComposerView: View {
         .frame(maxWidth: 900)
         .task { await loadPickerState() }
         .onAppear {
+            InputStateReporter.shared.route = "task-composer"
             // There is no public Siri Remote microphone-button callback. The
             // field must be first responder before the user holds Siri.
-            DispatchQueue.main.async { promptFocused = true }
+            DispatchQueue.main.async {
+                promptFocused = true
+                editingRequest += 1
+            }
         }
         .defaultFocus($promptFocused, true)
         .sheet(isPresented: $showTaskSettings) {
@@ -290,6 +292,7 @@ struct TaskComposerView: View {
                     Button("Done") {
                         showTaskSettings = false
                         promptFocused = true
+                        editingRequest += 1
                     }
                 }
             }
@@ -468,6 +471,7 @@ struct TaskComposerView: View {
                 // Start page: put the user straight back in the keyboard with
                 // their text intact.
                 promptFocused = true
+                editingRequest += 1
             }
             creating = false
         }

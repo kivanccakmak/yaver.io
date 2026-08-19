@@ -7,6 +7,7 @@ import SwiftUI
 struct BoxlessCodeView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var prompt = ""
+    @State private var editingRequest = 0
     @State private var answer = ""
     @State private var busy = false
     @State private var error: String?
@@ -33,17 +34,23 @@ struct BoxlessCodeView: View {
             )
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("boxless.credential-status")
-            // tvOS delivers Siri Remote dictation to the focused native
-            // TextField. The multiline axis variant is not a reliable
-            // dictation target on tvOS, so keep input single-line and let the
-            // answer area carry the multiline content.
-            TextField("Ask Yaver Code for a deep audit or explanation…", text: $prompt)
-                .font(.system(size: 20))
-                .frame(minHeight: 100, maxHeight: 150)
+            // Shared dictation field (see YaverDictationField). The old
+            // multiline SwiftUI axis was not a reliable dictation target on
+            // tvOS; the bridge is single-line and claims the UIKit responder,
+            // while the answer area carries the multiline content.
+            YaverDictationField(
+                text: $prompt,
+                editingRequestID: editingRequest,
+                onSubmit: { send(mode: "deep-audit") },
+                placeholder: "Ask Yaver Code for a deep audit or explanation…",
+                font: .systemFont(ofSize: 20),
+                accessibilityIdentifier: "boxless.prompt"
+            )
+                .focused($focus, equals: .prompt)
+                .frame(minHeight: 72)
                 .padding(8)
                 .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                .focused($focus, equals: .prompt)
-                .accessibilityIdentifier("boxless.prompt")
+                .onAppear { InputStateReporter.shared.route = "boxless" }
             HStack {
                 Button(busy ? "Thinking…" : "Deep audit / ask") { send(mode: "deep-audit") }
                     .buttonStyle(.borderedProminent)
@@ -67,7 +74,10 @@ struct BoxlessCodeView: View {
         .onAppear {
             // The Siri Remote microphone has no public button callback; it
             // only dictates into the currently focused text field.
-            DispatchQueue.main.async { focus = .prompt }
+            DispatchQueue.main.async {
+                focus = .prompt
+                editingRequest += 1
+            }
         }
     }
 

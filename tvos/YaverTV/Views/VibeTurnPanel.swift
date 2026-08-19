@@ -59,6 +59,7 @@ struct VibeTurnPanel: View {
 
     @State private var expanded: Bool
     @State private var prompt = ""
+    @State private var editingRequest = 0
     @State private var sending = false
     @State private var activeTask: TaskSummary?
     @State private var taskLog = ""
@@ -112,21 +113,30 @@ struct VibeTurnPanel: View {
                     if activeTask != nil || !optimisticTurns.isEmpty {
                         conversation
                     }
-                    TextField("What should change?", text: $prompt)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .tint(.white)
+                    // Shared dictation field (see YaverDictationField): claims
+                    // the UIKit responder so the Siri Remote mic dictates into
+                    // the vibe prompt. The border makes the armed state visible
+                    // from the couch — the field is either the active input
+                    // target or clearly not.
+                    YaverDictationField(
+                        text: $prompt,
+                        editingRequestID: editingRequest,
+                        onSubmit: { send() },
+                        placeholder: "What should change?",
+                        font: .systemFont(ofSize: 24, weight: .medium)
+                    )
+                        .focused($panelFocus, equals: .prompt)
                         .padding(.horizontal, 18)
                         .frame(minHeight: 72)
-                        .focusEffectDisabled()
-                        .focused($panelFocus, equals: .prompt)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(panelFocus == .prompt ? Color.white.opacity(0.55) : .clear, lineWidth: 2)
+                        }
                         #if os(tvOS)
                         .onMoveCommand { direction in
                             if direction == .down { panelFocus = .runner }
                         }
                         #endif
-                        .onSubmit { send() }
                 }
                 // One context control, four selectors inside. Four adjacent
                 // native Menu capsules looked like a second toolbar and their
@@ -142,6 +152,7 @@ struct VibeTurnPanel: View {
                     expanded = true
                     // Focus follows the expansion so a second mic press dictates.
                     panelFocus = .prompt
+                    editingRequest += 1
                 } label: {
                     Label(activeTask == nil ? "Vibe — ask for a change" : "Ask for another change",
                           systemImage: "wand.and.stars")
@@ -268,16 +279,26 @@ struct VibeTurnPanel: View {
         }
         .onChange(of: focusRequest) { _, _ in
             expanded = true
-            DispatchQueue.main.async { panelFocus = .prompt }
+            DispatchQueue.main.async {
+                panelFocus = .prompt
+                editingRequest += 1
+            }
         }
         .onAppear {
+            InputStateReporter.shared.route = "vibe-turn"
             if expanded {
-                DispatchQueue.main.async { panelFocus = .prompt }
+                DispatchQueue.main.async {
+                    panelFocus = .prompt
+                    editingRequest += 1
+                }
             }
         }
         .onChange(of: expanded) { _, isExpanded in
             if isExpanded {
-                DispatchQueue.main.async { panelFocus = .prompt }
+                DispatchQueue.main.async {
+                    panelFocus = .prompt
+                    editingRequest += 1
+                }
             }
         }
     }

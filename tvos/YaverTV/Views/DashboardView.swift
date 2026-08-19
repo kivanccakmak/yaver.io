@@ -132,10 +132,14 @@ struct DashboardView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
                         .frame(height: 142)
-                        .defaultFocus($dashboardFocus, .chat)
                     }
                 }
                 .padding(56)
+                // Scope-wide default: Chat owns initial focus even though the
+                // machine card is now the first focusable element above the
+                // rail (it must stay reachable but must not steal the couch's
+                // first destination).
+                .defaultFocus($dashboardFocus, .chat)
             }
             // Programmatic route from `yaver.tv.startAt` — see the property.
             // Fires once, and only when a box is actually selected: routing into
@@ -153,6 +157,10 @@ struct DashboardView: View {
             }
             .onAppear {
                 applyStartRouteIfReady()
+                // Chat owns the couch's first destination even though the
+                // machine card is now the first focusable element in the scope
+                // (it must stay reachable, not steal initial focus).
+                DispatchQueue.main.async { dashboardFocus = .chat }
             }
             .sheet(isPresented: $showUpdateAgent) { UpdateAgentView() }
             .task(id: store.selectedBox?.id) {
@@ -269,44 +277,55 @@ struct DashboardView: View {
     /// answers. Status dot: green = reachable, orange = unreachable, gray =
     /// checking. Detail names host, relay fallback and the runner/render split
     /// badge so a split is never two silent sources.
+    ///
+    /// The WHOLE card is a focus target. Measured 2026-08-19: the tile rail is
+    /// full-width at the bottom, but the Switch button and profile menu sit at
+    /// the far right, so the tvOS focus engine could not move Up from the left
+    /// or centre tiles — no horizontally-overlapping target existed above, and
+    /// the dashboard looked like "only 4 clickable boxes". A full-width
+    /// focusable card restores the Up chain: any tile → card → profile.
     private var selectedMachinePanel: some View {
-        HStack(spacing: 22) {
-            Image(systemName: "server.rack")
-                .font(.system(size: 34, weight: .semibold))
-                .foregroundStyle(connectivityColor)
-                .frame(width: 54, height: 54)
-                .background(connectivityColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 12) {
-                    Text(store.selectedBox?.name ?? "Selected machine")
-                        .font(.system(size: 26, weight: .bold))
-                        .lineLimit(1)
-                    if let alias = store.selectedBox?.aliasLabel {
-                        Text(alias)
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(.secondary)
+        NavigationLink(destination: MachinePickerView()) {
+            HStack(spacing: 22) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(connectivityColor)
+                    .frame(width: 54, height: 54)
+                    .background(connectivityColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 12) {
+                        Text(store.selectedBox?.name ?? "Selected machine")
+                            .font(.system(size: 26, weight: .bold))
                             .lineLimit(1)
+                        if let alias = store.selectedBox?.aliasLabel {
+                            Text(alias)
+                                .font(.system(size: 19, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        statusChip
                     }
-                    statusChip
+                    Text(machineDetail)
+                        .font(.system(size: 17))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                Text(machineDetail)
-                    .font(.system(size: 17))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            NavigationLink(destination: MachinePickerView()) {
+                Spacer()
                 Label("Switch", systemImage: "rectangle.2.swap")
                     .font(.system(size: 19, weight: .semibold))
                     .padding(.horizontal, 22).padding(.vertical, 10)
             }
-            .buttonStyle(.bordered)
-            .focused($dashboardFocus, equals: .machineSwitch)
-            .accessibilityIdentifier("dashboard.switch")
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .buttonStyle(.plain)
+        .focused($dashboardFocus, equals: .machineSwitch)
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(dashboardFocus == .machineSwitch ? Color.white.opacity(0.6) : .clear, lineWidth: 3)
+        }
+        .accessibilityIdentifier("dashboard.machine-card")
     }
 
     private var connectivityColor: Color {

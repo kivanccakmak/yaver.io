@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0AEECA73B0908A0415B8654C /* WakeProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76EA211ABDF521DD6CC22C3 /* WakeProgressView.swift */; };
+		0B73B4DE4DEB8BA5F3F1075D /* YaverDictationField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A900B18B742454D4D6C7359 /* YaverDictationField.swift */; };
 		0F3AD5C101105E22CCC5C114 /* AppleSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */; };
 		16587396CA5360A34F2C4342 /* Backend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62AA4F93DB55D50601FA4253 /* Backend.swift */; };
 		18F7F25A9DC46548215628BB /* YaverTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 053F14BB4784ACE0F6940C93 /* YaverTVApp.swift */; };
@@ -43,6 +44,7 @@
 		AEF06908D4ADCB0FE0759040 /* TasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706F27D55F944D59C8ECD555 /* TasksView.swift */; };
 		B4DB41408F8DDBA62F1BEF7F /* FrameworkStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E883FFE32672CAF75087F1E5 /* FrameworkStyle.swift */; };
 		BA1C4E5FB968311F8B9C37C7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */; };
+		BA348ACA3E9B639767CD13E5 /* TVInputStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66293D9C377C3A9C9D374E3 /* TVInputStatus.swift */; };
 		BA38FFCFED1DC4D4EE799E82 /* OAuthSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */; };
 		C925CDA83769C16357214E99 /* AgentClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30B780D2E7490982C5B7E328 /* AgentClient.swift */; };
 		CAF1C4F283907ED5436FC317 /* FeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */; };
@@ -85,6 +87,7 @@
 		1E6E9B680E701DC27F124C4F /* yaver-login-wordmark-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "yaver-login-wordmark-light.png"; sourceTree = "<group>"; };
 		2168C1CC5D76DE846256CFAD /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
 		276D29BCA1F4A3A8DD33A6D3 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		2A900B18B742454D4D6C7359 /* YaverDictationField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YaverDictationField.swift; sourceTree = "<group>"; };
 		2F558EBFDD66510DEF9FEFB4 /* YaverTVUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = YaverTVUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		30B780D2E7490982C5B7E328 /* AgentClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentClient.swift; sourceTree = "<group>"; };
 		35EB3210C08FB622ECCBF15C /* YaverNativeCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YaverNativeCatalog.swift; sourceTree = "<group>"; };
@@ -114,6 +117,7 @@
 		AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRuntimePlanTests.swift; sourceTree = "<group>"; };
 		AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVRemoteView.swift; sourceTree = "<group>"; };
 		B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthSignIn.swift; sourceTree = "<group>"; };
+		B66293D9C377C3A9C9D374E3 /* TVInputStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVInputStatus.swift; sourceTree = "<group>"; };
 		C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsView.swift; sourceTree = "<group>"; };
 		C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanApprovalBeacon.swift; sourceTree = "<group>"; };
 		CC389C91C8B5382905D6194B /* MachinePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachinePickerView.swift; sourceTree = "<group>"; };
@@ -211,12 +215,14 @@
 				10853B34BB3F067BDF0C02E9 /* TaskComposerView.swift */,
 				8FE9E4B8D55E6F9BE758452A /* TaskDetailView.swift */,
 				706F27D55F944D59C8ECD555 /* TasksView.swift */,
+				B66293D9C377C3A9C9D374E3 /* TVInputStatus.swift */,
 				59F5766C895CDA0075AE65E7 /* TVSettingsView.swift */,
 				9FAE4341960BE9EA05DE082D /* UpdateAgentView.swift */,
 				4ED0118C15F635CF31061B51 /* VibeTurnPanel.swift */,
 				4B5FCD77426D42F65FEB0D0A /* VibingView.swift */,
 				D76EA211ABDF521DD6CC22C3 /* WakeProgressView.swift */,
 				13B09883C3220F3715E4F3DF /* WebPreviewStreamView.swift */,
+				2A900B18B742454D4D6C7359 /* YaverDictationField.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -434,6 +440,7 @@
 				F6D6FD0612F8F2E9DD6D3A5C /* SignInView.swift in Sources */,
 				D299F8FE54C7BF349DB540D5 /* Speech.swift in Sources */,
 				9D0BB56F661FC19E222F21AC /* TVChatPlan.swift in Sources */,
+				BA348ACA3E9B639767CD13E5 /* TVInputStatus.swift in Sources */,
 				7379174AE578C3B3EE112B4E /* TVSettingsView.swift in Sources */,
 				2B768810EB7C0232820C5AAB /* TaskComposerView.swift in Sources */,
 				229C96D90BE4C06BFCD7F34E /* TaskDetailView.swift in Sources */,
@@ -446,6 +453,7 @@
 				8F7FD72900FD7A382640EDAA /* VibingView.swift in Sources */,
 				0AEECA73B0908A0415B8654C /* WakeProgressView.swift in Sources */,
 				8D8ABF84CE07DFF5DCA0C28A /* WebPreviewStreamView.swift in Sources */,
+				0B73B4DE4DEB8BA5F3F1075D /* YaverDictationField.swift in Sources */,
 				7BFF477EEDD5FEA7E3696C93 /* YaverNativeCatalog.swift in Sources */,
 				AD43610B33A8368A49E512B9 /* YaverStore.swift in Sources */,
 				18F7F25A9DC46548215628BB /* YaverTVApp.swift in Sources */,

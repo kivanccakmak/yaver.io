@@ -157,7 +157,12 @@ struct RemoteRuntimeWebRTCView: View {
         #if os(tvOS)
         .onMoveCommand { direction in
             guard streamFocused else { return }
-            if !domMode && direction == .right && (!runtime.hasMedia || cursor.x >= 0.94) {
+            // Right at the right edge is the deliberate "one Right/Select back
+            // to Chat" escape. But it must only fire with pixels on screen:
+            // measured 2026-08-19 — while media was still connecting,
+            // `!runtime.hasMedia` was true, so the FIRST Right press bounced
+            // focus to Chat and the pointer could never be moved right at all.
+            if !domMode && direction == .right && runtime.hasMedia && cursor.x >= 0.94 {
                 streamFocused = false
                 chatFocusRequest += 1
                 return
@@ -166,9 +171,6 @@ struct RemoteRuntimeWebRTCView: View {
             case .pointer:
                 movePointer(direction)
             case .scroll:
-                // Scroll at the pointer's location, not the centre of the
-                // frame. Nested web panels (chat/log panes) only consume a
-                // wheel event when the event lands on the hovered scroller.
                 runtime.scroll(direction, at: cursor)
             }
         }
@@ -502,7 +504,10 @@ struct RemoteRuntimeWebRTCView: View {
     #if os(tvOS)
     private func handleStreamMove(_ direction: MoveCommandDirection) {
         guard streamFocused else { return }
-        if !domMode && direction == .right && (!runtime.hasMedia || cursor.x >= 0.94) {
+        // See the matching comment on the outer .onMoveCommand: the right-edge
+        // escape to Chat is gated on real media so a connecting stream cannot
+        // swallow Right as "leave the stream" (2026-08-19).
+        if !domMode && direction == .right && runtime.hasMedia && cursor.x >= 0.94 {
             streamFocused = false
             chatFocusRequest += 1
             return

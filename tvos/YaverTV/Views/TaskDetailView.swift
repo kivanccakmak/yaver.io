@@ -66,6 +66,7 @@ struct TaskDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
+        .onAppear { InputStateReporter.shared.route = "task-detail" }
         .task { await loadConfiguration(); await refreshDetail() }
         .task(id: reattachNonce) { await startStream() }
         .onDisappear { stream?.cancel(); reattachTask?.cancel() }
@@ -180,19 +181,24 @@ struct TaskDetailView: View {
                 // Match the new-vibe composer: vertical text fields trap the
                 // Siri Remote's Down event, so a dictated reply could not
                 // reach Send without backing out of the screen.
-                TextField("Reply…", text: $reply)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 20))
+                // Shared dictation field (see YaverDictationField) — a single
+                // text input target for the Siri Remote mic on every task
+                // reply, matching the new-vibe composer.
+                YaverDictationField(
+                    text: $reply,
+                    onSubmit: {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            replyFocus = .send
+                        }
+                    },
+                    placeholder: "Reply…",
+                    font: .systemFont(ofSize: 20),
+                    accessibilityIdentifier: "chat.reply"
+                )
                     .focused($replyFocus, equals: .field)
-                    .accessibilityIdentifier("chat.reply")
                     .onMoveCommand { direction in
                         if direction == .down,
                            !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            replyFocus = .send
-                        }
-                    }
-                    .onSubmit {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                             replyFocus = .send
                         }
                     }
