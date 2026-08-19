@@ -33,7 +33,11 @@ struct BoxlessCodeView: View {
             )
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("boxless.credential-status")
-            TextField("Ask Yaver Code for a deep audit or explanation…", text: $prompt, axis: .vertical)
+            // tvOS delivers Siri Remote dictation to the focused native
+            // TextField. The multiline axis variant is not a reliable
+            // dictation target on tvOS, so keep input single-line and let the
+            // answer area carry the multiline content.
+            TextField("Ask Yaver Code for a deep audit or explanation…", text: $prompt)
                 .font(.system(size: 20))
                 .frame(minHeight: 100, maxHeight: 150)
                 .padding(8)
@@ -60,6 +64,11 @@ struct BoxlessCodeView: View {
         .frame(maxWidth: 1100, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.black)
         .defaultFocus($focus, .prompt)
+        .onAppear {
+            // The Siri Remote microphone has no public button callback; it
+            // only dictates into the currently focused text field.
+            DispatchQueue.main.async { focus = .prompt }
+        }
     }
 
     private func send(mode: String) {
