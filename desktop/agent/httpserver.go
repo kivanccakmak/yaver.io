@@ -485,6 +485,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/code/repos", s.auth(s.handleCodeRepos))
 	mux.HandleFunc("/code/repo", s.auth(s.handleCodeRepo))
 	mux.HandleFunc("/project/kind", s.auth(s.handleProjectKind))
+	mux.HandleFunc("/project/profile", s.auth(s.handleProjectProfile))
 	mux.HandleFunc("/code/dev", s.auth(s.handleCodeDev))
 	mux.HandleFunc("/code/deploy", s.auth(s.handleCodeDeploy))
 
@@ -1895,7 +1896,7 @@ func companionSessionAllowed(method, path, scope string) bool {
 		}
 	case "tv", "vision", "spatial":
 		switch {
-		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/workspace/apps" || path == "/project/preview-capabilities" || path == "/tmux/sessions" || path == "/tmux/stream" || path == "/mcp/servers"):
+		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/workspace/apps" || path == "/project/preview-capabilities" || path == "/project/profile" || path == "/tmux/sessions" || path == "/tmux/stream" || path == "/mcp/servers"):
 			return true
 		case method == http.MethodGet && (path == "/remote-runtime/capabilities" || path == "/remote-runtime/turn-credentials"):
 			return true
@@ -10963,6 +10964,12 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpProjectRuntime(a.Dir))
+	case "project_profile":
+		var a struct {
+			Dir string `json:"directory"`
+		}
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpProjectProfile(a.Dir))
 	case "project_runtime_apply":
 		var a ProjectRuntimeApplyRequest
 		var wrapper struct {

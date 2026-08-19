@@ -2972,6 +2972,17 @@ func (tm *TaskManager) startProcess(task *Task) error {
 
 	// Determine working directory
 	taskDir := tm.effectiveTaskWorkDir(task)
+	// Project policy is resolved only when the runner is about to start. This
+	// keeps agent boot light and lets every runner launch path (Claude Code,
+	// Codex, and OpenCode) receive the same project-scoped MCP
+	// selection. Explicit task MCPs remain additive, while the manifest can
+	// require or disable named adapters.
+	if selection, err := projectMCPSelection(taskDir, task.MCPServers); err != nil {
+		cancel()
+		return fmt.Errorf("project MCP policy: %w", err)
+	} else {
+		task.MCPServers = selection.Servers
+	}
 	includeYaverMcp := "1"
 	if !task.IncludeYaverMcp {
 		includeYaverMcp = "0"

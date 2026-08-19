@@ -117,6 +117,10 @@ type WorkspaceApp struct {
 	// Depends: app names this one depends on (for `workspace build`
 	// ordering). Cycles are rejected at parse time.
 	Depends []string `yaml:"depends" json:"depends,omitempty"`
+	// Adapters declares project-scoped MCP/integration IDs for this app. The
+	// same policy can be placed in the app's .yaver/project.yaml; app-level
+	// workspace declarations are useful when the repo is a monorepo.
+	Adapters *ProjectAdapterPolicy `yaml:"adapters,omitempty" json:"adapters,omitempty"`
 	// Env: per-app env var names to populate from the shared vault /
 	// host environment when kicking any action.
 	Env []string `yaml:"env" json:"env,omitempty"`

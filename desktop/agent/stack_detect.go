@@ -154,6 +154,17 @@ type StackDetection struct {
 	Hosting           []string `json:"hosting,omitempty"`
 	ORM               string   `json:"orm,omitempty"`
 	Services          []string `json:"services,omitempty"`
+	// Products are first-class project products/hosts, distinct from the
+	// implementation framework: office-addin, shopify-plugin, figma-plugin,
+	// chrome-extension, and similar project types.
+	Products []DetectedProduct `json:"products,omitempty"`
+	// DeployTargets are user-visible destinations such as web, backend,
+	// testflight, google-play, powerpoint, or shopify. They describe the
+	// project profile; machine-specific deploy capability is checked later.
+	DeployTargets []string `json:"deployTargets,omitempty"`
+	// Adapters are integration IDs suggested by detection. Explicit project
+	// policy remains authoritative for what a task may actually use.
+	Adapters []string `json:"adapters,omitempty"`
 
 	// Tags are the UI chips. Union of framework + backend + hosting +
 	// orm + language markers, deduped and stable-sorted.
@@ -171,6 +182,14 @@ type StackDetection struct {
 
 	IsMonorepo bool              `json:"isMonorepo,omitempty"`
 	Packages   []*StackDetection `json:"packages,omitempty"`
+}
+
+type DetectedProduct struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Hosts    []string `json:"hosts,omitempty"`
+	Evidence string   `json:"evidence"`
+	Weak     bool     `json:"weak,omitempty"`
 }
 
 // ---------------------------------------------------------------------
@@ -442,6 +461,10 @@ type pkgJSON struct {
 	Name    string
 	deps    map[string]string
 	present bool
+	// PublishConfig is set for packages that explicitly opt into npm
+	// publication. A normal React/RN app must not be labelled as an npm
+	// deploy just because it has a package.json.
+	PublishConfig bool
 	// Workspaces drives monorepo package discovery.
 	Workspaces []string
 }
@@ -456,13 +479,14 @@ func readPkgJSON(dir string) pkgJSON {
 		Dependencies    map[string]string `json:"dependencies"`
 		DevDependencies map[string]string `json:"devDependencies"`
 		PeerDeps        map[string]string `json:"peerDependencies"`
+		PublishConfig   json.RawMessage   `json:"publishConfig"`
 		// npm/yarn allow either form: ["packages/*"] or {"packages": [...]}.
 		Workspaces json.RawMessage `json:"workspaces"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return pkgJSON{}
 	}
-	p := pkgJSON{Name: raw.Name, present: true, deps: map[string]string{}}
+	p := pkgJSON{Name: raw.Name, present: true, deps: map[string]string{}, PublishConfig: len(raw.PublishConfig) > 0 && string(raw.PublishConfig) != "null"}
 	for _, m := range []map[string]string{raw.Dependencies, raw.DevDependencies, raw.PeerDeps} {
 		for k, v := range m {
 			p.deps[k] = v
@@ -626,8 +650,13 @@ func stackDetect(root string) *StackDetection {
 		// the buttons.
 		for _, p := range d.Packages {
 			d.Tags = append(d.Tags, p.Tags...)
+			d.Products = append(d.Products, p.Products...)
+			d.DeployTargets = append(d.DeployTargets, p.DeployTargets...)
+			d.Adapters = append(d.Adapters, p.Adapters...)
 		}
 		d.Tags = dedupeSorted(d.Tags)
+		d.DeployTargets = dedupeSorted(d.DeployTargets)
+		d.Adapters = dedupeSorted(d.Adapters)
 		d.Role = "unknown"
 		d.Roles = rollupMonorepoRoles(d)
 	}
@@ -705,6 +734,7 @@ func detectOneDir(dir, root string) *StackDetection {
 	d.Role = detectStackRole(d)
 	d.Surfaces = detectDevelopmentSurfaces(dir, d)
 	d.TestSurfaces = detectTestSurfaces(d)
+	d.Products, d.DeployTargets, d.Adapters = detectProjectProfile(dir, d)
 	d.FeedbackSDK = FeedbackSDKPackage(d.Stack)
 	if d.FeedbackSDK == "" {
 		d.FeedbackSDK = FeedbackSDKPackage(d.Framework)
@@ -1337,6 +1367,9 @@ func stackFingerprintMarkerPaths() []string {
 		"vite.config.ts", "vite.config.js", "vite.config.mts",
 		"Package.swift", "go.mod", "Cargo.toml", "pyproject.toml", "setup.py", "requirements.txt",
 		"build.gradle.kts", "settings.gradle.kts", "build.gradle", "settings.gradle",
+		"manifest.xml", "manifest.office.xml", "manifest.office.json",
+		"shopify.app.toml", "shopify.extension.toml", "extensions",
+		"manifest.json", ".yaver/project.yaml",
 	)
 	for _, provider := range stackProviders {
 		out = append(out, provider.Files...)

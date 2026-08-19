@@ -28,6 +28,28 @@ type ProjectManifest struct {
 	Cron      []ManifestCron               `yaml:"cron,omitempty" json:"cron,omitempty"`
 	Jobs      []ManifestJob                `yaml:"jobs,omitempty" json:"jobs,omitempty"`
 	Env       map[string]string            `yaml:"env,omitempty" json:"env,omitempty"`
+	// Tools declares project-scoped integrations. Values are names only;
+	// endpoints and credentials stay in the agent's local config/vault.
+	// `adapters` is the canonical spelling; Tools.MCP is accepted as the
+	// human-friendly compatibility spelling used by connected projects.
+	Adapters *ProjectAdapterPolicy `yaml:"adapters,omitempty" json:"adapters,omitempty"`
+	Tools    *ProjectToolsConfig   `yaml:"tools,omitempty" json:"tools,omitempty"`
+}
+
+// ProjectToolsConfig is the project manifest's integration namespace.
+type ProjectToolsConfig struct {
+	MCP *ProjectAdapterPolicy `yaml:"mcp,omitempty" json:"mcp,omitempty"`
+}
+
+// ProjectAdapterPolicy is an allowlist/policy, not an installation recipe.
+// Required adapters are automatically selected for tasks in this project;
+// optional adapters are available only when a task explicitly selects them;
+// disabled adapters are never selected by inference or task defaults.
+type ProjectAdapterPolicy struct {
+	Required []string            `yaml:"required,omitempty" json:"required,omitempty"`
+	Optional []string            `yaml:"optional,omitempty" json:"optional,omitempty"`
+	Disabled []string            `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Allow    map[string][]string `yaml:"allow,omitempty" json:"allow,omitempty"`
 }
 
 type ManifestRuntimeConfig struct {
