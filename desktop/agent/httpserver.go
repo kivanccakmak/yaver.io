@@ -1895,7 +1895,9 @@ func companionSessionAllowed(method, path, scope string) bool {
 		}
 	case "tv", "vision", "spatial":
 		switch {
-		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/tmux/sessions" || path == "/tmux/stream" || path == "/mcp/servers"):
+		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/workspace/apps" || path == "/project/preview-capabilities" || path == "/tmux/sessions" || path == "/tmux/stream" || path == "/mcp/servers"):
+			return true
+		case method == http.MethodGet && (path == "/remote-runtime/capabilities" || path == "/remote-runtime/turn-credentials"):
 			return true
 		case method == http.MethodGet && strings.HasPrefix(path, "/tasks/"):
 			return true
@@ -2725,7 +2727,14 @@ func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 	// "GitHub CLI ready" / "GitLab CLI not authenticated" indicators
 	// without each surface re-probing. Cached at boot + refreshed by
 	// `yaver install` after a successful gh/glab install.
-	info["gitProviderCLIs"] = DetectGitProviderCLIs()
+	gitProviderCLIs := CachedGitProviderCLIs()
+	info["gitProviderCLIs"] = gitProviderCLIs
+	if len(gitProviderCLIs) == 0 {
+		// Boot normally primes this cache before serving. Embedded/test starts
+		// may not; refresh off the request path so /info remains an operation-
+		// level liveness probe even when provider CLIs are slow or wedged.
+		go DetectGitProviderCLIs()
+	}
 
 	// Dev server status (for hot-reload awareness)
 	if s.devServerMgr != nil {
@@ -4057,10 +4066,9 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// MCPServers is the per-task external MCP allowlist. Empty means no
 		// external MCPs; Yaver's own MCP doorway remains available.
 		MCPServers []string `json:"mcpServers,omitempty"`
-		// IncludeYaverMcp defaults true (nil = include). A surface sets
-		// false when the user explicitly deselects the `yaver` MCP chip, so
-		// the runner sees ONLY the external MCPs in mcpServers (possibly
-		// none). *bool, not bool, so "field absent" ≠ "false".
+		// IncludeYaverMcp is opt-in for a NEW task. Omitted and false both
+		// mean no Yaver MCP doorway; a surface must send true after the user
+		// explicitly enables it (or enables its Use latest preference).
 		IncludeYaverMcp *bool              `json:"includeYaverMcp,omitempty"`
 		SliceContract   *TaskSliceContract `json:"sliceContract,omitempty"`
 		// Runner/render machine split (task_ensure_clone.go): the surface
@@ -4199,12 +4207,10 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	body.WorkDir = bodyWorkDir
 
 	taskOpts := TaskCreateOptions{
-		WorkDir:     body.WorkDir,
-		ProjectName: body.ProjectName,
-		MCPServers:  append([]string{}, body.MCPServers...),
-		// nil = include Yaver's own MCP doorway (default); explicit false
-		// strips it so the task runs with ONLY the selected external MCPs.
-		IncludeYaverMcp: body.IncludeYaverMcp == nil || *body.IncludeYaverMcp,
+		WorkDir:         body.WorkDir,
+		ProjectName:     body.ProjectName,
+		MCPServers:      append([]string{}, body.MCPServers...),
+		IncludeYaverMcp: includeYaverMCPForNewTask(body.IncludeYaverMcp),
 		// What the user typed. Feedback / shake clients send no userPrompt,
 		// so the fallback to the (now clean) title is what keeps their own
 		// sentence in their own bubble.
@@ -5909,9 +5915,27 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		"guest_leave", "guest_accept", "guest_config", "guest_usage",
 		"support_start", "support_status", "support_stop",
 		"chat_conversations", "chat_history", "chat_reply":
-		return mcpToolError("visitor and guest access has been removed from Yaver")
+		return mcpToolError("secondary-user access is not available in Yaver v1")
 	case "project_test_grow":
 		return mcpToolError("automatic test growth has been removed from Yaver")
+	}
+
+	// Embedded starts and coverage probes can intentionally construct an HTTP
+	// server without a task manager. Never turn that unavailable capability into
+	// a process crash: these tools all dereference taskMgr after validating their
+	// own arguments, and several (list/status/runner inventory) need no arguments
+	// at all. A named MCP error gives every surface a route to retry against the
+	// running agent instead of dropping the connection.
+	if s.taskMgr == nil {
+		switch call.Name {
+		case "create_task", "yaver_ask", "list_tasks", "get_task", "stop_task",
+			"continue_task", "fork_task", "get_info", "get_system_info",
+			"list_runners", "switch_runner", "agent_graph_start", "code_mesh_start",
+			"publish_config_get", "list_directory", "tmux_list_sessions",
+			"git_sync_remote", "yaver_doctor", "development_doctor", "yaver_status",
+			"yaver_ping", "mobile_hermes_doctor", "pipeline_list", "session_list":
+			return mcpToolError("task manager unavailable — start the Yaver agent and retry")
+		}
 	}
 
 	switch call.Name {
@@ -15989,6 +16013,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			SessionID string `json:"session_id"`
 			URL       string `json:"url"`
 			Profile   string `json:"profile"`
+			Headful   bool   `json:"headful"`
 			Width     int    `json:"width"`
 			Height    int    `json:"height"`
 			Prefill   []struct {
@@ -16016,7 +16041,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			profileDir = profileDirFor(profileDir) // bare name -> shared dir (matches browser_open's profile resolution, so headless reuses this session's clearance)
 		}
 		_ = os.MkdirAll(profileDir, 0o755)
-		if err := s.browserMgr.OpenInteractiveSession(args.SessionID, profileDir, args.Width, args.Height); err != nil {
+		if err := s.browserMgr.OpenInteractiveSessionMode(args.SessionID, profileDir, args.Width, args.Height, args.Headful); err != nil {
 			return mcpToolError(fmt.Sprintf("browser_interactive_start: %v", err))
 		}
 		if _, err := s.browserMgr.Navigate(args.SessionID, args.URL); err != nil {
@@ -16034,6 +16059,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			"input_path": "/browser/interactive/input/" + args.SessionID,
 			"width":      args.Width,
 			"height":     args.Height,
+			"headful":    args.Headful,
 			"message":    "Interactive co-browse started. A human can now drive the browser via the frame/input paths; automation resumes on the same session afterward.",
 		})
 

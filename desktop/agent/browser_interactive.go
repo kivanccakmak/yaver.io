@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/input"
@@ -95,11 +96,96 @@ func playwrightChromePath() string {
 	return ""
 }
 
+// nativeKeychainBrowserProfile reports whether profileDir is an existing
+// system Chrome/Chromium profile whose cookies are encrypted with the macOS
+// login keychain. chromedp's defaults force --password-store=basic and
+// --use-mock-keychain; that makes a profile visibly signed in when opened by
+// the user but signed out when Yaver opens the exact same bytes. This happened
+// during an App Store Connect deploy on 2026-08-18.
+//
+// Only explicit profiles under the native browser roots get this exception.
+// Yaver's own ~/.yaver/browser-profiles remain isolated on the mock keychain.
+func nativeKeychainBrowserProfile(profileDir, home, goos string) bool {
+	if goos != "darwin" || profileDir == "" || home == "" {
+		return false
+	}
+	profileDir = filepath.Clean(profileDir)
+	roots := []string{
+		filepath.Join(home, "Library", "Application Support", "Chromium"),
+		filepath.Join(home, "Library", "Application Support", "Google", "Chrome"),
+	}
+	for _, root := range roots {
+		rel, err := filepath.Rel(root, profileDir)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// nativeBrowserExecutableForProfile keeps the profile bytes paired with the
+// browser that encrypted them. Google Chrome and Chromium use different macOS
+// Safe Storage keys; launching a Chrome profile in Chromium produces a cleanly
+// running browser that is silently signed out everywhere.
+func nativeBrowserExecutableForProfile(profileDir, home, goos string) string {
+	if goos != "darwin" || profileDir == "" || home == "" {
+		return ""
+	}
+	profileDir = filepath.Clean(profileDir)
+	browsers := []struct {
+		root string
+		exec string
+	}{
+		{
+			root: filepath.Join(home, "Library", "Application Support", "Google", "Chrome"),
+			exec: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		},
+		{
+			root: filepath.Join(home, "Library", "Application Support", "Chromium"),
+			exec: "/Applications/Chromium.app/Contents/MacOS/Chromium",
+		},
+	}
+	for _, browser := range browsers {
+		rel, err := filepath.Rel(browser.root, profileDir)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return browser.exec
+		}
+	}
+	return ""
+}
+
+// defaultNativeBrowserDataDir reports whether profileDir is the browser's
+// actual default user-data-dir. Chromium 136+ deliberately ignores remote
+// debugging switches for that directory, so attempting to automate it waits
+// for the DevTools endpoint until Yaver's boot timeout expires. A dedicated
+// persistent Yaver profile remains visible, reusable, and keychain-backed
+// without weakening Chromium's protection of the user's daily profile.
+func defaultNativeBrowserDataDir(profileDir, home, goos string) bool {
+	if goos != "darwin" || profileDir == "" || home == "" {
+		return false
+	}
+	profileDir = filepath.Clean(profileDir)
+	return profileDir == filepath.Join(home, "Library", "Application Support", "Chromium") ||
+		profileDir == filepath.Join(home, "Library", "Application Support", "Google", "Chrome")
+}
+
 // OpenInteractiveSession starts a headful Chrome wired for human-in-the-loop
 // co-browse. Like OpenSession but with a persistent profile dir, a real window
 // size, automation-detection mitigations, and an explicit ExecPath when a
 // browser can be discovered.
 func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, height int) error {
+	headful := os.Getenv("YAVER_BROWSER_HEADED") == "1"
+	return bm.openInteractiveSession(id, profileDir, width, height, headful)
+}
+
+// OpenInteractiveSessionMode is the explicit caller-facing variant. Browser
+// tools must pass the requested visibility here; the environment-backed
+// wrapper above remains for older internal callers.
+func (bm *BrowserManager) OpenInteractiveSessionMode(id, profileDir string, width, height int, headful bool) error {
+	return bm.openInteractiveSession(id, profileDir, width, height, headful)
+}
+
+func (bm *BrowserManager) openInteractiveSession(id, profileDir string, width, height int, headful bool) error {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 
@@ -112,6 +198,9 @@ func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, h
 	}
 	if height <= 0 {
 		height = 800
+	}
+	if home, err := os.UserHomeDir(); err == nil && defaultNativeBrowserDataDir(profileDir, home, runtime.GOOS) {
+		return fmt.Errorf("Chromium protects its default profile from remote debugging; use a dedicated persistent profile and complete login once in the visible co-browse window")
 	}
 
 	// ── Headless when there is no GUI session to draw into ──────────────────
@@ -137,7 +226,7 @@ func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, h
 	// sitting at can still ask for it; the default now matches where the agent
 	// actually lives.
 	headlessMode := "new"
-	if os.Getenv("YAVER_BROWSER_HEADED") == "1" {
+	if headful {
 		headlessMode = "false"
 	}
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -151,10 +240,29 @@ func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, h
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.WindowSize(width, height),
 	)
+	if home, err := os.UserHomeDir(); err == nil && nativeKeychainBrowserProfile(profileDir, home, runtime.GOOS) {
+		// Boolean false overwrites chromedp's default flag map entry and omits
+		// the switch entirely, allowing Chromium to use the real macOS keychain.
+		allocOpts = append(allocOpts,
+			chromedp.Flag("password-store", false),
+			chromedp.Flag("use-mock-keychain", false),
+		)
+	}
 	if profileDir != "" {
 		allocOpts = append(allocOpts, chromedp.UserDataDir(profileDir))
 	}
-	if chromePath := findChromePath(); chromePath != "" {
+	chromePath := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		chromePath = nativeBrowserExecutableForProfile(profileDir, home, runtime.GOOS)
+	}
+	if chromePath != "" {
+		if info, err := os.Stat(chromePath); err != nil || info.IsDir() {
+			return fmt.Errorf("browser profile requires %s, but that executable is unavailable; install or reinstall the matching browser", chromePath)
+		}
+	} else {
+		chromePath = findChromePath()
+	}
+	if chromePath != "" {
 		allocOpts = append(allocOpts, chromedp.ExecPath(chromePath))
 	}
 
@@ -180,7 +288,7 @@ func (bm *BrowserManager) OpenInteractiveSession(id, profileDir string, width, h
 	now := time.Now()
 	bm.sessions[id] = &BrowserSession{
 		ID:            id,
-		Headful:       true,
+		Headful:       headful,
 		Interactive:   true,
 		ProfileDir:    profileDir,
 		ViewW:         width,

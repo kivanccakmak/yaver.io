@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TVOS_DIR="$ROOT/tvos"
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
+"$ROOT/scripts/check-no-native-payment-sdks.sh" source
 UPLOAD=0
 DEVICE_MODE=0
 SIM_MODE=0
@@ -43,13 +46,16 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --upload) UPLOAD=1 ;;
+    --upload) UPLOAD=1; shift ;;
     --device) DEVICE_MODE=1; DEVICE_UDID=""; shift; [ $# -gt 0 ] && case "$1" in --*) ;; *) DEVICE_UDID="$1"; shift ;; esac ;;
-    --simulator) SIM_MODE=1 ;;
+    --simulator) SIM_MODE=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+apple_require_working_xcode
+apple_ensure_simulator_runtime tvOS appletvsimulator
 
 if ! command -v xcodebuild >/dev/null 2>&1; then
   echo "ERROR: xcodebuild is missing. Install full Xcode, then retry." >&2
@@ -181,8 +187,6 @@ if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
   set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
 fi
 
-# shellcheck source=scripts/apple-xcode-auth.sh
-. "$ROOT/scripts/apple-xcode-auth.sh"
 apple_resolve_team_id "$TVOS_DIR/project.yml"
 apple_configure_xcode_auth
 
@@ -226,6 +230,8 @@ else
   SIGNING_SETTINGS+=(CODE_SIGN_STYLE=Automatic)
 fi
 
+TVOS_ARCHIVE_LOG="${TVOS_ARCHIVE_LOG:-/tmp/yaver_tvos_archive.log}"
+set +e
 xcodebuild -project "$TVOS_DIR/YaverTV.xcodeproj" \
   -scheme "$SCHEME" \
   -configuration "$CONFIGURATION" \
@@ -237,9 +243,29 @@ xcodebuild -project "$TVOS_DIR/YaverTV.xcodeproj" \
   ${ALLOW_PROVISIONING_UPDATES[@]+"${ALLOW_PROVISIONING_UPDATES[@]}"} \
   ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
   ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
-  archive
+  archive 2>&1 | tee "$TVOS_ARCHIVE_LOG"
+TVOS_ARCHIVE_EXIT=${PIPESTATUS[0]}
+set -e
+if [ "$TVOS_ARCHIVE_EXIT" -ne 0 ]; then
+  if grep -qiE 'team has no devices|No profiles.*App Development' "$TVOS_ARCHIVE_LOG"; then
+    echo "ERROR: Xcode requested a tvOS development profile, but this is a TestFlight upload." >&2
+    echo "       A physical Apple TV is not required. Create/download a tvOS App Store" >&2
+    echo "       provisioning profile for io.yaver.mobile, then retry with:" >&2
+    echo "         TVOS_PROVISIONING_PROFILE_SPECIFIER='<profile name>' ./deploy/deploy.sh tvos" >&2
+  fi
+  exit "$TVOS_ARCHIVE_EXIT"
+fi
 
 EXPORT_OPTIONS="$(mktemp /tmp/YaverTVExportOptions.plist.XXXXXX)"
+EXPORT_DESTINATION="upload"
+# Xcode's `destination=upload` can still consult the Apple ID account token
+# even when a complete App Store Connect API key was supplied. On 2026-08-18
+# it archived + signed successfully, then failed with "Account credentials have
+# expired". Exporting the immutable IPA locally and handing it to altool keeps
+# the API-key lane API-key-only, like the working macOS TestFlight path.
+if [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ]; then
+  EXPORT_DESTINATION="export"
+fi
 if [ -n "$TVOS_PROVISIONING_PROFILE_SPECIFIER" ]; then
   PROVISIONING_PROFILES_XML="
     <key>provisioningProfiles</key>
@@ -257,7 +283,7 @@ printf '%s\n' \
 '    <key>method</key><string>app-store-connect</string>' \
 "    <key>teamID</key><string>${APPLE_TEAM_ID}</string>" \
 "    <key>signingStyle</key><string>${EXPORT_SIGNING_STYLE}</string>" \
-'    <key>destination</key><string>upload</string>' \
+"    <key>destination</key><string>${EXPORT_DESTINATION}</string>" \
 '    <key>uploadSymbols</key><false/>' \
 "${PROVISIONING_PROFILES_XML}" \
 '</dict>' \
@@ -271,4 +297,33 @@ xcodebuild -exportArchive \
   ${ALLOW_PROVISIONING_UPDATES[@]+"${ALLOW_PROVISIONING_UPDATES[@]}"} \
   ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"}
 
-echo "tvOS upload submitted from $ARCHIVE_PATH"
+if [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ]; then
+  IPA_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+  if [ -z "$IPA_PATH" ]; then
+    echo "ERROR: Xcode export succeeded but produced no tvOS IPA under $EXPORT_PATH." >&2
+    exit 1
+  fi
+
+  # altool discovers API keys by filename under ./private_keys. Keep that
+  # compatibility directory owner-only and ephemeral; never copy a private key
+  # into the repository or a persistent shared location.
+  UPLOAD_AUTH_DIR="$(mktemp -d /tmp/yaver-tvos-asc.XXXXXX)"
+  chmod 700 "$UPLOAD_AUTH_DIR"
+  mkdir -m 700 "$UPLOAD_AUTH_DIR/private_keys"
+  cp "$APP_STORE_KEY_PATH" "$UPLOAD_AUTH_DIR/private_keys/AuthKey_${APP_STORE_KEY_ID}.p8"
+  chmod 600 "$UPLOAD_AUTH_DIR/private_keys/AuthKey_${APP_STORE_KEY_ID}.p8"
+  cleanup_tvos_upload_auth() {
+    find "$UPLOAD_AUTH_DIR" -depth -delete 2>/dev/null || true
+  }
+  trap cleanup_tvos_upload_auth EXIT
+
+  echo "Validating tvOS IPA with App Store Connect…"
+  (cd "$UPLOAD_AUTH_DIR" && xcrun altool --validate-app --file "$IPA_PATH" \
+    --type appletvos --apiKey "$APP_STORE_KEY_ID" --apiIssuer "$APP_STORE_KEY_ISSUER")
+  echo "Uploading tvOS IPA to TestFlight…"
+  (cd "$UPLOAD_AUTH_DIR" && xcrun altool --upload-app --file "$IPA_PATH" \
+    --type appletvos --apiKey "$APP_STORE_KEY_ID" --apiIssuer "$APP_STORE_KEY_ISSUER")
+  echo "tvOS build $BUILD_NUMBER accepted by App Store Connect."
+else
+  echo "tvOS upload submitted from $ARCHIVE_PATH"
+fi

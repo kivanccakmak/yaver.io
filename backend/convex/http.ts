@@ -3521,13 +3521,25 @@ http.route({
     const token = authHeader.slice(7);
     const tokenHash = await sha256Hex(token);
 
-    const body = await request.json();
-    await ctx.runMutation(api.devices.removeDevice, {
-      tokenHash,
-      deviceId: body.deviceId,
-    });
-
-    return jsonResponse({ ok: true });
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.deviceId !== "string" || !body.deviceId.trim()) {
+      return errorResponse("deviceId required", 400);
+    }
+    try {
+      await ctx.runMutation(api.devices.removeDevice, {
+        tokenHash,
+        deviceId: body.deviceId.trim(),
+      });
+      return jsonResponse({ ok: true, removed: true });
+    } catch (e: any) {
+      const message = e?.message || "device removal failed";
+      if (errorMessageIncludes(e, "YAVER_HOSTED_DECOMMISSION_REQUIRED")) {
+        return errorResponse(message, 409);
+      }
+      if (errorMessageIncludes(e, "Unauthorized")) return errorResponse(message, 401);
+      if (errorMessageIncludes(e, "Device not found")) return errorResponse(message, 404);
+      return errorResponse(message, 400);
+    }
   }),
 });
 

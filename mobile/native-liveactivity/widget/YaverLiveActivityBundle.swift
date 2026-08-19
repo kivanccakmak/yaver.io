@@ -65,9 +65,8 @@ struct YaverActivityWidget: Widget {
                     .foregroundStyle(YaverActivityStyle.tint(context.state.status))
             }
         }
-        // The one line that reaches the car. CarPlay Developer Guide (June
-        // 2026): Live Activities appear on the CarPlay Dashboard, and "your app
-        // does not need to be a CarPlay app" to support them. No entitlement.
+        // The one line that reaches the car. The extension's iOS 18 floor
+        // matches this API; the containing phone app keeps its older floor.
         .supplementalActivityFamilies([.small])
     }
 #else

@@ -83,6 +83,9 @@ test.describe("medici / ai.tusrehber.com — text to text closed loop (mobile)",
       await newTaskBtn.click();
       await page.waitForTimeout(3000);
 
+      // Project/MCP scope is intentionally progressive disclosure: the
+      // keyboard-open composer keeps only prompt + primary actions visible.
+      await page.locator('[data-testid="task-options-more"]').first().click();
       const chip = page.locator('[data-testid="composer-project-chip"]').first();
       await expect
         .poll(async () => (await chip.count()) > 0 && (await chip.isVisible().catch(() => false)), {

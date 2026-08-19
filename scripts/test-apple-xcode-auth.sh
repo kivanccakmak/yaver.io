@@ -52,4 +52,103 @@ if apple_validate_build_number TEST_BUILD nope >/dev/null 2>&1; then
   fail "non-numeric builds must fail"
 fi
 
+apple_require_working_xcode \
+  /Applications/Xcode.app/Contents/Developer \
+  0 \
+  /Applications/Xcode.app/Contents/Developer/usr/bin/git
+if apple_require_working_xcode \
+  /Applications/Xcode.app/Contents/Developer \
+  134 \
+  'dlopen(@rpath/libxcodebuildLoader.dylib): Symbol not found: _XPCTypeBool' \
+  >/dev/null 2>&1; then
+  fail "an Xcode runtime loader crash must fail before the SDK/version check"
+fi
+if apple_require_working_xcode \
+  /Library/Developer/CommandLineTools \
+  0 \
+  /Library/Developer/CommandLineTools/usr/bin/git \
+  >/dev/null 2>&1; then
+  fail "standalone Command Line Tools must not pass as full Xcode"
+fi
+
+for apple_deploy in deploy-tvos.sh deploy-visionos.sh deploy-watchos.sh \
+  deploy-macos-testflight.sh deploy-carplay.sh; do
+  if ! grep -q '^apple_require_working_xcode$' "$ROOT/scripts/$apple_deploy"; then
+    fail "$apple_deploy must run the operational Xcode probe before its build"
+  fi
+done
+
+# Every successful option branch must consume its argument. The tvOS upload
+# lane once spun forever at 100% CPU because --upload set its flag but left $1
+# unchanged, so the preflight/build never began and emitted no useful status.
+tvos_deploy="$ROOT/scripts/deploy-tvos.sh"
+grep -q -- '--upload) UPLOAD=1; shift ;;' "$tvos_deploy" || \
+  fail "deploy-tvos.sh --upload must advance the argument parser"
+grep -q -- '--simulator) SIM_MODE=1; shift ;;' "$tvos_deploy" || \
+  fail "deploy-tvos.sh --simulator must advance the argument parser"
+grep -q 'A physical Apple TV is not required' "$tvos_deploy" || \
+  fail "tvOS signing failure must route TestFlight uploads to an App Store profile"
+grep -q 'APPLE_XCODE_AUTH_MODE.*api-key' "$tvos_deploy" || \
+  fail "tvOS API-key deploys must avoid the expirable Xcode account upload session"
+grep -q -- '--type appletvos --apiKey' "$tvos_deploy" || \
+  fail "tvOS API-key deploys must validate/upload the exported IPA with altool"
+
+# A clean mobile checkout has no node_modules. Dependency self-healing must run
+# before either Node-based target injector, and must include their xcode module.
+testflight_script="$ROOT/scripts/deploy-testflight.sh"
+ensure_line="$(grep -n '^ensure_mobile_dependencies$' "$testflight_script" | head -1 | cut -d: -f1)"
+watch_inject_line="$(grep -n '^node .*add-watch-ios-target.js' "$testflight_script" | head -1 | cut -d: -f1)"
+[ -n "$ensure_line" ] && [ -n "$watch_inject_line" ] && [ "$ensure_line" -lt "$watch_inject_line" ] || \
+  fail "mobile dependencies must be restored before Watch target injection"
+grep -q 'node_modules/xcode/package.json' "$testflight_script" || \
+  fail "mobile dependency preflight must verify the xcode module used by target injection"
+
+apple_ensure_simulator_runtime \
+  watchOS watchsimulator \
+  'watchOS 26.5 (26.5 - 23T570) - com.apple.CoreSimulator.SimRuntime.watchOS-26-5' \
+  26.5 23T570
+# Compatible SDK/runtime builds need not be identical. Xcode 26.6 pairs the
+# iOS 23F81a SDK with the iOS 23F77 runtime.
+apple_ensure_simulator_runtime \
+  iOS iphonesimulator \
+  'iOS 26.5 (26.5 - 23F77) - com.apple.CoreSimulator.SimRuntime.iOS-26-5' \
+  26.5 23F81a
+# Xcode calls the registered runtime visionOS even though its identifier is
+# xrOS. This registered profile is the capability actool actually consumes.
+apple_ensure_simulator_runtime \
+  visionOS xrsimulator \
+  'visionOS 26.5 (26.5 - 23O470) - com.apple.CoreSimulator.SimRuntime.xrOS-26-5' \
+  26.5 23O469
+# A disk-image label is only inventory. This exact false green occurred while
+# actool reported "No available simulator runtimes for platform xrsimulator".
+if YAVER_SKIP_XCODE_PLATFORM_DOWNLOAD=1 apple_ensure_simulator_runtime \
+  visionOS xrsimulator \
+  'xrOS 26.5 (23O470) - 855BBF93-1BD0-4091-A27E-E4CAE0004E4E (Ready)' \
+  26.5 23O469 >/dev/null 2>&1; then
+  fail "a Ready disk image without a registered visionOS runtime must not pass"
+fi
+if YAVER_SKIP_XCODE_PLATFORM_DOWNLOAD=1 apple_ensure_simulator_runtime \
+  visionOS xrsimulator \
+  'xrOS 26.5 (23O470) - B6D5690F-054C-4E67-9843-1B7BD0B470E7 (Unusable - Other Failure)' \
+  26.5 23O469 >/dev/null 2>&1; then
+  fail "an unusable visionOS disk image must not pass"
+fi
+if YAVER_SKIP_XCODE_PLATFORM_DOWNLOAD=1 apple_ensure_simulator_runtime \
+  iOS iphonesimulator \
+  'iOS 26.5 (26.5 - 23F77) - com.apple.CoreSimulator.SimRuntime.iOS-26-5 (unavailable, runtime profile not found)' \
+  26.5 23F81a >/dev/null 2>&1; then
+  fail "an unavailable matching-version runtime must not pass"
+fi
+if YAVER_SKIP_XCODE_PLATFORM_DOWNLOAD=1 apple_ensure_simulator_runtime \
+  watchOS watchsimulator \
+  'watchOS 11.2 (11.2 - 22S99) - com.apple.CoreSimulator.SimRuntime.watchOS-11-2' \
+  26.5 23T570 >/dev/null 2>&1; then
+  fail "a stale simulator runtime must not pass for a newer Xcode SDK"
+fi
+
+apple_require_store_sdk iphoneos 26 26.0
+if apple_require_store_sdk iphoneos 26 18.2 >/dev/null 2>&1; then
+  fail "an SDK below Apple's upload floor must fail before archive"
+fi
+
 echo "apple-xcode-auth tests passed"

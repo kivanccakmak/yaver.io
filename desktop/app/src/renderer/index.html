@@ -469,7 +469,10 @@ async function refreshDevices() {
   // Dedup by hostname, keep latest
   const seen = new Map();
   for (const d of devices) { const k = (d.name||d.deviceId||'').toLowerCase(); const e = seen.get(k); if (!e || (d.lastHeartbeat||0) > (e.lastHeartbeat||0)) seen.set(k, d); }
-  devices = Array.from(seen.values()).filter(d => d.isOnline);
+  // Keep offline rows visible: account removal must work while a machine is in
+  // repair or has already been factory-reset. The backend omits tombstones, so
+  // anything returned here is still an active account device.
+  devices = Array.from(seen.values());
 
   // If local agent found, remove remote entries that are actually this same machine
   const localHostname = (local.found && local.hostname) ? local.hostname.toLowerCase() : null;
@@ -520,7 +523,8 @@ async function refreshDevices() {
       <div class="dot" style="background:${dot}"></div>
       <div style="flex:1"><div style="font-size:14px;font-weight:500">${esc(d.name||d.deviceId)}</div>
       <div style="font-size:11px;color:var(--text-muted)">${d.platform||'unknown'}</div></div>
-      ${connectBadge}</div>`;
+      ${connectBadge}
+      <button class="btn btn-ghost btn-sm no-drag" style="color:var(--red)" onclick="event.stopPropagation(); removeAccountDevice(${i})">${d.hosting === 'yaver-hosted' ? 'Decommission' : 'Remove'}</button></div>`;
   }
 
   if (!html) {
@@ -548,6 +552,40 @@ async function connectRemote(i) {
   const r = await window.yaver.connectDevice(d, relays);
   if (!r.ok) { grid.innerHTML = `<div style="text-align:center;color:var(--red);font-size:12px;padding:20px">${esc(r.error)}</div>`; setTimeout(refreshDevices, 2000); return; }
   enterMain(d, r.mode);
+}
+
+async function removeAccountDevice(i) {
+  const d = window._devices?.[i]; if (!d) return;
+  const hosted = d.hosting === 'yaver-hosted';
+  const name = d.name || d.deviceId;
+  const prompt = hosted
+    ? `Decommission ${name}? This cancels linked billing and permanently deletes its Yaver cloud resources. No snapshot is kept.`
+    : `Remove ${name} from Yaver? It disappears from every surface immediately. A repaired or reset machine can pair again.`;
+  if (!window.confirm(prompt)) return;
+  try {
+    if (hosted && !d.machineId) throw new Error('This cloud box is missing its provider identity. Open Cloud Workspace to decommission it.');
+    if (!hosted && d.isOnline) {
+      try {
+        let relays = [];
+        const settings = await window.yaver.convexRequest('GET', '/settings');
+        if (settings?.relayServers) relays = settings.relayServers;
+        const connected = await window.yaver.connectDevice(d, relays);
+        if (connected?.ok) {
+          await window.yaver.agentRequest('POST', '/machine/remove', { confirm: true, phrase: 'delete my machine' });
+          await new Promise(resolve => setTimeout(resolve, 1200));
+        }
+      } catch (_) {
+        // Repair/offline devices must still be removed from the account below.
+      }
+    }
+    const result = hosted
+      ? await window.yaver.convexRequest('POST', '/billing/yaver-cloud/dev-deprovision', { machineId: d.machineId })
+      : await window.yaver.convexRequest('POST', '/devices/remove', { deviceId: d.deviceId });
+    if (result?.error || result?.ok === false) throw new Error(result.error || 'Remove failed');
+    await refreshDevices();
+  } catch (error) {
+    window.alert(error?.message || 'Could not remove this machine.');
+  }
 }
 
 function enterMain(device, mode) {

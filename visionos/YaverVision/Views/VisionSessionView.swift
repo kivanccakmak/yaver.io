@@ -7,6 +7,7 @@ import SwiftUI
 struct VisionSessionView: View {
     @EnvironmentObject var store: YaverStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var prompt = ""
     @State private var pane = ""
@@ -55,6 +56,10 @@ struct VisionSessionView: View {
         .glassBackgroundEffect()
         .task(id: store.selectedBox?.id) { await loadSessions() }
         .task(id: selectedSession) { await streamSelectedSession() }
+        .onDisappear { dictation.stop() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { dictation.stop() }
+        }
     }
 
     private var header: some View {
@@ -119,6 +124,10 @@ struct VisionSessionView: View {
                     .tint(dictation.listening ? .red : nil)
                     .accessibilityLabel(dictation.listening ? "Stop dictation" : "Dictate a prompt")
                     .disabled(loading || selectedSession.isEmpty)
+                } else if !selectedSession.isEmpty {
+                    Label("On-device dictation is unavailable for this language on this headset. Download the language in Settings › General › Keyboard › Dictation, or use the virtual keyboard.", systemImage: "mic.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Button {
@@ -241,6 +250,7 @@ struct VisionSessionView: View {
         } catch {
             sessions = []
             selectedSession = ""
+            if store.handleAuthenticationFailure(error) { return }
             self.error = error.localizedDescription
         }
     }
@@ -260,6 +270,7 @@ struct VisionSessionView: View {
             guard let sessionClient else { throw AgentError(message: "No machine selected") }
             apply(try await sessionClient.sendText(text, session: selectedSession, surfaceId: "vision"))
         } catch {
+            if store.handleAuthenticationFailure(error) { return }
             self.error = error.localizedDescription
         }
     }
@@ -313,6 +324,7 @@ struct VisionSessionView: View {
             guard let sessionClient else { throw AgentError(message: "No machine selected") }
             apply(try await sessionClient.sendChoice(choice, session: selectedSession))
         } catch {
+            if store.handleAuthenticationFailure(error) { return }
             self.error = error.localizedDescription
         }
     }

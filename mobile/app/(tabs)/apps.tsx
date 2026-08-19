@@ -1918,7 +1918,7 @@ export default function AppsScreen() {
     if (!isBundleLoaderAvailable()) {
       Alert.alert(
         "Bundle Loader Unavailable",
-        "This build of Yaver can't mount guest bundles. Update Yaver to the latest version — or run the app directly on the dev machine.",
+        "This build of Yaver can't mount project bundles. Update Yaver to the latest version — or run the app directly on the dev machine.",
       );
       return;
     }

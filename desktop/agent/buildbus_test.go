@@ -362,7 +362,5 @@ func TestBuildBusConcurrentRaceOneWinner(t *testing.T) {
 		t.Fatalf("held reports = %d, want %d", len(held), n-1)
 	}
 	// Now the race is over: release the winner's lease.
-	for l := range win {
-		l.Release("success")
-	}
+	(<-win).Release("success")
 }

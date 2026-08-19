@@ -68,6 +68,7 @@ struct RemoteRuntimeSession: Decodable, Equatable {
     let frameTransport: String?
     let status: String
     let lastCommand: String?
+    let textInputFocused: Bool?
     let note: String?
     let deviceDims: RemoteRuntimeDeviceDims?
 }

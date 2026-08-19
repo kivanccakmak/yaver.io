@@ -56,6 +56,8 @@ import { setActivePreviewLane, subscribeBrowserRender, subscribeBrowserShake } f
 import { subscribeSse } from "../lib/sseClient";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
 import { monoFamily } from "../theme/tokens";
+import { DomInspectChip } from "./DomInspectChip";
+import { ScreenContextChip } from "./ScreenContextChip";
 
 /**
  * Dev Preview.
@@ -177,6 +179,7 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
   const layout = useResponsiveLayout();
   const [status, setStatus] = useState<DevServerStatus | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [showPreviewTools, setShowPreviewTools] = useState(false);
   const [loading, setLoading] = useState(false);
   const [webViewKey, setWebViewKey] = useState(0);
   const [webStarting, setWebStarting] = useState(false);
@@ -990,6 +993,16 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
               </View>
             </View>
             <View style={styles.headerRight}>
+              <Pressable
+                onPress={() => setShowPreviewTools((visible) => !visible)}
+                style={styles.headerBtn}
+                accessibilityRole="button"
+                accessibilityLabel={showPreviewTools ? "Hide preview tools" : "More preview tools"}
+                accessibilityState={{ expanded: showPreviewTools }}
+                testID="preview-tools-more"
+              >
+                <Ionicons name="ellipsis-horizontal" size={20} color="#cbd5e1" />
+              </Pressable>
               <Pressable onPress={() => void handleReload("fast")} style={styles.headerBtn} accessibilityLabel="Fast Reload">
                 <Text style={styles.headerBtnReload}>Fast</Text>
               </Pressable>
@@ -1020,6 +1033,12 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
               </Pressable>
             </View>
           </View>
+          {showPreviewTools ? (
+            <View style={{ paddingHorizontal: 10, paddingTop: 8, gap: 8, backgroundColor: "#111" }}>
+              <ScreenContextChip workDir={status.workDir} />
+              <DomInspectChip workDir={status.workDir} />
+            </View>
+          ) : null}
 
           {mustUseNativePreview ? (
             /* Native dev-client mode or building: show controls / build logs */

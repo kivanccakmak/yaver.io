@@ -149,6 +149,8 @@ struct TaskSummary: Decodable, Identifiable {
     let status: String?          // queued | running | review | completed | failed | stopped
     let runner: String?          // `runnerId` on current agents; `runner` on older ones
     let model: String?
+    let workDir: String?
+    let projectName: String?
     let sessionId: String?
     let output: String?
     let resultText: String?
@@ -157,7 +159,7 @@ struct TaskSummary: Decodable, Identifiable {
     let tmuxSession: String?     // present → the task has a live session to drive
 
     enum CodingKeys: String, CodingKey {
-        case id, taskId, title, status, runner, runnerId, model, sessionId
+        case id, taskId, title, status, runner, runnerId, model, workDir, projectName, sessionId
         case output, resultText, turns, pendingFollowUps, tmuxSession
     }
 
@@ -167,6 +169,8 @@ struct TaskSummary: Decodable, Identifiable {
         status: String? = nil,
         runner: String? = nil,
         model: String? = nil,
+        workDir: String? = nil,
+        projectName: String? = nil,
         sessionId: String? = nil,
         output: String? = nil,
         resultText: String? = nil,
@@ -179,6 +183,8 @@ struct TaskSummary: Decodable, Identifiable {
         self.status = status
         self.runner = runner
         self.model = model
+        self.workDir = workDir
+        self.projectName = projectName
         self.sessionId = sessionId
         self.output = output
         self.resultText = resultText
@@ -196,6 +202,8 @@ struct TaskSummary: Decodable, Identifiable {
         runner = try c.decodeIfPresent(String.self, forKey: .runnerId)
             ?? c.decodeIfPresent(String.self, forKey: .runner)
         model = try c.decodeIfPresent(String.self, forKey: .model)
+        workDir = try c.decodeIfPresent(String.self, forKey: .workDir)
+        projectName = try c.decodeIfPresent(String.self, forKey: .projectName)
         sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
         output = try c.decodeIfPresent(String.self, forKey: .output)
         resultText = try c.decodeIfPresent(String.self, forKey: .resultText)
@@ -351,6 +359,62 @@ struct McpServerSummary: Decodable, Identifiable {
     let url: String?
     let toolCount: Int?
     var id: String { name }
+}
+
+/// Live coding choices from GET /agent/runners. The TV must use this measured
+/// list rather than copying a runner/model catalogue: provider configuration
+/// differs per box, and a copied model id is exactly how a task gets sent to a
+/// CLI that cannot run it.
+struct AgentRunnerModel: Decodable, Identifiable, Equatable {
+    let id: String
+    let name: String
+    let provider: String?
+    let isDefault: Bool?
+}
+
+struct AgentRunnerSummary: Decodable, Identifiable, Equatable {
+    let id: String
+    let name: String
+    let installed: Bool
+    let ready: Bool
+    let isDefault: Bool
+    let warning: String?
+    let error: String?
+    let models: [AgentRunnerModel]
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, installed, ready, isDefault, warning, error, models
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? id
+        installed = try c.decodeIfPresent(Bool.self, forKey: .installed) ?? false
+        ready = try c.decodeIfPresent(Bool.self, forKey: .ready) ?? false
+        isDefault = try c.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
+        warning = try c.decodeIfPresent(String.self, forKey: .warning)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+        // Go encodes a nil slice as JSON null. One unavailable runner must not
+        // make the TV discard every healthy runner and all of their models.
+        models = try c.decodeIfPresent([AgentRunnerModel].self, forKey: .models) ?? []
+    }
+
+    var canonicalId: String { RegisteredRunner.canonical(id) }
+
+    var displayName: String {
+        switch canonicalId {
+        case "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        default: return name.isEmpty ? id : name
+        }
+    }
+}
+
+struct AgentRunnerList: Decodable {
+    let runners: [AgentRunnerSummary]
+    let `default`: String?
 }
 
 /// A feedback report the box has collected (GET /feedback). The TV shows them

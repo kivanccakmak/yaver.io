@@ -30,17 +30,18 @@ import (
 
 // taskForkRequest is the wire format for POST /tasks/{id}/fork.
 type taskForkRequest struct {
-	Runner             string   `json:"runner"`                 // claude | codex | opencode (required)
-	Model              string   `json:"model,omitempty"`        // empty = runner default
-	Mode               string   `json:"mode,omitempty"`         // opencode mode: build | plan | <custom> | "" = defaultAgent
-	Input              string   `json:"input"`                  // user's new message (required)
-	ContextWords       int      `json:"contextWords,omitempty"` // word budget for recent-context handoff (default 1200)
-	AllowLocalFallback bool     `json:"allowLocalFallback,omitempty"`
-	ProjectDir         string   `json:"projectDir,omitempty"`
-	MCPServers         []string `json:"mcpServers,omitempty"`
-	// IncludeYaverMcp defaults true (nil = include). A surface sets false
-	// when the user deselected the `yaver` chip, so the forked task runs
-	// with ONLY the external MCPs in mcpServers.
+	Runner             string `json:"runner"`                 // claude | codex | opencode (required)
+	Model              string `json:"model,omitempty"`        // empty = runner default
+	Mode               string `json:"mode,omitempty"`         // opencode mode: build | plan | <custom> | "" = defaultAgent
+	Input              string `json:"input"`                  // user's new message (required)
+	ContextWords       int    `json:"contextWords,omitempty"` // word budget for recent-context handoff (default 1200)
+	AllowLocalFallback bool   `json:"allowLocalFallback,omitempty"`
+	ProjectDir         string `json:"projectDir,omitempty"`
+	// Pointer preserves the wire distinction between omitted (inherit parent)
+	// and [] (the user explicitly selected No MCP). A plain slice flattened
+	// both to len==0 and silently re-granted the parent's external tools.
+	MCPServers *[]string `json:"mcpServers,omitempty"`
+	// Omitted inherits the parent scope; an explicit boolean overrides it.
 	IncludeYaverMcp *bool `json:"includeYaverMcp,omitempty"`
 }
 
@@ -67,6 +68,20 @@ const (
 	minForkContextWords = 100
 	maxForkContextWords = 5000
 )
+
+// New conversations start without Yaver MCP unless the caller carries an
+// explicit user choice. This is intentionally different from a fork: forks
+// continue the parent's scope when the field is absent.
+func includeYaverMCPForNewTask(requested *bool) bool {
+	return requested != nil && *requested
+}
+
+func includeYaverMCPForFork(requested *bool, parent bool) bool {
+	if requested == nil {
+		return parent
+	}
+	return *requested
+}
 
 // handleTaskFork serves POST /tasks/{id}/fork. Wired in by handleTaskByID.
 func (s *HTTPServer) handleTaskFork(w http.ResponseWriter, r *http.Request, parentID string) {
@@ -127,17 +142,17 @@ func (s *HTTPServer) handleTaskFork(w http.ResponseWriter, r *http.Request, pare
 	// operates on the same code. Without this the new task's workdir
 	// would be the agent's global cwd which is rarely the right answer
 	// for runner switches.
-	mcpServers := req.MCPServers
-	if len(mcpServers) == 0 {
+	var mcpServers []string
+	if req.MCPServers == nil {
 		mcpServers = append([]string{}, parent.MCPServers...)
+	} else {
+		mcpServers = append([]string{}, (*req.MCPServers)...)
 	}
 	taskOpts := TaskCreateOptions{
-		WorkDir:     firstNonEmpty(strings.TrimSpace(req.ProjectDir), parent.WorkDir),
-		ProjectName: parent.ProjectName,
-		MCPServers:  mcpServers,
-		// nil = include Yaver's own MCP doorway (default); explicit false
-		// strips it so the forked task runs with ONLY selected externals.
-		IncludeYaverMcp:   req.IncludeYaverMcp == nil || *req.IncludeYaverMcp,
+		WorkDir:           firstNonEmpty(strings.TrimSpace(req.ProjectDir), parent.WorkDir),
+		ProjectName:       parent.ProjectName,
+		MCPServers:        mcpServers,
+		IncludeYaverMcp:   includeYaverMCPForFork(req.IncludeYaverMcp, parent.IncludeYaverMcp),
 		InitialUserPrompt: req.Input,
 		Mode:              req.Mode,
 		// Carry the parent's conversation into the child for DISPLAY only, so

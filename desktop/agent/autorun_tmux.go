@@ -62,6 +62,7 @@ func autorunTmuxArgs(runner RunnerConfig) []string {
 	interactiveEquivalent := map[string]string{
 		"--full-auto": "--dangerously-bypass-approvals-and-sandbox",
 	}
+	isCodex := normalizeRunnerID(runner.RunnerID) == "codex"
 
 	var args []string
 	if strings.TrimSpace(runner.Model) != "" {
@@ -74,6 +75,13 @@ func autorunTmuxArgs(runner RunnerConfig) []string {
 			continue
 		}
 		if a == "{prompt}" || dropSubcommand[a] {
+			continue
+		}
+		if isCodex && (a == "--sandbox" || a == "-s") {
+			skipNext = true
+			if !stringSliceContains(args, "--dangerously-bypass-approvals-and-sandbox") {
+				args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+			}
 			continue
 		}
 		if repl, ok := interactiveEquivalent[a]; ok {

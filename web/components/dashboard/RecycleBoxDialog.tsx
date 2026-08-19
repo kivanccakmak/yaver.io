@@ -1,6 +1,9 @@
 "use client";
 
-// RecycleBoxDialog — cloud-box lifecycle, provider-agnostic UI.
+// RecycleBoxDialog — device removal + cloud-box lifecycle.
+//   • BYO/self-hosted: soft-remove from Yaver everywhere; if reachable, ask
+//     the device to uninstall its own Yaver stack. No provider/snapshot flow.
+//   • Yaver-hosted: provider-agnostic lifecycle UI below.
 //   • Recycle (replace): create a fresh box, health-check, then
 //     snapshot+delete the old one (zero-downtime; rollback keeps the
 //     old box if the new one is unhealthy). Agent `recycle` verb.
@@ -25,6 +28,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AgentClient, agentClient } from "@/lib/agent-client";
 import type { Device } from "@/lib/use-devices";
+import { deviceRemovalPolicy } from "@/lib/deviceRemovalPolicy";
+import { CONVEX_URL } from "@/lib/constants";
 
 // Local, dependency-free version ordering (avoids a circular import
 // with DevicesView). Only used to rank control-agent candidates —
@@ -88,8 +93,9 @@ function matchResource(servers: CloudResourceInfo[], target: Device): CloudResou
 export function RecycleBoxDialog({ device, devices, primaryDeviceId, token, onClose }: RecycleBoxDialogProps) {
   const deviceId = device.id;
   const deviceName = device.alias || device.name || device.id;
+  const cloudManaged = deviceRemovalPolicy(device) === "cloud-decommission";
 
-  const [mode, setMode] = useState<Mode>("recycle");
+  const [mode, setMode] = useState<Mode>(cloudManaged ? "recycle" : "remove");
   const [resourceId, setResourceId] = useState("");
   const [newName, setNewName] = useState(`${deviceName || "box"}-new`);
   const [plan, setPlan] = useState("starter");
@@ -292,6 +298,14 @@ export function RecycleBoxDialog({ device, devices, primaryDeviceId, token, onCl
   }
 
   async function discoverAndResolve(cancelledRef: { v: boolean }) {
+    if (!cloudManaged) {
+      setConnecting(false);
+      setConnectError(null);
+      setControlName(null);
+      setPreparing(null);
+      setSelfMode(false);
+      return;
+    }
     setConnecting(true);
     setConnectError(null);
     setControlName(null);
@@ -453,6 +467,43 @@ export function RecycleBoxDialog({ device, devices, primaryDeviceId, token, onCl
     setBusy(true);
     setError(null);
     try {
+      if (!cloudManaged) {
+        // If the box is reachable, ask its own agent to remove Yaver's local
+        // service + ~/.yaver and shut down. This is best-effort: an offline
+        // machine in repair must still disappear from the account immediately.
+        let localCleanup = "Device was offline, so only its Yaver account registration was removed.";
+        if (device.online) {
+          let target: AgentClient | null = null;
+          try {
+            target = await connectTo(device);
+            const scheduled = await target.machineRemove("delete my machine");
+            if (scheduled?.ok) {
+              localCleanup = "Local Yaver uninstall requested: service and ~/.yaver will be removed, then the agent will stop.";
+              // machine_remove deregisters first. Give that first operation a
+              // brief head start before the owner-session fallback below.
+              await new Promise((resolve) => setTimeout(resolve, 1200));
+            }
+          } catch {
+            localCleanup = "Could not reach the device for local cleanup; its account registration was still removed.";
+          } finally {
+            try { target?.disconnect(); } catch { /* device may already be shutting down */ }
+          }
+        }
+        const response = await fetch(`${CONVEX_URL}/devices/remove`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceId }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body?.error || `remove failed (${response.status})`);
+        setSteps([
+          `${deviceName} removed from every Yaver surface. Its old sessions and device routes were revoked.`,
+          localCleanup,
+          "If the machine is repaired or factory-reset, pairing Yaver again recreates it as an active device.",
+        ]);
+        setPhase("done");
+        return;
+      }
       // Control-agent path: send targetDeviceId so the agent-side
       // self-destruct guard fires if it IS the target (defense-in-
       // depth; old agents ignore it). Self-decommission path (selfMode):
@@ -552,20 +603,32 @@ export function RecycleBoxDialog({ device, devices, primaryDeviceId, token, onCl
         className="max-h-[88vh] w-[460px] max-w-[92vw] overflow-auto rounded-xl border border-slate-200 bg-white p-5 text-slate-900 shadow-2xl dark:border-surface-800 dark:bg-surface-900 dark:text-surface-100"
       >
         <h3 className="m-0 mb-1 text-base font-semibold">
-          {mode === "recycle" ? "Recycle" : "Remove"} box — {deviceName || deviceId.slice(0, 8)}
+          {cloudManaged && mode === "recycle" ? "Recycle box" : cloudManaged ? "Remove box" : "Remove device"} — {deviceName || deviceId.slice(0, 8)}
         </h3>
         <p className="mb-3 text-xs text-slate-500 dark:text-surface-400">
-          {mode === "recycle"
+          {!cloudManaged
+            ? `Removes this device from your Yaver account on every surface. No snapshot or replacement is involved. If it is reachable, Yaver also removes its local service and data before shutting the agent down. Your repositories and operating system are not touched.${device.hosting === "byo" ? " The underlying resource in your own cloud account is not deleted and may keep billing." : ""}`
+            : mode === "recycle"
             ? "Creates a fresh box, health-checks it, then snapshots & deletes the old one. The old box keeps serving until the new one is healthy — a failure rolls back with nothing destroyed."
             : "Deletes this box. No replacement. Optionally take a snapshot first as a recovery point (off by default — a snapshot is a paid, lingering disk image). Runs from another of your devices, so it works even if this box is already offline."}
         </p>
 
-        <div className="mb-3 flex gap-1.5">
-          {tab("recycle", "Recycle (replace)")}
-          {tab("remove", "Remove (decommission)")}
-        </div>
+        {cloudManaged ? (
+          <div className="mb-3 flex gap-1.5">
+            {tab("recycle", "Recycle (replace)")}
+            {tab("remove", "Remove (decommission)")}
+          </div>
+        ) : null}
 
-        {connecting ? (
+        {!cloudManaged && phase !== "done" ? (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300">
+            <p className="m-0 font-medium">This device will disappear from web, mobile, TV, wearables, CLI, and task routing.</p>
+            <p className="m-0 mt-1 opacity-80">
+              Its old Yaver sessions are revoked and a hidden tombstone prevents it from silently reappearing. Pairing it again after repair creates an active device again.
+              {device.hosting === "byo" ? " This does not delete the resource from your own cloud provider." : ""}
+            </p>
+          </div>
+        ) : connecting ? (
           <div className="flex items-center gap-2 rounded-md bg-slate-100 px-3 py-2.5 text-xs text-slate-600 dark:bg-[rgba(12,12,16,0.9)] dark:text-surface-300">
             <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
             {preparing || "Finding a device that can manage this box, and resolving its cloud resource…"}
@@ -782,10 +845,10 @@ export function RecycleBoxDialog({ device, devices, primaryDeviceId, token, onCl
           {ready && mode === "remove" && phase === "form" ? (
             <button
               onClick={() => void runRemove()}
-              disabled={!resolved || busy}
+              disabled={(cloudManaged && !resolved) || busy}
               className="rounded-md border border-rose-500 bg-rose-600 px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
-              {busy ? "Removing…" : "Snapshot & remove (destructive)"}
+              {busy ? "Removing…" : cloudManaged ? "Snapshot & remove (destructive)" : "Remove from Yaver"}
             </button>
           ) : null}
         </div>

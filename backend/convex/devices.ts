@@ -18,6 +18,7 @@ import {
   isRawHostname,
   type LabelSignals,
 } from "./deviceLabels";
+import { activeDeviceRows, isActiveDeviceRow } from "./deviceRemoval";
 
 // Hard bound on the device black box (deviceFlightEvents). Mirrors
 // flightRecorderMaxEvents in desktop/agent/flightrecorder.go — the agent caps
@@ -634,6 +635,11 @@ export const registerDevice = mutation({
       if (existing.userId !== session.user._id) {
         throw new Error("Device belongs to another user");
       }
+      // A removed installation cannot heartbeat because removeDevice revokes
+      // all of its sessions. If the owner explicitly signs in/pairs again,
+      // registerDevice arrives with a NEW valid session and may revive this
+      // identity. This is how a repaired/factory-reset box self-recreates
+      // without making tombstones visible in the meantime.
       // Every register call requires a valid session (validated
       // above) — so by definition this device is owner-authenticated
       // and is not in needs-auth / bootstrap state anymore. Clear
@@ -642,6 +648,7 @@ export const registerDevice = mutation({
       // as a permanent yellow "Needs pairing" row in every client
       // picker). Patches the existing row in place — no new
       // heartbeat backlog, one row per device always.
+      const wasRemoved = existing.removed === true;
       await ctx.db.patch(existing._id, {
         name: args.name,
         platform: args.platform,
@@ -653,6 +660,8 @@ export const registerDevice = mutation({
         publicEndpoints: args.publicEndpoints,
         isOnline: true,
         needsAuth: false,
+        removed: false,
+        removedAt: undefined,
         lastHeartbeat: Date.now(),
         // Only stamp the signing pubkey when the agent sent one (older agents
         // omit it) so a re-register from an old build doesn't wipe it.
@@ -669,6 +678,27 @@ export const registerDevice = mutation({
           ? { agentVersion: args.agentVersion, agentVersionReportedAt: Date.now() }
           : {}),
       });
+      if (wasRemoved) {
+        const activeSiblings = activeDeviceRows(await ctx.db
+          .query("devices")
+          .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+          .collect()).filter((d) => d.deviceId !== args.deviceId);
+        if (activeSiblings.length === 0) {
+          const settings = await ctx.db
+            .query("userSettings")
+            .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
+            .first();
+          if (!settings) {
+            await ctx.db.insert("userSettings", {
+              userId: session.user._id,
+              primaryDeviceId: args.deviceId,
+              moreOptionalTools: [],
+            });
+          } else if (!settings.primaryDeviceId) {
+            await ctx.db.patch(settings._id, { primaryDeviceId: args.deviceId });
+          }
+        }
+      }
       return existing._id;
     }
 
@@ -679,7 +709,7 @@ export const registerDevice = mutation({
     const ownDeviceCount = (await ctx.db
       .query("devices")
       .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
-      .collect()).length;
+      .collect()).filter((d) => !d.removed).length;
     if (ownDeviceCount === 0) {
       const settings = await ctx.db
         .query("userSettings")
@@ -736,7 +766,7 @@ export const registerDevice = mutation({
         .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
         .collect();
       const taken = new Set(
-        ownDevices.map((d) => d.alias).filter((a): a is string => !!a),
+        ownDevices.filter((d) => !d.removed).map((d) => d.alias).filter((a): a is string => !!a),
       );
       const slug = uniqueAliasSlug(smartAliasSlug(labelSignals), taken);
       if (slug) autoAlias = slug;
@@ -797,7 +827,7 @@ export const ownerByHardwareId = internalQuery({
       .query("devices")
       .withIndex("by_hardwareId", (q) => q.eq("hardwareId", args.hardwareId))
       .first();
-    if (!device) return null;
+    if (!device || !isActiveDeviceRow(device)) return null;
     return {
       deviceId: device.deviceId,
       ownerUserId: device.userId,
@@ -826,10 +856,10 @@ export const ownerByHardwareIdForCaller = internalQuery({
     callerUserId: v.string(),
   },
   handler: async (ctx, args) => {
-    const devices = await ctx.db
+    const devices = activeDeviceRows(await ctx.db
       .query("devices")
       .withIndex("by_hardwareId", (q) => q.eq("hardwareId", args.hardwareId))
-      .collect();
+      .collect());
     if (devices.length === 0) return null;
     const ownByCaller = devices.find((d) => String(d.userId) === args.callerUserId);
     const picked = ownByCaller || devices[0];
@@ -1165,6 +1195,9 @@ export const heartbeat = mutation({
 
     if (!device) throw new Error("DEVICE_ID_STALE: device row not found and no unambiguous owned hardware match exists");
     if (device.userId !== session.user._id) throw new Error("Unauthorized");
+    if (device.removed) {
+      throw new Error("DEVICE_REMOVED: this device was removed from the account; pair it again after resetting Yaver to create a fresh device identity");
+    }
 
     const patch: Record<string, unknown> = {
       isOnline: true,
@@ -1593,7 +1626,7 @@ export const presenceUpdate = internalMutation({
       .query("devices")
       .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
       .unique();
-    if (!device) {
+    if (!device || !isActiveDeviceRow(device)) {
       // Silently ignore unknown devices — the relay may have tunnels
       // for devices that were removed from this user's account.
       return;
@@ -1687,10 +1720,10 @@ export const listMyDevices = query({
     if (!session) throw new Error("Unauthorized");
 
     // Own devices
-    const ownDevices = await ctx.db
+    const ownDevices = activeDeviceRows(await ctx.db
       .query("devices")
       .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
-      .collect();
+      .collect());
 
     // Hosting provenance. A device is "yaver-hosted" (managed) when it has a
     // cloudMachines row that is Yaver-side (origin !== "self-hosted" — managed or
@@ -1830,10 +1863,10 @@ export const recommendTaskPlacement = query({
     const session = await validateSessionInternal(ctx, args.tokenHash);
     if (!session) throw new Error("Unauthorized");
 
-    const ownDevices = await ctx.db
+    const ownDevices = activeDeviceRows(await ctx.db
       .query("devices")
       .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
-      .collect();
+      .collect());
 
     return recommendPlacement(
       collapseListedDevices(
@@ -1995,7 +2028,12 @@ export const markOffline = mutation({
 });
 
 /**
- * Remove (unregister) a device.
+ * Remove (unregister) a device from every user-facing surface.
+ *
+ * Keep a tombstone instead of hard-deleting the identity. That makes removal
+ * durable when the physical machine is offline/in repair: its old install
+ * cannot heartbeat or register itself back into the account. Pairing after a
+ * factory reset creates a fresh identity explicitly.
  */
 export const removeDevice = mutation({
   args: {
@@ -2014,6 +2052,19 @@ export const removeDevice = mutation({
     if (!device) throw new Error("Device not found");
     if (device.userId !== session.user._id) throw new Error("Unauthorized");
 
+    // Account-forget is deliberately not cloud decommission. Refuse to leave
+    // a Yaver-hosted billing resource alive behind an invisible tombstone;
+    // that tier must go through purgeMachineResources, which deletes provider
+    // resources first and tombstones the device only after success.
+    const hosted = await ctx.db
+      .query("cloudMachines")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
+      .filter((q) => q.neq(q.field("origin"), "self-hosted"))
+      .first();
+    if (hosted && hosted.status !== "removed" && hosted.status !== "deleted") {
+      throw new Error("YAVER_HOSTED_DECOMMISSION_REQUIRED: this Yaver-hosted box must be decommissioned so its cloud resources and billing are removed too");
+    }
+
     const deviceSessions = await ctx.db
       .query("sessions")
       .withIndex("by_deviceId", (q) => q.eq("deviceId", args.deviceId))
@@ -2025,7 +2076,7 @@ export const removeDevice = mutation({
     }
 
     // Cascade — every Convex row that names this deviceId becomes
-    // dangling the moment we delete the device. The orphaned sdkTokens
+    // dangling the moment we remove the device from active inventory. The orphaned sdkTokens
     // are the security-critical case (long-lived tokens still validate
     // for /info, /tasks, etc. until natural expiry); userProjects /
     // userServices / userDeployments are functional dangling pointers
@@ -2067,31 +2118,73 @@ export const removeDevice = mutation({
       }
     }
 
-    // userSettings.primaryDeviceId — clear it if it points at the
-    // device we're about to delete. Patch (not delete) the settings
-    // row so the user's other prefs (runner choice, relay creds,
-    // verbosity) survive.
+    const deploymentsForUser = await ctx.db
+      .query("userDeployments")
+      .withIndex("by_user", (q) => q.eq("userId", session.user._id))
+      .collect();
+    for (const deployment of deploymentsForUser) {
+      if (deployment.deviceId === args.deviceId) {
+        await ctx.db.delete(deployment._id);
+      }
+    }
+
+    // Clear every user-facing pointer to the removed device. Patch (not
+    // delete) the settings row so unrelated preferences survive.
     const settings = await ctx.db
       .query("userSettings")
       .withIndex("by_userId", (q) => q.eq("userId", session.user._id))
       .unique();
-    if (settings && settings.primaryDeviceId === args.deviceId) {
-      await ctx.db.patch(settings._id, { primaryDeviceId: undefined });
+    if (settings) {
+      const settingsPatch: Record<string, unknown> = {};
+      if (settings.primaryDeviceId === args.deviceId) settingsPatch.primaryDeviceId = undefined;
+      if (settings.secondaryDeviceId === args.deviceId) settingsPatch.secondaryDeviceId = undefined;
+      if (settings.primaryRunnerByDevice?.some((r) => r.deviceId === args.deviceId)) {
+        settingsPatch.primaryRunnerByDevice = settings.primaryRunnerByDevice.filter((r) => r.deviceId !== args.deviceId);
+      }
+      if (settings.defaultRuntimeTargetByDevice?.some((r) => r.deviceId === args.deviceId)) {
+        settingsPatch.defaultRuntimeTargetByDevice = settings.defaultRuntimeTargetByDevice.filter((r) => r.deviceId !== args.deviceId);
+      }
+      if (settings.machineRolesByProject?.some((r) =>
+        r.runnerDeviceId === args.deviceId ||
+        r.secondaryRunnerDeviceId === args.deviceId ||
+        r.renderDeviceId === args.deviceId ||
+        r.secondaryRenderDeviceId === args.deviceId
+      )) {
+        settingsPatch.machineRolesByProject = settings.machineRolesByProject.filter((r) =>
+          r.runnerDeviceId !== args.deviceId &&
+          r.secondaryRunnerDeviceId !== args.deviceId &&
+          r.renderDeviceId !== args.deviceId &&
+          r.secondaryRenderDeviceId !== args.deviceId
+        );
+      }
+      if (Object.keys(settingsPatch).length > 0) await ctx.db.patch(settings._id, settingsPatch);
     }
 
-    await ctx.db.delete(device._id);
+    await ctx.db.patch(device._id, {
+      removed: true,
+      removedAt: Date.now(),
+      isOnline: false,
+      alias: undefined,
+      pendingAuthCode: undefined,
+      pendingAuthCodeAt: undefined,
+      publicEndpoints: undefined,
+      localIps: undefined,
+      relayConnected: false,
+      lastTunnelEvent: undefined,
+    });
   },
 });
 
 /**
- * deleteDeviceRow — internal device-row removal used by the managed-cloud
+ * deleteDeviceRow — internal device-row tombstone used by the managed-cloud
  * decommission path (purgeMachineResources). 2026-08-10: decommissioning a
  * cloud box removed the cloudMachines row but LEFT the device row
  * (`cloud-<id>`), so the dashboard kept showing a phantom offline card for a
  * decommissioned box (confusing — "is the managed cloud real?"). The public
  * removeDevice requires a session tokenHash, which an internal action
  * doesn't have; this is the internal equivalent, scoped to the deviceId the
- * caller computed (internal functions are not client-callable).
+ * caller computed (internal functions are not client-callable). This also
+ * revokes device sessions and clears user-facing pointers before tombstoning.
  */
 export const deleteDeviceRow = internalMutation({
   args: { deviceId: v.string() },
@@ -2101,7 +2194,78 @@ export const deleteDeviceRow = internalMutation({
       .withIndex("by_deviceId", (q) => q.eq("deviceId", deviceId))
       .unique();
     if (device) {
-      await ctx.db.delete(device._id);
+      const deviceSessions = await ctx.db
+        .query("sessions")
+        .withIndex("by_deviceId", (q) => q.eq("deviceId", deviceId))
+        .collect();
+      for (const session of deviceSessions) {
+        if (session.userId === device.userId) await ctx.db.delete(session._id);
+      }
+      const sdkTokens = await ctx.db
+        .query("sdkTokens")
+        .withIndex("by_userId", (q) => q.eq("userId", device.userId))
+        .collect();
+      for (const token of sdkTokens) {
+        if (token.targetDeviceId === deviceId) await ctx.db.delete(token._id);
+      }
+      const projects = await ctx.db
+        .query("userProjects")
+        .withIndex("by_device", (q) => q.eq("deviceId", deviceId))
+        .collect();
+      for (const project of projects) {
+        if (project.userId === device.userId) await ctx.db.delete(project._id);
+      }
+      const services = await ctx.db
+        .query("userServices")
+        .withIndex("by_device", (q) => q.eq("deviceId", deviceId))
+        .collect();
+      for (const service of services) {
+        if (service.userId === device.userId) await ctx.db.delete(service._id);
+      }
+      const deployments = await ctx.db
+        .query("userDeployments")
+        .withIndex("by_user", (q) => q.eq("userId", device.userId))
+        .collect();
+      for (const deployment of deployments) {
+        if (deployment.deviceId === deviceId) await ctx.db.delete(deployment._id);
+      }
+      const settings = await ctx.db
+        .query("userSettings")
+        .withIndex("by_userId", (q) => q.eq("userId", device.userId))
+        .unique();
+      if (settings) {
+        const patch: Record<string, unknown> = {};
+        if (settings.primaryDeviceId === deviceId) patch.primaryDeviceId = undefined;
+        if (settings.secondaryDeviceId === deviceId) patch.secondaryDeviceId = undefined;
+        if (settings.primaryRunnerByDevice?.some((r) => r.deviceId === deviceId)) {
+          patch.primaryRunnerByDevice = settings.primaryRunnerByDevice.filter((r) => r.deviceId !== deviceId);
+        }
+        if (settings.defaultRuntimeTargetByDevice?.some((r) => r.deviceId === deviceId)) {
+          patch.defaultRuntimeTargetByDevice = settings.defaultRuntimeTargetByDevice.filter((r) => r.deviceId !== deviceId);
+        }
+        if (settings.machineRolesByProject?.some((r) =>
+          r.runnerDeviceId === deviceId || r.secondaryRunnerDeviceId === deviceId ||
+          r.renderDeviceId === deviceId || r.secondaryRenderDeviceId === deviceId
+        )) {
+          patch.machineRolesByProject = settings.machineRolesByProject.filter((r) =>
+            r.runnerDeviceId !== deviceId && r.secondaryRunnerDeviceId !== deviceId &&
+            r.renderDeviceId !== deviceId && r.secondaryRenderDeviceId !== deviceId
+          );
+        }
+        if (Object.keys(patch).length > 0) await ctx.db.patch(settings._id, patch);
+      }
+      await ctx.db.patch(device._id, {
+        removed: true,
+        removedAt: Date.now(),
+        isOnline: false,
+        alias: undefined,
+        pendingAuthCode: undefined,
+        pendingAuthCodeAt: undefined,
+        publicEndpoints: undefined,
+        localIps: undefined,
+        relayConnected: false,
+        lastTunnelEvent: undefined,
+      });
     }
   },
 });
@@ -2319,6 +2483,7 @@ export const selectDevices = query({
 
     const out = [];
     for (const d of devices) {
+      if (!isActiveDeviceRow(d)) continue;
       const tags = d.tags ?? [];
       if (want.length > 0) {
         const has = match === "all"
@@ -2439,7 +2604,7 @@ export const resolveDeviceSig = internalQuery({
       .query("devices")
       .withIndex("by_deviceId", (q) => q.eq("deviceId", signerDeviceId))
       .unique();
-    if (!signer || !signer.signPublicKey) return deny;
+    if (!signer || !isActiveDeviceRow(signer) || !signer.signPublicKey) return deny;
 
     const target =
       targetDeviceId && targetDeviceId !== signerDeviceId
@@ -2448,7 +2613,7 @@ export const resolveDeviceSig = internalQuery({
             .withIndex("by_deviceId", (q) => q.eq("deviceId", targetDeviceId))
             .unique()
         : signer;
-    if (!target) return deny;
+    if (!target || !isActiveDeviceRow(target)) return deny;
 
     const sameOwner = String(signer.userId) === String(target.userId);
     if (!sameOwner) return deny;

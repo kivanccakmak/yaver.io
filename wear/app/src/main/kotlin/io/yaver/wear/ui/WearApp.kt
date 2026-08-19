@@ -11,6 +11,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -45,11 +48,14 @@ fun WearApp(
     onIntent: (WatchProtocol.FixedIntent) -> Unit,
     onWake: () -> Unit,
     onDismissWake: () -> Unit,
+    canRemoveDevice: Boolean,
+    onRemoveDevice: () -> Unit,
 ) {
     val line by WatchState.line.collectAsState()
     val phase by WatchState.phase.collectAsState()
     val phoneReachable by WatchState.phoneReachable.collectAsState()
     val wakeStatus by BoxLifecycle.status.collectAsState()
+    var confirmRemoval by remember { mutableStateOf(false) }
 
     // Wall-clock bound on Phase.Working: the only prior exit was a later
     // phone→watch push, so a lost Data Layer message or a phone that died
@@ -92,12 +98,23 @@ fun WearApp(
                     )
                 }
 
+                confirmRemoval -> ConfirmScreen(
+                    prompt = "Remove this box from every Yaver device list?",
+                    onConfirm = {
+                        confirmRemoval = false
+                        onRemoveDevice()
+                    },
+                    onCancel = { confirmRemoval = false },
+                )
+
                 else -> MainScreen(
                     line = line,
                     phase = phase,
                     phoneReachable = phoneReachable,
                     onRecord = onRecord,
                     onIntent = onIntent,
+                    canRemoveDevice = canRemoveDevice,
+                    onRemoveDevice = { confirmRemoval = true },
                 )
             }
         }
@@ -111,6 +128,8 @@ private fun MainScreen(
     phoneReachable: Boolean,
     onRecord: () -> Unit,
     onIntent: (WatchProtocol.FixedIntent) -> Unit,
+    canRemoveDevice: Boolean,
+    onRemoveDevice: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -152,6 +171,13 @@ private fun MainScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 QuickIntentChip("Run tests", WatchProtocol.FixedIntent.RUN_TESTS, onIntent)
                 QuickIntentChip("Status", WatchProtocol.FixedIntent.STATUS, onIntent)
+                if (canRemoveDevice) {
+                    Chip(
+                        label = { Text("Remove box") },
+                        onClick = onRemoveDevice,
+                        colors = ChipDefaults.secondaryChipColors(),
+                    )
+                }
             }
         }
     }

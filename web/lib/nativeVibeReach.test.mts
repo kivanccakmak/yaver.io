@@ -40,14 +40,14 @@ test("the shared native client can CREATE a task, not only list them", () => {
     "AgentClient has no createTask — every native surface is back to watch-only, " +
     "and the colour loop cannot take its first step there");
   const start = agentClient.indexOf("func createTask(");
-  const body = agentClient.slice(start, start + 1600);
+  const body = agentClient.slice(start, start + 3000);
   assert.match(body, /request\(\s*"POST"\s*,\s*path:\s*"\/tasks"/,
     "createTask does not POST /tasks — it must hit the same route the web funnel does");
 });
 
 test("it does NOT invent its own runner/model default", () => {
   const start = agentClient.indexOf("func createTask(");
-  const body = agentClient.slice(start, start + 1600);
+  const body = agentClient.slice(start, start + 3000);
   // Empty means "let the agent apply the account's per-device primary", which
   // is exactly what the phone gets. A TV hardcoding a model is how a surface
   // drifts onto one the subscription cannot run — that shipped this week.

@@ -11,6 +11,9 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showSignIn = false
     @State private var state: UpdateState = .idle
+    @State private var confirmRemoval = false
+    @State private var removalError: String?
+    @State private var removing = false
 
     /// The update request's lifecycle as far as we can HONESTLY observe it: we
     /// see it accepted, never applied. There is deliberately no `.updating`.
@@ -64,6 +67,20 @@ struct SettingsView: View {
                             store.signOutStandalone()
                         }
                         .font(.footnote)
+
+                        if store.box?.deviceId != nil {
+                            Button("Remove box from Yaver", role: .destructive) {
+                                confirmRemoval = true
+                            }
+                            .font(.footnote)
+                            .disabled(removing)
+                            Text("Removes it from every Yaver device list. A repaired or reset box can pair again.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if removing { ProgressView() }
+                        if let removalError {
+                            Text(removalError).font(.caption2).foregroundStyle(.orange)
+                        }
                     }
                 }
             }
@@ -74,6 +91,12 @@ struct SettingsView: View {
         // because Settings is where the button lives — if it resolves, the button
         // appears in place; if not, the explanation below does.
         .task { await store.resolveDeviceIdIfNeeded() }
+        .confirmationDialog("Remove this box from Yaver?", isPresented: $confirmRemoval) {
+            Button("Remove", role: .destructive) { Task { await removeBox() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("It disappears from every Yaver surface immediately. This does not delete your operating system or repositories.")
+        }
     }
 
     /// "Update agent" — Convex-direct desired state, NOT a command to the box.
@@ -121,6 +144,20 @@ struct SettingsView: View {
             state = .requested(version)
         } catch {
             state = .failed(error.localizedDescription)
+        }
+    }
+
+    private func removeBox() async {
+        guard let deviceId = store.box?.deviceId else { return }
+        removing = true
+        removalError = nil
+        defer { removing = false }
+        do {
+            try await DeviceRemoval.remove(deviceId: deviceId, token: store.token)
+            store.signOutStandalone()
+            dismiss()
+        } catch {
+            removalError = error.localizedDescription
         }
     }
 }

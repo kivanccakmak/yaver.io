@@ -45,15 +45,42 @@ type GitProviderCLI struct {
 }
 
 var (
-	gitProviderCLIMu     sync.RWMutex
-	gitProviderCLICache  = map[string]GitProviderCLI{}
-	gitProviderCLIScanAt time.Time
+	gitProviderCLIMu      sync.RWMutex
+	gitProviderCLICache   = map[string]GitProviderCLI{}
+	gitProviderCLIScanAt  time.Time
+	gitProviderCLIProbeMu sync.Mutex
 )
+
+// CachedGitProviderCLIs returns the latest completed probe without starting
+// subprocesses. Request handlers use this so a slow `gh auth status` or
+// `glab auth status` can never turn /info into a liveness timeout.
+func CachedGitProviderCLIs() map[string]GitProviderCLI {
+	gitProviderCLIMu.RLock()
+	defer gitProviderCLIMu.RUnlock()
+	out := make(map[string]GitProviderCLI, len(gitProviderCLICache))
+	for k, v := range gitProviderCLICache {
+		out[k] = v
+	}
+	return out
+}
 
 // DetectGitProviderCLIs probes gh + glab and caches the result.
 // Idempotent + safe to call concurrently. Cache is invalidated by
 // RefreshGitProviderCLIs.
 func DetectGitProviderCLIs() map[string]GitProviderCLI {
+	gitProviderCLIMu.RLock()
+	if !gitProviderCLIScanAt.IsZero() && time.Since(gitProviderCLIScanAt) < 10*time.Minute {
+		out := make(map[string]GitProviderCLI, len(gitProviderCLICache))
+		for k, v := range gitProviderCLICache {
+			out[k] = v
+		}
+		gitProviderCLIMu.RUnlock()
+		return out
+	}
+	gitProviderCLIMu.RUnlock()
+	gitProviderCLIProbeMu.Lock()
+	defer gitProviderCLIProbeMu.Unlock()
+	// Another caller may have completed the refresh while we waited.
 	gitProviderCLIMu.RLock()
 	if !gitProviderCLIScanAt.IsZero() && time.Since(gitProviderCLIScanAt) < 10*time.Minute {
 		out := make(map[string]GitProviderCLI, len(gitProviderCLICache))

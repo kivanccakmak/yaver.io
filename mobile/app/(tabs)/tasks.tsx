@@ -113,8 +113,6 @@ import { transcribe, initWhisper, isWhisperReady, startRealtimeTranscribe, SPEEC
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { DevPreview } from "../../src/components/DevPreview";
 import { Badge } from "../../src/components/Badge";
-import { ScreenContextChip } from "../../src/components/ScreenContextChip";
-import { DomInspectChip } from "../../src/components/DomInspectChip";
 import RunnerAuthModal from "../../src/components/RunnerAuthModal";
 import { ParkedTurnError, parkedTurnNotice } from "../../src/lib/parkedTurn";
 import { OpenCodeConfigModal } from "../../src/components/OpenCodeConfigModal";
@@ -129,12 +127,14 @@ import {
   loadLastTaskProject,
   loadLastTaskProjectFromConvex,
   loadMCPServersFromConvex,
+  loadUseLatestMCPEnabled,
   loadTaskVideoSummaryEnabled,
   loadTextCorrectionEnabled,
   saveKeepLastProjectEnabled,
   saveLastTaskProject,
   saveLastTaskProjectToConvex,
   saveMCPServersToConvex,
+  saveUseLatestMCPEnabled,
 } from "../../src/lib/taskComposerPrefs";
 import { visibleProjectPickerRows } from "../../src/lib/projectPickerRows";
 import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
@@ -1521,7 +1521,7 @@ interface AgentContextExtras {
   selectedModelId?: string;
   /** Active device descriptor (full object, not just name) for the
    *  preferredDefaultModelForRunner fallback when Task lacks model. */
-  activeDevice?: { id?: string; name?: string | null; os?: string | null };
+  activeDevice?: { id?: string; name?: string | null; hostName?: string | null; os?: string | null };
   /** Signed-in user email — feeds the kivanc-account fallback inside
    *  preferredDefaultModelForRunner. Honest pass-through: any user. */
   userEmail?: string | null;
@@ -1939,6 +1939,10 @@ export default function TasksScreen() {
     }) || null;
   }, [devices]);
   const [showNewTask, setShowNewTask] = useState(false);
+  // Task composition stays deliberately quiet. Project/MCP, runner and mode
+  // controls are available behind the header ellipsis instead of competing
+  // with the prompt and Send button when the keyboard is open.
+  const [showTaskOptions, setShowTaskOptions] = useState(false);
   const [composerProjects, setComposerProjects] = useState<ComposerProject[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState<string>(routeProjectDir);
   // A blank project chosen by the user is intentional task context, not
@@ -1947,12 +1951,13 @@ export default function TasksScreen() {
   const explicitProjectChoiceRef = useRef<{ deviceId: string; path: string } | null>(null);
   const [availableMcpServers, setAvailableMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
-  // Yaver's own MCP doorway — user-selectable, defaults ON (the agent
-  // injects `yaver mcp` unless the task explicitly opts out).
-  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
+  // Yaver's own MCP doorway is task authority, so it starts OFF with every
+  // other MCP unless the user selects it or enables Use latest.
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(false);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
   const [projectPickerQuery, setProjectPickerQuery] = useState("");
-  const [keepLastProject, setKeepLastProject] = useState(true);
+  const [keepLastProject, setKeepLastProject] = useState(false);
+  const [useLatestMCP, setUseLatestMCP] = useState(false);
   // Cross-machine surface catalogs (2026-08-13): which MCP servers / which
   // git projects live on which machine, from Convex userSettings
   // (mcpCatalogByDevice / runtimeProjectCatalogByDevice, seeded by each
@@ -2091,6 +2096,48 @@ export default function TasksScreen() {
               onValueChange={(value) => {
                 setKeepLastProject(value);
                 void saveKeepLastProjectEnabled(value);
+                if (!value) {
+                  setSelectedProjectPath("");
+                  return;
+                }
+                const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+                void (async () => {
+                  const last = (token ? await loadLastTaskProjectFromConvex(token, runnerDeviceId) : null)
+                    ?? await loadLastTaskProject(runnerDeviceId);
+                  if (!last) return;
+                  const match = composerProjects.find((project) =>
+                    (last.path && project.path === last.path) ||
+                    project.name.toLowerCase() === last.name.toLowerCase() ||
+                    projectNameFromPath(project.path)?.toLowerCase() === last.name.toLowerCase());
+                  if (match) setSelectedProjectPath(match.path);
+                })();
+              }}
+            />
+          </View>
+          <View style={s.keepLastRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "600" }}>Use latest MCP selection</Text>
+              <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2 }}>Off means every task starts with No MCP, including Yaver MCP.</Text>
+            </View>
+            <Switch
+              value={useLatestMCP}
+              onValueChange={(value) => {
+                setUseLatestMCP(value);
+                void saveUseLatestMCPEnabled(value);
+                if (!value) {
+                  setSelectedMcpServers([]);
+                  setIncludeYaverMcp(false);
+                  return;
+                }
+                const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+                if (token) {
+                  void loadMCPServersFromConvex(token, runnerDeviceId).then((pref) => {
+                    if (!pref) return;
+                    const known = new Set(availableMcpServers.map((server) => server.name));
+                    setSelectedMcpServers((pref.mcpServers || []).filter((name) => known.has(name)));
+                    setIncludeYaverMcp(pref.includeYaverMcp ?? false);
+                  });
+                }
               }}
             />
           </View>
@@ -2235,11 +2282,15 @@ export default function TasksScreen() {
           </View>
           <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>MCP SERVERS</Text>
           <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
-            Yaver tools are on by default — toggle them off to run with only external MCPs.
+            No MCP is selected by default. Choose tools here or enable Use latest above.
           </Text>
           <Pressable
             key="yaver"
-            onPress={() => { setIncludeYaverMcp((prev) => !prev); persistMCPPrefs(); }}
+            onPress={() => {
+              const next = !includeYaverMcp;
+              setIncludeYaverMcp(next);
+              persistMCPPrefs({ mcpServers: selectedMcpServers, includeYaverMcp: next });
+            }}
             style={[
               s.projectPickerRow,
               { borderColor: includeYaverMcp ? c.accent : c.border, backgroundColor: includeYaverMcp ? withAlpha(c.accent, "1f") : c.bg },
@@ -2268,11 +2319,11 @@ export default function TasksScreen() {
                 <Pressable
                   key={server.name}
                   onPress={() => {
-                    setSelectedMcpServers((prev) =>
-                      prev.includes(server.name)
-                        ? prev.filter((name) => name !== server.name)
-                        : [...prev, server.name],
-                    );
+                    const next = selectedMcpServers.includes(server.name)
+                      ? selectedMcpServers.filter((name) => name !== server.name)
+                      : [...selectedMcpServers, server.name];
+                    setSelectedMcpServers(next);
+                    persistMCPPrefs({ mcpServers: next, includeYaverMcp });
                   }}
                   style={[
                     s.projectPickerRow,
@@ -2378,6 +2429,7 @@ export default function TasksScreen() {
   const [followUpText, setFollowUpText] = useState("");
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
   const [followUpExpanded, setFollowUpExpanded] = useState(false);
+  const [showFollowUpOptions, setShowFollowUpOptions] = useState(false);
   // Pending agent_question pulled from the SSE stream. When non-null
   // the question sheet is open; the user types/picks an answer, the
   // sheet POSTs to /tasks/{id}/answer (via answerTaskQuestion), and
@@ -2476,9 +2528,30 @@ export default function TasksScreen() {
   }, [routeProjectDir]);
 
   useEffect(() => {
+    if (!showNewTask) return;
+    if (!keepLastProject && !routeProjectDir) setSelectedProjectPath("");
+    if (!useLatestMCP) {
+      setSelectedMcpServers([]);
+      setIncludeYaverMcp(false);
+    }
+  }, [showNewTask]); // Scope defaults are evaluated once when the composer opens.
+
+  useEffect(() => {
+    if (!selectedTask?.id) return;
+    if (!keepLastProject && !routeProjectDir) setSelectedProjectPath("");
+    if (!useLatestMCP) {
+      setSelectedMcpServers([]);
+      setIncludeYaverMcp(false);
+    }
+  }, [selectedTask?.id]);
+
+  useEffect(() => {
     let cancelled = false;
     void loadKeepLastProjectEnabled().then((enabled) => {
       if (!cancelled) setKeepLastProject(enabled);
+    });
+    void loadUseLatestMCPEnabled().then((enabled) => {
+      if (!cancelled) setUseLatestMCP(enabled);
     });
     void loadTextCorrectionEnabled().then((enabled) => {
       if (!cancelled) setTextCorrectionEnabled(enabled);
@@ -2561,12 +2634,12 @@ export default function TasksScreen() {
   // is remembered on the web and vice versa (2026-08-10). Fire-and-forget:
   // a failed settings write never blocks the picker. Reads the current state
   // via a ref so callers can call it right after setState without waiting.
-  const mcpStateRef = useRef({ mcpServers: [] as string[], includeYaverMcp: true });
+  const mcpStateRef = useRef({ mcpServers: [] as string[], includeYaverMcp: false });
   mcpStateRef.current = { mcpServers: selectedMcpServers, includeYaverMcp };
-  const persistMCPPrefs = useCallback(() => {
+  const persistMCPPrefs = useCallback((override?: { mcpServers: string[]; includeYaverMcp: boolean }) => {
     if (!token) return;
     const deviceId = activeDevice?.id || "default";
-    const snap = mcpStateRef.current;
+    const snap = override ?? mcpStateRef.current;
     void saveMCPServersToConvex(token, {
       deviceId,
       mcpServers: snap.mcpServers,
@@ -4216,7 +4289,7 @@ export default function TasksScreen() {
     if (!isBundleLoaderAvailable()) {
       Alert.alert(
         "Reload unavailable",
-        "This build of Yaver can't mount guest bundles. Update Yaver to the latest version, or use the Reload tab's dev-server controls.",
+        "This build of Yaver can't mount project bundles. Update Yaver to the latest version, or use the Reload tab's dev-server controls.",
       );
       return;
     }
@@ -5488,10 +5561,11 @@ export default function TasksScreen() {
     let cancelled = false;
     const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
     void (async () => {
-      const [projectRows, mcpRows, keep, settings] = await Promise.all([
+      const [projectRows, mcpRows, keep, useLatestMCPPref, settings] = await Promise.all([
         connectionManager.runnerClient().listProjects().catch(() => [] as ComposerProject[]),
         listMcpServers().catch(() => [] as McpServer[]),
         loadKeepLastProjectEnabled(),
+        loadUseLatestMCPEnabled(),
         // Convex runtime project catalog for the runner device — the
         // Convex-seeded memory of the same git projects, merged with the
         // agent's live discovery below so both sources feed ONE list
@@ -5548,12 +5622,16 @@ export default function TasksScreen() {
       setComposerProjects(normalizedProjects);
       setAvailableMcpServers((mcpRows || []).filter((server) => server.enabled));
       setKeepLastProject(keep);
+      setUseLatestMCP(useLatestMCPPref);
 
       // MCP selection restore — same mcpServersByDevice row the web chat +
       // Vibing composers and tvOS write, so an MCP set chosen on the web is
       // remembered on the phone and vice versa (2026-08-10). Convex-first,
       // no local fallback (MCP names are agent-scoped, not path-scoped).
-      if (token) {
+      if (!useLatestMCPPref && !suppressMcpRestoreRef.current) {
+        setSelectedMcpServers([]);
+        setIncludeYaverMcp(false);
+      } else if (token) {
         const mcpPref = await loadMCPServersFromConvex(token, runnerDeviceId).catch(() => null);
         if (mcpPref && !cancelled && !suppressMcpRestoreRef.current) {
           const known = new Set((mcpRows || []).filter((s) => s.enabled).map((s) => s.name));
@@ -5643,6 +5721,7 @@ export default function TasksScreen() {
     setNewTaskText("");
     setAttachedImages([]);
     setInputFromSpeech(false);
+    setShowTaskOptions(false);
     pendingOpenTaskRef.current = null;
     // multiTargetMode without an active connection falls through to the wizard
     // so the user can pick a target before they even see the composer.
@@ -6613,6 +6692,7 @@ export default function TasksScreen() {
           onDismiss={handleNewTaskModalDismiss}
           onRequestClose={() => {
             Keyboard.dismiss();
+            setShowTaskOptions(false);
             setShowNewTask(false);
             setNewTaskText("");
             setAttachedImages([]);
@@ -6621,7 +6701,7 @@ export default function TasksScreen() {
           }}
         >
           <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-            <Pressable style={s.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowNewTask(false); setNewTaskText(""); setAttachedImages([]); setInputFromSpeech(false); setPendingTarget(null); }} />
+            <Pressable style={s.modalDismiss} onPress={() => { Keyboard.dismiss(); setShowTaskOptions(false); setShowNewTask(false); setNewTaskText(""); setAttachedImages([]); setInputFromSpeech(false); setPendingTarget(null); }} />
             <View
               style={[
                 s.modalContent,
@@ -6648,27 +6728,42 @@ export default function TasksScreen() {
               >
                 <View style={s.modalHeaderRow}>
                   <Text style={[s.modalTitle, { color: c.textPrimary }]}>New task</Text>
-                  <Pressable
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      setShowNewTask(false);
-                      setNewTaskText("");
-                      setAttachedImages([]);
-                      setInputFromSpeech(false);
-                      setPendingTarget(null);
-                    }}
-                    style={({ pressed }) => [s.modalCloseButton, pressed && { opacity: 0.55 }]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Close new task"
-                    testID="close-new-task"
-                  >
-                    <Ionicons name="close" size={24} color={c.textSecondary} />
-                  </Pressable>
+                  <View style={s.modalHeaderActions}>
+                    <Pressable
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      onPress={() => setShowTaskOptions((visible) => !visible)}
+                      style={({ pressed }) => [s.modalCloseButton, pressed && { opacity: 0.55 }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={showTaskOptions ? "Hide task options" : "More task options"}
+                      accessibilityState={{ expanded: showTaskOptions }}
+                      testID="task-options-more"
+                    >
+                      <Ionicons name="ellipsis-horizontal" size={23} color={c.textSecondary} />
+                    </Pressable>
+                    <Pressable
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      onPress={() => {
+                        Keyboard.dismiss();
+                        setShowTaskOptions(false);
+                        setShowNewTask(false);
+                        setNewTaskText("");
+                        setAttachedImages([]);
+                        setInputFromSpeech(false);
+                        setPendingTarget(null);
+                      }}
+                      style={({ pressed }) => [s.modalCloseButton, pressed && { opacity: 0.55 }]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Close new task"
+                      testID="close-new-task"
+                    >
+                      <Ionicons name="close" size={24} color={c.textSecondary} />
+                    </Pressable>
+                  </View>
                 </View>
                 {/* Target chip row — runner+model pill mirrors the badge
                     in the follow-up bar so the user can pick the agent
                     at task creation, not only after the task starts. */}
+                {showTaskOptions ? <>
                 <View style={s.modalTargetRow}>
                   {pendingTarget ? (
                     // Locked target chip: when the wizard chose this
@@ -6799,18 +6894,9 @@ export default function TasksScreen() {
                     {devices.find((d) => d.id === machineRoles.renderDeviceId)?.name || machineRoles.renderDeviceId.slice(0, 8)}
                   </Text>
                 ) : null}
+                </> : null}
               </View>
-              {/* Screen context — states, in plain language, that the agent is
-                  about to prepend a description of the screen you're previewing
-                  to what you type, names WHICH screen, and lets you switch it
-                  off (which deletes what was already reported). Silent prompt
-                  mutation is a defect; this is the disclosure. */}
-              <ScreenContextChip workDir={projectDir} style={{ marginBottom: 8 }} />
-              {/* DOM mode — the element the user clicked in the preview is
-                  prepended to the prompt. Browse|Inspect radio + attached
-                  element, same disclosure rule as the screen chip: switching
-                  back to Browse deletes what was already reported. */}
-              <DomInspectChip workDir={projectDir} style={{ marginBottom: 8 }} />
+              {showTaskOptions ? (
               <View style={s.composerScopeRow}>
                 <Pressable
                   style={({ pressed }) => [
@@ -6827,12 +6913,15 @@ export default function TasksScreen() {
                   <Text style={[s.scopeChipText, { color: c.textSecondary }]} numberOfLines={1}>
                     {[
                       selectedComposerProject?.name || projectNameFromPath(projectDir) || "No project",
-                      selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCPs",
+                      selectedMcpServers.length + (includeYaverMcp ? 1 : 0)
+                        ? `${selectedMcpServers.length + (includeYaverMcp ? 1 : 0)} MCP`
+                        : "No MCP",
                     ].join(" · ")}
                   </Text>
                   <Text style={{ color: c.textMuted, fontSize: 10 }}>▾</Text>
                 </Pressable>
               </View>
+              ) : null}
                 <View style={[s.composerShell, {
                     backgroundColor: c.bg,
                     borderColor: c.border,
@@ -6872,6 +6961,7 @@ export default function TasksScreen() {
                       ))}
                     </ScrollView>
                   )}
+                  {showTaskOptions ? <>
                   {/* OpenCode quick Build|Plan mode — the two common agents,
                       one tap, persisted to the device the task runs on. Custom
                       agents / Default stay in the task-configuration sheet's
@@ -6948,6 +7038,7 @@ export default function TasksScreen() {
                     </Text>
                   )}
                 </Pressable>
+                </> : null}
                 <View style={[s.composerFooter, { borderTopColor: withAlpha(c.border, "cc") }]}>
                   <Pressable
                     style={({ pressed }) => [
@@ -6979,55 +7070,6 @@ export default function TasksScreen() {
                     >
                       <Ionicons name={isRecording ? "stop" : "mic-outline"} size={22} color={isRecording ? "#fff" : c.textPrimary} />
                     </Pressable>
-                    {/* Symmetric mic↔text switch (audit §4.2, 2026-07-19).
-                        Vibe has a "Prefer to type?" pill; the composer needs
-                        the mirror. Tapping this closes the composer, seeds
-                        Vibe with whatever the user just typed (preserved as
-                        lastHeardRef on the Vibe side — the same channel
-                        that carries speech going the other direction), and
-                        navigates to /vibe so the loop reopens. Quiet by
-                        design — voice is the primary path, this pill is
-                        the escape hatch back to it. */}
-                    <Pressable
-                      style={({ pressed }) => [
-                        s.composerActionButton,
-                        { backgroundColor: c.bgCard },
-                        pressed && { opacity: 0.7 },
-                      ]}
-                      onPress={() => {
-                        const seed = newTaskText.trim();
-                        Keyboard.dismiss();
-                        setShowNewTask(false);
-                        setNewTaskText("");
-                        setAttachedImages([]);
-                        setInputFromSpeech(false);
-                        setPendingTarget(null);
-                        taskRouter.push({
-                          pathname: "/vibe",
-                          params: seed ? { prompt: seed } : {},
-                        } as any);
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Switch to voice — reopens Vibe with your typed text preserved"
-                    >
-                      <Ionicons name="chatbubble-ellipses-outline" size={20} color={c.textMuted} />
-                    </Pressable>
-                    {/* ⚡ Reload — one-tap Hermes bundle push to this phone
-                        from the selected machine. Needs the native bundle
-                        loader (iOS + Android); hidden on builds without it. */}
-                    {isEffectivelyConnected && isBundleLoaderAvailable() && (
-                      <Pressable
-                        style={({ pressed }) => [
-                          s.composerActionButton,
-                          { backgroundColor: c.bgCard },
-                          pressed && { opacity: 0.7 },
-                        ]}
-                        onPress={() => { taskHaptics.send(); triggerHermesReload(); }}
-                        disabled={isSubmitting || isTranscribing}
-                      >
-                        <Ionicons name="flash-outline" size={22} color={c.textPrimary} />
-                      </Pressable>
-                    )}
                     {(() => {
                       const isDisabled =
                         (!newTaskText.trim() && attachedImages.length === 0) ||
@@ -8033,12 +8075,23 @@ export default function TasksScreen() {
                     <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                     <View style={s.modalHeader}>
                       <Text style={[s.modalTitle, { color: c.textPrimary }]}>Follow Up</Text>
+                      <Pressable
+                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                        style={({ pressed }) => [s.modalCloseButton, { marginLeft: "auto" }, pressed && { opacity: 0.55 }]}
+                        onPress={() => setShowFollowUpOptions((visible) => !visible)}
+                        accessibilityRole="button"
+                        accessibilityLabel={showFollowUpOptions ? "Hide follow-up options" : "More follow-up options"}
+                        accessibilityState={{ expanded: showFollowUpOptions }}
+                        testID="followup-options-more"
+                      >
+                        <Ionicons name="ellipsis-horizontal" size={23} color={c.textSecondary} />
+                      </Pressable>
                       {/* Runtime agent switch — tap to open the same picker
                           that's on the New Task screen, but here a different
                           selection forks the chat to a child task with the
                           new runner instead of continuing in place. See
                           handleFollowUp's `switching` branch + task_fork.go. */}
-                      <Pressable
+                      {showFollowUpOptions ? <Pressable
                         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                         style={({ pressed }) => [
                           s.agentBadge,
@@ -8069,22 +8122,13 @@ export default function TasksScreen() {
                           })()}
                         </Text>
                         <Text style={{ color: c.textMuted, fontSize: 10, marginLeft: 4 }}>▾</Text>
-                      </Pressable>
+                      </Pressable> : null}
                       {/* NO running spinner here (2026-08-09, user call): the
                           runner is already named by the chip + the status
                           pill + the Stop button + PhaseStatusLine. A pulsing
                           circle beside a usable composer reads as blocked. */}
                     </View>
-                    {/* What the agent is holding about the screen you're
-                        previewing. Follow-ups are exactly the turn where "make
-                        THIS screen red" gets said, and screen_context_turn.go
-                        attaches on every turn — so the disclosure has to be
-                        here too, not only on the first message. */}
-                    <ScreenContextChip workDir={projectDir} style={{ marginBottom: 8 }} />
-                    {/* DOM mode on the follow-up composer too — follow-ups
-                        are exactly the turn where "audit THIS element" gets
-                        said. */}
-                    <DomInspectChip workDir={projectDir} style={{ marginBottom: 8 }} />
+                    {showFollowUpOptions ? <>
                     {/* Project/MCP scope chip — SAME affordance as the New
                         Task composer. No chat/console discrimination
                         (2026-08-09): a follow-up is a task, and the user
@@ -8108,7 +8152,9 @@ export default function TasksScreen() {
                         <Text style={[s.scopeChipText, { color: c.textSecondary }]} numberOfLines={1}>
                           {[
                             selectedComposerProject?.name || projectNameFromPath(projectDir) || "No project",
-                            selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCPs",
+                            selectedMcpServers.length + (includeYaverMcp ? 1 : 0)
+                              ? `${selectedMcpServers.length + (includeYaverMcp ? 1 : 0)} MCP`
+                              : "No MCP",
                           ].join(" · ")}
                         </Text>
                         <Text style={{ color: c.textMuted, fontSize: 10 }}>▾</Text>
@@ -8151,6 +8197,7 @@ export default function TasksScreen() {
                         </View>
                       </View>
                     )}
+                    </> : null}
                     <TextInput
                       // testIDs on the composer exist so the follow-up loop can
                       // be driven by maestro (mobile/maestro/followup-visible.yaml).
@@ -8185,7 +8232,7 @@ export default function TasksScreen() {
                       </ScrollView>
                     )}
                     <View style={s.modalButtons}>
-                      <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setFollowUpExpanded(false); }}>
+                      <Pressable style={[s.cancelButton, { backgroundColor: c.bgCardElevated }]} onPress={() => { Keyboard.dismiss(); setShowFollowUpOptions(false); setFollowUpExpanded(false); }}>
                         <Text style={[s.cancelButtonText, { color: c.textSecondary }]}>Cancel</Text>
                       </Pressable>
                       <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -8227,7 +8274,7 @@ export default function TasksScreen() {
                         <Pressable
                           testID="followup-send"
                           style={[s.submitButton, { backgroundColor: c.accent }, ((!followUpText.trim() && followUpImages.length === 0) || isSendingFollowUp || isTranscribing) && s.submitButtonDisabled]}
-                          onPress={() => { handleFollowUp(); setFollowUpExpanded(false); }}
+                          onPress={() => { handleFollowUp(); setShowFollowUpOptions(false); setFollowUpExpanded(false); }}
                           disabled={(!followUpText.trim() && followUpImages.length === 0) || isSendingFollowUp || isTranscribing}
                         >
                           <Text style={s.submitButtonText}>{isSendingFollowUp ? "Sending..." : "Send"}</Text>
@@ -8957,10 +9004,11 @@ const s = StyleSheet.create({
   // New task modal
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" },
   modalDismiss: { flex: 1 },
-  modalContent: { borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 24, paddingTop: 28, paddingBottom: 40 },
+  modalContent: { borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 20, paddingTop: 22, paddingBottom: 32 },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 24 },
-  modalHeaderStack: { marginBottom: 20 },
+  modalHeaderStack: { marginBottom: 12 },
   modalHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  modalHeaderActions: { flexDirection: "row", alignItems: "center", gap: 4 },
   modalTargetRow: { flexDirection: "row", alignItems: "center", marginTop: 12 },
   modalCloseButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   modalTitle: { fontSize: 20, fontWeight: "700" },
@@ -8988,7 +9036,7 @@ const s = StyleSheet.create({
   projectPickerRow: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 10 },
   agentPickerChips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, marginBottom: 4 },
   input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 12 },
-  inputMultiline: { minHeight: 160 },
+  inputMultiline: { minHeight: 132 },
   composerShell: {
     borderWidth: 1,
     borderRadius: 28,

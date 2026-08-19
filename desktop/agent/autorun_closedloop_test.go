@@ -74,10 +74,19 @@ func newAutorunTestRepo(t *testing.T) *autorunTestRepo {
 
 	key := filepath.Join(root, "signing-key")
 	r.run(root, "ssh-keygen", "-t", "ed25519", "-N", "", "-C", "autorun-test", "-f", key)
+	publicKey, err := os.ReadFile(key + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowedSigners := filepath.Join(root, "allowed_signers")
+	if err := os.WriteFile(allowedSigners, []byte("autorun@test.invalid "+strings.TrimSpace(string(publicKey))+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, cfg := range [][]string{
 		{"user.name", "Autorun Test"},
 		{"user.email", "autorun@test.invalid"},
 		{"gpg.format", "ssh"},
+		{"gpg.ssh.allowedSignersFile", allowedSigners},
 		{"user.signingkey", key},
 		{"commit.gpgsign", "false"},
 	} {
@@ -215,9 +224,12 @@ func TestAutorunClosedLoopMasterPlansDoerImplementsGateVerifies(t *testing.T) {
 	if log := repo.log(); !strings.Contains(log, autorunFinalCommitMarker) || !strings.Contains(log, "verified iteration 1") {
 		t.Fatalf("source checkout main did not absorb the slot branch: %q", log)
 	}
-	// Signed for real — `-S` against a real key, not a stubbed git.
-	if sig := repo.run(repo.dir, "git", "log", "-1", "--pretty=%GT"); strings.TrimSpace(sig) == "" {
-		t.Fatal("final commit carries no signature trailer")
+	// Signed for real — `-S` against a real key, not a stubbed git. `%G?`
+	// validates the signature without requiring an allowedSignersFile; `%GT`
+	// asks Git for a trust level and aborts on clean-room SSH fixtures where no
+	// trust store exists.
+	if sig := strings.TrimSpace(repo.run(repo.dir, "git", "log", "-1", "--pretty=%G?")); sig != "G" && sig != "U" {
+		t.Fatalf("final commit signature status = %q, want good or good/untrusted", sig)
 	}
 	// --push means main was pushed and the temporary slot branch was deleted.
 	if remote := repo.run(repo.dir, "git", "log", "-1", "--oneline", "origin/main"); !strings.Contains(remote, autorunFinalCommitMarker) {

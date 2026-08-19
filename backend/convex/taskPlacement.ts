@@ -27,6 +27,7 @@ import {
   type PlacementResourceClass,
   type PlacementTaskKind,
 } from "./taskPlacementClassifier";
+import { activeDeviceRows } from "./deviceRemoval";
 
 const lanes = v.union(
   v.literal("phone_sandbox"),
@@ -381,7 +382,7 @@ async function candidateOwnedDevice(
     .query("userSettings")
     .withIndex("by_userId", (q: any) => q.eq("userId", userId))
     .first();
-  return selectLiveOwnedDevice(devices as OwnedDeviceCandidate[], {
+  return selectLiveOwnedDevice(activeDeviceRows(devices) as OwnedDeviceCandidate[], {
     now: Date.now(),
     targetDeviceId: args.targetDeviceId,
     runnerId: args.runnerId,

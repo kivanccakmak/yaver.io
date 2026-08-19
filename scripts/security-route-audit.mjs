@@ -16,6 +16,15 @@ const ownerDeploySources = [
   relativePath,
   source: fs.readFileSync(path.join(repoRoot, relativePath), "utf8"),
 }));
+const ownerOnlySurfaceSources = [
+  "mobile/app/(tabs)/settings.tsx",
+  "mobile/app/(tabs)/screenlog.tsx",
+  "mobile/app/(tabs)/_layout.tsx",
+  "web/app/dashboard/page.tsx",
+].map((relativePath) => ({
+  relativePath,
+  source: fs.readFileSync(path.join(repoRoot, relativePath), "utf8"),
+}));
 
 const ROUTE_RE = /mux\.HandleFunc\("([^"]+)",\s*([^\n]+?)\)/g;
 const BACKEND_ROUTE_RE = /path:\s*"([^"]+)"/g;
@@ -336,6 +345,18 @@ for (const { relativePath, source: deploySource } of ownerDeploySources) {
       path: relativePath,
       actual: "present",
       detail: "deployment entrypoints must start owner-only agents",
+    });
+  }
+}
+
+for (const { relativePath, source: surfaceSource } of ownerOnlySurfaceSources) {
+  if (/invite someone to code with you|invite you to share their machine|share it to you first|router\.(?:push|navigate)\(["']\/guests/i.test(surfaceSource)) {
+    findings.push({
+      severity: "high",
+      check: "cross-account-surface-restored",
+      path: relativePath,
+      actual: "present",
+      detail: "v1 surfaces must not advertise guest, visitor, or cross-account machine access",
     });
   }
 }

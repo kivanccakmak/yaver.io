@@ -1922,9 +1922,9 @@ export function buildCreateTaskBody(params: CreateTaskParams): Record<string, un
     gitBranch: params.gitBranch ?? "",
     autoPush: params.autoPush ?? "",
     goal: params.goal ?? "",
-    // Absent = include (server default true); only an explicit false strips
-    // Yaver's own MCP doorway so the task runs with ONLY selected externals.
-    includeYaverMcp: params.includeYaverMcp ?? true,
+    // New conversations are No MCP unless the surface carries an explicit
+    // user choice (or an enabled Use latest preference).
+    includeYaverMcp: params.includeYaverMcp ?? false,
     source: "web",
   };
 }
@@ -2634,8 +2634,10 @@ export class AgentClient {
           contextWords: args.contextWords,
           allowLocalFallback: args.allowLocalFallback ?? false,
           projectDir: args.projectDir ?? "",
-          mcpServers: args.mcpServers ?? [],
-          includeYaverMcp: args.includeYaverMcp ?? true,
+          // Omitted fork scope inherits the parent. Explicit []/false means
+          // the user selected No MCP.
+          ...(args.mcpServers !== undefined ? { mcpServers: args.mcpServers } : {}),
+          ...(args.includeYaverMcp !== undefined ? { includeYaverMcp: args.includeYaverMcp } : {}),
         }),
       },
       30_000,

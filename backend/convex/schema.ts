@@ -288,6 +288,13 @@ export default defineSchema({
   devices: defineTable({
     userId: v.id("users"),
     deviceId: v.string(),
+    // Account-level removal is a tombstone, not a hard delete. Every
+    // user-facing inventory filters this row, while keeping the deviceId lets
+    // register/heartbeat reject a stale installation instead of letting it
+    // silently reappear. A factory-reset machine receives a fresh deviceId
+    // when the owner explicitly pairs it again.
+    removed: v.optional(v.boolean()),
+    removedAt: v.optional(v.number()),
     name: v.string(),
     // User-set short alias used by `yaver ssh <alias>`, the dashboard,
     // and the mobile app. Per-user uniqueness is enforced in the

@@ -28,8 +28,8 @@ export type SendTaskRequestBodyArgs = {
    *  mobile gap so a phone-triggered ask is indistinguishable from a
    *  dashboard one. */
   askMode?: boolean;
-  /** Whether the runner sees Yaver's own `yaver mcp` doorway (default
-   *  true). Set false when the user deselects the `yaver` chip. */
+  /** Whether the runner sees Yaver's own `yaver mcp` doorway. New tasks
+   *  default false; send true only after an explicit user opt-in. */
   includeYaverMcp?: boolean;
 };
 
@@ -53,8 +53,6 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     ...(args.allowLocalFallback ? { allowLocalFallback: true } : {}),
     ...(args.goal ? { goal: args.goal } : {}),
     ...(args.askMode ? { askMode: true } : {}),
-    // Absent = include (server default true); only an explicit false strips
-    // Yaver's own MCP doorway so the task runs with ONLY selected externals.
-    ...(args.includeYaverMcp === false ? { includeYaverMcp: false } : {}),
+    ...(typeof args.includeYaverMcp === "boolean" ? { includeYaverMcp: args.includeYaverMcp } : {}),
   };
 }

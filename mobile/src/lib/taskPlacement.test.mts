@@ -122,7 +122,7 @@ test("mobile placement helper surfaces wake failure activation blockers", () => 
   );
   assert.equal(
     activationBlockReason({ action: "wake_failed" }),
-    "Cloud Workspace wake failed before this task could run.",
+    "Remote machine wake failed before this task could run.",
   );
   assert.equal(activationBlockReason({ action: "wake_scheduled" }), null);
 });

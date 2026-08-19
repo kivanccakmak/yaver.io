@@ -10,7 +10,7 @@ const faqs = [
     items: [
       {
         q: "Who is Yaver for?",
-        a: "An individual developer running Yaver on their own machines. Your laptop, your Mac mini, your Linux box, your VPS — paired with your own phone or browser as a remote control. V1 is not a hosted multi-tenant service and does not expose machine-sharing or guest-access flows.",
+        a: "An individual developer running Yaver on their own machines. Your laptop, your Mac mini, your Linux box, your VPS — paired with your own phone or browser as a remote control. V1 is not a hosted multi-tenant service and does not expose machine-sharing or secondary-user access.",
       },
       {
         q: "What AI agents does Yaver work with?",

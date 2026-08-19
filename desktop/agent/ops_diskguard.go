@@ -492,8 +492,8 @@ func diskGuardClasses() []diskGuardClass {
 		{
 			Name: "yaver-tmp-dirs",
 			Why:  "yaver-* scratch trees in the system temp dir (expo-web exports, preview bundles, repo seeds, hot-swap staging). Each is re-created on demand by the operation that owns it; a crash strands them forever — 2026-07-27 found ~600MB of them on a box at 95%. Only trees whose NEWEST file is older than 7 days qualify, so a live dev server's dir is never taken.",
-			Collect: func(time.Duration) ([]diskGuardCandidate, error) {
-				return diskGuardCollectYaverTemp()
+			Collect: func(minAge time.Duration) ([]diskGuardCandidate, error) {
+				return diskGuardCollectYaverTemp(minAge)
 			},
 			KeepNewest: 0,
 		},
@@ -551,16 +551,20 @@ func diskGuardCollectGoBuildCache(minAge time.Duration) ([]diskGuardCandidate, e
 // deleting one mid-session (a broken preview) outweighs a week of parked bytes.
 const yaverTempMaxAge = 7 * 24 * time.Hour
 
-func diskGuardCollectYaverTemp() ([]diskGuardCandidate, error) {
+func diskGuardCollectYaverTemp(pressureAge ...time.Duration) ([]diskGuardCandidate, error) {
 	tmp := os.TempDir()
 	entries, err := os.ReadDir(tmp)
 	if err != nil {
 		return nil, err
 	}
-	cutoff := time.Now().Add(-yaverTempMaxAge)
+	cutoffAge := yaverTempMaxAge
+	if len(pressureAge) > 0 && pressureAge[0] > 0 {
+		cutoffAge = pressureAge[0]
+	}
+	cutoff := time.Now().Add(-cutoffAge)
 	var out []diskGuardCandidate
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), "yaver-") {
+		if !isReclaimableRenderTempName(e.Name()) {
 			continue
 		}
 		full := filepath.Join(tmp, e.Name())
@@ -577,6 +581,17 @@ func diskGuardCollectYaverTemp() ([]diskGuardCandidate, error) {
 		out = append(out, diskGuardCandidate{Path: full, Bytes: size, ModTime: newest})
 	}
 	return out, nil
+}
+
+// isReclaimableRenderTempName covers only disposable roots created by Yaver's
+// browser/preview lanes. Playwright and chromedp do not use a yaver- prefix;
+// leaving them outside the allowlist caused hundreds of crashed render runs
+// to accumulate until the next WebRTC session could not create a profile.
+func isReclaimableRenderTempName(name string) bool {
+	return strings.HasPrefix(name, "yaver-") ||
+		strings.HasPrefix(name, "playwright_chromiumdev_profile-") ||
+		strings.HasPrefix(name, "playwright-artifacts-") ||
+		strings.HasPrefix(name, "chromedp-runner")
 }
 
 // diskGuardNewestMTime is the newest modification time anywhere in the tree.

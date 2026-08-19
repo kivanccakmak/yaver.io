@@ -619,7 +619,66 @@ func (browserWindowTarget) Tap(ctx context.Context, deviceID string, x, y int) e
 	if !ok {
 		return fmt.Errorf("browser-window %q not found", deviceID)
 	}
-	return chromedp.Run(e.browserCtx, chromedp.MouseClickXY(float64(x), float64(y)))
+	// Capture coordinates are device pixels. Under Chrome mobile emulation the
+	// DOM layout viewport may still be 980 CSS px wide while the authenticated
+	// JPEG is 400 px wide. Sending the screenshot coordinate directly therefore
+	// makes the visible pointer and actual click disagree.
+	var viewport struct {
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+	}
+	if err := chromedp.Run(e.browserCtx, chromedp.Evaluate(
+		`({width: window.innerWidth || document.documentElement.clientWidth, height: window.innerHeight || document.documentElement.clientHeight})`,
+		&viewport,
+	)); err != nil {
+		return fmt.Errorf("measure browser viewport: %w", err)
+	}
+	hitX, hitY := float64(x), float64(y)
+	if e.width > 0 && viewport.Width > 0 {
+		hitX = hitX * viewport.Width / float64(e.width)
+	}
+	if e.height > 0 && viewport.Height > 0 {
+		hitY = hitY * viewport.Height / float64(e.height)
+	}
+	if err := chromedp.Run(e.browserCtx, chromedp.MouseClickXY(hitX, hitY)); err != nil {
+		return err
+	}
+	// A remote pointer click can activate an input without leaving Chrome's
+	// document.activeElement on it (notably with touch emulation and React
+	// wrappers). That makes the operation look successful while the TV has no
+	// evidence that it should open its keyboard. Resolve the actual hit target
+	// after the real click and explicitly focus only editable controls. The real
+	// click remains load-bearing for application handlers; this is the native
+	// keyboard-focus part of the same tap, not synthetic form interaction.
+	return chromedp.Run(e.browserCtx, chromedp.Evaluate(fmt.Sprintf(`(() => {
+		let el = document.elementFromPoint(%f, %f);
+		if (!el) return false;
+		if (el.tagName === 'LABEL' && el.control) el = el.control;
+		const editable = el.closest && el.closest('input,textarea,[contenteditable="true"],[contenteditable=""]');
+		if (!editable || editable.disabled || editable.readOnly) return false;
+		editable.focus({preventScroll: true});
+		return document.activeElement === editable;
+	})()`, hitX, hitY), nil))
+}
+
+// browserWindowTextInputFocused probes the operation that matters after a
+// remote tap: whether the page actually focused something editable. Inventory
+// ("the page contains an input") is insufficient because the tap may have hit
+// a button or missed the field entirely.
+func browserWindowTextInputFocused(ctx context.Context, deviceID string) (bool, error) {
+	e, ok := browserPool.get(deviceID)
+	if !ok {
+		return false, fmt.Errorf("browser-window %q not found", deviceID)
+	}
+	var focused bool
+	err := chromedp.Run(e.browserCtx, chromedp.Evaluate(`(() => {
+		const el = document.activeElement;
+		if (!el) return false;
+		const tag = String(el.tagName || '').toLowerCase();
+		return !el.disabled && !el.readOnly &&
+			(tag === 'input' || tag === 'textarea' || el.isContentEditable === true);
+	})()`, &focused))
+	return focused, err
 }
 
 func (browserWindowTarget) Swipe(ctx context.Context, deviceID string, x1, y1, x2, y2, durationMs int) error {

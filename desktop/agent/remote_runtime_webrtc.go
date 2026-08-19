@@ -850,12 +850,24 @@ func (m *RemoteRuntimeManager) ExecuteControl(sessionID string, req remoteRuntim
 	defer cancel()
 
 	action := strings.ToLower(strings.TrimSpace(req.Action))
+	textInputFocused := false
 	if action == "" {
 		return session, fmt.Errorf("missing action")
 	}
 	switch action {
 	case "tap":
 		err = live.tap(ctx, req.X, req.Y)
+		if err == nil {
+			live.mu.Lock()
+			targetID, deviceID := live.targetID, live.deviceID
+			live.mu.Unlock()
+			if targetID == "browser-window" {
+				// The click has completed; ask the browser which element owns
+				// focus. Failure leaves the optional UX hint false without
+				// turning a successful tap into a failed control operation.
+				textInputFocused, _ = browserWindowTextInputFocused(ctx, deviceID)
+			}
+		}
 	case "swipe":
 		err = live.swipe(ctx, req.X, req.Y, req.X2, req.Y2, req.DurationMs)
 	case "pinch", "zoom":
@@ -895,6 +907,7 @@ func (m *RemoteRuntimeManager) ExecuteControl(sessionID string, req remoteRuntim
 	updated, _ := m.Update(sessionID, func(current *RemoteRuntimeSession) {
 		current.Status = "streaming"
 		current.LastCommand = action
+		current.TextInputFocused = textInputFocused
 		switch action {
 		case "tap":
 			current.Note = fmt.Sprintf("Tapped %d,%d on %s", req.X, req.Y, current.TargetLabel)

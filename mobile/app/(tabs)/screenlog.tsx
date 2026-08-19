@@ -1,5 +1,5 @@
 // Screen Monitor tab — drive the screenlog "screen as a stream of images"
-// black box on ANY of your machines (e.g. a family member's PC you manage)
+// black box on any machine signed into the owner's Yaver account
 // from your phone. Lists local sessions, shows the deterministic activity
 // report ("what did it spend time on"), a frame grid (loaded with auth headers
 // straight off the device's disk over the relay), and the owner consent policy
@@ -278,7 +278,7 @@ export default function ScreenlogScreen() {
             <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 17 }}>
               Screen Monitor needs the machine online. Make sure Yaver is running there
               (<Text style={{ fontFamily: "Menlo" }}>yaver serve</Text>) and it's signed into this account.
-              If it's a family member's PC on their own account, share it to you first.
+              V1 only supports machines signed into your own Yaver account.
             </Text>
           </View>
         ) : connecting ? (

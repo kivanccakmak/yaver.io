@@ -56,12 +56,18 @@ enum SpeechError: LocalizedError {
 final class DictationSession: ObservableObject {
     @Published private(set) var transcript = ""
     @Published private(set) var listening = false
+    @Published private(set) var starting = false
     @Published private(set) var error: String?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale.current)
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private let engine = AVAudioEngine()
+    private var tapInstalled = false
+    // Permission requests suspend start(). Without an attempt token, a stop
+    // caused by scene deactivation can return before the continuation resumes
+    // and the old attempt can still open the microphone in the background.
+    private var startAttempt: UInt = 0
 
     /// True when this headset can transcribe WITHOUT sending audio anywhere.
     /// The UI uses it to hide the mic rather than offer a button that will
@@ -85,7 +91,13 @@ final class DictationSession: ObservableObject {
     }
 
     func start() async {
-        guard !listening else { return }
+        guard !listening, !starting else { return }
+        startAttempt &+= 1
+        let attempt = startAttempt
+        starting = true
+        defer {
+            if startAttempt == attempt { starting = false }
+        }
         error = nil
         transcript = ""
 
@@ -103,6 +115,7 @@ final class DictationSession: ObservableObject {
             ).localizedDescription
             return
         }
+        guard startAttempt == attempt else { return }
 
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
@@ -124,10 +137,19 @@ final class DictationSession: ObservableObject {
             input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in
                 req.append(buffer)
             }
+            tapInstalled = true
             engine.prepare()
             try engine.start()
         } catch {
             self.error = "Could not start the microphone: \(error.localizedDescription)"
+            cleanup()
+            return
+        }
+
+        // stop() may have invalidated the attempt while setup was suspended.
+        // Do not publish a live session or leave the engine active in that case.
+        guard startAttempt == attempt else {
+            engine.stop()
             cleanup()
             return
         }
@@ -150,15 +172,20 @@ final class DictationSession: ObservableObject {
     }
 
     func stop() {
-        guard listening || task != nil else { return }
+        startAttempt &+= 1
+        starting = false
+        guard listening || task != nil || tapInstalled else { return }
         engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
         request?.endAudio()
         task?.cancel()
         cleanup()
     }
 
     private func cleanup() {
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
         request = nil
         task = nil
         listening = false

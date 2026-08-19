@@ -26,6 +26,45 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+# Refuse an obsolete SDK before touching generated native state or consuming a
+# build number. Apple has rejected iOS SDKs below 26 since 2026-04-28.
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
+apple_require_store_sdk iphoneos 26
+apple_ensure_simulator_runtime iOS iphonesimulator
+
+# Target-injection scripts are Node programs and must run only after their
+# dependencies exist. On 2026-08-18 this check lived below those scripts, so a
+# clean checkout died with a raw "Cannot find module .../node_modules/xcode"
+# stack trace even though the canonical deploy already knew how to run npm ci.
+ensure_mobile_dependencies() {
+  local mobile_dir="$ROOT/mobile"
+  local xcode_package="$mobile_dir/node_modules/xcode/package.json"
+  local sqlite_package="$mobile_dir/node_modules/expo-sqlite/package.json"
+  local audio_package="$mobile_dir/node_modules/react-native-audio-api/package.json"
+
+  if [ -f "$xcode_package" ] && [ -f "$sqlite_package" ] && [ -f "$audio_package" ]; then
+    return 0
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: mobile dependencies are incomplete and npm is unavailable." >&2
+    echo "       Install Node.js/npm, then rerun the deploy; Yaver will restore the lockfile." >&2
+    exit 1
+  fi
+  if [ ! -f "$mobile_dir/package-lock.json" ]; then
+    echo "ERROR: mobile dependencies are incomplete and mobile/package-lock.json is missing." >&2
+    echo "       Restore the tracked lockfile before deploying; refusing an unpinned install." >&2
+    exit 1
+  fi
+
+  echo "Mobile native dependencies are incomplete — restoring mobile/package-lock.json with npm ci."
+  echo "Install output follows; the deploy will resume automatically when it finishes."
+  (cd "$mobile_dir" && npm ci --legacy-peer-deps --no-audit --no-fund)
+}
+
+ensure_mobile_dependencies
+
 # Keep the Apple Watch companion target present in the committed iOS project.
 # The phone bridge is injected by Expo prebuild; this target is what makes the
 # real paired watch app install alongside the iPhone app.
@@ -56,33 +95,11 @@ if [ "$(printf '%s\n' "$MARKETING_VERSIONS" | wc -l | tr -d ' ')" -ne 1 ]; then
   echo "  committed pbxproj if a stale script run clobbered it." >&2
   exit 1
 fi
+APP_MARKETING_VERSION="$(printf '%s\n' "$MARKETING_VERSIONS" | head -1)"
 
 cd "$ROOT/mobile/ios"
 
-ensure_mobile_dependencies() {
-  local mobile_dir="$ROOT/mobile"
-  local sqlite_package="$mobile_dir/node_modules/expo-sqlite/package.json"
-  local audio_package="$mobile_dir/node_modules/react-native-audio-api/package.json"
-
-  if [ -f "$sqlite_package" ] && [ -f "$audio_package" ]; then
-    return 0
-  fi
-
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "ERROR: mobile dependencies are incomplete and npm is unavailable." >&2
-    echo "       Install Node.js/npm, then rerun the deploy; Yaver will restore the lockfile." >&2
-    exit 1
-  fi
-  if [ ! -f "$mobile_dir/package-lock.json" ]; then
-    echo "ERROR: mobile dependencies are incomplete and mobile/package-lock.json is missing." >&2
-    echo "       Restore the tracked lockfile before deploying; refusing an unpinned install." >&2
-    exit 1
-  fi
-
-  echo "Mobile native dependencies are incomplete — restoring mobile/package-lock.json with npm ci."
-  echo "Install output follows; the deploy will resume automatically when it finishes."
-  (cd "$mobile_dir" && npm ci --legacy-peer-deps --no-audit --no-fund)
-}
+"$ROOT/scripts/check-no-native-payment-sdks.sh" source
 
 hydrate_native_dependency_artifacts() {
   local sqlite_dir="$ROOT/mobile/node_modules/expo-sqlite"
@@ -122,8 +139,20 @@ hydrate_native_dependency_artifacts() {
   [ "$missing" = 0 ] || exit 1
 }
 
-ensure_mobile_dependencies
 node "$ROOT/scripts/restore-ios-share-extension.js"
+node "$ROOT/scripts/restore-ios-splash-storyboard.js"
+# The native project is generated state, but deploys deliberately do not rerun
+# Expo prebuild because it can rewrite the hand-maintained companion targets.
+# Reapply config-plugin Podfile repairs directly before CocoaPods regenerates
+# Pods, including Sentry's private module path required by Xcode's ObjC scanner.
+node "$ROOT/mobile/plugins/withSentryXcode16Compat.js" "$ROOT/mobile/ios/Podfile"
+if ! command -v pod >/dev/null 2>&1; then
+  echo "ERROR: CocoaPods is required to regenerate the validated iOS Pods project." >&2
+  echo "       Install CocoaPods, then rerun the deploy; the locked install resumes automatically." >&2
+  exit 1
+fi
+(cd "$ROOT/mobile/ios" && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install)
+"$ROOT/scripts/check-no-native-payment-sdks.sh" ios
 hydrate_native_dependency_artifacts
 
 # Load secrets from the Yaver vault (project="mobile" + globals). Vault
@@ -132,9 +161,10 @@ hydrate_native_dependency_artifacts
 # In CI: just don't put the secret in the vault — GitHub Actions env vars
 # pass through unchanged.
 
-# App Store Connect credentials. `~/.appstoreconnect/yaver.env` is gitignored
-# and pre-seeded with all four exports (see CLAUDE.md "iOS — TestFlight"); in
-# CI they arrive as GitHub secrets in the parent env.
+# App Store Connect credentials. When provisioned,
+# `~/.appstoreconnect/yaver.env` is gitignored and carries all four exports
+# (see CLAUDE.md "iOS — TestFlight"); in CI they arrive as GitHub secrets in
+# the parent env. Its absence is valid and selects Xcode-managed account auth.
 #
 # This used to be a fallback behind `yaver vault env`. It is now the source.
 # The vault call swallowed its own failure, so a locked vault died further down
@@ -149,8 +179,6 @@ fi
 # the Apple account already signed in to Xcode. Partial credentials still fail
 # loudly. Without API access, an explicit build number is mandatory so we do
 # not guess and collide with an existing TestFlight build.
-# shellcheck source=scripts/apple-xcode-auth.sh
-. "$ROOT/scripts/apple-xcode-auth.sh"
 apple_resolve_team_id "$ROOT/mobile/ios/Yaver.xcodeproj/project.pbxproj"
 apple_configure_xcode_auth
 
@@ -385,6 +413,7 @@ ARCHIVE_LOG=/tmp/arch_full.log
 xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
   -archivePath /tmp/Yaver.xcarchive archive \
   DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
+  MARKETING_VERSION="$APP_MARKETING_VERSION" CURRENT_PROJECT_VERSION="$NEW_BUILD" \
   CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES \
   ENABLE_USER_SCRIPT_SANDBOXING=NO -allowProvisioningUpdates \
   ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
@@ -455,6 +484,35 @@ if [ ! -d /tmp/Yaver.xcarchive ]; then
   exit 1
 fi
 
+# Inspect the archive that will actually be exported, not the project settings
+# that were supposed to produce it. App Store Connect rejects embedded bundles
+# whose marketing/build versions drift from their containing app; historically
+# the Watch and Live Activity plists hardcoded build 1 while the phone had
+# already reached the hundreds. Fail before export so a bad archive cannot
+# consume an upload slot.
+ARCHIVE_APP=/tmp/Yaver.xcarchive/Products/Applications/Yaver.app
+ARCHIVE_BUNDLES=(
+  "$ARCHIVE_APP"
+  "$ARCHIVE_APP/PlugIns/YaverActivity.appex"
+  "$ARCHIVE_APP/PlugIns/ShareExtension.appex"
+  "$ARCHIVE_APP/Watch/Yaver.app"
+)
+for bundle in "${ARCHIVE_BUNDLES[@]}"; do
+  if [ ! -d "$bundle" ]; then
+    echo "ERROR: required embedded bundle is missing from archive: $bundle" >&2
+    exit 1
+  fi
+  bundle_version=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$bundle/Info.plist")
+  bundle_build=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$bundle/Info.plist")
+  bundle_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$bundle/Info.plist")
+  if [ "$bundle_version" != "$APP_MARKETING_VERSION" ] || [ "$bundle_build" != "$NEW_BUILD" ]; then
+    echo "ERROR: archive version drift in $bundle_id: version=$bundle_version build=$bundle_build" >&2
+    echo "       Expected version=$APP_MARKETING_VERSION build=$NEW_BUILD for every embedded bundle." >&2
+    exit 1
+  fi
+  echo "Archive bundle verified: $bundle_id $bundle_version ($bundle_build)"
+done
+
 if [ "$UPLOAD" != "1" ]; then
   DEPLOY_OUTCOME=success
   echo "✓ Signed iOS archive ready (build-only): /tmp/Yaver.xcarchive"
@@ -519,4 +577,16 @@ fi
 DEPLOY_OUTCOME=success   # the trap releases the lease with this outcome + quota++
 echo "✓ TestFlight build $NEW_BUILD uploaded"
 
-mobile-cache-cleanup.sh mark-deployed yaver || true
+# The shared cache helper is installed outside the repo and is not guaranteed to
+# be on PATH in GUI/headless deploy sessions. Resolve its documented fallback
+# explicitly so a successful upload never ends with a misleading command-not-
+# found error.
+CACHE_CLEANUP="$(command -v mobile-cache-cleanup.sh 2>/dev/null || true)"
+if [ -z "$CACHE_CLEANUP" ] && [ -x "$HOME/.local/bin/mobile-cache-cleanup.sh" ]; then
+  CACHE_CLEANUP="$HOME/.local/bin/mobile-cache-cleanup.sh"
+fi
+if [ -n "$CACHE_CLEANUP" ]; then
+  "$CACHE_CLEANUP" mark-deployed yaver || true
+else
+  echo "Note: mobile cache cleanup helper is not installed; upload is complete."
+fi

@@ -45,6 +45,13 @@ test("mobile task request body carries portable project identity and MCP allowli
   assert.deepEqual(body.mcpServers, ["tusrehber"]);
 });
 
+test("mobile task request body preserves explicit MCP doorway intent", () => {
+  const omitted = buildSendTaskRequestBody({ title: "No tools", description: "" });
+  assert.equal(Object.prototype.hasOwnProperty.call(omitted, "includeYaverMcp"), false);
+  assert.equal(buildSendTaskRequestBody({ title: "Tools", description: "", includeYaverMcp: true }).includeYaverMcp, true);
+  assert.equal(buildSendTaskRequestBody({ title: "No tools", description: "", includeYaverMcp: false }).includeYaverMcp, false);
+});
+
 test("mobile task request body carries askMode only when enabled (deep-audit frame)", () => {
   const plain = buildSendTaskRequestBody({
     title: "Add a button",

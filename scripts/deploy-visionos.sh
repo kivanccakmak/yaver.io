@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
+"$ROOT/scripts/check-no-native-payment-sdks.sh" source
 UPLOAD=0
 NATIVE_ONLY=0
 CONFIGURATION="${CONFIGURATION:-Release}"
@@ -44,6 +47,9 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+apple_require_working_xcode
+apple_ensure_simulator_runtime visionOS xrsimulator
 
 if ! xcodebuild -showsdks | grep -Eq "xros|visionos"; then
   echo "ERROR: Xcode visionOS SDK is not installed. Install the visionOS platform component in Xcode, then retry." >&2
@@ -156,8 +162,6 @@ fi
 if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
   set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
 fi
-# shellcheck source=scripts/apple-xcode-auth.sh
-. "$ROOT/scripts/apple-xcode-auth.sh"
 apple_resolve_team_id "$VISION_DIR/project.yml"
 apple_configure_xcode_auth
 

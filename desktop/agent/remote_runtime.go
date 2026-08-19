@@ -121,9 +121,14 @@ type RemoteRuntimeSession struct {
 	FrameTransport   string                 `json:"frameTransport,omitempty"`
 	Status           string                 `json:"status"`
 	LastCommand      string                 `json:"lastCommand,omitempty"`
-	CreatedAt        string                 `json:"createdAt"`
-	UpdatedAt        string                 `json:"updatedAt"`
-	Note             string                 `json:"note,omitempty"`
+	// TextInputFocused is measured after a pointer tap on browser-window.
+	// Remote viewers cannot receive the page's native keyboard request, so this
+	// signal lets them open their own text-entry surface only for real editable
+	// elements rather than guessing from pixels or opening on every button.
+	TextInputFocused bool   `json:"textInputFocused,omitempty"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
+	Note             string `json:"note,omitempty"`
 	// RemoteBuilderId is the alias (NOT the URL or token) of the
 	// builder this session is dispatched to. Set when a Linux dev
 	// box forwards a Swift session to a paired Mac via the Phase-5
@@ -554,7 +559,7 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 		FeedbackSDKCompatible: mode == ExecutionModeNativeWebRTC || rnSim || webBrowser,
 		FeedbackSDKNote: func() string {
 			if rnSim {
-				return "Feedback flows client→server: the phone owns shake detection (it already has ShakeDetector), and in a WebRTC session a shake sends the `shake` session command to the remote box, which injects a hardware shake into the simulator (simctl for iOS, adb sensor for Android). The guest app's OWN Yaver Feedback SDK — live in the real simulator — then fires its overlay inside the sim, and that overlay streams back to the phone over the same WebRTC video. Yaver can also push a launch-feedback control message down the events channel to trigger it directly."
+				return "Feedback flows client→server: the phone owns shake detection (it already has ShakeDetector), and in a WebRTC session a shake sends the `shake` session command to the remote box, which injects a hardware shake into the simulator (simctl for iOS, adb sensor for Android). The project app's own Yaver Feedback SDK — live in the real simulator — then fires its overlay inside the sim, and that overlay streams back to the phone over the same WebRTC video. Yaver can also push a launch-feedback control message down the events channel to trigger it directly."
 			}
 			return "Remote runtime is intended to coexist with Yaver Feedback SDK instrumentation in native apps; session transport and feedback transport remain separate."
 		}(),
@@ -577,7 +582,7 @@ func remoteRuntimeCapabilitiesForProject(workDir, framework string) RemoteRuntim
 		// Keep the wire shape stable. A nil Go slice serializes as null, which
 		// strict native clients correctly reject for an array field and used to
 		// turn an ordinary capability gap into "the data is missing".
-		Targets:                 []RemoteRuntimeTarget{},
+		Targets: []RemoteRuntimeTarget{},
 	}
 	if webBrowser {
 		caps.Targets = []RemoteRuntimeTarget{browserWindowTargetForFramework(framework)}
@@ -2082,7 +2087,7 @@ func (s *HTTPServer) handleRemoteRuntimeSessionCommand(w http.ResponseWriter, r 
 			}
 			current.Status = "building"
 			current.LastCommand = "run-guest"
-			current.Note = "Building the guest app into the simulator (dev mode, Fast Refresh)…"
+			current.Note = "Building the project app in the simulator (dev mode, Fast Refresh)…"
 		})
 		if alreadyBuilding {
 			current, _ := mgr.Get(session.ID)
@@ -2092,7 +2097,7 @@ func (s *HTTPServer) handleRemoteRuntimeSessionCommand(w http.ResponseWriter, r 
 				"command":   "run-guest",
 				"status":    "building",
 				"deduped":   true,
-				"note":      "A guest build is already in flight for this session; not starting another.",
+				"note":      "A project build is already in flight for this session; not starting another.",
 				"session":   current,
 			})
 			return
@@ -2104,11 +2109,11 @@ func (s *HTTPServer) handleRemoteRuntimeSessionCommand(w http.ResponseWriter, r 
 			s.ensureRemoteRuntimeManager().Update(session.ID, func(current *RemoteRuntimeSession) {
 				if err != nil {
 					current.Status = "build-failed"
-					current.Note = "Guest build failed: " + err.Error()
+					current.Note = "Project build failed: " + err.Error()
 					return
 				}
 				current.Status = "running"
-				current.Note = "Guest app running in the simulator; Metro Fast Refresh live. Streaming."
+				current.Note = "Project app running in the simulator; Metro Fast Refresh live. Streaming."
 			})
 		}()
 		updated, _ := mgr.Update(session.ID, func(_ *RemoteRuntimeSession) {})
@@ -2143,7 +2148,7 @@ func (s *HTTPServer) handleRemoteRuntimeSessionCommand(w http.ResponseWriter, r 
 				"ts":        time.Now().UTC().Format(time.RFC3339Nano),
 			})
 		}
-		note := "Shake injected into the simulator; the guest app's feedback SDK should open."
+		note := "Shake injected into the simulator; the project app's feedback SDK should open."
 		if injErr != nil {
 			note = "Hardware-shake injection unavailable on this host (" + injErr.Error() + "); sent feedback-launch-request instead."
 		}

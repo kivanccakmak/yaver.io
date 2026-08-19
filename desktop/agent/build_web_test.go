@@ -3,7 +3,6 @@ package main
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestInjectBaseHrefHappyPath confirms the <base> tag lands inside <head>
@@ -119,31 +118,9 @@ func TestWebTransportPhaseLadder(t *testing.T) {
 
 	tr.transition("ready_to_serve")
 	tr.recordFile("index.html", 1024)
-	// Wait for the goroutine that emits the synchronous serving phase.
-	// In a real handler this is racy with the immediate progress event;
-	// the test asserts both eventually land.
-
 	tr.recordFile("_expo/static/js/a.js", 50000)
 	tr.recordFile("_expo/static/js/b.js", 30000)
 	tr.markDelivered(987)
-
-	// Allow the serving-phase goroutine to fire. Real sleep — the
-	// previous version was a tight CPU spin which raced with the
-	// scheduler under parallel test load.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		hasServing := false
-		for _, e := range events {
-			if e.Phase == "serving" {
-				hasServing = true
-				break
-			}
-		}
-		if hasServing {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
 
 	hasReady := false
 	hasServing := false

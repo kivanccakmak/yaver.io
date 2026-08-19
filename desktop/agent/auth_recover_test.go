@@ -241,6 +241,14 @@ func TestAuthRecoverPairReusesExistingWindow(t *testing.T) {
 func TestAuthRecoverPairReturnsRecoverySessionAndStatus(t *testing.T) {
 	withTempHome(t)
 	recoveryLimiter.reset()
+	oldValidate := validateRecoveredTokenFn
+	validateRecoveredTokenFn = func(_, token string) (string, error) {
+		if token == "recovered-token" {
+			return "test-owner", nil
+		}
+		return "", nil
+	}
+	t.Cleanup(func() { validateRecoveredTokenFn = oldValidate })
 	EndPairingSession()
 	if err := SetBootstrapSecret("session-secret"); err != nil {
 		t.Fatalf("SetBootstrapSecret: %v", err)

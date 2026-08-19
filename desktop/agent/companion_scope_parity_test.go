@@ -40,11 +40,15 @@ var tvClientEndpoints = []struct {
 	{http.MethodGet, "/tasks"},
 	{http.MethodGet, "/tasks/task-123"},
 	{http.MethodGet, "/projects"},
+	{http.MethodGet, "/workspace/apps"},
+	{http.MethodGet, "/project/preview-capabilities"},
 	{http.MethodGet, "/tmux/sessions"},
 	{http.MethodGet, "/tmux/stream"},
 	{http.MethodPost, "/ops"},
 	{http.MethodPost, "/runner/session/turn"},
 	{http.MethodGet, "/remote-runtime/sessions"},
+	{http.MethodGet, "/remote-runtime/capabilities"},
+	{http.MethodGet, "/remote-runtime/turn-credentials"},
 	{http.MethodPost, "/remote-runtime/sessions/r1/control"},
 	// Pixels: the whole point of a TV.
 	{http.MethodGet, "/droid/frame"},
@@ -94,6 +98,10 @@ var companionDeniedEndpoints = []struct {
 	{http.MethodPost, "/settings/repair-relay"},
 	{http.MethodPost, "/dev/reload"},
 	{http.MethodGet, "/host-share/fs/read"},
+	// Account removal is intentionally Convex-only for companion surfaces; a
+	// stolen TV/vision token must not uninstall or stop the user's box.
+	{http.MethodPost, "/machine/remove"},
+	{http.MethodPost, "/projects/refresh"},
 }
 
 // watchClientEndpoints is the same contract for the watch scope. Source of

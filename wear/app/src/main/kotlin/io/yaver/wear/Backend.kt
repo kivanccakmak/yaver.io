@@ -9,6 +9,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
 /**
@@ -222,4 +223,80 @@ class Backend(
             null
         }
     }
+
+    /** Resolve the configured standalone box from the account registry, then
+     * remove it through the hosting-correct route. Resolution is operation-
+     * based: the stored legacy id may be either a device id or a managed
+     * machine id, so we also match the configured LAN host against live row
+     * addresses instead of guessing which historical meaning applies. */
+    suspend fun removeConfiguredDevice(token: String, boxUrl: String, idHint: String) =
+        withContext(Dispatchers.IO) {
+            val listRequest = Request.Builder()
+                .url(convexOrigin.trimEnd('/') + "/devices/list")
+                .header("Authorization", "Bearer $token")
+                .header("X-Yaver-Surface", "watch")
+                .get()
+                .build()
+            val target = http.newCall(listRequest).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw IllegalStateException(
+                    JSONObject(text).optString("error", "Couldn't load your devices (${response.code}).")
+                )
+                val host = runCatching { URI(boxUrl).host.orEmpty() }.getOrDefault("")
+                val rows = JSONObject(text).optJSONArray("devices")
+                    ?: throw IllegalStateException("Yaver returned no device list.")
+                val matches = (0 until rows.length()).map { rows.getJSONObject(it) }.filter { row ->
+                    val ips = row.optJSONArray("localIps")
+                    row.optString("deviceId") == idHint ||
+                        row.optString("machineId") == idHint ||
+                        (host.isNotEmpty() && row.optString("quicHost") == host) ||
+                        (host.isNotEmpty() && ips != null && (0 until ips.length()).any { ips.optString(it) == host })
+                }
+                when (matches.size) {
+                    1 -> matches.first()
+                    0 -> throw IllegalStateException("This watch couldn't identify the configured box in your Yaver account.")
+                    else -> throw IllegalStateException("More than one Yaver device matches this box. Remove it from your phone.")
+                }
+            }
+
+            val hosted = target.optString("hosting") == "yaver-hosted"
+            val path: String
+            val body: JSONObject
+            if (hosted) {
+                val machineId = target.optString("machineId")
+                if (machineId.isEmpty()) throw IllegalStateException("This cloud box is missing its provider identity.")
+                path = "/billing/yaver-cloud/dev-deprovision"
+                body = JSONObject().put("machineId", machineId)
+            } else {
+                // Best-effort local uninstall while the configured box still
+                // accepts this session. Failure (repair/offline) never blocks
+                // the durable account tombstone below.
+                runCatching {
+                    val uninstallBody = JSONObject()
+                        .put("confirm", true)
+                        .put("phrase", "delete my machine")
+                    val uninstall = Request.Builder()
+                        .url(boxUrl.trimEnd('/') + "/machine/remove")
+                        .header("Authorization", "Bearer $token")
+                        .header("X-Yaver-Surface", "watch")
+                        .post(uninstallBody.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    http.newCall(uninstall).execute().close()
+                }
+                path = "/devices/remove"
+                body = JSONObject().put("deviceId", target.getString("deviceId"))
+            }
+            val request = Request.Builder()
+                .url(convexOrigin.trimEnd('/') + path)
+                .header("Authorization", "Bearer $token")
+                .header("X-Yaver-Surface", "watch")
+                .post(body.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            http.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw IllegalStateException(
+                    JSONObject(text).optString("error", "Couldn't remove this box (${response.code}).")
+                )
+            }
+        }
 }

@@ -752,7 +752,7 @@ async function normalizeOwnedDeviceId(
     .query("devices")
     .withIndex("by_deviceId", (q: any) => q.eq("deviceId", next))
     .first();
-  if (!device || device.userId !== userId) {
+  if (!device || device.userId !== userId || device.removed) {
     throw new Error(`${slot} must refer to one of the caller's devices`);
   }
   return next;

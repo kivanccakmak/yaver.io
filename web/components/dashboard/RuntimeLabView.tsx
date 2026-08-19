@@ -15,7 +15,7 @@ import {
   type WorkspaceAppView,
 } from "@/lib/agent-client";
 import { isRunnerBrowserAuthTerminal } from "@/lib/agent-client";
-import { saveLastProjectToConvex, loadLastProjectFromConvex, saveMCPServersToConvex, loadMCPServersFromConvex } from "@/lib/runtimeProjectSettings";
+import { saveLastProjectToConvex, loadLastProjectFromConvex, saveMCPServersToConvex, loadMCPServersFromConvex, setUseLatestMCPEnabled, setUseLatestProjectEnabled, useLatestMCPEnabled, useLatestProjectEnabled } from "@/lib/runtimeProjectSettings";
 import { isAgentAuthErrorMessage } from "@/lib/agentAuthError";
 import { detectCompileFailure } from "@/lib/compileFailure";
 import {
@@ -1032,21 +1032,18 @@ export default function RuntimeLabView({
   const [runnerAuthCodeBusy, setRunnerAuthCodeBusy] = useState(false);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
-  // External MCP servers + the yaver doorway toggle — parity with the web
-  // chat composer (page.tsx) so a task started from the Vibing tab carries the
-  // same MCP selection as one started from Chat. Defaults: yaver doorway ON,
-  // no external servers (2026-08-10). Loaded from the connected agent on
-  // connect; choices ride on task bodies via createTask.
+  const [useLatestProject, setUseLatestProject] = useState(() => useLatestProjectEnabled());
+  const [useLatestMCP, setUseLatestMCP] = useState(() => useLatestMCPEnabled());
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
-  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(false);
   // Convex MCP sync — same mcpServersByDevice row the Chat composer and
   // mobile write, so an MCP selection made on the Vibing tab is remembered
   // on the phone and vice versa (2026-08-10). Load on connect; write on user
   // change (guarded so the initial restore is not written back as a "change").
   const mcpRestoredRef = useRef(false);
   useEffect(() => {
-    if (!connectedDevice?.id || !token) return;
+    if (!useLatestMCP || !connectedDevice?.id || !token) return;
     const deviceId = connectedDevice.id;
     let cancelled = false;
     const restore = async () => {
@@ -1065,7 +1062,7 @@ export default function RuntimeLabView({
     // mcpServers intentionally omitted: restore once the agent's server list
     // is loaded; a later list refresh must not overwrite an in-session pick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectedDevice?.id, token]);
+  }, [connectedDevice?.id, token, useLatestMCP]);
   useEffect(() => {
     if (!mcpRestoredRef.current || !connectedDevice?.id || !token) return;
     void saveMCPServersToConvex(CONVEX_URL, token, {
@@ -1508,11 +1505,11 @@ export default function RuntimeLabView({
         const detail = err instanceof Error ? err.message : String(err);
         appendLog(`default project catalog sync skipped: ${detail || "settings unavailable"}`);
       });
-      if (!selectedPath && rows[0]?.path) {
+      if (useLatestProject && !selectedPath && rows[0]?.path) {
         const saved = connectedDevice?.id
           ? (settings?.defaultRuntimeProjectByDevice || []).find((row: RuntimeProjectPreference) => row.deviceId === connectedDevice.id)
           : undefined;
-        setSelectedPath(resolveRuntimeProjectPreference(rows, saved)?.path || rows[0].path);
+        setSelectedPath(resolveRuntimeProjectPreference(rows, saved)?.path || "");
       }
       appendLog(`projects loaded: ${rows.length}`);
     } catch (err) {
@@ -1528,7 +1525,7 @@ export default function RuntimeLabView({
         setError(err instanceof Error ? err.message : "Could not load projects.");
       }
     }
-  }, [appendLog, connectedDevice?.id, devices, loadRuntimeSettings, machineRoles, seedRuntimeProjectCatalog, selectedPath]);
+  }, [appendLog, connectedDevice?.id, devices, loadRuntimeSettings, machineRoles, seedRuntimeProjectCatalog, selectedPath, useLatestProject]);
 
   const refreshRunners = useCallback(async () => {
     const deviceFallback = deviceRunnerFallback;
@@ -4586,12 +4583,41 @@ export default function RuntimeLabView({
                   onChange={(e) => { userSelectedProjectRef.current = true; setSelectedPath(e.target.value); setRuntimeProjectNote(null); setCaps(null); setSession(null); setWebPreviewPanelOpen(false); setRuntimeControlsOpen(false); setWebPreviewUrl(null); setWebPreviewNote(null); }}
                   className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#e6e8ec]"
                 >
+                  <option value="">No project</option>
                   {projects.length === 0 ? <option value="">No projects on the render machine</option> : null}
                   {projects.map((p) => (
                     <option key={p.path} value={p.path}>{p.name} · {p.framework || "unknown"}</option>
                   ))}
                 </select>
               </label>
+              <div className="mb-2 flex flex-wrap items-center gap-3 text-[11px] text-surface-500">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={useLatestProject}
+                    onChange={(event) => {
+                      const next = event.target.checked;
+                      setUseLatestProject(next);
+                      setUseLatestProjectEnabled(next);
+                      if (!next) setSelectedPath("");
+                    }}
+                  />
+                  latest project
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={useLatestMCP}
+                    onChange={(event) => {
+                      const next = event.target.checked;
+                      setUseLatestMCP(next);
+                      setUseLatestMCPEnabled(next);
+                      if (!next) { setSelectedMcpServers([]); setIncludeYaverMcp(false); }
+                    }}
+                  />
+                  latest MCP
+                </label>
+              </div>
               {/* MCP doorway + external servers — parity with the Chat tab
                   composer (page.tsx). The yaver toggle renders ALWAYS (it is
                   the doorway to Yaver's own MCP, present on every box even

@@ -370,6 +370,26 @@ final class YaverStore: ObservableObject {
         storedBoxesJSON = "[]"
     }
 
+    /// Clear a persisted session only when the server has proved it is no
+    /// longer usable. A non-empty Keychain token is not proof of liveness: a
+    /// reinstall can restore a revoked one-year token and strand native
+    /// surfaces on their machine picker. Keep transport failures recoverable,
+    /// but make definitive auth failures return to Sign in on every target
+    /// that shares YaverStore (tvOS and visionOS today).
+    @discardableResult
+    func handleAuthenticationFailure(_ error: Error) -> Bool {
+        let normalized = error.localizedDescription.lowercased()
+        let definitive = normalized.contains("session expired")
+            || normalized.contains("sign in first")
+            || normalized.contains("(401)")
+            || normalized.contains("(403)")
+            || normalized.contains("missing or invalid authorization")
+            || normalized.contains("invalid token")
+        guard definitive else { return false }
+        signOut()
+        return true
+    }
+
     /// Remove a box (a typo'd address, a decommissioned machine). Without this a
     /// bad entry was permanent — the dashboard could only ever ADD.
     func removeBox(_ box: BoxTarget) {

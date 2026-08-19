@@ -15,13 +15,11 @@
 // "off" means the agent is not holding your screen rather than holding it and
 // promising not to look.
 //
-// ── Why it renders here and not in the preview ────────────────────────────
+// ── Why it renders on the preview surface ─────────────────────────────────
 //
-// The observation is made in the Hot Reload tab / DevPreview modal; the prompt
-// is typed in Tasks. The chip belongs where the PROMPT is, because that is
-// where the mutation happens and where the user is deciding what to say. The
-// bridge (screenContextBridge.ts) carries the observation across the tab
-// boundary.
+// The observation and its disclosure live together in the DevPreview render /
+// reload surface, behind that header's ellipsis. Ordinary Tasks stay focused
+// on task composition; the bridge carries this context into Vibing turns.
 
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";

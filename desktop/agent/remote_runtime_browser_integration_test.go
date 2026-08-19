@@ -23,8 +23,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"image/jpeg"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -32,6 +32,10 @@ import (
 
 	"github.com/pion/webrtc/v4"
 )
+
+func browserTestDataURL(page string) string {
+	return "data:text/html;charset=utf-8;base64," + base64.StdEncoding.EncodeToString([]byte(page))
+}
 
 func readTestFile(t *testing.T, path string) []byte {
 	t.Helper()
@@ -211,7 +215,7 @@ button{width:320px;height:96px;border:0;background:white;color:#111;font:700 22p
 </style></head><body><main><button id="todo">Ship WebRTC todo</button></main>
 <script>document.body.addEventListener("click",()=>document.body.classList.add("done"));</script>
 </body></html>`
-	if err := browserPool.navigate(entry.id, "data:text/html;charset=utf-8,"+url.QueryEscape(page)); err != nil {
+	if err := browserPool.navigate(entry.id, browserTestDataURL(page)); err != nil {
 		t.Fatalf("navigate: %v", err)
 	}
 
@@ -321,6 +325,44 @@ func TestBrowserPoolListReportsOpened(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("opened window %s not visible in browserPool.list()", entry.id)
+	}
+}
+
+func TestBrowserWindowReportsEditableFocusAfterTap(t *testing.T) {
+	if !browserBinaryAvailable() {
+		t.Skip("no Chrome / Chromium binary available")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	entry, err := browserPool.open(ctx, 400, 240)
+	if err != nil {
+		t.Fatalf("browserPool.open: %v", err)
+	}
+	t.Cleanup(func() { browserPool.close(entry.id) })
+	page := `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}body{margin:0}` +
+		`input,button{position:absolute;left:10%;width:80%;height:25%}` +
+		`input{top:10%}button{top:60%}</style>` +
+		`<input id="name"><button id="next">Next</button>`
+	if err := browserPool.navigate(entry.id, browserTestDataURL(page)); err != nil {
+		t.Fatalf("navigate: %v", err)
+	}
+	tgt := browserWindowTarget{}
+	if err := tgt.Tap(ctx, entry.id, 190, 60); err != nil {
+		t.Fatalf("tap input: %v", err)
+	}
+	focused, err := browserWindowTextInputFocused(ctx, entry.id)
+	if err != nil || !focused {
+		t.Fatalf("input tap must report editable focus, focused=%v err=%v", focused, err)
+	}
+	if err := tgt.Tap(ctx, entry.id, 190, 170); err != nil {
+		t.Fatalf("tap button: %v", err)
+	}
+	focused, err = browserWindowTextInputFocused(ctx, entry.id)
+	if err != nil {
+		t.Fatalf("probe after button: %v", err)
+	}
+	if focused {
+		t.Fatal("ordinary button tap must not request a text keyboard")
 	}
 }
 

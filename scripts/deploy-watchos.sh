@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WATCH_DIR="$ROOT/watch"
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
 CONFIGURATION="${CONFIGURATION:-Release}"
 SCHEME="${SCHEME:-YaverWatch}"
 ARCHIVE_PATH="${ARCHIVE_PATH:-/tmp/YaverWatch.xcarchive}"
@@ -64,6 +66,9 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+apple_require_working_xcode
+apple_ensure_simulator_runtime watchOS watchsimulator
 
 if ! xcodebuild -showsdks | grep -q "watchos"; then
   echo "ERROR: Xcode watchOS SDK is not installed. Install the watchOS platform component in Xcode, then retry." >&2

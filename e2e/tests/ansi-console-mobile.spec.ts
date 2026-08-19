@@ -26,11 +26,13 @@ import { devices, expect, test } from "@playwright/test";
 const APP_URL = process.env.MOBILE_WEB_URL || "";
 const EMAIL = process.env.YAVER_TEST_EMAIL || "";
 const PASSWORD = process.env.YAVER_TEST_PASSWORD || "";
+const TOKEN = process.env.YAVER_TEST_TOKEN || "";
+const CONVEX = process.env.E2E_CONVEX_URL || "https://perceptive-minnow-557.eu-west-1.convex.site";
 
 test.describe("ansi console chat rendering (mobile)", () => {
   test.setTimeout(5 * 60_000);
-  test.skip(!APP_URL || !EMAIL,
-    "needs MOBILE_WEB_URL (cd mobile && npm run web) + YAVER_TEST_EMAIL/PASSWORD");
+  test.skip(!APP_URL || (!TOKEN && !(EMAIL && PASSWORD)),
+    "needs MOBILE_WEB_URL plus YAVER_TEST_TOKEN or YAVER_TEST_EMAIL/PASSWORD");
 
   test("opencode task output renders console grammar in the chat bubble", async ({ browser }) => {
     const ctx = await browser.newContext({ ...devices["iPhone 15 Pro"] });
@@ -44,10 +46,38 @@ test.describe("ansi console chat rendering (mobile)", () => {
       await page.goto(APP_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
       await page.waitForTimeout(9000);
 
+      // A revocable owner token is enough for RN-web when we seed the user
+      // record the app normally persists after login. Seed the install marker
+      // too: a fresh browser context otherwise correctly looks like a fresh
+      // phone install and clears Keychain-compatible storage on first boot.
+      if (TOKEN) {
+        const validation = await page.request.get(`${CONVEX}/auth/validate?_=${Date.now()}`, {
+          headers: { Authorization: `Bearer ${TOKEN}`, "Cache-Control": "no-store" },
+        });
+        expect(validation.ok(), `owner token validation failed (HTTP ${validation.status()})`).toBe(true);
+        const payload = await validation.json() as { user?: Record<string, unknown> };
+        const user = payload.user || {};
+        await page.evaluate(({ token, userRow }) => {
+          localStorage.setItem("yaver_installed", "1");
+          localStorage.setItem("yaver.secure.yaver_auth_token", token);
+          localStorage.setItem("yaver.secure.yaver_user", JSON.stringify({
+            id: userRow.userId,
+            email: userRow.email,
+            name: userRow.fullName,
+            provider: userRow.provider,
+            emailVerified: userRow.emailVerified,
+            surveyCompleted: userRow.surveyCompleted,
+            isOwner: userRow.isOwner,
+          }));
+        }, { token: TOKEN, userRow: user });
+        await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+        await page.waitForTimeout(12_000);
+      }
+
       // Sign in through the app's own flow — storage seeding does not work
-      // for RN-web (auth.ts reads a user record the dashboard never stores).
+      // without the user record above. Password login remains the fallback.
       const emailBtn = page.getByText(/Continue with Email/i).first();
-      if (await emailBtn.count()) {
+      if (!TOKEN && await emailBtn.count()) {
         await emailBtn.click();
         await page.waitForTimeout(3500);
         await page.getByPlaceholder("Email").first().fill(EMAIL);
@@ -88,6 +118,12 @@ test.describe("ansi console chat rendering (mobile)", () => {
       // contain "$").
       expect(finalBody.includes("Cannot read properties") || finalBody.includes("Minified React error"),
         "no React crash overlay may replace the chat").toBe(false);
+
+      // V1 is owner-only. Assert controls, not page prose: runner output can
+      // legitimately mention the word "guest" while discussing app previews.
+      const crossAccountControls = page.getByRole("button", { name: /guest access|share (?:a |your )?machine/i })
+        .or(page.getByRole("link", { name: /guest access|share (?:a |your )?machine/i }));
+      expect(await crossAccountControls.count(), "mobile v1 must expose no guest/machine-sharing control").toBe(0);
     } finally {
       await ctx.close();
     }

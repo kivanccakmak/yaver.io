@@ -2989,8 +2989,10 @@ export class QuicClient {
           contextWords: args.contextWords,
           allowLocalFallback: args.allowLocalFallback ?? false,
           projectDir: args.projectDir ?? "",
-          mcpServers: args.mcpServers ?? [],
-          includeYaverMcp: args.includeYaverMcp ?? true,
+          // Omitted fork scope inherits the parent. Explicit []/false means
+          // the user selected No MCP.
+          ...(args.mcpServers !== undefined ? { mcpServers: args.mcpServers } : {}),
+          ...(args.includeYaverMcp !== undefined ? { includeYaverMcp: args.includeYaverMcp } : {}),
         }),
       }, 30000);
     } catch (e) {

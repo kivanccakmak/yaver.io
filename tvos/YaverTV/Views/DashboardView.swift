@@ -8,7 +8,6 @@
 //
 //   Chat     → TasksView          (tasks & vibes — the web/mobile chat)
 //   Vibing   → VibingView         (project → available target → live preview)
-//   Projects → ProjectsView       (browse the selected machine)
 //   Devices  → MachinePickerView  (your account's machines, switch/wake)
 //   Settings → account defaults  (device · runner · project · MCP)
 //
@@ -21,29 +20,19 @@ import SwiftUI
 
 struct DashboardView: View {
     @EnvironmentObject var store: YaverStore
-    @State private var showPicker = false
-    @State private var showSettings = false
     @State private var showUpdateAgent = false
     @StateObject private var lifecycle = BoxLifecycle()
     @FocusState private var dashboardFocus: DashboardDestination?
 
     private enum DashboardDestination: Hashable {
-        case chat, vibing, projects, devices, settings
+        case chat, vibing, devices, settings
     }
 
     /// Open the TV directly on a screen instead of the tile grid.
     ///
     /// Same class of configuration as `yaver.tv.selectedBox` and
     /// `yaver.tv.boxes` above it — read from UserDefaults, so the argument
-    /// domain sets it too. Values: "" (normal), "chat", "vibing",
-    /// "projects", "preview:<projectName>".
-    ///
-    /// "preview:<name>" routes THROUGH here to Projects, which then continues
-    /// the route to that project (ProjectsView.startAt). Matching this key by
-    /// EQUALITY against "projects" was a real regression: adding the deeper
-    /// value silently stopped the first hop, the app stayed on the dashboard,
-    /// and the screenshots showed a tile grid where a preview was expected.
-    /// A route with two segments has to match on its prefix, not its whole.
+    /// domain sets it too. Values: "" (normal), "chat", or "vibing".
     ///
     /// This is a ROUTE, not a test hook, and it earns its place twice:
     ///
@@ -61,14 +50,12 @@ struct DashboardView: View {
     @State private var didHandleStartRoute = false
 
     private enum StartRoute: String, Hashable {
-        case chat, vibing, projects
+        case chat, vibing
     }
 
-    /// `preview:<name>` enters through Projects, which owns the second hop.
     private var requestedStartRoute: StartRoute? {
         if startAt == "chat" { return .chat }
         if startAt == "vibing" { return .vibing }
-        if startAt == "projects" || startAt.hasPrefix("preview:") { return .projects }
         return nil
     }
 
@@ -100,41 +87,36 @@ struct DashboardView: View {
 
                         // One predictable horizontal rail: every primary
                         // surface is visible at once and Left/Right is the only
-                        // navigation axis. Keep the five cards inside the
-                        // standard tvOS safe width. The old 328-pt labels needed ~1736
-                        // logical points on a 1280-pt 1080p TV canvas, so the
-                        // Devices card was visibly cut in half and More lived
-                        // entirely offscreen in the launch screenshot.
+                        // navigation axis. These are deliberately single-layer
+                        // icon + name controls. Explanations duplicated what
+                        // the destinations already say and forced each label to
+                        // scale differently; an inner material card also fought
+                        // tvOS' own focus surface and looked double-framed.
                         HStack(spacing: 16) {
                             NavigationLink(destination: TasksView()) {
-                                    Tile(icon: "bubble.left.and.bubble.right.fill", title: "Chat", detail: "Ask now · continue conversations", outerWidth: 216)
+                                Tile(icon: "bubble.left.and.bubble.right.fill", title: "Chat", outerWidth: 216)
                             }
                             .focused($dashboardFocus, equals: .chat)
                             .accessibilityIdentifier("dashboard.chat")
                             NavigationLink(destination: VibingView()) {
-                                    Tile(icon: "play.rectangle.fill", title: "Vibing", detail: "Open the last project · run · stream", outerWidth: 216)
+                                Tile(icon: "play.rectangle.fill", title: "Vibing", outerWidth: 216)
                             }
                             .focused($dashboardFocus, equals: .vibing)
                             .accessibilityIdentifier("dashboard.vibing")
-                            NavigationLink(destination: ProjectsView()) {
-                                    Tile(icon: "folder.fill", title: "Projects", detail: "Browse repositories", outerWidth: 216)
-                            }
-                            .focused($dashboardFocus, equals: .projects)
-                            .accessibilityIdentifier("dashboard.projects")
-                            Button { showPicker = true } label: {
-                                    Tile(icon: "laptopcomputer", title: "Devices", detail: "Switch or wake", outerWidth: 216)
+                            NavigationLink(destination: MachinePickerView()) {
+                                Tile(icon: "laptopcomputer", title: "Devices", outerWidth: 216)
                             }
                             .focused($dashboardFocus, equals: .devices)
                             .accessibilityIdentifier("dashboard.devices")
-                            Button { showSettings = true } label: {
-                                    Tile(icon: "gearshape.fill", title: "Settings", detail: "Device · runner · project · MCP", outerWidth: 216)
+                            NavigationLink(destination: TVSettingsView()) {
+                                Tile(icon: "gearshape.fill", title: "Settings", outerWidth: 216)
                             }
                             .focused($dashboardFocus, equals: .settings)
                             .accessibilityIdentifier("dashboard.settings")
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
-                        .frame(height: 214)
+                        .frame(height: 142)
                         .defaultFocus($dashboardFocus, .chat)
                     }
                 }
@@ -148,7 +130,6 @@ struct DashboardView: View {
                 switch route {
                 case .chat: TasksView()
                 case .vibing: VibingView()
-                case .projects: ProjectsView()
                 }
             }
             .onChange(of: store.selectedBox?.id) { _, id in
@@ -158,8 +139,6 @@ struct DashboardView: View {
             .onAppear {
                 applyStartRouteIfReady()
             }
-            .sheet(isPresented: $showPicker) { MachinePickerView() }
-            .sheet(isPresented: $showSettings) { TVSettingsView() }
             .sheet(isPresented: $showUpdateAgent) { UpdateAgentView() }
             .task(id: store.selectedBox?.id) {
                 await store.refreshSelectedRelaySettings()
@@ -298,7 +277,7 @@ struct DashboardView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Button { showPicker = true } label: {
+            NavigationLink(destination: MachinePickerView()) {
                 Label("Switch", systemImage: "rectangle.2.swap")
                     .font(.system(size: 19, weight: .semibold))
                     .padding(.horizontal, 22).padding(.vertical, 10)
@@ -362,7 +341,7 @@ struct DashboardView: View {
                 .font(.system(size: 26, weight: .semibold))
             Text("Choose one of the machines on your account, or type a LAN address. A machine appears here once it's running `yaver serve` signed in as you.")
                 .font(.system(size: 19)).foregroundStyle(.secondary).frame(maxWidth: 720, alignment: .leading)
-            Button("Choose machine") { showPicker = true }.padding(.top, 8)
+            NavigationLink("Choose machine", destination: MachinePickerView()).padding(.top, 8)
         }
     }
 
@@ -378,10 +357,10 @@ struct DashboardView: View {
             }
             Text("Connecting automatically. This opens the moment your machine is ready.")
                 .font(.system(size: 19)).foregroundStyle(.secondary).frame(maxWidth: 720, alignment: .leading)
-            Button("Choose a machine myself") {
-                store.cancelAutoConnect()
-                showPicker = true
+            NavigationLink(destination: MachinePickerView()) {
+                Text("Choose a machine myself")
             }
+            .simultaneousGesture(TapGesture().onEnded { store.cancelAutoConnect() })
             .padding(.top, 8)
         }
     }
@@ -390,25 +369,23 @@ struct DashboardView: View {
 private struct Tile: View {
     let icon: String
     let title: String
-    let detail: String
     let outerWidth: CGFloat
-    @Environment(\.isFocused) private var isFocused
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Image(systemName: icon).font(.system(size: 40))
-            Spacer(minLength: 0)
-            Text(title).font(.system(size: 24, weight: .bold))
-            if !detail.isEmpty {
-                Text(detail).font(.system(size: 16)).foregroundStyle(.secondary)
-            }
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 30, weight: .semibold))
+                .frame(width: 38)
+            Text(title)
+                .font(.system(size: 22, weight: .semibold))
+                .lineLimit(1)
+                .allowsTightening(true)
         }
-        .frame(width: max(130, outerWidth - 40), height: 164, alignment: .leading)
-        .padding(20)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .frame(width: max(130, outerWidth - 36), height: 82, alignment: .leading)
+        .padding(.horizontal, 18)
     }
 }
 
 // AddBoxView moved to ../AddBoxView.swift — the shared client layer — so the
-// visionOS target can present it too. Guest/sharing UI is intentionally absent
+// visionOS target can present it too. Sharing UI is intentionally absent
 // from every v1 client surface.

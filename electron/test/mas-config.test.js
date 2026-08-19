@@ -49,4 +49,6 @@ test("MAS deploy preserves the existing Yaver app identity and verifies the pack
   assert.match(deploy, /PACKAGED_BUNDLE_ID/);
   assert.match(deploy, /PACKAGED_BUILD/);
   assert.match(deploy, /codesign --verify --deep --strict/);
+  assert.match(deploy, /find "\$DIST_MAS_DIR" -depth -delete/);
+  assert.match(deploy, /retrying the same verified archive once/);
 });

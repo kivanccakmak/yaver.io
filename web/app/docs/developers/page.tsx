@@ -1658,7 +1658,7 @@ CLI Agent ◄──QUIC──────────────── Relay (:
                     <InlineCode>/devices/remove</InlineCode>
                   </td>
                   <td className="py-3 pr-4">Token</td>
-                  <td className="py-3">Remove a device from registry</td>
+                  <td className="py-3">Soft-remove a device from every inventory, revoke its sessions, and retain a hidden tombstone until it explicitly pairs again. Yaver-hosted boxes must use cloud decommission so billing resources are not orphaned.</td>
                 </tr>
                 <tr className="border-b border-surface-800/50">
                   <td className="py-3 pr-4">
@@ -3023,7 +3023,7 @@ YaverFreeClient(client);`}</pre>
             </div>
             <div className="flex items-start gap-2">
               <span className="mt-0.5 text-surface-500">2.</span>
-              <span><strong className="text-surface-200">Hermes bytecode pipeline</strong> &mdash; <InlineCode>npx expo export --platform ios</InlineCode> produces a 3.76 MB <InlineCode>.hbc</InlineCode> bundle. That same bundle ships via <InlineCode>yaver-cli push</InlineCode> to the Yaver native container. No WebView anywhere in the guest-app path.</span>
+              <span><strong className="text-surface-200">Hermes bytecode pipeline</strong> &mdash; <InlineCode>npx expo export --platform ios</InlineCode> produces a 3.76 MB <InlineCode>.hbc</InlineCode> bundle. That same bundle ships via <InlineCode>yaver-cli push</InlineCode> to the Yaver native container. No WebView anywhere in the project-app path.</span>
             </div>
             <div className="flex items-start gap-2">
               <span className="mt-0.5 text-surface-500">3.</span>

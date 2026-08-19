@@ -118,18 +118,18 @@ func probeWebRTCDeps(ctx context.Context, skipSimctlTiming bool) []depCheck {
 	checks = append(checks, depCheck{
 		Name: "idb", Present: onPath("idb"), Healable: true, Critical: false,
 		Fix:    "brew tap facebook/fb && brew install idb-companion && pip3 install fb-idb",
-		Detail: "iOS-sim tap/swipe injection; without it interactive taps never reach the guest app",
+		Detail: "iOS-sim tap/swipe injection; without it interactive taps never reach the project app",
 	})
 	if runtime.GOOS == "darwin" {
 		checks = append(checks, depCheck{
 			Name: "flutter", Present: onPath("flutter"), Healable: true, Critical: false,
 			Fix:    "brew install --cask flutter",
-			Detail: "builds Flutter guest apps for the sim/emulator (e.g. e-mobile)",
+			Detail: "builds Flutter project apps for the sim/emulator (e.g. e-mobile)",
 		})
 		checks = append(checks, depCheck{
 			Name: "xcodebuild", Present: onPath("xcodebuild"), Healable: false, Critical: true,
 			Fix:    "install Xcode from the App Store",
-			Detail: "builds iOS guest apps for the simulator",
+			Detail: "builds iOS project apps for the simulator",
 		})
 	}
 	// scrcpy + adb — Android/redroid streaming + control.

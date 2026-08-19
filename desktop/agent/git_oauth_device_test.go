@@ -154,24 +154,25 @@ func TestGitOAuthClientID_EnvOverride(t *testing.T) {
 	}
 }
 
-// TestGitOAuthClientID_NoConfigErrorsHelpfully ensures a fresh box with
-// no client ID configured returns a descriptive error pointing the user
-// at the registration page + vault entry, not a cryptic crash.
-func TestGitOAuthClientID_NoConfigErrorsHelpfully(t *testing.T) {
+// TestGitOAuthClientID_CompiledFallback ensures a fresh box uses Yaver's
+// public Device Flow application identifier. A public OAuth client ID is not a
+// credential; shipping it is what makes first-run GitHub auth work without
+// asking every user to register an OAuth app.
+func TestGitOAuthClientID_CompiledFallback(t *testing.T) {
 	t.Setenv("YAVER_GITHUB_OAUTH_CLIENT_ID", "")
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	t.Setenv("YAVER_VAULT_PASSPHRASE", "")
 
-	_, _, err := gitOAuthClientID("github")
-	if err == nil {
-		t.Fatal("expected error when no client id configured")
+	id, byo, err := gitOAuthClientID("github")
+	if err != nil {
+		t.Fatalf("compiled fallback: %v", err)
 	}
-	msg := err.Error()
-	for _, want := range []string{"github.com/settings/developers", "github-oauth-client-id", "YAVER_GITHUB_OAUTH_CLIENT_ID"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error message missing %q hint: %s", want, msg)
-		}
+	if id != defaultYaverGitHubOAuthClientID {
+		t.Fatalf("client id = %q, want compiled Yaver public id", id)
+	}
+	if byo {
+		t.Fatal("compiled Yaver client id must not be reported as BYO")
 	}
 }
 

@@ -89,6 +89,13 @@ const (
 	// Constraint-shaped on purpose: only the caller has the missing text, so
 	// there is no route the surface could offer.
 	ReasonTaskPromptMissing = "task.prompt_missing"
+	// ReasonTaskInterruptedByAgentRestart is "the runner did not choose to
+	// stop; the owning Yaver process exited while the task was live". This is
+	// deliberately a failed state, not a historical stopped state: after the
+	// 2026-08-16 OpenCode stream-parser panic, systemd restarted the agent and
+	// every surface saw only `stopped` with no reason even though the task had
+	// already edited the project. The in-place route is the task's Retry action.
+	ReasonTaskInterruptedByAgentRestart = "task.interrupted_by_agent_restart"
 	// ReasonPreviewSessionActive is "a preview of this project is already
 	// running on this box, held by another surface". One session per project is
 	// a real constraint — one headless Chrome per project, one capture loop —

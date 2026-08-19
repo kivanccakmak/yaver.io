@@ -176,7 +176,7 @@ struct ProjectsView: View {
             Text(msg).multilineTextAlignment(.center).frame(maxWidth: 640).foregroundStyle(.secondary)
             if let project {
                 HStack(spacing: 18) {
-                    NavigationLink(destination: SessionView(preselect: nil)) {
+                    NavigationLink(destination: sessionDestination) {
                         Label("Open in Session", systemImage: "terminal.fill")
                             .font(.system(size: 18, weight: .semibold))
                     }
@@ -207,6 +207,18 @@ struct ProjectsView: View {
 
     private func center<C: View>(@ViewBuilder _ content: () -> C) -> some View {
         content().frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // visionOS has its own dictation-capable session driver. Keep the shared
+    // project route, but do not compile the Siri Remote SessionView into the
+    // headset or send headset turns with a tvOS surface identity.
+    @ViewBuilder
+    private var sessionDestination: some View {
+        #if os(visionOS)
+        VisionSessionView()
+        #else
+        SessionView(preselect: nil)
+        #endif
     }
 
     private func load() async {

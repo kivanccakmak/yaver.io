@@ -38,6 +38,38 @@ final class TVChatNavigationTests: XCTestCase {
         )
     }
 
+    func testTaskChoicesStayBehindOneEllipsisPanel() throws {
+        let app = launchChat()
+        let newVibe = app.buttons["chat.new-vibe"]
+        XCTAssertTrue(newVibe.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+
+        // Choice inventory must not compete with the prompt until requested.
+        XCTAssertFalse(app.navigationBars["Task settings"].exists)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+
+        let more = app.buttons["chat.task-settings"]
+        XCTAssertTrue(more.waitForExistence(timeout: 3))
+        // tvOS has no coordinate tap. Move focus from the prompt to the lone
+        // header action, then press Select like the Siri Remote does.
+        for _ in 0..<3 where !more.hasFocus {
+            XCUIRemote.shared.press(.up)
+        }
+        XCTAssertTrue(more.hasFocus, "The ellipsis must be reachable from the prompt with the remote")
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(
+            app.navigationBars["Task settings"].waitForExistence(timeout: 5),
+            "One ellipsis must reveal project, runner, model, and multi-MCP choices"
+        )
+        XCTAssertTrue(app.staticTexts["Project"].exists)
+        XCTAssertTrue(app.staticTexts["Runner"].exists)
+        XCTAssertTrue(app.staticTexts["Model"].exists)
+        XCTAssertTrue(app.staticTexts["MCP tools"].exists)
+        XCTAssertTrue(app.staticTexts["No project"].exists)
+    }
+
     func testMenuReturnsFromDevicesSheetAndVisibleBackExists() throws {
         let app = launchDashboard()
         XCTAssertTrue(app.buttons["dashboard.chat"].waitForExistence(timeout: 8))
@@ -70,6 +102,13 @@ final class TVChatNavigationTests: XCTestCase {
         // First Menu closes the keyboard; second Menu dismisses the one-step
         // prompt surface. There is no intermediate Start/Cancel page.
         XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForNonExistence(timeout: 3),
+            "The first Menu press must close the system keyboard"
+        )
+        // Do not send the sheet-dismiss press during the keyboard's dismissal
+        // animation. tvOS drops that second remote event; a real user cannot
+        // press both at the same timestamp, but the old test did exactly that.
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(newVibe.waitForExistence(timeout: 5), "Menu must dismiss the composer to Chat")
         XCUIRemote.shared.press(.menu)
@@ -87,6 +126,20 @@ final class TVChatNavigationTests: XCTestCase {
             // Any unrecognised value means dashboard and overrides a stale
             // deep-route value left in simulator defaults.
             "-yaver.tv.startAt", "dashboard",
+        ]
+        app.launch()
+        return app
+    }
+
+    private func launchChat() -> XCUIApplication {
+        let app = XCUIApplication()
+        let boxJSON = #"[{"id":"navigation-box","name":"Navigation Test","host":"127.0.0.1","port":18080}]"#
+        let plistQuoted = "\"" + boxJSON.replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        app.launchArguments = [
+            "-yaver.tv.token", "navigation-audit",
+            "-yaver.tv.boxes", plistQuoted,
+            "-yaver.tv.selectedBox", "navigation-box",
+            "-yaver.tv.startAt", "chat",
         ]
         app.launch()
         return app

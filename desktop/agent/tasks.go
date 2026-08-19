@@ -1167,8 +1167,8 @@ type Task struct {
 	// runner spawn scope only; UI state owns what it selected.
 	MCPServers []string `json:"-"`
 
-	// IncludeYaverMcp echoes the per-task yaver-MCP door toggle (default true
-	// when unset). Kept on the Task so the spawn path can skip the injection.
+	// IncludeYaverMcp echoes the per-task Yaver-MCP opt-in. New tasks default
+	// false; a fork may inherit the parent's explicit scope.
 	IncludeYaverMcp bool `json:"includeYaverMcp,omitempty"`
 
 	// Runner/render machine split (task_ensure_clone.go): git identity the

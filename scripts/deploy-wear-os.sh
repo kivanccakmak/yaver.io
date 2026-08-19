@@ -45,6 +45,8 @@ done
 MANIFEST="$ROOT/wear/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
 AAB="$ROOT/wear/app/build/outputs/bundle/release/app-release.aab"
 
+"$ROOT/scripts/check-no-native-payment-sdks.sh" source
+
 if [ "$SKIP_BUILD" != "1" ]; then
   (cd "$ROOT/wear" && \
     ../mobile/android/gradlew -p . :app:bundleRelease \
@@ -53,6 +55,16 @@ if [ "$SKIP_BUILD" != "1" ]; then
       -PyaverWearVersionName="$VERSION_NAME" \
       --no-daemon --max-workers=2)
 fi
+
+PAYMENT_DEP_REPORT="$(mktemp -t yaver-wear-release-deps.XXXXXX)"
+if ! (cd "$ROOT/wear" && ../mobile/android/gradlew -p . :app:dependencies \
+  --configuration releaseRuntimeClasspath --no-daemon --max-workers=2) >"$PAYMENT_DEP_REPORT"; then
+  rm -f "$PAYMENT_DEP_REPORT"
+  echo "ERROR: could not resolve the Wear release dependency graph for payment-SDK verification." >&2
+  exit 1
+fi
+"$ROOT/scripts/check-no-native-payment-sdks.sh" android "$PAYMENT_DEP_REPORT"
+rm -f "$PAYMENT_DEP_REPORT"
 
 if [ ! -f "$MANIFEST" ]; then
   echo "ERROR: Wear release manifest not found: $MANIFEST" >&2

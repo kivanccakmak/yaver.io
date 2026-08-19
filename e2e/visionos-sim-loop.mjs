@@ -297,6 +297,19 @@ try {
       ? `the headset never reached the preview — ${dash.named.say}`
       : `the headset never reached the preview. The screen said: ${(dash.seen?.text || "(no text at all)").slice(0, 300)}`;
   }
+  if (!failed) {
+    // The preview route is also the shared VibeTurnPanel route. Assert its
+    // visible entry point so a build can pass while the headset silently
+    // drops the actual prompt surface.
+    const vibe = waitForText(["Vibe", "change"], "vibe-panel", 60_000);
+    log(`shared vibe panel: ${vibe.ok ? "PASS" : "FAIL"}`);
+    if (!vibe.ok) {
+      failed = true;
+      reason = vibe.named
+        ? `the preview rendered but the shared vibe panel reported a failure — ${vibe.named.say}`
+        : `the preview rendered but the shared vibe panel was not visible: ${(vibe.seen?.text || "(no text)").slice(0, 300)}`;
+    }
+  }
 
   // 4. THE COLOUR VERDICT — a FRACTION, not a modal colour.
   //
@@ -342,7 +355,7 @@ try {
   }
 
   // 5. Runner sessions — only meaningful once the app is up.
-  if (false) {
+  if (!failed) {
     const runner = waitForText(["session", "runner", "opencode", "claude"], "runners", 60_000);
     log(`runner sessions listed: ${runner.ok ? "PASS" : "not shown"}`);
     if (!runner.ok) {

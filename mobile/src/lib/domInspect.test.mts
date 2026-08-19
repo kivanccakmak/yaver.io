@@ -355,6 +355,25 @@ test("the chip shows what is attached and DELETES it when switched off", () => {
   assert.ok(chip.includes("Browse") && chip.includes("Inspect"), "chip has no Browse|Inspect radio");
 });
 
+test("Tasks keeps preview-only DOM and screen context out of its composers", () => {
+  const tasks = readFileSync(join(repoRoot, "mobile/app/(tabs)/tasks.tsx"), "utf8");
+  const preview = readFileSync(join(repoRoot, "mobile/src/components/DevPreview.tsx"), "utf8");
+  assert.ok(!tasks.includes("<DomInspectChip"), "Tasks rendered DOM mode; it belongs to the Vibing preview flow");
+  assert.ok(!tasks.includes("<ScreenContextChip"), "Tasks rendered preview screen context; it belongs to the Vibing flow");
+  assert.ok(tasks.includes('testID="task-options-more"'), "Tasks has no progressive-disclosure ellipsis");
+  assert.match(
+    tasks,
+    /showTaskOptions\s*\?\s*\([\s\S]*?testID="composer-project-chip"/,
+    "project/MCP configuration is visible outside the task options ellipsis",
+  );
+  assert.ok(preview.includes('testID="preview-tools-more"'), "DevPreview has no preview-tools ellipsis");
+  assert.match(
+    preview,
+    /showPreviewTools\s*\?\s*\([\s\S]*?<ScreenContextChip[\s\S]*?<DomInspectChip/,
+    "preview context and DOM controls are not scoped behind the render/reload ellipsis",
+  );
+});
+
 test("DOM mode is gated on a DOM-capable preview lane (Hermes/native honesty)", () => {
   const chip = readFileSync(join(repoRoot, "mobile/src/components/DomInspectChip.tsx"), "utf8");
   // The Hermes/native preview has NO DOM — the probe lives in pages the agent

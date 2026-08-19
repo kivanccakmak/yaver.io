@@ -68,7 +68,7 @@ func performPermanentMachineRemoval(progress machineRemoveProgress) error {
 	}
 	var errs []string
 
-	emit("convex_dereg", "running", "deleting device row + cascading sdkTokens / projects / primary pointer", nil)
+	emit("convex_dereg", "running", "removing device from every inventory + revoking sessions and routes", nil)
 	if cfg, err := LoadConfig(); err == nil {
 		if cfg.AuthToken != "" && cfg.ConvexSiteURL != "" && cfg.DeviceID != "" {
 			if err := RemoveDeviceShutdown(cfg.ConvexSiteURL, cfg.AuthToken, cfg.DeviceID); err != nil {
@@ -81,7 +81,7 @@ func performPermanentMachineRemoval(progress machineRemoveProgress) error {
 					emit("convex_dereg", "ok", "marked offline (Convex will purge via heartbeat staleness)", nil)
 				}
 			} else {
-				emit("convex_dereg", "ok", "device + sdkTokens + projects + primaryDeviceId cleared", nil)
+				emit("convex_dereg", "ok", "device hidden on every surface; sessions, routes, and device pointers cleared", nil)
 			}
 		} else {
 			emit("convex_dereg", "skipped", "no auth token / device id — nothing to dereg", nil)

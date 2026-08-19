@@ -2434,8 +2434,8 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 				projectPath = strings.TrimSpace(st.WorkDir)
 			}
 		}
-		s.emitBuildProgress("Preparing Yaver reload: stop guest, rebuild Hermes, restart…", "prepare")
-		reloadOp := s.upsertDevOperation("reload_app", "running", "prepare", "Preparing Yaver reload: stop guest, rebuild Hermes bundle, then restart in Yaver.", projectPath, target.DeviceID, phaseProgress("prepare"), map[string]interface{}{"mode": "bundle"})
+		s.emitBuildProgress("Preparing Yaver reload: stop project app, rebuild Hermes, restart…", "prepare")
+		reloadOp := s.upsertDevOperation("reload_app", "running", "prepare", "Preparing Yaver reload: stop the project app, rebuild its Hermes bundle, then restart in Yaver.", projectPath, target.DeviceID, phaseProgress("prepare"), map[string]interface{}{"mode": "bundle"})
 		// Native bundle: rebuild and tell SDK devices to fetch new bundle.
 		// Capture handleBuildNativeBundle's response so we can detect a
 		// failed build (no active dev server, dependency install failed,
@@ -2492,7 +2492,7 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		}
 		// Build succeeded. Tell SDKs to fetch the fresh bundle.
 		s.emitBuildProgress("Sending fresh bundle + restart command to phone…", "push")
-		s.upsertDevOperation("reload_app", "running", "restart", "Bundle ready. Sending restart command so the phone can swap the guest bridge in Yaver.", projectPath, target.DeviceID, phaseProgress("restart"), map[string]interface{}{"mode": "bundle"})
+		s.upsertDevOperation("reload_app", "running", "restart", "Bundle ready. Sending restart command so the phone can swap the project bridge in Yaver.", projectPath, target.DeviceID, phaseProgress("restart"), map[string]interface{}{"mode": "bundle"})
 		bundleURL, assetsURL := signedNativeBundleURLs(s)
 		cmd := BlackBoxCommand{
 			Command: "reload_bundle",
@@ -2523,7 +2523,7 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		// alongside it, so existing SDK/CLI consumers keep every field they read.
 		w.WriteHeader(rec.Status())
 		w.Write(withDeliveredTo(rec.Body(), deliveredTo))
-		s.upsertDevOperation("reload_app", "completed", "push", "Fresh bundle sent. The phone is restarting the guest inside Yaver.", projectPath, target.DeviceID, 1, map[string]interface{}{"mode": "bundle"})
+		s.upsertDevOperation("reload_app", "completed", "push", "Fresh bundle sent. The phone is restarting the project app inside Yaver.", projectPath, target.DeviceID, 1, map[string]interface{}{"mode": "bundle"})
 		// Explicit terminal event on /dev/events so SSE consumers
 		// (feedback-overlay reload chip) can clear their progress
 		// spinner without waiting on a 90s safety timeout. Without
@@ -3422,7 +3422,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 				selectedLabel = sel.Selected.ID
 			}
 			metaMsg := fmt.Sprintf(
-				"Runtime family %s: guest Expo %s / RN %s / React %s -> host %s",
+				"Runtime family %s: project Expo %s / RN %s / React %s -> host %s",
 				sel.MatchKind,
 				fallbackRuntimeValue(sel.Guest.ExpoVersion, "?"),
 				fallbackRuntimeValue(sel.Guest.ReactNativeVersion, "?"),
@@ -3437,7 +3437,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 			case currentFamilyID == "" && defaultFamilyID != "" && defaultFamilyID != sel.Selected.ID:
 				metaMsg += fmt.Sprintf(" (default host family is %s)", defaultFamilyID)
 			}
-			s.devServerMgr.EmitLog("Guest runtime: " + guestSummary)
+			s.devServerMgr.EmitLog("Project runtime: " + guestSummary)
 			if sel.ExactMatch {
 				log.Printf("[super-host] runtime-family match: %s", sel.Reason)
 				s.devServerMgr.EmitLog("Host runtime matched: " + selectedLabel)
@@ -3701,9 +3701,9 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := injectGuestSafePrelude(bundlePath); err != nil {
-		errMsg := fmt.Sprintf("guest-safe prelude injection failed: %v", err)
+		errMsg := fmt.Sprintf("project-safety prelude injection failed: %v", err)
 		s.devServerMgr.EmitLog(errMsg)
-		incident := s.appendDevIncident("build", ReasonBuildNativeFailed, "Guest safety prelude failed", "Yaver could not prepare its guest-safety runtime shim before Hermes compilation.", errMsg, "Inspect the generated bundle path and retry the build after fixing host file permissions or disk state.", workDir, target.DeviceID, req.Platform, IncidentSeverityError, true, true, []string{"stream:dev-events"}, nil, buildOp.ID)
+		incident := s.appendDevIncident("build", ReasonBuildNativeFailed, "Project safety prelude failed", "Yaver could not prepare its project-safety runtime shim before Hermes compilation.", errMsg, "Inspect the generated bundle path and retry the build after fixing host file permissions or disk state.", workDir, target.DeviceID, req.Platform, IncidentSeverityError, true, true, []string{"stream:dev-events"}, nil, buildOp.ID)
 		s.upsertDevOperation("build_native", "failed", "error", incident.UserMessage, workDir, target.DeviceID, 1, map[string]interface{}{"platform": req.Platform}, incident.ID)
 		writeNativeBuildStatus(workDir, nativeBuildStatus{
 			State:        "build_failed",
@@ -3717,7 +3717,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 		})
 		return
 	}
-	s.devServerMgr.EmitLog("Injected Yaver guest-safe runtime shims for ExpoHaptics and RNCNetInfo.")
+	s.devServerMgr.EmitLog("Injected Yaver project-safe runtime shims for ExpoHaptics and RNCNetInfo.")
 
 	// ── Hermes compile ──
 	s.emitBuildProgress("Compiling Hermes bytecode...", "hermes")
@@ -3994,7 +3994,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 				len(compatIncompatible), compatIncompatible)
 			s.devServerMgr.EmitLog(fmt.Sprintf(
 				"⚠ %d native module(s) declared in this project are NOT in Yaver's super-host: %s. "+
-					"They throw only if the guest actually calls them; a guarded require() never reaches that throw.",
+					"They throw only if the project app actually calls them; a guarded require() never reaches that throw.",
 				len(compatIncompatible), strings.Join(compatIncompatible, ", "),
 			))
 		}
@@ -4062,11 +4062,11 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 						parts = append(parts, fmt.Sprintf("react project %s vs host %s", compatReactVersionMismatch.ProjectVersion, compatReactVersionMismatch.HostVersion))
 					}
 					errMsg = fmt.Sprintf(
-						"Blocked native Hermes load: framework/runtime drift between guest and Yaver host: %s",
+						"Blocked native Hermes load: framework/runtime drift between project and Yaver host: %s",
 						strings.Join(parts, ", "),
 					)
 					title = "Runtime family mismatch"
-					userMsg = "The bundle compiled, but Yaver blocked restart because the guest app does not match the selected mobile host runtime family."
+			userMsg = "The bundle compiled, but Yaver blocked restart because the project app does not match the selected mobile host runtime family."
 					helpHint = "Use one of Yaver's supported host runtime families, or align the project's Expo, React Native, and React versions to the nearest family before retrying."
 					if report.RuntimeFamily != nil {
 						errMsg = fmt.Sprintf("%s. Closest host family: %s. Host supports: %s",

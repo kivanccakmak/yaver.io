@@ -2296,25 +2296,6 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* People & shared projects */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Collaborate</Text>
-          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-            <Pressable
-              style={styles.aboutRow}
-              onPress={() => router.push("/connections")}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>People & Projects</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  Connect with people, share a repo, invite someone to code with you — your machine or Yaver Cloud
-                </Text>
-              </View>
-              <Text style={[styles.aboutValue, { color: c.accent }]}>Open ›</Text>
-            </Pressable>
-          </View>
-        </View>
-
         {/* Mobile Sandbox coding */}
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Sandbox</Text>
@@ -2823,49 +2804,6 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
-
-          {user?.id ? (
-            <Pressable
-              onPress={async () => {
-                await ExpoClipboard.setStringAsync(user.id);
-                Alert.alert(
-                  "User ID copied",
-                  "Paste this in WhatsApp / iMessage / email so someone can invite you to share their machine.",
-                );
-              }}
-              style={{
-                marginTop: 8,
-                backgroundColor: c.bgCard,
-                borderColor: c.border,
-                borderWidth: 1,
-                borderRadius: 10,
-                padding: 12,
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 10,
-              }}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: c.textMuted, fontSize: 10, textTransform: "uppercase", fontWeight: "700" }}>
-                  Your user ID
-                </Text>
-                <Text
-                  selectable
-                  style={{ color: c.textPrimary, fontFamily: Platform.OS === "ios" ? "SF Mono" : "monospace", fontSize: 15, marginTop: 4 }}
-                  numberOfLines={1}
-                >
-                  {user.id}
-                </Text>
-                <Text style={{ color: c.textMuted, fontSize: 13, marginTop: 4 }}>
-                  Share this with a friend so they can invite you without knowing your email.
-                </Text>
-              </View>
-              <View style={{ alignItems: "center", gap: 4 }}>
-                <Ionicons name="copy-outline" size={20} color={c.accent} />
-                <Text style={{ color: c.accent, fontSize: 10, fontWeight: "700" }}>COPY</Text>
-              </View>
-            </Pressable>
-          ) : null}
 
           <View
             style={{

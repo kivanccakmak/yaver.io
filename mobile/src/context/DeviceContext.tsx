@@ -1898,6 +1898,21 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   const handleRemoveDevice = useCallback(async (device: Device) => {
     if (!token) throw new Error("Not signed in");
+    if (device.hosting === "yaver-hosted") {
+      throw new Error("This Yaver-hosted box must be decommissioned so its cloud resources and billing are removed too. Use Remove (decommission), not account removal.");
+    }
+    // Best-effort local uninstall. Offline/in-repair devices still get the
+    // server tombstone below, so reachability can never block removal.
+    const localClient = connectionManager.clientFor(device.id);
+    if (localClient.isConnected) {
+      try {
+        const scheduled = await localClient.machineRemove("delete my machine");
+        if (scheduled?.ok) await new Promise((resolve) => setTimeout(resolve, 1200));
+      } catch {
+        // The durable account tombstone is the required outcome. The machine
+        // may already be shutting down, or may be physically in repair.
+      }
+    }
     const res = await fetch(`${getConvexSiteUrl()}/devices/remove`, {
       method: "POST",
       headers: {

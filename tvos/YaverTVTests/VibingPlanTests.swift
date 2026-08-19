@@ -41,7 +41,7 @@ final class VibingPlanTests: XCTestCase {
             deviceId: id, name: name, alias: nil, platform: "linux",
             isOnline: online, quicHost: "127.0.0.1", quicPort: 18080,
             localIps: [], relayConnected: online, agentVersion: nil,
-            managed: false, machineId: nil, lastHeartbeat: lastHeartbeat,
+            managed: false, hosting: nil, machineId: nil, lastHeartbeat: lastHeartbeat,
             runners: nil, installedRunnerIds: nil
         )
     }
@@ -107,6 +107,41 @@ final class VibingPlanTests: XCTestCase {
         XCTAssertEqual(task.turns?.last?.content, "Working")
     }
 
+    func testRunnerCatalogueSurvivesNullModelsOnAnotherRunner() throws {
+        let payload = Data(#"{"runners":[{"id":"claude","name":"Claude Code","installed":true,"ready":true,"isDefault":false,"models":[{"id":"claude-sonnet-4-6","name":"Claude Sonnet 4.6","isDefault":true}]},{"id":"missing","name":"Missing","installed":false,"ready":false,"isDefault":false,"models":null}],"default":"claude"}"#.utf8)
+        let list = try JSONDecoder().decode(AgentRunnerList.self, from: payload)
+        XCTAssertEqual(list.runners.count, 2)
+        XCTAssertEqual(list.runners[0].models.first?.id, "claude-sonnet-4-6")
+        XCTAssertTrue(list.runners[1].models.isEmpty)
+    }
+
+    func testDroppedFinalFrameRefreshStopsReattachForTerminalTask() {
+        XCTAssertTrue(tvTaskIsRunnerCoding("queued"))
+        XCTAssertTrue(tvTaskIsRunnerCoding("running"))
+        for terminal in ["review", "completed", "failed", "stopped"] {
+            XCTAssertFalse(
+                tvTaskIsRunnerCoding(terminal),
+                "a terminal task must render retained output instead of retrying a dead SSE stream"
+            )
+        }
+    }
+
+    func testInterruptedTaskStreamUsesBoundedAutomaticReattach() {
+        XCTAssertEqual(
+            FailureSignals.planStreamRecovery(end: .interrupted, attempt: 0),
+            .reattach(
+                attempt: 0,
+                delayMs: 1_000,
+                message: "Live output stopped — reattaching (1 of 5)… The work is still running on the box."
+            )
+        )
+        if case .giveUp = FailureSignals.planStreamRecovery(end: .interrupted, attempt: 5) {
+            // expected
+        } else {
+            XCTFail("task stream recovery must stop after its bounded ladder")
+        }
+    }
+
     func testLiveChatContinuesInPlace() {
         XCTAssertEqual(tvChatFollowUpAction(status: "running", runner: "codex"), .continueCurrent)
         XCTAssertEqual(tvChatFollowUpAction(status: "queued", runner: "codex"), .continueCurrent)
@@ -114,12 +149,89 @@ final class VibingPlanTests: XCTestCase {
 
     func testTerminalChatForksSilentlyToRecordedRunner() {
         for status in ["completed", "review", "failed", "stopped"] {
-            XCTAssertEqual(tvChatFollowUpAction(status: status, runner: "opencode"), .forkSameRunner("opencode"))
+            XCTAssertEqual(tvChatFollowUpAction(status: status, runner: "opencode"), .fork("opencode"))
         }
     }
 
     func testTerminalChatHasAStableRunnerFallback() {
-        XCTAssertEqual(tvChatFollowUpAction(status: "completed", runner: nil), .forkSameRunner("claude"))
+        XCTAssertEqual(tvChatFollowUpAction(status: "completed", runner: nil), .fork("claude"))
+    }
+
+    func testChangingHiddenChatSettingsForksEvenWhileRunnerIsLive() {
+        XCTAssertEqual(
+            tvChatFollowUpAction(
+                status: "running",
+                runner: "opencode",
+                selectedRunner: "codex",
+                settingsChanged: true
+            ),
+            .fork("codex")
+        )
+    }
+
+    func testPortraitRuntimeAlwaysFitsInsideInsetTVViewport() {
+        let bounds = CGRect(x: 16, y: 16, width: 1180, height: 820)
+        let fit = tvRemoteAspectFitRect(
+            imageSize: CGSize(width: 393, height: 852),
+            in: bounds
+        )
+        XCTAssertGreaterThanOrEqual(fit.minX, bounds.minX)
+        XCTAssertGreaterThanOrEqual(fit.minY, bounds.minY)
+        XCTAssertLessThanOrEqual(fit.maxX, bounds.maxX)
+        XCTAssertLessThanOrEqual(fit.maxY, bounds.maxY)
+        XCTAssertEqual(fit.midX, bounds.midX, accuracy: 0.01)
+        XCTAssertEqual(fit.midY, bounds.midY, accuracy: 0.01)
+    }
+
+    func testDecodedFrameMustContainUsablePixelsBeforeTransportIsGreen() {
+        XCTAssertTrue(tvRemoteFrameSamplesAreBlank(Array(repeating: 0, count: 144)))
+        XCTAssertTrue(tvRemoteFrameSamplesAreBlank(Array(repeating: 255, count: 144)))
+        XCTAssertFalse(tvRemoteFrameSamplesAreBlank([0, 0, 4, 18, 64, 128, 220, 255]))
+        XCTAssertFalse(tvRemoteFrameSamplesAreBlank(Array(repeating: 80, count: 144)),
+                       "a deliberately solid app background is not automatically a failed capture")
+    }
+
+    func testInteractiveBrowserTargetCarriesDOMInspectionButNativePixelTargetsDoNot() {
+        XCTAssertTrue(tvRemoteDOMInspectionAvailable(targetId: "browser-window"))
+        XCTAssertFalse(tvRemoteDOMInspectionAvailable(targetId: "ios-simulator"))
+        XCTAssertFalse(tvRemoteDOMInspectionAvailable(targetId: "android-emulator"))
+        XCTAssertFalse(tvRemoteDOMInspectionAvailable(targetId: nil))
+    }
+
+    func testDOMHoverAndSelectUseTheSameClampedViewportCoordinates() {
+        let size = CGSize(width: 393, height: 852)
+        XCTAssertEqual(
+            tvRemoteDOMPoint(normalized: CGPoint(x: 0.5, y: 0.25), sourceSize: size),
+            CGPoint(x: 197, y: 213)
+        )
+        XCTAssertEqual(
+            tvRemoteDOMPoint(normalized: CGPoint(x: -2, y: 4), sourceSize: size),
+            CGPoint(x: 0, y: 852)
+        )
+    }
+
+    func testRunnerCatalogueCarriesMeasuredDeepSeekChoice() throws {
+        let data = Data(#"""
+        {
+          "runners": [{
+            "id": "opencode", "name": "OpenCode", "installed": true,
+            "ready": true, "isDefault": true,
+            "models": [{
+              "id": "deepseek/deepseek-v4-flash",
+              "name": "DeepSeek V4 Flash",
+              "provider": "deepseek",
+              "isDefault": true
+            }]
+          }],
+          "default": "opencode"
+        }
+        """#.utf8)
+
+        let decoded = try JSONDecoder().decode(AgentRunnerList.self, from: data)
+        XCTAssertEqual(decoded.default, "opencode")
+        XCTAssertEqual(decoded.runners.first?.displayName, "OpenCode")
+        XCTAssertEqual(decoded.runners.first?.models.first?.id, "deepseek/deepseek-v4-flash")
+        XCTAssertEqual(decoded.runners.first?.models.first?.isDefault, true)
     }
 
     func testTVAutoConnectUsesPrimaryBeforeAlphabeticalOrder() throws {

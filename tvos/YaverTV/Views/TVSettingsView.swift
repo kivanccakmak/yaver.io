@@ -101,24 +101,30 @@ struct TVSettingsView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button { Task { await load() } } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(loading || saving)
-                }
             }
         }
         .task { await load() }
     }
 
     private var intro: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Defaults")
-                .font(.system(size: 30, weight: .bold))
-            Text("Chat uses these silently. Vibing shows the latest project first, but waits for you to open it.")
-                .font(.system(size: 16))
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 18) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Defaults")
+                    .font(.system(size: 30, weight: .bold))
+                Text("Chat uses these silently. Vibing shows the latest project first, but waits for you to open it.")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 12)
+            Button { Task { await load() } } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Refresh settings")
+            .disabled(loading || saving)
         }
         .padding(.bottom, 8)
     }
@@ -230,7 +236,7 @@ struct TVSettingsView: View {
     private var mcpMenu: some View {
         let pref = deviceId.flatMap { store.lastMCPServersByDevice[$0] }
         let selected = Set(pref?.mcpServers ?? [])
-        let includeYaver = pref?.includeYaverMcp ?? true
+        let includeYaver = pref?.includeYaverMcp ?? false
         let count = selected.count + (includeYaver ? 1 : 0)
         return Menu {
             Button { saveMCP(selected, includeYaver: !includeYaver) } label: {

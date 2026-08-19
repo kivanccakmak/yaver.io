@@ -35,6 +35,10 @@ targets:
       # phone uses. tvOS compiles this to nothing — it has no browser.
       - path: ../tvos/YaverTV/OAuthSignIn.swift
       - path: ../tvos/YaverTV/Models.swift
+      # AgentClient's remote-runtime methods use the shared typed wire model.
+      # Keep the model beside the client on every target that compiles it; a
+      # source-only client without its contract is not a compilable surface.
+      - path: ../tvos/YaverTV/RemoteRuntimeModels.swift
       - path: ../tvos/YaverTV/AgentClient.swift
       # Failure classification (capability gaps, scope denials, relay verdicts).
       # AgentClient references FailureSignals, so leaving this out breaks the
@@ -50,6 +54,10 @@ targets:
       - path: ../tvos/YaverTV/TokenStore.swift
       - path: ../tvos/YaverTV/YaverStore.swift
       - path: ../tvos/YaverTV/SessionClient.swift
+      # Pure follow-up/session policy shared by the vision-native session and
+      # the tvOS vibe panel. Keep these helpers out of TaskDetailView.swift:
+      # that view is tvOS-only and would pull its remote UI into visionOS.
+      - path: ../tvos/YaverTV/TVChatPlan.swift
       - path: ../tvos/YaverTV/YaverNativeCatalog.swift
       # The only caller of store.addBox() in the repo. Without it the headset's
       # "No machine selected" screen was the terminal state of the app — no
@@ -72,6 +80,12 @@ targets:
       # dropping either would leave a button that goes nowhere, which is the
       # failure this repo keeps paying for.
       - path: ../tvos/YaverTV/Views/ProjectsView.swift
+      # ProjectsView routes into both the live runner session and the one-step
+      # task composer. Their lifecycle helper is shared too. These destinations
+      # must be in the same target as the NavigationLinks that name them.
+      - path: ../tvos/YaverTV/BoxLifecycle.swift
+      - path: ../tvos/YaverTV/Views/WakeProgressView.swift
+      - path: ../tvos/YaverTV/Views/TaskComposerView.swift
       - path: ../tvos/YaverTV/Views/VibeTurnPanel.swift
       - path: ../tvos/YaverTV/Views/UpdateAgentView.swift
       # DroidStreamView is the Android-project branch of ProjectsView's

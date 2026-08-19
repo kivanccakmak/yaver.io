@@ -51,15 +51,43 @@ func TestDiskGuardYaverTempSparesLiveTrees(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Browser renderers strand these roots when Chromium is killed or a
+	// WebRTC capture is interrupted. They are safe only because the allowlist
+	// names the producer-owned temp roots; arbitrary browser profiles remain
+	// out of scope.
+	for _, name := range []string{"playwright_chromiumdev_profile-stale", "playwright-artifacts-stale", "chromedp-runner-stale"} {
+		p := filepath.Join(tmp, name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "trace"), []byte("z"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, q := range []string{filepath.Join(p, "trace"), p} {
+			if err := os.Chtimes(q, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
 	cands, err := diskGuardCollectYaverTemp()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cands) != 1 {
-		t.Fatalf("want exactly the stale yaver tree, got %d candidates: %+v", len(cands), cands)
+	if len(cands) != 4 {
+		t.Fatalf("want the stale yaver and browser render trees, got %d candidates: %+v", len(cands), cands)
 	}
-	if !strings.HasSuffix(cands[0].Path, "yaver-expo-web-stale") {
-		t.Fatalf("wrong candidate: %s", cands[0].Path)
+	for _, suffix := range []string{"yaver-expo-web-stale", "playwright_chromiumdev_profile-stale", "playwright-artifacts-stale", "chromedp-runner-stale"} {
+		found := false
+		for _, cand := range cands {
+			if strings.HasSuffix(cand.Path, suffix) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing candidate %q: %+v", suffix, cands)
+		}
 	}
 }
 

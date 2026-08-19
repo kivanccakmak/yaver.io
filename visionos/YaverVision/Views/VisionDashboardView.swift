@@ -17,6 +17,8 @@ struct VisionDashboardView: View {
     @State private var loading = false
     @State private var reloadingMode: String?
     @State private var showAddBox = false
+    @State private var confirmRemoval = false
+    @State private var removing = false
 
     /// Open the headset directly on a screen instead of the dashboard.
     ///
@@ -74,6 +76,12 @@ struct VisionDashboardView: View {
             }
             .sheet(isPresented: $showAddBox) { AddBoxView() }
             .sheet(isPresented: $showSession) { VisionSessionView() }
+            .confirmationDialog("Remove this machine from Yaver?", isPresented: $confirmRemoval) {
+                Button("Remove", role: .destructive) { Task { await removeSelectedMachine() } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("BYO and local machines disappear from every surface immediately. Yaver-hosted boxes are fully decommissioned with no snapshot.")
+            }
         }
         .task(id: store.selectedBox?.id) { await refresh() }
         .task(id: store.selectedBox?.id) { await startDevEventStream() }
@@ -145,6 +153,12 @@ struct VisionDashboardView: View {
             if let cpu = info?.cpuPercent {
                 row("CPU", String(format: "%.0f%%", cpu))
             }
+            Button(role: .destructive) {
+                confirmRemoval = true
+            } label: {
+                Label("Remove from Yaver", systemImage: "trash")
+            }
+            .disabled(removing || info?.deviceId == nil)
         }
     }
 
@@ -419,7 +433,35 @@ struct VisionDashboardView: View {
                 notice = nil
             }
         } catch {
+            if store.handleAuthenticationFailure(error) { return }
             notice = .error("Couldn't reach \(store.selectedBox?.name ?? "the machine"): \(error.localizedDescription)")
+        }
+    }
+
+    private func removeSelectedMachine() async {
+        guard let deviceId = info?.deviceId,
+              let selected = store.selectedBox else { return }
+        removing = true
+        defer { removing = false }
+        do {
+            let devices = try await MachineRegistry.fetch(token: store.token)
+            guard let device = devices.first(where: { $0.deviceId == deviceId }) else {
+                throw AgentError(message: "This machine is no longer in your Yaver account.")
+            }
+            if device.hosting == "yaver-hosted" {
+                guard let machineId = device.machineId, !machineId.isEmpty else {
+                    throw AgentError(message: "This cloud box is missing its provider identity. Open Cloud Workspace to decommission it.")
+                }
+                try await MachineRegistry.decommissionCloudMachine(machineId: machineId, token: store.token)
+            } else {
+                // A vision-scoped token may remove the account row, but not
+                // destroy the local agent through the companion API.
+                try await MachineRegistry.removeDevice(deviceId: device.deviceId, token: store.token)
+            }
+            store.removeBox(selected)
+        } catch {
+            if store.handleAuthenticationFailure(error) { return }
+            notice = .error(error.localizedDescription)
         }
     }
 

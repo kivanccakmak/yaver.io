@@ -507,7 +507,7 @@ func SelectRuntimeFamily(guest RuntimeFingerprint, supported []RuntimeFamily) Ru
 	if selection.ExactMatch {
 		selection.MatchKind = "exact"
 		selection.Reason = fmt.Sprintf(
-			"guest Expo %s / RN %s / React %s matches host family %s",
+			"project Expo %s / RN %s / React %s matches host family %s",
 			fallbackRuntimeValue(guest.ExpoVersion, "?"),
 			fallbackRuntimeValue(guest.ReactNativeVersion, "?"),
 			fallbackRuntimeValue(guest.ReactVersion, "?"),
@@ -520,7 +520,7 @@ func SelectRuntimeFamily(guest RuntimeFingerprint, supported []RuntimeFamily) Ru
 	}
 	selection.MatchKind = "closest"
 	selection.Reason = fmt.Sprintf(
-		"guest Expo %s / RN %s / React %s is closest to host family %s",
+		"project Expo %s / RN %s / React %s is closest to host family %s",
 		fallbackRuntimeValue(guest.ExpoVersion, "?"),
 		fallbackRuntimeValue(guest.ReactNativeVersion, "?"),
 		fallbackRuntimeValue(guest.ReactVersion, "?"),

@@ -109,3 +109,175 @@ apple_validate_build_number() {
       ;;
   esac
 }
+
+# Prove that full Xcode can load and execute against the host OS before any
+# deploy mutates generated state. On 2026-08-18 macOS Tahoe 26.6.2 was paired
+# with Xcode 16.2: `xcodebuild -version` was green, but every real tool lookup
+# aborted while loading CoreDevice because Tahoe's Mercury framework no longer
+# exported _XPCTypeBool. A version string is inventory; asking xcodebuild to
+# locate a tool through the active macOS SDK is the operation.
+#
+# The optional arguments make the loader result deterministic in the shell
+# regression test: developer dir, probe exit status, and probe output.
+apple_require_working_xcode() {
+  local developer_dir="${1:-}"
+  local probe_status="${2:-}"
+  local probe_output="${3:-}"
+
+  if [ -z "$developer_dir" ]; then
+    developer_dir="$(xcode-select -p 2>/dev/null || true)"
+  fi
+
+  case "$developer_dir" in
+    */Xcode*.app/Contents/Developer) ;;
+    *)
+      echo "ERROR: full Xcode is not selected; active developer directory is ${developer_dir:-<unset>}." >&2
+      echo "       Command Line Tools can provide Git, but cannot archive or upload Apple apps." >&2
+      echo "       Install a Tahoe-compatible Xcode, then run:" >&2
+      echo "         sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+      return 1
+      ;;
+  esac
+
+  if [ -z "$probe_status" ]; then
+    local xcodebuild_bin="$developer_dir/usr/bin/xcodebuild"
+    if [ ! -x "$xcodebuild_bin" ]; then
+      probe_status=127
+      probe_output="missing executable: $xcodebuild_bin"
+    elif probe_output="$(DEVELOPER_DIR="$developer_dir" "$xcodebuild_bin" -sdk macosx -find git 2>&1)"; then
+      probe_status=0
+    else
+      probe_status=$?
+    fi
+  fi
+
+  if [ "$probe_status" -ne 0 ]; then
+    local macos_version xcode_version
+    macos_version="$(sw_vers -productVersion 2>/dev/null || true)"
+    xcode_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+      "${developer_dir%/Contents/Developer}/Contents/Info.plist" 2>/dev/null || true)"
+    echo "ERROR: active Xcode cannot load its required libraries (probe exit $probe_status)." >&2
+    echo "       macOS ${macos_version:-unknown}; Xcode ${xcode_version:-unknown}; developer dir $developer_dir." >&2
+    printf '%s\n' "$probe_output" | tail -4 >&2
+    echo "       Wait for any active installation to finish, or update/reinstall full Xcode" >&2
+    echo "       to a release compatible with this macOS version. Command Line Tools alone" >&2
+    echo "       are not enough for TestFlight. Then select Xcode and run its first-launch setup." >&2
+    return 1
+  fi
+
+  case "$probe_output" in
+    /*/git) ;;
+    *)
+      echo "ERROR: Xcode's operational probe did not resolve Git; got: ${probe_output:-<empty>}." >&2
+      echo "       Reinstall full Xcode, select it with xcode-select, and rerun first-launch setup." >&2
+      return 1
+      ;;
+  esac
+}
+
+# Asset catalogs are compiled with simulator tooling even for generic device
+# archives. On 2026-08-18 Xcode 26.6 had every device SDK but only the previous
+# generation of simulator runtimes; the watch build passed `-showsdks` and then
+# actool failed with "No simulator runtime version ... available". Match the
+# runtime VERSION to the active simulator SDK, not merely the platform family.
+# Do not compare build numbers: Apple can ship a compatible runtime whose build
+# differs from the SDK in the same Xcode (iOS 26.5 is SDK 23F81a and runtime
+# 23F77). Xcode's supported download command is the authority for that pairing.
+# Missing matching runtimes are an unambiguous, idempotent repair, so stream
+# Xcode's supported platform download and return to the deploy automatically.
+#
+# Optional inventory/version/build arguments keep the shell test deterministic.
+apple_ensure_simulator_runtime() {
+  local platform="$1"
+  local simulator_sdk="$2"
+  local inventory="${3:-}"
+  local required_version="${4:-}"
+  local required_build="${5:-}"
+
+  if [ -z "$required_version" ]; then
+    required_version="$(xcrun --sdk "$simulator_sdk" --show-sdk-version 2>/dev/null || true)"
+  fi
+  if [ -z "$required_build" ]; then
+    required_build="$(xcrun --sdk "$simulator_sdk" --show-sdk-build-version 2>/dev/null || true)"
+  fi
+  if [ -z "$required_version" ] || [ -z "$required_build" ]; then
+    echo "ERROR: could not determine the active $platform simulator SDK version/build." >&2
+    echo "       Reinstall the $platform platform in Xcode, then retry." >&2
+    return 1
+  fi
+
+  if [ -z "$inventory" ]; then
+    inventory="$(xcrun simctl list runtimes 2>/dev/null || true)"
+  fi
+  local platform_pattern="$platform"
+  if [ "$platform" = "visionOS" ]; then
+    platform_pattern='(visionOS|xrOS)'
+  fi
+  if printf '%s\n' "$inventory" | grep -Eq \
+    "^$platform_pattern $required_version \\(.*\\) - com\\.apple\\.CoreSimulator\\.SimRuntime\\.[^ ]+$"; then
+    return 0
+  fi
+
+  echo "Xcode has $platform SDK $required_version ($required_build), but no matching simulator runtime." >&2
+  echo "Installing the matching $platform runtime; download progress follows." >&2
+  if [ "${YAVER_SKIP_XCODE_PLATFORM_DOWNLOAD:-}" = "1" ]; then
+    echo "ERROR: automatic platform download is disabled." >&2
+    echo "       Fix: xcodebuild -downloadPlatform $platform -architectureVariant arm64" >&2
+    return 1
+  fi
+
+  if ! xcodebuild -downloadPlatform "$platform" -architectureVariant arm64; then
+    echo "ERROR: Xcode could not download the matching $platform runtime." >&2
+    echo "       Retry the command above or use Xcode > Settings > Components." >&2
+    return 1
+  fi
+
+  # Download success is not capability success. Xcode 26.6 once produced two
+  # xrOS disk-image records (one Ready, one duplicate) while actool still saw
+  # zero xrsimulator runtimes. Ask CoreSimulator to register/mount the asset,
+  # then require the same inventory actool consumes.
+  xcrun simctl runtime scan-and-mount >/dev/null 2>&1 || true
+  inventory="$(xcrun simctl list runtimes 2>/dev/null || true)"
+  if ! printf '%s\n' "$inventory" | grep -Eq \
+    "^$platform_pattern $required_version \\(.*\\) - com\\.apple\\.CoreSimulator\\.SimRuntime\\.[^ ]+$"; then
+    echo "ERROR: $platform runtime download returned success, but version $required_version is still unavailable." >&2
+    echo "       CoreSimulator may have duplicate/stale disk-image registrations even when" >&2
+    echo "       Settings says Ready. Inspect: xcrun simctl runtime list" >&2
+    echo "       Repair the exact unusable duplicate, then run: xcrun simctl runtime scan-and-mount" >&2
+    return 1
+  fi
+}
+
+# Fail before dependency generation, build-number mutation, and a long archive
+# when Apple's upload floor has moved beyond this Mac's active SDK. App Store
+# Connect is the real capability probe, but its rejection comes far too late;
+# this mirrors Apple's published SDK floor locally and names the host upgrade
+# required to make the operation possible.
+apple_require_store_sdk() {
+  local sdk="$1"
+  local minimum_major="$2"
+  local detected="${3:-}"
+
+  if [ -z "$detected" ]; then
+    apple_require_working_xcode || return 1
+    detected="$(xcrun --sdk "$sdk" --show-sdk-version 2>/dev/null || true)"
+  fi
+  case "$detected" in
+    ''|*[!0-9.]*)
+      echo "ERROR: could not determine the active $sdk SDK version." >&2
+      echo "       Select a complete Xcode installation with xcode-select, then retry." >&2
+      return 1
+      ;;
+  esac
+
+  local major="${detected%%.*}"
+  if [ "$major" -lt "$minimum_major" ]; then
+    local xcode_version macos_version
+    xcode_version="$(xcodebuild -version 2>/dev/null | tr '\n' ' ' || true)"
+    macos_version="$(sw_vers -productVersion 2>/dev/null || true)"
+    echo "ERROR: App Store Connect requires the $sdk $minimum_major SDK or later; active SDK is $detected." >&2
+    echo "       Active ${xcode_version:-Xcode version is unknown}; macOS ${macos_version:-version is unknown}." >&2
+    echo "       Install macOS Sequoia 15.6 or later and Xcode 26 or later, then rerun the deploy." >&2
+    return 1
+  fi
+}

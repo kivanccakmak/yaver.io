@@ -239,7 +239,7 @@ export default function HotReloadScreen() {
           "Open as…",
           last
             ? `Last time you picked "${last === "phone" ? "Phone view" : "Tablet view"}". Pick again or keep it.`
-            : "Run this guest as a phone-shaped frame with a vibing dock beside it, or full-width for tablet UI testing?",
+            : "Run this project app as a phone-shaped frame with a vibing dock beside it, or full-width for tablet UI testing?",
           [
             { text: "Cancel", style: "cancel", onPress: () => resolve(true) },
             { text: "Tablet view", onPress: () => { void apply("tablet"); } },
@@ -587,7 +587,7 @@ export default function HotReloadScreen() {
     if (!isBundleLoaderAvailable()) {
       Alert.alert(
         "Bundle Loader Unavailable",
-        "This build of Yaver can't mount guest bundles. Update Yaver to the latest version and try again.",
+        "This build of Yaver can't mount project bundles. Update Yaver to the latest version and try again.",
       );
       return;
     }

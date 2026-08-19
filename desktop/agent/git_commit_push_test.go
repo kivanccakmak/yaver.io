@@ -85,7 +85,7 @@ func TestGitCommitPushRebaseOnNonFastForward(t *testing.T) {
 	// Simulate "someone else pushed first" by adding a commit from a
 	// fresh clone and pushing it.
 	other := filepath.Join(tmp, "other")
-	mustGit(t, "", "clone", bare, other)
+	mustGit(t, "", "clone", "--branch", "main", bare, other)
 	mustGit(t, other, "config", "user.email", "other@example.com")
 	mustGit(t, other, "config", "user.name", "Other")
 	writeFile(t, filepath.Join(other, "OTHER.md"), "remote-only\n")
@@ -139,7 +139,7 @@ func TestGitCommitPushConflictRequiresAgent(t *testing.T) {
 	mustGit(t, seed, "push", "-u", "origin", "main")
 
 	other := filepath.Join(tmp, "other")
-	mustGit(t, "", "clone", bare, other)
+	mustGit(t, "", "clone", "--branch", "main", bare, other)
 	mustGit(t, other, "config", "user.email", "other@example.com")
 	mustGit(t, other, "config", "user.name", "Other")
 	writeFile(t, filepath.Join(other, "shared.txt"), "remote\n")

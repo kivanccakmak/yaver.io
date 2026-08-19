@@ -72,7 +72,7 @@ import { runnerAuthFlowKind, runnerAuthLivenessLine } from "@/lib/runnerAuthFlow
 import { diagnoseRunnerFailure, formatFailureTime, runnerFailureFromTaskFailure } from "@/lib/runnerFailure";
 import { describeSidecarNoise, partitionRunnerOutput } from "@/lib/runnerOutputNoise";
 import { isRawRunnerCommand } from "@/lib/raw-runner-command";
-import { loadLastProjectFromConvex, loadMCPServersFromConvex, saveLastProjectToConvex, saveMCPServersToConvex } from "@/lib/runtimeProjectSettings";
+import { loadLastProjectFromConvex, loadMCPServersFromConvex, saveLastProjectToConvex, saveMCPServersToConvex, setUseLatestMCPEnabled, useLatestMCPEnabled } from "@/lib/runtimeProjectSettings";
 import PreviewPane from "./PreviewPane";
 import { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice } from "./DevicesView";
 
@@ -327,8 +327,8 @@ const LAST_PROJECT_STORAGE_PREFIX = "yaver:vibe-coding:last-project:";
 const KEEP_LAST_PROJECT_STORAGE_KEY = "yaver:vibe-coding:keep-last-project";
 
 function keepLastProjectEnabled(): boolean {
-  if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(KEEP_LAST_PROJECT_STORAGE_KEY) !== "0";
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(KEEP_LAST_PROJECT_STORAGE_KEY) === "1";
 }
 
 function setKeepLastProjectEnabled(enabled: boolean) {
@@ -503,10 +503,20 @@ export default function VibeCodingView({
   const projectChoiceRef = useRef<{ deviceId: string; explicit: boolean }>({ deviceId: "", explicit: false });
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
-  // Yaver's own MCP doorway — user-selectable, defaults ON (the agent
-  // injects `yaver mcp` unless the task explicitly opts out).
-  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(false);
+  const [useLatestMCP, setUseLatestMCP] = useState(() => useLatestMCPEnabled());
   const [keepLastProject, setKeepLastProject] = useState(() => keepLastProjectEnabled());
+  useEffect(() => {
+    if (!useLatestMCP || !token || !connectedDevice?.id) return;
+    let cancelled = false;
+    void loadMCPServersFromConvex(CONVEX_URL, token, connectedDevice.id).then((pref) => {
+      if (cancelled || !pref) return;
+      const known = new Set(mcpServers.map((server) => server.name));
+      setSelectedMcpServers((pref.mcpServers || []).filter((name) => known.has(name)));
+      setIncludeYaverMcp(pref.includeYaverMcp ?? false);
+    });
+    return () => { cancelled = true; };
+  }, [connectedDevice?.id, mcpServers, token, useLatestMCP]);
   // Deep link from the Projects wizard: /dashboard?tab=vibe&project=<path>
   // [&app=<monorepo-app>][&preview=web]. Read once at mount — the wizard's
   // "Vibe in browser" routes here so the user lands with the project
@@ -2622,18 +2632,33 @@ export default function VibeCodingView({
                       {selectedProject?.name || "No project"} · {selectedMcpServers.length ? `${selectedMcpServers.length} MCP` : "No MCPs"}
                     </div>
                   </div>
-                  <label className="flex shrink-0 items-center gap-2 text-[11px] text-surface-400">
-                    <input
-                      type="checkbox"
-                      checked={keepLastProject}
-                      onChange={(event) => {
-                        setKeepLastProject(event.target.checked);
-                        setKeepLastProjectEnabled(event.target.checked);
-                        if (event.target.checked) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, selectedProject);
-                      }}
-                    />
-                    keep
-                  </label>
+                  <div className="flex shrink-0 items-center gap-3 text-[11px] text-surface-400">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={keepLastProject}
+                        onChange={(event) => {
+                          setKeepLastProject(event.target.checked);
+                          setKeepLastProjectEnabled(event.target.checked);
+                          if (event.target.checked) saveLastProjectBoth(CONVEX_URL, token, connectedDevice?.id, selectedProject);
+                          else setSelectedProjectPath("");
+                        }}
+                      />
+                      latest project
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={useLatestMCP}
+                        onChange={(event) => {
+                          setUseLatestMCP(event.target.checked);
+                          setUseLatestMCPEnabled(event.target.checked);
+                          if (!event.target.checked) { setSelectedMcpServers([]); setIncludeYaverMcp(false); }
+                        }}
+                      />
+                      latest MCP
+                    </label>
+                  </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {/* Yaver's own MCP doorway — always rendered so the user

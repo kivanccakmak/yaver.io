@@ -226,7 +226,7 @@ struct TasksView: View {
             // The one speech path a TV has: the Siri Remote's mic button
             // dictates into a focused text field. Everything started from the
             // phone's whisper mic is a task too, so it lands in this same list.
-            Text("Press the mic button on the Siri Remote to dictate a vibe — or start one with whisper on your iPhone; it appears here.")
+            Text("Press and hold Siri on the remote while the prompt field is focused to dictate a vibe — or start one with whisper on your iPhone; it appears here.")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
         }

@@ -933,10 +933,11 @@ export APPLE_TEAM_ID="<team-id>"
 YAVER_IOS_BUILD_NUMBER=<next-build> ./scripts/deploy-testflight.sh
 ```
 
-`~/.appstoreconnect/yaver.env` is gitignored and pre-seeded with all four
-exports — sourcing it is the friction-free path when vault is locked
-(common after auth token rotation). Keep it in sync if you rotate the
-App Store Connect issuer/key.
+When provisioned, `~/.appstoreconnect/yaver.env` is gitignored and carries all
+four exports — sourcing it is the friction-free path when vault is locked
+(common after auth token rotation). Its absence is valid and selects the
+Xcode-managed account lane, which requires an explicit verified next build.
+Keep the file in sync if you rotate the App Store Connect issuer/key.
 
 GitHub Actions secrets backing the same flow (already populated): `APPLE_TEAM_ID`,
 `APP_STORE_CONNECT_API_KEY`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`,

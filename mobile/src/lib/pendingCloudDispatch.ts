@@ -31,9 +31,8 @@ export type PendingCloudTaskParams = {
   /** Yaver goal-mode objective (opencode goal plugin) — carried through the
    *  pending-cloud placeholder so a deferred dispatch still arms goal-mode. */
   goal?: string;
-  /** Whether the runner sees Yaver's own `yaver mcp` doorway (default true).
-   *  Carried through the placeholder so a deferred dispatch honors the
-   *  user's deselect of the `yaver` chip. */
+  /** Whether the runner sees Yaver's own `yaver mcp` doorway. New tasks
+   *  default false; deferred dispatches preserve the explicit user choice. */
   includeYaverMcp?: boolean;
 };
 

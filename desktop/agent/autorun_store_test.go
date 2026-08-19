@@ -130,6 +130,11 @@ func TestHolderAliveOnThisHost(t *testing.T) {
 	if holderAliveOnThisHost(host + "/999999999") {
 		t.Error("a pid that cannot exist should read as dead")
 	}
+	// autorunHolder's production shape includes the literal "pid" prefix.
+	// A dead deploy in this format must be just as reclaimable.
+	if holderAliveOnThisHost(host + "/pid999999999") {
+		t.Error("a prefixed pid that cannot exist should read as dead")
+	}
 	// Different host → presume alive (can't verify remotely).
 	if !holderAliveOnThisHost("other-host/999999999") {
 		t.Error("remote holder must be presumed alive")

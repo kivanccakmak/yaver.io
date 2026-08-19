@@ -37,10 +37,10 @@ class MemoryStorage {
 (globalThis as any).window = { localStorage: new MemoryStorage() };
 globalThis.localStorage = (globalThis as any).window.localStorage;
 
-test("task composer keep-last-project defaults on and stores per device", async () => {
+test("task composer keep-last-project defaults off and stores per device", async () => {
   await storage.clear();
 
-  assert.equal(await loadKeepLastProjectEnabled(), true);
+  assert.equal(await loadKeepLastProjectEnabled(), false);
   await saveKeepLastProjectEnabled(false);
   assert.equal(await loadKeepLastProjectEnabled(), false);
   await saveKeepLastProjectEnabled(true);

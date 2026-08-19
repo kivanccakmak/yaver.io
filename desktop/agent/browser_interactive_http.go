@@ -40,6 +40,7 @@ func (s *HTTPServer) handleBrowserInteractiveStart(w http.ResponseWriter, r *htt
 		SessionID string `json:"session_id"`
 		URL       string `json:"url"`
 		Profile   string `json:"profile"`
+		Headful   bool   `json:"headful"`
 		Width     int    `json:"width"`
 		Height    int    `json:"height"`
 		Prefill   []struct {
@@ -70,7 +71,7 @@ func (s *HTTPServer) handleBrowserInteractiveStart(w http.ResponseWriter, r *htt
 	}
 	_ = os.MkdirAll(profileDir, 0o755)
 
-	if err := s.browserMgr.OpenInteractiveSession(req.SessionID, profileDir, req.Width, req.Height); err != nil {
+	if err := s.browserMgr.OpenInteractiveSessionMode(req.SessionID, profileDir, req.Width, req.Height, req.Headful); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
@@ -95,6 +96,7 @@ func (s *HTTPServer) handleBrowserInteractiveStart(w http.ResponseWriter, r *htt
 		"input_path": "/browser/interactive/input/" + req.SessionID,
 		"width":      req.Width,
 		"height":     req.Height,
+		"headful":    req.Headful,
 	})
 }
 

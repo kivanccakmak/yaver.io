@@ -18,7 +18,8 @@ struct MachinePickerView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var connecting: String?   // deviceId being resolved
-    @State private var showManualAdd = false
+    @State private var removing: String?     // deviceId being removed
+    @State private var removalCandidate: RegisteredDevice?
     @StateObject private var lifecycle = BoxLifecycle()
     @State private var relaySettings: MachineRegistry.UserSettings?
     /// Resolved relay leg (2026-08-13): settings.relayUrl is a user OVERRIDE,
@@ -52,15 +53,25 @@ struct MachinePickerView: View {
                     Button("Back") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Type an address") { showManualAdd = true }
+                    NavigationLink("Type an address", destination: AddBoxView())
                 }
             }
-            .sheet(isPresented: $showManualAdd, onDismiss: {
-                // AddBoxView selects the box it adds; if it did, we're done.
-                if store.selectedBox != nil { dismiss() }
-            }) { AddBoxView() }
         }
         .task { await load() }
+        .alert(item: $removalCandidate) { device in
+            Alert(
+                title: Text(device.hosting == "yaver-hosted"
+                            ? "Decommission \(device.displayName)?"
+                            : "Remove \(device.displayName)?"),
+                message: Text(device.hosting == "yaver-hosted"
+                              ? "This cancels linked billing and permanently deletes the Yaver cloud resources. No snapshot is kept."
+                              : "It disappears from every Yaver surface immediately. If it is repaired or reset, pairing Yaver again recreates it."),
+                primaryButton: .destructive(Text(device.hosting == "yaver-hosted" ? "Decommission" : "Remove")) {
+                    Task { await remove(device) }
+                },
+                secondaryButton: .cancel()
+            )
+        }
     }
 
     private var list: some View {
@@ -91,7 +102,15 @@ struct MachinePickerView: View {
                                        primary: store.primaryDeviceId == d.deviceId)
                         }
                         .buttonStyle(.card)
-                        .disabled(connecting != nil)
+                        .disabled(connecting != nil || removing != nil)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                removalCandidate = d
+                            } label: {
+                                Label(d.hosting == "yaver-hosted" ? "Decommission box" : "Remove from Yaver",
+                                      systemImage: "trash")
+                            }
+                        }
                         .accessibilityIdentifier("devices.machine.\(d.deviceId)")
                     }
                 }
@@ -155,7 +174,7 @@ struct MachinePickerView: View {
             Text("No machines on your account yet").font(.title2)
             Text("Run `yaver serve` on a computer signed in as you, and it appears here. Or type a LAN address.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 640)
-            Button("Type an address") { showManualAdd = true }.padding(.top, 8)
+            NavigationLink("Type an address", destination: AddBoxView()).padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -165,7 +184,7 @@ struct MachinePickerView: View {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 48)).foregroundStyle(.orange)
             Text(msg).multilineTextAlignment(.center).frame(maxWidth: 640)
             Button("Try again") { Task { await load() } }
-            Button("Type an address") { showManualAdd = true }
+            NavigationLink("Type an address", destination: AddBoxView())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -191,7 +210,13 @@ struct MachinePickerView: View {
             // The owner-only registry contract already excludes shared rows.
             devices = list
         } catch {
-            self.error = error.localizedDescription
+            let message = error.localizedDescription
+            // A reinstall can preserve a revoked Keychain token. The shared
+            // store owns the auth-failure contract so visionOS cannot drift.
+            if store.handleAuthenticationFailure(error) {
+                return
+            }
+            self.error = message
         }
         loading = false
     }
@@ -227,6 +252,31 @@ struct MachinePickerView: View {
         store.addBox(box)
         store.select(box)
         dismiss()
+    }
+
+    private func remove(_ device: RegisteredDevice) async {
+        removing = device.deviceId
+        error = nil
+        defer { removing = nil }
+        do {
+            if device.hosting == "yaver-hosted" {
+                guard let machineId = device.machineId, !machineId.isEmpty else {
+                    throw AgentError(message: "This cloud box is missing its provider identity. Open Cloud Workspace to decommission it.")
+                }
+                try await MachineRegistry.decommissionCloudMachine(machineId: machineId, token: store.token)
+            } else {
+                // Companion tokens may unregister the account row, but must
+                // never invoke the destructive local-machine removal route.
+                // The box can be removed from Yaver even while it is offline.
+                try await MachineRegistry.removeDevice(deviceId: device.deviceId, token: store.token)
+            }
+            devices.removeAll { $0.deviceId == device.deviceId }
+            if let cached = store.boxes.first(where: { $0.id == device.deviceId }) {
+                store.removeBox(cached)
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     private func boxTarget(for d: RegisteredDevice, host: String) -> BoxTarget {

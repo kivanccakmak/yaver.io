@@ -20,6 +20,24 @@ export type RuntimeProjectCatalogRow = {
   updatedAt?: number;
 };
 
+const USE_LATEST_PROJECT_KEY = "yaver:tasks:use-latest-project";
+const USE_LATEST_MCP_KEY = "yaver:tasks:use-latest-mcp";
+
+function readOptIn(key: string): boolean {
+  if (typeof window === "undefined") return false;
+  try { return window.localStorage.getItem(key) === "1"; } catch { return false; }
+}
+
+function writeOptIn(key: string, enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(key, enabled ? "1" : "0"); } catch {}
+}
+
+export const useLatestProjectEnabled = () => readOptIn(USE_LATEST_PROJECT_KEY);
+export const setUseLatestProjectEnabled = (enabled: boolean) => writeOptIn(USE_LATEST_PROJECT_KEY, enabled);
+export const useLatestMCPEnabled = () => readOptIn(USE_LATEST_MCP_KEY);
+export const setUseLatestMCPEnabled = (enabled: boolean) => writeOptIn(USE_LATEST_MCP_KEY, enabled);
+
 export function runtimeProjectDisplayName(project: RuntimeProjectSeed | undefined): string {
   const name = String(project?.projectName || project?.repoName || "").trim();
   return name || "Unnamed project";
@@ -165,7 +183,8 @@ export async function saveLastProjectToConvex(
 // ── MCP selection preference, Convex-backed (2026-08-09) ───────────────
 // Per-device `mcpServersByDevice` (replace-by-deviceId): which external MCP
 // servers a task attaches, plus whether Yaver's own `yaver mcp` doorway is
-// included (default true). Synced so the phone and the web dashboard agree.
+// included. New task composers start empty and only restore this row after an
+// explicit local Use latest opt-in.
 
 export type MCPServersPreference = {
   deviceId: string;
@@ -306,4 +325,3 @@ export async function loadSurfaceCatalogsFromConvex(
     return empty;
   }
 }
-

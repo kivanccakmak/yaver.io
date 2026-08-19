@@ -172,6 +172,29 @@ enum AgentUpdate {
     }
 }
 
+/// Account-level removal for the standalone watch Settings surface. The
+/// backend refuses this route for an active Yaver-hosted cloud box, so the
+/// wrist cannot orphan provider resources or billing.
+enum DeviceRemoval {
+    static func remove(deviceId: String, token: String) async throws {
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("devices/remove"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("watch", forHTTPHeaderField: "X-Yaver-Surface")
+        req.timeoutInterval = 12
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["deviceId": deviceId])
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw AgentError(message: "No response from Yaver.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            throw AgentError(message: message ?? "Couldn't remove this box (\(http.statusCode)).")
+        }
+    }
+}
+
 struct BoxTarget: Codable, Identifiable, Equatable {
     /// Stable local identity. In practice this is the HOST STRING the user typed
     /// (SignInView's AddBoxView is the only construction site) — NOT a deviceId,

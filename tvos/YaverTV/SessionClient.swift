@@ -16,6 +16,16 @@
 
 import Foundation
 
+// Session requests must identify the surface that actually renders them.
+// The vision-native session is the only vision session driver; tvOS keeps its
+// own label. A default of tvOS here used to make headset turns look like TV
+// traffic to the agent.
+#if os(visionOS)
+private let yaverSessionSurfaceID = "vision"
+#else
+private let yaverSessionSurfaceID = "tvos"
+#endif
+
 struct SessionTurnResult: Codable {
     let ok: Bool?
     let session: String?
@@ -142,7 +152,9 @@ actor SessionClient {
     /// single live session happened to be the user's own hand-rolled tmux window,
     /// the guess drove THAT: a prompt typed into a personal Claude Code session,
     /// its private scrollback rendered back onto a television. Name the session.
-    func sendText(_ text: String, session: String?, waitMs: Int = 6000, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = true) async throws -> SessionTurnResult {
+    // MCP authority is opt-in: a session starts with No MCP unless the user
+    // explicitly enables Yaver MCP or selects a server in the picker.
+    func sendText(_ text: String, session: String?, waitMs: Int = 6000, surfaceId: String = yaverSessionSurfaceID, workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = false) async throws -> SessionTurnResult {
         try await turn(text: text, choice: nil, session: session, waitMs: waitMs, surfaceId: surfaceId, workDir: workDir, mcpServers: mcpServers, includeYaverMcp: includeYaverMcp)
     }
 
@@ -151,7 +163,7 @@ actor SessionClient {
         try await turn(text: nil, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId)
     }
 
-    private func turn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = true) async throws -> SessionTurnResult {
+    private func turn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = false) async throws -> SessionTurnResult {
         do {
             return try await runtimeTurn(text: text, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId, workDir: workDir, mcpServers: mcpServers, includeYaverMcp: includeYaverMcp)
         } catch {
@@ -186,7 +198,7 @@ actor SessionClient {
         return []
     }
 
-    private func runtimeTurn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = true) async throws -> SessionTurnResult {
+    private func runtimeTurn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = false) async throws -> SessionTurnResult {
         var target: [String: Any] = [:]
         if let session, !session.isEmpty { target["session"] = session }
         var payload: [String: Any] = [
@@ -219,7 +231,7 @@ actor SessionClient {
         // user-picked absolute path from /projects when the picker set one.
         if let workDir, !workDir.isEmpty { payload["workDir"] = workDir }
         if !mcpServers.isEmpty { payload["mcpServers"] = mcpServers }
-        if includeYaverMcp == false { payload["includeYaverMcp"] = false }
+        payload["includeYaverMcp"] = includeYaverMcp
         let body = try JSONSerialization.data(withJSONObject: [
             "verb": "runtime_turn",
             "payload": payload,

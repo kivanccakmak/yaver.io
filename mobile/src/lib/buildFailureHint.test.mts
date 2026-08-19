@@ -11,8 +11,8 @@
  *   "build-native: refusing to build a Hermes bundle of Yaver for the Yaver
  *    container. … Use the browser/WebRTC preview instead …"
  *
- *   "Hermes bytecode version mismatch between the guest app and the selected
- *    Yaver host family. Align the guest runtime to a supported family and
+ *   "Hermes bytecode version mismatch between the project app and the selected
+ *    Yaver host family. Align the project runtime to a supported family and
  *    retry."
  *
  * They cannot both be true. The build was REFUSED, so no bundle exists whose
@@ -107,6 +107,16 @@ eq(nativeBuildFailureTitle({}), "Load Failed",
 // 8 — the ROUTE the phone renders comes from `remedy`, so it must survive.
 eq(refusalResult.remedy, "stream-over-webrtc",
    "8: the agent's remedy is the button, and apps.tsx maps it to remote-runtime");
+
+// 9 — v1 has no secondary-user concept. Runtime failures must describe the
+// project app, never leak the old internal compatibility terminology into UI.
+for (const [label, output] of [
+  ["family", buildFailureHint({ code: "RUNTIME_FAMILY_MISMATCH" }, "")],
+  ["bytecode", buildFailureHint({ code: "BC_VERSION_MISMATCH" }, "")],
+] as const) {
+  check(!output.toLowerCase().includes("guest"),
+        `9 ${label}: user-facing runtime copy has no deprecated access terminology`);
+}
 
 if (failures) {
   console.error(`\n${failures} of ${checks} checks FAILED`);

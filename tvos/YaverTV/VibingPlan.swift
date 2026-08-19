@@ -3,7 +3,7 @@
 //
 // The agent's `remote-runtime` option means the BOX can produce WebRTC. tvOS
 // now ships a raw libwebrtc decoder and the remote-runtime control protocol,
-// so it can negotiate H.264 or JPEG-over-data-channel and drive the guest with
+// so it can negotiate H.264 or JPEG-over-data-channel and drive the app with
 // a soft Siri Remote cursor. TV frames remain the compatibility lane.
 
 import Foundation
@@ -43,7 +43,7 @@ let tvOSRenderLaneVerdicts: [TVRenderLaneVerdict] = [
         id: "webrtc",
         label: "WebRTC",
         usable: true,
-        reason: "Interactive WebRTC on Apple TV: Siri Remote pointer, scroll, guest keys, and text, with authenticated frame fallback when ICE is slow."
+        reason: "Interactive WebRTC on Apple TV: Siri Remote pointer, scroll, app keys, and text, with authenticated frame fallback when ICE is slow."
     ),
 ]
 

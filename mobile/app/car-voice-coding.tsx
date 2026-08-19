@@ -42,7 +42,7 @@ import { connectionManager } from "../src/lib/connectionManager";
 import { goalFromSlashCommand } from "../src/lib/goalSlashCommand";
 import { quicClient } from "../src/lib/quic";
 import { loadLocalSpeechConfig } from "../src/lib/auth";
-import { loadKeepLastProjectEnabled, loadLastTaskProject, loadLastTaskProjectFromConvex, loadMCPServersFromConvex } from "../src/lib/taskComposerPrefs";
+import { loadKeepLastProjectEnabled, loadLastTaskProject, loadLastTaskProjectFromConvex, loadMCPServersFromConvex, loadUseLatestMCPEnabled } from "../src/lib/taskComposerPrefs";
 import { speakText } from "../src/lib/speech";
 import {
   makeRealCarVoiceDeps,
@@ -187,12 +187,12 @@ export default function CarVoiceCodingScreen() {
     const client = connectionManager.clientFor(deviceId);
     const convexLast = token ? await loadLastTaskProjectFromConvex(token, deviceId || "default") : null;
     const lastProject = (await loadKeepLastProjectEnabled()) ? (convexLast ?? (await loadLastTaskProject(deviceId || "default"))) : null;
-    // MCP selection rides along — same mcpServersByDevice row the phone/web
-    // write, so a task voiced in the car carries the box's chosen MCP set
-    // (2026-08-10). Best-effort: absence means the defaults (yaver ON).
-    const mcpPref = token ? await loadMCPServersFromConvex(token, deviceId || "default") : null;
+    // Car starts with No MCP unless the owner explicitly enabled Use latest
+    // in task settings. Driving mode must never silently broaden tool scope.
+    const useLatestMCP = await loadUseLatestMCPEnabled();
+    const mcpPref = useLatestMCP && token ? await loadMCPServersFromConvex(token, deviceId || "default") : null;
     const mcpServers = mcpPref?.mcpServers ?? [];
-    const includeYaverMcp = mcpPref?.includeYaverMcp ?? true;
+    const includeYaverMcp = mcpPref?.includeYaverMcp ?? false;
     // Car dispatch always uses the opencode runner (terminal-style "yaver
     // code" wrapping), so a "/goal <objective>" voice command arms Yaver
     // goal-mode via the structured goal field (see goalSlashCommand).

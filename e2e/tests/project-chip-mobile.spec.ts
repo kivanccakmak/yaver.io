@@ -108,6 +108,9 @@ test.describe("project chip — top-level only, no chat/console discrimination (
       await newTaskBtn.click();
       await page.waitForTimeout(3000);
 
+      const more = page.locator('[data-testid="task-options-more"]').first();
+      await expect(more, "task options ellipsis is missing").toBeVisible();
+      await more.click();
       const chip = page.locator('[data-testid="composer-project-chip"]').first();
       await expect
         .poll(async () => (await chip.count()) > 0 && (await chip.isVisible().catch(() => false)), {

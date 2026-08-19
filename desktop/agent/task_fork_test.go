@@ -261,6 +261,60 @@ func TestHandleTaskForkCreatesChildAndKeepsParentImmutable(t *testing.T) {
 	}
 }
 
+func TestHandleTaskForkExplicitNoMCPDoesNotInheritParentTools(t *testing.T) {
+	s := newForkTestServer(t)
+	parent := mkParentTask(t)
+	parent.MCPServers = []string{"private-tool"}
+	s.taskMgr.tasks[parent.ID] = parent
+
+	body := bytes.NewReader([]byte(`{
+		"runner":"opencode",
+		"input":"continue without tools",
+		"mcpServers":[],
+		"includeYaverMcp":false
+	}`))
+	r := httptest.NewRequest(http.MethodPost, "/tasks/parent-1/fork", body)
+	rr := httptest.NewRecorder()
+	s.handleTaskFork(rr, r, parent.ID)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200 — body %s", rr.Code, rr.Body.String())
+	}
+	var resp taskForkResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	child, ok := s.taskMgr.GetTask(resp.TaskID)
+	if !ok {
+		t.Fatal("child task not found")
+	}
+	if len(child.MCPServers) != 0 {
+		t.Fatalf("explicit No MCP inherited parent tools: %v", child.MCPServers)
+	}
+	if child.IncludeYaverMcp {
+		t.Fatal("explicit No MCP unexpectedly included Yaver MCP")
+	}
+}
+
+func TestMCPDoorwayDefaultsAndForkInheritance(t *testing.T) {
+	if includeYaverMCPForNewTask(nil) {
+		t.Fatal("new task with omitted MCP choice must default to No MCP")
+	}
+	enabled := true
+	if !includeYaverMCPForNewTask(&enabled) {
+		t.Fatal("explicit Yaver MCP opt-in was ignored")
+	}
+	if includeYaverMCPForFork(nil, false) {
+		t.Fatal("fork with omitted choice did not inherit parent's disabled scope")
+	}
+	if !includeYaverMCPForFork(nil, true) {
+		t.Fatal("fork with omitted choice did not inherit parent's enabled scope")
+	}
+	disabled := false
+	if includeYaverMCPForFork(&disabled, true) {
+		t.Fatal("fork explicit No MCP was ignored")
+	}
+}
+
 // The 2026-07-21 "I lost the summary — every follow-up starts a fresh chat"
 // report: a fork must render as ONE continuous thread, so the child carries the
 // parent's conversation turns for display (WhatsApp-style), then appends the new

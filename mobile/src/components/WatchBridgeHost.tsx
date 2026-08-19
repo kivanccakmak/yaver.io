@@ -7,7 +7,7 @@ import { connectionManager } from "../lib/connectionManager";
 import { goalFromSlashCommand } from "../lib/goalSlashCommand";
 import { appLog } from "../lib/logger";
 import { runtimeSurfaceClient } from "../lib/runtimeSurfaceClient";
-import { loadKeepLastProjectEnabled, loadLastTaskProject, loadLastTaskProjectFromConvex, loadMCPServersFromConvex } from "../lib/taskComposerPrefs";
+import { loadKeepLastProjectEnabled, loadLastTaskProject, loadLastTaskProjectFromConvex, loadMCPServersFromConvex, loadUseLatestMCPEnabled } from "../lib/taskComposerPrefs";
 import { watchBridgeBus } from "../lib/watchEntry";
 import { isDeviceAsleep, wakeManagedDevice } from "../lib/wakeMachine";
 
@@ -65,12 +65,12 @@ function makeWatchDeps(deviceId: string, token: string | null | undefined) {
       // (defaultRuntimeProjectByDevice); AsyncStorage offline fallback.
       const convexLast = token ? await loadLastTaskProjectFromConvex(token, deviceId) : null;
       const lastProject = (await loadKeepLastProjectEnabled()) ? (convexLast ?? (await loadLastTaskProject(deviceId))) : null;
-      // MCP selection rides along — same mcpServersByDevice row the phone/web
-      // write, so a task voiced on the watch carries the box's chosen MCP set
-      // (2026-08-10). Best-effort: absence means the defaults (yaver ON).
-      const mcpPref = token ? await loadMCPServersFromConvex(token, deviceId) : null;
+      // Remembered MCP scope is opt-in. Wrist-created tasks otherwise start
+      // with No MCP, matching phone/TV/web rather than silently reusing tools.
+      const useLatestMCP = await loadUseLatestMCPEnabled();
+      const mcpPref = useLatestMCP && token ? await loadMCPServersFromConvex(token, deviceId) : null;
       const mcpServers = mcpPref?.mcpServers ?? [];
-      const includeYaverMcp = mcpPref?.includeYaverMcp ?? true;
+      const includeYaverMcp = mcpPref?.includeYaverMcp ?? false;
       // Watch bridge dispatch uses the opencode runner; a "/goal
       // <objective>" voice command arms Yaver goal-mode via the structured
       // goal field (see goalSlashCommand).

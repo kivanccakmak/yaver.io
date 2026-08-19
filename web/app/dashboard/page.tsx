@@ -84,6 +84,10 @@ import {
   loadMCPServersFromConvex,
   saveMCPServersToConvex,
   loadSurfaceCatalogsFromConvex,
+  setUseLatestMCPEnabled,
+  setUseLatestProjectEnabled,
+  useLatestMCPEnabled,
+  useLatestProjectEnabled,
   runtimeProjectDisplayName,
   type MCPCatalogServer,
   type RuntimeProjectSeed,
@@ -918,11 +922,9 @@ export default function DashboardPage() {
   const [runners, setRunners] = useState<Runner[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
-  // Yaver's own MCP doorway — user-selectable, defaults ON (the agent
-  // injects `yaver mcp` unless the task explicitly opts out). Same rule as
-  // mobile tasks.tsx: without this chip the web chat always shipped the
-  // doorway with no way to turn it off, while mobile could (2026-08-10).
-  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(false);
+  const [useLatestProject, setUseLatestProject] = useState(() => useLatestProjectEnabled());
+  const [useLatestMCP, setUseLatestMCP] = useState(() => useLatestMCPEnabled());
   // Chat composer project picker — the web twin of mobile's
   // renderProjectPickerSheet. `preferredSurfaceProjectPath` feeds task
   // workDir; the picker makes it user-visible instead of chat-intent-only
@@ -1274,11 +1276,11 @@ export default function DashboardPage() {
   // web/lib/runtimeProjectSettings.ts). Never blocks connection: a failed
   // settings read keeps the previous defaults.
   useEffect(() => {
-    if (!isConnected || !token || !connectedDevice?.id) return;
+    if (!isConnected || !token || !connectedDevice?.id || (!useLatestProject && !useLatestMCP)) return;
     const deviceId = connectedDevice.id;
     let cancelled = false;
     const restore = async () => {
-      try {
+      if (useLatestProject) try {
         const pref = await loadLastProjectFromConvex(CONVEX_URL, token, deviceId);
         if (cancelled || !pref?.projectName) return;
         // Match the remembered project against the fresh /projects list.
@@ -1287,7 +1289,7 @@ export default function DashboardPage() {
           || (pref.gitRemote && p.gitRemote && p.gitRemote === pref.gitRemote));
         if (proj) setPreferredSurfaceProjectPath(proj.path);
       } catch {}
-      try {
+      if (useLatestMCP) try {
         const mcpPref = await loadMCPServersFromConvex(CONVEX_URL, token, deviceId);
         if (cancelled || !mcpPref) return;
         if (Array.isArray(mcpPref.mcpServers)) {
@@ -1305,7 +1307,7 @@ export default function DashboardPage() {
     // first connect after the list lands is what we want; re-restoring on
     // every list refresh would overwrite an in-session pick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConnected, token, connectedDevice?.id]);
+  }, [isConnected, token, connectedDevice?.id, useLatestProject, useLatestMCP]);
 
   // Cross-machine surface catalogs (2026-08-13): one /settings fetch that
   // answers "which MCP server / which git project lives on which machine"
@@ -5630,9 +5632,34 @@ export default function DashboardPage() {
                                     : "Project ▾"}
                                 </button>
                               )}
-                              {/* Yaver's own MCP doorway — default ON, same as
-                                  mobile. Off means the runner gets only the
-                                  external MCPs the user selected below. */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = !useLatestProject;
+                                  setUseLatestProject(next);
+                                  setUseLatestProjectEnabled(next);
+                                  if (!next) setPreferredSurfaceProjectPath(null);
+                                }}
+                                className={`rounded-full border px-2.5 py-1 font-semibold ${useLatestProject ? "border-fuchsia-400/50 bg-fuchsia-400/10 text-fuchsia-100" : "border-surface-800 bg-surface-950 text-surface-500"}`}
+                                title="Restore the latest project on this browser"
+                              >
+                                latest project{useLatestProject ? " ✓" : ""}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = !useLatestMCP;
+                                  setUseLatestMCP(next);
+                                  setUseLatestMCPEnabled(next);
+                                  if (!next) { setSelectedMcpServers([]); setIncludeYaverMcp(false); }
+                                }}
+                                className={`rounded-full border px-2.5 py-1 font-semibold ${useLatestMCP ? "border-brand/40 bg-brand-soft text-brand-softFg" : "border-surface-800 bg-surface-950 text-surface-500"}`}
+                                title="Restore the latest MCP selection on this browser"
+                              >
+                                latest MCP{useLatestMCP ? " ✓" : ""}
+                              </button>
+                              {/* Yaver's own MCP doorway is an explicit opt-in.
+                                  Off means the runner gets only selected externals. */}
                               <button
                                 type="button"
                                 onClick={() => setIncludeYaverMcp((v) => !v)}

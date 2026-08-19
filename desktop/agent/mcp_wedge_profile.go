@@ -51,12 +51,12 @@ var wedgeToolFamilies = map[string]bool{
 	"ops": true,
 
 	// ── Yaver itself: auth, identity, devices, health, onboarding.
-	"yaver": true, "get": true, "config": true, "diagnose": true, "invite": true,
-	"guest": true, "account": true, "totp": true, "change": true, "forgot": true,
+	"yaver": true, "get": true, "config": true, "diagnose": true,
+	"account": true, "totp": true, "change": true, "forgot": true,
 	"oauth": true, "sdk": true, "session": true, "support": true,
 
 	// ── Connect a remote machine + keep it reachable. The "remote runtime" half.
-	"device": true, "primary": true, "console": true, "machine": true,
+	"device": true, "primary": true, "console": true, "machine": true, "agent": true,
 	"relay": true, "add": true, "remove": true, "tunnel": true, "expose": true,
 	"acl": true, "ping": true, "port": true, "net": true, "dns": true,
 	"public": true, "wifi": true, "network": true, "listen": true, "http": true,

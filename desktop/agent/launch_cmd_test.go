@@ -6,8 +6,11 @@ func TestLaunchProviderSelectionIsAutomaticByDefault(t *testing.T) {
 	t.Setenv("YAVER_OPERATOR_PROVIDER_OVERRIDE", "")
 	t.Setenv("YAVER_LAUNCH_PROVIDER_OVERRIDE", "")
 
-	if !isExplicitCloudProvider("aws") || !isExplicitCloudProvider("gcp") || !isExplicitCloudProvider("azure") || !isExplicitCloudProvider("hetzner") {
+	if !isExplicitCloudProvider("aws") || !isExplicitCloudProvider("gcp") || !isExplicitCloudProvider("azure") {
 		t.Fatal("all concrete cloud providers must be classified as explicit provider overrides")
+	}
+	if isExplicitCloudProvider("hetzner") {
+		t.Fatal("the removed direct Hetzner launcher must not be resurrected as an operator override")
 	}
 	if isExplicitCloudProvider("cloud") {
 		t.Fatal("cloud is the automatic end-user launch path, not a provider override")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -212,6 +213,17 @@ func runAutoTestWebFlow(ctx context.Context, sp *Spec, driver string, vp AutoTes
 		out.DurationMS = time.Since(start).Milliseconds()
 		return out
 	}
+	// Probe the operation before trusting browser inventory. ChromeDriver can
+	// successfully navigate to its own ERR_CONNECTION_REFUSED page and still
+	// return a valid DOM snapshot, which previously made an unreachable app a
+	// green autotest flow. Any HTTP response proves the target is reachable;
+	// authentication and assertion outcomes remain the browser flow's job.
+	if err := probeWebTargetReachability(ctx, out.URL); err != nil {
+		out.Passed = false
+		out.Error = err.Error()
+		out.DurationMS = time.Since(start).Milliseconds()
+		return out
+	}
 	d, err := NewWebDriver(driver, ChromeOpts{
 		URL:       out.URL,
 		ViewportW: vp.Width,
@@ -251,6 +263,21 @@ func runAutoTestWebFlow(ctx context.Context, sp *Spec, driver string, vp AutoTes
 	out.Network = d.Network()
 	out.DurationMS = time.Since(start).Milliseconds()
 	return out
+}
+
+func probeWebTargetReachability(ctx context.Context, rawURL string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("web target is invalid: %w", err)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("web target is unreachable: %w", err)
+	}
+	_ = resp.Body.Close()
+	return nil
 }
 
 func firstSpecURL(sp *Spec) string {

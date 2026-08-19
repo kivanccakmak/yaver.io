@@ -611,7 +611,7 @@ func ResolveFeedbackBehaviour(stack string, insideContainer bool, streamed bool)
 		return FeedbackBehaviour{
 			Transport: FeedbackViewerTriggered,
 			Owner:     EscapeContainerOverlay,
-			Detail:    "guest SDK suppressed by YaverInfo.isYaver; container overlay owns shake (Reload / Back to Yaver)",
+			Detail:    "project SDK suppressed by YaverInfo.isYaver; container overlay owns shake (Reload / Back to Yaver)",
 		}
 
 	default:

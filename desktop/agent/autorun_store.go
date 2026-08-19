@@ -247,7 +247,8 @@ func holderAliveOnThisHost(holder string) bool {
 	if holder[:slash] != host {
 		return true // other machine → can't verify, presume alive
 	}
-	pid, err := strconv.Atoi(holder[slash+1:])
+	pidText := strings.TrimPrefix(holder[slash+1:], "pid")
+	pid, err := strconv.Atoi(pidText)
 	if err != nil || pid <= 0 {
 		return true
 	}

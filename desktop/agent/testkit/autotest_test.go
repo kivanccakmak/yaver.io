@@ -37,12 +37,12 @@ steps:
 		t.Fatalf("RunAutoTest returned top-level error: %v", err)
 	}
 	if res == nil || res.Passed {
-		t.Fatalf("RunAutoTest should report a failed flow for selenium stub: %+v", res)
+		t.Fatalf("RunAutoTest should report a failed flow for an unreachable target: %+v", res)
 	}
 	if res.BugsFound != 1 || res.Proposed != 1 {
 		t.Fatalf("bugs/proposed = %d/%d, want 1/1", res.BugsFound, res.Proposed)
 	}
-	if len(res.Flows) != 1 || (!strings.Contains(res.Flows[0].Error, "chromedriver") && !strings.Contains(res.Flows[0].Error, "selenium")) {
+	if len(res.Flows) != 1 || strings.TrimSpace(res.Flows[0].Error) == "" {
 		t.Fatalf("unexpected flow result: %+v", res.Flows)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".yaver", "tests", "plan.json")); err != nil {

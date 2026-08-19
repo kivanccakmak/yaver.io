@@ -106,17 +106,10 @@ func (t *webTransport) recordFile(rel string, bytes int64) {
 		return
 	}
 	t.mu.Lock()
+	emitServing := false
 	if t.phase == "compiled" || t.phase == "ready_to_serve" {
 		t.phase = "serving"
-		// Emit serving phase synchronously so the dashboard sees the
-		// transition the moment the iframe asks for index.html.
-		go func(caller, target string) {
-			t.emit(DevServerEvent{
-				Type: "phase", Topic: "webview/transport",
-				Phase: "serving", Caller: caller, Framework: target,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-			})
-		}(t.caller, t.target)
+		emitServing = true
 	}
 	t.servedFiles++
 	t.servedBytes += bytes
@@ -138,6 +131,16 @@ func (t *webTransport) recordFile(rel string, bytes int64) {
 	totalFiles := t.totalFiles
 	phase := t.phase
 	t.mu.Unlock()
+	// Preserve the transport ladder's causal order. The earlier goroutine could
+	// race the progress and delivered events, so consumers occasionally saw
+	// ready_to_serve → streaming → delivered with no serving phase at all.
+	if emitServing {
+		t.emit(DevServerEvent{
+			Type: "phase", Topic: "webview/transport",
+			Phase: "serving", Caller: t.caller, Framework: t.target,
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+	}
 
 	if !emitNow {
 		return

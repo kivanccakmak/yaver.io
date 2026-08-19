@@ -29,7 +29,6 @@
     "@react-native-segmented-control/segmented-control": "2.5.7",
     "@sentry/react-native": "8.8.0",
     "@shopify/react-native-skia": "2.2.12",
-    "@stripe/stripe-react-native": "0.64.0",
     "expo-apple-authentication": "8.0.8",
     "expo-asset": "12.0.12",
     "expo-av": "16.0.8",
@@ -81,7 +80,6 @@
     "react-native-device-info": "15.0.2",
     "react-native-gesture-handler": "2.28.0",
     "react-native-get-random-values": "1.11.0",
-    "react-native-iap": "13.0.4",
     "react-native-keyboard-controller": "1.21.5",
     "react-native-maps": "1.20.1",
     "react-native-mmkv": "4.3.0",
@@ -91,7 +89,6 @@
     "react-native-passkey": "3.3.3",
     "react-native-pdf": "7.0.4",
     "react-native-permissions": "5.5.1",
-    "react-native-purchases": "10.0.1",
     "react-native-reanimated": "4.1.7",
     "react-native-safe-area-context": "5.6.2",
     "react-native-screens": "4.16.0",
@@ -206,13 +203,6 @@
     },
     "@shopify/react-native-skia": {
       "version": "2.2.12",
-      "hostApp": true,
-      "cliPush": true,
-      "agentOpenInYaver": true,
-      "pluginEnabled": false
-    },
-    "@stripe/stripe-react-native": {
-      "version": "0.64.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
@@ -575,13 +565,6 @@
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
-    "react-native-iap": {
-      "version": "13.0.4",
-      "hostApp": true,
-      "cliPush": true,
-      "agentOpenInYaver": true,
-      "pluginEnabled": false
-    },
     "react-native-keyboard-controller": {
       "version": "1.21.5",
       "hostApp": true,
@@ -640,13 +623,6 @@
     },
     "react-native-permissions": {
       "version": "5.5.1",
-      "hostApp": true,
-      "cliPush": true,
-      "agentOpenInYaver": true,
-      "pluginEnabled": false
-    },
-    "react-native-purchases": {
-      "version": "10.0.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,

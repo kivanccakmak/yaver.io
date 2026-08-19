@@ -33,9 +33,9 @@ import (
 // argument for staying off a desktop streamer disappears. Pin the CDP calls.
 func TestInputIsDispatchedThroughCDPNotX11(t *testing.T) {
 	src := readAgentSource(t, "remote_runtime_browser.go")
-	for _, need := range []string{"DispatchTouchEvent", "DispatchMouseEvent"} {
+	for _, need := range []string{"SynthesizePinchGesture", "DispatchMouseEvent"} {
 		if !strings.Contains(src, need) {
-			t.Errorf("remote_runtime_browser.go no longer uses %s — input through CDP is why this lane needs no X11 and can express a real pinch", need)
+			t.Errorf("remote_runtime_browser.go no longer uses %s — compositor input through CDP is why this lane needs no X11 and can express a real pinch", need)
 		}
 	}
 	// A desktop streamer would need these; if they ever appear, the trade-off

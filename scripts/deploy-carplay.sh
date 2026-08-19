@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IOS_DIR="$ROOT/mobile/ios"
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
 INFO_PLIST="$IOS_DIR/Yaver/Info.plist"
 ENTITLEMENTS="$IOS_DIR/Yaver/Yaver.entitlements"
 SCENE_DELEGATE="$IOS_DIR/Yaver/YaverCarPlaySceneDelegate.swift"
@@ -30,6 +32,9 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+apple_require_working_xcode
+apple_ensure_simulator_runtime iOS iphonesimulator
 
 if [ ! -f "$INFO_PLIST" ]; then
   echo "ERROR: missing iOS Info.plist at $INFO_PLIST" >&2
@@ -66,19 +71,41 @@ if ! xcodebuild -showsdks | grep -q "iphoneos"; then
 fi
 
 if [ "$UPLOAD" != "1" ]; then
-  # -destination only, never -sdk. `-sdk iphonesimulator` is applied to EVERY
+	SIMULATOR_ARCH="$(uname -m)"
+	PODS_APP_XCCONFIG="$IOS_DIR/Pods/Target Support Files/Pods-Yaver/Pods-Yaver.release.xcconfig"
+	# Google ML Kit's prebuilt simulator frameworks currently exclude arm64.
+	# CocoaPods propagates that constraint to the app xcconfig; respect the
+	# operation's actual valid architectures instead of forcing the host CPU and
+	# reaching the framework-embed phase with an empty ARCHS array.
+	if [ "$SIMULATOR_ARCH" = "arm64" ] &&
+		[ -f "$PODS_APP_XCCONFIG" ] &&
+		grep -Eq '^EXCLUDED_ARCHS\[sdk=iphonesimulator\*\].*=.*(^|[[:space:]])arm64([[:space:]]|$)' "$PODS_APP_XCCONFIG"; then
+		SIMULATOR_ARCH=x86_64
+		echo "Simulator dependencies exclude arm64; validating the x86_64 simulator slice."
+	fi
+	case "$SIMULATOR_ARCH" in
+		arm64|x86_64) ;;
+		*)
+			echo "ERROR: unsupported local simulator architecture: $SIMULATOR_ARCH" >&2
+			exit 1
+			;;
+	esac
+	# -destination only, never -sdk. `-sdk iphonesimulator` is applied to EVERY
   # target in the scheme, which overrides the embedded YaverWatch target's
   # SDKROOT=watchos and rebuilds it as an iOS app. That target is
   # PRODUCT_NAME=Yaver, so it then lands on the same
   # Release-iphonesimulator/Yaver.app path as the real app and the build dies
   # with "Multiple commands produce .../Yaver.app". -destination lets each
   # target resolve its own SDK, which is what we wanted here all along.
-  xcodebuild -workspace "$IOS_DIR/Yaver.xcworkspace" \
-    -scheme Yaver \
-    -configuration Release \
-    -destination "generic/platform=iOS Simulator" \
-    -derivedDataPath /tmp/YaverCarPlayBuild \
-    CODE_SIGNING_ALLOWED=NO \
+	xcodebuild -workspace "$IOS_DIR/Yaver.xcworkspace" \
+		-scheme Yaver \
+		-configuration Release \
+		-destination "generic/platform=iOS Simulator" \
+		-derivedDataPath /tmp/YaverCarPlayBuild \
+		-quiet \
+		ARCHS="$SIMULATOR_ARCH" \
+		ONLY_ACTIVE_ARCH=YES \
+		CODE_SIGNING_ALLOWED=NO \
     build
   echo "CarPlay preflight/build passed. Upload with scripts/deploy-carplay.sh --upload after the App ID/profile carries the CarPlay entitlement."
   exit 0

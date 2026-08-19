@@ -284,7 +284,7 @@ struct SessionView: View {
 
     private var promptBar: some View {
         HStack(spacing: 16) {
-            TextField("Dictate a prompt (press mic on Siri Remote)", text: $prompt)
+            TextField("Dictate a prompt (press and hold Siri)", text: $prompt)
                 .textFieldStyle(.plain)
                 .font(.system(size: 22))
                 .padding(.horizontal, 20).padding(.vertical, 14)

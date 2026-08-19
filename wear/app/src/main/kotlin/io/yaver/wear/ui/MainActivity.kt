@@ -91,6 +91,8 @@ class MainActivity : ComponentActivity() {
                 onIntent = { intent -> onIntent(intent) },
                 onWake = { onWake() },
                 onDismissWake = { BoxLifecycle.reset() },
+                canRemoveDevice = StandaloneStore.isReady(this),
+                onRemoveDevice = { removeStandaloneDevice() },
             )
         }
 
@@ -130,6 +132,32 @@ class MainActivity : ComponentActivity() {
         haptics.click()
         WatchState.listening()
         Dictation.launch(dictationLauncher, prompt = "What should Yaver do?")
+    }
+
+    private fun removeStandaloneDevice() {
+        val token = StandaloneStore.token(this)
+        if (token.isEmpty()) return
+        haptics.click()
+        WatchState.setPhase(WatchState.Phase.Working)
+        WatchState.setLine("Removing box…")
+        lifecycleScope.launch {
+            try {
+                Backend().removeConfiguredDevice(
+                    token = token,
+                    boxUrl = StandaloneStore.boxUrl(this@MainActivity),
+                    idHint = StandaloneStore.machineId(this@MainActivity),
+                )
+                StandaloneStore.clear(this@MainActivity)
+                sessionClient = null
+                WatchState.setPhase(WatchState.Phase.Idle)
+                WatchState.setLine("Box removed from Yaver")
+                haptics.success()
+            } catch (error: Throwable) {
+                WatchState.setPhase(WatchState.Phase.Idle)
+                WatchState.setLine(error.message ?: "Couldn't remove box")
+                haptics.failure()
+            }
+        }
     }
 
     /** Got a transcript → echo it, fire-and-forget to the phone, stay snappy. */

@@ -97,6 +97,15 @@ apps:
       android: playstore
     depends: [backend]
 
+  - name: androidtv
+    path: ./androidtv
+    stack: kotlin
+    surfaces: [tv]
+    test_surfaces: [android-tv]
+    provider:
+      android: playstore
+    depends: [backend]
+
   - name: desktop-agent
     path: ./desktop/agent
     stack: go

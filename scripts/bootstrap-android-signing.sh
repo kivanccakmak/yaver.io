@@ -30,14 +30,48 @@ if ! command -v yaver >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Syncing vault from peers..."
-yaver vault sync 2>&1 | sed 's/^/  /' || {
+# Vault-backed deploy cells are explicitly opt-in in current CLI builds. This
+# bootstrap is one of those cells, so every call must carry the flag; otherwise
+# it reports every existing entry as missing. Peer sync is advisory and must be
+# wall-clock bounded: on 2026-08-18 seven offline peers held Android deploy for
+# minutes even though the script promised to fall back to the local vault.
+vault_get() {
+  YAVER_ENABLE_VAULT=1 yaver vault get "$@"
+}
+
+sync_vault_bounded() {
+  local timeout_seconds="${YAVER_VAULT_SYNC_TIMEOUT_SECONDS:-45}"
+  local sync_log sync_pid elapsed rc
+  sync_log="$(mktemp /tmp/yaver-android-vault-sync.XXXXXX)"
+  YAVER_ENABLE_VAULT=1 yaver vault sync >"$sync_log" 2>&1 &
+  sync_pid=$!
+  elapsed=0
+  while kill -0 "$sync_pid" 2>/dev/null && [ "$elapsed" -lt "$timeout_seconds" ]; do
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  if kill -0 "$sync_pid" 2>/dev/null; then
+    kill "$sync_pid" 2>/dev/null || true
+    wait "$sync_pid" 2>/dev/null || true
+    sed 's/^/  /' "$sync_log"
+    echo "  (vault peer sync timed out after ${timeout_seconds}s — using the local vault)"
+    find "$sync_log" -delete
+    return 124
+  fi
+  if wait "$sync_pid"; then rc=0; else rc=$?; fi
+  sed 's/^/  /' "$sync_log"
+  find "$sync_log" -delete
+  return "$rc"
+}
+
+echo "Syncing vault from peers (bounded)..."
+sync_vault_bounded || {
   echo "  (sync failed or no peers online — using whatever's in local vault)"
 }
 
 require_entry() {
   local name="$1"
-  yaver vault get "$name" --project mobile >/dev/null 2>&1 || {
+  vault_get "$name" --project mobile >/dev/null 2>&1 || {
     echo "ERROR: vault entry mobile/$name missing." >&2
     echo "  Add it on a machine that has it, then 'yaver vault sync' from this one." >&2
     exit 2
@@ -47,8 +81,8 @@ require_entry() {
 # Accept either ANDROID_KEYSTORE_BASE64 (explicit) or ANDROID_KEYSTORE
 # (matches the GitHub-Actions secret name). Pick whichever exists.
 KEYSTORE_ENTRY="ANDROID_KEYSTORE_BASE64"
-if ! yaver vault get ANDROID_KEYSTORE_BASE64 --project mobile >/dev/null 2>&1; then
-  if yaver vault get ANDROID_KEYSTORE --project mobile >/dev/null 2>&1; then
+if ! vault_get ANDROID_KEYSTORE_BASE64 --project mobile >/dev/null 2>&1; then
+  if vault_get ANDROID_KEYSTORE --project mobile >/dev/null 2>&1; then
     KEYSTORE_ENTRY="ANDROID_KEYSTORE"
   else
     echo "ERROR: neither mobile/ANDROID_KEYSTORE_BASE64 nor mobile/ANDROID_KEYSTORE is in the vault." >&2
@@ -65,12 +99,12 @@ KEYSTORE_PATH="keys/yaver-upload.keystore"
 PROPERTIES_PATH="mobile/android/keystore.properties"
 
 echo "Materializing $KEYSTORE_PATH (from $KEYSTORE_ENTRY) ..."
-yaver vault get "$KEYSTORE_ENTRY" --project mobile | base64 -d > "$KEYSTORE_PATH"
+vault_get "$KEYSTORE_ENTRY" --project mobile | base64 -d > "$KEYSTORE_PATH"
 chmod 600 "$KEYSTORE_PATH"
 
 # Sanity check: keytool can read it
 if command -v keytool >/dev/null 2>&1; then
-  STORE_PW="$(yaver vault get ANDROID_KEYSTORE_PASSWORD --project mobile)"
+  STORE_PW="$(vault_get ANDROID_KEYSTORE_PASSWORD --project mobile)"
   if ! keytool -list -keystore "$KEYSTORE_PATH" -storepass "$STORE_PW" >/dev/null 2>&1; then
     echo "ERROR: keystore decoded but keytool can't open it (bad password or corrupt base64)." >&2
     exit 3
@@ -81,9 +115,9 @@ echo "Materializing $PROPERTIES_PATH ..."
 mkdir -p "$(dirname "$PROPERTIES_PATH")"
 {
   echo "storeFile=../../../keys/yaver-upload.keystore"
-  echo "storePassword=$(yaver vault get ANDROID_KEYSTORE_PASSWORD --project mobile)"
-  echo "keyAlias=$(yaver vault get ANDROID_KEY_ALIAS --project mobile)"
-  echo "keyPassword=$(yaver vault get ANDROID_KEY_PASSWORD --project mobile)"
+  echo "storePassword=$(vault_get ANDROID_KEYSTORE_PASSWORD --project mobile)"
+  echo "keyAlias=$(vault_get ANDROID_KEY_ALIAS --project mobile)"
+  echo "keyPassword=$(vault_get ANDROID_KEY_PASSWORD --project mobile)"
 } > "$PROPERTIES_PATH"
 chmod 600 "$PROPERTIES_PATH"
 
@@ -92,9 +126,9 @@ chmod 600 "$PROPERTIES_PATH"
 # PLAY_STORE_SERVICE_ACCOUNT_JSON; the upload script's PLAY_STORE_KEY_FILE
 # env var must be a path to a JSON file on disk.
 PLAY_KEY_PATH="keys/google-play-service-account.json"
-if yaver vault get PLAY_STORE_SERVICE_ACCOUNT_JSON --project mobile >/dev/null 2>&1; then
+if vault_get PLAY_STORE_SERVICE_ACCOUNT_JSON --project mobile >/dev/null 2>&1; then
   echo "Materializing $PLAY_KEY_PATH ..."
-  yaver vault get PLAY_STORE_SERVICE_ACCOUNT_JSON --project mobile > "$PLAY_KEY_PATH"
+  vault_get PLAY_STORE_SERVICE_ACCOUNT_JSON --project mobile > "$PLAY_KEY_PATH"
   chmod 600 "$PLAY_KEY_PATH"
   if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$PLAY_KEY_PATH" >/dev/null 2>&1; then
     echo "ERROR: $PLAY_KEY_PATH is not valid JSON — vault entry corrupted?" >&2

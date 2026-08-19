@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -17,6 +17,7 @@ import {
   loadLastTaskProject,
   loadLastTaskProjectFromConvex,
   loadMCPServersFromConvex,
+  loadUseLatestMCPEnabled,
   saveLastTaskProject,
   saveLastTaskProjectToConvex,
   saveMCPServersToConvex,
@@ -48,15 +49,13 @@ export default function TVCodingScreen() {
   const [runners, setRunners] = useState<RunnerInfo[]>([]);
   const [selectedRunner, setSelectedRunner] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const [openCodeMode, setOpenCodeMode] = useState<"build" | "plan">("build");
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
-  // Yaver's own MCP doorway — default ON, same as every other surface
-  // (2026-08-10 cross-surface MCP sync).
-  const [includeYaverMcp, setIncludeYaverMcp] = useState(true);
+  const [includeYaverMcp, setIncludeYaverMcp] = useState(false);
   const [inputMode, setInputMode] = useState<"write" | "speech">("write");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState("");
-  const [sendFocused, setSendFocused] = useState(false);
 
   const deviceRows = useMemo(() => {
     const rows = Array.isArray(devices) ? devices : [];
@@ -94,11 +93,12 @@ export default function TVCodingScreen() {
           });
         }
         const client = connectionManager.clientFor(deviceId);
-        const [projectRows, runnerRows, mcpRows, keepLast] = await Promise.all([
+        const [projectRows, runnerRows, mcpRows, keepLast, useLatestMCP] = await Promise.all([
           client.listProjects().catch(() => []),
           client.getRunners().catch(() => []),
           listMcpServers().catch(() => []),
           loadKeepLastProjectEnabled(),
+          loadUseLatestMCPEnabled(),
         ]);
         if (cancelled) return;
         const normalizedProjects = (projectRows || [])
@@ -112,7 +112,7 @@ export default function TVCodingScreen() {
           }));
         const installed = (runnerRows || []).filter((runner: RunnerInfo) => runner.installed);
         setProjects(normalizedProjects);
-        setRunners(installed);
+        setRunners(installed.filter((runner) => ["opencode", "codex", "claude"].includes(normalizeTaskRunnerId(runner.id))));
         setMcpServers((mcpRows || []).filter((server) => server.enabled));
 
         // Son-proje belleği, Convex-first (tasks.tsx ile aynı desen):
@@ -124,7 +124,7 @@ export default function TVCodingScreen() {
         // MCP selection restore — same mcpServersByDevice row every surface
         // writes, so an MCP set picked on the phone/web is remembered on the
         // TV and vice versa (2026-08-10).
-        if (token) {
+        if (useLatestMCP && token) {
           const mcpPref = await loadMCPServersFromConvex(token, deviceId).catch(() => null);
           if (mcpPref && !cancelled) {
             const known = new Set((mcpRows || []).filter((s) => s.enabled).map((s) => s.name));
@@ -185,7 +185,7 @@ export default function TVCodingScreen() {
         undefined,
         undefined,
         selectedProjectPath || undefined,
-        undefined,
+        normalizeTaskRunnerId(selectedRunner) === "opencode" ? openCodeMode : undefined,
         undefined,
         true,
         undefined,
@@ -226,7 +226,7 @@ export default function TVCodingScreen() {
     } catch (error) {
       setBusy(error instanceof Error ? error.message : String(error));
     }
-  }, [deviceId, includeYaverMcp, prompt, selectedMcpServers, selectedModel, selectedProject, selectedProjectPath, selectedRunner, token]);
+  }, [deviceId, includeYaverMcp, openCodeMode, prompt, selectedMcpServers, selectedModel, selectedProject, selectedProjectPath, selectedRunner, token]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -279,7 +279,7 @@ export default function TVCodingScreen() {
         </ConfigBand>
 
         {availableModels.length > 0 ? (
-          <ConfigBand title="Model">
+        <ConfigBand title="Model">
             {availableModels.map((model: ModelInfo) => (
               <TVChip key={model.id} active={model.id === selectedModel} colors={c} onPress={() => setSelectedModel(model.id)}>
                 {model.name || model.id}
@@ -304,6 +304,13 @@ export default function TVCodingScreen() {
           ))}
         </ConfigBand>
 
+        {normalizeTaskRunnerId(selectedRunner) === "opencode" ? (
+          <ConfigBand title="OpenCode mode">
+            <TVChip active={openCodeMode === "build"} colors={c} onPress={() => setOpenCodeMode("build")}>Build</TVChip>
+            <TVChip active={openCodeMode === "plan"} colors={c} onPress={() => setOpenCodeMode("plan")}>Plan</TVChip>
+          </ConfigBand>
+        ) : null}
+
         <ConfigBand title="Input">
           <TVChip active={inputMode === "write"} colors={c} onPress={() => setInputMode("write")}>
             Write
@@ -320,22 +327,17 @@ export default function TVCodingScreen() {
             placeholder={inputMode === "speech" ? "Use TV dictation, then send" : "What should the agent do?"}
             placeholderTextColor={c.textMuted}
             multiline
+            // Android/Google TV routes the remote microphone through the
+            // platform IME (Gboard/Leanback keyboard), not through an app
+            // audio capture API. Keep the native TextInput focused as soon as
+            // Coding opens so the remote voice key has the same target as
+            // YouTube's search field.
+            autoFocus
+            onFocus={() => setInputMode("speech")}
+            returnKeyType="done"
+            onSubmitEditing={() => { if (prompt.trim()) void send(); }}
             style={styles.input}
           />
-          <Pressable
-            focusable
-            onPress={send}
-            onFocus={() => setSendFocused(true)}
-            onBlur={() => setSendFocused(false)}
-            disabled={!prompt.trim() || !deviceId || !!busy.startsWith("Sending")}
-            style={({ pressed }) => [
-              styles.send,
-              (pressed || sendFocused) && styles.focused,
-              (!prompt.trim() || !deviceId) && styles.disabled,
-            ]}
-          >
-            {busy.startsWith("Sending") ? <ActivityIndicator color={c.textInverse} /> : <Text style={styles.sendText}>Send</Text>}
-          </Pressable>
         </View>
         {busy ? <Text style={styles.status}>{busy}</Text> : null}
       </ScrollView>

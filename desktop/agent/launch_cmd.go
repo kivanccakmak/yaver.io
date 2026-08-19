@@ -27,9 +27,10 @@ package main
 //      `opencode` already authed when they SSH in. This is the
 //      runner_auth_mirror flow already shipped for the glass-OAuth path.
 //
-// Provider files (launch_hetzner.go, launch_aws.go, launch_gcp.go,
-// launch_azure.go, launch_ssh.go) implement step 3 only. Everything else is
-// shared here.
+// Provider files (launch_aws.go, launch_gcp.go, launch_azure.go,
+// launch_ssh.go) implement step 3 only. The older direct Hetzner launcher was
+// removed with managed-infra billing; Hetzner-backed capacity, when selected,
+// is now a backend-owned Cloud Workspace detail rather than a CLI override.
 
 import (
 	"context"

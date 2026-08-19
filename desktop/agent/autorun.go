@@ -1011,15 +1011,23 @@ func autorunReleaseWorkspace(ctx context.Context, ws autorunWorkspace, push, lan
 
 func autorunRunnerArgs(runner RunnerConfig, prompt string) []string {
 	args := make([]string, 0, len(runner.Args)+2)
+	isCodex := normalizeRunnerID(runner.RunnerID) == "codex"
 	if strings.TrimSpace(runner.Model) != "" {
 		args = append(args, "--model", runner.Model)
 	}
-	for _, arg := range runner.Args {
+	for i := 0; i < len(runner.Args); i++ {
+		arg := runner.Args[i]
 		// Autorun is unattended. Its safety boundary is the scope and gate,
-		// not a runner sandbox or an approval prompt. The general Codex
-		// adapter uses --full-auto, so strengthen it only for this surface.
-		if normalizeRunnerID(runner.RunnerID) == "codex" && arg == "--full-auto" {
-			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+		// not a runner sandbox or an approval prompt. Codex 0.144 replaced
+		// --full-auto with `--sandbox workspace-write`; consume either form
+		// and emit the one explicit unattended flag exactly once.
+		if isCodex && (arg == "--full-auto" || arg == "--sandbox" || arg == "-s") {
+			if (arg == "--sandbox" || arg == "-s") && i+1 < len(runner.Args) {
+				i++
+			}
+			if !stringSliceContains(args, "--dangerously-bypass-approvals-and-sandbox") {
+				args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+			}
 			continue
 		}
 		if arg == "{prompt}" {

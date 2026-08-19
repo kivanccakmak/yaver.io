@@ -9,9 +9,8 @@ usage() {
   cat <<'EOF'
 Usage: scripts/deploy-android-tv.sh [--upload] [--skip-build]
 
-Build and verify the Android TV release surface. Android TV ships in the same
-Play AAB as the phone app; this script verifies the release manifest contains
-the leanback launcher/features before optionally uploading to Play internal.
+Build and verify the standalone Android TV release surface. The TV package is
+io.yaver.tv and is built from androidtv/; it is not the Expo phone AAB.
 
 Options:
   --upload      Upload the built AAB to Google Play internal testing.
@@ -29,12 +28,31 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-MANIFEST="$ROOT/mobile/android/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
-AAB="$ROOT/mobile/android/app/build/outputs/bundle/release/app-release.aab"
-BANNER="$ROOT/mobile/android/app/src/main/res/drawable-xhdpi/tv_banner.png"
+MANIFEST="$ROOT/androidtv/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
+AAB="$ROOT/androidtv/app/build/outputs/bundle/release/app-release.aab"
+BANNER="$ROOT/androidtv/app/src/main/res/drawable-xhdpi/tv_banner.png"
+
+if pgrep -f '[x]codebuild' >/dev/null 2>&1; then
+  echo "ERROR: refusing Android TV compilation while an Xcode build is active." >&2
+  echo "Wait for the mobile build to finish, then retry deploy/deploy.sh android-tv." >&2
+  exit 2
+fi
 
 if [ "$SKIP_BUILD" != "1" ]; then
-  "$ROOT/scripts/deploy-playstore.sh"
+  if [ ! -f "$ROOT/mobile/android/keystore.properties" ] || [ ! -f "$ROOT/keys/yaver-upload.keystore" ]; then
+    echo "Android TV release signing material is missing; running the Yaver signing bootstrap..."
+    (cd "$ROOT" && ./scripts/bootstrap-android-signing.sh)
+  fi
+  if [ ! -f "$ROOT/mobile/android/keystore.properties" ] || [ ! -f "$ROOT/keys/yaver-upload.keystore" ]; then
+    echo "ERROR: Android TV release signing requires mobile/android/keystore.properties and keys/yaver-upload.keystore." >&2
+    echo "Run ./scripts/bootstrap-android-signing.sh with the configured Yaver vault, then retry." >&2
+    exit 2
+  fi
+  if ! command -v gradle >/dev/null 2>&1; then
+    echo "ERROR: Gradle is required to build androidtv/." >&2
+    exit 2
+  fi
+  gradle -p "$ROOT/androidtv" bundleRelease --no-daemon
 fi
 
 if [ ! -f "$MANIFEST" ]; then
@@ -89,6 +107,8 @@ fi
 echo "Android TV AAB ready: $AAB"
 
 if [ "$UPLOAD" = "1" ]; then
-  PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
+  PLAY_PACKAGE_NAME="io.yaver.tv" \
+    AAB_PATH="$AAB" \
+    PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
     python3 "$ROOT/scripts/upload-playstore.py"
 fi

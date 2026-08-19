@@ -24,14 +24,16 @@ func prepareRunnerMCPScope(runnerID, workDir string, allowed ...[]string) runner
 	if len(allowed) > 0 {
 		allowlist = allowed[0]
 	}
-	// includeYaverMcp defaults true. When the user explicitly deselects
+	// Missing scope defaults to No MCP. Current task dispatch supplies an
+	// explicit "0"/"1" sentinel; false here protects future call sites from
+	// silently broadening a runner's tools. When the user deselects
 	// Yaver's own MCP doorway on a surface, skip the injection entirely so
 	// the runner sees ONLY the external MCPs the task allowed (possibly
 	// none). The flag rides in the allowlist as a sentinel: the first list
 	// element is the external-MCP allowlist; a second element carries the
 	// includeYaverMcp bool as the string "0"/"1" when provided. This keeps
 	// every existing caller (agent, MCP, CLI) byte-compatible.
-	includeYaverMcp := true
+	includeYaverMcp := false
 	if len(allowed) > 1 && len(allowed[1]) > 0 {
 		includeYaverMcp = allowed[1][0] != "0"
 	}

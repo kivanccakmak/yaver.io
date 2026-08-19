@@ -169,6 +169,8 @@ func TestFinalizeAutorunCommitsMarkedFinalCommitAndReportsSHA(t *testing.T) {
 				commitArgs = append([]string(nil), args...)
 			case "rev-parse":
 				return autorunCommandResult{Output: "abc1234def\n"}
+			case "branch":
+				return autorunCommandResult{Output: "main\n"}
 			case "push":
 				pushed = true
 			}

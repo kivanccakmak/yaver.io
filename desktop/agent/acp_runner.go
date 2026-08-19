@@ -164,11 +164,26 @@ func newACPClientForRunner(runnerID, workDir string, opts acpClientOptions) (*ac
 // subscription login for this runner ("" when the runner's ACP server hides
 // it, e.g. codex under NO_BROWSER).
 func acpSubscriptionMethodID(runnerID string) string {
-	spec, ok := acpRunnerSpecFor(runnerID)
-	if !ok {
+	// Method identity is a protocol property, not an installation probe. The
+	// previous implementation asked acpRunnerSpecFor, which returns ok=false
+	// when an optional adapter binary is absent. That made every surface forget
+	// which advertised method was subscription-backed on a fresh machine—the
+	// exact machine where it needs to explain what can be installed or signed
+	// in. Keep availability in acpRunnerInstalled/newACPClientForRunner and keep
+	// this classifier deterministic.
+	switch normalizeRunnerID(runnerID) {
+	case "opencode":
+		return "opencode-login"
+	case "claude":
+		return "claude-ai-login"
+	case "codex":
+		if os.Getenv("NO_BROWSER") == "1" {
+			return ""
+		}
+		return "chat-gpt"
+	default:
 		return ""
 	}
-	return spec.SubscriptionAuthMethod
 }
 
 // acpAuthMethodIsSubscription reports whether an advertised ACP auth method

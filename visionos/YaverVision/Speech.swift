@@ -94,6 +94,52 @@ enum Speech {
         #endif
     }
 
+    /// Speak the first useful, non-code status line from a runner pane. Keep
+    /// this grammar aligned with the companion runner surfaces; visionOS uses
+    /// its native VisionSessionView rather than the Siri Remote SessionView.
+    static func speakSummary(of pane: String) {
+        speak(summarize(pane))
+    }
+
+    private static let codePattern = try! NSRegularExpression(
+        pattern: #"[{}<>;=]|```|\b(function|const|class|def|import|return)\b|/\w+/"#
+    )
+    private static let sentencePattern = try! NSRegularExpression(
+        pattern: #"^(.{1,120}?[.!?])(\s|$)"#
+    )
+    private static let markdownPattern = try! NSRegularExpression(
+        pattern: "[#*`_~]"
+    )
+
+    static func summarize(_ pane: String) -> String {
+        for line in pane.split(separator: "\n", omittingEmptySubsequences: true) {
+            let value = String(line).trimmingCharacters(in: .whitespaces)
+            guard !value.isEmpty else { continue }
+            let range = NSRange(value.startIndex..., in: value)
+            if codePattern.firstMatch(in: value, range: range) == nil {
+                return clampSentence(stripMarkdown(value))
+            }
+        }
+        return "Done."
+    }
+
+    private static func clampSentence(_ value: String) -> String {
+        let range = NSRange(value.startIndex..., in: value)
+        if let match = sentencePattern.firstMatch(in: value, range: range),
+           let sentenceRange = Range(match.range(at: 1), in: value) {
+            let sentence = String(value[sentenceRange])
+            return sentence.count <= 120 ? sentence : String(sentence.prefix(119)) + "…"
+        }
+        return value.count <= 120 ? value : String(value.prefix(119)) + "…"
+    }
+
+    private static func stripMarkdown(_ value: String) -> String {
+        let range = NSRange(value.startIndex..., in: value)
+        return markdownPattern.stringByReplacingMatches(
+            in: value, range: range, withTemplate: ""
+        ).trimmingCharacters(in: .whitespaces)
+    }
+
     /// Stop any in-flight speech.
     static func stop() {
         #if canImport(AVFoundation)
@@ -109,4 +155,3 @@ enum Speech {
         #endif
     }
 }
-

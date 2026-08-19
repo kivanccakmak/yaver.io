@@ -29,6 +29,7 @@ struct RegisteredDevice: Decodable, Identifiable {
     let relayConnected: Bool?
     let agentVersion: String?
     let managed: Bool?
+    let hosting: String?
     let machineId: String?
     let lastHeartbeat: Double? // ms epoch
     let runners: [RegisteredRunner]?
@@ -267,6 +268,38 @@ enum MachineRegistry {
             throw AgentError(message: "Couldn't load your machines (\(http.statusCode)).")
         }
         return (try JSONDecoder().decode(DeviceList.self, from: data)).devices
+    }
+
+    /// Account removal for BYO/self-hosted devices. The shared backend
+    /// tombstones the row, revokes old sessions, and hides it on every surface.
+    static func removeDevice(deviceId: String, token: String) async throws {
+        try await postRemoval(path: "devices/remove", token: token, body: ["deviceId": deviceId])
+    }
+
+    /// Provider-aware removal for Yaver-hosted boxes. This cancels linked
+    /// billing and schedules the full cloud-resource purge without a snapshot.
+    static func decommissionCloudMachine(machineId: String, token: String) async throws {
+        try await postRemoval(path: "billing/yaver-cloud/dev-deprovision",
+                              token: token, body: ["machineId": machineId])
+    }
+
+    private static func postRemoval(path: String, token: String, body: [String: Any]) async throws {
+        guard !token.isEmpty else { throw AgentError(message: "Sign in first.") }
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent(path))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+        req.timeoutInterval = 20
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw AgentError(message: "No response from Yaver.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            throw AgentError(message: message ?? "Couldn't remove this machine (\(http.statusCode)).")
+        }
     }
 
     /// GET /settings — per-user transport metadata. Mirrors mobile's

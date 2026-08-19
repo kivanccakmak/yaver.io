@@ -249,17 +249,18 @@ ok(/codex:\s*["']gpt-5\.6-terra["']/.test(devicesView),
 // real account, which is exactly what that loop is for.
 import { resolveUsableModel, seededLedger } from "./runnerModelCompat";
 
-const seeded = seededLedger();
+const seededNow = Date.parse("2026-08-02T00:00:00Z") + ModelCompatLedger.DEFAULT_TTL_MS - 1;
+const seeded = seededLedger(seededNow);
 // The seed is the MEASURED refusal set (codex exec on two machines signed in
 // with the ChatGPT account, 2026-08-02). It previously held gpt-5.4 on the
 // strength of one 400 — and that single wrong row made the dispatch funnel
 // rewrite a WORKING model into gpt-5.3-codex, which the account truly refuses.
-eq(seeded.has("codex", "subscription", "gpt-5.3-codex"), true,
+eq(seeded.has("codex", "subscription", "gpt-5.3-codex", seededNow), true,
   "the seeded ledger carries a refusal we actually measured");
-eq(seeded.has("codex", "subscription", "gpt-5.4"), false,
+eq(seeded.has("codex", "subscription", "gpt-5.4", seededNow), false,
   "gpt-5.4 is NOT seeded as refused — it works on a subscription login (probed)");
 
-const migrated = resolveUsableModel("codex", "gpt-5.3-codex", "subscription", seeded);
+const migrated = resolveUsableModel("codex", "gpt-5.3-codex", "subscription", seeded, seededNow);
 eq(migrated.model, "gpt-5.6-terra", "a stored gpt-5.3-codex resolves to the model that works");
 eq(migrated.changed, true, "the swap is reported, never silent");
 ok(/saved for this machine/i.test(migrated.reason || ""),

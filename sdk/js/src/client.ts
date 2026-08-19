@@ -3,6 +3,7 @@ import type {
   RunnerInfo, RunnerAuthSession, RunnerSetupOptions, YaverCapability, AccountLinkSession,
 } from './types';
 import type { ScreenlogAPI, ScreenlogConfig, ScreenlogPolicy, InputEvent } from './screenlog';
+import { createRemoteDesktopAPI, type RemoteDesktopAPI } from './remote-desktop';
 
 /**
  * Yaver client — connects to a Yaver agent's HTTP API.
@@ -22,6 +23,22 @@ export class YaverClient {
   /** Check if the agent is reachable. */
   async health(): Promise<{ status: string }> {
     return this.get('/health');
+  }
+
+  /** Consent-gated live screen + input. Frames travel agent-to-viewer only. */
+  get remoteDesktop(): RemoteDesktopAPI {
+    return createRemoteDesktopAPI((path, init = {}, json = false) => fetchWithTimeout(
+      `${this.baseURL}${path}`,
+      {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${this.authToken}`,
+          ...(json ? { 'Content-Type': 'application/json' } : {}),
+          ...(init.headers as Record<string, string> | undefined),
+        },
+      },
+      this.timeout,
+    ));
   }
 
   /**

@@ -98,7 +98,7 @@ func BuildRecoveryPrompt(ctx RecoveryContext) (title, prompt string) {
 			"",
 			"Figure out the root cause and fix it so `/dev/build-native` succeeds. Typical culprits:",
 			"- Metro not starting (node missing, wrong node version, stale `.expo/`).",
-			"- Runtime-family mismatch or Hermes bytecode drift between the guest app and the nearest Yaver host family (align the project's Expo / React Native / React versions to a supported host family).",
+			"- Runtime-family mismatch or Hermes bytecode drift between the project app and the nearest Yaver host family (align the project's Expo / React Native / React versions to a supported host family).",
 			"- Missing native dependencies after a prebuild reset.",
 			"",
 			"Do not run `expo run:ios`, `xcodebuild`, `gradlew`, or `expo run:android` — Yaver loads the app via Hermes push, so Metro + a fresh bundle is what matters.",
@@ -258,7 +258,7 @@ func BuildRecoveryPrompt(ctx RecoveryContext) (title, prompt string) {
 // its require is currently unguarded.
 func buildHermesCompatFixPrompt(project, fw, wd, hostOS string, compat *CompatReport, errText string) string {
 	lines := []string{
-		fmt.Sprintf("The Yaver mobile host compiled a Hermes bundle for %s (%s) at %s, but blocked the on-phone reload because the guest app's native runtime contract does not match the host.",
+		fmt.Sprintf("The Yaver mobile host compiled a Hermes bundle for %s (%s) at %s, but blocked the on-phone reload because the project app's native runtime contract does not match the host.",
 			project, fallback(fw, "react-native/expo"), fallback(wd, "(unknown)")),
 		fmt.Sprintf("Dev machine OS: %s.", hostOS),
 		"",
@@ -273,7 +273,7 @@ func buildHermesCompatFixPrompt(project, fw, wd, hostOS string, compat *CompatRe
 	if compat != nil {
 		g := compat.GuestRuntime
 		if g.ExpoVersion != "" || g.ReactNativeVersion != "" || g.ReactVersion != "" {
-			lines = append(lines, fmt.Sprintf("Guest runtime: Expo %s / React Native %s / React %s.",
+			lines = append(lines, fmt.Sprintf("Project runtime: Expo %s / React Native %s / React %s.",
 				fallback(g.ExpoVersion, "?"), fallback(g.ReactNativeVersion, "?"), fallback(g.ReactVersion, "?")))
 		}
 	}
@@ -319,9 +319,9 @@ func buildHermesCompatFixPrompt(project, fw, wd, hostOS string, compat *CompatRe
 	lines = append(lines,
 		fmt.Sprintf("Your job: make this app load into the Yaver Hermes host without changing what it does. Work ONLY inside %s. Choose the smallest change per issue:", fallback(wd, "the project directory")),
 		"",
-		"1. For each version/family mismatch above — align the GUEST DOWN to the host, never the host up. Pin the project's dependency to the host version shown (a package.json `overrides`/`resolutions` entry, plus Expo/RN/React set to the host family), then run the package manager once (detect it from the lockfile). Do NOT bump the Yaver host, and do NOT add a native module the host lacks — the host binary is fixed and shared across every user.",
+		"1. For each version/family mismatch above — align the PROJECT DOWN to the host, never the host up. Pin the project's dependency to the host version shown (a package.json `overrides`/`resolutions` entry, plus Expo/RN/React set to the host family), then run the package manager once (detect it from the lockfile). Do NOT bump the Yaver host, and do NOT add a native module the host lacks — the host binary is fixed and shared across every user.",
 		"",
-		"2. For each unguarded native require()/import of an unsupported module — wrap it so a missing module renders a fallback instead of crashing. This is the gold-standard pattern already used in talos/mobile's src/screens/more/Cell3D.tsx and SpatialBackdrop.tsx: the expo-gl require is wrapped in try/catch and the component renders a graceful fallback when the module is absent, so the throw lands in the guest's own catch and never reaches the host. Mirror it exactly:",
+		"2. For each unguarded native require()/import of an unsupported module — wrap it so a missing module renders a fallback instead of crashing. This is the gold-standard pattern already used in talos/mobile's src/screens/more/Cell3D.tsx and SpatialBackdrop.tsx: the expo-gl require is wrapped in try/catch and the component renders a graceful fallback when the module is absent, so the throw lands in the project's own catch and never reaches the host. Mirror it exactly:",
 		"     let NativeMod = null;",
 		"     try { NativeMod = require('the-module'); } catch { NativeMod = null; }",
 		"     // at the call site: if (!NativeMod) return <Fallback />;",

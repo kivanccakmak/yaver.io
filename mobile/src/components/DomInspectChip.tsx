@@ -14,12 +14,12 @@
 // agent is not holding your element rather than holding it and promising not
 // to look.
 //
-// ── Why it renders here and not in the preview ────────────────────────────
+// ── Why it renders on the preview surface ─────────────────────────────────
 //
-// The selection is made in the Hot Reload tab / DevPreview modal; the prompt
-// is typed in Tasks. The chip belongs where the PROMPT is — that is where the
-// mutation happens and where the user is deciding what to say. The bridge
-// (domInspectBridge.ts) carries the element across the tab boundary.
+// The selection and its disclosure live together in the DevPreview render /
+// reload surface, behind that header's ellipsis. Ordinary Tasks must not show
+// browser-only controls. The bridge (domInspectBridge.ts) still carries the
+// selected element to the next Vibing turn.
 //
 // Browse|Inspect is a radio, not a toggle: while Inspect is on, clicks in the
 // preview are intercepted (the real app cannot be used), so the exclusivity

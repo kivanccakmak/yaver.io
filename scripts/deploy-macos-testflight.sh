@@ -7,6 +7,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ELECTRON_DIR="$ROOT/electron"
+# shellcheck source=scripts/apple-xcode-auth.sh
+. "$ROOT/scripts/apple-xcode-auth.sh"
+"$ROOT/scripts/check-no-native-payment-sdks.sh" source
 MAS_BUNDLE_ID="io.yaver.mobile"
 UPLOAD=0
 DEV_BUILD=0
@@ -47,6 +50,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
   echo "ERROR: macOS TestFlight packaging requires a Mac with full Xcode." >&2
   exit 2
 fi
+apple_require_working_xcode
 for tool in node npm xcrun codesign pkgutil plutil security; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "ERROR: required tool '$tool' is missing." >&2
@@ -150,6 +154,15 @@ if [ "$DEV_BUILD" = "1" ]; then
   BUILD_LABEL="sandbox development"
 fi
 echo "Building Yaver macOS ${BUILD_LABEL} package ${YAVER_MAC_BUILD_NUMBER} (client-only; embedded agent excluded)…"
+# A previous failed exporter can leave a valid package for an older build in
+# dist-mas. electron-builder does not clear it, and `find ... '*.pkg'` would
+# select that stale package after signing the new app. Start from a measured,
+# exact output directory so package identity can never drift across attempts.
+DIST_MAS_DIR="$ELECTRON_DIR/dist-mas"
+if [ -d "$DIST_MAS_DIR" ]; then
+  ls -ld "$DIST_MAS_DIR" >/dev/null
+  find "$DIST_MAS_DIR" -depth -delete
+fi
 (cd "$ELECTRON_DIR" && npm ci)
 if [ "$DEV_BUILD" = "1" ]; then
   (cd "$ELECTRON_DIR" && npm run dist:mas-dev)
@@ -242,9 +255,19 @@ if [ -z "$PKG_PATH" ]; then
   plutil -insert manageAppVersionAndBuildNumber -bool NO "$EXPORT_OPTIONS"
 
   mkdir -p "$EXPORT_PATH"
-  xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
-    -exportOptionsPlist "$EXPORT_OPTIONS" -exportPath "$EXPORT_PATH" \
-    -allowProvisioningUpdates
+  if ! xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
+      -exportOptionsPlist "$EXPORT_OPTIONS" -exportPath "$EXPORT_PATH" \
+      -allowProvisioningUpdates; then
+    # Xcode's cloud-managed installer export performs network I/O and can fail
+    # after a successful five-minute universal build with "network connection
+    # was lost". The signed app/archive are immutable, so one bounded export
+    # retry is safe and avoids rebuilding every nested Electron resource.
+    echo "Xcode Store export failed; retrying the same verified archive once…" >&2
+    find "$EXPORT_PATH" -mindepth 1 -depth -delete 2>/dev/null || true
+    xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
+      -exportOptionsPlist "$EXPORT_OPTIONS" -exportPath "$EXPORT_PATH" \
+      -allowProvisioningUpdates
+  fi
   PKG_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -type f -name '*.pkg' -print -quit)"
   if [ -z "$PKG_PATH" ]; then
     echo "ERROR: Xcode export succeeded but produced no signed App Store .pkg." >&2

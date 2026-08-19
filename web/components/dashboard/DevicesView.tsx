@@ -62,6 +62,8 @@ import {
 } from "@/lib/probe-backoff";
 import type { useMachineRoles, MachineRolesRow } from "@/lib/useMachineRoles";
 import { isThisDesktopDevice, type DesktopSurfaceInfo } from "@/lib/desktopSurface";
+import { runnerMenuStatusText } from "@/lib/runnerMenuStatus";
+import { deviceRemovalPolicy } from "@/lib/deviceRemovalPolicy";
 
 function transportToneClasses(tone: TransportInfo["tone"]): string {
   switch (tone) {
@@ -5346,8 +5348,7 @@ function DeviceActionsMenu({
   function runnerMenuHint(runner: TerminalLaunchRunner): string {
     const state = runnerStateById.get(runner);
     if (!state) return runner === "opencode" ? "tmux · auto" : "tmux · yolo";
-    if (state.health === "needs-auth" && (runner === "claude" || runner === "codex")) return "sign in";
-    return runnerChipStatusText(state);
+    return runnerMenuStatusText(state);
   }
 
   function runOrAuthorize(runner: TerminalLaunchRunner) {
@@ -5556,10 +5557,12 @@ function DeviceActionsMenu({
                 <button
                   className={`${itemClass} text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-500/10`}
                   onClick={() => { onRecycle(); setOpen(false); }}
-                  title="Recycle this box: provision a fresh box, health-check, then snapshot+delete the old one (dry-run first)"
+                  title={deviceRemovalPolicy(device) === "cloud-decommission"
+                    ? "Recycle or decommission this Yaver-hosted cloud box"
+                    : "Remove this device from Yaver; if reachable, uninstall its local Yaver stack"}
                 >
-                  <span>♻ Recycle box</span>
-                  <span className={hintClass}>dry-run first</span>
+                  <span>{deviceRemovalPolicy(device) === "cloud-decommission" ? "♻ Recycle box" : "Remove device"}</span>
+                  <span className={hintClass}>{deviceRemovalPolicy(device) === "cloud-decommission" ? "dry-run first" : "forget"}</span>
                 </button>
               </>
             ) : null}

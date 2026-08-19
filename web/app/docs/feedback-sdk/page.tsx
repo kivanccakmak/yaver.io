@@ -367,7 +367,7 @@ if (isDev) {
             <code className="rounded bg-surface-900 px-1 text-surface-400">
               YaverFeedback.init()
             </code>. No ShakeDetector is registered, no FeedbackModal is
-            mounted, no BlackBox stream is opened from inside the guest
+            mounted, no BlackBox stream is opened from inside the project app
             bundle. The user sees only Yaver&apos;s native overlay
             (&quot;Reload&quot; / &quot;Back to Yaver&quot;) and uses
             Yaver&apos;s built-in feedback flow.

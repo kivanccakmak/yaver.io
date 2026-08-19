@@ -120,7 +120,8 @@ func TestDetectFramework_ScopeAwareness(t *testing.T) {
 		{
 			name: "flutter project",
 			setup: func(t *testing.T, dir string) {
-				write(t, dir, "pubspec.yaml", "name: e_mobile_new\n")
+				write(t, dir, "pubspec.yaml", "name: e_mobile_new\ndependencies:\n  flutter:\n    sdk: flutter\n")
+				write(t, dir, "lib/main.dart", "void main() {}\n")
 			},
 			expect: "flutter",
 		},

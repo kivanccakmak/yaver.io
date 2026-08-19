@@ -1412,11 +1412,13 @@ export default function DevicesScreen() {
               authExpired={activeDevice?.id === item.id && connectionStatus === "connected" && agentAuthExpired}
               forceDetailsOpen={openDetailsId === item.id}
               onLongPress={() => {
-                const actionLabel = "Remove";
+                const actionLabel = item.hosting === "yaver-hosted" ? "Manage cloud box" : "Remove from Yaver";
                 const isConnectedHere = connectedSet.has(item.id);
-                const message = isConnectedHere
-                    ? "Disconnect from this machine, or remove it from your account? The node will need to re-register before it shows up again."
-                    : "Remove this device from your account? The node will need to re-register before it shows up again.";
+                const message = item.hosting === "yaver-hosted"
+                  ? "This is a Yaver-hosted box. Decommission it from Cloud Workspace so the provider resources and billing are removed too."
+                  : isConnectedHere
+                    ? "Disconnect, or remove this device from every Yaver surface? Remove also asks the connected agent to uninstall its local Yaver service and data. Your repositories and operating system are not touched. Pair it again after repair to recreate it."
+                    : "Remove this device from every Yaver surface? It is offline, so Yaver will revoke its sessions and keep a hidden tombstone. Pair it again after repair to recreate it.";
                 const isThisPrimary = primaryDeviceId === item.id;
                 const isThisSecondary = secondaryDeviceId === item.id;
                 const primaryAction = isThisPrimary
@@ -1450,6 +1452,10 @@ export default function DevicesScreen() {
                   text: actionLabel,
                   style: "destructive",
                   onPress: async () => {
+                    if (item.hosting === "yaver-hosted") {
+                      Alert.alert("Cloud Workspace", "Open the Cloud Workspace section and choose Decommission so Yaver can remove the cloud resource and stop billing.");
+                      return;
+                    }
                     try {
                       await removeDevice(item);
                     } catch (e: any) {

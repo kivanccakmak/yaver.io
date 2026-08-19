@@ -83,6 +83,17 @@ export type {
 export { YaverApp } from './app';
 export type { YaverAppOptions, SessionHandle, AppStatus } from './app';
 export type { AgentStatus, AgentRunnerState } from './connect';
+export { createRemoteDesktopAPI } from './remote-desktop';
+export type {
+  RemoteDesktopAPI,
+  RemoteDesktopDisplay,
+  RemoteDesktopStatus,
+  RemoteDesktopPolicyPatch,
+  RemoteDesktopPolicyResult,
+  RemoteDesktopInputEvent,
+  RemoteDesktopFrame,
+  RemoteDesktopRequest,
+} from './remote-desktop';
 
 // Generic policy + runtime resolver (the "OpenRouter of coding agents" spine).
 // Apps register an AppProfile; Yaver core stays free of app vocabulary.

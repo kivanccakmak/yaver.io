@@ -116,7 +116,7 @@ func (s *HTTPServer) applySandboxQuickstart(mode string, buildImage bool) (Conta
 	case "", "host":
 		s.containerizeHost = true
 	default:
-		return ContainerSandboxSummary{}, "", fmt.Errorf("mode must be 'host'; guest containerization has been removed")
+		return ContainerSandboxSummary{}, "", fmt.Errorf("mode must be 'host'; secondary-user containerization is not available")
 	}
 	if err := s.ensureContainerRunner(); err != nil {
 		return ContainerSandboxSummary{}, "", err
@@ -173,7 +173,7 @@ func (s *HTTPServer) handleSandboxConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if body.ContainerizeGuests != nil {
-		jsonError(w, http.StatusGone, "containerizeGuests has been removed; Yaver accepts owner tasks only")
+		jsonError(w, http.StatusGone, "containerizeGuests is not available; Yaver accepts owner tasks only")
 		return
 	}
 

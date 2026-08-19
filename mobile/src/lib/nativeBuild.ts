@@ -112,12 +112,12 @@ export function buildFailureHint(buildResult: any, rawMessage: string): string {
   if (code === "YAVER_SELF_DEVELOPMENT_RECURSION") return "";
 
   if (code === "RUNTIME_FAMILY_MISMATCH" || code === "FRAMEWORK_VERSION_MISMATCH") {
-    return "\n\nYaver picked the nearest supported runtime family, but the guest app still does not match it exactly. "
-      + "Align the guest app to one of Yaver's supported families or switch to a native build fallback.";
+    return "\n\nYaver picked the nearest supported runtime family, but the project app still does not match it exactly. "
+      + "Align the project app to one of Yaver's supported families or switch to a native build fallback.";
   }
   if (code === "BC_VERSION_MISMATCH") {
-    return "\n\nHermes bytecode version mismatch between the guest app and the selected Yaver host family. "
-      + "Align the guest runtime to a supported family and retry.";
+    return "\n\nHermes bytecode version mismatch between the project app and the selected Yaver host family. "
+      + "Align the project runtime to a supported family and retry.";
   }
   if (lower.includes("did not become ready") || lower.includes("dev server")) {
     return "\n\nMetro didn't start on the dev machine. Check Node.js is installed and the project has a valid package.json.";
@@ -159,10 +159,10 @@ function compatibilitySummary(buildResult: any): string | null {
     return "Yaver blocked restart because the project's React runtime does not match the mobile host.";
   }
   if (buildResult?.code === "FRAMEWORK_VERSION_MISMATCH") {
-    return "Yaver blocked restart because the guest app does not match the selected mobile host runtime family.";
+    return "Yaver blocked restart because the project app does not match the selected mobile host runtime family.";
   }
   if (buildResult?.code === "RUNTIME_FAMILY_MISMATCH") {
-    return "Yaver blocked restart because the guest app does not match the selected mobile host runtime family.";
+    return "Yaver blocked restart because the project app does not match the selected mobile host runtime family.";
   }
   if (buildResult?.code === "BC_VERSION_MISMATCH") {
     return buildResult?.error || "Hermes bytecode version mismatch.";
