@@ -2,28 +2,24 @@
 //
 // This is what makes the TV a vibing surface instead of a monitor: the same
 // screen that streams the app also takes the next prompt. Web gets this with
-// a chat pane beside an iframe (RuntimeLabView); the TV gets a focusable
-// overlay — press Vibe, dictate or type into the tvOS keyboard (Siri Remote
-// dictation types into a TextField for free), and the turn goes to the
+// a chat pane beside an iframe (RuntimeLabView); interactive TV previews now
+// use the same lean split layout. Dictation types into a TextField for free,
+// and the turn goes to the
 // RUNNER box while the preview keeps polling underneath. HMR lands in the
 // frame stream on its own; nothing re-mounts, nothing blanks.
 //
-// Turn plumbing is the existing SessionClient (/runner/session/turn) — the
-// endpoint that drives the session the user already has running, with the
-// same pane + options + awaitingChoice contract SessionView renders. Options
-// come back as focusable buttons, so "runner asks, user picks" works from
-// the couch without ever leaving the preview.
+// A preview turn starts a normal task. It must work from a cold runner box;
+// requiring an already-live terminal session made Send a guaranteed no-op on
+// healthy machines that simply had no pane open.
 //
 // Role rule: the turn client is built from store.runnerBox() — NEVER the
 // selected box. In a runner/render split the selected box may be the render
 // machine, and a prompt sent there lands on a box with no runner sessions.
 //
-// Project + MCP picker (2026-08-10): the TV remembers the last project and
-// MCP selection the SAME way mobile and the web chat do — Convex
-// defaultRuntimeProjectByDevice / mcpServersByDevice, synced here via
-// YaverStore.rememberProject / rememberMCPServers. Picking a project on the
-// phone then vibing on the TV keeps the same workDir; the picker shows the
-// runner box's /projects and highlights the remembered one.
+// Project + MCP picker: task authority starts at No project / No MCP. The
+// cross-surface Convex memories remain available only through explicit
+// "Use latest" actions; opening a composer never silently grants a previous
+// task's workDir or tools.
 
 import SwiftUI
 
@@ -38,29 +34,68 @@ struct VibeTurnPanel: View {
     /// cleared so a repeated tap re-fires. Defaults to a constant so existing
     /// call sites (visionOS, ProjectsView previews) compile unchanged.
     @Binding var prefill: String
+    @Binding var showConsolePopup: Bool
+    @Binding var modelLabel: String
+    let modelFocusRequest: Int
+    let focusRequest: Int
 
-    init(project: ProjectSummary?, prefill: Binding<String> = .constant("")) {
+    init(
+        project: ProjectSummary?,
+        prefill: Binding<String> = .constant(""),
+        startsExpanded: Bool = false,
+        focusRequest: Int = 0,
+        showConsolePopup: Binding<Bool> = .constant(false),
+        modelLabel: Binding<String> = .constant("DeepSeek V4 Flash"),
+        modelFocusRequest: Int = 0
+    ) {
         self.project = project
         self._prefill = prefill
+        self._showConsolePopup = showConsolePopup
+        self._modelLabel = modelLabel
+        self.modelFocusRequest = modelFocusRequest
+        self.focusRequest = focusRequest
+        self._expanded = State(initialValue: startsExpanded)
     }
 
-    @State private var expanded = false
+    @State private var expanded: Bool
     @State private var prompt = ""
     @State private var sending = false
-    @State private var turn: SessionTurnResult?
+    @State private var activeTask: TaskSummary?
+    @State private var taskLog = ""
+    @State private var liveAssistantText = ""
+    @State private var optimisticTurns: [TaskConversationTurn] = []
+    @State private var appConsole = ""
+    @State private var showFullAppConsole = false
+    @State private var showFullTaskLog = false
+    @State private var taskStream: Task<Void, Never>?
+    @State private var taskStreamRetry: Task<Void, Never>?
+    @State private var taskStreamNotice: String?
+    @State private var rawCursor = 0
+    @State private var detailRefreshTask: Task<Void, Never>?
+    @State private var appConsoleTask: Task<Void, Never>?
+    @State private var appConsoleRetryTask: Task<Void, Never>?
     @State private var turnError: String?
     // Project/MCP picker state — loaded from the runner box on first open.
     @State private var showProjectPicker = false
-    @State private var availableProjects: [ProjectSummary] = []
-    @State private var pickedProjectPath: String?
-    @State private var projectSelectionLoaded = false
     @State private var availableMCPServers: [String] = []
     @State private var pickedMCPServers: Set<String> = []
-    @State private var yaverMcpOn = true
+    @State private var yaverMcpOn = false
+    @State private var availableRunners: [AgentRunnerSummary] = []
+    @State private var pickedRunner = ""
+    @State private var pickedModel = ""
+    @State private var pickedMode = "build"
+    @State private var showModelPicker = false
+    @State private var showRunnerPicker = false
+    @State private var conversationSettingsChanged = false
 
-    /// Focus the prompt the moment the panel expands so the Siri Remote's mic
-    /// button dictates straight into it — the only speech input a TV has.
-    @FocusState private var promptFocused: Bool
+    private enum PanelFocus: Hashable {
+        case prompt, context, conversation, appConsole, appConsoleLog, taskLog, runner, model, project, mcp
+    }
+
+    /// An explicit focus chain is required on tvOS. A focused TextField keeps
+    /// directional input for editing, so relying on geometric focus made the
+    /// runner/model menus visible but unreachable from the Siri Remote.
+    @FocusState private var panelFocus: PanelFocus?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -71,45 +106,150 @@ struct VibeTurnPanel: View {
                     .lineLimit(2)
             }
 
-            if let turn {
-                turnStatus(turn)
-            }
-
             if expanded {
-                HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 12) {
+                    if activeTask != nil || !optimisticTurns.isEmpty {
+                        conversation
+                    }
                     TextField("What should change?", text: $prompt)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 20))
-                        .frame(maxWidth: 700)
-                        .focused($promptFocused)
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .tint(.white)
+                        .padding(.horizontal, 18)
+                        .frame(minHeight: 72)
+                        .focusEffectDisabled()
+                        .focused($panelFocus, equals: .prompt)
+                        .onMoveCommand { direction in
+                            if direction == .down { panelFocus = .runner }
+                        }
                         .onSubmit { send() }
-                    Button(sending ? "Sending…" : "Send") { send() }
-                        .disabled(sending || prompt.trimmingCharacters(in: .whitespaces).isEmpty)
-                    Button("Close") { expanded = false }
                 }
-                Text("Press the mic button on the Siri Remote to dictate — the prompt is focused.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 10) {
-                    projectChip
-                    mcpChip
+                // One context control, four selectors inside. Four adjacent
+                // native Menu capsules looked like a second toolbar and their
+                // intrinsic widths could not share a baseline cleanly. The
+                // active authority remains explicit in this one-line summary.
+                contextChip
+                    .padding(.top, 2)
+                if let activeTask {
+                    taskStatus(activeTask)
                 }
-                .padding(.top, 4)
             } else {
                 Button {
                     expanded = true
                     // Focus follows the expansion so a second mic press dictates.
-                    promptFocused = true
+                    panelFocus = .prompt
                 } label: {
-                    Label(turn == nil ? "Vibe — ask for a change" : "Ask for another change",
+                    Label(activeTask == nil ? "Vibe — ask for a change" : "Ask for another change",
                           systemImage: "wand.and.stars")
                         .font(.system(size: 17, weight: .semibold))
                 }
             }
         }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
-        .task { await loadPickerState() }
+        .padding(.vertical, 4)
+        .task(id: project?.id ?? "no-project") {
+            await loadPickerState()
+            startAppConsole()
+        }
+        .onDisappear {
+            taskStream?.cancel()
+            taskStreamRetry?.cancel()
+            detailRefreshTask?.cancel()
+            appConsoleTask?.cancel()
+            appConsoleRetryTask?.cancel()
+        }
+        .fullScreenCover(isPresented: $showConsolePopup) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("Console logs", systemImage: "terminal")
+                        .font(.title3.bold())
+                    Spacer()
+                    Button { showConsolePopup = false } label: {
+                        Label("Done", systemImage: "checkmark")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                ScrollView(.vertical) {
+                    Text(appConsole.isEmpty
+                         ? "Waiting for app, npm, Metro, and dev-server output…"
+                         : redactHomePaths(appConsole))
+                        .font(.system(size: 14, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .focusable()
+                .focused($panelFocus, equals: .appConsoleLog)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+            }
+            .padding(24)
+            .frame(minWidth: 680, idealWidth: 860, minHeight: 360, idealHeight: 520)
+            .background(Color.black.opacity(0.96))
+            .onAppear {
+                showFullAppConsole = true
+                startAppConsole()
+            }
+        }
+        .onChange(of: showConsolePopup) { _, visible in
+            if visible {
+                showFullAppConsole = true
+                startAppConsole()
+            }
+        }
+        .onChange(of: pickedModel) { _, _ in
+            modelLabel = selectedModelLabel
+        }
+        .onChange(of: modelFocusRequest) { _, _ in
+            expanded = true
+            panelFocus = .model
+        }
+        .sheet(isPresented: $showModelPicker) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Select model")
+                    .font(.title2.bold())
+                Text(selectedRunner?.displayName ?? "Runner")
+                    .foregroundStyle(.secondary)
+                ForEach(selectedRunner?.models ?? []) { model in
+                    Button {
+                        pickedModel = model.id
+                        modelLabel = model.name
+                        showModelPicker = false
+                        if activeTask != nil { conversationSettingsChanged = true }
+                    } label: {
+                        HStack {
+                            Image(systemName: model.id == pickedModel ? "checkmark.circle.fill" : "circle")
+                            Text(model.name)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(42)
+            .frame(minWidth: 520, minHeight: 360)
+        }
+        .sheet(isPresented: $showRunnerPicker) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Select runner")
+                    .font(.title2.bold())
+                ForEach(supportedRunnerOptions) { runner in
+                    Button {
+                        pickedRunner = runner.canonicalId
+                        pickedModel = runner.models.first(where: { $0.isDefault == true })?.id ?? runner.models.first?.id ?? ""
+                        modelLabel = runner.models.first(where: { $0.isDefault == true })?.name ?? runner.models.first?.name ?? "Default"
+                        showRunnerPicker = false
+                        if activeTask != nil { conversationSettingsChanged = true }
+                    } label: {
+                        HStack {
+                            Image(systemName: runner.canonicalId == RegisteredRunner.canonical(pickedRunner) ? "checkmark.circle.fill" : "circle")
+                            Text(runner.displayName)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(42)
+            .frame(minWidth: 520, minHeight: 360)
+        }
         // One-tap deep-audit from DOM mode: seed the prompt, expand, and send
         // immediately (the agent's per-turn hook prepends the selected
         // element's block to the turn — the runner gets the element, not a
@@ -122,99 +262,55 @@ struct VibeTurnPanel: View {
             expanded = true
             send()
         }
+        .onChange(of: focusRequest) { _, _ in
+            expanded = true
+            DispatchQueue.main.async { panelFocus = .prompt }
+        }
     }
 
     // ── Project / MCP picker ──────────────────────────────────────────────
 
     private var runnerBoxId: String? { store.runnerBox()?.id }
 
-    /// Seed the picker from the runner box's /projects + the Convex-remembered
-    /// selection (same rows the phone/web write). Runs once per panel mount.
+    /// Load selectable inventory without applying remembered task authority.
     private func loadPickerState() async {
-        guard let boxId = runnerBoxId else { return }
-        let prefs = store.lastProjectByDevice[boxId]
-        // Start from the remembered Convex choice so a phone-picked project
-        // shows up selected on the TV without any TV-side tap.
-        if let prefName = prefs?.projectName, let proj = project, proj.name == prefName {
-            pickedProjectPath = proj.path
-        } else if let proj = project {
-            pickedProjectPath = proj.path
-        }
-        if let mcpPref = store.lastMCPServersByDevice[boxId] {
-            yaverMcpOn = mcpPref.includeYaverMcp ?? true
-            pickedMCPServers = Set(mcpPref.mcpServers ?? [])
-        }
+        guard runnerBoxId != nil else { return }
+        yaverMcpOn = false
+        pickedMCPServers.removeAll()
         guard let client = store.runnerClient() else { return }
-        // Projects + MCP server names from the RUNNER box — the machine whose
-        // repo the AI edits (same list ProjectsView shows).
-        if let list = try? await client.listProjects() {
-            availableProjects = list
-            if pickedProjectPath == nil, project == nil {
-                pickedProjectPath = store.lastProject(for: boxId, projects: list)?.path
-            }
-        }
         if let servers = try? await client.listMCPServers() {
             availableMCPServers = servers.map(\.name)
             pickedMCPServers = pickedMCPServers.intersection(Set(availableMCPServers))
         }
-        projectSelectionLoaded = true
-    }
-
-    /// "Project: <name> ▾" — opens a dpad-friendly list of the runner box's
-    /// repos. Picking one remembers it to Convex (store.rememberProject).
-    private var projectChip: some View {
-        Menu {
-            Button {
-                projectSelectionLoaded = true
-                pickedProjectPath = nil
-            } label: {
-                if projectSelectionLoaded && pickedProjectPath == nil {
-                    Label("No project (optional)", systemImage: "checkmark")
-                } else {
-                    Text("No project (optional)")
-                }
-            }
-            if !availableProjects.isEmpty { Divider() }
-            ForEach(availableProjects) { p in
-                Button {
-                    projectSelectionLoaded = true
-                    pickedProjectPath = p.path
-                    if let boxId = runnerBoxId {
-                        store.rememberProject(p, for: boxId)
-                    }
-                } label: {
-                    if p.path == pickedProjectPath {
-                        Label(p.name, systemImage: "checkmark")
-                    } else {
-                        Text(p.name)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "folder")
-                Text(currentProjectLabel)
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
+        if let list = try? await client.listRunners() {
+            // Keep unavailable-but-known runners visible in the … menu (Aider
+            // is commonly installed on the box after first launch). The agent
+            // supplies the measured installed/ready flags and models; hiding
+            // the row made the TV catalogue disagree with web.
+            availableRunners = list.runners
+            let preferred = runnerBoxId.flatMap { store.primaryRunnerByDevice[$0] }
+                ?? list.default
+                ?? availableRunners.first(where: \.isDefault)?.id
+                ?? availableRunners.first?.id
+                ?? ""
+            pickedRunner = RegisteredRunner.canonical(preferred)
+            pickedModel = selectedRunner?.models.first(where: { $0.isDefault == true })?.id
+                ?? selectedRunner?.models.first?.id
+                ?? ""
         }
+        // tvOS Vibing deliberately has no project picker. The TV is a lean
+        // conversation surface; project authority must be chosen in Tasks or
+        // on the web/mobile surface, never from a crowded Siri Remote menu.
     }
 
-    private var currentProjectLabel: String {
-        if let path = pickedProjectPath {
-            return availableProjects.first(where: { $0.path == path })?.name
-                ?? path.split(separator: "/").last.map(String.init)
-                ?? path
-        }
-        if !projectSelectionLoaded, let project { return project.name }
-        return "No project · optional ▾"
-    }
-
-    /// "yaver · 2 MCP ▾" — toggles the yaver doorway (default ON) and the
+    /// "yaver · 2 MCP ▾" — toggles the yaver doorway (default OFF) and the
     /// box's external MCP servers; selection syncs to Convex on change.
     private var mcpChip: some View {
         Menu {
+            if let boxId = runnerBoxId, store.lastMCPServersByDevice[boxId] != nil {
+                Button("Use latest") { useLatestMCP(for: boxId) }
+                Divider()
+            }
             Button {
                 yaverMcpOn.toggle()
                 persistMCP()
@@ -247,54 +343,458 @@ struct VibeTurnPanel: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "platter.2.filled.ipad")
-                Text(yaverMcpOn ? "yaver" : "yaver (off)")
-                if !pickedMCPServers.isEmpty {
+                Text(yaverMcpOn ? "Yaver" : (pickedMCPServers.isEmpty ? "No MCP" : "MCP"))
+                if yaverMcpOn && !pickedMCPServers.isEmpty {
                     Text("· \(pickedMCPServers.count) MCP")
+                } else if !yaverMcpOn && !pickedMCPServers.isEmpty {
+                    Text("· \(pickedMCPServers.count)")
                 }
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.62)
             .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
+            .padding(.horizontal, 8).padding(.vertical, 7)
+        }
+        .focused($panelFocus, equals: .mcp)
+        .onMoveCommand { direction in
+            if direction == .left { panelFocus = .project }
+            if direction == .up { panelFocus = .prompt }
         }
     }
 
     private func persistMCP() {
         guard let boxId = runnerBoxId else { return }
+        if activeTask != nil { conversationSettingsChanged = true }
         store.rememberMCPServers(Array(pickedMCPServers), includeYaverMcp: yaverMcpOn, for: boxId)
     }
 
-    /// The turn's life, narrated in place: what was sent, what the runner is
-    /// showing, and — when it asks — the choices as focusable buttons.
-    @ViewBuilder
-    private func turnStatus(_ turn: SessionTurnResult) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if sending {
-                HStack(spacing: 10) {
-                    ProgressView()
-                    Text("Working on \(currentProjectLabel)…").foregroundStyle(.secondary)
+    private func useLatestMCP(for boxId: String) {
+        guard let pref = store.lastMCPServersByDevice[boxId] else { return }
+        yaverMcpOn = pref.includeYaverMcp ?? false
+        pickedMCPServers = Set(pref.mcpServers ?? []).intersection(Set(availableMCPServers))
+        if activeTask != nil { conversationSettingsChanged = true }
+    }
+
+    private var selectedRunner: AgentRunnerSummary? {
+        availableRunners.first(where: { $0.canonicalId == RegisteredRunner.canonical(pickedRunner) })
+    }
+
+    private var supportedRunnerOptions: [AgentRunnerSummary] {
+        availableRunners.filter {
+            ["opencode", "codex", "claude"].contains(RegisteredRunner.canonical($0.canonicalId))
+        }
+    }
+
+    /// tvOS keeps the authority controls visible and inline. Menus/popovers are
+    /// awkward with a Siri Remote and made it look as if settings had vanished;
+    /// these small widgets expose the current choice and let the user change it
+    /// without leaving the Vibing surface.
+    private var contextChip: some View {
+        HStack(spacing: 8) {
+                inlineModelWidget
+                if RegisteredRunner.canonical(pickedRunner) == "opencode" {
+                    inlineOpenCodeModeWidget
                 }
-                .font(.system(size: 16))
+                inlineMCPWidget
+                Button { showRunnerPicker = true } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "cpu")
+                        Text(selectedRunner?.displayName ?? "Runner")
+                    }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Select runner")
+        }
+        .padding(.vertical, 2)
+        .controlSize(.small)
+        .font(.system(size: 12, weight: .semibold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.62)
+        .clipped()
+        .contentShape(Rectangle())
+        .allowsHitTesting(true)
+        .zIndex(20)
+        .accessibilityIdentifier("vibe.context.widgets")
+    }
+
+    private var inlineRunnerWidget: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "cpu")
+            Text(selectedRunner?.displayName ?? "Runner")
+                .lineLimit(1).truncationMode(.tail).minimumScaleFactor(0.62)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private var inlineModelWidget: some View {
+        Button {
+            showModelPicker = true
+        } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "sparkles")
+                    Text(selectedModelLabel)
+                }
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .minimumScaleFactor(0.62)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            if let pane = turn.pane, !pane.isEmpty {
-                // The last few pane lines, home-paths redacted — a TV is a
-                // shared-room surface; never print a username on it.
-                Text(redactHomePaths(paneTail(pane)))
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .frame(maxWidth: 900, alignment: .leading)
+        .buttonStyle(.bordered)
+        .lineLimit(1)
+        .accessibilityIdentifier("vibe.model-chip")
+        .accessibilityLabel("Select model, current \(selectedModelLabel)")
+        }
+
+    @ViewBuilder
+    private var inlineMCPWidget: some View {
+        if yaverMcpOn || !pickedMCPServers.isEmpty {
+            HStack(spacing: 4) {
+                Image(systemName: "platter.2.filled.ipad")
+                Button(currentMCPLabel) {
+                    yaverMcpOn.toggle()
+                    persistMCP()
+                }
+                .buttonStyle(.bordered)
+                .lineLimit(1)
             }
-            if turn.awaitingChoice == true, let options = turn.options, !options.isEmpty {
-                Text("The runner is asking:")
-                    .font(.system(size: 15, weight: .semibold))
-                HStack(spacing: 10) {
-                    ForEach(options.prefix(4), id: \.self) { option in
-                        Button(option) { choose(option) }
-                            .font(.system(size: 15))
-                            .disabled(sending)
+        }
+    }
+
+    private var inlineOpenCodeModeWidget: some View {
+        Button {
+            pickedMode = pickedMode == "build" ? "plan" : "build"
+            if activeTask != nil { conversationSettingsChanged = true }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: pickedMode == "plan" ? "list.bullet.clipboard" : "hammer")
+                Text(pickedMode.capitalized)
+            }
+            .lineLimit(1)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel("OpenCode mode \(pickedMode)")
+    }
+
+    private func cycleModel() {
+        let models = selectedRunner?.models ?? []
+        guard !models.isEmpty else { return }
+        let current = models.firstIndex(where: { $0.id == pickedModel }) ?? -1
+        pickedModel = models[(current + 1) % models.count].id
+        if activeTask != nil { conversationSettingsChanged = true }
+    }
+
+    private var selectedModelLabel: String {
+        selectedRunner?.models.first(where: { $0.id == pickedModel })?.name ?? "Default"
+    }
+
+    private var currentMCPLabel: String {
+        if yaverMcpOn && !pickedMCPServers.isEmpty { return "Yaver + \(pickedMCPServers.count)" }
+        if yaverMcpOn { return "Yaver" }
+        if !pickedMCPServers.isEmpty { return "\(pickedMCPServers.count) selected" }
+        return "None"
+    }
+
+    private var runnerChip: some View {
+        Menu {
+            ForEach(supportedRunnerOptions) { runner in
+                Button {
+                    pickedRunner = runner.canonicalId
+                    pickedModel = runner.models.first(where: { $0.isDefault == true })?.id
+                        ?? runner.models.first?.id
+                        ?? ""
+                    if activeTask != nil { conversationSettingsChanged = true }
+                } label: {
+                    if runner.canonicalId == RegisteredRunner.canonical(pickedRunner) {
+                        Label(runner.displayName, systemImage: "checkmark")
+                    } else { Text(runner.displayName) }
+                }
+            }
+        } label: {
+            Label(selectedRunner?.displayName ?? "Choose runner", systemImage: "cpu")
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.62)
+                .padding(.horizontal, 8).padding(.vertical, 7)
+        }
+        .disabled(availableRunners.isEmpty)
+        .focused($panelFocus, equals: .runner)
+        .accessibilityIdentifier("vibe.runner")
+        .onMoveCommand { direction in
+            if direction == .right { panelFocus = .model }
+            if direction == .up { panelFocus = .prompt }
+        }
+    }
+
+    private var modelChip: some View {
+        Menu {
+            Button("Runner default") {
+                pickedModel = ""
+                if activeTask != nil { conversationSettingsChanged = true }
+            }
+            ForEach(selectedRunner?.models ?? []) { model in
+                Button {
+                    pickedModel = model.id
+                    if activeTask != nil { conversationSettingsChanged = true }
+                } label: {
+                    if model.id == pickedModel { Label(model.name, systemImage: "checkmark") }
+                    else { Text(model.name) }
+                }
+            }
+        } label: {
+            Label(selectedRunner?.models.first(where: { $0.id == pickedModel })?.name ?? "Runner default", systemImage: "sparkles")
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.62)
+                .padding(.horizontal, 8).padding(.vertical, 7)
+        }
+        .disabled(selectedRunner == nil)
+        .focused($panelFocus, equals: .model)
+        .accessibilityIdentifier("vibe.model")
+        .onMoveCommand { direction in
+            if direction == .left { panelFocus = .runner }
+            if direction == .right { panelFocus = .project }
+            if direction == .up { panelFocus = .prompt }
+        }
+    }
+
+    @ViewBuilder
+    private func taskStatus(_ task: TaskSummary) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(task.runner ?? pickedRunner) · \(task.status ?? "queued")")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var appConsolePanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { showFullAppConsole.toggle() } label: {
+                HStack {
+                    Text("App console")
+                    Spacer(minLength: 8)
+                    Text(showFullAppConsole ? "Show latest" : "Show full")
+                        .foregroundStyle(.secondary)
+                    Image(systemName: showFullAppConsole ? "chevron.up" : "chevron.down")
+                }
+                .font(.system(size: 13, weight: .bold))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable()
+            .focusEffectDisabled()
+            .focused($panelFocus, equals: .appConsole)
+            .accessibilityIdentifier("vibe.app-console")
+            .onMoveCommand { direction in
+                if direction == .up { panelFocus = .context }
+                if direction == .down {
+                    if !showFullAppConsole { showFullAppConsole = true }
+                    DispatchQueue.main.async { panelFocus = .appConsoleLog }
+                }
+            }
+
+            if showFullAppConsole {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(appConsole.isEmpty
+                             ? "No Node/Metro output captured yet. Start or reload the app to populate this console."
+                             : redactHomePaths(appConsole))
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(appConsole.isEmpty ? .secondary : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if appConsole.isEmpty {
+                            Button("Refresh logs") { startAppConsole() }
+                                .buttonStyle(.bordered)
+                                .focusEffectDisabled()
+                        }
                     }
                 }
+                .focusable()
+                .focusEffectDisabled()
+                .focused($panelFocus, equals: .appConsoleLog)
+                .onMoveCommand { direction in
+                    if direction == .up { panelFocus = .appConsole }
+                }
+                // Keep a one-line console from becoming a blank diagnostics
+                // wall. It grows as output arrives, but yields space back to
+                // the conversation when the dev server is quiet.
+                .frame(minHeight: 64, maxHeight: 180, alignment: .top)
+            } else {
+                Text(appConsole.isEmpty ? "Waiting for app and dev-server output…" : redactHomePaths(paneTail(appConsole, lines: 3)))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var displayTurns: [TaskConversationTurn] {
+        var rows = activeTask?.turns ?? []
+        if rows.isEmpty, let title = activeTask?.title, !title.isEmpty {
+            rows.append(TaskConversationTurn(role: "user", content: title, timestamp: nil))
+        }
+        for turn in optimisticTurns where !rows.contains(where: { $0.role == turn.role && $0.content == turn.content }) {
+            rows.append(turn)
+        }
+        if !liveAssistantText.isEmpty {
+            // Keep the in-flight assistant lane visible even when the task
+            // already contains a persisted/placeholder assistant turn. The
+            // web Vibing surface appends tokens to this bubble; suppressing it
+            // whenever any assistant row exists made tvOS appear to answer in
+            // one bulk update after completion.
+            let lastAssistant = rows.last(where: { $0.role == "assistant" })?.content ?? ""
+            if lastAssistant != liveAssistantText {
+                rows.append(TaskConversationTurn(role: "assistant", content: liveAssistantText, timestamp: nil))
+            }
+        } else if !rows.contains(where: { $0.role == "assistant" }) {
+            let answer = (activeTask?.resultText?.isEmpty == false ? activeTask?.resultText : activeTask?.output) ?? ""
+            if liveAssistantText.isEmpty, !answer.isEmpty {
+                rows.append(TaskConversationTurn(role: "assistant", content: answer, timestamp: nil))
+            }
+        }
+        return rows
+    }
+
+    private var conversation: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(displayTurns) { turn in
+                        conversationBubble(turn)
+                    }
+                    if activeTask != nil {
+                        liveRunnerTurn
+                    }
+                    Color.clear.frame(height: 1).id("vibe-chat-bottom")
+                }
+            }
+            // tvOS does not enter a plain ScrollView in the focus system by
+            // default. Make the conversation itself a Siri Remote target so
+            // the user's prompts and Yaver replies can be scrolled, not only
+            // the technical log panes.
+            .focusable()
+            .focusEffectDisabled()
+            .focused($panelFocus, equals: .conversation)
+            .onMoveCommand { direction in
+                if direction == .down { panelFocus = .prompt }
+                if direction == .up { panelFocus = .context }
+            }
+            .frame(maxHeight: 400)
+            .onChange(of: displayTurns.count) { _, _ in
+                withAnimation(.none) { proxy.scrollTo("vibe-chat-bottom", anchor: .bottom) }
+            }
+            .onChange(of: liveAssistantText) { _, _ in
+                withAnimation(.none) { proxy.scrollTo("vibe-chat-bottom", anchor: .bottom) }
+            }
+        }
+    }
+
+    /// Runner stdout is part of the active assistant turn. Rendering it here
+    /// avoids both failure modes the TV shipped with: a silent spinner while
+    /// the agent works, and a second standalone "Agent logs" card that repeats
+    /// the conversation and steals vertical space from the prompt.
+    private var liveRunnerTurn: some View {
+        HStack {
+            if showFullTaskLog {
+                VStack(alignment: .leading, spacing: 6) {
+                    Button { showFullTaskLog = false } label: {
+                        HStack {
+                            Text(activeTask.map { tvTaskIsRunnerCoding($0.status) ? "Yaver · working" : "Yaver · logs" } ?? "Yaver · logs")
+                            Spacer()
+                            Text("Show latest")
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.up")
+                        }
+                        .font(.system(size: 12, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .onMoveCommand { direction in
+                        if direction == .down { panelFocus = .taskLog }
+                    }
+                    ScrollView(.vertical) {
+                        if let taskStreamNotice {
+                            Text(taskStreamNotice)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.orange)
+                        }
+                        Text(taskLog.isEmpty ? "Waiting for the runner's first output…" : redactHomePaths(taskLog))
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(taskLog.isEmpty ? .secondary : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .focusable()
+                    .focusEffectDisabled()
+                    .focused($panelFocus, equals: .taskLog)
+                    .onMoveCommand { direction in
+                        if direction == .up { panelFocus = .conversation }
+                    }
+                    .frame(minHeight: 120, maxHeight: 240, alignment: .top)
+                }
+                .padding(12)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            } else {
+                Button { showFullTaskLog = true } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 7) {
+                            ProgressView()
+                                Text(activeTask.map { tvTaskIsRunnerCoding($0.status) ? "Yaver · working" : "Yaver · logs" } ?? "Yaver · logs")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("Show logs")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        if let taskStreamNotice {
+                            Text(taskStreamNotice)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.orange)
+                        }
+                        Text(taskLog.isEmpty ? "Waiting for the runner's first output…" : redactHomePaths(paneTail(taskLog, lines: 5)))
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(taskLog.isEmpty ? .secondary : .primary)
+                            .lineLimit(5)
+                            .truncationMode(.head)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(12)
+                    .contentShape(Rectangle())
+                }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .onMoveCommand { direction in
+                        if direction == .down {
+                            showFullTaskLog = true
+                            DispatchQueue.main.async { panelFocus = .taskLog }
+                        }
+                    }
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            }
+            Spacer(minLength: 70)
+        }
+    }
+
+    private func conversationBubble(_ turn: TaskConversationTurn) -> some View {
+        let user = turn.role == "user"
+        return HStack {
+            if user { Spacer(minLength: 70) }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(user ? "You" : "Yaver")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(user ? .blue : .secondary)
+                Text(redactHomePaths(turn.content))
+                    .font(.system(size: 15))
+                    .frame(maxWidth: 820, alignment: .leading)
+            }
+            .padding(12)
+            .background(user ? Color.blue.opacity(0.22) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            if !user { Spacer(minLength: 70) }
         }
     }
 
@@ -304,15 +804,94 @@ struct VibeTurnPanel: View {
             .joined(separator: "\n")
     }
 
-    private func client() -> SessionClient? {
-        guard store.isAuthenticated, let box = store.runnerBox() else { return nil }
-        return SessionClient(token: store.token, box: box)
+    @MainActor
+    private func startAppConsole() {
+        appConsoleTask?.cancel()
+        appConsole = "[console] connecting to app/dev-server logs…"
+        guard let preferredClient = store.renderClient() ?? store.runnerClient() else {
+            appConsole = "App console unavailable: no render machine is reachable."
+            return
+        }
+        let relayFallback = store.runnerClient()
+        appConsoleTask = Task {
+            var client = preferredClient
+            // Seed late subscribers from the agent's bounded Node/Metro
+            // stdout tail before waiting for new SSE events. Otherwise a
+            // render that already failed can leave the console looking empty
+            // even though /dev/status has the useful npm/node lines.
+            var status = try? await client.devServerStatus()
+            if status == nil, let fallback = relayFallback {
+                // A split render box can be stale/offline while the runner is
+                // healthy through Yaver relay. Do not leave Vibing's console
+                // blank just because the preferred render leg failed.
+                client = fallback
+                status = try? await client.devServerStatus()
+                await MainActor.run {
+                    appConsole = "[console] render leg unavailable; using runner relay…"
+                }
+            }
+            if let status {
+                await MainActor.run {
+                    if let recent = status.recentLogs, !recent.isEmpty {
+                        appConsole = recent.joined(separator: "\n")
+                    } else if let error = status.error, !error.isEmpty {
+                        appConsole = "[dev-server] \(error)"
+                    } else if let label = status.servingLabel, !label.isEmpty {
+                        appConsole = "[dev-server] \(label)"
+                    } else {
+                        appConsole = "[dev-server] connected; no recent output"
+                    }
+                }
+            }
+            // SSE is the live path, but a restarted dev server can have a
+            // useful bounded tail without emitting a new event. Poll that
+            // authoritative tail while subscribed so App console never
+            // depends on one missed event to become permanently empty.
+            appConsoleRetryTask?.cancel()
+            appConsoleRetryTask = Task { @MainActor in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    guard !Task.isCancelled, let latest = try? await client.devServerStatus() else { continue }
+                    if let recent = latest.recentLogs, !recent.isEmpty {
+                        appConsole = recent.joined(separator: "\n")
+                    }
+                }
+            }
+            let stream = await client.subscribeDevEvents { event in
+                let line = event.logLine ?? event.message
+                guard let line, !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                Task { @MainActor in
+                    appConsole = String((appConsole + (appConsole.isEmpty ? "" : "\n") + line).suffix(512 * 1024))
+                }
+            } onGap: { gap in
+                Task { @MainActor in
+                    appConsole = String((appConsole + (appConsole.isEmpty ? "" : "\n") + gap.summary).suffix(512 * 1024))
+                }
+            } onEnd: { kind, reason in
+                guard kind != .cancelled else { return }
+                Task { @MainActor in
+                    let line = "[console stream interrupted] \(reason ?? "connection closed")"
+                    appConsole = String((appConsole + (appConsole.isEmpty ? "" : "\n") + line).suffix(512 * 1024))
+                    appConsoleRetryTask?.cancel()
+                    appConsoleRetryTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        startAppConsole()
+                    }
+                }
+            } onError: { message in
+                Task { @MainActor in
+                    appConsole = String((appConsole + (appConsole.isEmpty ? "" : "\n") + "[console] " + message).suffix(512 * 1024))
+                }
+            }
+            await stream.value
+        }
     }
 
     private func send() {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        guard let client = client() else {
+        guard let client = store.runnerClient() else {
             turnError = store.machineSplitActive
                 ? "Your AI machine needs the relay to be reachable from this TV."
                 : "No machine selected"
@@ -321,26 +900,87 @@ struct VibeTurnPanel: View {
         sending = true
         turnError = nil
         prompt = ""
+        let optimistic = TaskConversationTurn(
+            role: "user",
+            content: text,
+            timestamp: ISO8601DateFormatter().string(from: Date())
+        )
+        optimisticTurns.append(optimistic)
         Task {
             do {
-                // The turn runs in the picked repo (workDir) with the chosen
-                // MCP set — the same selection a phone/web task carries.
-                let result = try await client.sendText(
-                    text,
-                    session: nil,
-                    workDir: pickedProjectPath,
-                    mcpServers: Array(pickedMCPServers),
-                    includeYaverMcp: yaverMcpOn
-                )
-                await MainActor.run {
-                    sending = false
-                    turn = result
-                    if result.ok == false, let err = result.error, !err.isEmpty {
-                        turnError = err
+                if let current = activeTask {
+                    switch tvChatFollowUpAction(
+                        status: current.status,
+                        runner: current.runner,
+                        selectedRunner: pickedRunner,
+                        settingsChanged: conversationSettingsChanged
+                    ) {
+                    case .continueCurrent:
+                        try await client.continueTask(current.id, input: text)
+                        await MainActor.run {
+                            activeTask = taskWithStatus(current, "running")
+                            liveAssistantText = ""
+                            sending = false
+                            // A previous turn may have ended its SSE stream
+                            // after reaching a terminal state. Reattach on a
+                            // follow-up so the new runner output cannot be
+                            // silently lost behind the old connection.
+                            attach(to: current.id, client: client)
+                        }
+                    case .fork(let runner):
+                        let fork = try await client.forkTask(
+                            current.id,
+                            runner: runner,
+                            model: pickedModel,
+                            mode: RegisteredRunner.canonical(pickedRunner) == "opencode" ? pickedMode : "",
+                            input: text,
+                            projectDir: nil,
+                            mcpServers: Array(pickedMCPServers),
+                            includeYaverMcp: yaverMcpOn
+                        )
+                        await MainActor.run {
+                            taskLog = ""
+                            liveAssistantText = ""
+                            rawCursor = 0
+                            activeTask = TaskSummary(
+                                id: fork.taskId,
+                                title: current.title,
+                                status: fork.status ?? "queued",
+                                runner: fork.runnerId,
+                                model: pickedModel,
+                                turns: displayTurns
+                            )
+                            sending = false
+                            conversationSettingsChanged = false
+                            attach(to: fork.taskId, client: client)
+                        }
+                    }
+                } else {
+                    let created = try await client.createTask(
+                        title: text,
+                        description: text,
+                        workDir: "",
+                        projectName: "",
+                        runner: pickedRunner,
+                        model: pickedModel,
+                        mode: RegisteredRunner.canonical(pickedRunner) == "opencode" ? pickedMode : "",
+                        mcpServers: Array(pickedMCPServers),
+                        includeYaverMcp: yaverMcpOn
+                    )
+                    await MainActor.run {
+                        sending = false
+                        activeTask = created
+                        taskLog = ""
+                        liveAssistantText = ""
+                        rawCursor = 0
+                        conversationSettingsChanged = false
+                        attach(to: created.id, client: client)
                     }
                 }
             } catch {
                 await MainActor.run {
+                    optimisticTurns.removeAll { $0.id == optimistic.id }
+                    if prompt.isEmpty { prompt = text }
                     sending = false
                     turnError = error.localizedDescription
                 }
@@ -348,23 +988,119 @@ struct VibeTurnPanel: View {
         }
     }
 
-    private func choose(_ option: String) {
-        guard let client = client() else { return }
-        sending = true
+    @MainActor
+    private func clearChat() {
+        taskStream?.cancel()
+        taskStreamRetry?.cancel()
+        detailRefreshTask?.cancel()
+        activeTask = nil
+        optimisticTurns.removeAll()
+        taskLog = ""
+        liveAssistantText = ""
+        taskStreamNotice = nil
         turnError = nil
+        prompt = ""
+        expanded = true
+        panelFocus = .prompt
+    }
+
+    @MainActor
+    private func attach(to taskId: String, client: AgentClient) {
+        taskStream?.cancel()
+        taskStreamRetry?.cancel()
         Task {
-            do {
-                let result = try await client.sendChoice(option, session: turn?.session)
-                await MainActor.run {
-                    sending = false
-                    turn = result
-                }
-            } catch {
-                await MainActor.run {
-                    sending = false
-                    turnError = error.localizedDescription
-                }
-            }
+            taskStream = await client.subscribeTaskOutput(
+                taskId: taskId,
+                rawSince: rawCursor,
+                onRaw: { text, offset, full in Task { @MainActor in
+                    taskStreamNotice = nil
+                    taskLog = full ? text : String((taskLog + text).suffix(128 * 1024))
+                    rawCursor = offset
+                } },
+                onData: { text in Task { @MainActor in
+                    taskStreamNotice = nil
+                    // Groomed runner text is the conversational assistant
+                    // lane. Render it incrementally beside the WebRTC app,
+                    // rather than waiting for the terminal task snapshot.
+                    liveAssistantText = String((liveAssistantText + text).suffix(64 * 1024))
+                    // Older/stale agents can emit groomed `output` while their
+                    // raw stdout lane is empty. Do not render a false-empty
+                    // Agent logs panel after successful work: show the measured
+                    // compatibility lane until a raw replay replaces it.
+                    if taskLog.isEmpty, !text.isEmpty {
+                        taskLog = String(("[task output]\n" + text).suffix(128 * 1024))
+                    }
+                    scheduleDetailRefresh(taskId: taskId, client: client)
+                } },
+                onDone: { status in Task { @MainActor in
+                    if var row = activeTask, row.id == taskId {
+                        row = taskWithStatus(row, status)
+                        activeTask = row
+                    }
+                    await refreshTask(taskId: taskId, client: client)
+                } },
+                onEnd: { kind, reason in Task { @MainActor in
+                    if kind == .interrupted {
+                        taskStreamNotice = reason ?? "Agent log stream interrupted; reconnecting…"
+                    }
+                    guard kind == .interrupted,
+                          activeTask?.id == taskId else { return }
+                    // The agent retains raw stdout and exposes a byte cursor,
+                    // so a relay/SSE drop is recoverable without duplicate
+                    // logs. Re-probe task state, then resume while it codes.
+                    await refreshTask(taskId: taskId, client: client)
+                    guard let task = activeTask,
+                          task.id == taskId,
+                          tvTaskIsRunnerCoding(task.status) else { return }
+                    taskStreamRetry?.cancel()
+                    taskStreamRetry = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        guard !Task.isCancelled, activeTask?.id == taskId else { return }
+                        attach(to: taskId, client: client)
+                    }
+                } }
+            )
         }
+    }
+
+    @MainActor
+    private func scheduleDetailRefresh(taskId: String, client: AgentClient) {
+        detailRefreshTask?.cancel()
+        detailRefreshTask = Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            await refreshTask(taskId: taskId, client: client)
+        }
+    }
+
+    @MainActor
+    private func refreshTask(taskId: String, client: AgentClient) async {
+        guard let detail = try? await client.task(taskId), activeTask?.id == taskId else { return }
+        activeTask = detail
+        if liveAssistantText.isEmpty, let output = detail.output, !output.isEmpty {
+            liveAssistantText = output
+        }
+        optimisticTurns.removeAll { optimistic in
+            (detail.turns ?? []).contains { $0.role == optimistic.role && $0.content == optimistic.content }
+                || (detail.pendingFollowUps ?? []).contains { $0.input == optimistic.content }
+        }
+    }
+
+    private func taskWithStatus(_ task: TaskSummary, _ status: String) -> TaskSummary {
+        TaskSummary(
+            id: task.id,
+            title: task.title,
+            status: status,
+            runner: task.runner,
+            model: task.model,
+            workDir: task.workDir,
+            projectName: task.projectName,
+            sessionId: task.sessionId,
+            output: task.output,
+            resultText: task.resultText,
+            turns: task.turns,
+            pendingFollowUps: task.pendingFollowUps,
+            tmuxSession: task.tmuxSession
+        )
     }
 }

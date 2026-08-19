@@ -13,7 +13,7 @@ import SwiftUI
 import UIKit
 import LiveKitWebRTC
 
-private enum TVGuestControlMode: String {
+private enum TVAppControlMode: String {
     case pointer = "Pointer"
     case scroll = "Scroll"
 
@@ -28,11 +28,20 @@ struct RemoteRuntimeWebRTCView: View {
 
     @StateObject private var runtime = TVRemoteRuntimeController()
     @State private var cursor = CGPoint(x: 0.5, y: 0.5)
-    @State private var mode: TVGuestControlMode = .pointer
+    @State private var mode: TVAppControlMode = .pointer
     @State private var keyboardText = ""
     @State private var showingKeyboard = false
-    @State private var showingVibe = false
+    @State private var showingConsoleLogs = false
+    @State private var selectedModelLabel = "DeepSeek V4 Flash"
+    @State private var modelFocusRequest = 0
+    @FocusState private var keyboardFieldFocused: Bool
     @State private var vibePrefill = ""
+    @State private var chatFocusRequest = 0
+    @State private var domMode = false
+    @State private var selectingElement = false
+    @State private var selectedElementSummary: String?
+    @State private var domError: String?
+    @State private var domHoverTask: Task<Void, Never>?
     @State private var lastMoveAt = Date.distantPast
     @State private var repeatedMoves = 0
     @FocusState private var streamFocused: Bool
@@ -42,11 +51,58 @@ struct RemoteRuntimeWebRTCView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack(spacing: 12) {
-                header
+            GeometryReader { layout in
+            HStack(alignment: .top, spacing: 22) {
                 streamSurface
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                controlRail
+                .frame(width: mobileAppLayout ? layout.size.width * 0.40 : nil)
+                .frame(maxWidth: mobileAppLayout ? nil : .infinity, maxHeight: .infinity)
+                .focusSection()
+
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .center, spacing: 12) {
+                        Label("Vibe", systemImage: "wand.and.stars")
+                            .font(.system(size: 24, weight: .bold))
+                        Spacer(minLength: 8)
+                        header
+                    }
+                    controlRail
+                    // The recovery card already owns terminal render failures.
+                    // Repeating status + cause above the chat created two large
+                    // diagnostic rows for one failure and pushed the work down.
+                    if runtime.error == nil,
+                       let note = runtime.controlNote, !note.isEmpty, !runtime.connected {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    if domMode {
+                        if let selectedElementSummary {
+                            selectedElementChip(selectedElementSummary)
+                        } else if let domError {
+                            Text(domError)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .lineLimit(2)
+                        }
+                    }
+                    VibeTurnPanel(
+                        project: project,
+                        prefill: $vibePrefill,
+                        startsExpanded: true,
+                        focusRequest: chatFocusRequest,
+                        showConsolePopup: $showingConsoleLogs,
+                        modelLabel: $selectedModelLabel,
+                        modelFocusRequest: modelFocusRequest
+                    )
+                    Spacer(minLength: 0)
+                }
+                .padding(18)
+                .frame(width: mobileAppLayout ? layout.size.width * 0.58 : 560)
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+                .focusSection()
+            }
             }
             .padding(.horizontal, 34)
             .padding(.vertical, 24)
@@ -57,61 +113,115 @@ struct RemoteRuntimeWebRTCView: View {
                 return
             }
             await runtime.start(client: client, project: project)
-            streamFocused = true
+            // Vibing's primary action is the next prompt. Giving the viewport
+            // default focus trapped every arrow in soft-pointer movement and
+            // made the visible Runner/Model controls unreachable. App control
+            // remains one Left/Select away; Chat owns initial focus.
+            streamFocused = false
+            chatFocusRequest += 1
         }
-        .onDisappear { runtime.stop() }
+        .onChange(of: domMode) { _, enabled in
+            selectedElementSummary = nil
+            domError = nil
+            Task {
+                do {
+                    try await runtime.setDOMMode(enabled, project: project)
+                } catch {
+                    await MainActor.run {
+                        domMode = false
+                        domError = error.localizedDescription
+                    }
+                }
+            }
+        }
+        .onChange(of: runtime.textInputFocusRequest) { _, _ in
+            // Browser-window taps have no way to summon tvOS' keyboard across
+            // WebRTC. The agent measured document.activeElement after the tap,
+            // so this opens only for a real editable target.
+            showingKeyboard = true
+        }
+        .onDisappear {
+            domHoverTask?.cancel()
+            if domMode, let client = store.renderClient() ?? store.runnerClient() {
+                Task {
+                    _ = try? await client.setPreviewDomMode(
+                        project: project.name,
+                        enabled: false,
+                        workDir: project.path
+                    )
+                }
+            }
+            runtime.stop()
+        }
         .sheet(isPresented: $showingKeyboard) { keyboardSheet }
-        .sheet(isPresented: $showingVibe) { vibeSheet }
         #if os(tvOS)
         .onMoveCommand { direction in
             guard streamFocused else { return }
+            if !domMode && direction == .right && (!runtime.hasMedia || cursor.x >= 0.94) {
+                streamFocused = false
+                chatFocusRequest += 1
+                return
+            }
             switch mode {
             case .pointer:
                 movePointer(direction)
             case .scroll:
-                runtime.scroll(direction)
+                // Scroll at the pointer's location, not the centre of the
+                // frame. Nested web panels (chat/log panes) only consume a
+                // wheel event when the event lands on the hovered scroller.
+                runtime.scroll(direction, at: cursor)
             }
         }
         .onPlayPauseCommand {
-            mode = mode == .pointer ? .scroll : .pointer
+            if domMode {
+                selectDOMElement()
+            } else {
+                mode = mode == .pointer ? .scroll : .pointer
+            }
             streamFocused = true
         }
         #endif
         .accessibilityIdentifier("vibing.interactive-webrtc")
     }
 
+    private var mobileAppLayout: Bool {
+        let framework = (project.framework ?? "").lowercased()
+        return form == .phone && ["expo", "react-native", "reactnative", "rn", "flutter", "kotlin", "android"].contains(framework)
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             Label("\(project.name) · interactive \(form.rawValue)", systemImage: "iphone.gen3.radiowaves.left.and.right")
                 .font(.system(size: 17, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
                 .background(.ultraThinMaterial, in: Capsule())
 
             if runtime.connected {
                 Label(runtime.transportLabel, systemImage: "checkmark.circle.fill")
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.green)
-                    .accessibilityIdentifier("vibing.runtime-connected")
-            } else {
-                Label(runtime.status, systemImage: "antenna.radiowaves.left.and.right")
-                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .accessibilityIdentifier(runtime.error == nil
-                        ? "vibing.runtime-connecting"
-                        : "vibing.runtime-error")
+                    .minimumScaleFactor(0.72)
+                    .accessibilityIdentifier("vibing.runtime-connected")
             }
-            Spacer()
-            Text(mode == .pointer ? "Move · Select clicks" : "Directions scroll · Play/Pause returns to pointer")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var streamSurface: some View {
         GeometryReader { geometry in
             let source = runtime.sourceSize
-            let fit = aspectFitRect(imageSize: source, in: geometry.size)
+            // Keep focused tvOS content inside the visible stream chrome. A
+            // focused Button can grow subtly; fitting to the raw outer bounds
+            // let portrait phone pixels cross the rounded frame at top/bottom.
+            let safeBounds = CGRect(origin: .zero, size: geometry.size).insetBy(dx: 16, dy: 16)
+            let fit = tvRemoteAspectFitRect(imageSize: source, in: safeBounds)
+            let phoneLike = source.height > source.width * 1.25
+            let mediaCorner: CGFloat = phoneLike ? 30 : 18
+            let deviceFrame = fit.insetBy(dx: phoneLike ? -14 : -6, dy: phoneLike ? -14 : -6)
 
             ZStack {
                 RoundedRectangle(cornerRadius: 28)
@@ -121,130 +231,200 @@ struct RemoteRuntimeWebRTCView: View {
                             .stroke(streamFocused ? Color.accentColor.opacity(0.85) : Color.white.opacity(0.14), lineWidth: streamFocused ? 4 : 2)
                     }
 
-                Button {
-                    if mode == .pointer {
-                        runtime.tap(normalized: cursor)
+                if form == .phone || runtime.hasMedia {
+                    RoundedRectangle(cornerRadius: mediaCorner + 14)
+                        .fill(Color.black)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: mediaCorner + 14)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 2)
+                        }
+                        .shadow(color: .black.opacity(0.8), radius: 18, y: 8)
+                        .frame(width: deviceFrame.width, height: deviceFrame.height)
+                        .position(x: deviceFrame.midX, y: deviceFrame.midY)
+                }
+
+                Group {
+                    if let error = runtime.error {
+                        runtimeFailurePanel(error)
                     } else {
-                        mode = .pointer
-                    }
-                } label: {
-                    ZStack {
-                        if let track = runtime.videoTrack {
-                            RemoteVideoTrackView(track: track)
-                        } else if let image = runtime.frame {
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                        } else {
-                            VStack(spacing: 16) {
-                                if let error = runtime.error {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.system(size: 46))
-                                        .foregroundStyle(.orange)
-                                    Text(error)
-                                        .multilineTextAlignment(.center)
-                                        .foregroundStyle(.secondary)
-                                        .frame(maxWidth: 680)
-                                } else {
+                        ZStack {
+                            if runtime.connected, let track = runtime.videoTrack {
+                                RemoteVideoTrackView(track: track)
+                            } else if let image = runtime.frame {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                            } else {
+                                VStack(spacing: 16) {
                                     ProgressView().scaleEffect(1.4)
                                     Text(runtime.status).foregroundStyle(.secondary)
                                 }
                             }
                         }
+                        .frame(width: fit.width, height: fit.height)
+                        .clipShape(RoundedRectangle(cornerRadius: mediaCorner))
+                        .contentShape(Rectangle())
+                        .focusable()
+                        .focusEffectDisabled()
+                        .focused($streamFocused)
+                        .prefersDefaultFocus(true, in: defaultFocus)
+                        .onTapGesture {
+                            if domMode {
+                                selectDOMElement()
+                            } else if mode == .pointer {
+                                runtime.tap(normalized: cursor)
+                            } else {
+                                mode = .pointer
+                            }
+                        }
                     }
-                    .frame(width: fit.width, height: fit.height)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .focused($streamFocused)
-                .prefersDefaultFocus(true, in: defaultFocus)
+                .frame(width: fit.width, height: fit.height)
                 .position(x: fit.midX, y: fit.midY)
 
                 if mode == .pointer, runtime.hasMedia {
                     softCursor(in: fit)
                 }
 
-                VStack {
-                    Spacer()
-                    if let note = runtime.controlNote, !note.isEmpty {
-                        Text(note)
-                            .font(.caption)
-                            .lineLimit(2)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .padding(.bottom, 14)
-                    }
-                }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 28))
+        }
+    }
+
+    private func runtimeFailurePanel(_ message: String) -> some View {
+        VStack(spacing: 14) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.orange)
+            Text("Render unavailable")
+                .font(.system(size: 22, weight: .bold))
+            Text(message)
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 560)
+            HStack(spacing: 12) {
+                Button("Retry render") { restartRuntime() }
+                    .buttonStyle(.borderedProminent)
+                Button("Fix with AI") {
+                    let request = "The interactive render for \(project.name) failed with this measured error: \(message). Diagnose the app and dev-server logs, fix the project, and restart the preview."
+                    // Clear before re-seeding so two consecutive failures with
+                    // the same message still trigger Vibing's auto-submit
+                    // observer. The next run is deferred one main-loop turn
+                    // so SwiftUI observes a real value transition.
+                    vibePrefill = ""
+                    DispatchQueue.main.async {
+                        vibePrefill = request
+                    }
+                    // Move focus into the same VibeTurnPanel that owns the
+                    // task SSE. Without this request the prompt could be
+                    // submitted while the recovery card still held focus,
+                    // leaving the runner working but no agent-log lane visible.
+                    chatFocusRequest += 1
+                    streamFocused = false
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("vibing.fix-with-ai")
+            }
+        }
+        .padding(26)
+        .background(Color.black.opacity(0.86), in: RoundedRectangle(cornerRadius: 18))
+        .accessibilityIdentifier("vibing.runtime-recovery")
+    }
+
+    private func restartRuntime() {
+        Task {
+            guard let client = store.renderClient() ?? store.runnerClient() else {
+                runtime.fail("No reachable render machine is selected.")
+                return
+            }
+            await runtime.start(client: client, project: project)
+            streamFocused = true
         }
     }
 
     private func softCursor(in fit: CGRect) -> some View {
         let x = fit.minX + cursor.x * fit.width
         let y = fit.minY + cursor.y * fit.height
-        return ZStack {
-            Circle()
-                .fill(Color.black.opacity(0.32))
-                .frame(width: 58, height: 58)
-            Circle()
-                .stroke(Color.white, lineWidth: 7)
-                .frame(width: 48, height: 48)
-            Circle()
-                .stroke(Color.accentColor, lineWidth: 3)
-                .frame(width: 48, height: 48)
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: 8, height: 8)
-        }
-        .shadow(color: .black.opacity(0.8), radius: 5)
+        return Image(systemName: domMode ? "scope" : "cursorarrow")
+            .font(.system(size: domMode ? 34 : 40, weight: .bold))
+            .foregroundStyle(domMode ? Color.purple : Color.white)
+            .shadow(color: .black, radius: 2, x: 1, y: 2)
+            .shadow(color: .black.opacity(0.9), radius: 6)
         .position(x: x, y: y)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 
     private var controlRail: some View {
-        HStack(spacing: 12) {
-            Button {
-                mode = mode == .pointer ? .scroll : .pointer
-                streamFocused = true
-            } label: {
-                Label(mode.rawValue, systemImage: mode.symbol)
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button { runtime.sendKey("back", action: "back") } label: {
-                Label("Guest Back", systemImage: "chevron.backward")
-            }
-            Button { runtime.sendKey("home", action: "home") } label: {
-                Label("Guest Home", systemImage: "house")
-            }
-            Button { showingKeyboard = true } label: {
-                Label("Keyboard", systemImage: "keyboard")
-            }
-            Button { showingVibe = true } label: {
-                Label("Vibe", systemImage: "wand.and.stars")
-            }
-
-            Spacer()
-
-            Button {
-                Task {
-                    guard let client = store.renderClient() ?? store.runnerClient() else { return }
-                    await runtime.start(client: client, project: project)
+        HStack(spacing: 4) {
+            Menu {
+                Button {
+                    mode = mode == .pointer ? .scroll : .pointer
                     streamFocused = true
+                } label: {
+                    Label(mode == .pointer ? "Use scroll mode" : "Use pointer mode", systemImage: mode.symbol)
+                }
+                Button { runtime.sendKey("back", action: "back") } label: {
+                    Label("Back", systemImage: "chevron.backward")
+                }
+                Button { runtime.sendKey("home", action: "home") } label: {
+                    Label("Home", systemImage: "house")
+                }
+                if runtime.supportsDOMInspection {
+                    Button {
+                        domMode.toggle()
+                        mode = .pointer
+                        streamFocused = true
+                    } label: {
+                        Label(domMode ? "Stop inspecting" : "Inspect", systemImage: domMode ? "scope" : "viewfinder")
+                    }
+                }
+                if !runtime.connected || runtime.error != nil {
+                    Button { restartRuntime() } label: {
+                        Label("Reconnect", systemImage: "arrow.clockwise")
+                    }
                 }
             } label: {
-                Label("Reconnect", systemImage: "arrow.clockwise")
+                Label("Controls", systemImage: "slider.horizontal.3")
             }
+            .accessibilityIdentifier("vibing.controls")
+
+            // Text entry is the only app action that must remain one tap away:
+            // a headless remote browser cannot summon tvOS' native keyboard
+            // when its input gains focus. Keep it beside Controls, focus the
+            // local field immediately, then inject into the remote active
+            // element on Send.
+            Button { showingKeyboard = true } label: {
+                Label("Type", systemImage: "keyboard")
+            }
+            .accessibilityIdentifier("vibing.type")
+            Button { showingConsoleLogs = true } label: {
+                Label("Console logs", systemImage: "terminal")
+            }
+            .accessibilityIdentifier("vibing.console-logs")
+            Spacer(minLength: 0)
         }
         .buttonStyle(.bordered)
+        .controlSize(.small)
+        .font(.system(size: 12, weight: .semibold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.55)
+        .fixedSize(horizontal: false, vertical: true)
         .font(.system(size: 16, weight: .semibold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+        .onMoveCommand { direction in
+            if direction == .right {
+                streamFocused = false
+                chatFocusRequest += 1
+            }
+        }
     }
 
     private var keyboardSheet: some View {
         VStack(alignment: .leading, spacing: 24) {
-            Label("Type in the guest app", systemImage: "keyboard")
+            Label("Type in the app", systemImage: "keyboard")
                 .font(.title2.bold())
             Text("Focus a field with the soft pointer first. Text is sent to that field on the remote phone or browser.")
                 .foregroundStyle(.secondary)
@@ -252,39 +432,30 @@ struct RemoteRuntimeWebRTCView: View {
                 .textFieldStyle(.plain)
                 .padding(18)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                .focused($keyboardFieldFocused)
+                .onSubmit { sendKeyboardText() }
             HStack {
                 Button("Cancel") { showingKeyboard = false }
                 Spacer()
-                Button("Send") {
-                    let value = keyboardText
-                    keyboardText = ""
-                    showingKeyboard = false
-                    runtime.sendText(value)
-                    streamFocused = true
-                }
+                Button("Send") { sendKeyboardText() }
                 .buttonStyle(.borderedProminent)
                 .disabled(keyboardText.isEmpty)
             }
         }
         .padding(60)
         .frame(width: 900, height: 430)
+        .onAppear {
+            DispatchQueue.main.async { keyboardFieldFocused = true }
+        }
     }
 
-    private var vibeSheet: some View {
-        VStack(spacing: 18) {
-            HStack {
-                Label("Vibe while you drive", systemImage: "wand.and.stars")
-                    .font(.title2.bold())
-                Spacer()
-                Button("Done") { showingVibe = false }
-            }
-            Text("The task runs on your primary runner; return to the stream to watch Fast Refresh land on the remote app.")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            VibeTurnPanel(project: project, prefill: $vibePrefill)
-        }
-        .padding(44)
-        .frame(width: 1200, height: 690)
+    private func sendKeyboardText() {
+        let value = keyboardText
+        guard !value.isEmpty else { return }
+        keyboardText = ""
+        showingKeyboard = false
+        runtime.sendText(value)
+        streamFocused = true
     }
 
     private func movePointer(_ direction: MoveCommandDirection) {
@@ -305,22 +476,149 @@ struct RemoteRuntimeWebRTCView: View {
         case .right: cursor.x = min(1, cursor.x + step)
         @unknown default: break
         }
+        if domMode { sendDOMHover() }
     }
 
-    private func aspectFitRect(imageSize: CGSize, in container: CGSize) -> CGRect {
+    private func sendDOMHover() {
+        guard domMode else { return }
+        let point = tvRemoteDOMPoint(normalized: cursor, sourceSize: runtime.sourceSize)
+        domHoverTask?.cancel()
+        domHoverTask = Task {
+            try? await Task.sleep(nanoseconds: 90_000_000)
+            guard !Task.isCancelled, domMode else { return }
+            try? await runtime.moveDOMCursor(point, project: project)
+        }
+    }
+
+    private func selectDOMElement() {
+        guard domMode, !selectingElement else { return }
+        selectingElement = true
+        domError = nil
+        let point = tvRemoteDOMPoint(normalized: cursor, sourceSize: runtime.sourceSize)
+        Task {
+            do {
+                let result = try await runtime.selectDOMElement(point, project: project)
+                await MainActor.run {
+                    selectingElement = false
+                    if result.ok == true, let summary = result.summary, !summary.isEmpty {
+                        selectedElementSummary = summary
+                        // Keep the selected DOM node as first-class Vibing
+                        // context. The panel's prefill hook sends this as a
+                        // normal turn, so the runner receives the same
+                        // element block as the browser surface.
+                        vibePrefill = "Deep audit the selected element: \(summary)"
+                        chatFocusRequest += 1
+                        streamFocused = false
+                    } else {
+                        domError = "No element at that spot — move the cursor and try again."
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    selectingElement = false
+                    domError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func selectedElementChip(_ summary: String) -> some View {
+        HStack(spacing: 10) {
+            Text("Element · \(summary)")
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+            Button("Select another") {
+                selectedElementSummary = nil
+                domError = nil
+                domMode = true
+                streamFocused = true
+            }
+            .buttonStyle(.bordered)
+            Button("Done") {
+                selectedElementSummary = nil
+                domMode = false
+            }
+                .buttonStyle(.bordered)
+        }
+        .lineLimit(1)
+        .padding(10)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+}
+
+/// Aspect-fit in a real bounded rect, not an origin-zero size. This keeps a
+/// portrait app centered inside the TV's rounded stream chrome and makes the
+/// containment invariant directly testable without pixels or LiveKit.
+func tvRemoteAspectFitRect(imageSize: CGSize, in container: CGRect) -> CGRect {
         guard imageSize.width > 0, imageSize.height > 0,
               container.width > 0, container.height > 0 else {
-            return CGRect(origin: .zero, size: container)
+            return container
         }
         let scale = min(container.width / imageSize.width, container.height / imageSize.height)
         let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
         return CGRect(
-            x: (container.width - size.width) / 2,
-            y: (container.height - size.height) / 2,
+            x: container.minX + (container.width - size.width) / 2,
+            y: container.minY + (container.height - size.height) / 2,
             width: size.width,
             height: size.height
         )
+}
+
+/// DOM controls exist only for the browser-window target. A native simulator
+/// can stream pixels over WebRTC, but it has no browser DOM to inspect.
+func tvRemoteDOMInspectionAvailable(targetId: String?) -> Bool {
+    targetId == "browser-window"
+}
+
+/// Convert the normalized TV cursor into the captured browser viewport. Keep
+/// this shared by hover and select so the highlight and chosen element cannot
+/// drift apart at letterboxed phone aspect ratios.
+func tvRemoteDOMPoint(normalized: CGPoint, sourceSize: CGSize) -> CGPoint {
+    let x = min(max(normalized.x, 0), 1)
+    let y = min(max(normalized.y, 0), 1)
+    return CGPoint(
+        x: (x * max(sourceSize.width, 1)).rounded(),
+        y: (y * max(sourceSize.height, 1)).rounded()
+    )
+}
+
+/// A transport is not healthy merely because it decoded a JPEG. Browser and
+/// simulator capture can return valid, uniformly black/white images while the
+/// app failed before first paint. Sample a tiny luminance grid so this check is
+/// cheap enough for the live lane; the pure predicate below is unit-testable.
+func tvRemoteImageLooksBlank(_ image: UIImage) -> Bool {
+    guard let source = image.cgImage else { return false }
+    let width = 12
+    let height = 12
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    guard let context = CGContext(
+        data: &pixels,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: width * 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { return false }
+    context.interpolationQuality = .low
+    context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+    var luminances: [UInt8] = []
+    luminances.reserveCapacity(width * height)
+    for index in stride(from: 0, to: pixels.count, by: 4) {
+        let value = (Int(pixels[index]) * 299
+            + Int(pixels[index + 1]) * 587
+            + Int(pixels[index + 2]) * 114) / 1000
+        luminances.append(UInt8(clamping: value))
     }
+    return tvRemoteFrameSamplesAreBlank(luminances)
+}
+
+func tvRemoteFrameSamplesAreBlank(_ samples: [UInt8]) -> Bool {
+    guard let darkest = samples.min(), let brightest = samples.max() else { return false }
+    let average = samples.reduce(0) { $0 + Int($1) } / samples.count
+    let nearlyUniform = Int(brightest) - Int(darkest) <= 6
+    return nearlyUniform && (average <= 12 || average >= 243)
 }
 
 private struct RemoteVideoTrackView: UIViewRepresentable {
@@ -371,8 +669,13 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
     @Published var connected = false
     @Published var error: String?
     @Published var controlNote: String?
+    @Published private(set) var textInputFocusRequest = 0
+    @Published private(set) var receivedUsableFrame = false
 
     var hasMedia: Bool { frame != nil || videoTrack != nil }
+    var supportsDOMInspection: Bool {
+        tvRemoteDOMInspectionAvailable(targetId: session?.targetId)
+    }
     var sourceSize: CGSize {
         if let dims = session?.deviceDims, dims.width > 0, dims.height > 0 {
             return CGSize(width: dims.width, height: dims.height)
@@ -404,6 +707,11 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
     private var heartbeatTask: Task<Void, Never>?
     private var jpegChunks: [String: JPEGChunks] = [:]
     private var generation = UUID()
+    private var frameFallbackForced = false
+    private var webrtcICEReady = false
+    private var blankFrameStartedAt: Date?
+    private var vibingCapabilities = Set<String>()
+    private var pendingVibingAcks: [String: CheckedContinuation<[String: Any], Error>] = [:]
 
     func fail(_ message: String) {
         error = message
@@ -416,13 +724,19 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         generation = thisGeneration
         self.client = client
         self.project = project
-        frame = nil
+        // Preserve the last good pixels while transport renegotiates. A new
+        // frame replaces them only after blank-frame validation succeeds.
         videoTrack = nil
         session = nil
         error = nil
         controlNote = nil
         connected = false
         transportLabel = "WebRTC"
+        frameFallbackForced = false
+        webrtcICEReady = false
+        receivedUsableFrame = false
+        blankFrameStartedAt = nil
+        vibingCapabilities.removeAll()
 
         do {
             status = "Starting \(project.name)…"
@@ -456,11 +770,13 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             guard generation == thisGeneration else { return }
 
             watchdogTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
-                guard !Task.isCancelled, let self, self.generation == thisGeneration, !self.hasMedia else { return }
-                self.transportLabel = "WebRTC · HTTP fallback"
-                self.controlNote = "WebRTC is still negotiating; showing authenticated relay frames until media arrives."
-                self.startFrameFallback(sessionId: created.id, generation: thisGeneration)
+                // Do not leave a black H.264 surface on screen for eight
+                // seconds. If no usable pixels have arrived, hand off to the
+                // authenticated frame lane quickly; the last good frame (if
+                // any) remains visible during the handoff.
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !Task.isCancelled, let self, self.generation == thisGeneration, !self.receivedUsableFrame else { return }
+                self.activateFrameFallback("WebRTC did not deliver a usable viewport in time. Using authenticated browser frames instead.")
             }
         } catch is CancellationError {
             return
@@ -493,6 +809,11 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         framesChannel = nil
         primerChannel = nil
         jpegChunks.removeAll()
+        let pending = pendingVibingAcks.values
+        pendingVibingAcks.removeAll()
+        for continuation in pending {
+            continuation.resume(throwing: AgentError(message: "The WebRTC control channel closed."))
+        }
         let id = session?.id
         let client = self.client
         session = nil
@@ -510,22 +831,36 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         )
     }
 
-    func scroll(_ direction: MoveCommandDirection) {
+    func scroll(_ direction: MoveCommandDirection, at normalizedPoint: CGPoint? = nil) {
         let size = sourceSize
-        let centerX = Int(size.width * 0.5)
-        let centerY = Int(size.height * 0.5)
+        let anchorX = Int(size.width * min(max(normalizedPoint?.x ?? 0.5, 0), 1))
+        let anchorY = Int(size.height * min(max(normalizedPoint?.y ?? 0.5, 0), 1))
         let dx = Int(size.width * 0.28)
         let dy = Int(size.height * 0.28)
-        // A request to reveal content lower on the page is a finger swipe up.
+        // Anchor the gesture under the pointer. This matters for nested chat
+        // and log scrollers: a wheel/swipe at the frame centre can miss the
+        // scroll container currently under the pointer. Clamp the endpoints
+        // so edge positions (top/bottom of the phone) remain valid gestures.
+        let clampX = { (value: Int) in min(max(value, 0), Int(size.width)) }
+        let clampY = { (value: Int) in min(max(value, 0), Int(size.height)) }
+        let centerX = clampX(anchorX)
+        let centerY = clampY(anchorY)
+        // The browser target translates y1 - y2 into wheel deltaY. Positive
+        // deltaY is downward page movement, so Down uses the lower-to-upper
+        // gesture and Up uses the opposite polarity.
+        let upStartY = clampY(centerY - dy)
+        let upEndY = clampY(centerY + dy)
+        let downStartY = clampY(centerY + dy)
+        let downEndY = clampY(centerY - dy)
         switch direction {
         case .up:
-            sendControl(action: "swipe", x: centerX, y: centerY - dy, x2: centerX, y2: centerY + dy, durationMs: 260)
+            sendControl(action: "swipe", x: centerX, y: upStartY, x2: centerX, y2: upEndY, durationMs: 260)
         case .down:
-            sendControl(action: "swipe", x: centerX, y: centerY + dy, x2: centerX, y2: centerY - dy, durationMs: 260)
+            sendControl(action: "swipe", x: centerX, y: downStartY, x2: centerX, y2: downEndY, durationMs: 260)
         case .left:
-            sendControl(action: "swipe", x: centerX - dx, y: centerY, x2: centerX + dx, y2: centerY, durationMs: 260)
+            sendControl(action: "swipe", x: clampX(centerX + dx), y: centerY, x2: clampX(centerX - dx), y2: centerY, durationMs: 260)
         case .right:
-            sendControl(action: "swipe", x: centerX + dx, y: centerY, x2: centerX - dx, y2: centerY, durationMs: 260)
+            sendControl(action: "swipe", x: clampX(centerX - dx), y: centerY, x2: clampX(centerX + dx), y2: centerY, durationMs: 260)
         @unknown default: break
         }
     }
@@ -537,6 +872,95 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
 
     func sendKey(_ key: String, action: String = "key") {
         sendControl(action: action, key: action == "key" ? key : nil)
+    }
+
+    func setDOMMode(_ enabled: Bool, project: ProjectSummary) async throws {
+        guard supportsDOMInspection else {
+            throw AgentError(message: "Element inspection is available for browser-window previews; this target only exposes pixels.")
+        }
+        let body: [String: Any] = [
+            "project": project.name,
+            "workDir": project.path ?? "",
+            "enabled": enabled,
+        ]
+        if canSendVibingControl("vibing.dom.mode") {
+            _ = try await sendVibingControl(type: "vibing.dom.mode", body: body)
+        } else if let client {
+            _ = try await client.setPreviewDomMode(project: project.name, enabled: enabled, workDir: project.path)
+        } else {
+            throw AgentError(message: "No authenticated render connection is available for element inspection.")
+        }
+    }
+
+    func moveDOMCursor(_ point: CGPoint, project: ProjectSummary) async throws {
+        let body: [String: Any] = [
+            "project": project.name,
+            "x": Int(point.x),
+            "y": Int(point.y),
+        ]
+        if canSendVibingControl("vibing.dom.cursor") {
+            _ = try await sendVibingControl(type: "vibing.dom.cursor", body: body)
+        } else if let client {
+            try await client.movePreviewCursor(project: project.name, x: Int(point.x), y: Int(point.y))
+        }
+    }
+
+    func selectDOMElement(_ point: CGPoint, project: ProjectSummary) async throws -> AgentClient.PreviewSelectResult {
+        let body: [String: Any] = [
+            "project": project.name,
+            "workDir": project.path ?? "",
+            "x": Int(point.x),
+            "y": Int(point.y),
+        ]
+        if canSendVibingControl("vibing.dom.select") {
+            var result = try await sendVibingControl(type: "vibing.dom.select", body: body)
+            result["ok"] = true
+            let data = try JSONSerialization.data(withJSONObject: result)
+            return try JSONDecoder().decode(AgentClient.PreviewSelectResult.self, from: data)
+        }
+        guard let client else {
+            throw AgentError(message: "No authenticated render connection is available for element inspection.")
+        }
+        return try await client.selectPreviewElement(
+            project: project.name,
+            x: Int(point.x),
+            y: Int(point.y),
+            workDir: project.path
+        )
+    }
+
+    private func canSendVibingControl(_ type: String) -> Bool {
+        vibingCapabilities.contains(type) && eventsChannel?.readyState == .open
+    }
+
+    /// Send DOM control over the reliable, ordered WebRTC events channel. HTTP
+    /// remains the negotiated fallback only when the channel/capability is not
+    /// available; after a send starts we never retry through HTTP because a
+    /// timed-out select may already have clicked and stored the element.
+    private func sendVibingControl(type: String, body: [String: Any]) async throws -> [String: Any] {
+        guard let channel = eventsChannel, channel.readyState == .open else {
+            throw AgentError(message: "The WebRTC DOM control channel is not open.")
+        }
+        let id = "tvos-\(UUID().uuidString.lowercased())"
+        var payload = body
+        payload["v"] = 1
+        payload["id"] = id
+        payload["type"] = type
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingVibingAcks[id] = continuation
+            let sent = channel.sendData(LKRTCDataBuffer(data: data, isBinary: false))
+            guard sent else {
+                pendingVibingAcks.removeValue(forKey: id)
+                continuation.resume(throwing: AgentError(message: "The WebRTC DOM control channel rejected the command."))
+                return
+            }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 11_000_000_000)
+                guard let self, let waiting = self.pendingVibingAcks.removeValue(forKey: id) else { return }
+                waiting.resume(throwing: AgentError(message: "Element inspection timed out after 10 seconds. Retry when the browser preview is responsive."))
+            }
+        }
     }
 
     private func sendControl(
@@ -566,6 +990,9 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
                 )
                 session = updated
                 controlNote = updated.note
+                if action == "tap", updated.textInputFocused == true {
+                    textInputFocusRequest &+= 1
+                }
             } catch {
                 controlNote = error.localizedDescription
             }
@@ -591,8 +1018,16 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             current = try await client.devServerStatus()
         }
         if ["expo", "react-native", "reactnative", "rn"].contains(framework) {
-            status = "Starting the mobile web runtime…"
-            _ = try await client.startWebServer()
+            // Modern agents start the Expo web sibling as part of /dev/start
+            // when platform=web and report its real port in /dev/status. Calling
+            // the legacy start route anyway turned a healthy launch into a 404
+            // on older route sets and left the TV showing Expo's spinner. Only
+            // invoke the compatibility route when the measured operation says
+            // no web sibling is listening yet.
+            if (current.webPort ?? 0) <= 0 {
+                status = "Starting the mobile web runtime…"
+                _ = try await client.startWebServer()
+            }
         }
     }
 
@@ -697,14 +1132,17 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
     private func startFrameFallback(sessionId: String, generation: UUID) {
         guard fallbackTask == nil else { return }
         fallbackTask = Task { [weak self] in
+            let blankDeadline = Date().addingTimeInterval(8)
             while !Task.isCancelled {
                 guard let self, self.generation == generation, let client = self.client else { return }
                 do {
                     let data = try await client.remoteRuntimeFrame(sessionId: sessionId)
                     if let image = UIImage(data: data) {
-                        self.frame = image
-                        self.connected = true
-                        self.status = "Interactive stream ready"
+                        let usable = self.acceptFrame(image, transport: "Authenticated frames")
+                        if !usable, Date() >= blankDeadline {
+                            self.fail("The render transport connected, but the app returned only blank frames. The browser or mobile runtime did not paint usable pixels. Open App console for the underlying dev-server error, then retry or use Fix with AI.")
+                            return
+                        }
                     }
                 } catch {
                     if self.frame == nil { self.controlNote = error.localizedDescription }
@@ -714,19 +1152,57 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         }
     }
 
+    private func activateFrameFallback(_ reason: String) {
+        guard let session else {
+            fail(reason)
+            return
+        }
+        // A receiver object can exist before ICE ever carries a pixel. Keeping
+        // that empty H.264 view above a healthy HTTP frame fallback produced a
+        // permanent white phone with a green Connected badge.
+        videoTrack = nil
+        if !receivedUsableFrame { frame = nil }
+        frameFallbackForced = true
+        webrtcICEReady = false
+        connected = false
+        status = "Switching to the browser viewport…"
+        transportLabel = "Authenticated frames"
+        controlNote = reason
+        startFrameFallback(sessionId: session.id, generation: generation)
+    }
+
     private func acceptJPEG(_ data: Data, fromWebRTC: Bool) {
         guard let image = UIImage(data: data) else {
             controlNote = "A remote frame arrived but tvOS could not decode it."
             return
         }
-        frame = image
-        connected = true
-        status = "Interactive stream ready"
+        let usable = acceptFrame(image, transport: fromWebRTC ? "WebRTC · JPEG" : transportLabel)
         if fromWebRTC {
             transportLabel = "WebRTC · JPEG"
-            fallbackTask?.cancel()
-            fallbackTask = nil
+            if usable {
+                fallbackTask?.cancel()
+                fallbackTask = nil
+            }
         }
+    }
+
+    @discardableResult
+    private func acceptFrame(_ image: UIImage, transport: String) -> Bool {
+        guard !tvRemoteImageLooksBlank(image) else {
+            if blankFrameStartedAt == nil { blankFrameStartedAt = Date() }
+            connected = false
+            status = "Connected, waiting for usable app pixels…"
+            controlNote = "The capture operation is returning uniformly blank frames."
+            return false
+        }
+        blankFrameStartedAt = nil
+        receivedUsableFrame = true
+        frame = image
+        connected = true
+        error = nil
+        status = "Interactive stream ready"
+        transportLabel = transport
+        return true
     }
 
     private func handleData(_ data: Data, binary: Bool, channelLabel: String) {
@@ -760,6 +1236,19 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         guard channelLabel == "events",
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         switch object["type"] as? String {
+        case "vibing.protocol":
+            guard object["v"] as? Int == 1 else { break }
+            vibingCapabilities = Set(object["capabilities"] as? [String] ?? [])
+        case "vibing.ack":
+            guard let id = object["id"] as? String,
+                  let continuation = pendingVibingAcks.removeValue(forKey: id) else { break }
+            if object["ok"] as? Bool == true {
+                continuation.resume(returning: object["result"] as? [String: Any] ?? [:])
+            } else {
+                let failure = object["error"] as? [String: Any]
+                let message = failure?["message"] as? String ?? "The browser rejected the element-inspection command."
+                continuation.resume(throwing: AgentError(message: message))
+            }
         case "ready":
             if let transport = object["transport"] as? String { transportLabel = label(for: transport) }
         case "dims", "rotation":
@@ -780,6 +1269,7 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
                 frameTransport: current.frameTransport,
                 status: current.status,
                 lastCommand: current.lastCommand,
+                textInputFocused: current.textInputFocused,
                 note: current.note,
                 deviceDims: RemoteRuntimeDeviceDims(
                     width: width,
@@ -806,10 +1296,18 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
     }
 
     private func attachVideo(_ track: LKRTCVideoTrack) {
+        guard !frameFallbackForced else { return }
         videoTrack = track
+        status = "Connecting the live video…"
+        transportLabel = "WebRTC · H.264"
+        markWebRTCConnected()
+    }
+
+    private func markWebRTCConnected() {
+        guard !frameFallbackForced, webrtcICEReady, videoTrack != nil else { return }
         connected = true
         status = "Interactive stream ready"
-        transportLabel = "WebRTC · H.264"
+        controlNote = nil
         fallbackTask?.cancel()
         fallbackTask = nil
     }
@@ -853,7 +1351,12 @@ extension TVRemoteRuntimeController: LKRTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if newState == .failed { self.controlNote = "WebRTC ICE failed; using authenticated frame fallback." }
+            if newState == .connected || newState == .completed {
+                self.webrtcICEReady = true
+                self.markWebRTCConnected()
+            } else if newState == .failed {
+                self.activateFrameFallback("WebRTC could not reach this TV directly. Using the authenticated browser viewport instead.")
+            }
         }
     }
 

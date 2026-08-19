@@ -219,7 +219,9 @@ struct VibingView: View {
         loading = true
         error = nil
         do {
-            guard let client = store.runnerClient() else { throw AgentError(message: "No machine selected") }
+            guard let client = store.runnerClient() ?? store.renderClient() else {
+                throw AgentError(message: "No connected machine can provide project inventory")
+            }
             let loaded = try await client.listProjects().sorted {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }

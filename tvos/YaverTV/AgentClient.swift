@@ -46,6 +46,16 @@ actor AgentClient {
     /// platform while a stale token re-repairs nothing.
     private let relayRepair: (@Sendable () async -> BoxTarget?)?
 
+    /// Ask a connected BYO/self-hosted box to uninstall its local Yaver stack
+    /// and stop. Account tombstoning remains a separate Convex operation so an
+    /// offline machine can still be removed immediately.
+    func removeMachine() async throws {
+        _ = try await postJSON("/machine/remove", [
+            "confirm": true,
+            "phrase": "delete my machine",
+        ])
+    }
+
     private struct Endpoint {
         let url: URL
         let relay: Bool
@@ -278,6 +288,11 @@ actor AgentClient {
                 if Task.isCancelled { onEnd?(.cancelled, nil); return }
                 var req = URLRequest(url: endpoint.url)
                 req.httpMethod = "GET"
+                // This is an SSE subscription, not an ordinary API request.
+                // The shared session's 30-second request timeout is correct
+                // for verbs but turns a quiet coding phase into a false dead
+                // console. The server owns stream completion via `done`.
+                req.timeoutInterval = 24 * 60 * 60
                 req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                 req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
@@ -371,6 +386,15 @@ actor AgentClient {
         return (try JSONDecoder().decode(TaskList.self, from: data)).tasks
     }
 
+    /// Runners and models the selected machine can actually execute. This is
+    /// the same operation mobile/web use; heartbeat inventory does not carry
+    /// the machine's live provider/model catalogue.
+    func listRunners() async throws -> AgentRunnerList {
+        let data = try await request("GET", path: "/agent/runners",
+                                     failure: "couldn't load coding agents")
+        return try JSONDecoder().decode(AgentRunnerList.self, from: data)
+    }
+
     /// Full task detail — transcript + result — for the native Chat view.
     func task(_ id: String) async throws -> TaskSummary {
         let data = try await request("GET", path: "/tasks/\(id)", failure: "couldn't load the conversation")
@@ -393,10 +417,12 @@ actor AgentClient {
     func forkTask(
         _ id: String,
         runner: String,
+        model: String = "",
+        mode: String = "",
         input: String,
         projectDir: String? = nil,
         mcpServers: [String] = [],
-        includeYaverMcp: Bool = true
+        includeYaverMcp: Bool = false
     ) async throws -> TaskForkResult {
         var body: [String: Any] = [
             "runner": runner,
@@ -406,6 +432,8 @@ actor AgentClient {
             "mcpServers": mcpServers,
             "includeYaverMcp": includeYaverMcp,
         ]
+        if !model.isEmpty { body["model"] = model }
+        if !mode.isEmpty { body["mode"] = mode }
         if let projectDir, !projectDir.isEmpty { body["projectDir"] = projectDir }
         let data = try await request("POST", path: "/tasks/\(id)/fork", jsonBody: body,
                                      failure: "couldn't continue the finished conversation")
@@ -581,7 +609,7 @@ actor AgentClient {
         goal: String = "",
         askMode: Bool = false,
         mcpServers: [String] = [],
-        includeYaverMcp: Bool = true
+        includeYaverMcp: Bool = false
     ) async throws -> TaskSummary {
         var body: [String: Any] = [
             "title": title,
@@ -604,7 +632,7 @@ actor AgentClient {
         // toggle travel on the task body so a TV-started task is
         // indistinguishable from one started in the dashboard (2026-08-10).
         if !mcpServers.isEmpty { body["mcpServers"] = mcpServers }
-        if includeYaverMcp == false { body["includeYaverMcp"] = false }
+        body["includeYaverMcp"] = includeYaverMcp
 
         let data = try await request("POST", path: "/tasks", jsonBody: body,
                                      failure: "couldn't start the task")
@@ -639,7 +667,21 @@ actor AgentClient {
     /// Projects the box knows about (GET /projects → {projects:[…]} or a bare
     /// array). For the TV to browse and pick one to preview.
     func listProjects() async throws -> [ProjectSummary] {
-        let data = try await request("GET", path: "/projects", failure: "couldn't load projects")
+        let data: Data
+        do {
+            data = try await request("GET", path: "/projects", failure: "couldn't load projects")
+        } catch {
+            // A stale/empty discovery cache must not strand Vibing behind a
+            // generic error. Ask the agent to rescan once, then read the same
+            // canonical endpoint again. If the box is genuinely unreachable,
+            // the original transport error is preserved.
+            do {
+                _ = try await request("POST", path: "/projects/refresh", failure: "couldn't refresh projects")
+                data = try await request("GET", path: "/projects", failure: "couldn't load projects after refresh")
+            } catch {
+                throw error
+            }
+        }
         if let wrapped = try? JSONDecoder().decode(ProjectList.self, from: data) { return wrapped.projects }
         return (try? JSONDecoder().decode([ProjectSummary].self, from: data)) ?? []
     }
@@ -785,7 +827,7 @@ actor AgentClient {
             "POST",
             path: "/remote-runtime/sessions/\(sessionId)/control",
             jsonBody: body,
-            failure: "the guest app didn't accept that remote action"
+            failure: "the app didn't accept that remote action"
         )
         if let wrapped = try? JSONDecoder().decode(RemoteRuntimeControlEnvelope.self, from: data) {
             return wrapped.session
@@ -832,6 +874,7 @@ actor AgentClient {
         let port: Int?
         let webPort: Int?
         let error: String?
+        let recentLogs: [String]?
         let servingLabel: String?
     }
 
@@ -859,7 +902,7 @@ actor AgentClient {
                               building: nil, framework: project.framework,
                               url: nil, directUrl: nil, bundleUrl: nil,
                               port: nil, webPort: nil,
-                              error: nil, servingLabel: nil)
+                              error: nil, recentLogs: nil, servingLabel: nil)
     }
 
     /// The start endpoint is intentionally asynchronous. A 200 means the
