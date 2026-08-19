@@ -39,7 +39,10 @@ struct TasksView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            ScrollView {
+            if !store.taskRuntimePlan().available {
+                noTaskRuntimeView
+            } else {
+                ScrollView {
                 LazyVStack(spacing: 12) {
                     // This control is intentionally independent of the task
                     // history request. A slow/failed GET /tasks must never
@@ -64,6 +67,7 @@ struct TasksView: View {
                     }
                 }
                 .padding(48)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -160,6 +164,38 @@ struct TasksView: View {
             }
         }
         .padding(.top, 10)
+    }
+
+    private var noTaskRuntimeView: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Image(systemName: store.taskRuntimePlan().kind == .signedOut
+                  ? "person.crop.circle.badge.xmark"
+                  : "server.rack")
+                .font(.system(size: 52))
+                .foregroundStyle(.orange)
+            Text(store.taskRuntimePlan().kind == .signedOut
+                 ? "Sign in to start coding tasks"
+                 : "No remote runner connected")
+                .font(.system(size: 30, weight: .bold))
+            Text(store.taskRuntimePlan().kind == .signedOut
+                 ? "Sign in first, then choose the machine that runs OpenCode."
+                 : "OpenCode + DeepSeek V4 Flash tasks need a runner machine. A render box is not required for Chat or Git coding.")
+                .font(.system(size: 20))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 760, alignment: .leading)
+            if store.taskRuntimePlan().kind == .boxlessUnavailable {
+                Text("Boxless Git+coding is an optional executor and is not configured on this TV yet. Nothing was sent and no render machine was probed.")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: 760, alignment: .leading)
+            }
+            NavigationLink("Choose or add a machine", destination: MachinePickerView())
+                .buttonStyle(.borderedProminent)
+            NavigationLink("Use boxless Yaver Code", destination: BoxlessCodeView())
+                .buttonStyle(.bordered)
+        }
+        .padding(56)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var filtered: [TaskSummary] { tasks.filter { filter.matches($0.status) } }
@@ -278,7 +314,10 @@ struct TasksView: View {
         do {
             // Runner/render split: the task list lives on the RUNNER box.
             guard let client = store.runnerClient() else {
-                throw AgentError(message: store.machineSplitActive
+                let plan = store.taskRuntimePlan()
+                throw AgentError(message: plan.kind == .boxlessUnavailable
+                    ? "No task runner is connected. Remote runner tasks remain available; boxless Git+coding is not configured on this TV yet."
+                    : store.machineSplitActive
                     ? "Your AI runner machine needs the relay to be reachable from this TV — nothing was read from the wrong box."
                     : "No machine selected")
             }

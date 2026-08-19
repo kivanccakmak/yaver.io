@@ -25,13 +25,16 @@
 		7379174AE578C3B3EE112B4E /* TVSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59F5766C895CDA0075AE65E7 /* TVSettingsView.swift */; };
 		7BFF477EEDD5FEA7E3696C93 /* YaverNativeCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EB3210C08FB622ECCBF15C /* YaverNativeCatalog.swift */; };
 		7E0CEDAA389C30B231F33D93 /* MachinePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC389C91C8B5382905D6194B /* MachinePickerView.swift */; };
+		812D0A475176A47B5F8B7695 /* BoxlessCredentialSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCF092B4BD1BC1CC9DAA844 /* BoxlessCredentialSource.swift */; };
 		81DB028736C4430E2622C6F9 /* SessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4A93B698F49F0230F8DABF /* SessionView.swift */; };
 		82D80DF91ACD492496FBCEC1 /* yaver-login-wordmark-light.png in Resources */ = {isa = PBXBuildFile; fileRef = 1E6E9B680E701DC27F124C4F /* yaver-login-wordmark-light.png */; };
 		852CC39FBF2CFDEF2DCD3BB1 /* AddBoxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3856FA2ADBC347EA996932EA /* AddBoxView.swift */; };
 		859933A9F2FF6DBD55DA507D /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0279D581187CF7B6DAB53B5 /* DashboardView.swift */; };
 		8D8ABF84CE07DFF5DCA0C28A /* WebPreviewStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B09883C3220F3715E4F3DF /* WebPreviewStreamView.swift */; };
 		8F7FD72900FD7A382640EDAA /* VibingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5FCD77426D42F65FEB0D0A /* VibingView.swift */; };
+		8FEEAFB430FCFEB954769889 /* BoxlessCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 538F76DE5F0CE7ABB59354A3 /* BoxlessCodeView.swift */; };
 		928CCC06D104DE0E15FC5A18 /* UpdateAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FAE4341960BE9EA05DE082D /* UpdateAgentView.swift */; };
+		95EC8FC56B71667C9E11BE83 /* TaskRuntimePlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */; };
 		9D0BB56F661FC19E222F21AC /* TVChatPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E917EDECD2B19968A57D16 /* TVChatPlan.swift */; };
 		A2031FCCF6C82A44E0A3478B /* TVWebPreviewLoopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925084532D186202A5CA57D2 /* TVWebPreviewLoopTests.swift */; };
 		A652521801330E483E8F0DEE /* FailureSignals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9383688971427E7DF15B2D1C /* FailureSignals.swift */; };
@@ -43,10 +46,12 @@
 		BA38FFCFED1DC4D4EE799E82 /* OAuthSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */; };
 		C925CDA83769C16357214E99 /* AgentClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30B780D2E7490982C5B7E328 /* AgentClient.swift */; };
 		CAF1C4F283907ED5436FC317 /* FeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */; };
+		CC251EEE9B8247F7E633165D /* BoxlessDeepSeekClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0040D8EF80EF80251239D541 /* BoxlessDeepSeekClient.swift */; };
 		D299F8FE54C7BF349DB540D5 /* Speech.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */; };
 		D35115170BD592449BB9E6A2 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 44E779189DD0B98EC6AC2052 /* LiveKitWebRTC */; };
 		D7BD4B86D4F7E9BB55EFDC13 /* TokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2168C1CC5D76DE846256CFAD /* TokenStore.swift */; };
 		DC2819DC5C2145D82D127460 /* VibingPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */; };
+		E0D42899FE615119C171E320 /* TaskRuntimePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F41D8521019355088BB2706 /* TaskRuntimePlan.swift */; };
 		E6360E3A224D67440371A632 /* ProjectsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */; };
 		EEEB8D804BA1E102F39CD2E0 /* RemoteRuntimeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */; };
 		F6D6FD0612F8F2E9DD6D3A5C /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 407EAB8C318A209F3AE94A17 /* SignInView.swift */; };
@@ -72,6 +77,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0040D8EF80EF80251239D541 /* BoxlessDeepSeekClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoxlessDeepSeekClient.swift; sourceTree = "<group>"; };
 		053F14BB4784ACE0F6940C93 /* YaverTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YaverTVApp.swift; sourceTree = "<group>"; };
 		10853B34BB3F067BDF0C02E9 /* TaskComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskComposerView.swift; sourceTree = "<group>"; };
 		13160FC9012BA60947E3FE74 /* VibingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibingPlan.swift; sourceTree = "<group>"; };
@@ -88,6 +94,7 @@
 		4B5FCD77426D42F65FEB0D0A /* VibingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibingView.swift; sourceTree = "<group>"; };
 		4ED0118C15F635CF31061B51 /* VibeTurnPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeTurnPanel.swift; sourceTree = "<group>"; };
 		51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		538F76DE5F0CE7ABB59354A3 /* BoxlessCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoxlessCodeView.swift; sourceTree = "<group>"; };
 		59F5766C895CDA0075AE65E7 /* TVSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSettingsView.swift; sourceTree = "<group>"; };
 		5E6E50DABA5FE87AF986E197 /* TVChatNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVChatNavigationTests.swift; sourceTree = "<group>"; };
 		62AA4F93DB55D50601FA4253 /* Backend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend.swift; sourceTree = "<group>"; };
@@ -95,6 +102,7 @@
 		701043D706CE4793A50A17DD /* YaverTVTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = YaverTVTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		706F27D55F944D59C8ECD555 /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasksView.swift; sourceTree = "<group>"; };
 		72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibingPlanTests.swift; sourceTree = "<group>"; };
+		7F41D8521019355088BB2706 /* TaskRuntimePlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRuntimePlan.swift; sourceTree = "<group>"; };
 		8B47351433BB0B87175F60EA /* MachineRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineRegistry.swift; sourceTree = "<group>"; };
 		8FE9E4B8D55E6F9BE758452A /* TaskDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskDetailView.swift; sourceTree = "<group>"; };
 		925084532D186202A5CA57D2 /* TVWebPreviewLoopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVWebPreviewLoopTests.swift; sourceTree = "<group>"; };
@@ -102,6 +110,8 @@
 		9FAE4341960BE9EA05DE082D /* UpdateAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAgentView.swift; sourceTree = "<group>"; };
 		A7D4D91DB76D5F6AEBDD3D48 /* YaverTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = YaverTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A96BEDB7B91310E39E99DED2 /* SessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionClient.swift; sourceTree = "<group>"; };
+		ACCF092B4BD1BC1CC9DAA844 /* BoxlessCredentialSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoxlessCredentialSource.swift; sourceTree = "<group>"; };
+		AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRuntimePlanTests.swift; sourceTree = "<group>"; };
 		AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVRemoteView.swift; sourceTree = "<group>"; };
 		B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthSignIn.swift; sourceTree = "<group>"; };
 		C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsView.swift; sourceTree = "<group>"; };
@@ -142,6 +152,8 @@
 				E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */,
 				51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */,
 				62AA4F93DB55D50601FA4253 /* Backend.swift */,
+				ACCF092B4BD1BC1CC9DAA844 /* BoxlessCredentialSource.swift */,
+				0040D8EF80EF80251239D541 /* BoxlessDeepSeekClient.swift */,
 				3DB2DF3A66DAE025B2B780C8 /* BoxLifecycle.swift */,
 				9383688971427E7DF15B2D1C /* FailureSignals.swift */,
 				E883FFE32672CAF75087F1E5 /* FrameworkStyle.swift */,
@@ -152,6 +164,7 @@
 				CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */,
 				A96BEDB7B91310E39E99DED2 /* SessionClient.swift */,
 				6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */,
+				7F41D8521019355088BB2706 /* TaskRuntimePlan.swift */,
 				2168C1CC5D76DE846256CFAD /* TokenStore.swift */,
 				D9E917EDECD2B19968A57D16 /* TVChatPlan.swift */,
 				13160FC9012BA60947E3FE74 /* VibingPlan.swift */,
@@ -185,6 +198,7 @@
 			isa = PBXGroup;
 			children = (
 				AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */,
+				538F76DE5F0CE7ABB59354A3 /* BoxlessCodeView.swift */,
 				E0279D581187CF7B6DAB53B5 /* DashboardView.swift */,
 				DFF6CEE51B6A221D57E35F68 /* DroidStreamView.swift */,
 				DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */,
@@ -256,6 +270,7 @@
 		FFF5EADFCBAE2A1555B317FD /* YaverTVTests */ = {
 			isa = PBXGroup;
 			children = (
+				AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */,
 				72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */,
 			);
 			path = YaverTVTests;
@@ -382,6 +397,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				95EC8FC56B71667C9E11BE83 /* TaskRuntimePlanTests.swift in Sources */,
 				DC2819DC5C2145D82D127460 /* VibingPlanTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -396,6 +412,9 @@
 				22B21BB28D6FC910AA51413E /* AppleTVRemoteView.swift in Sources */,
 				16587396CA5360A34F2C4342 /* Backend.swift in Sources */,
 				3338C731056621FCCE8FE13A /* BoxLifecycle.swift in Sources */,
+				8FEEAFB430FCFEB954769889 /* BoxlessCodeView.swift in Sources */,
+				812D0A475176A47B5F8B7695 /* BoxlessCredentialSource.swift in Sources */,
+				CC251EEE9B8247F7E633165D /* BoxlessDeepSeekClient.swift in Sources */,
 				859933A9F2FF6DBD55DA507D /* DashboardView.swift in Sources */,
 				6EEAC350F5A3D4E89CE1C473 /* DroidStreamView.swift in Sources */,
 				A652521801330E483E8F0DEE /* FailureSignals.swift in Sources */,
@@ -418,6 +437,7 @@
 				7379174AE578C3B3EE112B4E /* TVSettingsView.swift in Sources */,
 				2B768810EB7C0232820C5AAB /* TaskComposerView.swift in Sources */,
 				229C96D90BE4C06BFCD7F34E /* TaskDetailView.swift in Sources */,
+				E0D42899FE615119C171E320 /* TaskRuntimePlan.swift in Sources */,
 				AEF06908D4ADCB0FE0759040 /* TasksView.swift in Sources */,
 				D7BD4B86D4F7E9BB55EFDC13 /* TokenStore.swift in Sources */,
 				928CCC06D104DE0E15FC5A18 /* UpdateAgentView.swift in Sources */,
@@ -464,6 +484,7 @@
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
 				CODE_SIGN_ENTITLEMENTS = YaverTV/YaverTV.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = YaverTV/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -581,6 +602,7 @@
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
 				CODE_SIGN_ENTITLEMENTS = YaverTV/YaverTV.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = YaverTV/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

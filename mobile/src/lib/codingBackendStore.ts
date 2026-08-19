@@ -42,7 +42,7 @@ const FS = FileSystem as any;
 
 // ── Preference (which backend the user picked) ──────────────────────
 
-const VALID_PREFS = new Set<CodingBackendPref>(["auto", "local", "subscription", "anthropic", "openai", "glm", "remote"]);
+const VALID_PREFS = new Set<CodingBackendPref>(["auto", "local", "subscription", "anthropic", "openai", "glm", "deepseek", "remote"]);
 
 export async function loadCodingBackendPref(): Promise<CodingBackendPref> {
   const raw = await getLocalSecret(LOCAL_KEYS.mobileCodingProvider);
@@ -102,10 +102,11 @@ export async function activeCoderModel(): Promise<ModelEntry | null> {
 // ── Availability snapshot ───────────────────────────────────────────
 
 export async function loadCodingAvailability(): Promise<CodingBackendAvailability> {
-  const [anthropic, openai, glm, coder, subscription] = await Promise.all([
+  const [anthropic, openai, glm, deepseek, coder, subscription] = await Promise.all([
     getLocalSecret(LOCAL_KEYS.anthropicApiKey),
     getLocalSecret(LOCAL_KEYS.openAiApiKey),
     getLocalSecret(LOCAL_KEYS.glmApiKey),
+    getLocalSecret(LOCAL_KEYS.deepseekApiKey),
     activeCoderModel(),
     hasSubscription(),
   ]);
@@ -118,6 +119,7 @@ export async function loadCodingAvailability(): Promise<CodingBackendAvailabilit
     anthropicKey: !!anthropic?.trim(),
     openaiKey: !!openai?.trim(),
     glmKey: !!glm?.trim(),
+    deepseekKey: !!deepseek?.trim(),
     // The remote GLM runner needs a connected box to dispatch to. We don't
     // probe the box's GLM config here (that surfaces as an error at run time
     // with a clear "configure ZAI_API_KEY on the box" message) — connectivity
@@ -195,6 +197,10 @@ export async function makeProvider(
     case "glm": {
       const key = (await getLocalSecret(LOCAL_KEYS.glmApiKey))?.trim();
       return key ? createOpenAiProvider({ flavor: "glm", apiKey: key }) : null;
+    }
+    case "deepseek": {
+      const key = (await getLocalSecret(LOCAL_KEYS.deepseekApiKey))?.trim();
+      return key ? createOpenAiProvider({ flavor: "deepseek", apiKey: key }) : null;
     }
     case "remote": {
       // No phone-side key — the box runs the GLM runner with its own z.ai

@@ -9,9 +9,8 @@
 // but generic over a tool registry and wired to the CODING tools
 // (sandboxTools.ts) instead of the coding-forbidden control-plane tools.
 //
-// Default provider is GLM (glm-4.7 @ z.ai): cheapest capable BYO key, and the
-// agentic read-only-what-you-need pattern is where GLM's price advantage
-// compounds (see the design doc's optimization section).
+// DeepSeek V4 Flash is the default boxless provider. GLM remains supported as
+// an explicit compatibility path.
 
 import {
   CODING_TOOLS,
@@ -20,9 +19,11 @@ import {
   type CodingTool,
 } from "./sandboxTools";
 
+import { redactSecrets } from "./secretRedaction";
+
 // ── Config ────────────────────────────────────────────────────────────
 
-export type CodingProvider = "glm" | "openai" | "openrouter" | "anthropic";
+export type CodingProvider = "glm" | "deepseek" | "openai" | "openrouter" | "anthropic";
 
 export interface CodingAgentConfig {
   provider: CodingProvider;
@@ -39,6 +40,7 @@ const PROVIDER_DEFAULTS: Record<CodingProvider, { baseUrl: string; model: string
   // single-shot GLM provider (llmOpenAI.ts) still uses. Pay-as-you-go users can
   // override baseUrl to https://api.z.ai/api/paas/v4.
   glm: { baseUrl: "https://api.z.ai/api/coding/paas/v4", model: "glm-4.7" },
+  deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" },
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1" },
   openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "z-ai/glm-4.7" },
   anthropic: { baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7" },
@@ -50,9 +52,13 @@ export function defaultCodingAgentConfig(apiKey: string): CodingAgentConfig {
   return { provider: "glm", model: PROVIDER_DEFAULTS.glm.model, apiKey, baseUrl: PROVIDER_DEFAULTS.glm.baseUrl };
 }
 
+export function defaultDeepSeekCodingAgentConfig(apiKey: string): CodingAgentConfig {
+  return { provider: "deepseek", model: PROVIDER_DEFAULTS.deepseek.model, apiKey, baseUrl: PROVIDER_DEFAULTS.deepseek.baseUrl };
+}
+
 // ── System prompt (opencode discipline, distilled) ─────────────────────
 
-export const CODING_AGENT_SYSTEM_PROMPT = `You are Yaver's coding agent, editing a project's src/ tree directly on the user's phone. There is no desktop, no shell on this device — you act ONLY through the tools provided.
+export const CODING_AGENT_SYSTEM_PROMPT = `You are Yaver's coding agent, editing a project directly on the user's phone. There is no desktop, no shell, no native build runtime, and no renderer on this device — you act ONLY through the tools provided.
 
 Work in a loop:
 1. Understand the request, then list_files / grep / read_file to learn the relevant code. Do NOT guess file contents — read before you edit.
@@ -60,7 +66,9 @@ Work in a loop:
 3. Only create files the request needs. Don't refactor unrelated code or add dependencies (package.json) unless asked.
 4. When the change is complete, STOP calling tools and reply with a short plain-text summary of what you changed and why. No markdown headings, no code fences.
 
-Path rules: every path is posix-relative inside src/ — no leading slash, no '..'.
+Audit policy: for audit or review requests, begin read-only, inspect evidence, identify policy/security/dependency risks, and do not mutate files unless the user explicitly asks for a fix. Never claim that a build, test, simulator, render, deploy, or shell command ran here. Those require a remote runtime; state the exact handoff instead.
+Git policy: inspect status and diff before commit; never force-push; never add credentials to files, remotes, commit messages, or tool arguments.
+Path rules: every path is posix-relative inside the scoped project — no leading slash, no '..'.
 If a tool returns an error, read the message and adjust (e.g. re-read the file if an anchor didn't match). Don't repeat a failing call unchanged.
 Be concise. Don't narrate every step; act.`;
 
@@ -136,7 +144,7 @@ export interface RunCodingAgentOptions {
 
 export async function runCodingAgent(opts: RunCodingAgentOptions): Promise<CodingAgentResult> {
   if (!opts.config?.apiKey) {
-    throw new Error("coding agent not configured — add a provider API key (GLM recommended).");
+    throw new Error("coding agent not configured — add a provider API key in secure settings.");
   }
   return opts.config.provider === "anthropic" ? runAnthropic(opts) : runOpenAICompatible(opts);
 }
@@ -252,7 +260,7 @@ async function runOpenAICompatible(opts: RunCodingAgentOptions): Promise<CodingA
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        throw new Error(`${cfg.provider} ${res.status}: ${truncateForError(body)}`);
+        throw new Error(`${cfg.provider} ${res.status}: ${redactSecrets(truncateForError(body), [cfg.apiKey])}`);
       }
       raw = (await res.json()) as OAIResponse;
     } finally {
@@ -367,7 +375,7 @@ async function runAnthropic(opts: RunCodingAgentOptions): Promise<CodingAgentRes
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        throw new Error(`anthropic ${res.status}: ${truncateForError(body)}`);
+        throw new Error(`anthropic ${res.status}: ${redactSecrets(truncateForError(body), [cfg.apiKey])}`);
       }
       raw = (await res.json()) as AntResponse;
     } finally {

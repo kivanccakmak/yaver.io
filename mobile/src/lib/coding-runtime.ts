@@ -153,8 +153,11 @@ export async function getLocalProvider(): Promise<LlmProvider> {
   return value === "openai-compatible" || value === "ollama" ? value : "deepseek";
 }
 export async function setLocalProvider(provider: LlmProvider): Promise<void> { await AsyncStorage.setItem(PROVIDER_KEY, provider); }
-export async function getLocalModel(): Promise<string> { return (await AsyncStorage.getItem(MODEL_KEY)) || "deepseek-chat"; }
-export async function setLocalModel(model: string): Promise<void> { await AsyncStorage.setItem(MODEL_KEY, model.trim() || "deepseek-chat"); }
+// Native boxless Yaver Code defaults to the same DeepSeek V4 Flash model as
+// the remote OpenCode lane. The remote lane keeps its provider-qualified id;
+// this direct OpenAI-compatible endpoint takes the provider's model id only.
+export async function getLocalModel(): Promise<string> { return (await AsyncStorage.getItem(MODEL_KEY)) || "deepseek-v4-flash"; }
+export async function setLocalModel(model: string): Promise<void> { await AsyncStorage.setItem(MODEL_KEY, model.trim() || "deepseek-v4-flash"); }
 export async function getLocalApiKey(provider: LlmProvider): Promise<string> { return (await SecureStore.getSecret(SECRET_PREFIX + provider)) || ""; }
 export async function setLocalApiKey(provider: LlmProvider, key: string): Promise<void> { key.trim() ? await SecureStore.setSecret(SECRET_PREFIX + provider, key.trim()) : await SecureStore.deleteSecret(SECRET_PREFIX + provider); }
 export async function getGitToken(provider: GitProvider): Promise<string> { return (await SecureStore.getSecret(GIT_SECRET_PREFIX + provider)) || ""; }

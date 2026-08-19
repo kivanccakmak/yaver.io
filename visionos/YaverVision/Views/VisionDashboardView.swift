@@ -307,6 +307,17 @@ struct VisionDashboardView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            NavigationLink {
+                BoxlessCodeView()
+            } label: {
+                Label("Use boxless Yaver Code", systemImage: "sparkles")
+            }
+            .buttonStyle(.bordered)
+            Text("Chat and deep audit work here with your DeepSeek key. Git edits, builds, simulators, and rendering require a connected remote runner.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 560)
         }
         .padding(48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -22,7 +22,7 @@
  *  over the metered "anthropic" key.
  *  "remote" = ship the sandbox to a connected box and let its GLM runner edit
  *  it (the box holds the z.ai credential, not the phone). */
-export type CodingBackendId = "local" | "subscription" | "anthropic" | "openai" | "glm" | "remote";
+export type CodingBackendId = "local" | "subscription" | "anthropic" | "openai" | "glm" | "deepseek" | "remote";
 
 /** What the user has chosen. "auto" = let resolveAutoBackend pick per availability. */
 export type CodingBackendPref = "auto" | CodingBackendId;
@@ -36,7 +36,7 @@ export interface CodingBackendMeta {
   /** One-line note for the picker. */
   note: string;
   /** For cloud fallback backends: which local provider credential slot it needs (none for local). */
-  requiresKey?: "openai" | "glm" | "anthropic";
+  requiresKey?: "openai" | "glm" | "anthropic" | "deepseek";
 }
 
 export const CODING_BACKENDS: readonly CodingBackendMeta[] = [
@@ -74,6 +74,13 @@ export const CODING_BACKENDS: readonly CodingBackendMeta[] = [
     requiresKey: "glm",
   },
   {
+    id: "deepseek",
+    label: "DeepSeek V4 Flash (BYO)",
+    kind: "cloud",
+    note: "Boxless Yaver coding on this device using your DeepSeek API key.",
+    requiresKey: "deepseek",
+  },
+  {
     id: "remote",
     label: "Remote runner (GLM)",
     kind: "cloud",
@@ -97,6 +104,7 @@ export interface CodingBackendAvailability {
   anthropicKey: boolean;
   openaiKey: boolean;
   glmKey: boolean;
+  deepseekKey: boolean;
   /** A box is connected that can run the remote GLM runner. */
   remoteRunner: boolean;
 }
@@ -125,6 +133,8 @@ export function backendUsable(id: CodingBackendId, av: CodingBackendAvailability
       return av.openaiKey;
     case "glm":
       return av.glmKey;
+    case "deepseek":
+      return av.deepseekKey;
     case "remote":
       return av.remoteRunner;
   }
@@ -151,6 +161,7 @@ export function usableBackends(av: CodingBackendAvailability): CodingBackendId[]
 export function resolveAutoBackend(av: CodingBackendAvailability): CodingBackendId | null {
   if (av.localModelReady) return "local";
   if (av.glmKey) return "glm";
+  if (av.deepseekKey) return "deepseek";
   if (av.anthropicKey) return "anthropic";
   if (av.openaiKey) return "openai";
   return null;

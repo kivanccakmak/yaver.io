@@ -1,6 +1,9 @@
 "use client";
 
+import { redactSecrets } from "./secret-redaction";
+
 export type WebProvider = "deepseek" | "openai-compatible";
+export type BrowserCodingMode = "audit" | "edit";
 export type GitProvider = "github" | "gitlab";
 
 export interface BrowserWorkspace {
@@ -25,16 +28,25 @@ function safePath(path: string): string {
   return normalized;
 }
 
-export async function runBrowserPrompt(apiKey: string, provider: WebProvider, model: string, prompt: string, workspace: BrowserWorkspace, onWorkspace: (next: BrowserWorkspace) => void): Promise<string> {
+export async function runBrowserPrompt(
+  apiKey: string,
+  provider: WebProvider,
+  model: string,
+  prompt: string,
+  workspace: BrowserWorkspace,
+  onWorkspace: (next: BrowserWorkspace) => void,
+  options: { mode?: BrowserCodingMode; confirmMutation?: (path: string, content: string) => Promise<boolean> | boolean } = {},
+): Promise<string> {
   if (!apiKey.trim()) throw new Error("Enter a provider API key for this browser session.");
+  const mode = options.mode ?? "audit";
   const messages: any[] = [
-    { role: "system", content: "You are Yaver Web local mode. You can read, search, and edit this browser workspace. You cannot run shell commands, Docker, native builds, or deploy. Be explicit when remote or CI execution is required." },
+    { role: "system", content: `You are Yaver Web local mode using DeepSeek V4 Flash by default. You can read, search, and edit this browser workspace. You cannot run shell commands, Docker, native builds, simulators, rendering, or deploy. Mode: ${mode}. In audit mode, remain read-only. In edit mode, ask for approval before changing files. Separate observed evidence from hypotheses and end with the smallest next action. Be explicit when remote or CI execution is required.` },
     { role: "user", content: prompt },
   ];
   for (let turn = 0; turn < 8; turn++) {
     const response = await fetch(endpoint(provider), { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, tools, tool_choice: "auto", temperature: 0.1 }) });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data?.error?.message || `Provider returned HTTP ${response.status}`);
+    if (!response.ok) throw new Error(redactSecrets(data?.error?.message || `Provider returned HTTP ${response.status}`, [apiKey]));
     const message = data.choices?.[0]?.message || {};
     messages.push(message);
     if (!message.tool_calls?.length) return message.content || "Done.";
@@ -46,14 +58,18 @@ export async function runBrowserPrompt(apiKey: string, provider: WebProvider, mo
         else if (call.function.name === "fs_search") result = Object.entries(workspace.files).filter(([, content]) => content.toLowerCase().includes(String(args.query).toLowerCase())).map(([path]) => path);
         else if (call.function.name === "fs_write") {
           const path = safePath(args.path);
+          if (mode === "audit") { result = { error: "audit mode is read-only; no file was changed" }; }
+          else if (options.confirmMutation && !(await options.confirmMutation(path, String(args.content)))) { result = { error: "user rejected this file change" }; }
+          else {
           const next = { ...workspace, files: { ...workspace.files, [path]: String(args.content) } };
           onWorkspace(next); result = { ok: true, path };
+          }
         } else result = { error: "Unknown tool" };
       } catch (error) { result = { error: error instanceof Error ? error.message : String(error) }; }
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
     }
   }
-  return "The browser agent reached its safe tool-call limit. Review the workspace and continue or hand off remotely.";
+  return redactSecrets("The browser agent reached its safe tool-call limit. Review the workspace and continue or hand off remotely.", [apiKey]);
 }
 
 function repoParts(repoUrl: string): { owner: string; name: string } {

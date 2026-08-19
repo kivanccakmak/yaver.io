@@ -81,6 +81,21 @@ struct DashboardView: View {
                         } else {
                             emptyBoxPrompt
                         }
+                        // Chat remains reachable even before a box is picked.
+                        // Tasks can then explain the missing runner and offer
+                        // the next repair in-place instead of making the
+                        // dashboard look empty or silently hiding Chat.
+                        HStack(spacing: 16) {
+                            NavigationLink(destination: TasksView()) {
+                                Tile(icon: "bubble.left.and.bubble.right.fill", title: "Chat", outerWidth: 216)
+                            }
+                            .accessibilityIdentifier("dashboard.chat.no-box")
+                            NavigationLink(destination: MachinePickerView()) {
+                                Tile(icon: "laptopcomputer", title: "Devices", outerWidth: 216)
+                            }
+                            .accessibilityIdentifier("dashboard.devices.no-box")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         selectedMachinePanel
                         wakePanel
@@ -337,11 +352,18 @@ struct DashboardView: View {
 
     private var emptyBoxPrompt: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Pick a machine")
+            Text("No remote runner connected")
                 .font(.system(size: 26, weight: .semibold))
-            Text("Choose one of the machines on your account, or type a LAN address. A machine appears here once it's running `yaver serve` signed in as you.")
+            Text("Chat is still available, but OpenCode + DeepSeek coding tasks need a runner machine. Rendering is a separate optional capability.")
                 .font(.system(size: 19)).foregroundStyle(.secondary).frame(maxWidth: 720, alignment: .leading)
-            NavigationLink("Choose machine", destination: MachinePickerView()).padding(.top, 8)
+            HStack(spacing: 16) {
+                NavigationLink("Choose machine", destination: MachinePickerView())
+                    .buttonStyle(.borderedProminent)
+                NavigationLink("Add LAN box", destination: AddBoxView())
+                    .buttonStyle(.bordered)
+            }
+            Text("To use the optional boxless Git+coding lane, configure its task executor from a supported client. This TV currently reports that capability honestly rather than pretending a task ran.")
+                .font(.system(size: 15)).foregroundStyle(.tertiary).frame(maxWidth: 820, alignment: .leading)
         }
     }
 

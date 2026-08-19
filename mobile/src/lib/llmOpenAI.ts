@@ -19,7 +19,7 @@ import {
   type LlmProvider,
 } from "./llmClient";
 
-export type OpenAiFlavor = "openai" | "glm";
+export type OpenAiFlavor = "openai" | "glm" | "deepseek";
 
 const FLAVOR_DEFAULTS: Record<OpenAiFlavor, { baseUrl: string; model: string; label: string }> = {
   openai: {
@@ -35,6 +35,11 @@ const FLAVOR_DEFAULTS: Record<OpenAiFlavor, { baseUrl: string; model: string; la
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
     model: "glm-4.7",
     label: "GLM",
+  },
+  deepseek: {
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-v4-flash",
+    label: "DeepSeek",
   },
 };
 

@@ -1,8 +1,8 @@
-// cloneToPhone.ts — clone a GitHub repo into a NEW phone-local project, fully on
+// cloneToPhone.ts — clone a GitHub/GitLab repo into a NEW phone-local project, fully on
 // device. No remote box: isomorphic-git (over the gitFsExpo adapter) clones into
 // <doc>/phone-projects/<slug>/, the exact root the agentic coding loop
 // (repoSandboxForSlug) and the git panel (gitContextForSlug) operate on. Auth for
-// private repos / push comes from the stored GitHub token; public repos clone
+// private repos / push comes from the stored provider token; public repos clone
 // without one.
 //
 // Importing this pulls in expo (via gitFsExpo + phoneProjects), so headless tests
@@ -14,20 +14,21 @@ import http from "isomorphic-git/http/web";
 import { cloneRepo } from "./codingAgent/sandboxGitOps";
 import { gitContextForSlug } from "./codingAgent/codingAgentRun";
 import { isRepo } from "./codingAgent/sandboxGit";
-import { gitHubNetFromStore } from "./githubAuthStore";
-import { normalizeRepoUrl, parseRepoSlug } from "./githubAuth";
+import { detectGitProvider, normalizeGitUrl, repoLabelFromUrl } from "./gitProviderAuth";
+import { gitNetFromStore } from "./gitProviderStore";
 import { createLocalPhoneProject, type PhoneProject } from "./phoneProjects";
 
 export interface CloneToPhoneResult {
   slug: string;
   project: PhoneProject;
   url: string;
-  /** True when no GitHub token was used (public clone). */
+  provider: "github" | "gitlab" | "bitbucket" | "generic";
+  /** True when no provider token was used (public clone). */
   anonymous: boolean;
 }
 
 /**
- * Clone `input` (owner/repo or a github.com URL) onto this phone.
+ * Clone `input` (GitHub owner/repo or a full GitHub/GitLab URL) onto this phone.
  *
  * Shallow by default (depth 1) — full history of a real app is large and slow to
  * materialize through the on-device base64 fs, and editing/committing/pushing all
@@ -37,16 +38,18 @@ export async function cloneGitRepoToPhone(
   input: string,
   opts: { depth?: number; ref?: string } = {},
 ): Promise<CloneToPhoneResult> {
-  const parsed = parseRepoSlug(input);
-  if (!parsed) {
-    throw new Error(`Not a GitHub repo: "${input}". Use owner/repo or a github.com URL.`);
+  const url = normalizeGitUrl(input);
+  const provider = detectGitProvider(url);
+  if (provider !== "github" && provider !== "gitlab") {
+    throw new Error(`Unsupported repository provider for "${input}". Use GitHub or GitLab.`);
   }
-  const url = normalizeRepoUrl(input);
+  const label = repoLabelFromUrl(url);
+  const repoName = label.split("/").filter(Boolean).pop() || "repo";
 
   // Register a blank phone project so the repo appears in the project list with a
   // stable slug; the clone fills its tree. (Blank template writes no src/ files,
   // so it won't collide with the cloned tree.)
-  const project = await createLocalPhoneProject({ name: parsed.repo, slug: parsed.repo, template: "blank" });
+  const project = await createLocalPhoneProject({ name: repoName, slug: repoName, template: "blank" });
   const slug = project.slug;
   const git = gitContextForSlug(slug);
 
@@ -59,15 +62,15 @@ export async function cloneGitRepoToPhone(
   // Ensure the project root exists before clone (isomorphic-git writes .git into it).
   await ensureGitDir(git);
 
-  // Auth: stored token if present (required for private repos + push). Public
-  // repos clone with no onAuth.
-  const net = (await gitHubNetFromStore(http)) ?? { http };
+  // Auth: provider-specific token if present (required for private repos +
+  // push). Public repositories clone without onAuth.
+  const net = (await gitNetFromStore(url, http)) ?? { http };
   const anonymous = !net.onAuth;
 
   const depth = opts.depth === 0 ? undefined : opts.depth ?? 1;
   await cloneRepo(git, net, { url, ref: opts.ref, depth });
 
-  return { slug, project, url, anonymous };
+  return { slug, project, url, provider, anonymous };
 }
 
 /** mkdir -p the repo root through the gitFs (non-recursive mkdir, EEXIST-safe). */

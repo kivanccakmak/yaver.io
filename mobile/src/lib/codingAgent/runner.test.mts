@@ -91,6 +91,18 @@ test("rejects when no api key configured", async () => {
   );
 });
 
+test("provider error diagnostics never echo the API key", async () => {
+  const fetchImpl = (async () => ({
+    ok: false,
+    status: 401,
+    async text() { return "invalid key glm-key; Authorization: Bearer glm-key"; },
+  })) as unknown as typeof fetch;
+  await assert.rejects(
+    () => runCodingAgent({ prompt: "audit", sandbox: memSandbox(), config: GLM_CFG, fetchImpl }),
+    (error: Error) => !error.message.includes("glm-key") && error.message.includes("401"),
+  );
+});
+
 test("multi-step loop: read_file → edit_file → finish, feeds tool results back", async () => {
   const box = memSandbox({ "App.tsx": "const title = 'old'\n" });
   const { fetchImpl, requests } = scriptedFetch([

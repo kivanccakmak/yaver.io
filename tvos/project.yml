@@ -39,6 +39,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.yaver.mobile   # universal w/ the iPhone app (Universal Purchase)
         PRODUCT_NAME: Yaver
         PRODUCT_MODULE_NAME: YaverTV
+        # LiveKitWebRTC currently ships an arm64 tvOS simulator slice. Apple
+        # Silicon development uses arm64 simulators; excluding x86_64 keeps
+        # Xcode from attempting to link an architecture the dependency does
+        # not provide while leaving physical tvOS arm64 builds unchanged.
+        'EXCLUDED_ARCHS[sdk=appletvsimulator*]': x86_64
         MARKETING_VERSION: "1.2.0"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: "NO"

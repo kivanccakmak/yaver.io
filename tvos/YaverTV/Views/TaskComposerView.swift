@@ -423,7 +423,10 @@ struct TaskComposerView: View {
                 // same remembered project/MCP context as mobile and web.
                 await loadPickerState()
                 guard let client = store.runnerClient() else {
-                    throw AgentError(message: store.machineSplitActive
+                    let plan = store.taskRuntimePlan()
+                    throw AgentError(message: plan.kind == .boxlessUnavailable
+                        ? "No task runner is connected. Remote runner tasks remain available; boxless Git+coding is not configured on this TV yet."
+                        : store.machineSplitActive
                         ? "Your AI runner machine needs the relay to be reachable from this TV."
                         : "No machine selected")
                 }

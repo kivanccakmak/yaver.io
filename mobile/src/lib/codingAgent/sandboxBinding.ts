@@ -25,7 +25,7 @@ import {
   listSourceFiles,
 } from "../phoneSandboxSourceDefault";
 import type { CodingSandbox } from "./sandboxTools";
-import { defaultCodingAgentConfig, type CodingAgentConfig } from "./runner";
+import { defaultCodingAgentConfig, defaultDeepSeekCodingAgentConfig, type CodingAgentConfig } from "./runner";
 import { createExpoGitFs, gitDirForSlug } from "./gitFsExpo";
 import { ensureRepo, type SandboxGitOptions } from "./sandboxGit";
 import { addRemote, listRemotes, type NetOptions } from "./sandboxGitOps";
@@ -49,6 +49,11 @@ export function sandboxForSlug(slug: string): CodingSandbox {
 export async function loadGlmCodingConfig(): Promise<CodingAgentConfig | null> {
   const key = (await getLocalSecret(LOCAL_KEYS.glmApiKey))?.trim();
   return key ? defaultCodingAgentConfig(key) : null;
+}
+
+export async function loadDeepSeekCodingConfig(): Promise<CodingAgentConfig | null> {
+  const key = (await getLocalSecret(LOCAL_KEYS.deepseekApiKey))?.trim();
+  return key ? defaultDeepSeekCodingAgentConfig(key) : null;
 }
 
 /** Build the MANAGED coding config: route the agentic loop through the Yaver
@@ -76,7 +81,7 @@ export async function loadCodingConfig(): Promise<CodingAgentConfig | null> {
     const managed = await loadManagedCodingConfig();
     if (managed) return managed;
   }
-  return loadGlmCodingConfig();
+  return (await loadDeepSeekCodingConfig()) ?? loadGlmCodingConfig();
 }
 
 /** Git context ({fs, dir}) for a slug's on-device repo — the expo-backed

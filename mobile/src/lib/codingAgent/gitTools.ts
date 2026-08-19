@@ -157,11 +157,11 @@ export function makeGitTools(git: SandboxGitOptions, net?: NetOptions): CodingTo
   if (net) {
     tools.push({
       name: "git_push",
-      description: "Push the current branch (or the given ref) to a remote (default 'origin'). Requires configured auth.",
-      parameters: obj({ remote: STR, ref: STR, force: { type: "boolean" } }),
+      description: "Push the current branch (or the given ref) to a remote (default 'origin'). Requires configured auth. Force-push is not available from the mobile agent.",
+      parameters: obj({ remote: STR, ref: STR }),
       mutating: true,
       async invoke(a: { remote?: string; ref?: string; force?: boolean }) {
-        return push(git, net, a);
+        return push(git, net, { ...a, force: false });
       },
     });
   }

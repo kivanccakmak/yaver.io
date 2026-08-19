@@ -53,7 +53,12 @@ targets:
       - path: ../tvos/YaverTV/MachineRegistry.swift
       - path: ../tvos/YaverTV/TokenStore.swift
       - path: ../tvos/YaverTV/YaverStore.swift
+      - path: ../tvos/YaverTV/TaskRuntimePlan.swift
       - path: ../tvos/YaverTV/SessionClient.swift
+      # Boxless provider-direct Yaver Code is available on visionOS for chat
+      # and deep audits. It never claims shell, Git, build, or render support.
+      - path: ../tvos/YaverTV/BoxlessDeepSeekClient.swift
+      - path: ../tvos/YaverTV/Views/BoxlessCodeView.swift
       # Pure follow-up/session policy shared by the vision-native session and
       # the tvOS vibe panel. Keep these helpers out of TaskDetailView.swift:
       # that view is tvOS-only and would pull its remote UI into visionOS.

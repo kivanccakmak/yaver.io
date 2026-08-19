@@ -19,6 +19,7 @@ const NONE: CodingBackendAvailability = {
   anthropicKey: false,
   openaiKey: false,
   glmKey: false,
+  deepseekKey: false,
   remoteRunner: false,
 };
 
@@ -53,6 +54,13 @@ test("backendUsable + usableBackends reflect availability", () => {
   assert.equal(backendUsable("openai", av), true);
   assert.equal(backendUsable("local", av), false);
   assert.deepEqual(usableBackends(av), ["openai", "glm"]);
+});
+
+test("DeepSeek V4 Flash is a usable optional boxless backend", () => {
+  const av = { ...NONE, deepseekKey: true };
+  assert.equal(backendMeta("deepseek").requiresKey, "deepseek");
+  assert.equal(backendUsable("deepseek", av), true);
+  assert.equal(resolveAutoBackend(av), "deepseek");
 });
 
 test("resolveBackend honors a usable explicit pick", () => {

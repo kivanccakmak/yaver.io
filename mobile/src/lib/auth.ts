@@ -692,7 +692,7 @@ export interface UserSettings {
   openAiApiKey?: string;
   glmApiKey?: string;
   anthropicApiKey?: string;
-  mobileCodingProvider?: "openai" | "glm";
+  mobileCodingProvider?: "openai" | "glm" | "deepseek";
   ttsEnabled?: boolean;
   ttsTaskMode?: boolean; // run tasks in TTS mode: agent leads replies with a spoken-style summary (text only)
   verbosity?: number; // 0-10: response detail level
@@ -833,6 +833,7 @@ export const LOCAL_KEYS = {
   speechApiKey: `${LOCAL_KEY_PREFIX}speech`,
   openAiApiKey: `${LOCAL_KEY_PREFIX}openai_api_key`,
   glmApiKey: `${LOCAL_KEY_PREFIX}glm_api_key`,
+  deepseekApiKey: `${LOCAL_KEY_PREFIX}deepseek_api_key`,
   anthropicApiKey: `${LOCAL_KEY_PREFIX}anthropic_api_key`,
   figmaAccessToken: `${LOCAL_KEY_PREFIX}figma_access_token`,
   // Git provider PATs for pushing/cloning phone-local sandbox repos, directly

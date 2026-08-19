@@ -11,6 +11,7 @@ import { quicClient } from "../../src/lib/quic";
 import { getUserSettings } from "../../src/lib/auth";
 import { takePendingVibingProject } from "../../src/lib/vibingStore";
 import { getCodingMode, listLocalWorkspaces, validateLocalWorkspace, type CodingMode, type LocalWorkspace, type StaticValidationReport } from "../../src/lib/coding-runtime";
+import { remoteRenderRequiredFailure } from "../../src/lib/renderCapability";
 
 type Project = { name: string; path: string; framework?: string };
 type DevStatus = {
@@ -70,7 +71,9 @@ export default function VibingScreen() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [projectSelected, setProjectSelected] = useState(false);
-  const [capabilities, setCapabilities] = useState<BoxCapabilities>({ browser: true });
+  // No capability is selectable until the connected runner reports it. The
+  // old optimistic browser=true made an unselected box look renderable.
+  const [capabilities, setCapabilities] = useState<BoxCapabilities>({});
   const [previewTarget, setPreviewTarget] = useState<PreviewOption["id"]>("web");
   const [status, setStatus] = useState<DevStatus | null>(null);
   const [working, setWorking] = useState(false);
@@ -96,6 +99,7 @@ export default function VibingScreen() {
     [selectedProject?.framework, capabilities],
   );
   const selectedPreview = previewOptions.find((option) => option.id === previewTarget) || previewOptions[0];
+  const renderFailure = remoteRenderRequiredFailure(isTV ? "This TV" : "This device");
 
   useEffect(() => {
     if (!base || !token) return;
@@ -339,6 +343,43 @@ export default function VibingScreen() {
 
   const serving = !!status?.serving;
   const building = !serving && status?.running === false && !!status?.port;
+
+  if (!isLocalVibing && (!activeDevice || connectionStatus !== "connected")) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.bg }]} edges={["bottom"]}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <View style={styles.headerRow}>
+            <View style={styles.titleBlock}>
+              <Text style={[styles.title, { color: c.textPrimary }]}>Vibing</Text>
+              <Text style={[styles.subtitle, { color: c.textSecondary }]}>{renderFailure.title}</Text>
+            </View>
+            <View style={[styles.badge, { backgroundColor: c.warn + "22" }]}>
+              <Text style={[styles.badgeText, { color: c.warn }]}>Unavailable</Text>
+            </View>
+          </View>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <Text style={[styles.cardLabel, { color: c.textPrimary }]}>{renderFailure.code}</Text>
+            <Text style={[styles.hint, { color: c.textSecondary, marginTop: 8 }]}>{renderFailure.message}</Text>
+            <Pressable
+              hasTVPreferredFocus
+              onPress={() => router.push(renderFailure.action.route)}
+              style={({ focused }) => [styles.btnPrimary, { backgroundColor: c.accent, marginTop: 16 }, focused && styles.focused]}
+            >
+              <Text style={styles.btnPrimaryText}>{renderFailure.action.label}</Text>
+            </Pressable>
+          </View>
+          {!isTV && (
+            <Pressable
+              onPress={() => router.push("/tasks")}
+              style={({ focused }) => [styles.changeProject, { borderColor: c.border, backgroundColor: c.bgCard }, focused && styles.focused]}
+            >
+              <Text style={{ color: c.textMuted, fontSize: 15 }}>Use boxless local coding and audit</Text>
+            </Pressable>
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   if (isLocalVibing) {
     return (

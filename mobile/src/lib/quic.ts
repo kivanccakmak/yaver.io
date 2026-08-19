@@ -526,6 +526,8 @@ export interface Task {
    *  show the wrong model label in its history card. */
   model?: string;
   source?: string;        // Task origin: "mobile", "mcp", "cli", "vibing", "vibing-cache", "todolist"
+  /** Phone-local checkout slug for boxless coding tasks. Never an absolute path. */
+  localCheckoutId?: string;
   turns?: ConversationTurn[];  // Full conversation history (detail only)
   pendingFollowUps?: PendingFollowUp[];
   /** How many turns the server holds, even when `turns` is omitted. The list

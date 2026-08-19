@@ -1,6 +1,7 @@
 // app/repo-coding.tsx — code a real GitHub repo FULLY ON THIS PHONE, no remote
-// box. The honest on-iOS engine is "Yaver Agent · GLM": Yaver's own agentic loop
-// (read→grep→edit→git) running in Hermes, driving the GLM cloud API. The real
+// box. The honest on-iOS engine is "Yaver Agent · DeepSeek V4 Flash": Yaver's
+// own agentic loop (read→grep→edit→git) running in Hermes, driving the
+// DeepSeek OpenAI-compatible API. The real
 // claude/codex/opencode CLIs can't run on iOS (no Node/exec/JIT) — those need a
 // machine; this path doesn't.
 //
@@ -28,21 +29,21 @@ import {
 } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import http from "isomorphic-git/http/web";
-
 import { useColors } from "../src/context/ThemeContext";
 import { AppBackButton } from "../src/components/AppBackButton";
 import SandboxGitPanel from "../src/components/SandboxGitPanel";
 import { LOCAL_KEYS, deleteLocalSecret, getLocalSecret, saveLocalSecret } from "../src/lib/auth";
-import { hasGitHubToken, saveGitHubToken, gitHubNetFromStore } from "../src/lib/githubAuthStore";
+import { hasGitHubToken, saveGitHubToken } from "../src/lib/githubAuthStore";
+import { loadGitCredStatus, saveProviderToken } from "../src/lib/gitProviderStore";
 import { looksLikeGitHubToken } from "../src/lib/githubAuth";
 import { cloneGitRepoToPhone } from "../src/lib/cloneToPhone";
 import { listPhoneProjects, type PhoneProject } from "../src/lib/phoneProjects";
 import { runAgenticCoding, gitContextForSlug } from "../src/lib/codingAgent/codingAgentRun";
 import { repoSandboxForSlug } from "../src/lib/codingAgent/repoSandbox";
-import { loadCodingConfig } from "../src/lib/codingAgent/sandboxBinding";
+import { gitNetForSlug, loadCodingConfig } from "../src/lib/codingAgent/sandboxBinding";
 import { isRepo, revertTo } from "../src/lib/codingAgent/sandboxGit";
 import type { CodingAgentProgress } from "../src/lib/codingAgent/runner";
+import { redactProgressText, redactSecrets, redactValue } from "../src/lib/codingAgent/secretRedaction";
 
 const SFMG_DEFAULT = "kivanccakmak/sfmg";
 
@@ -52,11 +53,13 @@ export default function RepoCodingScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ slug?: string }>();
 
-  const [hasGlm, setHasGlm] = useState(false);
+  const [hasDeepSeek, setHasDeepSeek] = useState(false);
   const [hasGh, setHasGh] = useState(false);
-  const [glmDraft, setGlmDraft] = useState("");
+  const [hasGitLab, setHasGitLab] = useState(false);
+  const [deepSeekDraft, setDeepSeekDraft] = useState("");
   const [ghDraft, setGhDraft] = useState("");
-  const [savingKey, setSavingKey] = useState<"glm" | "gh" | null>(null);
+  const [gitLabDraft, setGitLabDraft] = useState("");
+  const [savingKey, setSavingKey] = useState<"deepseek" | "gh" | "gitlab" | null>(null);
 
   const [repoInput, setRepoInput] = useState(SFMG_DEFAULT);
   const [cloning, setCloning] = useState(false);
@@ -66,19 +69,22 @@ export default function RepoCodingScreen() {
   const [selected, setSelected] = useState<string | null>(params.slug ?? null);
 
   const [prompt, setPrompt] = useState("");
+  const [runMode, setRunMode] = useState<"audit" | "edit">("audit");
   const [running, setRunning] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [beforeOid, setBeforeOid] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const reload = useCallback(async () => {
-    const [glm, gh, list] = await Promise.all([
-      getLocalSecret(LOCAL_KEYS.glmApiKey),
+    const [deepseek, gh, gitCreds, list] = await Promise.all([
+      getLocalSecret(LOCAL_KEYS.deepseekApiKey),
       hasGitHubToken(),
+      loadGitCredStatus(),
       listPhoneProjects().catch(() => [] as PhoneProject[]),
     ]);
-    setHasGlm(!!glm?.trim());
+    setHasDeepSeek(!!deepseek?.trim());
     setHasGh(gh);
+    setHasGitLab(gitCreds.gitlab);
     setProjects(list);
     // Which phone projects actually have a git repo (so we mark them + enable the agent).
     const repos = new Set<string>();
@@ -100,18 +106,18 @@ export default function RepoCodingScreen() {
     }, [reload]),
   );
 
-  const saveGlm = useCallback(async () => {
-    const v = glmDraft.trim();
-    setSavingKey("glm");
+  const saveDeepSeek = useCallback(async () => {
+    const v = deepSeekDraft.trim();
+    setSavingKey("deepseek");
     try {
-      if (v) await saveLocalSecret(LOCAL_KEYS.glmApiKey, v);
-      else await deleteLocalSecret(LOCAL_KEYS.glmApiKey);
-      setGlmDraft("");
+      if (v) await saveLocalSecret(LOCAL_KEYS.deepseekApiKey, v);
+      else await deleteLocalSecret(LOCAL_KEYS.deepseekApiKey);
+      setDeepSeekDraft("");
       await reload();
     } finally {
       setSavingKey(null);
     }
-  }, [glmDraft, reload]);
+  }, [deepSeekDraft, reload]);
 
   const saveGh = useCallback(async () => {
     const v = ghDraft.trim();
@@ -129,6 +135,18 @@ export default function RepoCodingScreen() {
       setSavingKey(null);
     }
   }, [ghDraft, reload]);
+
+  const saveGitLab = useCallback(async () => {
+    const v = gitLabDraft.trim();
+    setSavingKey("gitlab");
+    try {
+      await saveProviderToken("gitlab", v);
+      setGitLabDraft("");
+      await reload();
+    } finally {
+      setSavingKey(null);
+    }
+  }, [gitLabDraft, reload]);
 
   const doClone = useCallback(async () => {
     const input = repoInput.trim();
@@ -172,15 +190,56 @@ export default function RepoCodingScreen() {
     const slug = selected;
     const p = prompt.trim();
     if (!slug || !p) return;
+    const agentPrompt = runMode === "audit"
+      ? `Perform a deep, read-only audit. Do not edit files, commit, push, build, test, render, or deploy.\n\n${p}`
+      : `Implement this request carefully. Ask for approval before every file or Git mutation.\n\n${p}`;
     const config = await loadCodingConfig();
     if (!config) {
       Alert.alert(
-        "Add a GLM key",
-        "The Yaver Agent needs a GLM API key — or turn on Yaver-managed mode (uses your credit balance, no key needed).",
+        "Add a DeepSeek API key",
+        "The Yaver Agent needs a DeepSeek API key — or turn on Yaver-managed mode (uses your credit balance, no key needed).",
       );
       return;
     }
-    const net = (await gitHubNetFromStore(http)) ?? undefined; // lets the agent git_push if a token is set
+    const net = await gitNetForSlug(slug); // credentials stay inside the injected git transport
+    const confirmMutation = ({ name, args }: { name: string; args: unknown }) => new Promise<boolean>((resolve) => {
+      const a = args as Record<string, unknown> | null;
+      const target = typeof a?.path === "string"
+        ? a.path
+        : typeof a?.branch === "string"
+          ? `branch ${a.branch}`
+          : name === "git_push" ? "the current branch"
+            : name === "git_commit" ? "the staged changes"
+              : "the project";
+      let settled = false;
+      const finish = (value: boolean) => { if (!settled) { settled = true; resolve(value); } };
+      Alert.alert(
+        "Approve coding-agent change?",
+        `${name} · ${target}\n\nSecrets and file contents are not shown here.`,
+        [
+          { text: "Deny", style: "cancel", onPress: () => finish(false) },
+          { text: "Approve", onPress: () => finish(true) },
+        ],
+        { cancelable: true, onDismiss: () => finish(false) },
+      );
+    });
+    const safeProgress = (event: CodingAgentProgress): void => {
+      if (event.kind === "model_text") {
+        onProgress({ ...event, text: redactProgressText(event.text, [config.apiKey]) });
+      } else if (event.kind === "tool_call") {
+        onProgress({
+          ...event,
+          call: {
+            ...event.call,
+            args: redactValue(event.call.args, [config.apiKey]),
+            result: redactValue(event.call.result, [config.apiKey]),
+            error: event.call.error ? redactSecrets(event.call.error, [config.apiKey]) : undefined,
+          },
+        });
+      } else {
+        onProgress(event);
+      }
+    };
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setRunning(true);
@@ -189,11 +248,12 @@ export default function RepoCodingScreen() {
     try {
       const run = await runAgenticCoding({
         slug,
-        prompt: p,
+        prompt: agentPrompt,
         config,
         net,
         sandbox: repoSandboxForSlug(slug), // whole repo (convex/, app.json, …), not just src/
-        onProgress,
+        onProgress: safeProgress,
+        confirmMutation: runMode === "audit" ? () => false : confirmMutation,
         signal: ctrl.signal,
       });
       setBeforeOid(run.before);
@@ -203,16 +263,16 @@ export default function RepoCodingScreen() {
         `■ done · ${r.steps} step${r.steps === 1 ? "" : "s"} · ${changed} file${changed === 1 ? "" : "s"} changed` +
           (r.hitMaxSteps ? " · hit step cap" : ""),
       );
-      if (r.finalText.trim()) appendLog(`\n${r.finalText.trim()}`);
+      if (r.finalText.trim()) appendLog(`\n${redactSecrets(r.finalText, [config.apiKey])}`);
       await reload();
     } catch (e: any) {
       if (e?.name === "AbortError") appendLog("⏹ stopped");
-      else appendLog(`✗ ${e?.message ?? String(e)}`);
+      else appendLog(`✗ ${redactSecrets(e?.message ?? String(e), [config.apiKey])}`);
     } finally {
       setRunning(false);
       abortRef.current = null;
     }
-  }, [selected, prompt, onProgress, appendLog, reload]);
+  }, [selected, prompt, runMode, onProgress, appendLog, reload]);
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
 
@@ -229,7 +289,7 @@ export default function RepoCodingScreen() {
   }, [selected, beforeOid, appendLog, reload]);
 
   const gitProjects = projects.filter((p) => repoSlugs.has(p.slug));
-  const canRunAgent = !!selected && repoSlugs.has(selected) && hasGlm && !running;
+  const canRunAgent = !!selected && repoSlugs.has(selected) && hasDeepSeek && !running;
 
   return (
     <KeyboardAvoidingView
@@ -242,7 +302,7 @@ export default function RepoCodingScreen() {
           <View style={{ marginLeft: 8, flex: 1 }}>
             <Text style={[styles.h1, { color: c.textPrimary }]}>Code on this phone</Text>
             <Text style={{ color: c.textMuted, fontSize: 12 }}>
-              Yaver Agent · GLM — runs fully on your iPhone, no remote box
+              Yaver Agent · DeepSeek V4 Flash — runs fully on your iPhone, no remote box
             </Text>
           </View>
         </View>
@@ -253,13 +313,13 @@ export default function RepoCodingScreen() {
         <Text style={[styles.section, { color: c.textSecondary }]}>SETUP</Text>
         <View style={[styles.card, { borderColor: c.border, backgroundColor: c.bgCard }]}>
           <KeyRow
-            label="GLM API key"
-            sub="The engine. The agent reads/edits code through GLM."
-            saved={hasGlm}
-            value={glmDraft}
-            onChange={setGlmDraft}
-            onSave={saveGlm}
-            saving={savingKey === "glm"}
+            label="DeepSeek API key"
+            sub="The engine. The agent reads/edits code through DeepSeek V4 Flash."
+            saved={hasDeepSeek}
+            value={deepSeekDraft}
+            onChange={setDeepSeekDraft}
+            onSave={saveDeepSeek}
+            saving={savingKey === "deepseek"}
             c={c}
           />
           <View style={{ height: 10 }} />
@@ -273,6 +333,17 @@ export default function RepoCodingScreen() {
             saving={savingKey === "gh"}
             c={c}
           />
+          <View style={{ height: 10 }} />
+          <KeyRow
+            label="GitLab token"
+            sub="For private GitLab repos and pushing. Public clones do not need one."
+            saved={hasGitLab}
+            value={gitLabDraft}
+            onChange={setGitLabDraft}
+            onSave={saveGitLab}
+            saving={savingKey === "gitlab"}
+            c={c}
+          />
         </View>
 
         {/* Clone */}
@@ -282,7 +353,7 @@ export default function RepoCodingScreen() {
             <TextInput
               value={repoInput}
               onChangeText={setRepoInput}
-              placeholder="owner/repo"
+              placeholder="owner/repo or GitLab URL"
               placeholderTextColor={c.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
@@ -297,7 +368,7 @@ export default function RepoCodingScreen() {
             </Pressable>
           </View>
           <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 8, lineHeight: 16 }}>
-            Clones onto this phone via on-device git (shallow). Default is sfmg.
+            Clones GitHub or GitLab onto this phone via on-device git (shallow). Bare owner/repo means GitHub.
           </Text>
         </View>
 
@@ -329,7 +400,7 @@ export default function RepoCodingScreen() {
         {selected && repoSlugs.has(selected) ? (
           <>
             <Text style={[styles.section, { color: c.textSecondary, marginTop: 18 }]}>
-              YAVER AGENT · GLM
+              YAVER AGENT · DEEPSEEK V4 FLASH
             </Text>
             <View style={[styles.card, { borderColor: c.border, backgroundColor: c.bgCard }]}>
               <TextInput
@@ -340,6 +411,19 @@ export default function RepoCodingScreen() {
                 multiline
                 style={[styles.prompt, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bg }]}
               />
+              <View style={styles.modeRow}>
+                {(["audit", "edit"] as const).map((mode) => (
+                  <Pressable
+                    key={mode}
+                    onPress={() => setRunMode(mode)}
+                    style={[styles.modeButton, { borderColor: runMode === mode ? c.accent : c.border, backgroundColor: runMode === mode ? c.accent + "22" : c.bg }]}
+                  >
+                    <Text style={{ color: runMode === mode ? c.accent : c.textMuted, fontWeight: "600", fontSize: 12 }}>
+                      {mode === "audit" ? "Deep audit · read-only" : "Implement · approve changes"}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
               <View style={{ flexDirection: "row", marginTop: 8 }}>
                 <Pressable
                   onPress={runAgent}
@@ -365,9 +449,9 @@ export default function RepoCodingScreen() {
                   </Pressable>
                 ) : null}
               </View>
-              {!hasGlm ? (
+              {!hasDeepSeek ? (
                 <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 8 }}>
-                  Add a GLM key above to enable the agent.
+                  Add a DeepSeek key above to enable the agent.
                 </Text>
               ) : null}
 
@@ -390,7 +474,7 @@ export default function RepoCodingScreen() {
 
         <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 18, lineHeight: 16 }}>
           The real claude / codex / opencode CLIs can't run on iOS — they need a machine. This agent is
-          Yaver's own loop on GLM, doing the same kind of work fully on-device. Building/running the app and
+          Yaver's own DeepSeek V4 Flash loop, doing the safe subset fully on-device. Building/running the app and
           deploying Convex still need a machine.
         </Text>
       </ScrollView>
@@ -462,6 +546,8 @@ const styles = StyleSheet.create({
   radioDot: { width: 10, height: 10, borderRadius: 5 },
   prompt: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, fontSize: 14, minHeight: 72, textAlignVertical: "top" },
   runBtn: { flex: 1, borderRadius: 8, paddingVertical: 12, alignItems: "center", justifyContent: "center" },
+  modeRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  modeButton: { flex: 1, borderWidth: 1, borderRadius: 8, paddingVertical: 9, alignItems: "center" },
   stopBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 18, alignItems: "center", justifyContent: "center" },
   log: { marginTop: 12, borderWidth: 1, borderRadius: 8, padding: 10, gap: 3 },
   logLine: { fontSize: 12, fontFamily: "Menlo" },

@@ -121,6 +121,12 @@ import {
   loadYaverAgentLocalConfig,
   type YaverAgentHistoryTurn,
 } from "../../src/lib/yaverAgentRunner";
+import { listPhoneProjects, type PhoneProject } from "../../src/lib/phoneProjects";
+import { gitContextForSlug, runAgenticCoding } from "../../src/lib/codingAgent/codingAgentRun";
+import { gitNetForSlug, loadCodingConfig } from "../../src/lib/codingAgent/sandboxBinding";
+import { repoSandboxForSlug } from "../../src/lib/codingAgent/repoSandbox";
+import { isRepo } from "../../src/lib/codingAgent/sandboxGit";
+import { redactProgressText, redactSecrets, redactValue } from "../../src/lib/codingAgent/secretRedaction";
 import type { YaverAgentToolContext } from "../../src/lib/yaverAgentTools";
 import {
   loadKeepLastProjectEnabled,
@@ -1945,6 +1951,8 @@ export default function TasksScreen() {
   const [showTaskOptions, setShowTaskOptions] = useState(false);
   const [composerProjects, setComposerProjects] = useState<ComposerProject[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState<string>(routeProjectDir);
+  const [phoneProjects, setPhoneProjects] = useState<PhoneProject[]>([]);
+  const [selectedPhoneCheckout, setSelectedPhoneCheckout] = useState<string | null>(null);
   // A blank project chosen by the user is intentional task context, not
   // "project discovery has not finished". Track it per runner device so the
   // restore effect cannot immediately overwrite No project with the old row.
@@ -1982,6 +1990,28 @@ export default function TasksScreen() {
     [composerProjects, selectedProjectPath, projectPickerQuery],
   );
   const projectDir = selectedComposerProject?.path || selectedProjectPath || routeProjectDir;
+
+  // Phone-local repositories are an explicit target. Loading their metadata is
+  // advisory and must never block the remote project catalog or remote send.
+  useEffect(() => {
+    let cancelled = false;
+    void listPhoneProjects()
+      .then(async (projects) => {
+        const repos: PhoneProject[] = [];
+        for (const project of projects) {
+          try {
+            if (await isRepo(gitContextForSlug(project.slug))) repos.push(project);
+          } catch {
+            // A metadata row without a usable local checkout is not selectable.
+          }
+        }
+        if (!cancelled) setPhoneProjects(repos);
+      })
+      .catch(() => {
+        if (!cancelled) setPhoneProjects([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const closeProjectPicker = useCallback(() => {
     Keyboard.dismiss();
@@ -2169,10 +2199,42 @@ export default function TasksScreen() {
             ) : null}
           </View>
           <View>
+            {phoneProjects.length > 0 ? (
+              <>
+                <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 14 }]}>ON THIS IPHONE</Text>
+                <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 10 }}>
+                  Boxless DeepSeek coding uses the selected checkout on this phone. Remote rendering and builds remain unavailable here.
+                </Text>
+                {phoneProjects.map((project) => {
+                  const active = selectedPhoneCheckout === project.slug;
+                  return (
+                    <Pressable
+                      key={`phone:${project.slug}`}
+                      onPress={() => {
+                        setSelectedPhoneCheckout(project.slug);
+                        setSelectedProjectPath("");
+                        explicitProjectChoiceRef.current = null;
+                      }}
+                      style={[s.projectPickerRow, { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Use local checkout ${project.name}`}
+                      accessibilityState={{ selected: active }}
+                    >
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{project.name}</Text>
+                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>This iPhone · {project.slug}</Text>
+                      </View>
+                      {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
+                    </Pressable>
+                  );
+                })}
+              </>
+            ) : null}
             <Pressable
               onPress={() => {
                 const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
                 explicitProjectChoiceRef.current = { deviceId: runnerDeviceId, path: "" };
+                setSelectedPhoneCheckout(null);
                 setSelectedProjectPath("");
               }}
               style={[
@@ -2208,6 +2270,7 @@ export default function TasksScreen() {
                     onPress={() => {
                       const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
                       explicitProjectChoiceRef.current = { deviceId: runnerDeviceId, path: project.path };
+                      setSelectedPhoneCheckout(null);
                       setSelectedProjectPath(project.path);
                       if (keepLastProject) {
                         void saveLastTaskProject({
@@ -3027,7 +3090,7 @@ export default function TasksScreen() {
   //      queued only AFTER the previous one settles, so probes can never
   //      overlap and a synchronous failure still costs real wall-clock time.
   useEffect(() => {
-    if (connectionStatus !== "connected") {
+    if (connectionStatus !== "connected" && selectedTask.runnerId !== "yaver-phone") {
       setAgentStatus(null);
       setAvailableRunners((prev) => (prev.length === 0 ? prev : []));
       setAvailableModels((prev) => (prev.length === 0 ? prev : []));
@@ -4340,6 +4403,123 @@ export default function TasksScreen() {
     }
   };
 
+  const runPhoneLocalTask = useCallback(async () => {
+    const slug = selectedPhoneCheckout;
+    const promptText = newTaskText.trim();
+    if (!slug || !promptText) return;
+    const config = await loadCodingConfig();
+    if (!config) {
+      Alert.alert(
+        "Add a DeepSeek API key",
+        "This iPhone task needs a DeepSeek API key in the phone's secure settings.",
+      );
+      return;
+    }
+
+    Keyboard.dismiss();
+    setIsSubmitting(true);
+    const taskId = `phone-local-${Date.now()}`;
+    const startedAt = Date.now();
+    const startedIso = new Date(startedAt).toISOString();
+    const initialTask: Task = {
+      id: taskId,
+      title: promptText,
+      description: promptText,
+      status: "running" as TaskStatus,
+      runnerId: "yaver-phone",
+      model: config.model,
+      source: "phone-local",
+      localCheckoutId: slug,
+      output: [],
+      resultText: "",
+      turns: [{ role: "user", content: promptText, timestamp: startedIso }],
+      createdAt: startedAt,
+      updatedAt: startedAt,
+      deviceName: "This iPhone",
+    };
+    setTasks((prev) => [initialTask, ...prev]);
+    pendingOpenTaskRef.current = initialTask;
+    setShowNewTask(false);
+    setNewTaskText("");
+    setAttachedImages([]);
+    setInputFromSpeech(false);
+
+    const updateTask = (mut: (task: Task) => Task) => {
+      setTasks((prev) => prev.map((task) => (task.id === taskId ? mut(task) : task)));
+      setSelectedTask((prev) => (prev && prev.id === taskId ? mut(prev) : prev));
+    };
+    const controller = new AbortController();
+    yaverAgentAbortersRef.current.set(taskId, controller);
+    const confirmMutation = ({ name, args }: { name: string; args: unknown }) => new Promise<boolean>((resolve) => {
+      const a = args as Record<string, unknown> | null;
+      const target = typeof a?.path === "string"
+        ? a.path
+        : name === "git_push" ? "the current branch"
+          : name === "git_commit" ? "the staged changes"
+            : "the project";
+      Alert.alert(
+        "Approve phone-local change?",
+        `${name} · ${target}\n\nThe local agent cannot build or render on this iPhone. Secrets and file contents are not shown here.`,
+        [
+          { text: "Deny", style: "cancel", onPress: () => resolve(false) },
+          { text: "Approve", onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
+    try {
+      const result = await runAgenticCoding({
+        slug,
+        prompt: promptText,
+        config,
+        net: await gitNetForSlug(slug),
+        sandbox: repoSandboxForSlug(slug),
+        confirmMutation,
+        signal: controller.signal,
+        onProgress: (event) => {
+          if (event.kind === "model_text") {
+            const text = redactProgressText(event.text, [config.apiKey]);
+            updateTask((task) => ({ ...task, resultText: text, output: [...task.output, text], updatedAt: Date.now() }));
+          } else if (event.kind === "tool_call") {
+            const safeCall = {
+              ...event.call,
+              args: redactValue(event.call.args, [config.apiKey]),
+              result: redactValue(event.call.result, [config.apiKey]),
+              error: event.call.error ? redactSecrets(event.call.error, [config.apiKey]) : undefined,
+            };
+            const summary = safeCall.error
+              ? "failed: " + safeCall.name + " · " + safeCall.error
+              : "completed: " + safeCall.name;
+            updateTask((task) => ({ ...task, output: [...task.output, summary], updatedAt: Date.now() }));
+          }
+        },
+      });
+      const reply = redactSecrets(result.result.finalText.trim() || "Done.", [config.apiKey]);
+      const finishedAt = Date.now();
+      updateTask((task) => ({
+        ...task,
+        status: "completed" as TaskStatus,
+        resultText: reply,
+        turns: [...(task.turns ?? []), { role: "assistant", content: reply, timestamp: new Date(finishedAt).toISOString() }],
+        updatedAt: finishedAt,
+      }));
+    } catch (e) {
+      const aborted = e instanceof Error && e.name === "AbortError";
+      const message = aborted ? "Stopped." : redactSecrets(e instanceof Error ? e.message : String(e), [config.apiKey]);
+      const finishedAt = Date.now();
+      updateTask((task) => ({
+        ...task,
+        status: aborted ? ("stopped" as TaskStatus) : ("failed" as TaskStatus),
+        resultText: message,
+        turns: [...(task.turns ?? []), { role: "assistant", content: message, timestamp: new Date(finishedAt).toISOString() }],
+        updatedAt: finishedAt,
+      }));
+    } finally {
+      yaverAgentAbortersRef.current.delete(taskId);
+      setIsSubmitting(false);
+    }
+  }, [newTaskText, selectedPhoneCheckout]);
+
   const handleCreateTask = async () => {
     if (!newTaskText.trim() && attachedImages.length === 0) return;
 
@@ -4365,6 +4545,13 @@ export default function TasksScreen() {
         return;
       }
       await triggerHermesReload();
+      return;
+    }
+
+    // Explicit phone-local target: this is the repository-scoped DeepSeek
+    // agent, not the control-plane Yaver agent and not a remote fallback.
+    if (selectedPhoneCheckout) {
+      await runPhoneLocalTask();
       return;
     }
 
@@ -4896,6 +5083,94 @@ export default function TasksScreen() {
     }
     Keyboard.dismiss();
     setIsSendingFollowUp(true);
+
+    // Phone-local follow-up: continue against the same checkout without
+    // touching the remote connection. The previous turns are compacted into
+    // the prompt because the repository agent has no server-side session.
+    if (selectedTask.runnerId === "yaver-phone") {
+      const promptText = followUpText.trim();
+      const slug = selectedTask.localCheckoutId;
+      if (!promptText || !slug) {
+        setIsSendingFollowUp(false);
+        return;
+      }
+      const config = await loadCodingConfig();
+      if (!config) {
+        setIsSendingFollowUp(false);
+        Alert.alert("Add a DeepSeek API key", "This iPhone task needs a DeepSeek API key in secure settings.");
+        return;
+      }
+      const taskId = selectedTask.id;
+      const turnAt = Date.now();
+      const turnIso = new Date(turnAt).toISOString();
+      const prior = (selectedTask.turns ?? []).slice(-12).map((turn) => `${turn.role}: ${turn.content}`).join("\n\n");
+      const updateTask = (mut: (task: Task) => Task) => {
+        setTasks((prev) => prev.map((task) => (task.id === taskId ? mut(task) : task)));
+        setSelectedTask((prev) => (prev && prev.id === taskId ? mut(prev) : prev));
+      };
+      updateTask((task) => ({
+        ...task,
+        status: "running" as TaskStatus,
+        turns: [...(task.turns ?? []), { role: "user", content: promptText, timestamp: turnIso }],
+        updatedAt: turnAt,
+      }));
+      setFollowUpText("");
+      setFollowUpImages([]);
+      const controller = new AbortController();
+      yaverAgentAbortersRef.current.set(taskId, controller);
+      const confirmMutation = ({ name, args }: { name: string; args: unknown }) => new Promise<boolean>((resolve) => {
+        const a = args as Record<string, unknown> | null;
+        const target = typeof a?.path === "string" ? a.path : name === "git_push" ? "the current branch" : "the project";
+        Alert.alert("Approve phone-local change?", `${name} · ${target}\n\nSecrets and file contents are not shown here.`, [
+          { text: "Deny", style: "cancel", onPress: () => resolve(false) },
+          { text: "Approve", onPress: () => resolve(true) },
+        ], { cancelable: true, onDismiss: () => resolve(false) });
+      });
+      try {
+        const result = await runAgenticCoding({
+          slug,
+          prompt: `Previous conversation:\n${prior}\n\nNew request:\n${promptText}`,
+          config,
+          net: await gitNetForSlug(slug),
+          sandbox: repoSandboxForSlug(slug),
+          confirmMutation,
+          signal: controller.signal,
+          onProgress: (event) => {
+            if (event.kind === "model_text") {
+              const text = redactProgressText(event.text, [config.apiKey]);
+              updateTask((task) => ({ ...task, resultText: text, output: [...task.output, text], updatedAt: Date.now() }));
+            } else if (event.kind === "tool_call") {
+              const detail = event.call.error ? redactSecrets(event.call.error, [config.apiKey]) : "✓";
+              updateTask((task) => ({ ...task, output: [...task.output, `↳ ${event.call.name} ${detail}`], updatedAt: Date.now() }));
+            }
+          },
+        });
+        const reply = redactSecrets(result.result.finalText.trim() || "Done.", [config.apiKey]);
+        const finishedAt = Date.now();
+        updateTask((task) => ({
+          ...task,
+          status: "completed" as TaskStatus,
+          resultText: reply,
+          turns: [...(task.turns ?? []), { role: "assistant", content: reply, timestamp: new Date(finishedAt).toISOString() }],
+          updatedAt: finishedAt,
+        }));
+      } catch (e) {
+        const aborted = e instanceof Error && e.name === "AbortError";
+        const message = aborted ? "Stopped." : redactSecrets(e instanceof Error ? e.message : String(e), [config.apiKey]);
+        const finishedAt = Date.now();
+        updateTask((task) => ({
+          ...task,
+          status: aborted ? ("stopped" as TaskStatus) : ("failed" as TaskStatus),
+          resultText: message,
+          turns: [...(task.turns ?? []), { role: "assistant", content: message, timestamp: new Date(finishedAt).toISOString() }],
+          updatedAt: finishedAt,
+        }));
+      } finally {
+        yaverAgentAbortersRef.current.delete(taskId);
+        setIsSendingFollowUp(false);
+      }
+      return;
+    }
 
     // Yaver-agent follow-up: continue the embedded LLM conversation
     // using prior turns as history. Same streaming + cancel rig as the

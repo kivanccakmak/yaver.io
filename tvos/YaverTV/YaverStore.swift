@@ -267,6 +267,17 @@ final class YaverStore: ObservableObject {
         return AgentClient(token: token, box: box, relayRepair: relayRepairClosure)
     }
 
+    /// Task/chat authority is intentionally independent from render state.
+    /// Callers handling tasks must use this plan (and runnerClient), never
+    /// renderClient, so a render box is optional for Git/coding work.
+    func taskRuntimePlan() -> TVTaskRuntimePlan {
+        TVTaskRuntimePlan.resolve(
+            authenticated: isAuthenticated,
+            runnerDeviceID: machineRoles?.runnerDeviceId,
+            hasRunnerBox: runnerBox() != nil
+        )
+    }
+
     /// Client for preview/stream/build flows — the render box.
     func renderClient() -> AgentClient? {
         guard isAuthenticated, let box = renderBox() else { return nil }
