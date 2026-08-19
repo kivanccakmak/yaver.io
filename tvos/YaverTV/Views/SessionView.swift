@@ -47,6 +47,7 @@ struct SessionView: View {
     @State private var error: String?
     @State private var boxUnreachable = false
     @StateObject private var lifecycle = BoxLifecycle()
+    @FocusState private var promptFocused: Bool
 
     /// The runner PTYs live on the box right now, and which one we drive.
     /// Loaded before the first turn: a surface that cannot name its target has
@@ -112,6 +113,12 @@ struct SessionView: View {
                 boxUnreachable = false
                 Task { await loadSessions() }
             }
+        }
+        .onChange(of: sessionsLoaded) { _, loaded in
+            if loaded { focusPromptIfAvailable() }
+        }
+        .onChange(of: awaitingChoice) { _, waiting in
+            if !waiting { focusPromptIfAvailable() }
         }
     }
 
@@ -289,6 +296,7 @@ struct SessionView: View {
                 .font(.system(size: 22))
                 .padding(.horizontal, 20).padding(.vertical, 14)
                 .background(.gray.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                .focused($promptFocused)
             Button {
                 Task { await sendPrompt() }
             } label: {
@@ -300,6 +308,17 @@ struct SessionView: View {
             .disabled(prompt.trimmingCharacters(in: .whitespaces).isEmpty || loading)
         }
         .padding(.horizontal, 48).padding(.vertical, 16)
+    }
+
+    /// Siri Remote dictation is delivered by tvOS to the focused text field;
+    /// there is no public API for intercepting the remote microphone button.
+    /// Keep focus deterministic whenever the session has a writable prompt so
+    /// a user can open a session and immediately hold Siri to dictate.
+    private func focusPromptIfAvailable() {
+        guard sessionsLoaded, !awaitingChoice, !sessions.isEmpty else { return }
+        DispatchQueue.main.async {
+            promptFocused = true
+        }
     }
 
     // MARK: - Options (awaitingChoice)
