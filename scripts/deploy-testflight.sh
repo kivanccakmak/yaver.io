@@ -548,6 +548,18 @@ fi
 # uploadSymbols=false: rnwhisper framework has missing dSYMs that
 # Xcode 15+ treats as a fatal export error. Crash reports still work
 # from Apple's symbolication — we just skip uploading our local dSYMs.
+#
+# API-key deploys export locally, then validate/upload with altool below. tvOS
+# and visionOS already use this lane. On 2026-08-20 the same API key could query
+# App Store Connect and archive/provision all four iOS-family bundles, but
+# Xcode's destination=upload session returned NOT_AUTHORIZED before it even
+# exported the IPA. Authentication inventory was green; the upload operation
+# was not. altool signs its own bearer token from the key and avoids that
+# expirable Xcode session. Xcode-account deploys still need destination=upload.
+EXPORT_DESTINATION="upload"
+if [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ]; then
+  EXPORT_DESTINATION="export"
+fi
 cat > /tmp/ExportOptions.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -556,13 +568,14 @@ cat > /tmp/ExportOptions.plist <<EOF
     <key>method</key><string>app-store-connect</string>
     <key>teamID</key><string>${APPLE_TEAM_ID}</string>
     <key>signingStyle</key><string>automatic</string>
-    <key>destination</key><string>upload</string>
+    <key>destination</key><string>${EXPORT_DESTINATION}</string>
     <key>uploadSymbols</key><false/>
 </dict>
 </plist>
 EOF
 
-# Export & upload (destination=upload sends directly to App Store Connect).
+# Export, then upload. Xcode-account mode uploads during export; API-key mode
+# produces an IPA which is validated and uploaded with altool below.
 #
 # BUG FIX (2026-07-19): this used to be `EXPORT_OUTPUT=$(xcodebuild …)`. Under
 # `set -eo pipefail` (line 2), a FAILED command substitution aborts the script
@@ -574,10 +587,18 @@ EOF
 # visible.
 echo "Exporting & uploading..."
 EXPORT_LOG=/tmp/yaver_export.log
+EXPORT_PATH=/tmp/YaverExport
+# Xcode refuses or can leave stale products when the export directory already
+# exists. It is generated and disposable, but list the exact path before the
+# bounded cleanup so a path regression is visible in the deploy log.
+ls -la "$EXPORT_PATH" 2>/dev/null || true
+if [ -e "$EXPORT_PATH" ]; then
+  find "$EXPORT_PATH" -depth -delete
+fi
 set +e
 xcodebuild -exportArchive -archivePath /tmp/Yaver.xcarchive \
   -exportOptionsPlist /tmp/ExportOptions.plist \
-  -exportPath /tmp/YaverExport -allowProvisioningUpdates \
+  -exportPath "$EXPORT_PATH" -allowProvisioningUpdates \
   ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} 2>&1 | tee "$EXPORT_LOG"
 EXPORT_EXIT=${PIPESTATUS[0]}
 set -e
@@ -597,6 +618,34 @@ if [ "$EXPORT_EXIT" -ne 0 ] && ! grep -q "Redundant Binary Upload" "$EXPORT_LOG"
   fi
   grep -iE "error|errSec|EXPORT FAILED|ITMS-" "$EXPORT_LOG" | tail -8
   exit 1
+fi
+
+if [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ]; then
+  IPA_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+  if [ -z "$IPA_PATH" ]; then
+    echo "ERROR: Xcode export succeeded but produced no iOS IPA under $EXPORT_PATH." >&2
+    exit 1
+  fi
+
+  # altool discovers API keys by filename under ./private_keys. Keep that
+  # compatibility directory owner-only and ephemeral; never copy a private key
+  # into the repository or a persistent shared location.
+  UPLOAD_AUTH_DIR="$(mktemp -d /tmp/yaver-ios-asc.XXXXXX)"
+  chmod 700 "$UPLOAD_AUTH_DIR"
+  mkdir -m 700 "$UPLOAD_AUTH_DIR/private_keys"
+  cp "$APP_STORE_KEY_PATH" "$UPLOAD_AUTH_DIR/private_keys/AuthKey_${APP_STORE_KEY_ID}.p8"
+  chmod 600 "$UPLOAD_AUTH_DIR/private_keys/AuthKey_${APP_STORE_KEY_ID}.p8"
+  cleanup_ios_upload_auth() {
+    find "$UPLOAD_AUTH_DIR" -depth -delete 2>/dev/null || true
+  }
+  trap 'cleanup_ios_upload_auth; release_lease' EXIT
+
+  echo "Validating iOS IPA with App Store Connect…"
+  (cd "$UPLOAD_AUTH_DIR" && xcrun altool --validate-app --file "$IPA_PATH" \
+    --type ios --apiKey "$APP_STORE_KEY_ID" --apiIssuer "$APP_STORE_KEY_ISSUER")
+  echo "Uploading iOS IPA to TestFlight…"
+  (cd "$UPLOAD_AUTH_DIR" && xcrun altool --upload-app --file "$IPA_PATH" \
+    --type ios --apiKey "$APP_STORE_KEY_ID" --apiIssuer "$APP_STORE_KEY_ISSUER")
 fi
 
 DEPLOY_OUTCOME=success   # the trap releases the lease with this outcome + quota++

@@ -102,6 +102,12 @@ watch_inject_line="$(grep -n '^node .*add-watch-ios-target.js' "$testflight_scri
   fail "mobile dependencies must be restored before Watch target injection"
 grep -q 'node_modules/xcode/package.json' "$testflight_script" || \
   fail "mobile dependency preflight must verify the xcode module used by target injection"
+grep -q 'APPLE_XCODE_AUTH_MODE.*api-key' "$testflight_script" || \
+  fail "iOS API-key deploys must avoid the expirable Xcode account upload session"
+grep -q 'EXPORT_DESTINATION="export"' "$testflight_script" || \
+  fail "iOS API-key deploys must export locally before App Store authentication"
+[ "$(grep -c -- '--type ios --apiKey' "$testflight_script")" -eq 2 ] || \
+  fail "iOS API-key deploys must validate/upload the exported IPA with altool"
 
 apple_ensure_simulator_runtime \
   watchOS watchsimulator \

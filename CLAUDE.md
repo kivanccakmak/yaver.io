@@ -960,16 +960,12 @@ browser is signed in or Xcode preferences list the Apple ID. Refresh Xcode →
 Settings → Accounts in that case. The explicit build requirement prevents
 a stale local plist from colliding with an existing TestFlight build. A partial
 API-key configuration or unreadable key path is always an error. The script
-archives at `/tmp/Yaver.xcarchive`, exports, and uploads. On flake/timeout,
-re-export from the existing archive without re-archiving:
-
-```bash
-xcodebuild -exportArchive -archivePath /tmp/Yaver.xcarchive \
-  -exportOptionsPlist /tmp/ExportOptions.plist -exportPath /tmp/YaverExport \
-  -allowProvisioningUpdates -authenticationKeyPath "$APP_STORE_KEY_PATH" \
-  -authenticationKeyID "$APP_STORE_KEY_ID" \
-  -authenticationKeyIssuerID "$APP_STORE_KEY_ISSUER"
-```
+archives at `/tmp/Yaver.xcarchive`, exports, and uploads. API-key deploys export
+an IPA locally and then validate/upload it with `altool`; this avoids Xcode's
+expirable App Store upload session. Xcode-managed-account deploys still use
+Xcode's direct upload lane. On an export flake, preserve the archive and rerun
+through the canonical `./deploy/deploy.sh ios` path; do not submit an
+unvalidated IPA by hand.
 
 **TestFlight rate limit**: ~15-20 uploads/app/day. Don't re-run after
 "Upload limit reached" — wait 24h.
