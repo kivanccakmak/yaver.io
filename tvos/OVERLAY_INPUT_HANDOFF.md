@@ -22,7 +22,10 @@ overlay.
 - Entering the WebRTC hit target or Mouse mode enables `overlayMode`.
 - The WebRTC target is a custom tvOS `UIButton` which consumes directional
   presses at the UIKit boundary, before the default focus engine can highlight
-  a Vibe chip. The SwiftUI root handler remains a guarded fallback.
+  a Vibe chip. Its focused UIKit environment also vetoes directional
+  `shouldUpdateFocus` requests, preventing the focus engine from playing a
+  navigation sound after the arrow was already accepted as remote input. The
+  SwiftUI root handler remains a guarded fallback.
 - A per-event move guard ensures an arrow observed by both SwiftUI handlers
   executes exactly one remote move.
 - Back/Menu clears overlay state and moves focus to Vibe. A deferred handoff
@@ -82,9 +85,10 @@ assertion are the resulting product/test hardening.
 
 After explicit authorization, the corrected second source built with automatic
 development signing, installed from `Debug-appletvos/Yaver.app` on the paired
-Apple TV, and launched as `io.yaver.mobile` at 11:20 local time. The remaining
-pixel/input verdict is the physical repeated-arrow and Back replay on that exact
-build.
+Apple TV, and launched as `io.yaver.mobile` at 11:20 local time. That run kept
+Right inside the overlay but still produced a system navigation sound. The
+focus-update veto is the resulting third-candidate fix; its remaining verdict
+is the physical repeated-arrow and Back replay.
 
 ## Source of truth
 

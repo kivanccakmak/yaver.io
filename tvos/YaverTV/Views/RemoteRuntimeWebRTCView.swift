@@ -71,6 +71,18 @@ private final class TVRemoteInputButton: UIButton {
     var onMove: ((MoveCommandDirection) -> Void)?
     var onExit: (() -> Void)?
 
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        let directional: UIFocusHeading = [.up, .down, .left, .right]
+        if isFocused, !context.focusHeading.intersection(directional).isEmpty {
+            // Consuming UIPress prevents the move callback from bubbling, but
+            // tvOS can still ask the focus engine to move and play its click.
+            // Veto that update at the focused UIKit environment. The same
+            // arrow has already been delivered to `onMove` as remote input.
+            return false
+        }
+        return super.shouldUpdateFocus(in: context)
+    }
+
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
             if let direction = moveDirection(for: press.type) {

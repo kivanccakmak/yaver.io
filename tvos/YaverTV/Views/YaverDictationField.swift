@@ -243,7 +243,14 @@ struct YaverDictationField: UIViewRepresentable {
             // or stale task even though the keyboard visibly contains text.
             syncCommittedText(from: field)
             DispatchQueue.main.async { [weak self] in self?.parent.onSubmit() }
-            field.resignFirstResponder()
+            // The keyboard-only New vibe host stays first responder while the
+            // task POST runs, so no app-owned loading widget can flash between
+            // the blue tick and Task Detail. Dismantling that host after the
+            // returned task navigation closes the keyboard atomically. Other
+            // chat fields retain the ordinary Return-to-resign behavior.
+            if !parent.autoSubmitBatchInput {
+                field.resignFirstResponder()
+            }
             return true
         }
 

@@ -39,36 +39,18 @@ final class TVChatNavigationTests: XCTestCase {
         )
     }
 
-    func testTaskChoicesStayBehindOneEllipsisPanel() throws {
+    func testNewVibeIsOnlyTheSystemKeyboard() throws {
         let app = launchChat()
         let newVibe = app.buttons["chat.new-vibe"]
         XCTAssertTrue(newVibe.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
 
-        // Choice inventory must not compete with the prompt until requested.
-        XCTAssertFalse(app.navigationBars["Task settings"].exists)
-        XCUIRemote.shared.press(.menu)
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-
-        let more = app.buttons["chat.task-settings"]
-        XCTAssertTrue(more.waitForExistence(timeout: 3))
-        // tvOS has no coordinate tap. Move focus from the prompt to the lone
-        // header action, then press Select like the Siri Remote does.
-        for _ in 0..<3 where !more.hasFocus {
-            XCUIRemote.shared.press(.up)
-        }
-        XCTAssertTrue(more.hasFocus, "The ellipsis must be reachable from the prompt with the remote")
-        XCUIRemote.shared.press(.select)
-        XCTAssertTrue(
-            app.navigationBars["Task settings"].waitForExistence(timeout: 5),
-            "One ellipsis must reveal project, runner, model, and multi-MCP choices"
-        )
-        XCTAssertTrue(app.staticTexts["Project"].exists)
-        XCTAssertTrue(app.staticTexts["Runner"].exists)
-        XCTAssertTrue(app.staticTexts["Model"].exists)
-        XCTAssertTrue(app.staticTexts["MCP tools"].exists)
-        XCTAssertTrue(app.staticTexts["No project"].exists)
+        // The removed composer widget must never return. Native tvOS/iPhone
+        // keyboard input is the entire New vibe surface.
+        XCTAssertFalse(app.buttons["chat.task-settings"].exists)
+        XCTAssertFalse(app.staticTexts["Start a session"].exists)
+        XCTAssertFalse(app.staticTexts["Starting session…"].exists)
     }
 
     func testMenuReturnsFromDevicesSheetAndVisibleBackExists() throws {
@@ -144,19 +126,15 @@ final class TVChatNavigationTests: XCTestCase {
             "Typing must land in the prompt — the field must be the active text-input responder, not merely focus-ring-selected. Got value: '\(value)'"
         )
 
-        // Menu closes the keyboard; the field keeps focus so Up still reaches
-        // the header ellipsis (focus must not drop off the field).
+        // Menu still closes the native keyboard. There is deliberately no
+        // composer widget or settings button underneath it.
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(
             app.keyboards.firstMatch.waitForNonExistence(timeout: 3),
             "The first Menu press must close the system keyboard"
         )
-        let more = app.buttons["chat.task-settings"]
-        XCTAssertTrue(more.waitForExistence(timeout: 3))
-        for _ in 0..<3 where !more.hasFocus {
-            XCUIRemote.shared.press(.up)
-        }
-        XCTAssertTrue(more.hasFocus, "Up from the prompt must reach the ellipsis after the keyboard closes")
+        XCTAssertFalse(app.buttons["chat.task-settings"].exists)
+        XCTAssertFalse(app.staticTexts["Starting session…"].exists)
     }
 
     func testDoneCreatesExactlyOneTaskAndOpensItsLiveConversation() throws {
@@ -202,6 +180,12 @@ final class TVChatNavigationTests: XCTestCase {
             server.createCount, 1,
             "Done must produce one POST /tasks before navigation. UI: \(app.debugDescription)"
         )
+        XCTAssertTrue(
+            app.keyboards.firstMatch.exists,
+            "the native keyboard must stay up while POST /tasks is pending"
+        )
+        XCTAssertFalse(app.staticTexts["Starting session…"].exists,
+                       "New vibe must never expose an app-owned loading widget")
 
         let userTurn = app.descendants(matching: .any)["chat.user-turn"]
         XCTAssertTrue(userTurn.waitForExistence(timeout: 8), "Done must route to the exact created task's chat")
@@ -379,7 +363,11 @@ private final class TVChatHTTPFixture: @unchecked Sendable {
             sendJSON(#"{"runners":[{"id":"opencode","name":"OpenCode","installed":true,"ready":true,"isDefault":true,"models":[]}],"default":"opencode"}"#, on: connection)
         case ("POST", "/tasks"):
             recordCreate(request)
-            sendJSON(#"{"taskId":"task-iphone-handoff","status":"queued","runnerId":"opencode"}"#, status: "201 Created", on: connection)
+            // Keep the operation pending long enough for the UI arc to prove
+            // that the system keyboard remains the only visible input surface.
+            queue.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+                self?.sendJSON(#"{"taskId":"task-iphone-handoff","status":"queued","runnerId":"opencode"}"#, status: "201 Created", on: connection)
+            }
         case ("GET", "/tasks/task-iphone-handoff"):
             sendTaskDetail(on: connection)
         case ("GET", "/tasks/task-iphone-handoff/output"):

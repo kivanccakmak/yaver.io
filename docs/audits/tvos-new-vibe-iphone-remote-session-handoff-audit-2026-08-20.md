@@ -5,7 +5,8 @@
 The couch flow must be one continuous conversation:
 
 1. On Apple TV: open **Chat** and select **New vibe**.
-2. The prompt field is already a real Siri Remote dictation target.
+2. New vibe shows only the native tvOS keyboard (mirrored on iPhone); there is
+   no Yaver-owned composer widget underneath it.
 3. On the iPhone Apple TV Remote: tap the microphone, speak, confirm the
    transcription, then tap the blue **Done** key.
 4. Exactly one task/session is created from that sentence.
@@ -26,6 +27,10 @@ blank remote sheet after Done.
 - `ScreenRecording_08-20-2026 10-26-31_1.MP4`: the iPhone is the Apple TV
   Remote. It opens the keyboard and exposes the microphone/blue Done control,
   but the recording does not prove that Done creates or opens a Yaver task.
+- `IMG_6383.HEIC`: after dictating “Hello”, disabling the prompt during
+  `POST /tasks` closed the system keyboard and exposed the unwanted New vibe /
+  “Starting session…” widget. The user explicitly rejected that intermediate
+  surface; the keyboard must remain until Task Detail replaces it.
 - The agent's actual route is `POST /tasks`, wired in
   `desktop/agent/httpserver.go`; it accepts an empty `workDir` and resolves the
   agent work directory/project rather than treating `No project` as an error.
@@ -38,7 +43,7 @@ current worktree. Earlier uncommitted tvOS work was preserved.
 | Area | Existing implementation | Assessment |
 |---|---|---|
 | Task dispatch | `AgentClient.createTask` posts the prompt to `/tasks`, accepts both `taskId` and `id`, and locally enriches the minimal create response with the title. | Correct defensive shape: a successful task must not be reported as a decode failure. |
-| Navigation | `TasksView` receives the created `TaskSummary` and routes to `TaskDetailView` after the composer closes. | This is the necessary handoff into the newly-created conversation. |
+| Navigation | `TasksView` atomically replaces the keyboard host with `TaskDetailView` for the returned `TaskSummary`. | No app-owned screen is visible between the native keyboard and the newly-created conversation. |
 | Conversation | `TaskDetailView` renders the task title as an initial **You** turn, names `queued`/`running`, streams groomed `/tasks/{id}/output` bytes into an assistant bubble, resumes with a byte cursor, and retains raw stdout behind Live console. | Matches the required user-visible task lifecycle. |
 | No-project dispatch | `TaskComposerView` sends an empty per-task `workDir` when no project is selected. The agent's `TaskManager` falls back to its configured work directory and can auto-detect a project. | Not the cause of the observed handoff gap. |
 | Build | `xcodebuild -project tvos/YaverTV.xcodeproj -scheme YaverTV -sdk appletvos -configuration Debug build CODE_SIGNING_ALLOWED=NO -derivedDataPath /tmp/yaver-tvos-audit-derived` succeeded. | Compiles; does not prove physical Siri Remote behavior. |
@@ -147,7 +152,23 @@ that transient ownership loss.
 consumes directional and Menu presses at UIKit's press boundary, before the
 default focus engine navigates. Select still passes through as the primary
 action. A focus-loss counter is exposed to the UI arc, which requires zero
-transient losses after the repeated-arrow sequence.
+transient losses after the repeated-arrow sequence. The next physical run
+showed that Right could still produce the system focus sound even without
+escaping; the focused UIKit environment now also vetoes every directional
+`shouldUpdateFocus` request after delivering the arrow as remote input.
+
+### 8. New vibe exposed an app-owned loading widget
+
+`IMG_6383.HEIC` showed the dictated prompt, ellipsis, and “Starting session…”
+after the system keyboard disappeared. The immediate cause was
+`.disabled(creating)`: it resigned the real text responder while the task POST
+was pending. More fundamentally, the user does not want a New vibe form at all.
+
+**Resolution:** the composer widget, context summary, settings ellipsis, and
+loading row were removed from `TaskComposerView`. It is now a visually empty
+UIKit responder host. The native tvOS/iPhone keyboard remains first responder
+while `POST /tasks` is pending; dismantling the host during the atomic task
+navigation closes it. A failed POST presents only a retry/cancel alert.
 
 ## Verification evidence
 
@@ -155,7 +176,11 @@ transient losses after the repeated-arrow sequence.
   passed on tvOS Simulator 26.5. Its real loopback HTTP/SSE fixture proves the
   bearer-authenticated create count, returned task ID, user bubble, running
   state, streamed assistant turn, reply field, and absence of a reopened
-  keyboard.
+  keyboard. The fixture delays the create response and proves the native
+  keyboard remains present while the POST is pending.
+- `TVChatNavigationTests.testNewVibeIsOnlyTheSystemKeyboard` proves the native
+  keyboard opens while `chat.task-settings`, “Start a session”, and “Starting
+  session…” do not exist.
 - `YaverDictationFieldTests` proves that a Continuity-style multi-character
   commit submits without Return and that the default request cannot open the
   Task Detail reply keyboard. `TVOverlayInputStateTests` passes all four reducer
@@ -170,13 +195,18 @@ transient losses after the repeated-arrow sequence.
 - The corrected second build succeeded, installed from the operation-specific
   `Debug-appletvos/Yaver.app`, and launched as `io.yaver.mobile` on the paired
   Apple TV at 11:20 local time (PID 1080). No TestFlight upload or App Store
-  submission occurred. The remaining verdict is the user's physical replay of
-  the first-blue-button and no-focus-blink operations on that exact build.
+  submission occurred. Its physical replay exposed the rejected widget in
+  `IMG_6383` and a remaining Right-arrow focus sound; both are addressed in the
+  next local build rather than recorded as a pass.
+- An App Store archive for candidate build 293 validated successfully, but its
+  upload was interrupted before acceptance when the new physical findings
+  arrived. Do not treat validation as a TestFlight deployment.
 
 ## Non-goals
 
-- Do not upload or submit a tvOS build as part of this audit. Direct paired-TV
-  development installs are in scope only with the user's explicit authorization.
+- Do not upload a known-broken candidate. Direct paired-TV and official
+  TestFlight deployment are authorized for this session, but the hardware
+  keyboard/arrow replay must judge the final candidate first.
 - Do not treat a running tmux/terminal session as the chat handoff target; the
   task ID returned by `POST /tasks` is the authority for this flow.
 - Do not replace the task detail with a raw terminal. The raw console remains
