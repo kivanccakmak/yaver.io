@@ -32,3 +32,16 @@ test("Scan TV QR is the first mobile Settings section", () => {
   assert.ok(scanner >= 0 && nextSection >= 0 && scanner < nextSection);
   assert.match(settings, /params: \{ scan: "1" \}/);
 });
+
+test("native and generated iOS camera disclosures name TV QR sign-in", () => {
+  const expected =
+    "Yaver uses your camera to scan TV sign-in QR codes, take photos for tasks, and provide camera access to apps you run for testing.";
+  const appJson = JSON.parse(source("../../app.json"));
+  assert.equal(appJson.expo.ios.infoPlist.NSCameraUsageDescription, expected);
+
+  const cameraCopies = appJson.expo.plugins
+    .filter((plugin: unknown) => Array.isArray(plugin) && (plugin[0] === "expo-camera" || plugin[0] === "expo-image-picker"))
+    .map((plugin: [string, { cameraPermission?: string }]) => plugin[1]?.cameraPermission);
+  assert.deepEqual(cameraCopies, [expected, expected]);
+  assert.match(source("../../ios/Yaver/Info.plist"), new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});

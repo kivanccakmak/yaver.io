@@ -46,7 +46,7 @@
         },
         "NSMicrophoneUsageDescription": "Yaver uses your microphone for voice input — send tasks by speaking instead of typing.",
         "NSSpeechRecognitionUsageDescription": "Yaver uses speech recognition to transcribe your voice into task descriptions.",
-        "NSCameraUsageDescription": "Yaver uses your camera for photos and running apps that need camera access.",
+        "NSCameraUsageDescription": "Yaver uses your camera to scan TV sign-in QR codes, take photos for tasks, and provide camera access to apps you run for testing.",
         "NSFaceIDUsageDescription": "Yaver uses Face ID to confirm sensitive actions such as approving a TV sign-in.",
         "NSPhotoLibraryUsageDescription": "Yaver uses your photo library to attach screenshots and images to coding tasks.",
         "NSLocationWhenInUseUsageDescription": "Yaver provides location access to apps you run for testing.",
@@ -156,13 +156,13 @@
         "expo-image-picker",
         {
           "photosPermission": "Yaver needs photo access to attach images to tasks.",
-          "cameraPermission": "Yaver needs camera access to take photos for tasks."
+          "cameraPermission": "Yaver uses your camera to scan TV sign-in QR codes, take photos for tasks, and provide camera access to apps you run for testing."
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Yaver provides camera access to apps you run for testing."
+          "cameraPermission": "Yaver uses your camera to scan TV sign-in QR codes, take photos for tasks, and provide camera access to apps you run for testing."
         }
       ],
       [
