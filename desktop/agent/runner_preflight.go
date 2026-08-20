@@ -72,7 +72,7 @@ func RunnerPreflightByID(runnerID, workDir string) RunnerPreflightResult {
 // pre-flighted.
 func runnerHasAuthModel(id string) bool {
 	switch normalizeRunnerID(id) {
-	case "codex", "claude", "opencode":
+	case "codex", "claude", "opencode", "remoteless":
 		return true
 	}
 	return false
@@ -96,6 +96,13 @@ func runnerReauthCommand(id string) string {
 		return "claude setup-token"
 	case "opencode":
 		return "opencode auth login"
+	case "remoteless":
+		// The remoteless lane authenticates with a DeepSeek key, not a
+		// subscription OAuth. A key lives as DEEPSEEK_API_KEY (env/vault)
+		// or provider.deepseek in opencode.json. There is no CLI login to
+		// run, so the CTA names the credential config rather than a command
+		// that does not exist (a route into a wall is worse than nothing).
+		return "configure a DeepSeek API key (DEEPSEEK_API_KEY or opencode.json provider.deepseek)"
 	default:
 		return "yaver runner auth " + id
 	}

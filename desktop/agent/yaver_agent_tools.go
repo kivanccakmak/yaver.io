@@ -74,7 +74,8 @@ type YaverAgentDeviceAudit struct {
 
 // runnerAuditOrder fixes the runner order in the response so the LLM
 // can rely on positional reasoning ("the second runner is codex").
-var runnerAuditOrder = []string{"claude", "codex", "opencode"}
+// remoteless is the hosted-model lane (interim backend = opencode + DeepSeek).
+var runnerAuditOrder = []string{"claude", "codex", "opencode", "remoteless"}
 
 // runnerLabel returns the human-friendly name we'd put in UI copy.
 func runnerLabel(id string) string {
@@ -85,6 +86,8 @@ func runnerLabel(id string) string {
 		return "Codex"
 	case "opencode":
 		return "OpenCode"
+	case "remoteless":
+		return "Remoteless AI"
 	default:
 		return id
 	}

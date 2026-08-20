@@ -584,15 +584,51 @@ func compileFailureGap(framework, detail string, installedRunners []string) *Cap
 		Constraint: "The dev server is running; the project's own source does not compile. " +
 			"Yaver has no command that fixes source code, so this is not something the agent can repair for you.",
 	}
-	// Prefer the first installed runner. The caller passes the probed list, so
-	// this can never name a runner that is not on the box.
-	for _, r := range installedRunners {
+	// Prefer the first installed runner — with the hosted-model lane moved
+	// to the front when it is usable, because Fix-with-AI prefers the cheap
+	// hosted lane over a subscription binary on the same box. The caller
+	// passes the probed list, so this can never name a runner that is not
+	// on the box.
+	for _, r := range preferRemotelessFirst(installedRunners) {
 		if fix := aiFixRoute(r, "Fix the compile error", compileFixPrompt(framework, detail)); fix != nil {
 			gap.AIFix = fix
 			break
 		}
 	}
 	return gap
+}
+
+// remotelessAIAvailable reports whether the hosted-model lane can run on
+// this box right now (interim backend: opencode binary + DeepSeek key; see
+// docs/architecture/REMOTELESS_AI.md). The in-process loop later removes the
+// binary requirement without changing this contract.
+func remotelessAIAvailable() bool {
+	st := detectRemotelessStatus("")
+	return st.Ready && st.AuthConfigured
+}
+
+// preferRemotelessFirst returns the installed runner list with "remoteless"
+// moved to the front when the hosted-model lane is usable. Fix-with-AI
+// prefers the cheap hosted lane over a subscription binary on the same box;
+// a box with neither still falls through to the caller's probed list.
+func preferRemotelessFirst(installed []string) []string {
+	return preferRemotelessFirstList(remotelessAIAvailable(), installed)
+}
+
+// preferRemotelessFirstList is the pure decision: put "remoteless" first
+// when the lane is usable, dedup, else return the list untouched. Kept pure
+// so the precedence is hermetically testable without a binary on PATH.
+func preferRemotelessFirstList(remotelessUsable bool, installed []string) []string {
+	if !remotelessUsable {
+		return installed
+	}
+	out := []string{"remoteless"}
+	for _, r := range installed {
+		if r != "remoteless" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // compileFixPrompt is what the coding agent is actually asked. It carries the

@@ -132,11 +132,12 @@ func TestHandleYaverAgentDeviceAudit_HTTPShape(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// Three runners always present in fixed order.
-	if len(resp.Runners) != 3 {
-		t.Fatalf("expected 3 runners, got %d: %+v", len(resp.Runners), resp.Runners)
+	// The four first-class runners always present in fixed order: three
+	// binary runners + the hosted-model "remoteless" lane.
+	if len(resp.Runners) != 4 {
+		t.Fatalf("expected 4 runners, got %d: %+v", len(resp.Runners), resp.Runners)
 	}
-	expected := []string{"claude", "codex", "opencode"}
+	expected := []string{"claude", "codex", "opencode", "remoteless"}
 	for i, want := range expected {
 		if resp.Runners[i].ID != want {
 			t.Errorf("runner[%d].ID = %q, want %q", i, resp.Runners[i].ID, want)

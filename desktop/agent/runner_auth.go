@@ -201,6 +201,8 @@ func DetectRunnerRuntimeStatus(runner RunnerConfig, workDir string) RunnerRuntim
 		status = detectCodexStatus()
 	case "opencode":
 		status = detectOpenCodeStatus(workDir)
+	case "remoteless":
+		status = detectRemotelessStatus(workDir)
 	case "claude":
 		status = detectClaudeStatus()
 	case "glm":
@@ -688,6 +690,8 @@ func runnerCapabilityName(runnerID string) string {
 		return "Claude Code"
 	case "opencode":
 		return "OpenCode"
+	case "remoteless":
+		return "Remoteless AI"
 	case "glm":
 		return "GLM (z.ai)"
 	default:
@@ -1518,6 +1522,58 @@ func codexAuthCandidatePaths() []string {
 		dedup = append(dedup, p)
 	}
 	return dedup
+}
+
+// detectRemotelessStatus reports whether the remoteless AI lane can run a
+// task on THIS box. Interim backend = opencode binary + a DeepSeek key
+// (env/vault DEEPSEEK_API_KEY, or opencode.json provider.deepseek with a
+// key/baseURL). The id is the stable lane contract — when the backend swaps
+// to the in-process Go loop (docs/architecture/REMOTELESS_AI.md), this
+// check drops the binary requirement and just probes the key + endpoint.
+//
+// Deliberately does NOT lean on detectOpenCodeStatus's configured-default-
+// model check: remoteless forces --model deepseek/… at spawn, so a box whose
+// opencode.json default points at another provider must still report ready.
+func detectRemotelessStatus(workDir string) RunnerRuntimeStatus {
+	status := RunnerRuntimeStatus{Ready: true}
+	if resolveRunnerBinary("opencode") == "" {
+		status.Ready = false
+		status.Error = "The remoteless AI lane needs the opencode runner binary (interim backend). Install it with `yaver runner-auth setup opencode` or `npm i -g opencode-ai`."
+		status.Warning = status.Error
+		return status
+	}
+	src := remotelessCredentialSource(workDir)
+	if src == "" {
+		status.Ready = false
+		status.Error = "The remoteless AI lane needs a DeepSeek API key on this box (DEEPSEEK_API_KEY env/vault, or provider.deepseek in opencode.json)."
+		status.Warning = status.Error
+		return status
+	}
+	status.AuthConfigured = true
+	status.AuthSource = src
+	return status
+}
+
+// remotelessCredentialSource returns where a DeepSeek credential is
+// available on this box: the DEEPSEEK_API_KEY env var name, "vault:<name>",
+// the opencode.json path holding provider.deepseek with a key/baseURL, or ""
+// when none exists. Pure — the binary check lives in detectRemotelessStatus,
+// so this is hermetically testable.
+func remotelessCredentialSource(workDir string) string {
+	if value, src := hostSecretValue("DEEPSEEK_API_KEY"); value != "" {
+		return src
+	}
+	cfgPath, cfgText := readFirstExistingFile(openCodeConfigPaths(workDir))
+	for _, p := range openCodeRuntimeProviders(loadOpenCodeConfigMapText(cfgText)) {
+		if normalizeOpenCodeProvider(p.ID) == "deepseek" &&
+			(p.HasAPIKey || strings.TrimSpace(p.BaseURL) != "") {
+			if cfgPath != "" {
+				return cfgPath
+			}
+			return "opencode provider deepseek"
+		}
+	}
+	return ""
 }
 
 func detectOpenCodeStatus(workDir string) RunnerRuntimeStatus {

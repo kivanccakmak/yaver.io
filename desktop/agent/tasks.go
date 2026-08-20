@@ -153,11 +153,14 @@ func ActiveTaskManager() *TaskManager {
 	return activeTaskManager
 }
 
-// builtinRunners defines yaver's three first-class runner configurations.
-// claude-code, codex, and opencode are the only runners we ship support
-// for; everything else (Ollama, OpenRouter, GLM, ZAI, …) reaches the
+// builtinRunners defines yaver's first-class runner configurations.
+// claude-code, codex, and opencode are binary runners we ship support for;
+// everything else (Ollama, OpenRouter, GLM, ZAI, DeepSeek, …) reaches the
 // system through opencode's BYOK provider config rather than yaver
-// shipping a dedicated wrapper for each CLI.
+// shipping a dedicated wrapper for each CLI. "remoteless" is the hosted-
+// model lane (default DeepSeek): its interim backend is the opencode
+// binary with a DeepSeek key, and it later swaps to an in-process Go loop
+// with no binary at all — callers pin the stable id and never care.
 var builtinRunners = map[string]RunnerConfig{
 	"claude": {
 		RunnerID: "claude",
@@ -231,6 +234,23 @@ var builtinRunners = map[string]RunnerConfig{
 		OutputMode:  "raw",
 		ExitCommand: "/quit",
 	},
+	"remoteless": {
+		RunnerID: "remoteless",
+		Name:     "Remoteless AI (DeepSeek)",
+		// The hosted-model lane. Interim backend: the opencode binary with
+		// a DeepSeek BYOK key (opencode.json provider.deepseek or the
+		// DEEPSEEK_API_KEY env/vault). The id is the STABLE contract —
+		// callers pin "remoteless"; the backend later swaps to an
+		// in-process Go loop with no binary at all (see
+		// docs/architecture/REMOTELESS_AI.md). --model is injected by
+		// startProcess (the opencode splice below), so a per-task model
+		// override wins over the deepseek default.
+		Command:     "opencode",
+		Args:        []string{"run", "--dangerously-skip-permissions", "{prompt}"},
+		Model:       "deepseek/deepseek-v4-flash",
+		OutputMode:  "raw",
+		ExitCommand: "/quit",
+	},
 }
 
 // GetRunnerConfig returns the RunnerConfig for a given runner ID.
@@ -268,8 +288,11 @@ func firstInstalledBuiltinRunner() (RunnerConfig, bool) {
 // advertises in user-facing UX (slash menu, capability inventory,
 // /autodev/options, hybrid implementer pick). These are the only
 // runners yaver ships first-class support for. Order is the preference
-// order for "default installed runner" fallbacks.
-var supportedRunnerIDs = []string{"claude", "codex", "opencode"}
+// order for "default installed runner" fallbacks. "remoteless" is the
+// hosted-model lane (interim backend = opencode + DeepSeek key); it
+// comes last so a working subscription binary still wins the default
+// fallback.
+var supportedRunnerIDs = []string{"claude", "codex", "opencode", "remoteless"}
 
 // IsSupportedRunner reports whether a runner ID is in the canonical
 // user-facing set. Use this anywhere you'd otherwise enumerate the
@@ -302,7 +325,7 @@ func runnerModelCompatible(runnerID, model string) bool {
 		return strings.HasPrefix(m, "claude") || m == "opus" || m == "sonnet" || m == "haiku" || m == "claude-opus-4-7"
 	case "codex":
 		return strings.HasPrefix(m, "gpt") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4")
-	case "opencode":
+	case "opencode", "remoteless":
 		provider, modelName, ok := strings.Cut(m, "/")
 		return ok && strings.TrimSpace(provider) != "" && strings.TrimSpace(modelName) != ""
 	}
@@ -2952,7 +2975,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		}
 		if !modelOverride {
 			switch runner.RunnerID {
-			case "opencode":
+			case "opencode", "remoteless":
+				// remoteless shares opencode's argv shape (`opencode run …`),
+				// so the deepseek model splices in the same place.
 				args = insertRunnerFlagAfter(args, "run", "--model", effectiveModel)
 			case "codex":
 				// On a schedule-resume, resumeTransform rebuilt the argv as
