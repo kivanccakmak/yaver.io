@@ -34,6 +34,13 @@ struct TaskDetailView: View {
     @State private var sending = false
     @State private var sendError: String?
     @State private var optimisticTurns: [TaskConversationTurn] = []
+    @State private var pendingQuestion: TaskAgentQuestion?
+    @State private var questionReply = ""
+    @State private var questionSelections: Set<String> = []
+    @State private var answeringQuestion = false
+    @State private var questionError: String?
+    @State private var parkedRunner: String?
+    @State private var taskScopeDenied = false
 
     // Optional project + MCP context. Inventory is shared with mobile/web,
     // while authority starts empty until the user chooses or taps Use latest.
@@ -73,12 +80,12 @@ struct TaskDetailView: View {
         .task(id: reattachNonce) { await startStream() }
         .onDisappear { stream?.cancel(); reattachTask?.cancel() }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("UIKeyboardDidHideNotification"))) { _ in
-            guard !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            guard !activeComposerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             DispatchQueue.main.async { replyFocus = .send }
         }
         .onChange(of: replyFocus) { oldFocus, newFocus in
             guard oldFocus == .field, newFocus == nil,
-                  !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                  !activeComposerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             DispatchQueue.main.async { replyFocus = .send }
         }
         .defaultFocus($replyFocus, .field)
@@ -127,6 +134,10 @@ struct TaskDetailView: View {
                         }
                         .padding(18)
                         .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    }
+
+                    if let pendingQuestion {
+                        taskQuestionCard(pendingQuestion)
                     }
 
                     if let streamMessage {
@@ -180,7 +191,20 @@ struct TaskDetailView: View {
             if let sendError {
                 Text(sendError).font(.system(size: 14)).foregroundStyle(.orange).lineLimit(2)
             }
-            HStack(spacing: 12) {
+            if taskScopeDenied {
+                NavigationLink("Update the agent to continue Tasks") { UpdateAgentView() }
+                    .buttonStyle(.borderedProminent)
+            }
+            if let parkedRunner {
+                NavigationLink("Sign in to \(runnerDisplayName(parkedRunner))") { RuntimeDashboardView() }
+                    .buttonStyle(.borderedProminent)
+            }
+            if pendingQuestion?.isSecret == true {
+                Text("This answer may contain a credential. Answer it from Yaver Tasks on your phone or desktop.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 12) {
                 // Match the new-vibe composer: vertical text fields trap the
                 // Siri Remote's Down event, so a dictated reply could not
                 // reach Send without backing out of the screen.
@@ -188,25 +212,26 @@ struct TaskDetailView: View {
                 // text input target for the Siri Remote mic on every task
                 // reply, matching the new-vibe composer.
                 YaverDictationField(
-                    text: $reply,
+                    text: composerBinding,
                     onSubmit: {
                         // The blue tvOS keyboard tick is the chat Send action,
                         // not merely a focus move. sendReply() is guarded
                         // against duplicate delegate callbacks.
-                        DispatchQueue.main.async { sendReply() }
+                        DispatchQueue.main.async { sendComposerText() }
                     },
                     onEndEditing: {
                         // Apple TV Remote can end dictation without emitting
                         // return. Submit the already-transcribed follow-up on
                         // that same first tick so a second microphone press is
                         // never required.
-                        DispatchQueue.main.async { sendReply() }
+                        DispatchQueue.main.async { sendComposerText() }
                     },
-                    placeholder: "Reply…",
+                    autoSubmitBatchInput: true,
+                    placeholder: pendingQuestion == nil ? "Reply…" : "Answer the runner…",
                     font: .systemFont(ofSize: 20),
-                    textColor: UIColor(white: 0.12, alpha: 1),
-                    tint: UIColor(white: 0.12, alpha: 1),
-                    fieldBackgroundColor: UIColor(white: 0.93, alpha: 1),
+                    textColor: .white,
+                    tint: .white,
+                    fieldBackgroundColor: .black,
                     fieldCornerRadius: 16,
                     fieldContentInset: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16),
                     accessibilityIdentifier: "chat.reply"
@@ -216,13 +241,15 @@ struct TaskDetailView: View {
                     .focusEffectDisabled()
                     .onMoveCommand { direction in
                         if direction == .down,
-                           !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                           !activeComposerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             replyFocus = .send
                         }
                     }
-                Button(sending ? "Sending…" : "Send") { sendReply() }
+                Button(composerBusy ? "Sending…" : (pendingQuestion == nil ? "Send" : "Answer")) {
+                    sendComposerText()
+                }
                     .buttonStyle(.borderedProminent)
-                    .disabled(sending || reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(composerBusy || activeComposerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .focused($replyFocus, equals: .send)
                     .accessibilityIdentifier("chat.send-reply")
                 Button { showTaskSettings = true } label: {
@@ -234,6 +261,7 @@ struct TaskDetailView: View {
                 .focused($replyFocus, equals: .settings)
                 .accessibilityLabel("Task settings")
                 .accessibilityIdentifier("chat.followup-settings")
+                }
             }
             HStack(spacing: 10) {
                 Label(runnerLabel, systemImage: "terminal.fill")
@@ -247,6 +275,78 @@ struct TaskDetailView: View {
         }
         .padding(.horizontal, 48).padding(.vertical, 16)
         .background(.ultraThinMaterial)
+    }
+
+    private var composerBinding: Binding<String> {
+        Binding(
+            get: { pendingQuestion == nil ? reply : questionReply },
+            set: { value in
+                if pendingQuestion == nil { reply = value }
+                else { questionReply = value }
+            }
+        )
+    }
+
+    private var activeComposerText: String {
+        pendingQuestion == nil ? reply : questionReply
+    }
+
+    private var composerBusy: Bool { sending || answeringQuestion }
+
+    @ViewBuilder
+    private func taskQuestionCard(_ question: TaskAgentQuestion) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label((question.header?.isEmpty == false ? question.header : nil) ?? "Runner question",
+                  systemImage: question.isSecret ? "lock.fill" : "questionmark.bubble.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(question.isSecret ? .orange : .blue)
+            Text(redactHomePaths(question.prompt))
+                .font(.system(size: 20, weight: .semibold))
+                .frame(maxWidth: 900, alignment: .leading)
+            if let questionError {
+                Text(questionError).font(.system(size: 14)).foregroundStyle(.orange)
+            }
+            if question.isSecret {
+                Text("For privacy, credentials are answered on your phone or desktop—not on a shared television.")
+                    .font(.system(size: 15)).foregroundStyle(.secondary)
+            } else if question.kind.lowercased() == "choice" {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array((question.choices ?? []).enumerated()), id: \.offset) { _, choice in
+                        Button {
+                            if question.allowsMultipleChoices {
+                                if questionSelections.contains(choice) { questionSelections.remove(choice) }
+                                else { questionSelections.insert(choice) }
+                            } else {
+                                submitQuestionAnswer(choice)
+                            }
+                        } label: {
+                            Label(
+                                choice,
+                                systemImage: questionSelections.contains(choice) ? "checkmark.circle.fill" : "circle"
+                            )
+                            .frame(maxWidth: 850, alignment: .leading)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(answeringQuestion)
+                    }
+                    if question.allowsMultipleChoices {
+                        Button(answeringQuestion ? "Sending…" : "Send selected") {
+                            let ordered = (question.choices ?? []).filter(questionSelections.contains)
+                            submitQuestionAnswer(ordered.joined(separator: "; "))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(answeringQuestion || questionSelections.isEmpty)
+                        .accessibilityIdentifier("chat.question-send-selected")
+                    }
+                }
+            } else {
+                Text("Answer below to let the runner continue.")
+                    .font(.system(size: 15)).foregroundStyle(.secondary)
+            }
+        }
+        .padding(20)
+        .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityIdentifier("chat.agent-question")
     }
 
     private var selectedProject: ProjectSummary? {
@@ -409,6 +509,49 @@ struct TaskDetailView: View {
         settingsChanged = true
     }
 
+    private func sendComposerText() {
+        if let pendingQuestion {
+            submitQuestionAnswer(questionReply, question: pendingQuestion)
+        } else {
+            sendReply()
+        }
+    }
+
+    private func submitQuestionAnswer(_ rawAnswer: String, question explicitQuestion: TaskAgentQuestion? = nil) {
+        guard let question = explicitQuestion ?? pendingQuestion, !question.isSecret else { return }
+        let answer = rawAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty, !answeringQuestion else { return }
+        guard let client = store.runnerClient() else {
+            questionError = "No machine selected"
+            return
+        }
+        answeringQuestion = true
+        questionError = nil
+        Task {
+            do {
+                try await client.answerTaskQuestion(task.id, questionId: question.id, answer: answer)
+                await MainActor.run {
+                    if pendingQuestion?.id == question.id { pendingQuestion = nil }
+                    questionReply = ""
+                    questionSelections.removeAll()
+                    answeringQuestion = false
+                    status = "running"
+                    // The runner was parked on the question. Reattach even if
+                    // the old stream ended while the TV was answering.
+                    reattachNonce += 1
+                }
+            } catch {
+                await MainActor.run {
+                    questionError = error.localizedDescription
+                    if FailureSignals.isSessionScopeDenied(error) {
+                        taskScopeDenied = true
+                    }
+                    answeringQuestion = false
+                }
+            }
+        }
+    }
+
     private var displayTurns: [TaskConversationTurn] {
         var rows = task.turns ?? []
         if rows.isEmpty, let title = task.title, !title.isEmpty {
@@ -518,6 +661,8 @@ struct TaskDetailView: View {
         reply = ""
         sending = true
         sendError = nil
+        parkedRunner = nil
+        taskScopeDenied = false
 
         Task {
             do {
@@ -531,6 +676,10 @@ struct TaskDetailView: View {
                     try await client.continueTask(task.id, input: text)
                     await MainActor.run {
                         status = "running"
+                        // A stale terminal status can route a valid resume down
+                        // the in-place path after its prior SSE already ended.
+                        // Cursor-based replay makes this restart lossless.
+                        reattachNonce += 1
                     }
                 case .fork(let runner):
                     let fork = try await client.forkTask(
@@ -567,9 +716,25 @@ struct TaskDetailView: View {
                 await MainActor.run { sending = false }
             } catch {
                 await MainActor.run {
+                    if let agentError = error as? AgentError, agentError.parked {
+                        // The box kept the words and will replay them after
+                        // runner auth recovers. Keep the optimistic user turn;
+                        // restoring the text invites a duplicate execution.
+                        let runner = agentError.runner ?? task.runner
+                        let notice = tvParkedTurnNotice(
+                            code: agentError.code,
+                            runner: runner,
+                            reauthable: agentError.reauthable
+                        )
+                        parkedRunner = notice.offersRunnerSignIn ? runner : nil
+                        sendError = notice.line
+                        sending = false
+                        return
+                    }
                     optimisticTurns.removeAll { $0.id == optimistic.id }
                     if reply.isEmpty { reply = text }
                     sendError = error.localizedDescription
+                    taskScopeDenied = FailureSignals.isSessionScopeDenied(error)
                     sending = false
                 }
             }
@@ -643,6 +808,35 @@ struct TaskDetailView: View {
                     reattachAttempt = 0
                     await refreshDetail()
                     liveAssistantText = ""
+                    // A queued follow-up rolls the agent onto a fresh output
+                    // channel. Older agents close the old SSE with a nonterminal
+                    // `done`; follow the task, not that obsolete channel.
+                    if tvTaskStreamShouldReattachAfterDone(status ?? doneStatus) {
+                        reattachNonce += 1
+                    }
+                }
+            },
+            onQuestion: { question in
+                Task { @MainActor in
+                    let isReplay = pendingQuestion?.id == question.id
+                    pendingQuestion = question
+                    // Re-subscribing replays a still-pending question. Keep a
+                    // half-dictated answer or selected choices across that
+                    // transport recovery; only a genuinely new ask resets UI.
+                    if !isReplay {
+                        questionReply = ""
+                        questionSelections.removeAll()
+                        questionError = nil
+                    }
+                }
+            },
+            onQuestionClosed: { questionId in
+                Task { @MainActor in
+                    guard questionId == nil || pendingQuestion?.id == questionId else { return }
+                    pendingQuestion = nil
+                    questionReply = ""
+                    questionSelections.removeAll()
+                    questionError = nil
                 }
             },
             onEnd: { kind, reason in
@@ -748,6 +942,16 @@ struct TaskDetailView: View {
         case "opencode": return "OpenCode"
         case .some(let value) where !value.isEmpty: return value
         default: return "Runner"
+        }
+    }
+
+    private func runnerDisplayName(_ runner: String) -> String {
+        switch RegisteredRunner.canonical(runner) {
+        case "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "opencode": return "OpenCode"
+        case let value where !value.isEmpty: return value
+        default: return "the runner"
         }
     }
 

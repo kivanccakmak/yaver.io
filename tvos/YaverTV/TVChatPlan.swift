@@ -17,6 +17,56 @@ func tvTaskIsRunnerCoding(_ status: String?) -> Bool {
     }
 }
 
+/// A `done` frame closes one concrete SSE response, not necessarily the task's
+/// conversation. When a live follow-up rolls the task onto its next runner
+/// process, older agents close the previous response with queued/running status.
+/// The TV must follow that next channel so repeated turns remain one live chat.
+func tvTaskStreamShouldReattachAfterDone(_ status: String?) -> Bool {
+    tvTaskIsRunnerCoding(status)
+}
+
+struct TVParkedTurnNotice: Equatable {
+    let line: String
+    let offersRunnerSignIn: Bool
+}
+
+/// A parked turn means the agent retained the user's words. Stable reason
+/// codes decide whether runner OAuth can actually help; a generic 409 must not
+/// turn into a dead sign-in button for a sandbox or transient host failure.
+func tvParkedTurnNotice(code: String?, runner: String?, reauthable: Bool) -> TVParkedTurnNotice {
+    let rawRunner = RegisteredRunner.canonical(runner ?? "")
+    let label: String
+    switch rawRunner {
+    case "claude": label = "Claude Code"
+    case "codex": label = "Codex"
+    case "opencode": label = "OpenCode"
+    case let value where !value.isEmpty: label = value
+    default: label = "the runner"
+    }
+
+    switch code {
+    case "runner.codex.linux_sandbox_blocked":
+        return TVParkedTurnNotice(
+            line: "Message saved. This machine is blocking the sandbox \(label) needs; it will run after the host is fixed.",
+            offersRunnerSignIn: false
+        )
+    case "runner.codex.refresh_lineage_lost",
+         "runner.codex.credential_expired",
+         "runner.codex.credential_is_copy",
+         "runner.codex.credential_corrupt",
+         "runner.codex.not_authenticated":
+        return TVParkedTurnNotice(
+            line: "Message saved. \(label) needs to be signed in on this machine; it will run automatically afterward.",
+            offersRunnerSignIn: reauthable
+        )
+    default:
+        return TVParkedTurnNotice(
+            line: "Message saved. It will run automatically when \(label) is ready.",
+            offersRunnerSignIn: false
+        )
+    }
+}
+
 enum TVChatFollowUpAction: Equatable {
     case continueCurrent
     case fork(String)

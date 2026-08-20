@@ -107,6 +107,30 @@ final class VibingPlanTests: XCTestCase {
         XCTAssertEqual(task.turns?.last?.content, "Working")
     }
 
+    func testTaskQuestionDecodesFromSSEShape() throws {
+        let payload = Data(#"{"id":"q1","taskId":"task-live","prompt":"Which approach?","header":"Approach","kind":"choice","choices":["Safe","Fast"],"multi":false,"createdAtMs":1,"timeoutSec":300}"#.utf8)
+        let question = try JSONDecoder().decode(TaskAgentQuestion.self, from: payload)
+        XCTAssertEqual(question.id, "q1")
+        XCTAssertEqual(question.choices, ["Safe", "Fast"])
+        XCTAssertFalse(question.isSecret)
+    }
+
+    func testTaskQuestionDecodesInsideActualSSEEnvelope() throws {
+        let payload = Data(#"{"type":"agent_question","question":{"id":"q2","taskId":"task-live","prompt":"Proceed?","kind":"text","createdAtMs":1,"timeoutSec":300}}"#.utf8)
+        let event = try JSONDecoder().decode(AgentClient.TaskOutputEvent.self, from: payload)
+        XCTAssertEqual(event.type, "agent_question")
+        XCTAssertEqual(event.question?.id, "q2")
+    }
+
+    func testParkedFollowUpEnvelopeKeepsStructuredRecoveryFields() throws {
+        let payload = Data(#"{"ok":false,"error":"Sign in again","code":"runner.codex.not_authenticated","parked":true,"reauthable":true,"runner":"codex"}"#.utf8)
+        let error = try XCTUnwrap(AgentError.fromHTTPBody(payload))
+        XCTAssertTrue(error.parked)
+        XCTAssertTrue(error.reauthable)
+        XCTAssertEqual(error.runner, "codex")
+        XCTAssertEqual(error.code, "runner.codex.not_authenticated")
+    }
+
     func testRunnerCatalogueSurvivesNullModelsOnAnotherRunner() throws {
         let payload = Data(#"{"runners":[{"id":"claude","name":"Claude Code","installed":true,"ready":true,"isDefault":false,"models":[{"id":"claude-sonnet-4-6","name":"Claude Sonnet 4.6","isDefault":true}]},{"id":"missing","name":"Missing","installed":false,"ready":false,"isDefault":false,"models":null}],"default":"claude"}"#.utf8)
         let list = try JSONDecoder().decode(AgentRunnerList.self, from: payload)
@@ -124,6 +148,33 @@ final class VibingPlanTests: XCTestCase {
                 "a terminal task must render retained output instead of retrying a dead SSE stream"
             )
         }
+    }
+
+    func testNonterminalDoneFollowsQueuedFollowUpOntoNextStream() {
+        XCTAssertTrue(tvTaskStreamShouldReattachAfterDone("queued"))
+        XCTAssertTrue(tvTaskStreamShouldReattachAfterDone("running"))
+        for terminal in ["review", "completed", "failed", "stopped"] {
+            XCTAssertFalse(tvTaskStreamShouldReattachAfterDone(terminal))
+        }
+    }
+
+    func testParkedFollowUpOnlyOffersSignInWhenItCanHelp() {
+        let auth = tvParkedTurnNotice(
+            code: "runner.codex.not_authenticated",
+            runner: "codex",
+            reauthable: true
+        )
+        XCTAssertTrue(auth.offersRunnerSignIn)
+
+        let sandbox = tvParkedTurnNotice(
+            code: "runner.codex.linux_sandbox_blocked",
+            runner: "codex",
+            reauthable: false
+        )
+        XCTAssertFalse(sandbox.offersRunnerSignIn)
+        XCTAssertTrue(sandbox.line.contains("host"))
+
+        XCTAssertFalse(tvParkedTurnNotice(code: nil, runner: "codex", reauthable: true).offersRunnerSignIn)
     }
 
     func testInterruptedTaskStreamUsesBoundedAutomaticReattach() {

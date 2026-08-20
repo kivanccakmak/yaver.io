@@ -619,6 +619,8 @@ func TestCompanionSessionAllowed(t *testing.T) {
 		{http.MethodPost, "/tasks", "vision", false},
 		{http.MethodPost, "/tasks", "tv", true},
 		{http.MethodPost, "/tasks/abc/continue", "tv", true},
+		{http.MethodPost, "/tasks/abc/answer", "tv", true},
+		{http.MethodPost, "/tasks/abc/question", "tv", false},
 		{http.MethodPost, "/tasks/abc/cancel", "tv", false},
 		{http.MethodPost, "/ops", "tv", true},
 		{http.MethodGet, "/tmux/sessions", "spatial", true},

@@ -42,6 +42,7 @@ var tvClientEndpoints = []struct {
 	{http.MethodPost, "/tasks"},
 	{http.MethodPost, "/tasks/task-123/continue"},
 	{http.MethodPost, "/tasks/task-123/fork"},
+	{http.MethodPost, "/tasks/task-123/answer"},
 	{http.MethodGet, "/projects"},
 	{http.MethodGet, "/workspace/apps"},
 	{http.MethodGet, "/project/preview-capabilities"},
@@ -149,12 +150,12 @@ func TestCompanionScopeAdmitsShippedTVClient(t *testing.T) {
 }
 
 func TestTVTaskMutationScopeIsExact(t *testing.T) {
-	for _, path := range []string{"/tasks", "/tasks/t1/continue", "/tasks/t1/fork"} {
+	for _, path := range []string{"/tasks", "/tasks/t1/continue", "/tasks/t1/fork", "/tasks/t1/answer"} {
 		if !tvTaskMutationAllowed(http.MethodPost, path, "tv") {
 			t.Errorf("expected TV task conversation route %s to be allowed", path)
 		}
 	}
-	for _, path := range []string{"/tasks/t1", "/tasks/t1/cancel", "/tasks/t1/delete", "/tasks/t1/continue/again"} {
+	for _, path := range []string{"/tasks/t1", "/tasks/t1/cancel", "/tasks/t1/delete", "/tasks/t1/question", "/tasks/t1/continue/again"} {
 		if tvTaskMutationAllowed(http.MethodPost, path, "tv") {
 			t.Errorf("unexpected TV task mutation route %s is allowed", path)
 		}

@@ -102,9 +102,11 @@ The first physical install then exposed a second, Continuity-only boundary that
 the simulator cannot synthesize: the iPhone Remote's first blue button ended
 microphone mode and committed the recognized phrase as one multi-character
 replacement, but did not send Return, end editing, or close the keyboard. The
-composer now treats that committed batch as the New vibe send action after a
-short coalescing window. This behavior is enabled only for the initial composer;
-the already-good follow-up reply path is unchanged.
+composer now treats that committed batch as the send action after a short
+coalescing window. The same contract is enabled on the persistent Task reply
+field. When Task Detail clears an accepted phrase, the bridge reopens its
+duplicate-submit latch so a second and later iPhone Remote dictation can send
+without closing the keyboard or requiring a second microphone press.
 
 ### 4. Two Boolean destinations cancelled the new task's first SSE
 
@@ -170,6 +172,51 @@ UIKit responder host. The native tvOS/iPhone keyboard remains first responder
 while `POST /tasks` is pending; dismantling the host during the atomic task
 navigation closes it. A failed POST presents only a retry/cancel alert.
 
+### 9. Task replies did not carry the Continuity Done contract
+
+`TaskDetailView` used the shared UIKit field but did not enable its
+multi-character Continuity submission path. On iPhone Apple TV Remote, Done
+could commit a complete follow-up without emitting Return/end-editing, leaving
+the words visible but unsent.
+
+**Resolution:** Task replies now use the same coalesced Done boundary as New
+Vibe, keep the keyboard active after submission, and reset the one-shot
+duplicate guard only when the accepted text is cleared. The loopback UI arc now
+asserts exactly one authenticated `POST /tasks/{id}/continue` for the next turn.
+
+### 10. A queued follow-up could disappear when the SSE channel rolled over
+
+A live continuation can replace the task's runner process/output channel. The
+old SSE may end with `queued` or `running`; treating that frame as terminal
+left the TV attached to an obsolete channel.
+
+**Resolution:** tvOS refreshes the task after `done` and reattaches with its
+groomed/raw byte cursors whenever the refreshed status is still coding. One
+conversation can therefore carry repeated turns without duplicate scrollback.
+
+### 11. Runner questions were decoded as the wrong wire type and dropped
+
+`TaskOutputEvent.question` was a string even though the agent emits a structured
+`AgentQuestion` object. JSON decoding failed for the entire event, and tvOS had
+neither a question card nor an answer route.
+
+**Resolution:** Task SSE now decodes and renders text/choice questions inline,
+posts answers to `/tasks/{id}/answer`, preserves half-written answers across SSE
+replay, and closes the card when another device answers or the ask is cancelled.
+Secret questions remain on phone/desktop: a TV is a shared-room surface, and
+the agent rejects secret answers from a server-validated `tv` session scope.
+
+### 12. A safely parked follow-up looked like a failed send
+
+When runner authentication is unavailable, the agent can return 409 while
+retaining the user's prompt for automatic replay. tvOS discarded the structured
+`parked`, `reauthable`, `runner`, and reason-code fields, rolled back the visible
+turn, and restored the composer—inviting the same work to run twice.
+
+**Resolution:** the TV keeps the accepted turn, says that the message is saved,
+and offers runner sign-in only for reason codes where sign-in can help. Sandbox
+and transient failures never receive a dead OAuth button.
+
 ## Verification evidence
 
 - `TVChatNavigationTests.testDoneCreatesExactlyOneTaskAndOpensItsLiveConversation`
@@ -182,9 +229,21 @@ navigation closes it. A failed POST presents only a retry/cancel alert.
   keyboard opens while `chat.task-settings`, “Start a session”, and “Starting
   session…” do not exist.
 - `YaverDictationFieldTests` proves that a Continuity-style multi-character
-  commit submits without Return and that the default request cannot open the
-  Task Detail reply keyboard. `TVOverlayInputStateTests` passes all four reducer
+  commit submits without Return, a persistent field can submit another phrase
+  after the host clears the first, and the default request cannot open the Task
+  Detail reply keyboard. `TVOverlayInputStateTests` passes all four reducer
   cases; the standalone overlay executable passes all nine checks.
+- The Tasks regression fixture now also covers one authenticated follow-up and
+  an inline choice question answered through the real REST/SSE contract. On the
+  current Mac, `build-for-testing` succeeds for the generic tvOS Simulator
+  destination, compiling the app, unit tests, and UI tests. No concrete tvOS
+  Simulator device is installed, so these new UI arcs were compiled but not
+  executed in this worktree; the paired physical TV was not mutated for this
+  implementation pass.
+- Focused Go tests prove the scoped TV allow-list admits only create, continue,
+  fork, and answer task mutations; ordinary questions resolve, while secret
+  questions return the stable `auth.session.scope_denied` code and remain
+  pending for a private surface.
 - The first run failed because a SwiftUI field was focused but not editing; the
   restored UIKit responder made the keyboard assertion pass. A later run failed
   because the fixture used ambiguous close-delimited streaming; the fixture now

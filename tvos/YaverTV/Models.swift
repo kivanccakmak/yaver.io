@@ -132,6 +132,27 @@ struct TaskPendingFollowUp: Decodable, Identifiable, Equatable {
     var id: String { input }
 }
 
+/// A runner question carried on the task SSE stream. This is part of the task
+/// conversation, not a second chat system: answering it unblocks the same
+/// `/tasks/{id}` turn and the runner keeps coding in place.
+struct TaskAgentQuestion: Decodable, Identifiable, Equatable {
+    let id: String
+    let taskId: String
+    let prompt: String
+    let header: String?
+    let kind: String                 // text | choice | secret
+    let choices: [String]?
+    let multi: Bool?
+    let vaultHint: String?
+    let createdAtMs: Int64?
+    let timeoutSec: Int?
+    let screenshot: String?
+    let step: String?
+
+    var isSecret: Bool { kind.lowercased() == "secret" }
+    var allowsMultipleChoices: Bool { multi == true }
+}
+
 /// A task as it appears in the list and chat detail.
 ///
 /// tvOS used to decode only a title/status and present the raw runner console as

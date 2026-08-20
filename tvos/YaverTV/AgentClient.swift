@@ -23,6 +23,12 @@ struct AgentError: AgentErrorCoded, LocalizedError {
     /// reason_codes.go vocabulary, e.g. auth.session.scope_denied). Lets views
     /// classify a refusal without regexing prose. nil on old agents.
     var code: String? = nil
+    /// A 409 from /tasks/{id}/continue can mean the agent KEPT the user's
+    /// words because the selected runner needs authentication. That is queued
+    /// work, not a failed send; callers must not restore it into the composer.
+    var parked: Bool = false
+    var reauthable: Bool = false
+    var runner: String? = nil
     /// True when this refusal came back over the RELAY leg with a credential
     /// deny ("invalid relay password" & friends) — i.e. the account's stored
     /// relay password drifted, not the box being down. The client normally
@@ -31,6 +37,22 @@ struct AgentError: AgentErrorCoded, LocalizedError {
     /// route instead of a dead "Try again".
     var relayDeny: Bool = false
     var errorDescription: String? { message }
+
+    /// Decode the structured refusal envelope shared by task, preview, and
+    /// runtime routes. Keeping this pure makes the parked-turn promise
+    /// regression-testable without standing up a network fixture.
+    static func fromHTTPBody(_ data: Data, gap: CapabilityGap? = nil) -> AgentError? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = obj["error"] as? String, !message.isEmpty else { return nil }
+        return AgentError(
+            message: message,
+            gap: gap,
+            code: obj["code"] as? String,
+            parked: obj["parked"] as? Bool ?? false,
+            reauthable: obj["reauthable"] as? Bool ?? false,
+            runner: obj["runner"] as? String
+        )
+    }
 }
 
 actor AgentClient {
@@ -402,6 +424,18 @@ actor AgentClient {
                               failure: "couldn't continue the conversation")
     }
 
+    /// Answer a structured question raised by the runner in this task. TV
+    /// sessions may answer text/choice questions; the agent rejects secret
+    /// questions for scoped tokens so credentials stay on a private surface.
+    func answerTaskQuestion(_ taskId: String, questionId: String, answer: String) async throws {
+        _ = try await request(
+            "POST",
+            path: "/tasks/\(taskId)/answer",
+            jsonBody: ["questionId": questionId, "answer": answer],
+            failure: "couldn't deliver the answer"
+        )
+    }
+
     /// A terminal runner session is not resumed in place. Fork silently to the
     /// same recorded runner and carry bounded recent context, exactly as mobile.
     func forkTask(
@@ -452,7 +486,7 @@ actor AgentClient {
         let status: String?
         let offset: Int?
         let full: Bool?
-        let question: String?
+        let question: TaskAgentQuestion?
         let questionId: String?
     }
 
@@ -467,6 +501,8 @@ actor AgentClient {
         onRaw: (@Sendable (String, Int, Bool) -> Void)? = nil,
         onData: (@Sendable (String) -> Void)?,
         onDone: (@Sendable (String) -> Void)? = nil,
+        onQuestion: (@Sendable (TaskAgentQuestion) -> Void)? = nil,
+        onQuestionClosed: (@Sendable (String?) -> Void)? = nil,
         onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
     ) -> Task<Void, Never> {
         let bridgedOnData: (@Sendable (String, Int?, Bool) -> Void)?
@@ -482,6 +518,8 @@ actor AgentClient {
             onRaw: onRaw,
             onData: bridgedOnData,
             onDone: onDone,
+            onQuestion: onQuestion,
+            onQuestionClosed: onQuestionClosed,
             onEnd: onEnd
         )
     }
@@ -493,6 +531,8 @@ actor AgentClient {
         onRaw: (@Sendable (String, Int, Bool) -> Void)? = nil,
         onData: (@Sendable (String, Int?, Bool) -> Void)? = nil,
         onDone: (@Sendable (String) -> Void)? = nil,
+        onQuestion: (@Sendable (TaskAgentQuestion) -> Void)? = nil,
+        onQuestionClosed: (@Sendable (String?) -> Void)? = nil,
         onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
     ) -> Task<Void, Never> {
         var queryItems: [URLQueryItem] = []
@@ -542,6 +582,7 @@ actor AgentClient {
                         if Task.isCancelled { onEnd?(.cancelled, nil); return }
                         if line.isEmpty {
                             emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone,
+                                           onQuestion: onQuestion, onQuestionClosed: onQuestionClosed,
                                            sawDone: &sawDone, replaceNextOutput: &replaceNextOutput)
                             dataLines.removeAll(keepingCapacity: true)
                             continue
@@ -551,6 +592,7 @@ actor AgentClient {
                         }
                     }
                     emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone,
+                                   onQuestion: onQuestion, onQuestionClosed: onQuestionClosed,
                                    sawDone: &sawDone, replaceNextOutput: &replaceNextOutput)
                     // The body ended. If we never saw `done`, this is an
                     // interruption — the box closed the stream or the relay
@@ -580,6 +622,8 @@ actor AgentClient {
         onRaw: (@Sendable (String, Int, Bool) -> Void)?,
         onData: (@Sendable (String, Int?, Bool) -> Void)?,
         onDone: (@Sendable (String) -> Void)?,
+        onQuestion: (@Sendable (TaskAgentQuestion) -> Void)?,
+        onQuestionClosed: (@Sendable (String?) -> Void)?,
         sawDone: inout Bool,
         replaceNextOutput: inout Bool
     ) {
@@ -609,8 +653,12 @@ actor AgentClient {
                 sawDone = true
                 onDone(event.status ?? "completed")
             }
+        case "agent_question":
+            if let question = event.question { onQuestion?(question) }
+        case "agent_answered", "agent_question_cancelled":
+            onQuestionClosed?(event.questionId)
         default:
-            break // agent_question and future event types: TV renders nothing yet
+            break // Future event types remain additive.
         }
     }
 
@@ -1385,10 +1433,7 @@ actor AgentClient {
                         // out: the string for every existing call site, the gap for
                         // the ones that can render a fix.
                         let gap = FailureSignals.capabilityGapFromData(data)
-                        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let err = obj["error"] as? String, !err.isEmpty {
-                            throw AgentError(message: err, gap: gap, code: obj["code"] as? String)
-                        }
+                        if let refusal = AgentError.fromHTTPBody(data, gap: gap) { throw refusal }
                         if let gap {
                             throw AgentError(message: gap.summary, gap: gap)
                         }

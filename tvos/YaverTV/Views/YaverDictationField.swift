@@ -87,7 +87,11 @@ struct YaverDictationField: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.parent = self
         if field.text != text {
+            let hostClearedSubmittedText = autoSubmitBatchInput && text.isEmpty && !(field.text ?? "").isEmpty
             field.text = text
+            if hostClearedSubmittedText {
+                coordinator.prepareForNextSubmittedPhrase()
+            }
         }
         if let accessibilityIdentifier, field.accessibilityIdentifier != accessibilityIdentifier {
             field.accessibilityIdentifier = accessibilityIdentifier
@@ -168,6 +172,16 @@ struct YaverDictationField: UIViewRepresentable {
         func cancelBatchSubmit() {
             batchSubmitTask?.cancel()
             batchSubmitTask = nil
+        }
+
+        /// A persistent task composer clears its binding after accepting a
+        /// phrase while the UIKit editing session stays open. That clear is
+        /// the boundary between turns: reopen the one-shot end callback for
+        /// the next iPhone Remote dictation without allowing duplicates from
+        /// the phrase that was just sent.
+        func prepareForNextSubmittedPhrase() {
+            cancelBatchSubmit()
+            endCallbackSent = false
         }
 
         @objc func textDidChange(_ field: UITextField) {

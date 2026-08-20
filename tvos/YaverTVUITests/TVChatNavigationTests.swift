@@ -210,6 +210,71 @@ final class TVChatNavigationTests: XCTestCase {
         XCTAssertEqual(server.createCount, 1, "duplicate submit/focus callbacks must still produce one POST /tasks")
         XCTAssertEqual(server.createdTitle, "Audit the couch handoff")
         XCTAssertTrue(server.sawAuthorizedCreate, "the handoff must preserve the same bearer-auth boundary as other task clients")
+
+        // Stay inside the same running task and send the next turn. This is the
+        // contract the former test omitted: a green New Vibe handoff does not
+        // prove that the Task reply field reaches /continue.
+        let reply = app.textFields["chat.reply"]
+        XCTAssertTrue(reply.hasFocus, "task conversation must leave focus on its reply field")
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        reply.typeText("Keep auditing")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.75))
+        XCTAssertEqual(server.continueCount, 0, "transcription alone must not send a partial follow-up")
+        reply.typeText("\n")
+
+        let continueDeadline = Date().addingTimeInterval(5)
+        while server.continueCount == 0 && Date() < continueDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(server.continueCount, 1, "Done must produce exactly one POST /tasks/{id}/continue")
+        XCTAssertEqual(server.continuedInput, "Keep auditing")
+        XCTAssertTrue(server.sawAuthorizedContinue, "the follow-up must preserve the TV bearer boundary")
+    }
+
+    func testRunnerQuestionRendersAndAnswersInsideTaskConversation() throws {
+        let server = try TVChatHTTPFixture(questionMode: true)
+        addTeardownBlock { server.stop() }
+
+        let app = XCUIApplication()
+        let boxJSON = #"[{"id":"question-box","name":"Question Test","host":"127.0.0.1","port":\#(server.port)}]"#
+        let plistQuoted = "\"" + boxJSON.replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        app.launchArguments = [
+            "-yaver.tv.token", "handoff-audit",
+            "-yaver.tv.boxes", plistQuoted,
+            "-yaver.tv.selectedBox", "question-box",
+            "-yaver.tv.startAt", "chat",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["chat.new-vibe"].waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.select)
+        let prompt = app.textFields["chat.prompt"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        prompt.typeText("Ask before choosing")
+        prompt.typeText("\n")
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["chat.agent-question"].waitForExistence(timeout: 10),
+            "agent_question must become a visible card in the same Task conversation"
+        )
+        XCTAssertTrue(app.staticTexts["Which approach?"].exists)
+        let fast = app.buttons["Fast"]
+        XCTAssertTrue(fast.exists, "choice questions must expose their actual answers as focusable buttons")
+        for _ in 0..<8 where !fast.hasFocus {
+            XCUIRemote.shared.press(.up)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertTrue(fast.hasFocus, "the Siri Remote must be able to reach a question choice from the composer")
+        XCUIRemote.shared.press(.select)
+
+        let answerDeadline = Date().addingTimeInterval(5)
+        while server.answerCount == 0 && Date() < answerDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(server.answerCount, 1, "one choice must produce exactly one POST /tasks/{id}/answer")
+        XCTAssertEqual(server.answeredValue, "Fast")
+        XCTAssertTrue(server.sawAuthorizedAnswer, "question answers must preserve the TV bearer boundary")
     }
 
     private func launchDashboard() -> XCUIApplication {
@@ -254,6 +319,13 @@ private final class TVChatHTTPFixture: @unchecked Sendable {
     private var _createCount = 0
     private var _createdTitle = ""
     private var _sawAuthorizedCreate = false
+    private var _continueCount = 0
+    private var _continuedInput = ""
+    private var _sawAuthorizedContinue = false
+    private var _answerCount = 0
+    private var _answeredValue = ""
+    private var _sawAuthorizedAnswer = false
+    private let questionMode: Bool
     private var completed = false
     // Network.framework does not retain accepted connections for the
     // listener. Keep each one alive through the orderly response EOF; letting
@@ -265,8 +337,15 @@ private final class TVChatHTTPFixture: @unchecked Sendable {
     var createCount: Int { locked { _createCount } }
     var createdTitle: String { locked { _createdTitle } }
     var sawAuthorizedCreate: Bool { locked { _sawAuthorizedCreate } }
+    var continueCount: Int { locked { _continueCount } }
+    var continuedInput: String { locked { _continuedInput } }
+    var sawAuthorizedContinue: Bool { locked { _sawAuthorizedContinue } }
+    var answerCount: Int { locked { _answerCount } }
+    var answeredValue: String { locked { _answeredValue } }
+    var sawAuthorizedAnswer: Bool { locked { _sawAuthorizedAnswer } }
 
-    init() throws {
+    init(questionMode: Bool = false) throws {
+        self.questionMode = questionMode
         listener = try NWListener(using: .tcp, on: .any)
         let ready = DispatchSemaphore(value: 0)
         var startupError: NWError?
@@ -372,6 +451,12 @@ private final class TVChatHTTPFixture: @unchecked Sendable {
             sendTaskDetail(on: connection)
         case ("GET", "/tasks/task-iphone-handoff/output"):
             streamTask(on: connection)
+        case ("POST", "/tasks/task-iphone-handoff/continue"):
+            recordContinue(request)
+            sendJSON(#"{"ok":true,"taskId":"task-iphone-handoff","status":"running"}"#, on: connection)
+        case ("POST", "/tasks/task-iphone-handoff/answer"):
+            recordAnswer(request)
+            sendJSON(#"{"ok":true}"#, on: connection)
         default:
             sendJSON(#"{"error":"not found"}"#, status: "404 Not Found", on: connection)
         }
@@ -390,6 +475,38 @@ private final class TVChatHTTPFixture: @unchecked Sendable {
         _createCount += 1
         _createdTitle = title
         _sawAuthorizedCreate = request.range(of: "Authorization: Bearer handoff-audit", options: .caseInsensitive) != nil
+        lock.unlock()
+    }
+
+    private func recordContinue(_ request: String) {
+        let body = request.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n")
+        let input: String
+        if let data = body.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            input = json["input"] as? String ?? ""
+        } else {
+            input = ""
+        }
+        lock.lock()
+        _continueCount += 1
+        _continuedInput = input
+        _sawAuthorizedContinue = request.range(of: "Authorization: Bearer handoff-audit", options: .caseInsensitive) != nil
+        lock.unlock()
+    }
+
+    private func recordAnswer(_ request: String) {
+        let body = request.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n")
+        let answer: String
+        if let data = body.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            answer = json["answer"] as? String ?? ""
+        } else {
+            answer = ""
+        }
+        lock.lock()
+        _answerCount += 1
+        _answeredValue = answer
+        _sawAuthorizedAnswer = request.range(of: "Authorization: Bearer handoff-audit", options: .caseInsensitive) != nil
         lock.unlock()
     }
 
@@ -421,7 +538,14 @@ private final class TVChatHTTPFixture: @unchecked Sendable {
                 let output = "data: {\"type\":\"output\",\"text\":\"I am checking the handoff now.\",\"offset\":31}\n\n"
                 connection.send(content: self.chunk(output), completion: .contentProcessed { error in
                     guard error == nil else { connection.cancel(); return }
-                    self.queue.asyncAfter(deadline: .now() + 2.0) {
+                    if self.questionMode && self.answerCount == 0 {
+                        let question = "data: {\"type\":\"agent_question\",\"question\":{\"id\":\"q-tv-choice\",\"taskId\":\"task-iphone-handoff\",\"prompt\":\"Which approach?\",\"header\":\"Approach\",\"kind\":\"choice\",\"choices\":[\"Safe\",\"Fast\"],\"multi\":false,\"createdAtMs\":1,\"timeoutSec\":300}}\n\n"
+                        connection.send(content: self.chunk(question), completion: .contentProcessed { error in
+                            if error != nil { connection.cancel() }
+                        })
+                        return
+                    }
+                    self.queue.asyncAfter(deadline: .now() + 8.0) {
                         self.locked { self.completed = true }
                         let done = "data: {\"type\":\"done\",\"status\":\"completed\"}\n\n"
                         // `isComplete` emits an orderly EOF. Cancelling again

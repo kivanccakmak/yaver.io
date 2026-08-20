@@ -209,6 +209,24 @@ func (s *HTTPServer) handleTaskAnswer(w http.ResponseWriter, r *http.Request, ta
 		jsonError(w, http.StatusBadRequest, "questionId required")
 		return
 	}
+	// A TV is a shared-room surface. Its scoped token may answer ordinary text
+	// and choice questions in the task it is already allowed to drive, but it
+	// must never turn /answer into an indirect vault-write/credential-exposure
+	// route. Full owner sessions (including deliberate email/password sign-in)
+	// retain the existing secret-answer behavior; phone-approved TV sessions are
+	// told to finish that one question on a private surface.
+	if normalizeSessionScope(r.Header.Get("X-Yaver-SessionScope")) == "tv" {
+		if pending, ok := globalQuestionRegistry.Pending(taskID); ok &&
+			pending.ID == body.QuestionID && strings.EqualFold(pending.Kind, "secret") {
+			jsonReply(w, http.StatusForbidden, map[string]interface{}{
+				"ok":    false,
+				"code":  ReasonAuthSessionScopeDenied,
+				"scope": "tv",
+				"error": "Secret task questions must be answered from Yaver on a phone or desktop.",
+			})
+			return
+		}
+	}
 	// F4 (Access Layer): capture the question's vault intent BEFORE Answer removes it, so we
 	// can remember a credential the human just typed. The runner setting vault_hint IS the
 	// intent signal that this answer is a reusable credential.

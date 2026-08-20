@@ -1876,7 +1876,7 @@ func isCompanionSessionScope(scope string) bool {
 
 // tvTaskMutationAllowed is deliberately narrower than a /tasks/ prefix. A TV
 // approved from the owner's signed-in phone can use the task conversation UI it
-// ships (create, continue and fork), but cannot cancel/delete tasks or inherit
+// ships (create, continue, fork, and non-secret question answers), but cannot cancel/delete tasks or inherit
 // future task-control routes by accident.
 func tvTaskMutationAllowed(method, path, scope string) bool {
 	if normalizeSessionScope(scope) != "tv" || strings.ToUpper(strings.TrimSpace(method)) != http.MethodPost {
@@ -1886,7 +1886,7 @@ func tvTaskMutationAllowed(method, path, scope string) bool {
 		return true
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	return len(parts) == 3 && parts[0] == "tasks" && parts[1] != "" && (parts[2] == "continue" || parts[2] == "fork")
+	return len(parts) == 3 && parts[0] == "tasks" && parts[1] != "" && (parts[2] == "continue" || parts[2] == "fork" || parts[2] == "answer")
 }
 
 func companionSessionAllowed(method, path, scope string) bool {
