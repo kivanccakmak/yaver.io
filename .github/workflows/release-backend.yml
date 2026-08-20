@@ -1,0 +1,38 @@
+name: Release Backend
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-backend
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY_3 || secrets.CONVEX_DEPLOY_KEY_2 || secrets.CONVEX_DEPLOY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Require Convex deploy credentials
+        run: |
+          if [ -z "$CONVEX_DEPLOY_KEY" ]; then
+            echo "ERROR: no Yaver Convex deploy key is configured for this repository or production environment." >&2
+            exit 2
+          fi
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+
+      - name: Deploy Convex backend
+        run: ./deploy/deploy.sh backend

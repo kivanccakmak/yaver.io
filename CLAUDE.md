@@ -611,7 +611,7 @@ changing those.
   | npm (`yaver-cli`) | `./deploy/deploy.sh npm` | `release-cli.yml` after the local command tags/pushes |
   | TestFlight (iOS) | `./deploy/deploy.sh ios` | local-only by design |
   | Google Play internal | `./deploy/deploy.sh android` | `release-mobile.yml` (android job) |
-  | Convex backend | `./deploy/deploy.sh backend` | not wired to CI |
+  | Convex backend | `./deploy/deploy.sh backend` | `release-backend.yml` (manual; production environment) |
   | Cloudflare web | `./deploy/deploy.sh cloudflare` | `release-web.yml` |
   | MCP registry metadata | `./deploy/deploy.sh mcp` | release CLI workflow when publishing npm |
 
