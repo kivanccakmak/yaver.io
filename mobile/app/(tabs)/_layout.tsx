@@ -485,6 +485,11 @@ export default function TabLayout() {
           ),
         }}
       />
+      {/* These remain reachable by explicit navigation/deep links, but must
+          never become anonymous tab slots. Expo Router auto-registers every
+          file in this directory unless the route is declared hidden here. */}
+      <Tabs.Screen name="projects" options={{ href: null, headerShown: false }} />
+      <Tabs.Screen name="vibing" options={{ href: null, headerShown: false }} />
       {/* Shortcuts removed from the tab bar (kept as a hidden route so any
           existing deep links / navigation don't 404). */}
       <Tabs.Screen name="shortcuts" options={{ href: null, headerShown: false }} />

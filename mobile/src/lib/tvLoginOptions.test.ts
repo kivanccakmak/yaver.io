@@ -25,12 +25,34 @@ test("tvOS cannot silently re-expose dormant native provider implementations", (
   assert.equal(existsSync(join(here, "../../../tvos/YaverTV/OAuthSignIn.swift")), false);
 });
 
-test("Scan TV QR is the first mobile Settings section", () => {
+test("TV sign-in stays pinned above the scrollable Settings sections", () => {
   const settings = source("../../app/(tabs)/settings.tsx");
-  const scanner = settings.indexOf("Scan TV QR");
-  const nextSection = settings.indexOf("Machine + voice controls");
-  assert.ok(scanner >= 0 && nextSection >= 0 && scanner < nextSection);
+  const scanner = settings.indexOf("Sign in a TV");
+  const scroll = settings.indexOf("<KeyboardAvoidingView");
+  assert.ok(scanner >= 0 && scroll >= 0 && scanner < scroll);
   assert.match(settings, /params: \{ scan: "1" \}/);
+});
+
+test("the approval success action cannot shrink to its four-letter label", () => {
+  const approval = source("../../app/approve-device.tsx");
+  assert.match(approval, /styles\.primaryBtn,\s*styles\.successBtn/);
+  assert.match(approval, /successBtn:\s*\{[^}]*width:\s*"100%"[^}]*minHeight:\s*52/s);
+});
+
+test("Settings keeps dense utility rows concise and separates Docker status cards", () => {
+  const settings = source("../../app/(tabs)/settings.tsx");
+  for (const removedWall of [
+    "permission-justification videos & prose",
+    "catch bugs (red box / crash / ANR)",
+    "Agent leads each reply with a short spoken-style summary",
+  ]) {
+    assert.ok(!settings.includes(removedWall), `verbose helper copy returned: ${removedWall}`);
+  }
+  const imageSection = settings.slice(
+    settings.indexOf("{/* Image status + build */}"),
+    settings.indexOf("{/* Containerize Host toggle */}"),
+  );
+  assert.match(imageSection, /<View style=\{\{ height: 8 \}\} \/>/);
 });
 
 test("native and generated iOS camera disclosures name TV QR sign-in", () => {

@@ -2035,6 +2035,23 @@ export default function SettingsScreen() {
     <View style={[styles.safeArea, { backgroundColor: c.bg }]}>
       {/* Header */}
       <AppScreenHeader title="Settings" onBack={() => router.navigate("/(tabs)/more" as any)} />
+      {/* The companion action stays visible even when Settings restores a
+          previous scroll offset after returning from the scanner. */}
+      <Pressable
+        onPress={() => router.push({ pathname: "/approve-device", params: { scan: "1" } })}
+        style={({ pressed }) => [
+          styles.tvSignInBar,
+          { backgroundColor: c.bgCard, borderColor: c.border },
+          pressed && { opacity: 0.72 },
+        ]}
+      >
+        <Ionicons name="qr-code-outline" size={22} color={c.accent} />
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.aboutLabel, { color: c.textPrimary, fontWeight: "700" }]}>Sign in a TV</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11 }}>Scan its Yaver QR code</Text>
+        </View>
+        <Text style={[styles.aboutValue, { color: c.accent }]}>Scan ›</Text>
+      </Pressable>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -2047,26 +2064,6 @@ export default function SettingsScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
-        {/* Primary companion action: authorize a TV with the account that is
-            already signed in on this phone, regardless of its OAuth provider. */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>TV sign-in</Text>
-          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-            <Pressable
-              style={styles.aboutRow}
-              onPress={() => router.push({ pathname: "/approve-device", params: { scan: "1" } })}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Scan TV QR</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  Sign in Apple TV or Android TV with this Yaver account
-                </Text>
-              </View>
-              <Text style={[styles.aboutValue, { color: c.accent }]}>Scan ›</Text>
-            </Pressable>
-          </View>
-        </View>
-
         {/* Machine + voice controls */}
         {/* Per-machine coding agent preference lives before toolchain sync:
             choose the default runner for the connected box and drive remote
@@ -2307,9 +2304,7 @@ export default function SettingsScreen() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Sandbox AI</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  On-device model or your own Claude / OpenAI / GLM key for phone coding
-                </Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>Phone coding models and keys</Text>
               </View>
               <Text style={[styles.aboutValue, { color: c.accent }]}>Configure ›</Text>
             </Pressable>
@@ -2339,9 +2334,7 @@ export default function SettingsScreen() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Store Studio</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  App Store / Play assets — permission-justification videos & prose for your app
-                </Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>Store assets and review media</Text>
               </View>
               <Text style={[styles.aboutValue, { color: c.accent }]}>Open ›</Text>
             </Pressable>
@@ -2353,9 +2346,7 @@ export default function SettingsScreen() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>App-Test Agent</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  Drive your app on redroid, catch bugs (red box / crash / ANR) — catch-only or fix
-                </Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>Test apps and catch crashes</Text>
               </View>
               <Text style={[styles.aboutValue, { color: c.accent }]}>Open ›</Text>
             </Pressable>
@@ -2386,9 +2377,7 @@ export default function SettingsScreen() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>On-device models</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  Download + manage local LLMs (voice helper, coder) — run offline
-                </Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>Download models for offline use</Text>
               </View>
               <Text style={[styles.aboutValue, { color: c.accent }]}>Manage ›</Text>
             </Pressable>
@@ -2401,9 +2390,7 @@ export default function SettingsScreen() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Voice assistant</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  Hold-to-talk device control — connect, reconnect, switch agents, run safe actions
-                </Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>Control devices by voice</Text>
               </View>
               <Text style={[styles.aboutValue, { color: c.accent }]}>Open ›</Text>
             </Pressable>
@@ -2420,7 +2407,7 @@ export default function SettingsScreen() {
             >
               <View style={{ flex: 1 }}>
                 <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Agent voice loop</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>Deepgram Flux STT + Cartesia Sonic TTS, stored in the agent vault</Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>Cloud speech for tasks</Text>
               </View>
               <Text style={[styles.aboutValue, { color: c.accent }]}>Configure ›</Text>
             </Pressable>
@@ -2609,7 +2596,6 @@ export default function SettingsScreen() {
             <View style={[styles.aboutRow, { justifyContent: "space-between" }]}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Read responses aloud</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>{ttsProvider === "openai" ? "Uses OpenAI text-to-speech" : "Uses local device text-to-speech"}</Text>
               </View>
               <Switch
                 value={ttsEnabled}
@@ -2624,7 +2610,7 @@ export default function SettingsScreen() {
             <View style={[styles.aboutRow, { justifyContent: "space-between" }]}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Run tasks in TTS mode</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>Agent leads each reply with a short spoken-style summary, then the usual details. Text only — nothing is read aloud unless you also enable “Read responses aloud”.</Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>Add a short spoken summary</Text>
               </View>
               <Switch
                 value={ttsTaskMode}
@@ -4134,6 +4120,7 @@ export default function SettingsScreen() {
           </View>
 
           {/* Image status + build */}
+          <View style={{ height: 8 }} />
           <View style={[styles.actionRow, { backgroundColor: c.bgCard, borderColor: c.border, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }]}>
             <Text style={[styles.actionRowLabel, { color: c.textPrimary }]}>
               Image{sandboxStatus.imageName ? ` (${sandboxStatus.imageName})` : ""}
@@ -5555,6 +5542,18 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 120 },
+  tvSignInBar: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    minHeight: 58,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
 
   // Tightened from 32/12 → 18/8: with ~18 stacked sections the old
   // spacing made Settings an endless scroll even though every heavy

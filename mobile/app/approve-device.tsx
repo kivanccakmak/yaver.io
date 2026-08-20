@@ -238,7 +238,12 @@ export default function ApproveDeviceScreen() {
                 : `${info?.machineName || "The device"} is approved. Keep its sign-in screen open while it picks up the session.`}
           </Text>
           <Pressable
-            style={({ pressed }) => [styles.primaryBtn, { backgroundColor: c.accent }, pressed && { opacity: 0.85 }]}
+            style={({ pressed }) => [
+              styles.primaryBtn,
+              styles.successBtn,
+              { backgroundColor: c.accent },
+              pressed && { opacity: 0.85 },
+            ]}
             onPress={goHome}
           >
             <Text style={[styles.primaryBtnText, { color: "#000" }]}>Done</Text>
@@ -406,6 +411,9 @@ const styles = StyleSheet.create({
   infoText: { fontSize: 13 },
   error: { fontSize: 13, marginBottom: 12, textAlign: "center" },
   primaryBtn: { paddingVertical: 15, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 8 },
+  // `centered` uses alignItems:center, so the shared button otherwise shrinks
+  // to the four-letter label and renders as a tall, narrow pill on iPhone.
+  successBtn: { width: "100%", maxWidth: 320, minHeight: 52, paddingHorizontal: 32 },
   primaryBtnText: { fontSize: 16, fontWeight: "700" },
   cancelBtn: { alignItems: "center", paddingVertical: 14, marginTop: 8 },
   cancelText: { fontSize: 15, fontWeight: "600" },
