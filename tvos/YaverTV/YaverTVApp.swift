@@ -19,15 +19,10 @@ struct RootView: View {
     @EnvironmentObject var store: YaverStore
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            if store.isAuthenticated {
-                DashboardView()
-            } else {
-                SignInView()
-            }
-            #if DEBUG
-            DebugInputOverlay()
-            #endif
+        if store.isAuthenticated {
+            DashboardView()
+        } else {
+            SignInView()
         }
     }
 }

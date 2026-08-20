@@ -1,11 +1,11 @@
-// TVInputStatus.swift — named tvOS text-input states + a debug input HUD.
+// TVInputStatus.swift — named tvOS text-input states.
 //
 // Failure plumbing for the Siri Remote mic. tvOS gives the app no mic-button
 // callback; the only honest signals are the UIKit first-responder state and the
 // system keyboard. This reporter centralises those so every route renders the
 // same named state instead of silence (AGENTS.md "Every failure must carry a
-// route to its fix"). The status line is production; the on-screen HUD is Debug
-// so the physical-TV session can be judged on pixels from the couch.
+// route to its fix"). The quiet status line only appears when input needs
+// attention; healthy input consumes no screen space.
 
 import SwiftUI
 import UIKit
@@ -37,7 +37,7 @@ final class InputStateReporter: ObservableObject {
     @Published var lastTextChangeAt: Date?
     @Published var focusRequestedAt: Date?
 
-    // Responder-ladder diagnostics (read from the DebugInputOverlay HUD).
+    // Responder-ladder measurements retained for input diagnostics and tests.
     @Published var responderAttempts = 0
     @Published var lastAttemptResult = false
     @Published var editBeginCount = 0
@@ -101,67 +101,3 @@ struct TVInputStatusLine: View {
         }
     }
 }
-
-#if DEBUG
-/// On-screen input-state HUD for the physical-TV verification session. Shows
-/// only measured facts — never the DeepSeek key, token, or full prompt (only a
-/// 24-char tail of the last text change). Debug builds show it unconditionally;
-/// a Release build opts in via `yaver.tv.debugInput`.
-struct DebugInputOverlay: View {
-    @AppStorage("yaver.tv.debugInput") private var storedDebugInput = false
-    @Environment(\.scenePhase) private var phase
-    @ObservedObject private var reporter = InputStateReporter.shared
-
-    private var enabled: Bool {
-        #if DEBUG
-        true
-        #else
-        storedDebugInput
-        #endif
-    }
-
-    var body: some View {
-        if enabled {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: "route: \(reporter.route)")
-                Text(verbatim: "focusReq: \(reporter.focusRequestedAt != nil)  responder: \(reporter.responder)  kb: \(reporter.keyboardVisible)")
-                Text(verbatim: "scene: \(reporter.scenePhase)  state: \(reporter.derivedState?.label ?? "idle")")
-                Text(verbatim: "responderAttempts: \(reporter.responderAttempts)  last: \(reporter.lastAttemptResult)  begin: \(reporter.editBeginCount)  end: \(reporter.editEndCount)")
-                Text(verbatim: "textΔ: \(ageLabel)  txt: \(truncatedTail(reporter.lastTextChange))")
-            }
-            .font(.system(size: 14, design: .monospaced))
-            .foregroundStyle(.white)
-            .padding(12)
-            .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 10))
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            .padding(18)
-            .allowsHitTesting(false)
-            .onAppear { reporter.scenePhase = String(describing: phase) }
-            .onChange(of: phase) { _, newValue in
-                reporter.scenePhase = String(describing: newValue)
-            }
-        }
-    }
-
-    private var ageLabel: String {
-        guard let at = reporter.lastTextChangeAt else { return "-" }
-        let seconds = max(0, Int(Date().timeIntervalSince(at)))
-        return "\(seconds)s"
-    }
-
-    private func truncatedTail(_ value: String, max: Int = 24) -> String {
-        guard value.count > max else { return value }
-        return "…" + value.suffix(max)
-    }
-}
-
-private extension TVInputState {
-    var label: String {
-        switch self {
-        case .active: return "active"
-        case .notActive: return "NOT_ACTIVE"
-        case .dictationUnavailable: return "DICT_UNAVAIL"
-        }
-    }
-}
-#endif

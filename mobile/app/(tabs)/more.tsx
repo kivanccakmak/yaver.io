@@ -2204,15 +2204,27 @@ export default function MoreScreen() {
 
           <Pressable
             style={[s.quickCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
-            onPress={handleTutorials}
+            onPress={handleDevices}
           >
-            <Text style={[s.quickIcon, { color: c.textMuted }]}>{"\u2302"}</Text>
-            <Text style={[s.quickLabel, { color: c.textPrimary }]}>Tutorials</Text>
+            <Text style={[s.quickIcon, { color: c.textMuted }]}>{"\u25CF"}</Text>
+            <Text style={[s.quickLabel, { color: c.textPrimary }]}>Devices</Text>
             <Text style={[s.quickDesc, { color: c.textMuted }]} numberOfLines={2}>
-              Setup and guides
+              Manage remote boxes
             </Text>
           </Pressable>
         </View>
+
+        <Pressable
+          style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
+          onPress={handleConnection}
+        >
+          <Text style={[s.icon, { color: c.textMuted }]}>{"🌐"}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[s.label, { color: c.textPrimary }]}>Connection &amp; Network</Text>
+            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Phone and runner diagnostics</Text>
+          </View>
+          <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203a"}</Text>
+        </Pressable>
 
         <Pressable
           style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
@@ -2226,6 +2238,8 @@ export default function MoreScreen() {
           <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203a"}</Text>
         </Pressable>
 
+        {!LEAN_MORE_SURFACE ? (
+          <>
         <Pressable
           style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
           onPress={handleConnection}
@@ -2919,6 +2933,8 @@ export default function MoreScreen() {
         </Pressable>
           </>
         )}
+          </>
+        ) : null}
       </ScrollView>
 
       {/* Pair device modal */}
