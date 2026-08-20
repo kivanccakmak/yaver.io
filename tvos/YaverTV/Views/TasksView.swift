@@ -178,12 +178,10 @@ struct TasksView: View {
                 .foregroundStyle(.orange)
             Text(store.taskRuntimePlan().kind == .signedOut
                  ? "Sign in to start coding tasks"
-                 : store.remotelessMode ? "Working without a device" : "No remote runner connected")
+                 : "No remote runner connected")
                 .font(.system(size: 30, weight: .bold))
             Text(store.taskRuntimePlan().kind == .signedOut
                  ? "Sign in first, then choose the machine that runs OpenCode."
-                 : store.remotelessMode
-                 ? "Yaver Code can answer questions and deep-audit work from the TV. Git edits, builds, rendering, and Vibing still require a remote runner."
                  : "OpenCode + DeepSeek V4 Flash tasks need a runner machine. A render box is not required for Chat or Git coding.")
                 .font(.system(size: 20))
                 .foregroundStyle(.secondary)
@@ -196,7 +194,7 @@ struct TasksView: View {
             }
             NavigationLink("Choose or add a machine", destination: MachinePickerView())
                 .buttonStyle(.borderedProminent)
-            NavigationLink(store.remotelessMode ? "Open Yaver Code" : "Use boxless Yaver Code", destination: BoxlessCodeView())
+            NavigationLink("Use boxless Yaver Code", destination: BoxlessCodeView())
                 .buttonStyle(.bordered)
         }
         .padding(56)

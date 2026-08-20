@@ -456,6 +456,36 @@ actor AgentClient {
         let questionId: String?
     }
 
+    /// Compatibility bridge for existing consumers which only need appended
+    /// groomed text. The richer overload below owns resume offsets/full-replay
+    /// semantics for conversation surfaces; keeping this adapter makes that
+    /// transport evolution additive instead of forcing unrelated panels to
+    /// change in the same release.
+    func subscribeTaskOutput(
+        taskId: String,
+        rawSince: Int? = nil,
+        onRaw: (@Sendable (String, Int, Bool) -> Void)? = nil,
+        onData: (@Sendable (String) -> Void)?,
+        onDone: (@Sendable (String) -> Void)? = nil,
+        onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
+    ) -> Task<Void, Never> {
+        let bridgedOnData: (@Sendable (String, Int?, Bool) -> Void)?
+        if let onData {
+            bridgedOnData = { text, _, _ in onData(text) }
+        } else {
+            bridgedOnData = nil
+        }
+        return subscribeTaskOutput(
+            taskId: taskId,
+            since: nil,
+            rawSince: rawSince,
+            onRaw: onRaw,
+            onData: bridgedOnData,
+            onDone: onDone,
+            onEnd: onEnd
+        )
+    }
+
     func subscribeTaskOutput(
         taskId: String,
         since: Int? = nil,
