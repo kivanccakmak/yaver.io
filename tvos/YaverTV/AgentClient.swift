@@ -88,6 +88,11 @@ actor AgentClient {
         // Unwrap { initial: ... } if present (streaming verbs), else decode whole.
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let ok = obj["ok"] as? Bool, !ok {
+                // Preserve the structured refusal envelope — `code`,
+                // `capabilityGap`, relay flag — instead of flattening a
+                // deterministic verdict (auth.session.scope_denied & friends)
+                // to prose that a view must regex.
+                if let refusal = AgentError.fromHTTPBody(data) { throw refusal }
                 throw AgentError(message: obj["error"] as? String ?? "\(verb) failed")
             }
             if let initial = obj["initial"] {
@@ -111,9 +116,13 @@ actor AgentClient {
         let data = try await rawOps(verb, payload)
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let ok = obj["ok"] as? Bool, !ok {
+                if let refusal = AgentError.fromHTTPBody(data) { throw refusal }
                 throw AgentError(message: obj["error"] as? String ?? "\(verb) failed")
             }
-            if let err = obj["error"] as? String { throw AgentError(message: err) }
+            if let err = obj["error"] as? String {
+                if let refusal = AgentError.fromHTTPBody(data) { throw refusal }
+                throw AgentError(message: err)
+            }
             if let ok = obj["ok"] as? Bool { return ok }
         }
         return true
@@ -170,6 +179,15 @@ actor AgentClient {
                     // {error} body; surface the error message when present, like
                     // the RN client.
                     if !(200..<300).contains(http.statusCode) {
+                        if let refusal = AgentError.fromHTTPBody(data) {
+                            // A real answer from a reachable agent — do NOT
+                            // retry the next endpoint. Retrying would re-run a
+                            // verb that already executed and merely reported a
+                            // refusal. The structured envelope travels so the
+                            // TV can classify scope/relay denials without
+                            // regexing prose.
+                            throw refusal
+                        }
                         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                            let err = obj["error"] as? String {
                             // A real answer from a reachable agent — do NOT retry

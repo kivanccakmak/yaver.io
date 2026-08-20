@@ -426,6 +426,38 @@ struct RemoteRuntimeWebRTCView: View {
     }
 
     private func runtimeFailurePanel(_ message: String) -> some View {
+        // A scope 403 is deterministic — Retry render would 403 forever and
+        // Fix with AI edits a project that is fine. The box's agent predates
+        // the TV scope rows; the ONLY route is updating the agent, exactly as
+        // DroidStreamView / WebPreviewStreamView already do for this verdict.
+        // The code is preserved through TVRemoteRuntimeController.fail; the
+        // prose shim covers agents old enough to emit no code at all.
+        if runtime.errorCode == FailureSignals.sessionScopeDenied
+            || message.contains("scoped token cannot access this endpoint") {
+            return AnyView(
+                VStack(spacing: 16) {
+                    Image(systemName: "arrow.down.circle.dotted")
+                        .font(.system(size: 56))
+                        .foregroundStyle(.orange)
+                    Text("This box needs an agent update")
+                        .font(.system(size: 24, weight: .bold))
+                    Text(FailureSignals.explainSessionScopeDenied())
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 640)
+                    NavigationLink("Update the agent") { UpdateAgentView() }
+                        .buttonStyle(.borderedProminent)
+                }
+                .padding(26)
+                .background(Color.black.opacity(0.86), in: RoundedRectangle(cornerRadius: 18))
+                .accessibilityIdentifier("vibing.runtime-recovery")
+            )
+        }
+        return AnyView(runtimeRetryPanel(message))
+    }
+
+    private func runtimeRetryPanel(_ message: String) -> some View {
         VStack(spacing: 14) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 44))
@@ -495,7 +527,7 @@ struct RemoteRuntimeWebRTCView: View {
                 await runtime.start(client: client, project: project, preferAuthenticatedFrames: form == .phone)
                 enterRemoteOverlay()
             } catch {
-                runtime.fail("Reload failed: \(error.localizedDescription)")
+                runtime.fail(error, prefix: "Reload failed: ")
             }
         }
     }
@@ -919,6 +951,11 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
     @Published var transportLabel = "WebRTC"
     @Published var connected = false
     @Published var error: String?
+    /// Stable reason code from the agent's refusal (`code` key —
+    /// reason_codes.go vocabulary, e.g. auth.session.scope_denied), preserved
+    /// through `fail` so the view can route a deterministic verdict instead of
+    /// regexing prose. nil for transport failures and old agents.
+    @Published var errorCode: String?
     @Published var controlNote: String?
     @Published private(set) var textInputFocusRequest = 0
     @Published private(set) var receivedUsableFrame = false
@@ -964,9 +1001,23 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
     private var vibingCapabilities = Set<String>()
     private var pendingVibingAcks: [String: CheckedContinuation<[String: Any], Error>] = [:]
 
-    func fail(_ message: String) {
+    func fail(_ message: String, code: String? = nil) {
         error = message
+        errorCode = code
         status = "Interactive runtime unavailable"
+    }
+
+    /// Preserve the agent's structured refusal (`code`, `gap`, relay flag)
+    /// instead of flattening to `localizedDescription`. A scope/relay denial
+    /// is deterministic and must reach the view as itself; prose forces a
+    /// regex nobody keeps in sync (AGENTS.md "SIGNAL — structured and named").
+    func fail(_ failure: Error, prefix: String = "") {
+        if let agentError = failure as? AgentErrorCoded {
+            fail(prefix.isEmpty ? agentError.message : "\(prefix)\(agentError.message)",
+                 code: agentError.code)
+        } else {
+            fail(prefix.isEmpty ? failure.localizedDescription : "\(prefix)\(failure.localizedDescription)")
+        }
     }
 
     func start(client: AgentClient, project: ProjectSummary, preferAuthenticatedFrames: Bool = false) async {
@@ -980,6 +1031,7 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         videoTrack = nil
         session = nil
         error = nil
+        errorCode = nil
         controlNote = nil
         connected = false
         transportLabel = "WebRTC"
@@ -1045,7 +1097,7 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             return
         } catch {
             guard generation == thisGeneration else { return }
-            fail(error.localizedDescription)
+            fail(error)
         }
     }
 
