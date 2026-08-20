@@ -55,6 +55,18 @@ apple_configure_xcode_auth() {
   echo "Apple upload authentication: Xcode-managed account (validated during archive)"
 }
 
+# Xcode prints its full command invocation before a build. When API-key flags
+# are present that banner includes the private-key path plus credential
+# metadata, even though callers never echo those values themselves. Keep
+# compiler diagnostics visible while removing the authentication arguments
+# from every persisted or streamed build log.
+apple_redact_xcode_auth_output() {
+  LC_ALL=C sed -E \
+    -e 's#(-authenticationKeyPath[ =]+)("[^"]*"|[^[:space:]]+)#\1<redacted>#g' \
+    -e 's#(-authenticationKeyID[ =]+)("[^"]*"|[^[:space:]]+)#\1<redacted>#g' \
+    -e 's#(-authenticationKeyIssuerID[ =]+)("[^"]*"|[^[:space:]]+)#\1<redacted>#g'
+}
+
 apple_resolve_team_id() {
   local project_source="$1"
   local resolved="${APPLE_TEAM_ID:-}"

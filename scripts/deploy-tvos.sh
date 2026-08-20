@@ -154,7 +154,7 @@ if [ "$DEVICE_MODE" = "1" ]; then
     -allowProvisioningDeviceRegistration \
     ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
     ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
-    build
+    build 2>&1 | apple_redact_xcode_auth_output
 
   APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug-appletvos/Yaver.app"
   if [ ! -d "$APP_PATH" ]; then
@@ -251,7 +251,7 @@ xcodebuild -project "$TVOS_DIR/YaverTV.xcodeproj" \
   ${ALLOW_PROVISIONING_UPDATES[@]+"${ALLOW_PROVISIONING_UPDATES[@]}"} \
   ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
   ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
-  archive 2>&1 | tee "$TVOS_ARCHIVE_LOG"
+  archive 2>&1 | apple_redact_xcode_auth_output | tee "$TVOS_ARCHIVE_LOG"
 TVOS_ARCHIVE_EXIT=${PIPESTATUS[0]}
 set -e
 if [ "$TVOS_ARCHIVE_EXIT" -ne 0 ]; then
@@ -303,7 +303,8 @@ xcodebuild -exportArchive \
   -exportOptionsPlist "$EXPORT_OPTIONS" \
   -exportPath "$EXPORT_PATH" \
   ${ALLOW_PROVISIONING_UPDATES[@]+"${ALLOW_PROVISIONING_UPDATES[@]}"} \
-  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"}
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
+  2>&1 | apple_redact_xcode_auth_output
 
 if [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ]; then
   IPA_PATH="$(find "$EXPORT_PATH" -maxdepth 1 -type f -name '*.ipa' -print -quit)"

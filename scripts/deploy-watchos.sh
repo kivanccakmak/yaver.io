@@ -151,7 +151,7 @@ xcodebuild -project "$WATCH_DIR/YaverWatch.xcodeproj" \
   -authenticationKeyIssuerID "$AUTH_KEY_ISSUER" \
   SKIP_INSTALL=NO \
   ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
-  archive
+  archive 2>&1 | apple_redact_xcode_auth_output
 
 if [ ! -d "$ARCHIVE_PATH" ]; then
   echo "ERROR: expected watchOS archive not found: $ARCHIVE_PATH" >&2
@@ -180,7 +180,8 @@ xcodebuild -exportArchive \
   ${ALLOW_PROVISIONING_UPDATES[@]+"${ALLOW_PROVISIONING_UPDATES[@]}"} \
   -authenticationKeyPath "$AUTH_KEY" \
   -authenticationKeyID "$AUTH_KEY_ID" \
-  -authenticationKeyIssuerID "$AUTH_KEY_ISSUER"
+  -authenticationKeyIssuerID "$AUTH_KEY_ISSUER" \
+  2>&1 | apple_redact_xcode_auth_output
 
 if [ "$WATCHOS_EXPORT_DESTINATION" = "upload" ]; then
   echo "watchOS upload submitted from $ARCHIVE_PATH"

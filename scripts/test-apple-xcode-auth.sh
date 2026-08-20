@@ -33,6 +33,16 @@ apple_configure_xcode_auth >/dev/null
 [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ] || fail "complete credentials should use API-key mode"
 [ "${#APPLE_XCODE_AUTH_ARGS[@]}" -eq 6 ] || fail "API-key mode should emit six xcodebuild arguments"
 
+AUTH_BANNER='xcodebuild -authenticationKeyPath /private/AuthKey_SECRET.p8 -authenticationKeyID SECRETID -authenticationKeyIssuerID SECRET-ISSUER archive'
+REDACTED_BANNER="$(printf '%s\n' "$AUTH_BANNER" | apple_redact_xcode_auth_output)"
+case "$REDACTED_BANNER" in
+  *SECRET*) fail "Xcode auth output redactor must remove key paths and credential metadata" ;;
+esac
+[ "$(printf '%s\n' "$REDACTED_BANNER" | grep -o '<redacted>' | wc -l | tr -d ' ')" -eq 3 ] || \
+  fail "Xcode auth output redactor must replace all three authentication values"
+printf '%s\n' "$REDACTED_BANNER" | grep -q 'xcodebuild .* archive' || \
+  fail "Xcode auth output redactor must preserve useful build diagnostics"
+
 unset APPLE_TEAM_ID
 apple_resolve_team_id "$ROOT/mobile/ios/Yaver.xcodeproj/project.pbxproj"
 [ "${#APPLE_TEAM_ID}" -eq 10 ] || fail "iOS team ID was not derived"
@@ -108,6 +118,21 @@ grep -q 'EXPORT_DESTINATION="export"' "$testflight_script" || \
   fail "iOS API-key deploys must export locally before App Store authentication"
 [ "$(grep -c -- '--type ios --apiKey' "$testflight_script")" -eq 2 ] || \
   fail "iOS API-key deploys must validate/upload the exported IPA with altool"
+
+# Xcode echoes its full invocation, including API-key flags. Every Apple build
+# lane that supplies those flags must filter the stream before it reaches a
+# terminal or persistent log.
+for script_and_count in \
+  'deploy-testflight.sh:2' \
+  'deploy-tvos.sh:3' \
+  'deploy-visionos.sh:2' \
+  'deploy-watchos.sh:2'; do
+  apple_script="${script_and_count%:*}"
+  expected_redactors="${script_and_count##*:}"
+  actual_redactors="$(grep -c 'apple_redact_xcode_auth_output' "$ROOT/scripts/$apple_script")"
+  [ "$actual_redactors" -eq "$expected_redactors" ] || \
+    fail "$apple_script must redact every Xcode authentication invocation"
+done
 
 apple_ensure_simulator_runtime \
   watchOS watchsimulator \

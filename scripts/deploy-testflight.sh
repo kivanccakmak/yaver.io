@@ -424,7 +424,8 @@ rm -rf /tmp/Yaver.xcarchive
 # ~/.yaver/build/ios persists, is owner-only, and is outside the repo so it
 # can never be swept by a `git clean`. Override with YAVER_IOS_DERIVED_DATA if
 # a run genuinely wants a throwaway cache (a signing-cache bisect, say).
-# Archive.
+# Archive. Run the long-lived pipeline in a subshell so wait observes
+# xcodebuild's exit status while the persisted log is credential-redacted.
 #
 # Do not pipe xcodebuild through tee/tail here. On 2026-08-09 a TestFlight
 # deploy spent hours alive but silent inside Xcode's build-log machinery after
@@ -435,14 +436,18 @@ rm -rf /tmp/Yaver.xcarchive
 echo "Archiving... (derived data: $DERIVED — $CACHE_STATE)"
 ARCHIVE_LOG=/tmp/arch_full.log
 : > "$ARCHIVE_LOG"
-xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
-  -archivePath /tmp/Yaver.xcarchive archive \
-  DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
-  MARKETING_VERSION="$APP_MARKETING_VERSION" CURRENT_PROJECT_VERSION="$NEW_BUILD" \
-  CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES \
-  ENABLE_USER_SCRIPT_SANDBOXING=NO -allowProvisioningUpdates \
-  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
-  -derivedDataPath "$DERIVED" >"$ARCHIVE_LOG" 2>&1 &
+(
+  set +e
+  xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
+    -archivePath /tmp/Yaver.xcarchive archive \
+    DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
+    MARKETING_VERSION="$APP_MARKETING_VERSION" CURRENT_PROJECT_VERSION="$NEW_BUILD" \
+    CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES \
+    ENABLE_USER_SCRIPT_SANDBOXING=NO -allowProvisioningUpdates \
+    ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
+    -derivedDataPath "$DERIVED" 2>&1 | apple_redact_xcode_auth_output
+  exit "${PIPESTATUS[0]}"
+) >"$ARCHIVE_LOG" &
 ARCHIVE_PID=$!
 ARCHIVE_STARTED=$SECONDS
 ARCHIVE_LAST_SIZE=0
@@ -599,7 +604,8 @@ set +e
 xcodebuild -exportArchive -archivePath /tmp/Yaver.xcarchive \
   -exportOptionsPlist /tmp/ExportOptions.plist \
   -exportPath "$EXPORT_PATH" -allowProvisioningUpdates \
-  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} 2>&1 | tee "$EXPORT_LOG"
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} 2>&1 | \
+  apple_redact_xcode_auth_output | tee "$EXPORT_LOG"
 EXPORT_EXIT=${PIPESTATUS[0]}
 set -e
 

@@ -206,7 +206,8 @@ xcodebuild "${PROJECT_ARGS[@]}" \
   -allowProvisioningUpdates \
   ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
   -derivedDataPath "$DERIVED_DATA_PATH" \
-  ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"}
+  ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"} \
+  2>&1 | apple_redact_xcode_auth_output
 
 [ -d "$ARCHIVE_PATH" ] || { echo "ERROR: archive failed — no .xcarchive produced" >&2; exit 1; }
 
@@ -238,7 +239,8 @@ echo "Exporting & uploading visionOS…"
 xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
   -exportOptionsPlist /tmp/VisionExportOptions.plist \
   -exportPath "$EXPORT_PATH" -allowProvisioningUpdates \
-  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"}
+  ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
+  2>&1 | apple_redact_xcode_auth_output
 
 if [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ]; then
   IPA_PATH="$EXPORT_PATH/Yaver.ipa"
