@@ -198,15 +198,23 @@ navigation closes it. A failed POST presents only a retry/cancel alert.
   submission occurred. Its physical replay exposed the rejected widget in
   `IMG_6383` and a remaining Right-arrow focus sound; both are addressed in the
   next local build rather than recorded as a pass.
-- An App Store archive for candidate build 293 validated successfully, but its
-  upload was interrupted before acceptance when the new physical findings
-  arrived. Do not treat validation as a TestFlight deployment.
+- The earlier candidate-293 upload was interrupted before acceptance when the
+  new physical findings arrived. After the keyboard-only and focus-veto fixes
+  landed in `33bfc3efc`, the canonical `./deploy/deploy.sh tvos` path archived,
+  exported, validated, and uploaded a fresh build 293 from a clean worktree.
+  App Store Connect accepted that upload without errors on 2026-08-20; it is an
+  official TestFlight delivery, subject to Apple's normal processing time.
+- The latest build was not reinstalled directly on the paired Apple TV because
+  the Mac and TV were no longer on the same network. The 11:20 direct install
+  therefore remains the last local-device build; do not conflate it with the
+  accepted TestFlight build.
 
 ## Non-goals
 
-- Do not upload a known-broken candidate. Direct paired-TV and official
-  TestFlight deployment are authorized for this session, but the hardware
-  keyboard/arrow replay must judge the final candidate first.
+- Do not call simulator focus assertions proof of the physical Right-arrow
+  sound fix. The final build includes the UIKit focus-update veto and has been
+  delivered to TestFlight, but that specific hardware behavior still needs a
+  physical replay after Apple finishes processing it.
 - Do not treat a running tmux/terminal session as the chat handoff target; the
   task ID returned by `POST /tasks` is the authority for this flow.
 - Do not replace the task detail with a raw terminal. The raw console remains
