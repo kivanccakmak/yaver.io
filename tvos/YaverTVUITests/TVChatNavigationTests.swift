@@ -6,6 +6,7 @@
 // and it can be proven without a production token or mutable server fixture.
 
 import XCTest
+import Network
 
 final class TVChatNavigationTests: XCTestCase {
     override func setUpWithError() throws {
@@ -158,6 +159,75 @@ final class TVChatNavigationTests: XCTestCase {
         XCTAssertTrue(more.hasFocus, "Up from the prompt must reach the ellipsis after the keyboard closes")
     }
 
+    func testDoneCreatesExactlyOneTaskAndOpensItsLiveConversation() throws {
+        let server = try TVChatHTTPFixture()
+        addTeardownBlock { server.stop() }
+
+        let app = XCUIApplication()
+        let boxJSON = #"[{"id":"handoff-box","name":"Handoff Test","host":"127.0.0.1","port":\#(server.port)}]"#
+        let plistQuoted = "\"" + boxJSON.replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        app.launchArguments = [
+            "-yaver.tv.token", "handoff-audit",
+            "-yaver.tv.boxes", plistQuoted,
+            "-yaver.tv.selectedBox", "handoff-box",
+            "-yaver.tv.startAt", "chat",
+        ]
+        app.launch()
+
+        let newVibe = app.buttons["chat.new-vibe"]
+        XCTAssertTrue(newVibe.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.select)
+
+        let prompt = app.textFields["chat.prompt"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        prompt.typeText("Audit the couch handoff")
+
+        // Transcription is composition, not consent to send. The former
+        // implementation POSTed on the first two characters and this fixture
+        // caught the partial task before Done was pressed.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.75))
+        XCTAssertEqual(server.createCount, 0, "partial/in-progress text must never create a task")
+
+        // A newline is the simulator's explicit Return/Done event. The
+        // physical-device complement is the iPhone Apple TV Remote blue Done
+        // key, which reaches this same native TextField submit action.
+        prompt.typeText("\n")
+
+        let createDeadline = Date().addingTimeInterval(5)
+        while server.createCount == 0 && Date() < createDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(
+            server.createCount, 1,
+            "Done must produce one POST /tasks before navigation. UI: \(app.debugDescription)"
+        )
+
+        let userTurn = app.descendants(matching: .any)["chat.user-turn"]
+        XCTAssertTrue(userTurn.waitForExistence(timeout: 8), "Done must route to the exact created task's chat")
+        XCTAssertEqual(userTurn.label, "Audit the couch handoff")
+        XCTAssertTrue(
+            app.descendants(matching: .any)["chat.runner-working"].waitForExistence(timeout: 3),
+            "queued/running work must be named while output is pending"
+        )
+        let assistantTurn = app.descendants(matching: .any)["chat.assistant-turn"]
+        XCTAssertTrue(
+            assistantTurn.waitForExistence(timeout: 8),
+            "groomed task SSE output must stream into the assistant conversation lane"
+        )
+        XCTAssertEqual(assistantTurn.label, "I am checking the handoff now.")
+        XCTAssertTrue(app.textFields["chat.reply"].exists, "the created conversation must expose the next-turn reply field")
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForNonExistence(timeout: 3),
+            "Task detail must match the conversation screen directly; its reply field must not reopen the keyboard"
+        )
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.75))
+        XCTAssertEqual(server.createCount, 1, "duplicate submit/focus callbacks must still produce one POST /tasks")
+        XCTAssertEqual(server.createdTitle, "Audit the couch handoff")
+        XCTAssertTrue(server.sawAuthorizedCreate, "the handoff must preserve the same bearer-auth boundary as other task clients")
+    }
+
     private func launchDashboard() -> XCUIApplication {
         let app = XCUIApplication()
         let boxJSON = #"[{"id":"navigation-box","name":"Navigation Test","host":"127.0.0.1","port":18080}]"#
@@ -186,5 +256,225 @@ final class TVChatNavigationTests: XCTestCase {
         ]
         app.launch()
         return app
+    }
+}
+
+/// A real loopback HTTP server for the UI arc above. It intentionally speaks
+/// the production REST/SSE contract instead of injecting app state: the test
+/// can only pass if the app performs one POST, follows the returned task ID,
+/// subscribes to that task's output route, and renders the bytes it receives.
+private final class TVChatHTTPFixture: @unchecked Sendable {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "io.yaver.tests.tv-chat-http")
+    private let lock = NSLock()
+    private var _createCount = 0
+    private var _createdTitle = ""
+    private var _sawAuthorizedCreate = false
+    private var completed = false
+    // Network.framework does not retain accepted connections for the
+    // listener. Keep each one alive through the orderly response EOF; letting
+    // the last reference disappear immediately after `send` produces an RST.
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
+
+    private(set) var port: UInt16 = 0
+
+    var createCount: Int { locked { _createCount } }
+    var createdTitle: String { locked { _createdTitle } }
+    var sawAuthorizedCreate: Bool { locked { _sawAuthorizedCreate } }
+
+    init() throws {
+        listener = try NWListener(using: .tcp, on: .any)
+        let ready = DispatchSemaphore(value: 0)
+        var startupError: NWError?
+        var chosenPort: UInt16 = 0
+        listener.stateUpdateHandler = { [weak listener] state in
+            switch state {
+            case .ready:
+                chosenPort = listener?.port?.rawValue ?? 0
+                ready.signal()
+            case .failed(let error):
+                startupError = error
+                ready.signal()
+            default:
+                break
+            }
+        }
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.accept(connection)
+        }
+        listener.start(queue: queue)
+        guard ready.wait(timeout: .now() + 5) == .success,
+              startupError == nil,
+              chosenPort != 0 else {
+            listener.cancel()
+            throw startupError ?? NSError(
+                domain: "TVChatHTTPFixture", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "loopback server did not become ready"]
+            )
+        }
+        port = chosenPort
+    }
+
+    func stop() {
+        listener.cancel()
+        queue.sync {
+            connections.values.forEach { $0.cancel() }
+            connections.removeAll()
+        }
+    }
+
+    private func accept(_ connection: NWConnection) {
+        connections[ObjectIdentifier(connection)] = connection
+        connection.start(queue: queue)
+        receive(on: connection, buffer: Data())
+    }
+
+    private func receive(on connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1_048_576) { [weak self] data, _, _, error in
+            guard let self else { connection.cancel(); return }
+            var next = buffer
+            if let data { next.append(data) }
+            if self.requestIsComplete(next) {
+                self.respond(to: next, on: connection)
+            } else if error == nil {
+                self.receive(on: connection, buffer: next)
+            } else {
+                connection.cancel()
+            }
+        }
+    }
+
+    private func requestIsComplete(_ data: Data) -> Bool {
+        guard let text = String(data: data, encoding: .utf8),
+              let headerEnd = text.range(of: "\r\n\r\n") else { return false }
+        let headers = String(text[..<headerEnd.lowerBound])
+        let length = headers.split(separator: "\n").first { line in
+            line.lowercased().hasPrefix("content-length:")
+        }.flatMap { Int($0.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") } ?? 0
+        let bodyStart = text.distance(from: text.startIndex, to: headerEnd.upperBound)
+        return data.count >= bodyStart + length
+    }
+
+    private func respond(to data: Data, on connection: NWConnection) {
+        guard let request = String(data: data, encoding: .utf8),
+              let requestLine = request.split(separator: "\r\n", maxSplits: 1).first else {
+            sendJSON(#"{"error":"bad request"}"#, status: "400 Bad Request", on: connection)
+            return
+        }
+        let pieces = requestLine.split(separator: " ")
+        let method = pieces.first.map(String.init) ?? ""
+        let rawPath = pieces.count > 1 ? String(pieces[1]) : "/"
+        let path = rawPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? rawPath
+
+        switch (method, path) {
+        case ("GET", "/tasks"):
+            sendJSON(#"{"tasks":[]}"#, on: connection)
+        case ("POST", "/ops"):
+            sendJSON(#"{"count":0,"sessions":[]}"#, on: connection)
+        case ("GET", "/projects"):
+            sendJSON(#"{"projects":[]}"#, on: connection)
+        case ("GET", "/mcp/servers"):
+            sendJSON(#"{"servers":[]}"#, on: connection)
+        case ("GET", "/agent/runners"):
+            sendJSON(#"{"runners":[{"id":"opencode","name":"OpenCode","installed":true,"ready":true,"isDefault":true,"models":[]}],"default":"opencode"}"#, on: connection)
+        case ("POST", "/tasks"):
+            recordCreate(request)
+            sendJSON(#"{"taskId":"task-iphone-handoff","status":"queued","runnerId":"opencode"}"#, status: "201 Created", on: connection)
+        case ("GET", "/tasks/task-iphone-handoff"):
+            sendTaskDetail(on: connection)
+        case ("GET", "/tasks/task-iphone-handoff/output"):
+            streamTask(on: connection)
+        default:
+            sendJSON(#"{"error":"not found"}"#, status: "404 Not Found", on: connection)
+        }
+    }
+
+    private func recordCreate(_ request: String) {
+        let body = request.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n")
+        let title: String
+        if let data = body.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            title = json["title"] as? String ?? ""
+        } else {
+            title = ""
+        }
+        lock.lock()
+        _createCount += 1
+        _createdTitle = title
+        _sawAuthorizedCreate = request.range(of: "Authorization: Bearer handoff-audit", options: .caseInsensitive) != nil
+        lock.unlock()
+    }
+
+    private func sendTaskDetail(on connection: NWConnection) {
+        let done = locked { completed }
+        let title = locked { _createdTitle.isEmpty ? "Audit the couch handoff" : _createdTitle }
+        let turns: [[String: Any]] = done
+            ? [["role": "user", "content": title], ["role": "assistant", "content": "I am checking the handoff now."]]
+            : [["role": "user", "content": title]]
+        let task: [String: Any] = [
+            "id": "task-iphone-handoff",
+            "title": title,
+            "status": done ? "completed" : "running",
+            "runner": "opencode",
+            "turns": turns,
+        ]
+        let payload = try! JSONSerialization.data(withJSONObject: ["ok": true, "task": task])
+        sendJSON(String(decoding: payload, as: UTF8.self), on: connection)
+    }
+
+    private func streamTask(on connection: NWConnection) {
+        // Use real HTTP/1.1 chunk framing. A header-only, close-delimited body
+        // is ambiguous to URLSession when bytes arrive later and made the
+        // fixture drop valid SSE even though the production endpoint streams.
+        let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(headers.utf8) + chunk(": connected\n\n"), completion: .contentProcessed { error in
+            guard error == nil else { connection.cancel(); return }
+            self.queue.asyncAfter(deadline: .now() + 1.0) {
+                let output = "data: {\"type\":\"output\",\"text\":\"I am checking the handoff now.\",\"offset\":31}\n\n"
+                connection.send(content: self.chunk(output), completion: .contentProcessed { error in
+                    guard error == nil else { connection.cancel(); return }
+                    self.queue.asyncAfter(deadline: .now() + 2.0) {
+                        self.locked { self.completed = true }
+                        let done = "data: {\"type\":\"done\",\"status\":\"completed\"}\n\n"
+                        // `isComplete` emits an orderly EOF. Cancelling again
+                        // from the completion handler turns that FIN into a
+                        // reset on Network.framework, so URLSession can discard
+                        // an otherwise valid final frame as `ECONNRESET`.
+                        connection.send(content: self.chunk(done) + Data("0\r\n\r\n".utf8), isComplete: true, completion: .contentProcessed { _ in
+                            self.finish(connection)
+                        })
+                    }
+                })
+            }
+        })
+    }
+
+    private func sendJSON(_ json: String, status: String = "200 OK", on connection: NWConnection) {
+        let body = Data(json.utf8)
+        let headers = "HTTP/1.1 \(status)\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(headers.utf8) + body, isComplete: true, completion: .contentProcessed { _ in
+            self.finish(connection)
+        })
+    }
+
+    private func chunk(_ text: String) -> Data {
+        let body = Data(text.utf8)
+        return Data(String(format: "%X\r\n", body.count).utf8) + body + Data("\r\n".utf8)
+    }
+
+    private func finish(_ connection: NWConnection) {
+        // Give URLSession time to consume Content-Length / stream EOF before
+        // releasing the connection object. This remains bounded and local to
+        // the disposable UI-test fixture.
+        queue.asyncAfter(deadline: .now() + 0.5) {
+            self.connections.removeValue(forKey: ObjectIdentifier(connection))
+        }
+    }
+
+    @discardableResult
+    private func locked<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
     }
 }

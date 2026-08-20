@@ -458,17 +458,25 @@ actor AgentClient {
 
     func subscribeTaskOutput(
         taskId: String,
+        since: Int? = nil,
         rawSince: Int? = nil,
         onRaw: (@Sendable (String, Int, Bool) -> Void)? = nil,
-        onData: (@Sendable (String) -> Void)? = nil,
+        onData: (@Sendable (String, Int?, Bool) -> Void)? = nil,
         onDone: (@Sendable (String) -> Void)? = nil,
         onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
     ) -> Task<Void, Never> {
-        var query = ""
-        if let rawSince, rawSince >= 0 {
-            query = "?rawSince=\(rawSince)"
+        var queryItems: [URLQueryItem] = []
+        if let since, since >= 0 {
+            queryItems.append(URLQueryItem(name: "since", value: String(since)))
         }
-        let endpoints = requestEndpoints(path: "/tasks/\(taskId)/output\(query)")
+        if let rawSince, rawSince >= 0 {
+            queryItems.append(URLQueryItem(name: "rawSince", value: String(rawSince)))
+        }
+        var components = URLComponents()
+        components.path = "/tasks/\(taskId)/output"
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        let query = components.string ?? "/tasks/\(taskId)/output"
+        let endpoints = requestEndpoints(path: query)
         let token = self.token
         let relayPassword = box.relayPassword
         let urlSession = self.session
@@ -476,6 +484,7 @@ actor AgentClient {
             var lastError = "task output stream unavailable"
             var connected = false
             var sawDone = false
+            var replaceNextOutput = false
             for endpoint in endpoints {
                 if Task.isCancelled { onEnd?(.cancelled, nil); return }
                 var req = URLRequest(url: endpoint.url)
@@ -502,7 +511,8 @@ actor AgentClient {
                     for try await line in bytes.lines {
                         if Task.isCancelled { onEnd?(.cancelled, nil); return }
                         if line.isEmpty {
-                            emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone, sawDone: &sawDone)
+                            emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone,
+                                           sawDone: &sawDone, replaceNextOutput: &replaceNextOutput)
                             dataLines.removeAll(keepingCapacity: true)
                             continue
                         }
@@ -510,7 +520,8 @@ actor AgentClient {
                             dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
                         }
                     }
-                    emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone, sawDone: &sawDone)
+                    emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone,
+                                   sawDone: &sawDone, replaceNextOutput: &replaceNextOutput)
                     // The body ended. If we never saw `done`, this is an
                     // interruption — the box closed the stream or the relay
                     // dropped it — and saying nothing froze the console.
@@ -537,9 +548,10 @@ actor AgentClient {
     private nonisolated func emitTaskOutput(
         _ dataLines: [String],
         onRaw: (@Sendable (String, Int, Bool) -> Void)?,
-        onData: (@Sendable (String) -> Void)?,
+        onData: (@Sendable (String, Int?, Bool) -> Void)?,
         onDone: (@Sendable (String) -> Void)?,
-        sawDone: inout Bool
+        sawDone: inout Bool,
+        replaceNextOutput: inout Bool
     ) {
         guard !dataLines.isEmpty else { return }
         let payload = dataLines.joined(separator: "\n")
@@ -555,9 +567,12 @@ actor AgentClient {
             if let onRaw, let text = event.text, !text.isEmpty {
                 onRaw(text, event.offset ?? 0, event.full ?? true)
             }
+        case "resume":
+            replaceNextOutput = event.full ?? false
         case "output":
             if let onData, let text = event.text, !text.isEmpty {
-                onData(text)
+                onData(text, event.offset, replaceNextOutput)
+                replaceNextOutput = false
             }
         case "done":
             if !sawDone, let onDone {

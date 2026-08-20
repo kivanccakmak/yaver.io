@@ -27,6 +27,8 @@ struct TaskDetailView: View {
     @State private var reattachTask: Task<Void, Never>?
     @State private var reattachAttempt = 0
     @State private var rawCursor = 0
+    @State private var transcriptCursor = 0
+    @State private var liveAssistantText = ""
 
     @State private var reply = ""
     @State private var sending = false
@@ -121,6 +123,7 @@ struct TaskDetailView: View {
                             ProgressView()
                             Text("The runner is working…")
                                 .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("chat.runner-working")
                         }
                         .padding(18)
                         .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
@@ -187,15 +190,30 @@ struct TaskDetailView: View {
                 YaverDictationField(
                     text: $reply,
                     onSubmit: {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            replyFocus = .send
-                        }
+                        // The blue tvOS keyboard tick is the chat Send action,
+                        // not merely a focus move. sendReply() is guarded
+                        // against duplicate delegate callbacks.
+                        DispatchQueue.main.async { sendReply() }
+                    },
+                    onEndEditing: {
+                        // Apple TV Remote can end dictation without emitting
+                        // return. Submit the already-transcribed follow-up on
+                        // that same first tick so a second microphone press is
+                        // never required.
+                        DispatchQueue.main.async { sendReply() }
                     },
                     placeholder: "Reply…",
                     font: .systemFont(ofSize: 20),
+                    textColor: UIColor(white: 0.12, alpha: 1),
+                    tint: UIColor(white: 0.12, alpha: 1),
+                    fieldBackgroundColor: UIColor(white: 0.93, alpha: 1),
+                    fieldCornerRadius: 16,
+                    fieldContentInset: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16),
                     accessibilityIdentifier: "chat.reply"
                 )
                     .focused($replyFocus, equals: .field)
+                    .frame(maxWidth: .infinity, minHeight: 58, maxHeight: 58)
+                    .focusEffectDisabled()
                     .onMoveCommand { direction in
                         if direction == .down,
                            !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -412,6 +430,11 @@ struct TaskDetailView: View {
         for optimistic in optimisticTurns where !rows.contains(where: { $0.role == optimistic.role && $0.content == optimistic.content }) {
             rows.append(optimistic)
         }
+        let live = liveAssistantText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !live.isEmpty,
+           !rows.contains(where: { $0.role == "assistant" && $0.content == live }) {
+            rows.append(TaskConversationTurn(role: "assistant", content: live, timestamp: nil))
+        }
         return rows
     }
 
@@ -448,6 +471,7 @@ struct TaskDetailView: View {
                 Text(redactHomePaths(turn.content))
                     .font(.system(size: 17))
                     .frame(maxWidth: 900, alignment: .leading)
+                    .accessibilityIdentifier(user ? "chat.user-turn" : "chat.assistant-turn")
             }
             .padding(18)
             .background(user ? Color.blue.opacity(0.2) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
@@ -531,6 +555,8 @@ struct TaskDetailView: View {
                         status = fork.status ?? "queued"
                         console = ""
                         rawCursor = 0
+                        transcriptCursor = 0
+                        liveAssistantText = ""
                         streamMessage = nil
                         reattachNonce += 1
                         settingsChanged = false
@@ -578,6 +604,7 @@ struct TaskDetailView: View {
         let currentID = task.id
         let s = await client.subscribeTaskOutput(
             taskId: currentID,
+            since: transcriptCursor > 0 ? transcriptCursor : nil,
             rawSince: since,
             onRaw: { text, offset, full in
                 Task { @MainActor in
@@ -589,10 +616,21 @@ struct TaskDetailView: View {
                     reattachAttempt = 0
                 }
             },
-            onData: { _ in
+            onData: { text, offset, full in
                 Task { @MainActor in
-                    // Groomed compatibility output belongs in chat bubbles.
-                    // Only onRaw may populate the console.
+                    if full {
+                        liveAssistantText = String(text.suffix(128 * 1024))
+                    } else {
+                        liveAssistantText = String((liveAssistantText + text).suffix(128 * 1024))
+                    }
+                    if let offset {
+                        transcriptCursor = offset
+                    } else {
+                        // Older agents omitted groomed offsets. Still advance a
+                        // byte cursor so a relay reattach cannot duplicate the
+                        // assistant text already visible on the TV.
+                        transcriptCursor += text.utf8.count
+                    }
                     streamMessage = nil
                     streamRetrying = false
                 }
@@ -604,6 +642,7 @@ struct TaskDetailView: View {
                     streamRetrying = false
                     reattachAttempt = 0
                     await refreshDetail()
+                    liveAssistantText = ""
                 }
             },
             onEnd: { kind, reason in

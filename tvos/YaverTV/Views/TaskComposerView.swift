@@ -23,13 +23,19 @@ struct TaskComposerView: View {
     /// Optional project to preselect (e.g. "Start a vibe" from a project's
     /// dead-end preview screen). Matched by name against /projects.
     private let initialProjectName: String?
+    /// The Chat route owns its navigation transition so it can replace this
+    /// destination with the exact task returned by POST /tasks. Project
+    /// sheets keep the ordinary self-dismiss behaviour.
+    private let dismissAfterCreate: Bool
     private let onCreated: (TaskSummary) -> Void
 
     init(
         initialProjectName: String? = nil,
+        dismissAfterCreate: Bool = true,
         onCreated: @escaping (TaskSummary) -> Void = { _ in }
     ) {
         self.initialProjectName = initialProjectName
+        self.dismissAfterCreate = dismissAfterCreate
         self.onCreated = onCreated
     }
 
@@ -59,32 +65,35 @@ struct TaskComposerView: View {
         VStack(alignment: .leading, spacing: 22) {
             header
 
-            // Native text input is the shared YaverDictationField: it claims
-            // the UIKit first-responder state after the sheet is attached, so
-            // holding Siri on the remote dictates into this field instead of
-            // falling to system search. The old multiline SwiftUI axis could
-            // lose the dictation route; the bridge field is single-line by
-            // construction and the task description carries the full text.
+            // The bridge claims a real UIKit editing responder after this
+            // destination is attached. Its delegate copies the field's final
+            // committed value before Done/end-editing invokes create(), so
+            // iPhone Remote dictation cannot be lost between the blue tick and
+            // SwiftUI's binding update.
             YaverDictationField(
                 text: $prompt,
                 editingRequestID: editingRequest,
                 onSubmit: { create() },
+                onEndEditing: { create() },
+                autoSubmitBatchInput: true,
                 placeholder: "Speak your task — hold Siri on the remote",
-                font: .systemFont(ofSize: 24),
+                font: .systemFont(ofSize: 22, weight: .medium),
+                textColor: UIColor(white: 0.12, alpha: 1),
+                tint: UIColor(white: 0.12, alpha: 1),
+                fieldBackgroundColor: UIColor(white: 0.93, alpha: 1),
+                fieldCornerRadius: 18,
+                fieldContentInset: UIEdgeInsets(top: 0, left: 18, bottom: 0, right: 18),
                 accessibilityIdentifier: "chat.prompt"
             )
                 .focused($promptFocused)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 14)
-                .background(.gray.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+                .frame(maxWidth: .infinity, minHeight: 66, maxHeight: 66)
+                .focusEffectDisabled()
                 .disabled(creating)
-                .frame(minHeight: 66)
-            TVInputStatusLine()
 
             if creating {
                 HStack(spacing: 12) {
                     ProgressView()
-                    Text("Starting Deep Audit…")
+                    Text("Starting session…")
                         .font(.system(size: 17, weight: .semibold))
                 }
             } else {
@@ -135,7 +144,7 @@ struct TaskComposerView: View {
             Image(systemName: "wand.and.stars").font(.system(size: 26)).foregroundStyle(.blue)
             VStack(alignment: .leading, spacing: 3) {
                 Text("New vibe").font(.system(size: 30, weight: .bold))
-                Text("Deep Audit").font(.system(size: 15, weight: .semibold)).foregroundStyle(.blue)
+                Text("Start a session").font(.system(size: 15, weight: .semibold)).foregroundStyle(.blue)
             }
             Spacer()
             Button {
@@ -455,23 +464,27 @@ struct TaskComposerView: View {
                     runner: pickedRunner,
                     model: pickedModel,
                     mode: "",
-                    // Chat → New vibe is the TV's Deep Audit doorway. Runner,
-                    // model and scope are optional per-task overrides behind
-                    // the ellipsis; this action always requests the grounded
-                    // explain-first audit contract from the agent.
+                    // New Vibe creates a task through the runner task/chat
+                    // path. That path can start or reuse the runner session;
+                    // normal terminal mode requires a pre-existing tmux
+                    // session and was the reason this screen stayed visible
+                    // with a "no runner session" error after STT submit.
                     askMode: true,
                     mcpServers: Array(pickedMCPServers).sorted(),
                     includeYaverMcp: yaverMcpOn
                 )
                 onCreated(task)
-                dismiss()
+                if dismissAfterCreate { dismiss() }
             } catch {
                 self.error = error.localizedDescription
                 // POST failures stay recoverable without resurrecting the old
                 // Start page: put the user straight back in the keyboard with
                 // their text intact.
-                promptFocused = true
-                editingRequest += 1
+                promptFocused = false
+                DispatchQueue.main.async {
+                    promptFocused = true
+                    editingRequest += 1
+                }
             }
             creating = false
         }

@@ -25,10 +25,19 @@ struct YaverDictationField: UIViewRepresentable {
     /// reopen the keyboard after Menu.
     var editingRequestID: Int = 0
     var onSubmit: () -> Void = {}
+    var onEndEditing: () -> Void = {}
+    /// Continuity Keyboard sends iPhone Remote dictation to tvOS as one
+    /// multi-character replacement when its first blue Done ends microphone
+    /// mode. It does not send Return or end editing. Enable this only on a
+    /// surface where that committed phrase is itself the explicit send action.
+    var autoSubmitBatchInput = false
     var placeholder: String = ""
     var font: UIFont? = nil
     var textColor: UIColor? = nil
     var tint: UIColor? = nil
+    var fieldBackgroundColor: UIColor? = nil
+    var fieldCornerRadius: CGFloat = 0
+    var fieldContentInset: UIEdgeInsets = .zero
     var accessibilityIdentifier: String? = nil
 
     func makeCoordinator() -> Coordinator {
@@ -36,19 +45,31 @@ struct YaverDictationField: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UITextField {
-        let field = UITextField()
+        let field = YaverDictationTextField()
         field.delegate = context.coordinator
         field.returnKeyType = .done
         field.autocorrectionType = .no
         field.spellCheckingType = .no
         field.smartInsertDeleteType = .no
         field.borderStyle = .none
-        field.backgroundColor = .clear
+        field.backgroundColor = fieldBackgroundColor ?? .clear
+        field.layer.cornerRadius = fieldCornerRadius
+        field.clipsToBounds = fieldCornerRadius > 0
+        field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: fieldContentInset.left, height: 1))
+        field.leftViewMode = fieldContentInset.left > 0 ? .always : .never
+        field.rightView = UIView(frame: CGRect(x: 0, y: 0, width: fieldContentInset.right, height: 1))
+        field.rightViewMode = fieldContentInset.right > 0 ? .always : .never
         field.tintColor = tint ?? .white
         field.textColor = textColor ?? .white
         field.font = font ?? .systemFont(ofSize: 24)
         if !placeholder.isEmpty {
             field.placeholder = placeholder
+            if let textColor {
+                field.attributedPlaceholder = NSAttributedString(
+                    string: placeholder,
+                    attributes: [.foregroundColor: textColor.withAlphaComponent(0.58)]
+                )
+            }
         }
         if let accessibilityIdentifier {
             field.accessibilityIdentifier = accessibilityIdentifier
@@ -56,6 +77,9 @@ struct YaverDictationField: UIViewRepresentable {
         }
         field.addTarget(context.coordinator, action: #selector(Coordinator.textDidChange(_:)), for: .editingChanged)
         context.coordinator.field = field
+        field.onDictationRecordingDidEnd = { [weak coordinator = context.coordinator] in
+            coordinator?.dictationRecordingEnded()
+        }
         return field
     }
 
@@ -82,6 +106,8 @@ struct YaverDictationField: UIViewRepresentable {
 
     static func dismantleUIView(_ field: UITextField, coordinator: Coordinator) {
         coordinator.cancelResponderLadder()
+        coordinator.cancelBatchSubmit()
+        (field as? YaverDictationTextField)?.onDictationRecordingDidEnd = nil
         coordinator.field = nil
     }
 
@@ -89,7 +115,12 @@ struct YaverDictationField: UIViewRepresentable {
         var parent: YaverDictationField
         weak var field: UITextField?
         private var responderTask: Task<Void, Never>?
-        var lastEditingRequest = -1
+        private var batchSubmitTask: Task<Void, Never>?
+        private var endCallbackSent = false
+        // Zero means "do not open automatically". Composer routes explicitly
+        // bump to 1 after attachment; reply fields keep zero so navigating to
+        // task detail matches IMG_6382 and never resurrects the keyboard.
+        var lastEditingRequest = 0
 
         init(_ parent: YaverDictationField) {
             self.parent = parent
@@ -134,16 +165,52 @@ struct YaverDictationField: UIViewRepresentable {
             responderTask = nil
         }
 
+        func cancelBatchSubmit() {
+            batchSubmitTask?.cancel()
+            batchSubmitTask = nil
+        }
+
         @objc func textDidChange(_ field: UITextField) {
-            let value = field.text ?? ""
-            parent.text = value
-            InputStateReporter.shared.lastTextChange = value
-            InputStateReporter.shared.lastTextChangeAt = Date()
+            syncCommittedText(from: field)
+        }
+
+        func textField(
+            _ textField: UITextField,
+            shouldChangeCharactersIn range: NSRange,
+            replacementString string: String
+        ) -> Bool {
+            guard parent.autoSubmitBatchInput,
+                  string.trimmingCharacters(in: .whitespacesAndNewlines).count > 1 else {
+                return true
+            }
+            // Physical iPhone Remote fallback: Continuity Keyboard does not
+            // expose tvOS dictation callbacks, but its blue Done commits the
+            // recognized phrase as one batch replacement. Coalesce additive
+            // chunks long enough to avoid the former first-two-characters bug.
+            cancelBatchSubmit()
+            batchSubmitTask = Task { @MainActor [weak self, weak textField] in
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                guard !Task.isCancelled, let self, let textField else { return }
+                self.syncCommittedText(from: textField)
+                self.notifyEndEditingOnce()
+            }
+            return true
+        }
+
+        func dictationRecordingEnded() {
+            guard parent.autoSubmitBatchInput else { return }
+            cancelBatchSubmit()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let field = self.field else { return }
+                self.syncCommittedText(from: field)
+                self.notifyEndEditingOnce()
+            }
         }
 
         func textFieldDidBeginEditing(_ field: UITextField) {
             // The field is now the active tvOS text-input responder — the only
             // state in which the Siri Remote mic dictates into it.
+            endCallbackSent = false
             InputStateReporter.shared.noteEditingBegan()
         }
 
@@ -154,17 +221,60 @@ struct YaverDictationField: UIViewRepresentable {
             // navigation away clears focus through the normal focus engine.
             // Do NOT clear SwiftUI focus here — dropping it left Up/Down unable
             // to reach the surrounding controls after the keyboard closed.
+            syncCommittedText(from: field)
             InputStateReporter.shared.noteEditingEnded()
+            notifyEndEditingOnce()
+        }
+
+        func textFieldShouldEndEditing(_ field: UITextField) -> Bool {
+            // Apple TV Remote's blue tick can ask the field to end editing
+            // without reaching textFieldShouldReturn or, on some releases,
+            // textFieldDidEndEditing. Forward the event at this earlier
+            // delegate boundary too; callers guard duplicate submits.
+            syncCommittedText(from: field)
+            notifyEndEditingOnce()
+            return true
         }
 
         func textFieldShouldReturn(_ field: UITextField) -> Bool {
-            parent.onSubmit()
+            // Remote dictation may install the final phrase directly on the
+            // UIKit field without first sending editingChanged. Commit that
+            // value before notifying SwiftUI; otherwise Done creates an empty
+            // or stale task even though the keyboard visibly contains text.
+            syncCommittedText(from: field)
+            DispatchQueue.main.async { [weak self] in self?.parent.onSubmit() }
             field.resignFirstResponder()
             return true
         }
 
+        private func syncCommittedText(from field: UITextField) {
+            let value = field.text ?? ""
+            parent.text = value
+            InputStateReporter.shared.lastTextChange = value
+            InputStateReporter.shared.lastTextChangeAt = Date()
+        }
+
+        private func notifyEndEditingOnce() {
+            guard !endCallbackSent else { return }
+            endCallbackSent = true
+            DispatchQueue.main.async { [weak self] in self?.parent.onEndEditing() }
+        }
+
         deinit {
             responderTask?.cancel()
+            batchSubmitTask?.cancel()
         }
+    }
+}
+
+/// UIKit exposes a real dictation-completed boundary when dictation runs on
+/// tvOS itself. iPhone Continuity Keyboard currently uses the batch-replacement
+/// fallback above, but keeping both operations wired prevents OS-version drift.
+private final class YaverDictationTextField: UITextField {
+    var onDictationRecordingDidEnd: (() -> Void)?
+
+    override func dictationRecordingDidEnd() {
+        super.dictationRecordingDidEnd()
+        onDictationRecordingDidEnd?()
     }
 }

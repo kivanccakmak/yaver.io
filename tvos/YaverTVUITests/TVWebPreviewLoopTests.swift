@@ -211,9 +211,52 @@ final class TVWebPreviewLoopTests: XCTestCase {
         XCTAssertTrue(prompt.hasFocus, "Interactive Vibing must initially focus Chat")
         XCUIRemote.shared.press(.down)
         XCTAssertTrue(app.buttons["vibe.context"].hasFocus, "Down from Chat must focus Options")
+        XCUIRemote.shared.press(.up)
+        XCTAssertTrue(prompt.hasFocus, "Up from Options must restore the Vibe prompt before entering overlay mode")
+
+        // Enter the transparent remote-app overlay, then prove every arrow
+        // remains mouse input—even Right at its edge. A former
+        // `cursor.x >= 0.94` escape made Right leave the overlay, so users
+        // could never move the pointer to controls on the right of the app.
+        let overlay = app.buttons["Activate remote app"]
+        XCUIRemote.shared.press(.left)
+        XCTAssertTrue(waitForFocus(overlay), "Left from the Vibe prompt must enter the remote-app overlay")
+        XCUIRemote.shared.press(.select)
+        for _ in 0..<12 {
+            XCUIRemote.shared.press(.right)
+        }
+        XCTAssertTrue(waitForFocus(overlay), "Right must stay in overlay mode and move the remote mouse, even at its edge")
+        for direction in [XCUIRemote.Button.up, .down, .left, .right] {
+            XCUIRemote.shared.press(direction)
+            XCTAssertTrue(waitForFocus(overlay), "\(direction) must remain a remote mouse/scroll command while overlay mode is active")
+        }
+        XCTAssertEqual(
+            app.descendants(matching: .any)["vibing.overlay-focus-losses"].value as? String,
+            "0",
+            "Overlay arrows must be consumed before tvOS transiently highlights a Vibe chip"
+        )
+
+        // Back is the only overlay escape. The first press returns focus to
+        // the Vibe widget; the next, non-overlay Back returns to Dashboard.
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(prompt.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(prompt), "Back from overlay mode must stay in Vibing")
+        XCTAssertFalse(app.buttons["dashboard.vibing"].exists,
+                       "The overlay's Back event must not bubble into a Dashboard dismissal")
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(app.buttons["dashboard.vibing"].waitForExistence(timeout: 5), "Back outside overlay mode must return to Dashboard")
 
         Thread.sleep(forTimeInterval: 12)
         snap(app, "vibing-0004-interactive")
+    }
+
+    private func waitForFocus(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if element.hasFocus { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return element.hasFocus
     }
 
 

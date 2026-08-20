@@ -20,8 +20,99 @@ private enum TVAppControlMode: String {
     var symbol: String { self == .pointer ? "cursorarrow.rays" : "arrow.up.and.down" }
 }
 
+#if os(tvOS)
+/// A UIKit focus target that consumes directional presses before tvOS performs
+/// default focus navigation. SwiftUI's `onMoveCommand` observes a move but does
+/// not cancel the focus engine; that made DeepSeek flash and played a focus
+/// click before the overlay reclaimed focus on every Right press.
+private struct TVRemoteInputCapture: UIViewRepresentable {
+    let accessibilityLabel: String
+    let onMove: (MoveCommandDirection) -> Void
+    let onSelect: () -> Void
+    let onExit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> TVRemoteInputButton {
+        let button = TVRemoteInputButton(type: .custom)
+        button.backgroundColor = .clear
+        button.isOpaque = false
+        button.isAccessibilityElement = true
+        button.accessibilityTraits = .button
+        button.accessibilityIdentifier = "vibing.remote-input-capture"
+        button.addTarget(context.coordinator, action: #selector(Coordinator.select), for: .primaryActionTriggered)
+        context.coordinator.button = button
+        apply(to: button, coordinator: context.coordinator)
+        return button
+    }
+
+    func updateUIView(_ button: TVRemoteInputButton, context: Context) {
+        context.coordinator.parent = self
+        apply(to: button, coordinator: context.coordinator)
+    }
+
+    private func apply(to button: TVRemoteInputButton, coordinator: Coordinator) {
+        button.accessibilityLabel = accessibilityLabel
+        button.onMove = { [weak coordinator] direction in coordinator?.parent.onMove(direction) }
+        button.onExit = { [weak coordinator] in coordinator?.parent.onExit() }
+    }
+
+    final class Coordinator: NSObject {
+        var parent: TVRemoteInputCapture
+        weak var button: TVRemoteInputButton?
+
+        init(_ parent: TVRemoteInputCapture) { self.parent = parent }
+
+        @objc func select() { parent.onSelect() }
+    }
+}
+
+private final class TVRemoteInputButton: UIButton {
+    var onMove: ((MoveCommandDirection) -> Void)?
+    var onExit: (() -> Void)?
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            if let direction = moveDirection(for: press.type) {
+                onMove?(direction)
+            } else if press.type == .menu {
+                onExit?()
+            }
+        }
+        let uncaptured = Set(presses.filter { moveDirection(for: $0.type) == nil && $0.type != .menu })
+        if !uncaptured.isEmpty { super.pressesBegan(uncaptured, with: event) }
+    }
+
+    override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let uncaptured = Set(presses.filter { moveDirection(for: $0.type) == nil && $0.type != .menu })
+        if !uncaptured.isEmpty { super.pressesChanged(uncaptured, with: event) }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let uncaptured = Set(presses.filter { moveDirection(for: $0.type) == nil && $0.type != .menu })
+        if !uncaptured.isEmpty { super.pressesEnded(uncaptured, with: event) }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let uncaptured = Set(presses.filter { moveDirection(for: $0.type) == nil && $0.type != .menu })
+        if !uncaptured.isEmpty { super.pressesCancelled(uncaptured, with: event) }
+    }
+
+    private func moveDirection(for type: UIPress.PressType) -> MoveCommandDirection? {
+        switch type {
+        case .upArrow: return .up
+        case .downArrow: return .down
+        case .leftArrow: return .left
+        case .rightArrow: return .right
+        default: return nil
+        }
+    }
+}
+#endif
+
 struct RemoteRuntimeWebRTCView: View {
     @EnvironmentObject private var store: YaverStore
+    @Environment(\.dismiss) private var dismiss
 
     let project: ProjectSummary
     let form: PreviewForm
@@ -44,6 +135,11 @@ struct RemoteRuntimeWebRTCView: View {
     @State private var domHoverTask: Task<Void, Never>?
     @State private var lastMoveAt = Date.distantPast
     @State private var repeatedMoves = 0
+    /// Explicit input mode, separate from SwiftUI focus. tvOS is allowed to
+    /// recalculate focus during a remote swipe; it is never allowed to turn an
+    /// active remote mouse session back into Vibe navigation.
+    @State private var overlayInput = TVOverlayInputState()
+    @State private var overlayFocusLosses = 0
     @FocusState private var streamFocused: Bool
     @Namespace private var defaultFocus
 
@@ -112,12 +208,13 @@ struct RemoteRuntimeWebRTCView: View {
                 runtime.fail("No reachable render machine is selected.")
                 return
             }
-            await runtime.start(client: client, project: project)
+            await runtime.start(client: client, project: project, preferAuthenticatedFrames: form == .phone)
             // Vibing's primary action is the next prompt. Giving the viewport
             // default focus trapped every arrow in soft-pointer movement and
             // made the visible Runner/Model controls unreachable. App control
             // remains one Left/Select away; Chat owns initial focus.
             streamFocused = false
+            overlayInput.deactivate()
             chatFocusRequest += 1
         }
         .onChange(of: domMode) { _, enabled in
@@ -140,6 +237,20 @@ struct RemoteRuntimeWebRTCView: View {
             // so this opens only for a real editable target.
             showingKeyboard = true
         }
+        .onChange(of: streamFocused) { _, focused in
+            // A normal Left focus move into the WebRTC hit target starts the
+            // overlay input state too; all subsequent arrows remain remote
+            // mouse/scroll commands until Back explicitly clears it.
+            if focused && !overlayInput.exitHandoffPending {
+                overlayInput.enter()
+            } else if !focused, overlayInput.isActive, !overlayInput.exitHandoffPending {
+                // A consumed overlay arrow must never produce a transient
+                // SwiftUI focus hop. Count it so the closed loop catches the
+                // blink even if focus is reclaimed before XCTest samples it.
+                overlayFocusLosses += 1
+                DispatchQueue.main.async { streamFocused = true }
+            }
+        }
         .onDisappear {
             domHoverTask?.cancel()
             if domMode, let client = store.renderClient() ?? store.runnerClient() {
@@ -155,32 +266,25 @@ struct RemoteRuntimeWebRTCView: View {
         }
         .sheet(isPresented: $showingKeyboard) { keyboardSheet }
         #if os(tvOS)
-        .onMoveCommand { direction in
-            guard streamFocused else { return }
-            // Right at the right edge is the deliberate "one Right/Select back
-            // to Chat" escape. But it must only fire with pixels on screen:
-            // measured 2026-08-19 — while media was still connecting,
-            // `!runtime.hasMedia` was true, so the FIRST Right press bounced
-            // focus to Chat and the pointer could never be moved right at all.
-            if !domMode && direction == .right && runtime.hasMedia && cursor.x >= 0.94 {
-                streamFocused = false
-                chatFocusRequest += 1
-                return
-            }
-            switch mode {
-            case .pointer:
-                movePointer(direction)
-            case .scroll:
-                runtime.scroll(direction, at: cursor)
-            }
-        }
         .onPlayPauseCommand {
             if domMode {
                 selectDOMElement()
             } else {
                 mode = mode == .pointer ? .scroll : .pointer
             }
-            streamFocused = true
+            enterRemoteOverlay()
+        }
+        .onExitCommand {
+            handleVibeExit()
+        }
+        .onMoveCommand { direction in
+            // Handle directional input at the surface level. The transparent
+            // child hit target can lose the tvOS focus transaction before its
+            // own handler sees Right, which makes the pointer appear stuck at
+            // the stream's left/center edge. While the WebRTC surface owns
+            // focus, every direction belongs to the remote mouse/scroll plane.
+            guard overlayInput.isActive else { return }
+            handleStreamMove(direction)
         }
         #endif
         .accessibilityIdentifier("vibing.interactive-webrtc")
@@ -274,20 +378,19 @@ struct RemoteRuntimeWebRTCView: View {
                         // hit target so the circle button always reaches the
                         // remote runtime.
                         .overlay {
-                            Button {
-                                activateRemoteSurface()
-                            } label: {
-                                Color.clear
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
+                            // A transparent Button still receives tvOS' focus
+                            // treatment and can wash the entire remote app
+                            // white on hover. This is a focus target, not a
+                            // button: keep it visually inert and handle the
+                            // Select gesture directly.
+                            TVRemoteInputCapture(
+                                accessibilityLabel: domMode ? "Select remote element" : "Activate remote app",
+                                onMove: handleStreamMove,
+                                onSelect: activateRemoteSurface,
+                                onExit: exitOverlayToVibe
+                            )
+                            .focusEffectDisabled()
                             .focused($streamFocused)
-                            #if os(tvOS)
-                            .onMoveCommand { direction in
-                                handleStreamMove(direction)
-                            }
-                            #endif
-                            .accessibilityLabel(domMode ? "Select remote element" : "Activate remote app")
                         }
                     }
                 }
@@ -297,6 +400,13 @@ struct RemoteRuntimeWebRTCView: View {
                 if mode == .pointer, runtime.hasMedia {
                     softCursor(in: fit)
                 }
+
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityIdentifier("vibing.overlay-focus-losses")
+                    .accessibilityLabel("Overlay focus losses")
+                    .accessibilityValue(String(overlayFocusLosses))
 
             }
             .clipShape(RoundedRectangle(cornerRadius: 28))
@@ -334,6 +444,7 @@ struct RemoteRuntimeWebRTCView: View {
                     // leaving the runner working but no agent-log lane visible.
                     chatFocusRequest += 1
                     streamFocused = false
+                    overlayInput.deactivate()
                 }
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("vibing.fix-with-ai")
@@ -350,12 +461,35 @@ struct RemoteRuntimeWebRTCView: View {
                 runtime.fail("No reachable render machine is selected.")
                 return
             }
-            await runtime.start(client: client, project: project)
-            streamFocused = true
+            await runtime.start(client: client, project: project, preferAuthenticatedFrames: form == .phone)
+            enterRemoteOverlay()
+        }
+    }
+
+    private func reloadRuntime() {
+        Task {
+            guard let client = store.renderClient() ?? store.runnerClient() else {
+                runtime.fail("No reachable machine is selected for reload.")
+                return
+            }
+            runtime.status = "Reloading \(project.name)…"
+            do {
+                // A phone target needs the Hermes/native bundle lane; browser
+                // targets need the dev-server reload lane. Restart the viewer
+                // after the operation so a stale/black frame cannot remain on
+                // screen while the remote app has already reloaded.
+                let mode = form == .phone ? "bundle" : "dev"
+                _ = try await client.reload(mode: mode, workDir: project.path)
+                await runtime.start(client: client, project: project, preferAuthenticatedFrames: form == .phone)
+                enterRemoteOverlay()
+            } catch {
+                runtime.fail("Reload failed: \(error.localizedDescription)")
+            }
         }
     }
 
     private func activateRemoteSurface() {
+        enterRemoteOverlay()
         if domMode {
             selectDOMElement()
         } else if mode == .pointer {
@@ -383,7 +517,7 @@ struct RemoteRuntimeWebRTCView: View {
             Menu {
                 Button {
                     mode = mode == .pointer ? .scroll : .pointer
-                    streamFocused = true
+                    enterRemoteOverlay()
                 } label: {
                     Label(mode == .pointer ? "Use scroll mode" : "Use pointer mode", systemImage: mode.symbol)
                 }
@@ -397,7 +531,7 @@ struct RemoteRuntimeWebRTCView: View {
                     Button {
                         domMode.toggle()
                         mode = .pointer
-                        streamFocused = true
+                        enterRemoteOverlay()
                     } label: {
                         Label(domMode ? "Stop inspecting" : "Inspect", systemImage: domMode ? "scope" : "viewfinder")
                     }
@@ -407,10 +541,22 @@ struct RemoteRuntimeWebRTCView: View {
                         Label("Reconnect", systemImage: "arrow.clockwise")
                     }
                 }
+                Button { reloadRuntime() } label: {
+                    Label("Reload app", systemImage: "arrow.triangle.2.circlepath")
+                }
             } label: {
                 Label("Controls", systemImage: "slider.horizontal.3")
             }
             .accessibilityIdentifier("vibing.controls")
+
+            Button {
+                mode = .pointer
+                enterRemoteOverlay()
+            } label: {
+                Label("Mouse mode", systemImage: "cursorarrow.rays")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("vibing.mouse-mode")
 
             // Text entry is the only app action that must remain one tap away:
             // a headless remote browser cannot summon tvOS' native keyboard
@@ -436,12 +582,6 @@ struct RemoteRuntimeWebRTCView: View {
         .font(.system(size: 16, weight: .semibold))
         .lineLimit(1)
         .minimumScaleFactor(0.72)
-        .onMoveCommand { direction in
-            if direction == .right {
-                streamFocused = false
-                chatFocusRequest += 1
-            }
-        }
     }
 
     private var keyboardSheet: some View {
@@ -477,10 +617,19 @@ struct RemoteRuntimeWebRTCView: View {
         keyboardText = ""
         showingKeyboard = false
         runtime.sendText(value)
+        enterRemoteOverlay()
+    }
+
+    private func enterRemoteOverlay() {
+        overlayInput.enter()
         streamFocused = true
     }
 
     private func movePointer(_ direction: MoveCommandDirection) {
+        // The WebRTC surface is a modal control plane. Directional presses
+        // must never hand focus to the chat rail or leave the overlay; Menu
+        // is the only escape hatch (see onExitCommand above).
+        enterRemoteOverlay()
         let now = Date()
         if now.timeIntervalSince(lastMoveAt) < 0.24 {
             repeatedMoves = min(repeatedMoves + 1, 7)
@@ -490,28 +639,54 @@ struct RemoteRuntimeWebRTCView: View {
         lastMoveAt = now
         // Repeated touch-surface moves accelerate, while the first D-pad nudge
         // remains precise enough to hit a phone-sized button from the couch.
-        let step = 0.025 + Double(repeatedMoves) * 0.008
+        // A Siri Remote directional press is a pointer nudge, not a focus
+        // hop. 2.5% was too small on a phone-sized SFMG viewport, making the
+        // cursor appear unable to reach the right-hand controls from the
+        // couch. Use a visible first nudge and accelerate repeated presses.
+        let step = 0.07 + Double(repeatedMoves) * 0.012
         switch direction {
         case .up: cursor.y = max(0, cursor.y - step)
         case .down: cursor.y = min(1, cursor.y + step)
         case .left: cursor.x = max(0, cursor.x - step)
-        case .right: cursor.x = min(1, cursor.x + step)
+        case .right: cursor.x = min(domCursorMaximumX, cursor.x + step)
         @unknown default: break
         }
         if domMode { sendDOMHover() }
     }
 
     #if os(tvOS)
-    private func handleStreamMove(_ direction: MoveCommandDirection) {
-        guard streamFocused else { return }
-        // See the matching comment on the outer .onMoveCommand: the right-edge
-        // escape to Chat is gated on real media so a connecting stream cannot
-        // swallow Right as "leave the stream" (2026-08-19).
-        if !domMode && direction == .right && runtime.hasMedia && cursor.x >= 0.94 {
-            streamFocused = false
-            chatFocusRequest += 1
-            return
+    /// Overlay focus is modal: every directional command moves the remote
+    /// pointer or scroll plane. Back is the sole exit, so Right at the edge
+    /// must remain a mouse move rather than changing SwiftUI focus.
+    private func exitOverlayToVibe() {
+        handleVibeExit()
+    }
+
+    private func handleVibeExit() {
+        switch overlayInput.requestExit() {
+        case .leaveOverlay:
+            // Defer the focus update one event turn. If this focused child
+            // handler bubbles the same Menu press to its enclosing Vibe route,
+            // the reducer still classifies it as the same overlay handoff.
+            DispatchQueue.main.async {
+                streamFocused = false
+                chatFocusRequest += 1
+                overlayInput.completeExitHandoff()
+            }
+        case .dismissVibing:
+            // Outside the overlay, Vibing is a pushed dashboard route.
+            dismiss()
+        case .ignoreDuplicate:
+            break
         }
+    }
+
+    private func handleStreamMove(_ direction: MoveCommandDirection) {
+        guard overlayInput.claimMove() else { return }
+        DispatchQueue.main.async { overlayInput.completeMoveDelivery() }
+        // Reassert the transparent overlay target if tvOS tried to recompute
+        // focus at an edge; the current arrow still goes to the remote app.
+        enterRemoteOverlay()
         switch mode {
         case .pointer:
             movePointer(direction)
@@ -520,6 +695,15 @@ struct RemoteRuntimeWebRTCView: View {
         }
     }
     #endif
+
+    private var domCursorMaximumX: CGFloat {
+        let width = runtime.sourceSize.width
+        // SFMG can deliver its first authenticated frame before metadata has
+        // populated sourceSize. A zero/unknown width must not clamp the mouse
+        // to x=0 and make every Right press look broken.
+        guard width > 1 else { return 1 }
+        return min(1, max(0, (width - 1) / width))
+    }
 
     private func sendDOMHover() {
         guard domMode else { return }
@@ -551,6 +735,7 @@ struct RemoteRuntimeWebRTCView: View {
                         vibePrefill = "Deep audit the selected element: \(summary)"
                         chatFocusRequest += 1
                         streamFocused = false
+                        overlayInput.deactivate()
                     } else {
                         domError = "No element at that spot — move the cursor and try again."
                     }
@@ -573,7 +758,7 @@ struct RemoteRuntimeWebRTCView: View {
                 selectedElementSummary = nil
                 domError = nil
                 domMode = true
-                streamFocused = true
+                enterRemoteOverlay()
             }
             .buttonStyle(.bordered)
             Button("Done") {
@@ -619,9 +804,15 @@ func tvRemoteDOMInspectionAvailable(targetId: String?) -> Bool {
 func tvRemoteDOMPoint(normalized: CGPoint, sourceSize: CGSize) -> CGPoint {
     let x = min(max(normalized.x, 0), 1)
     let y = min(max(normalized.y, 0), 1)
+    // CDP coordinates are inside the viewport, not on its exclusive bottom or
+    // right edge. A normalized cursor of exactly 1 otherwise sends x=width,
+    // which is outside the DOM and makes rightward inspection appear to leave
+    // the preview.
+    let maxX = max(sourceSize.width - 1, 0)
+    let maxY = max(sourceSize.height - 1, 0)
     return CGPoint(
-        x: (x * max(sourceSize.width, 1)).rounded(),
-        y: (y * max(sourceSize.height, 1)).rounded()
+        x: min((x * maxX).rounded(), maxX),
+        y: min((y * maxY).rounded(), maxY)
     )
 }
 
@@ -672,6 +863,12 @@ private struct RemoteVideoTrackView: UIViewRepresentable {
         let view = LKRTCMTLVideoView(frame: .zero)
         view.videoContentMode = .scaleAspectFit
         view.isEnabled = true
+        // Metal-backed video views default to a white backing surface on
+        // tvOS. During the mobile overlay handoff there can be a frame or two
+        // before the guest paints; keep that transient state inside the
+        // preview's black frame instead of flashing a full white panel.
+        view.backgroundColor = .black
+        view.isOpaque = true
         context.coordinator.attach(track, to: view)
         return view
     }
@@ -760,7 +957,7 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         status = "Interactive runtime unavailable"
     }
 
-    func start(client: AgentClient, project: ProjectSummary) async {
+    func start(client: AgentClient, project: ProjectSummary, preferAuthenticatedFrames: Bool = false) async {
         stop(closeSession: true)
         let thisGeneration = UUID()
         generation = thisGeneration
@@ -799,7 +996,7 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             let created = try await client.startRemoteRuntimeSession(
                 for: project,
                 targetId: target.id,
-                transportMode: "direct-webrtc"
+                transportMode: preferAuthenticatedFrames ? "relay-jpeg-poll" : "direct-webrtc"
             )
             guard generation == thisGeneration else {
                 try? await client.closeRemoteRuntimeSession(created.id)
@@ -807,6 +1004,18 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             }
             session = created
             if let note = created.note { controlNote = note }
+            if preferAuthenticatedFrames {
+                // Phone previews must not put an H.264 surface on screen before
+                // it has produced usable app pixels. The authenticated frame
+                // lane is the same fallback used after a failed WebRTC probe,
+                // but selecting it up front prevents a persistent black mobile
+                // overlay (observed with SFMG on tvOS, 2026-08-20).
+                frameFallbackForced = true
+                status = "Opening the authenticated mobile viewport…"
+                transportLabel = "Authenticated frames"
+                startFrameFallback(sessionId: created.id, generation: thisGeneration)
+                return
+            }
             status = "Negotiating WebRTC…"
             try await negotiate(client: client, session: created)
             guard generation == thisGeneration else { return }
@@ -1069,6 +1278,28 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             if (current.webPort ?? 0) <= 0 {
                 status = "Starting the mobile web runtime…"
                 _ = try await client.startWebServer()
+            }
+
+            // The start endpoints are admission calls: a returned port is not
+            // proof that Expo is accepting HTTP yet. Do not create the
+            // browser-window session until the actual web lane is reported;
+            // otherwise chromedp navigates once into a transient blank/503
+            // page and never retries, leaving SFMG looking connected on tvOS
+            // while showing no app pixels.
+            let webDeadline = Date().addingTimeInterval(150)
+            while !Task.isCancelled && Date() < webDeadline {
+                current = try await client.devServerStatus()
+                if let failure = current.error?.trimmingCharacters(in: .whitespacesAndNewlines), !failure.isEmpty {
+                    throw AgentError(message: failure)
+                }
+                if (current.webPort ?? 0) > 0 && current.serving != false { break }
+                status = current.servingLabel?.isEmpty == false
+                    ? current.servingLabel!
+                    : "Waiting for the mobile web runtime…"
+                try await Task.sleep(nanoseconds: 600_000_000)
+            }
+            guard (current.webPort ?? 0) > 0 else {
+                throw AgentError(message: "The \(project.name) mobile web runtime did not open a listening port within 2½ minutes.")
             }
         }
     }

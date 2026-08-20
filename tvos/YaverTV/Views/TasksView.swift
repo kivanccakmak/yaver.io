@@ -16,10 +16,14 @@ struct TasksView: View {
     @State private var error: String?
     @State private var sessionError: String?
     @State private var filter: Filter = .all
-    @State private var showComposer = false
     @State private var createdTask: TaskSummary?
-    @State private var showCreatedTask = false
+    @State private var destination: ChatDestination?
     @FocusState private var newVibeFocused: Bool
+
+    private enum ChatDestination: Hashable {
+        case composer
+        case task(String)
+    }
 
     enum Filter: String, CaseIterable, Identifiable {
         case active = "Active", review = "Review", done = "Done", failed = "Failed", all = "All"
@@ -73,32 +77,31 @@ struct TasksView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .task { await load() }
-        .sheet(isPresented: $showComposer) {
-            TaskComposerView { task in
-                createdTask = task
-            }
+        // One item owns the one pushed Chat destination. Replacing `.composer`
+        // with `.task(id)` updates that destination atomically; independent
+        // Boolean destinations briefly mounted TaskDetail twice, cancelled its
+        // SSE during the transition, and left a visually-correct but frozen
+        // running conversation.
+        .navigationDestination(item: $destination) { route in
+            switch route {
+            case .composer:
+                TaskComposerView(dismissAfterCreate: false) { task in
+                    createdTask = task
+                    destination = .task(task.id)
+                }
                 .environmentObject(store)
-        }
-        .onChange(of: showComposer) { _, open in
-            guard !open else { return }
-            if createdTask != nil {
-                // Done on the keyboard starts the audit and continues straight
-                // into its conversation. Returning to the list made a one-step
-                // prompt feel as though nothing had happened.
-                showCreatedTask = true
-            } else {
-                Task { await load() }
+            case .task(let id):
+                if let createdTask, createdTask.id == id {
+                    // New Vibe is a couch conversation: after the prompt is
+                    // sent, go straight into the exact returned task's chat.
+                    TaskDetailView(task: createdTask)
+                }
             }
         }
-        .navigationDestination(isPresented: $showCreatedTask) {
-            if let createdTask {
-                TaskDetailView(task: createdTask)
-            }
-        }
-        .onChange(of: showCreatedTask) { _, open in
-            if !open {
+        .onChange(of: destination) { oldRoute, newRoute in
+            if newRoute == nil {
                 createdTask = nil
-                Task { await load() }
+                if oldRoute != nil { Task { await load() } }
             }
         }
         .defaultFocus($newVibeFocused, true)
@@ -175,10 +178,12 @@ struct TasksView: View {
                 .foregroundStyle(.orange)
             Text(store.taskRuntimePlan().kind == .signedOut
                  ? "Sign in to start coding tasks"
-                 : "No remote runner connected")
+                 : store.remotelessMode ? "Working without a device" : "No remote runner connected")
                 .font(.system(size: 30, weight: .bold))
             Text(store.taskRuntimePlan().kind == .signedOut
                  ? "Sign in first, then choose the machine that runs OpenCode."
+                 : store.remotelessMode
+                 ? "Yaver Code can answer questions and deep-audit work from the TV. Git edits, builds, rendering, and Vibing still require a remote runner."
                  : "OpenCode + DeepSeek V4 Flash tasks need a runner machine. A render box is not required for Chat or Git coding.")
                 .font(.system(size: 20))
                 .foregroundStyle(.secondary)
@@ -191,7 +196,7 @@ struct TasksView: View {
             }
             NavigationLink("Choose or add a machine", destination: MachinePickerView())
                 .buttonStyle(.borderedProminent)
-            NavigationLink("Use boxless Yaver Code", destination: BoxlessCodeView())
+            NavigationLink(store.remotelessMode ? "Open Yaver Code" : "Use boxless Yaver Code", destination: BoxlessCodeView())
                 .buttonStyle(.bordered)
         }
         .padding(56)
@@ -203,7 +208,7 @@ struct TasksView: View {
     private var newVibeButton: some View {
         Button {
             createdTask = nil
-            showComposer = true
+            destination = .composer
         } label: {
             HStack(spacing: 18) {
                 Image(systemName: "wand.and.stars")
@@ -213,7 +218,7 @@ struct TasksView: View {
                     .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
                 VStack(alignment: .leading, spacing: 4) {
                     Text("New vibe").font(.system(size: 26, weight: .bold))
-                    Text("Keyboard opens now · starts Deep Audit with your defaults")
+                    Text("Keyboard opens now · starts a session with your defaults")
                         .font(.system(size: 15)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -230,7 +235,7 @@ struct TasksView: View {
         .buttonStyle(.plain)
         .focused($newVibeFocused)
         .accessibilityIdentifier("chat.new-vibe")
-        .accessibilityLabel("New vibe — opens the keyboard and starts Deep Audit")
+        .accessibilityLabel("New vibe — opens the keyboard and starts a session")
     }
 
     private var header: some View {
@@ -289,7 +294,9 @@ struct TasksView: View {
                     .font(.system(size: 15)).foregroundStyle(.secondary)
             }
             Spacer()
-            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+            Image(systemName: "chevron.right")
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 8)
         }
     }
 

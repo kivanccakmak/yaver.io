@@ -111,9 +111,9 @@ if [ "$SIM_MODE" = "1" ]; then
     ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
     build
 
-  APP_PATH="$(find "$DERIVED_DATA_PATH/Build/Products" -maxdepth 2 -name "*.app" -type d | head -1)"
-  if [ -z "$APP_PATH" ]; then
-    echo "ERROR: built .app not found under $DERIVED_DATA_PATH/Build/Products" >&2
+  APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug-appletvsimulator/Yaver.app"
+  if [ ! -d "$APP_PATH" ]; then
+    echo "ERROR: simulator app not found at $APP_PATH" >&2
     exit 1
   fi
   echo "Installing to Apple TV simulator ($SIM_TARGET) …"
@@ -156,9 +156,9 @@ if [ "$DEVICE_MODE" = "1" ]; then
     ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
     build
 
-  APP_PATH="$(find "$DERIVED_DATA_PATH/Build/Products" -maxdepth 2 -name "*.app" -type d | head -1)"
-  if [ -z "$APP_PATH" ]; then
-    echo "ERROR: built .app not found under $DERIVED_DATA_PATH/Build/Products" >&2
+  APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug-appletvos/Yaver.app"
+  if [ ! -d "$APP_PATH" ]; then
+    echo "ERROR: physical-device app not found at $APP_PATH" >&2
     exit 1
   fi
 
