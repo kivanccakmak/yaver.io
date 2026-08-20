@@ -305,6 +305,31 @@ await (async () => {
   ok(!core.isRunning(), "not running after stop");
 })();
 
+// ── 9) explicit mic tap submits visible text without semantic delay ──────
+await (async () => {
+  const ft = new FakeTime();
+  const capture = new FakeCapture(ft);
+  const agent = new FakeAgent();
+  let judgeCalls = 0;
+  const judge: CompletenessJudge = {
+    async judge() {
+      judgeCalls++;
+      return { complete: false, wantsAnswer: false, source: "model" };
+    },
+  };
+  const { core } = build({ ft, capture, agent, judge });
+  core.start();
+  await ft.flush();
+
+  core.submit("submit the transcript already visible on screen");
+  await ft.flush();
+
+  eq(agent.sent.length, 1, "explicit mic tap dispatched exactly one turn");
+  eq(agent.sent[0]?.text, "submit the transcript already visible on screen", "visible transcript used when the recorder final is empty");
+  eq(judgeCalls, 0, "explicit submit bypassed the completeness judge");
+  core.stop();
+})();
+
 }
 
 main().then(() => {

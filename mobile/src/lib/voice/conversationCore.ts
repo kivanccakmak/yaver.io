@@ -142,6 +142,24 @@ export class VoiceConversationCore {
   }
 
   /**
+   * Finish the current spoken turn when the user taps the mic again. `stop()`
+   * is a cancellation primitive and must discard an unfinished turn; the
+   * phone's single mic control needs the opposite behavior after STT has
+   * produced text: stop capture, then submit that text to the runner.
+   */
+  submit(visibleText = ""): void {
+    if (!this.running) return;
+    const myGen = this.gen;
+    this.teardownTicker();
+    const text = (this.endpointer.currentText() || visibleText).trim();
+    if (!text) {
+      this.stop();
+      return;
+    }
+    void this.onCandidate(myGen, text, "silence", true);
+  }
+
+  /**
    * Barge-in: cut off the current spoken reply (or any active turn) and go
    * straight back to listening. Called by a native voice-activity trigger or a
    * PTT press. No-op if not running.
@@ -236,6 +254,7 @@ export class VoiceConversationCore {
     myGen: number,
     triggerText: string,
     reason: "silence" | "max-length",
+    forceComplete = false,
   ): Promise<void> {
     const final = await this.stopSession();
     if (!this.alive(myGen)) return;
@@ -262,7 +281,7 @@ export class VoiceConversationCore {
     }
 
     // The hard cap force-submits (safety net) — skip the semantic judge.
-    if (reason !== "max-length") {
+    if (!forceComplete && reason !== "max-length") {
       this.setState("judging", { text: combined });
       const verdict = await this.d.judge.judge({
         transcript: combined,

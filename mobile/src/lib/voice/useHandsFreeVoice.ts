@@ -20,6 +20,8 @@ export interface UseHandsFreeVoice {
   running: boolean;
   start: () => void;
   stop: () => void;
+  /** Finalize the current transcript and dispatch it. */
+  submit: (visibleText?: string) => void;
   /** Barge-in / stop toggle for the surface's single big control. */
   toggle: () => void;
   interrupt: () => void;
@@ -58,6 +60,10 @@ export function useHandsFreeVoice(
     coreRef.current?.stop();
   }, []);
 
+  const submit = useCallback((visibleText?: string) => {
+    coreRef.current?.submit(visibleText);
+  }, []);
+
   const interrupt = useCallback(() => {
     coreRef.current?.interrupt();
   }, []);
@@ -67,6 +73,7 @@ export function useHandsFreeVoice(
     if (core && core.isRunning()) {
       // Speaking → barge-in; otherwise leave the loop.
       if (core.currentState === "speaking") core.interrupt();
+      else if (core.currentState === "listening" || core.currentState === "judging") core.submit();
       else core.stop();
     } else {
       ensureCore().start();
@@ -81,5 +88,5 @@ export function useHandsFreeVoice(
     };
   }, []);
 
-  return { state, text, running: state !== "idle", start, stop, toggle, interrupt };
+  return { state, text, running: state !== "idle", start, stop, submit, toggle, interrupt };
 }

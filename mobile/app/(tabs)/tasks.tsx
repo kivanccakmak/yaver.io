@@ -2486,10 +2486,14 @@ export default function TasksScreen() {
   const [showTargetWizard, setShowTargetWizard] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<TaskTarget | null>(null);
   const [newTaskText, setNewTaskText] = useState("");
+  const newTaskTextRef = useRef("");
+  newTaskTextRef.current = newTaskText;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>("sonnet");
   const [refreshing, setRefreshing] = useState(false);
   const [followUpText, setFollowUpText] = useState("");
+  const followUpTextRef = useRef("");
+  followUpTextRef.current = followUpText;
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
   const [followUpExpanded, setFollowUpExpanded] = useState(false);
   const [showFollowUpOptions, setShowFollowUpOptions] = useState(false);
@@ -4193,7 +4197,10 @@ export default function TasksScreen() {
         const savedBase = baseText;
         const controller = await startRealtimeTranscribe((partialText) => {
           // Update text input with streaming partial results
-          setText(savedBase ? savedBase + " " + partialText : partialText);
+          const next = savedBase ? savedBase + " " + partialText : partialText;
+          if (target === "followup") followUpTextRef.current = next;
+          else newTaskTextRef.current = next;
+          setText(next);
         });
         realtimeRef.current = controller;
         setIsRecording(true);
@@ -4223,7 +4230,13 @@ export default function TasksScreen() {
       clearTimeout(recordingTimeoutRef.current);
       recordingTimeoutRef.current = null;
     }
-    const setText = recordingTargetRef.current === "followup" ? setFollowUpText : setNewTaskText;
+    const target = recordingTargetRef.current;
+    const setText = target === "followup" ? setFollowUpText : setNewTaskText;
+    const textRef = target === "followup" ? followUpTextRef : newTaskTextRef;
+    const commitText = (text: string) => {
+      textRef.current = text;
+      setText(text);
+    };
 
     if (speechProvider === "on-device" && realtimeRef.current) {
       // Realtime: stop and get final text (already streamed into input)
@@ -4232,18 +4245,18 @@ export default function TasksScreen() {
         realtimeRef.current = null;
         if (finalText) {
           const base = preRecordText;
-          setText(base ? base + " " + finalText : finalText);
+          commitText(base ? base + " " + finalText : finalText);
           setInputFromSpeech(true);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         Alert.alert("Transcription failed", msg);
       }
-      return;
+      return textRef.current;
     }
 
     // Cloud providers: stop recording, upload file
-    if (!audioRecordingRef.current) return;
+    if (!audioRecordingRef.current) return textRef.current;
     setIsTranscribing(true);
     try {
       await audioRecordingRef.current.stopAndUnloadAsync();
@@ -4254,7 +4267,7 @@ export default function TasksScreen() {
 
       const result = await transcribe(uri, { provider: speechProvider, apiKey: speechApiKey, model: sttModel });
       if (result.text) {
-        setText((prev) => (prev ? prev + " " + result.text : result.text));
+        commitText(textRef.current ? textRef.current + " " + result.text : result.text);
         setInputFromSpeech(true);
       }
     } catch (err) {
@@ -4263,6 +4276,7 @@ export default function TasksScreen() {
     } finally {
       setIsTranscribing(false);
     }
+    return textRef.current;
   };
 
   // ── Image picker ─────────────────────────────────────────────────
@@ -4403,9 +4417,9 @@ export default function TasksScreen() {
     }
   };
 
-  const runPhoneLocalTask = useCallback(async () => {
+  const runPhoneLocalTask = useCallback(async (promptOverride?: string) => {
     const slug = selectedPhoneCheckout;
-    const promptText = newTaskText.trim();
+    const promptText = (promptOverride ?? newTaskTextRef.current).trim();
     if (!slug || !promptText) return;
     const config = await loadCodingConfig();
     if (!config) {
@@ -4518,10 +4532,11 @@ export default function TasksScreen() {
       yaverAgentAbortersRef.current.delete(taskId);
       setIsSubmitting(false);
     }
-  }, [newTaskText, selectedPhoneCheckout]);
+  }, [selectedPhoneCheckout]);
 
-  const handleCreateTask = async () => {
-    if (!newTaskText.trim() && attachedImages.length === 0) return;
+  const handleCreateTask = async (promptOverride?: string) => {
+    const submittedText = (promptOverride ?? newTaskTextRef.current).trim();
+    if (!submittedText && attachedImages.length === 0) return;
 
     // Remember how this task went out so the follow-up composer defaults to the
     // same input mode (voice ↔ text).
@@ -4531,8 +4546,8 @@ export default function TasksScreen() {
     // command — typed or dictated into the composer — shouldn't spin up a
     // full agent task. Push a fresh bundle to this phone directly. Skipped
     // when images are attached (clearly a real task) or with no live host.
-    if (attachedImages.length === 0 && isEffectivelyConnected && isReloadIntent(newTaskText)) {
-      if (isRecording) { try { await stopRecordingAndTranscribe(); } catch {} }
+    if (attachedImages.length === 0 && isEffectivelyConnected && isReloadIntent(submittedText)) {
+      if (isRecording && promptOverride === undefined) { try { await stopRecordingAndTranscribe(); } catch {} }
       if (selectedTask && taskStatusMeansRunnerIsCoding(selectedTask.status)) {
         pendingRuntimeRenderRef.current = {
           taskId: selectedTask.id,
@@ -4551,7 +4566,7 @@ export default function TasksScreen() {
     // Explicit phone-local target: this is the repository-scoped DeepSeek
     // agent, not the control-plane Yaver agent and not a remote fallback.
     if (selectedPhoneCheckout) {
-      await runPhoneLocalTask();
+      await runPhoneLocalTask(submittedText);
       return;
     }
 
@@ -4569,7 +4584,7 @@ export default function TasksScreen() {
         );
         return;
       }
-      const promptText = newTaskText.trim();
+      const promptText = submittedText;
       if (!promptText) return;
       Keyboard.dismiss();
       setIsSubmitting(true);
@@ -4691,7 +4706,7 @@ export default function TasksScreen() {
       return;
     }
     // Stop any active recording before sending
-    if (isRecording) {
+    if (isRecording && promptOverride === undefined) {
       try { await stopRecordingAndTranscribe(); } catch {}
     }
     Keyboard.dismiss();
@@ -4705,7 +4720,7 @@ export default function TasksScreen() {
         ttsProvider,
         verbosity,
       } : undefined;
-      const title = initialTitle || newTaskText.trim();
+      const title = initialTitle || submittedText;
       // pendingTarget — set by TaskTargetWizard when multi-target mode
       // is on — overrides the in-modal runner/model picker for this
       // single submission. The wizard already switched the QUIC client
@@ -5061,8 +5076,9 @@ export default function TasksScreen() {
     });
   };
 
-  const handleFollowUp = async () => {
-    if (!selectedTask || (!followUpText.trim() && followUpImages.length === 0)) return;
+  const handleFollowUp = async (promptOverride?: string) => {
+    const submittedText = (promptOverride ?? followUpTextRef.current).trim();
+    if (!selectedTask || (!submittedText && followUpImages.length === 0)) return;
     // Gate on a LIVE connection before firing. On a flap the socket is gone but
     // host/port/token linger, so the send would silently hit a dead URL and the
     // message would vanish with zero feedback (the 2026-07-21 "second follow-up
@@ -5078,7 +5094,7 @@ export default function TasksScreen() {
     // Remember how this went out so the NEXT follow-up defaults to the same mode.
     lastSubmitModeRef.current = inputFromSpeech ? "voice" : "text";
     // Stop any active recording before sending
-    if (isRecording) {
+    if (isRecording && promptOverride === undefined) {
       try { await stopRecordingAndTranscribe(); } catch {}
     }
     Keyboard.dismiss();
@@ -5088,7 +5104,7 @@ export default function TasksScreen() {
     // touching the remote connection. The previous turns are compacted into
     // the prompt because the repository agent has no server-side session.
     if (selectedTask.runnerId === "yaver-phone") {
-      const promptText = followUpText.trim();
+      const promptText = submittedText;
       const slug = selectedTask.localCheckoutId;
       if (!promptText || !slug) {
         setIsSendingFollowUp(false);
@@ -5176,7 +5192,7 @@ export default function TasksScreen() {
     // using prior turns as history. Same streaming + cancel rig as the
     // initial run.
     if (selectedTask.runnerId === "yaver-agent") {
-      const promptText = followUpText.trim();
+      const promptText = submittedText;
       if (!promptText) {
         setIsSendingFollowUp(false);
         return;
@@ -5277,7 +5293,7 @@ export default function TasksScreen() {
     //
     // The optimistic turn is carried across the fork so the conversation reads
     // continuously, the way a chat app is expected to behave.
-    const optimisticText = followUpText.trim();
+    const optimisticText = submittedText;
     // Capture the payload NOW, before we clear the composer — the send calls
     // below must use these consts, never the live followUpText/followUpImages
     // state (which we're about to empty).
@@ -5563,6 +5579,16 @@ export default function TasksScreen() {
     } finally {
       setIsSendingFollowUp(false);
     }
+  };
+
+  // One-tap voice send: stop Whisper first, then pass its returned transcript
+  // directly into the normal submit path. React state updates do not refresh
+  // this event handler's closure, so waiting a tick still submitted the old
+  // empty value even though the final text was visible in the field.
+  const finishVoiceAndSubmit = async (target: "task" | "followup") => {
+    const transcript = await stopRecordingAndTranscribe();
+    if (target === "task") await handleCreateTask(transcript);
+    else await handleFollowUp(transcript);
   };
 
   const handleDeleteTask = async (taskId: string) => {
@@ -7197,18 +7223,22 @@ export default function TasksScreen() {
                 </Pressable>
               </View>
               ) : null}
-                <View style={[s.composerShell, {
-                    backgroundColor: c.bg,
-                    borderColor: c.border,
-                  },
-                ]}>
+                <View style={[s.composerShell, { backgroundColor: "transparent" }]}>
                   <TextInput
-                    style={[s.input, s.inputMultiline, s.composerInput, { color: c.textPrimary }]}
+                    style={[s.inputMultiline, s.composerInput, {
+                      color: c.textPrimary,
+                      backgroundColor: c.bg,
+                      borderColor: c.border,
+                      borderWidth: 1,
+                    }]}
                     placeholder={tasks.length > 0 ? "Send another command…" : "What should the agent do?"}
                     placeholderTextColor={c.textMuted}
                     value={newTaskText}
-                    onChangeText={(t) => { setNewTaskText(t); setInputFromSpeech(false); }}
+                    onChangeText={(t) => { newTaskTextRef.current = t; setNewTaskText(t); setInputFromSpeech(false); }}
                     multiline numberOfLines={4} textAlignVertical="top" autoFocus
+                    returnKeyType="send"
+                    blurOnSubmit
+                    onSubmitEditing={() => { void handleCreateTask(); }}
                     autoCorrect={textCorrectionEnabled}
                     autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
                   />
@@ -7372,7 +7402,8 @@ export default function TasksScreen() {
                           ]}
                           onPress={() => {
                             taskHaptics.send();
-                            handleCreateTask();
+                            if (isRecording) void finishVoiceAndSubmit("task");
+                            else void handleCreateTask();
                           }}
                           disabled={isDisabled}
                         >
@@ -8483,8 +8514,11 @@ export default function TasksScreen() {
                       placeholder={isRunning ? "Send follow-up while it works" : "Follow up — or send another command"}
                       placeholderTextColor={c.textMuted}
                       value={followUpText}
-                      onChangeText={(t) => { setFollowUpText(t); setInputFromSpeech(false); }}
+                      onChangeText={(t) => { followUpTextRef.current = t; setFollowUpText(t); setInputFromSpeech(false); }}
                       multiline numberOfLines={4} textAlignVertical="top" autoFocus
+                      returnKeyType="send"
+                      blurOnSubmit
+                      onSubmitEditing={() => { void handleFollowUp(); }}
                       autoCorrect={textCorrectionEnabled}
                       autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
                     />
@@ -8549,7 +8583,14 @@ export default function TasksScreen() {
                         <Pressable
                           testID="followup-send"
                           style={[s.submitButton, { backgroundColor: c.accent }, ((!followUpText.trim() && followUpImages.length === 0) || isSendingFollowUp || isTranscribing) && s.submitButtonDisabled]}
-                          onPress={() => { handleFollowUp(); setShowFollowUpOptions(false); setFollowUpExpanded(false); }}
+                          onPress={() => {
+                            const submit = isRecording
+                              ? finishVoiceAndSubmit("followup")
+                              : handleFollowUp();
+                            void submit;
+                            setShowFollowUpOptions(false);
+                            setFollowUpExpanded(false);
+                          }}
                           disabled={(!followUpText.trim() && followUpImages.length === 0) || isSendingFollowUp || isTranscribing}
                         >
                           <Text style={s.submitButtonText}>{isSendingFollowUp ? "Sending..." : "Send"}</Text>
@@ -9313,18 +9354,13 @@ const s = StyleSheet.create({
   input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 12 },
   inputMultiline: { minHeight: 132 },
   composerShell: {
-    borderWidth: 1,
-    borderRadius: 28,
-    paddingTop: 8,
-    paddingHorizontal: 8,
-    paddingBottom: 8,
+    paddingTop: 0,
+    paddingHorizontal: 0,
+    paddingBottom: 0,
     marginBottom: 14,
-    ...lightCardShadow,
   },
   composerInput: {
-    borderWidth: 0,
-    borderRadius: 22,
-    backgroundColor: "transparent",
+    borderRadius: 12,
     marginBottom: 0,
     paddingHorizontal: 16,
     paddingTop: 16,

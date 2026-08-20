@@ -286,7 +286,14 @@ export default function VibeScreen() {
         {/* Big mic — start / stop / barge-in */}
         <View style={{ alignItems: "center", marginVertical: 18 }}>
           <Pressable
-            onPress={handsFree.toggle}
+            onPress={() => {
+              // A second tap is an explicit submit. Pass the transcript that
+              // is already visible on-screen as a fallback because the native
+              // Whisper session can deliver its final slice just after the
+              // endpointer snapshot.
+              if (listening) handsFree.submit(live);
+              else handsFree.toggle();
+            }}
             style={{
               width: 180,
               height: 180,

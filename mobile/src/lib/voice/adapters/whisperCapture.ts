@@ -18,8 +18,8 @@
 import type { AudioCaptureAdapter, CaptureSession, VoiceSurface } from "../types";
 import { startRealtimeTranscribe } from "../../speech";
 
-/** Surfaces whose audio flows over a car/BT-HFP route and need voice-chat AEC. */
-const HANDS_FREE_ROUTES: VoiceSurface[] = ["car", "glass"];
+/** Native surfaces that need an active recording route before Whisper starts. */
+const AUDIO_CAPTURE_ROUTES: VoiceSurface[] = ["phone", "car", "glass"];
 
 /**
  * Build the iOS AVAudioSession config whisper.rn should acquire, using its own
@@ -27,7 +27,7 @@ const HANDS_FREE_ROUTES: VoiceSurface[] = ["car", "glass"];
  * isn't linked — both safe (whisper.rn then leaves the session alone).
  */
 function carVoiceSession(surface: VoiceSurface): unknown {
-  if (!HANDS_FREE_ROUTES.includes(surface)) return undefined;
+  if (!AUDIO_CAPTURE_ROUTES.includes(surface)) return undefined;
   try {
     const w = require("whisper.rn");
     const Cat = w.AudioSessionCategoryIos;
@@ -56,6 +56,7 @@ export function createWhisperCapture(): AudioCaptureAdapter {
       const surface = opts?.surface ?? "phone";
       const startedAt = Date.now();
       const session = carVoiceSession(surface);
+      await ensureMicrophonePermission();
       const ctrl = await startRealtimeTranscribe(
         (text) => onPartial(text, Date.now() - startedAt),
         {
@@ -82,6 +83,39 @@ export function createWhisperCapture(): AudioCaptureAdapter {
       };
     },
   };
+}
+
+/**
+ * The Tasks screen used to do this setup itself, but Vibe starts the shared
+ * voice core directly. Asking for permission without activating
+ * PlayAndRecord leaves Whisper running against a silent audio route on iOS:
+ * the user sees the permission prompt, the mic button turns on, and no text
+ * ever arrives. Keep the operation at the adapter boundary so every surface
+ * that owns the mic gets the same real capability check.
+ */
+async function ensureMicrophonePermission(): Promise<void> {
+  try {
+    const { Audio } = require("expo-av");
+    let permission = await Audio.getPermissionsAsync();
+    if (permission.status !== "granted" && permission.canAskAgain) {
+      permission = await Audio.requestPermissionsAsync();
+    }
+    if (permission.status !== "granted") {
+      throw new Error("Microphone permission is denied. Enable Microphone for Yaver in Settings.");
+    }
+
+    // whisper.rn applies the platform audio-session options passed below, but
+    // activating the session here makes the Vibe path deterministic on iOS
+    // before the realtime recorder is created.
+    if (require("react-native").Platform?.OS === "ios") {
+      const { AudioSessionIos } = require("whisper.rn");
+      await AudioSessionIos.setCategory("PlayAndRecord", ["DefaultToSpeaker", "AllowBluetooth"]);
+      await AudioSessionIos.setActive(true);
+    }
+  } catch (error) {
+    if (error instanceof Error && /Microphone permission is denied/.test(error.message)) throw error;
+    throw new Error(`Microphone setup failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /** whisper wants a bare language code ("en", "tr"), not a BCP-47 tag. */
