@@ -1325,6 +1325,105 @@ export default defineSchema({
     .index("by_createdAt", ["createdAt"])
     .index("by_email", ["email", "createdAt"]),
 
+  // Privacy-preserving task runtime metadata. Prompts, source, output, diffs,
+  // credentials, and absolute paths must never be stored here.
+  taskRuns: defineTable({
+    userId: v.string(),
+    taskId: v.string(),
+    runtime: v.union(
+      v.literal("remote-agent"),
+      v.literal("local-yaver"),
+      v.literal("cloud-runner"),
+      v.literal("queued"),
+    ),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("stopped"),
+    ),
+    runnerId: v.optional(v.string()),
+    model: v.optional(v.string()),
+    reasoningEffort: v.optional(v.string()),
+    deviceId: v.optional(v.string()),
+    gitProvider: v.optional(v.union(v.literal("github"), v.literal("gitlab"))),
+    gitRef: v.optional(v.string()),
+    commitSha: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user_task", ["userId", "taskId"])
+    .index("by_user_updated", ["userId", "updatedAt"]),
+
+  // Cloud Studio control-plane state. These tables contain only entitlement,
+  // routing, and opaque credential references; source and secret values stay
+  // on the runner or in the credential broker.
+  cloudAccess: defineTable({
+    userId: v.id("users"),
+    status: v.union(v.literal("active"), v.literal("inactive"), v.literal("suspended")),
+    maxCloudWorkspaces: v.number(),
+    maxConcurrentTasks: v.number(),
+    maxConcurrentPreviews: v.number(),
+    allowedRunnerClasses: v.array(v.union(v.literal("linux"), v.literal("macos"))),
+    validUntil: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_userId", ["userId"]),
+
+  cloudWorkspaces: defineTable({
+    userId: v.id("users"),
+    cloudWorkspaceId: v.string(),
+    runnerDeviceId: v.string(),
+    runnerClass: v.union(v.literal("linux"), v.literal("macos")),
+    region: v.string(),
+    state: v.union(
+      v.literal("provisioning"),
+      v.literal("ready"),
+      v.literal("sleeping"),
+      v.literal("starting"),
+      v.literal("unavailable"),
+      v.literal("deleting"),
+    ),
+    capabilitiesDigest: v.optional(v.string()),
+    lastReadyAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_workspaceId", ["cloudWorkspaceId"]),
+
+  gitConnections: defineTable({
+    userId: v.id("users"),
+    gitConnectionId: v.string(),
+    provider: v.union(v.literal("github"), v.literal("gitlab")),
+    externalAccountId: v.string(),
+    displayName: v.string(),
+    status: v.union(
+      v.literal("ready"),
+      v.literal("reauthorization-required"),
+      v.literal("revoked"),
+    ),
+    credentialReference: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_connectionId", ["gitConnectionId"]),
+
+  workloadCredentials: defineTable({
+    userId: v.id("users"),
+    tokenHash: v.string(),
+    cloudWorkspaceId: v.string(),
+    runnerDeviceId: v.string(),
+    expiresAt: v.number(),
+    status: v.union(v.literal("active"), v.literal("revoked")),
+    revokedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_tokenHash", ["tokenHash"])
+    .index("by_workspaceId", ["cloudWorkspaceId"]),
+
   deviceCodes: defineTable({
     userCode: v.string(),
     deviceCode: v.string(),
