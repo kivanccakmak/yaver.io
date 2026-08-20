@@ -1,8 +1,9 @@
 # Remoteless AI + Yaver repair channels (SSH wrapper + JSON-RPC "HTTPS-SSH")
 
 Status: **P0 committed + pushed (ecfc52c62, 2026-08-21)** — interim `remoteless` runner +
-aiFix default. See AGENTS.md: this doc is context, the code is the source of truth —
-grep the symbols before trusting them.
+aiFix default. **Handoff to next session: `docs/handoffs/remoteless-ai-2026-08-21.md`**
+(repo state, concurrent-session WIP, what's left for P1–P4). See AGENTS.md: this doc is
+context, the code is the source of truth — grep the symbols before trusting them.
 
 ## Goal
 
