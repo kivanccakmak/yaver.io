@@ -122,6 +122,8 @@ struct MachinePickerView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 18)
+
+                remotelessOption
             }
             .padding(32)
         }
@@ -181,8 +183,31 @@ struct MachinePickerView: View {
             Text("Run `yaver serve` on a computer signed in as you, and it appears here. Or type a LAN address.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 640)
             NavigationLink("Type an address", destination: AddBoxView()).padding(.top, 8)
+            remotelessOption
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var remotelessOption: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No machine right now?")
+                .font(.system(size: 18, weight: .semibold))
+            Text("You can continue with Yaver Code for Tasks without connecting a device. Vibing and live app previews still need a render machine.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+            Button {
+                store.useRemotelessMode()
+                dismiss()
+            } label: {
+                Label("Continue without a device", systemImage: "arrow.forward.circle")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("devices.continue-remoteless")
+        }
+        .padding(20)
+        .frame(maxWidth: 620, alignment: .leading)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
     }
 
     private func errorView(_ msg: String) -> some View {
@@ -191,6 +216,7 @@ struct MachinePickerView: View {
             Text(msg).multilineTextAlignment(.center).frame(maxWidth: 640)
             Button("Try again") { Task { await load() } }
             NavigationLink("Type an address", destination: AddBoxView())
+            remotelessOption
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

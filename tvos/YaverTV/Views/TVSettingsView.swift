@@ -19,7 +19,12 @@ struct TVSettingsView: View {
     @State private var error: String?
     @State private var savedMessage: String?
     @State private var showSignOutConfirmation = false
-    @State private var showDeleteAccount = false
+    @State private var activePicker: SettingsPicker?
+
+    private enum SettingsPicker: String, Identifiable {
+        case device, runner, project, mcp
+        var id: String { rawValue }
+    }
 
     private var deviceId: String? {
         store.primaryDeviceId ?? store.selectedBox?.id
@@ -117,14 +122,8 @@ struct TVSettingsView: View {
         } message: {
             Text("This Apple TV will forget its session and machine list. Your account and remote machines are not deleted.")
         }
-        .sheet(isPresented: $showDeleteAccount) {
-            DeleteAccountView { success in
-                guard success else { return }
-                store.signOut()
-                showDeleteAccount = false
-                dismiss()
-            }
-            .environmentObject(store)
+        .sheet(item: $activePicker) { picker in
+            pickerSheet(for: picker)
         }
     }
 
@@ -132,14 +131,12 @@ struct TVSettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Account")
                 .font(.system(size: 24, weight: .bold))
-            Text("Sign out only clears this Apple TV. Account deletion permanently removes the Yaver account and requires typing the confirmation phrase.")
+            Text("Sign out only clears this Apple TV. Your account and remote machines stay intact.")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 760, alignment: .leading)
             HStack(spacing: 14) {
                 Button("Sign out") { showSignOutConfirmation = true }
-                    .buttonStyle(.bordered)
-                Button("Delete account", role: .destructive) { showDeleteAccount = true }
                     .buttonStyle(.bordered)
             }
         }
@@ -189,28 +186,18 @@ struct TVSettingsView: View {
             }
             Spacer(minLength: 30)
             control()
+                .buttonStyle(.bordered)
                 .frame(maxWidth: 420, alignment: .trailing)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
         .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .focusSection()
     }
 
     private var deviceMenu: some View {
-        Menu {
-            ForEach(devices) { device in
-                Button {
-                    Task { await chooseDevice(device) }
-                } label: {
-                    if device.deviceId == deviceId {
-                        Label(device.realName, systemImage: "checkmark")
-                    } else {
-                        Text(device.realName)
-                    }
-                }
-            }
-        } label: {
+        Button { activePicker = .device } label: {
             VStack(alignment: .trailing, spacing: 3) {
                 Text(selectedDevice?.realName ?? "Choose device")
                     .font(.system(size: 17, weight: .semibold))
@@ -227,19 +214,7 @@ struct TVSettingsView: View {
     private var runnerMenu: some View {
         let rows = availableRunners
         let selected = deviceId.flatMap { store.primaryRunnerByDevice[$0] }
-        return Menu {
-            ForEach(rows) { runner in
-                Button {
-                    Task { await chooseRunner(runner.id) }
-                } label: {
-                    if runner.id == selected {
-                        Label(runner.label, systemImage: "checkmark")
-                    } else {
-                        Text(runner.label)
-                    }
-                }
-            }
-        } label: {
+        return Button { activePicker = .runner } label: {
             Text(runnerLabel(selected))
                 .font(.system(size: 17, weight: .semibold))
                 .lineLimit(1)
@@ -251,22 +226,7 @@ struct TVSettingsView: View {
     private var projectMenu: some View {
         let remembered = store.lastProject(for: deviceId, projects: projects)
         let savedName = deviceId.flatMap { store.lastProjectByDevice[$0]?.projectName }
-        return Menu {
-            ForEach(projects) { project in
-                Button {
-                    guard let deviceId else { return }
-                    store.rememberProject(project, for: deviceId)
-                    savedMessage = "Latest project saved"
-                    error = nil
-                } label: {
-                    if project.id == remembered?.id {
-                        Label(project.name, systemImage: "checkmark")
-                    } else {
-                        Text(project.name)
-                    }
-                }
-            }
-        } label: {
+        return Button { activePicker = .project } label: {
             Text(remembered?.name ?? savedName ?? "No latest project")
                 .font(.system(size: 17, weight: .semibold))
                 .lineLimit(1)
@@ -280,29 +240,95 @@ struct TVSettingsView: View {
         let selected = Set(pref?.mcpServers ?? [])
         let includeYaver = pref?.includeYaverMcp ?? false
         let count = selected.count + (includeYaver ? 1 : 0)
-        return Menu {
-            Button { saveMCP(selected, includeYaver: !includeYaver) } label: {
-                if includeYaver { Label("Yaver MCP", systemImage: "checkmark") }
-                else { Text("Yaver MCP") }
-            }
-            if !mcpServers.isEmpty { Divider() }
-            ForEach(mcpServers, id: \.self) { name in
-                Button {
-                    var next = selected
-                    if next.contains(name) { next.remove(name) } else { next.insert(name) }
-                    saveMCP(next, includeYaver: includeYaver)
-                } label: {
-                    if selected.contains(name) { Label(name, systemImage: "checkmark") }
-                    else { Text(name) }
-                }
-            }
-        } label: {
+        return Button { activePicker = .mcp } label: {
             Text(count == 0 ? "No MCP" : "\(count) enabled")
                 .font(.system(size: 17, weight: .semibold))
                 .lineLimit(1)
         }
         .disabled(!canReadRuntimeOptions)
         .accessibilityIdentifier("settings.latest-mcp")
+    }
+
+    @ViewBuilder
+    private func pickerSheet(for picker: SettingsPicker) -> some View {
+        NavigationStack {
+            List {
+                switch picker {
+                case .device:
+                    ForEach(devices) { device in
+                        Button {
+                            activePicker = nil
+                            Task { await chooseDevice(device) }
+                        } label: {
+                            selectionLabel(device.realName, selected: device.deviceId == deviceId)
+                        }
+                    }
+                case .runner:
+                    ForEach(availableRunners) { runner in
+                        Button {
+                            activePicker = nil
+                            Task { await chooseRunner(runner.id) }
+                        } label: {
+                            selectionLabel(runner.label, selected: runner.id == deviceId.flatMap { store.primaryRunnerByDevice[$0] })
+                        }
+                    }
+                case .project:
+                    ForEach(projects) { project in
+                        Button {
+                            guard let deviceId else { return }
+                            store.rememberProject(project, for: deviceId)
+                            savedMessage = "Latest project saved"
+                            error = nil
+                            activePicker = nil
+                        } label: {
+                            selectionLabel(project.name, selected: project.id == store.lastProject(for: deviceId, projects: projects)?.id)
+                        }
+                    }
+                case .mcp:
+                    Button {
+                        let pref = deviceId.flatMap { store.lastMCPServersByDevice[$0] }
+                        saveMCP(Set(pref?.mcpServers ?? []), includeYaver: !(pref?.includeYaverMcp ?? false))
+                    } label: {
+                        selectionLabel("Yaver MCP", selected: deviceId.flatMap { store.lastMCPServersByDevice[$0]?.includeYaverMcp } ?? false)
+                    }
+                    ForEach(mcpServers, id: \.self) { name in
+                        Button {
+                            guard let deviceId else { return }
+                            let current = Set(store.lastMCPServersByDevice[deviceId]?.mcpServers ?? [])
+                            var next = current
+                            if next.contains(name) { next.remove(name) } else { next.insert(name) }
+                            saveMCP(next, includeYaver: store.lastMCPServersByDevice[deviceId]?.includeYaverMcp ?? false)
+                        } label: {
+                            selectionLabel(name, selected: deviceId.flatMap { store.lastMCPServersByDevice[$0]?.mcpServers?.contains(name) } ?? false)
+                        }
+                    }
+                }
+            }
+            .navigationTitle(pickerTitle(picker))
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { activePicker = nil }
+                }
+            }
+        }
+        .frame(width: 900, height: 650)
+    }
+
+    private func selectionLabel(_ title: String, selected: Bool) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            if selected { Image(systemName: "checkmark").foregroundStyle(.blue) }
+        }
+    }
+
+    private func pickerTitle(_ picker: SettingsPicker) -> String {
+        switch picker {
+        case .device: return "Primary device"
+        case .runner: return "Primary runner"
+        case .project: return "Latest project"
+        case .mcp: return "MCP defaults"
+        }
     }
 
     private var availableRunners: [RegisteredRunner] {
@@ -390,71 +416,5 @@ struct TVSettingsView: View {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
         mcpServers = ((await mcpRows) ?? []).map(\.name).sorted()
-    }
-}
-
-private struct DeleteAccountView: View {
-    @EnvironmentObject private var store: YaverStore
-    @Environment(\.dismiss) private var dismiss
-    let onComplete: (Bool) -> Void
-    @State private var confirmation = ""
-    @State private var error: String?
-    @State private var deleting = false
-
-    private var confirmed: Bool {
-        confirmation.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "delete my account"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Label("Delete Yaver account", systemImage: "exclamationmark.triangle.fill")
-                .font(.title2.bold())
-                .foregroundStyle(.red)
-            Text("This permanently deletes your account and associated server data. It does not delete repositories or machines in your own cloud accounts.")
-                .foregroundStyle(.secondary)
-            Text("Type: delete my account")
-                .font(.system(.body, design: .monospaced))
-            TextField("Confirmation", text: $confirmation)
-                .textFieldStyle(.plain)
-                .padding(16)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-            if let error {
-                Text(error).foregroundStyle(.orange).lineLimit(3)
-            }
-            HStack {
-                Button("Cancel") { dismiss() }
-                Spacer()
-                Button("Delete permanently", role: .destructive) {
-                    Task { await delete() }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!confirmed || deleting)
-            }
-        }
-        .padding(48)
-        .frame(width: 760, height: 440)
-        .onAppear { DispatchQueue.main.async { } }
-    }
-
-    private func delete() async {
-        deleting = true
-        error = nil
-        defer { deleting = false }
-        guard !store.token.isEmpty else {
-            error = "No active Yaver session. Sign in again before deleting the account."
-            return
-        }
-        var request = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("auth/delete-account"))
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(store.token)", forHTTPHeaderField: "Authorization")
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                throw AgentError(message: "Account deletion was rejected by the server. Nothing was deleted.")
-            }
-            await MainActor.run { onComplete(true) }
-        } catch {
-            await MainActor.run { self.error = error.localizedDescription }
-        }
     }
 }

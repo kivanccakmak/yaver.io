@@ -11,11 +11,16 @@ final class YaverStore: ObservableObject {
     @AppStorage("yaver.tv.token") private var legacyStoredToken: String = ""
     @AppStorage("yaver.tv.boxes") private var storedBoxesJSON: String = "[]"
     @AppStorage("yaver.tv.selectedBox") private var selectedBoxId: String = ""
+    @AppStorage("yaver.tv.remoteless") private var storedRemotelessMode: Bool = false
     @AppStorage("yaver.tv.vibingResume") private var storedVibingResumeJSON: String = "[]"
 
     @Published var token: String = ""
     @Published var boxes: [BoxTarget] = []
     @Published var selectedBox: BoxTarget?
+    /// Explicitly stay in boxless mode. This is a user choice, not an
+    /// inferred transport failure: Tasks can use Yaver Code while Vibing and
+    /// rendering correctly remain unavailable without a render machine.
+    @Published private(set) var remotelessMode = false
 
     // Narrated auto-connect (Stream C parity with mobile). On launch, if no box
     // is picked yet, silently reach the account's best LIVE machine and connect,
@@ -263,7 +268,7 @@ final class YaverStore: ObservableObject {
     /// Client for AI-task dispatch (sessions/tasks). Nil when signed out or a
     /// split is configured but unreachable — callers surface the named cause.
     func runnerClient() -> AgentClient? {
-        guard isAuthenticated, let box = runnerBox() else { return nil }
+        guard isAuthenticated, !remotelessMode, let box = runnerBox() else { return nil }
         return AgentClient(token: token, box: box, relayRepair: relayRepairClosure)
     }
 
@@ -280,8 +285,15 @@ final class YaverStore: ObservableObject {
 
     /// Client for preview/stream/build flows — the render box.
     func renderClient() -> AgentClient? {
-        guard isAuthenticated, let box = renderBox() else { return nil }
+        guard isAuthenticated, !remotelessMode, let box = renderBox() else { return nil }
         return AgentClient(token: token, box: box, relayRepair: relayRepairClosure)
+    }
+
+    func useRemotelessMode() {
+        remotelessMode = true
+        storedRemotelessMode = true
+        selectedBox = nil
+        selectedBoxId = ""
     }
 
     /// The relay-credential self-heal, injected into every client so the TV
@@ -339,7 +351,8 @@ final class YaverStore: ObservableObject {
             legacyStoredToken = ""
         }
         boxes = (try? JSONDecoder().decode([BoxTarget].self, from: Data(storedBoxesJSON.utf8))) ?? []
-        selectedBox = boxes.first(where: { $0.id == selectedBoxId }) ?? boxes.first
+        remotelessMode = storedRemotelessMode
+        selectedBox = remotelessMode ? nil : (boxes.first(where: { $0.id == selectedBoxId }) ?? boxes.first)
         refreshSessionOnLaunch()
     }
 
@@ -423,6 +436,8 @@ final class YaverStore: ObservableObject {
     }
 
     func select(_ box: BoxTarget) {
+        remotelessMode = false
+        storedRemotelessMode = false
         selectedBox = box
         if !suppressMachinePersistence { selectedBoxId = box.id }
     }
