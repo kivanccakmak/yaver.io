@@ -214,7 +214,13 @@ if [ -z "$BUILD_NUMBER" ]; then
   # shellcheck source=scripts/asc-next-build.sh
   . "$ROOT/scripts/asc-next-build.sh"
   TVOS_LOCAL_BUILD="$(sed -n 's/.*CURRENT_PROJECT_VERSION: *"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p' "$TVOS_DIR/project.yml" | head -1)"
-  BUILD_NUMBER="$(asc_next_build TV_OS "${TVOS_LOCAL_BUILD:-0}")"
+  # project.yml intentionally carries only a scaffold build number. If ASC is
+  # temporarily unreadable, local+1 is guaranteed to regress and be rejected;
+  # fail before archiving instead of spending minutes and an upload attempt.
+  if ! BUILD_NUMBER="$(asc_next_build TV_OS "${TVOS_LOCAL_BUILD:-0}" require_remote)"; then
+    echo "ERROR: cannot safely choose the next tvOS build number. Retry when App Store Connect responds, or set TVOS_BUILD_NUMBER explicitly from a verified ASC maximum." >&2
+    exit 75
+  fi
   echo "tvOS build number: $BUILD_NUMBER"
   EXTRA_SETTINGS+=(CURRENT_PROJECT_VERSION="$BUILD_NUMBER")
 fi

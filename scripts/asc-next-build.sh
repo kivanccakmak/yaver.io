@@ -21,13 +21,14 @@
 # This file is that wiring, in ONE place, so the next surface (macOS, watchOS if
 # it ever gets its own channel) inherits it instead of re-deriving it.
 #
-# Contract, matching asc-max-build.py: BEST-EFFORT but never SILENT. If the
-# lookup cannot run, say why on stderr and fall back to local+1; stdout only
-# ever carries the number.
+# Contract, matching asc-max-build.py: BEST-EFFORT but never SILENT by default.
+# Callers whose local number is only a scaffold may pass `require_remote` as
+# the third argument. In that mode an unreadable ASC maximum is a hard failure:
+# falling back to scaffold+1 guarantees a rejected upload and wastes an archive.
 #
 # Usage:
 #   . "$(dirname "$0")/asc-next-build.sh"
-#   BUILD=$(asc_next_build TV_OS 1)
+#   BUILD=$(asc_next_build TV_OS 1 require_remote)
 
 # Several python3s live on these boxes (/usr/local, /opt/homebrew, Xcode's) and
 # which one answers `python3` depends on PATH order. Pick one that can actually
@@ -44,13 +45,14 @@ asc_pick_python() {
   return 1
 }
 
-# asc_next_build <ASC_PLATFORM> [local_current]
+# asc_next_build <ASC_PLATFORM> [local_current] [require_remote]
 #   ASC_PLATFORM: IOS | TV_OS | VISION_OS | MAC_OS
 #   local_current: build number from the local project spec, used as the floor
-# Echoes the build number to use. Never fails the caller.
+# Echoes the build number to use. `require_remote` exits 75 when ASC is unreadable.
 asc_next_build() {
   local platform="$1"
   local local_current="${2:-0}"
+  local lookup_policy="${3:-best_effort}"
   local here py asc_max helper
 
   # BASH_SOURCE is a bash-ism. This repo's deploy scripts are #!/bin/bash so it
@@ -79,6 +81,10 @@ asc_next_build() {
     echo "                $here). The $platform build number will be bumped from local" >&2
     echo "                $local_current, which is REJECTED as a duplicate whenever ASC is" >&2
     echo "                ahead. This is a PATH problem, not a credentials problem." >&2
+    if [ "$lookup_policy" = "require_remote" ]; then
+      echo "asc-next-build: refusing to choose a $platform upload build without the ASC maximum; retry the deploy or pass the build number explicitly." >&2
+      return 75
+    fi
     echo "$((local_current + 1))"
     return 0
   fi
@@ -90,6 +96,10 @@ asc_next_build() {
     echo "                (and burns a slot of the ~15-20/day TestFlight cap)." >&2
     echo "                Fix: $(command -v python3 || echo python3) -m pip install --break-system-packages PyJWT cryptography requests" >&2
     echo "                Or pass the number explicitly, e.g. TVOS_BUILD_NUMBER=<n>." >&2
+    if [ "$lookup_policy" = "require_remote" ]; then
+      echo "asc-next-build: refusing to choose a $platform upload build without the ASC maximum; install the dependency or pass the build number explicitly." >&2
+      return 75
+    fi
     echo "$((local_current + 1))"
     return 0
   fi
@@ -110,6 +120,10 @@ asc_next_build() {
     echo "asc-next-build: $platform highest on ASC is $asc_max (local $local_current) — using $((asc_max + 1))" >&2
     echo "$((asc_max + 1))"
   else
+    if [ -z "$asc_max" ] && [ "$lookup_policy" = "require_remote" ]; then
+      echo "asc-next-build: $platform max unreadable (reason above) — refusing the unsafe local $local_current fallback. Retry the deploy or pass the build number explicitly." >&2
+      return 75
+    fi
     [ -z "$asc_max" ] && \
       echo "asc-next-build: $platform max unreadable (reason above) — bumping from local $local_current" >&2
     echo "$((local_current + 1))"

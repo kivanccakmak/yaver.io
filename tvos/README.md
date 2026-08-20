@@ -114,8 +114,9 @@ The build number is chosen for you: `--upload` asks App Store Connect for the hi
 **TV_OS** build and uses that + 1 (`scripts/asc-next-build.sh` → `scripts/asc-max-build.py`).
 `project.yml` pins `CURRENT_PROJECT_VERSION: "1"`, which is why this lookup matters — without
 it every upload archives for minutes and is then rejected as a duplicate, burning a slot of the
-~15-20/day TestFlight cap. Set `TVOS_BUILD_NUMBER` only to deliberately override, and it must
-exceed the current ASC max.
+~15-20/day TestFlight cap. The upload now stops before archiving if that ASC lookup is unreadable;
+retry once the API responds. Set `TVOS_BUILD_NUMBER` only to deliberately override from a verified
+ASC maximum, and it must exceed the current ASC max.
 
 ## File map
 
