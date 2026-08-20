@@ -122,6 +122,12 @@ struct SessionView: View {
         .onChange(of: awaitingChoice) { _, waiting in
             if !waiting { focusPromptIfAvailable() }
         }
+        .onChange(of: selected) { _, session in
+            // A picker selection replaces the history-only view with the
+            // session chat. Open the prompt immediately instead of making the
+            // user select the field a second time.
+            if session != nil { focusPromptIfAvailable() }
+        }
     }
 
     // MARK: - No runner on the box
@@ -300,10 +306,28 @@ struct SessionView: View {
                 text: $prompt,
                 editingRequestID: editingRequest,
                 onSubmit: { Task { await sendPrompt() } },
+                onEndEditing: {
+                    // Apple TV Remote's blue tick may end UIKit editing
+                    // without emitting return. Treat that first tick as the
+                    // session-chat send action; sendPrompt guards empty text.
+                    Task { await sendPrompt() }
+                },
                 placeholder: "Dictate a prompt (press and hold Siri)",
-                font: .systemFont(ofSize: 22)
+                font: .systemFont(ofSize: 22),
+                textColor: UIColor(white: 0.12, alpha: 1),
+                tint: UIColor(white: 0.12, alpha: 1),
+                fieldBackgroundColor: UIColor(white: 0.93, alpha: 1),
+                fieldCornerRadius: 16,
+                fieldContentInset: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
             )
                 .focused($promptFocused)
+                .frame(maxWidth: .infinity, minHeight: 58, maxHeight: 58)
+                .focusEffectDisabled()
+                .onChange(of: prompt) { _, value in
+                    guard value.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2,
+                          !loading else { return }
+                    DispatchQueue.main.async { Task { await sendPrompt() } }
+                }
                 .padding(.horizontal, 20).padding(.vertical, 14)
                 .background(.gray.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
             Button {

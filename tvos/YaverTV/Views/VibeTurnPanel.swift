@@ -59,7 +59,6 @@ struct VibeTurnPanel: View {
 
     @State private var expanded: Bool
     @State private var prompt = ""
-    @State private var editingRequest = 0
     @State private var sending = false
     @State private var activeTask: TaskSummary?
     @State private var taskLog = ""
@@ -72,6 +71,7 @@ struct VibeTurnPanel: View {
     @State private var taskStreamRetry: Task<Void, Never>?
     @State private var taskStreamNotice: String?
     @State private var rawCursor = 0
+    @State private var transcriptCursor = 0
     @State private var detailRefreshTask: Task<Void, Never>?
     @State private var appConsoleTask: Task<Void, Never>?
     @State private var appConsoleRetryTask: Task<Void, Never>?
@@ -113,24 +113,27 @@ struct VibeTurnPanel: View {
                     if activeTask != nil || !optimisticTurns.isEmpty {
                         conversation
                     }
-                    // Shared dictation field (see YaverDictationField): claims
-                    // the UIKit responder so the Siri Remote mic dictates into
-                    // the vibe prompt. The border makes the armed state visible
-                    // from the couch — the field is either the active input
-                    // target or clearly not.
-                    YaverDictationField(
-                        text: $prompt,
-                        editingRequestID: editingRequest,
-                        onSubmit: { send() },
-                        placeholder: "What should change?",
-                        font: .systemFont(ofSize: 24, weight: .medium)
-                    )
+                    // Keep Vibing on SwiftUI's native tvOS text field. The
+                    // Siri Remote dictation session is attached by tvOS to the
+                    // native TextField; the UIKit first-responder bridge can
+                    // show a keyboard and accept typed text but does not make
+                    // the remote microphone route into this prompt.
+                    TextField("What should change?", text: $prompt)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.black)
+                        .tint(.black)
+                        .lineLimit(1)
                         .focused($panelFocus, equals: .prompt)
-                        .padding(.horizontal, 18)
-                        .frame(minHeight: 72)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(panelFocus == .prompt ? Color.white.opacity(0.55) : .clear, lineWidth: 2)
+                        .padding(.horizontal, 16)
+                        .frame(height: 56)
+                        .focusEffectDisabled()
+                        .accessibilityIdentifier("vibing.prompt")
+                        .onSubmit { send() }
+                        .onChange(of: prompt) { _, value in
+                            guard value.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2,
+                                  !sending else { return }
+                            DispatchQueue.main.async { send() }
                         }
                         #if os(tvOS)
                         .onMoveCommand { direction in
@@ -152,7 +155,6 @@ struct VibeTurnPanel: View {
                     expanded = true
                     // Focus follows the expansion so a second mic press dictates.
                     panelFocus = .prompt
-                    editingRequest += 1
                 } label: {
                     Label(activeTask == nil ? "Vibe — ask for a change" : "Ask for another change",
                           systemImage: "wand.and.stars")
@@ -171,6 +173,16 @@ struct VibeTurnPanel: View {
             detailRefreshTask?.cancel()
             appConsoleTask?.cancel()
             appConsoleRetryTask?.cancel()
+        }
+        .onChange(of: panelFocus) { oldFocus, newFocus in
+            // The Apple TV Remote blue tick can dismiss the native keyboard
+            // without delivering SwiftUI's onSubmit. If the prompt field was
+            // the active chat control, ending that edit is the send action.
+            guard oldFocus == .prompt,
+                  newFocus == nil,
+                  !sending,
+                  !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            send()
         }
         .fullScreenCover(isPresented: $showConsolePopup) {
             VStack(alignment: .leading, spacing: 12) {
@@ -281,7 +293,6 @@ struct VibeTurnPanel: View {
             expanded = true
             DispatchQueue.main.async {
                 panelFocus = .prompt
-                editingRequest += 1
             }
         }
         .onAppear {
@@ -289,7 +300,6 @@ struct VibeTurnPanel: View {
             if expanded {
                 DispatchQueue.main.async {
                     panelFocus = .prompt
-                    editingRequest += 1
                 }
             }
         }
@@ -297,7 +307,6 @@ struct VibeTurnPanel: View {
             if isExpanded {
                 DispatchQueue.main.async {
                     panelFocus = .prompt
-                    editingRequest += 1
                 }
             }
         }
@@ -994,6 +1003,7 @@ struct VibeTurnPanel: View {
                             taskLog = ""
                             liveAssistantText = ""
                             rawCursor = 0
+                            transcriptCursor = 0
                             activeTask = TaskSummary(
                                 id: fork.taskId,
                                 title: current.title,
@@ -1025,6 +1035,7 @@ struct VibeTurnPanel: View {
                         taskLog = ""
                         liveAssistantText = ""
                         rawCursor = 0
+                        transcriptCursor = 0
                         conversationSettingsChanged = false
                         attach(to: created.id, client: client)
                     }
@@ -1049,6 +1060,8 @@ struct VibeTurnPanel: View {
         optimisticTurns.removeAll()
         taskLog = ""
         liveAssistantText = ""
+        rawCursor = 0
+        transcriptCursor = 0
         taskStreamNotice = nil
         turnError = nil
         prompt = ""
@@ -1063,18 +1076,22 @@ struct VibeTurnPanel: View {
         Task {
             taskStream = await client.subscribeTaskOutput(
                 taskId: taskId,
+                since: transcriptCursor > 0 ? transcriptCursor : nil,
                 rawSince: rawCursor,
                 onRaw: { text, offset, full in Task { @MainActor in
                     taskStreamNotice = nil
                     taskLog = full ? text : String((taskLog + text).suffix(128 * 1024))
                     rawCursor = offset
                 } },
-                onData: { text in Task { @MainActor in
+                onData: { text, offset, full in Task { @MainActor in
                     taskStreamNotice = nil
                     // Groomed runner text is the conversational assistant
                     // lane. Render it incrementally beside the WebRTC app,
                     // rather than waiting for the terminal task snapshot.
-                    liveAssistantText = String((liveAssistantText + text).suffix(64 * 1024))
+                    liveAssistantText = full
+                        ? String(text.suffix(64 * 1024))
+                        : String((liveAssistantText + text).suffix(64 * 1024))
+                    if let offset { transcriptCursor = offset }
                     // Older/stale agents can emit groomed `output` while their
                     // raw stdout lane is empty. Do not render a false-empty
                     // Agent logs panel after successful work: show the measured
