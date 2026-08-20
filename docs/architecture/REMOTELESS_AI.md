@@ -1,7 +1,8 @@
 # Remoteless AI + Yaver repair channels (SSH wrapper + JSON-RPC "HTTPS-SSH")
 
-Status: **P0 in progress** (interim `remoteless` runner + aiFix default). Last updated: 2026-08-21.
-See AGENTS.md: this doc is context, the code is the source of truth — grep the symbols before trusting them.
+Status: **P0 committed + pushed (ecfc52c62, 2026-08-21)** — interim `remoteless` runner +
+aiFix default. See AGENTS.md: this doc is context, the code is the source of truth —
+grep the symbols before trusting them.
 
 ## Goal
 
@@ -73,6 +74,27 @@ work from a watch, by construction, because they call the same endpoints.
 forwarded to the box as a JSON-RPC method (Lane C). Zero key on the box.
 
 ## Lane B — Fix-with-AI across connectivity, OAuth, deep-audit, vibing
+
+### Constraint from the tvOS QR-auth handoff (2026-08-21)
+
+Read `docs/handoffs/tvos-qr-auth-audit-2026-08-21.md` before building any tvOS
+"Fix with AI" surface. Its rules are load-bearing for this lane:
+
+- A TV-scoped companion token is denied `POST /tasks` on deployed agents by
+  `auth.session.scope_denied` because the allowlist fix (`6a70b7e3f`,
+  `tvTaskMutationAllowed`, `desktop/agent/httpserver.go`) is **unreleased** —
+  the fix is a new agent release, then a box update, not a client bug.
+- **Verdict routing, not prose:** a `auth.session.scope_denied` verdict must
+  render an "Update agent" card and must NEVER render Retry/Fix-with-AI (a fix
+  route that cannot run is a wall). `TVRemoteRuntimeController.errorCode` +
+  `RemoteRuntimeWebRTCView.runtimeFailurePanel` already do this — the remoteless
+  fix lanes must keep the same discipline.
+- The remoteless runner's `POST /tasks` under a TV-scoped token is subject to
+  the same gate. Lane D's dedicated `repair`-scope token is the intended path
+  for TV-initiated repair, and it must exist independently of the released
+  allowlist state.
+- Companion-scope parity tests must validate **method + path** (a path check
+  that accepts GET when only POST is allowed can miss drift).
 
 **B1. Fix-with-AI default → remoteless (P0 starts here)**
 - `aiFixRoute` (`capability_gap.go:532-550`) defaults `runner` to `remoteless` when the lane is
