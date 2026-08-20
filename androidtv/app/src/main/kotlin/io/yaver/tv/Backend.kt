@@ -56,9 +56,7 @@ sealed class EmailAuthError : Exception() {
     class InvalidCredentials : EmailAuthError()
     class LockedOut : EmailAuthError()
     class RequiresTwoFactor : EmailAuthError()
-    class Server(message: String) : EmailAuthError() {
-        override val message: String get() = message
-    }
+    class Server(override val message: String) : EmailAuthError()
 }
 
 object Backend {
@@ -84,6 +82,7 @@ object Backend {
             .put("machineName", machineName)
             .put("platform", platform)
             .put("environment", environment)
+            .put("deviceId", TokenStore.installationId(appContext))
         lastOwnerUserId(appContext)?.let { body.put("ownerUserIdHint", it) }
         val request = Request.Builder()
             .url("$CONVEX_ORIGIN/auth/device-code")
@@ -231,7 +230,22 @@ object Backend {
         }
     }
 
-    // ── Email/password (secondary sign-in) ────────────────────────────────
+    /** Best-effort backend revocation; local sign-out never depends on it. */
+    suspend fun revokeSession(token: String) = withContext(Dispatchers.IO) {
+        if (token.isEmpty()) return@withContext
+        runCatching {
+            val request = Request.Builder()
+                .url("$CONVEX_ORIGIN/auth/logout")
+                .header("Authorization", "Bearer $token")
+                .header("X-Yaver-Surface", TV_SURFACE_ID)
+                .post(ByteArray(0).toRequestBody(JSON))
+                .build()
+            http.newCall(request).execute().close()
+        }
+        Unit
+    }
+
+    // ── Email/password (option one) ───────────────────────────────────────
 
     /** POST /auth/login {email, password} → {token} | {requires2fa} | error.
      *  Rate-limited server-side (429) and gated by the deployment's

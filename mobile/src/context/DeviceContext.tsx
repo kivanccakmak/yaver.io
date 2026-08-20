@@ -23,7 +23,6 @@ import { connectGiveUpMessage } from "../lib/platformTransport";
 import { classifyRelayLimit, explainRelayDeny } from "../lib/relayDeny";
 import { useAuth } from "./AuthContext";
 import { getConvexSiteUrl, getLocalSecret, getUserSettings, saveUserSettings, LOCAL_KEYS, UserSettingsUnavailableError } from "../lib/auth";
-import { approveDeviceCode } from "../lib/deviceCodeApprove";
 import { fetchPendingDeviceApprovals, pendingApprovalDeviceLabel } from "../lib/pendingApprovals";
 import { appLog } from "../lib/logger";
 import { sameDeviceList } from "../lib/deviceListEquality";
@@ -2637,13 +2636,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             {
               text: "Approve",
               onPress: () => {
-                void approveDeviceCode(row.userCode, token).then((r) => {
-                  if (r.ok) {
-                    Alert.alert("Approved", `${name} is signing in now.`);
-                  } else {
-                    Alert.alert("Approval failed", r.error || "Try scanning the QR on its screen instead.");
-                  }
-                });
+                // Route every approval through the named confirmation screen:
+                // it re-fetches the waiting TV, displays the same code and
+                // performs device authentication. A background alert must not
+                // bypass the guard the Settings scanner enforces.
+                router.push({ pathname: "/approve-device", params: { code: row.userCode } });
               },
             },
           ],

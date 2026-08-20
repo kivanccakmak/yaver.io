@@ -50,6 +50,22 @@ enum DevicePollStatus: String, Decodable {
     case pending, authorized, expired
 }
 
+enum DeviceCodeDeliveryDecision: Equatable {
+    case signIn(String)
+    case claim
+    case wait
+    case rotate
+
+    /// Arbitrate the long-event and fallback-poll lanes. A token-bearing result
+    /// always wins, even when the sibling lane is already awaiting /claim.
+    static func decide(status: DevicePollStatus, token: String?, claimInFlight: Bool) -> Self {
+        if status == .expired { return .rotate }
+        guard status == .authorized else { return .wait }
+        if let token, !token.isEmpty { return .signIn(token) }
+        return claimInFlight ? .wait : .claim
+    }
+}
+
 struct DevicePollResult: Decodable {
     let status: DevicePollStatus
     let token: String?
@@ -105,6 +121,7 @@ enum DeviceCodeAuth {
             "machineName": machineName,
             "platform": platform,
             "environment": environment,
+            "deviceId": TokenStore.installationID(),
         ]
         // Owner hint ("mobil onay"): if this device remembers its last owner,
         // say so — the owner's signed-in phone then gets a proactive approve
@@ -272,6 +289,18 @@ enum DeviceCodeAuth {
             UserDefaults.standard.set(uid, forKey: lastOwnerUserIdKey)
         }
         return raw?.token
+    }
+
+    /// Best-effort server revocation for a shared-room device. Local Keychain
+    /// deletion happens regardless, but sign-out should not leave the QR-minted
+    /// one-year bearer usable in the backend until natural expiry.
+    static func revokeSession(token: String) async {
+        guard !token.isEmpty else { return }
+        var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("auth/logout"))
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(Backend.surface, forHTTPHeaderField: "X-Yaver-Surface")
+        _ = try? await URLSession.shared.data(for: req)
     }
 
     /// UserDefaults key for the remembered owner hint (see refreshSession).

@@ -2047,6 +2047,26 @@ export default function SettingsScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
+        {/* Primary companion action: authorize a TV with the account that is
+            already signed in on this phone, regardless of its OAuth provider. */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>TV sign-in</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <Pressable
+              style={styles.aboutRow}
+              onPress={() => router.push({ pathname: "/approve-device", params: { scan: "1" } })}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Scan TV QR</Text>
+                <Text style={{ color: c.textMuted, fontSize: 11 }}>
+                  Sign in Apple TV or Android TV with this Yaver account
+                </Text>
+              </View>
+              <Text style={[styles.aboutValue, { color: c.accent }]}>Scan ›</Text>
+            </Pressable>
+          </View>
+        </View>
+
         {/* Machine + voice controls */}
         {/* Per-machine coding agent preference lives before toolchain sync:
             choose the default runner for the connected box and drive remote
@@ -2276,25 +2296,6 @@ export default function SettingsScreen() {
             </View>
           </View>
         ) : null}
-
-        {/* Sign in a TV/headless device by scanning its QR inside Yaver. */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Devices</Text>
-          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-            <Pressable
-              style={styles.aboutRow}
-              onPress={() => router.push("/approve-device")}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Sign in a TV</Text>
-                <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                  Scan the QR on Apple TV or Google TV inside Yaver; also works for a headless box code
-                </Text>
-              </View>
-              <Text style={[styles.aboutValue, { color: c.accent }]}>Scan ›</Text>
-            </Pressable>
-          </View>
-        </View>
 
         {/* Mobile Sandbox coding */}
         <View style={styles.section}>

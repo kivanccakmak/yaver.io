@@ -383,6 +383,7 @@ final class YaverStore: ObservableObject {
     }
 
     func signOut() {
+        let current = token
         token = ""
         legacyStoredToken = ""
         TokenStore.clear()
@@ -392,6 +393,7 @@ final class YaverStore: ObservableObject {
         selectedBox = nil
         selectedBoxId = ""
         storedBoxesJSON = "[]"
+        Task { await DeviceCodeAuth.revokeSession(token: current) }
     }
 
     /// Clear a persisted session only when the server has proved it is no

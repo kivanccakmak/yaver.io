@@ -24,8 +24,10 @@
 
 import { getConvexSiteUrlSync as getConvexSiteUrl } from "./backendConfig";
 import { approveFailureMessage } from "./approveFailureMessage";
+import { normalizeUserCode } from "./deviceCodeQr";
 
 export { approveFailureMessage };
+export { extractScannedDeviceCode, extractUserCode, normalizeUserCode } from "./deviceCodeQr";
 
 export interface DeviceCodeInfo {
   /** Hostname the box reported when it created the code. */
@@ -43,48 +45,47 @@ export interface DeviceCodeInfo {
   userCode?: string;
 }
 
-/** Normalize a scanned/typed code to the canonical ABCD-1234 shape the
- *  backend stores. Accepts "abcd1234", "ABCD-1234", with stray spaces.
- *  A valid normalized code is 9 chars (4 + hyphen + 4). */
-export function normalizeUserCode(raw: string): string {
-  const s = (raw || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (s.length === 8) return `${s.slice(0, 4)}-${s.slice(4)}`;
-  return s;
-}
-
-/** Extract the device-code from a scanned URL or raw code string.
- *  Handles https://yaver.io/auth/device?code=ABCD-1234[&convex=...],
- *  yaver://auth/device?code=..., and a bare "ABCD-1234". Returns "" if
- *  nothing code-shaped is found. */
-export function extractUserCode(input: string): string {
-  const raw = (input || "").trim();
-  if (!raw) return "";
-  try {
-    const u = new URL(raw);
-    const q = u.searchParams.get("code");
-    if (q) return normalizeUserCode(q);
-  } catch {
-    // not a URL — fall through to treat as a bare code
-  }
-  return normalizeUserCode(raw);
-}
+export type DeviceCodeInfoResult =
+  | { kind: "found"; info: DeviceCodeInfo }
+  | { kind: "not_found" }
+  | { kind: "unreachable"; message: string };
 
 /** Fetch the waiting box's details so the approve screen can show
  *  "Approve sign-in on <machine>?" instead of an opaque code. Public
- *  endpoint — no token needed. Returns null on any failure (expired
- *  code, network) so the caller can show a clean "code not found".  */
-export async function fetchDeviceCodeInfo(userCode: string): Promise<DeviceCodeInfo | null> {
+ *  endpoint — no token needed. Keeps expiry/not-found distinct from a
+ *  transport failure so the phone never falsely tells the user to rescan. */
+export async function fetchDeviceCodeInfoResult(
+  userCode: string,
+  timeoutMs = APPROVE_TIMEOUT_MS,
+): Promise<DeviceCodeInfoResult> {
   const code = normalizeUserCode(userCode);
-  if (!code) return null;
+  if (!code) return { kind: "not_found" };
   try {
     const res = await boundedFetch(
       `${getConvexSiteUrl()}/auth/device-code/info?user_code=${encodeURIComponent(code)}`,
+      undefined,
+      timeoutMs,
     );
-    if (!res.ok) return null;
-    return (await res.json()) as DeviceCodeInfo;
-  } catch {
-    return null;
+    if (res.status === 404 || res.status === 410) return { kind: "not_found" };
+    if (!res.ok) {
+      return { kind: "unreachable", message: `Yaver could not verify the TV (${res.status}). Try again.` };
+    }
+    return { kind: "found", info: (await res.json()) as DeviceCodeInfo };
+  } catch (err: any) {
+    return {
+      kind: "unreachable",
+      message: err?.name === "AbortError"
+        ? "TV verification timed out. Check your connection and try again."
+        : "Couldn't reach Yaver to verify this TV. Check your connection and try again.",
+    };
   }
+}
+
+/** Back-compatible nullable helper for status-only callers. New approval UI
+ * must use fetchDeviceCodeInfoResult so transport failure is not called expiry. */
+export async function fetchDeviceCodeInfo(userCode: string): Promise<DeviceCodeInfo | null> {
+  const result = await fetchDeviceCodeInfoResult(userCode);
+  return result.kind === "found" ? result.info : null;
 }
 
 /**
@@ -101,9 +102,9 @@ export async function fetchDeviceCodeInfo(userCode: string): Promise<DeviceCodeI
  */
 const APPROVE_TIMEOUT_MS = 12_000;
 
-async function boundedFetch(url: string, init?: RequestInit): Promise<Response> {
+async function boundedFetch(url: string, init?: RequestInit, timeoutMs = APPROVE_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), APPROVE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...(init || {}), signal: controller.signal });
   } finally {

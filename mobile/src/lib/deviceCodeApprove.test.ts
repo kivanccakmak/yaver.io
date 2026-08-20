@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { approveFailureMessage } from "./approveFailureMessage";
+import { extractScannedDeviceCode, extractUserCode, normalizeUserCode } from "./deviceCodeQr";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, "deviceCodeApprove.ts"), "utf8");
@@ -87,4 +88,31 @@ test("says the same thing the web approver says", () => {
   for (const phrase of ["Invalid code.", "has already been used", "Too many attempts"]) {
     assert.ok(web.includes(phrase), `web approver no longer says "${phrase}" — the surfaces have drifted`);
   }
+});
+
+test("normalizes manual TV codes without weakening the camera boundary", () => {
+  assert.equal(normalizeUserCode(" abcd 1234 "), "ABCD-1234");
+  assert.equal(extractUserCode("abcd1234"), "ABCD-1234");
+});
+
+test("camera accepts only canonical Yaver TV verification links", () => {
+  assert.equal(extractScannedDeviceCode("https://yaver.io/auth/device?code=abcd1234"), "ABCD-1234");
+  assert.equal(extractScannedDeviceCode("https://yaver.io/auth/device/?code=ABCD-1234"), "ABCD-1234");
+  assert.equal(extractScannedDeviceCode("yaver://auth/device?code=ABCD-1234"), "ABCD-1234");
+
+  for (const hostile of [
+    "https://evil.example/auth/device?code=ABCD-1234",
+    "http://yaver.io/auth/device?code=ABCD-1234",
+    "https://yaver.io.evil.example/auth/device?code=ABCD-1234",
+    "https://yaver.io/other?code=ABCD-1234",
+    "ABCD-1234",
+  ]) {
+    assert.equal(extractScannedDeviceCode(hostile), "", hostile);
+  }
+});
+
+test("warm and cold deep-link routing shares the strict scanner boundary", () => {
+  const handler = readFileSync(join(here, "pairLinkHandler.tsx"), "utf8");
+  assert.match(handler, /return extractScannedDeviceCode\(raw\) !== ""/);
+  assert.doesNotMatch(handler, /path === "\/auth\/device"\) return true/);
 });

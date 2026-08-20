@@ -60,7 +60,7 @@ fun YaverTvApp(store: TvStore) {
         navController = nav,
         startDestination = if (authenticated) Routes.DASHBOARD else Routes.SIGN_IN,
     ) {
-        composable(Routes.SIGN_IN) { SignInScreen(store = store, nav = nav) }
+        composable(Routes.SIGN_IN) { SignInScreen(store = store) }
         composable(Routes.DASHBOARD) { DashboardScreen(store = store, nav = nav) }
         composable(Routes.MACHINES) { MachinePickerScreen(store = store, nav = nav) }
         composable(Routes.ADD_BOX) { AddBoxScreen(store = store, nav = nav) }

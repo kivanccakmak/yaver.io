@@ -18,6 +18,7 @@ import { useEffect } from "react";
 import * as Linking from "expo-linking";
 import { router } from "expo-router";
 import { parsePairUrl } from "./pairDevice";
+import { extractScannedDeviceCode } from "./deviceCodeQr";
 
 // A remote/off-LAN box that can't be silently adopted over the LAN
 // beacon prints a device-code URL after `yaver auth`:
@@ -27,16 +28,10 @@ import { parsePairUrl } from "./pairDevice";
 // Route it into the in-app one-tap approver instead — the phone is
 // already signed in (see app/approve-device.tsx).
 function isApproveUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    const path = (u.pathname || "").replace(/\/+$/, "");
-    if (path === "/auth/device") return true;
-    // yaver://auth/device?code=… parses host="auth", pathname="/device".
-    if ((u.protocol === "yaver:" || u.protocol === "yaver://") && u.host === "auth" && path === "/device") return true;
-    return false;
-  } catch {
-    return false;
-  }
+  // Share the scanner's strict origin/path/code boundary. The old pathname-
+  // only check accepted yaver://evil/auth/device and arbitrary HTTPS hosts,
+  // creating a phishing doorway into a sensitive approval screen.
+  return extractScannedDeviceCode(raw) !== "";
 }
 
 function isRunnerAuthUrl(raw: string): boolean {

@@ -32,11 +32,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.navigation.NavHostController
 import io.yaver.tv.Backend
 import io.yaver.tv.DevicePollResult
+import io.yaver.tv.DeviceCodeDeliveryAction
 import io.yaver.tv.LanApprovalBeacon
 import io.yaver.tv.TvStore
+import io.yaver.tv.deviceCodeDeliveryAction
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.material3.OutlinedTextField
@@ -44,14 +45,15 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.text.input.KeyboardType
 
 /**
- * SignInScreen — the full device-code sign-in: QR + short code + match code,
+ * SignInScreen — exactly two account choices: email/password, or a QR approved
+ * by an already-signed-in Yaver phone. The QR path has short/match codes,
  * event-first wait with a 5s poll fallback, LAN approval Allow/Deny window
  * (UDP beacon on 19837), elapsed/expiry clock, "Can't reach Yaver — retrying"
- * narration, and email/password as the secondary path. Mirrors
+ * narration. The phone's original OAuth provider is irrelevant. Mirrors
  * tvos/YaverTV/Views/SignInView.swift.
  */
 @Composable
-fun SignInScreen(store: TvStore, nav: NavHostController) {
+fun SignInScreen(store: TvStore) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -60,9 +62,11 @@ fun SignInScreen(store: TvStore, nav: NavHostController) {
     var unreachable by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf("pending") } // pending | authorized | expired
     var lanPending by remember { mutableStateOf<io.yaver.tv.LanPendingInfo?>(null) }
-    var showEmail by remember { mutableStateOf(false) }
+    var showEmail by remember { mutableStateOf(true) }
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    var claimed by remember { mutableStateOf(false) }
+    var completed by remember { mutableStateOf(false) }
+    var claimInFlight by remember { mutableStateOf(false) }
+    var rotatingCode by remember { mutableStateOf(false) }
 
     val beacon = remember { LanApprovalBeacon(context) }
 
@@ -71,48 +75,84 @@ fun SignInScreen(store: TvStore, nav: NavHostController) {
     fun begin() {
         error = null
         status = "pending"
-        claimed = false
+        completed = false
+        claimInFlight = false
         scope.launch {
             try {
                 val s = Backend.startDeviceCode(context, machineName, "androidtv", "tv")
+                if (showEmail) return@launch
                 start = s
                 unreachable = null
                 if (s.approveNonce != null && s.matchCode != null) {
                     beacon.start(machineName, s.approveNonce, s.matchCode, s.expiresAt)
                 }
             } catch (e: Throwable) {
-                error = e.message ?: "Couldn't start sign-in. Check your connection."
+                if (!showEmail) error = e.message ?: "Couldn't start sign-in. Check your connection."
+            } finally {
+                rotatingCode = false
             }
         }
     }
 
     fun finishIfAuthorized(r: DevicePollResult, deviceCode: String) {
-        if (claimed) return
-        if (r.status == "authorized") {
-            claimed = true
+        if (completed) return
+        when (deviceCodeDeliveryAction(r.status, !r.token.isNullOrEmpty(), claimInFlight)) {
+        DeviceCodeDeliveryAction.SIGN_IN -> {
             status = "authorized"
-            val sessionToken = r.token
+            completed = true
+            val sessionToken = r.token ?: return
             scope.launch {
-                val token = if (sessionToken.isNullOrEmpty()) {
-                    val claimedResult = Backend.claimDeviceCode(deviceCode, r.claimHandle)
-                    if (claimedResult.status == "authorized") claimedResult.token else null
-                } else sessionToken
-                if (token != null) {
-                    store.signIn(token)
+                try {
+                    store.signIn(sessionToken)
                     beacon.stop()
-                } else {
-                    claimed = false
-                    unreachable = "Approved, but this TV could not pick up the session yet. Retrying..."
+                } catch (e: Throwable) {
+                    completed = false
+                    error = e.message ?: "The TV received its session but couldn't save it. Retrying..."
                 }
             }
-        } else if (r.status == "expired") {
+        }
+        DeviceCodeDeliveryAction.CLAIM -> {
+            status = "authorized"
+            claimInFlight = true
+            scope.launch {
+                try {
+                    val result = Backend.claimDeviceCode(deviceCode, r.claimHandle)
+                    if (!completed && result.status == "authorized" && !result.token.isNullOrEmpty()) {
+                        completed = true
+                        store.signIn(result.token)
+                        beacon.stop()
+                    } else if (!completed) {
+                        unreachable = result.unreachableReason
+                            ?: "Approved, but this TV could not pick up the session yet. Retrying..."
+                    }
+                } finally {
+                    claimInFlight = false
+                }
+            }
+        }
+        DeviceCodeDeliveryAction.ROTATE -> {
+            if (rotatingCode) return
+            rotatingCode = true
             status = "expired"
             begin()
         }
+        DeviceCodeDeliveryAction.WAIT -> Unit
+        }
     }
 
-    // Kick off a code on mount.
-    LaunchedEffect(Unit) { begin() }
+    // Email is option one/default. Mint an anonymous code only after the user
+    // chooses option two; leaving QR stops its beacon and delivery lanes.
+    LaunchedEffect(showEmail) {
+        if (showEmail) {
+            beacon.stop()
+            start = null
+            completed = false
+            claimInFlight = false
+            lanPending = null
+        } else {
+            begin()
+        }
+    }
 
     // Clock for elapsed/expiry narration.
     LaunchedEffect(Unit) {
@@ -126,11 +166,11 @@ fun SignInScreen(store: TvStore, nav: NavHostController) {
     // SignInView.startPolling).
     LaunchedEffect(start?.deviceCode) {
         val deviceCode = start?.deviceCode ?: return@LaunchedEffect
-        while (!claimed) {
+        while (!completed) {
             val r = Backend.waitDeviceCodeEvent(deviceCode)
             if (r.status == "authorized" || r.status == "expired") {
                 finishIfAuthorized(r, deviceCode)
-                break
+                if (r.status == "expired") break
             }
             r.lanPending?.let { lp -> if (status == "pending") lanPending = lp }
             unreachable = r.unreachableReason
@@ -140,12 +180,12 @@ fun SignInScreen(store: TvStore, nav: NavHostController) {
 
     LaunchedEffect(start?.deviceCode) {
         val deviceCode = start?.deviceCode ?: return@LaunchedEffect
-        while (!claimed) {
+        while (!completed) {
             delay(5000)
             val r = Backend.pollDeviceCode(deviceCode)
             if (r.status == "authorized" || r.status == "expired") {
                 finishIfAuthorized(r, deviceCode)
-                break
+                if (r.status == "expired") break
             }
             r.lanPending?.let { lp -> if (status == "pending") lanPending = lp }
             unreachable = r.unreachableReason
@@ -164,64 +204,23 @@ fun SignInScreen(store: TvStore, nav: NavHostController) {
         }
     }
 
-    Row(
+    Column(
         modifier = Modifier.fillMaxSize().background(TvColors.Bg).padding(48.dp),
-        horizontalArrangement = Arrangement.spacedBy(56.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            Text("Yaver", color = TvColors.TextPrimary, fontSize = 48.sp, fontWeight = FontWeight.Black)
-            Text("Sign in to Yaver", color = TvColors.TextPrimary, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-            Text("1. Open the Yaver app on your phone", color = TvColors.TextSecondary, fontSize = 20.sp)
-            Text("2. Scan this code (or visit yaver.io/auth/device)", color = TvColors.TextSecondary, fontSize = 20.sp)
-            Text("3. Tap Approve — this TV signs in instantly", color = TvColors.TextSecondary, fontSize = 20.sp)
+        Text("Yaver", color = TvColors.TextPrimary, fontSize = 48.sp, fontWeight = FontWeight.Black)
+        Text("Sign in to Yaver", color = TvColors.TextPrimary, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            TvTextButton(label = "1 · Email & password", onClick = { showEmail = true })
+            TvTextButton(label = "2 · Scan QR from phone", onClick = { showEmail = false })
+        }
 
-            start?.let { s ->
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("OR ENTER THIS CODE", color = TvColors.TextMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                    Text(
-                        s.userCode,
-                        color = TvColors.Accent,
-                        fontSize = 40.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 4.sp,
-                    )
-                }
-            }
-
-            lanPending?.let { lp ->
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Approve sign-in from ${lp.approverEmail ?: "your phone"}?", color = TvColors.TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                        Text("Match code: ${lp.matchCode ?: "—"}", color = TvColors.Accent, fontSize = 24.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                    }
-                    TvTextButton(label = "Allow", onClick = { lanDecision(true) })
-                    TvTextButton(label = "Deny", onClick = { lanDecision(false) })
-                }
-            }
-
-            error?.let { Text(it, color = TvColors.Red, fontSize = 16.sp) }
-            start?.let { s ->
-                val elapsed = ((now - (s.expiresAt - 15 * 60 * 1000)) / 1000).toInt().coerceAtLeast(0)
-                val remaining = ((s.expiresAt - now) / 1000).toInt().coerceAtLeast(0)
-                val hintColor = if (unreachable != null) TvColors.Orange else TvColors.TextMuted
-                Text(
-                    unreachable ?: "Waiting for approval · ${clock(elapsed)} elapsed · code expires in ${clock(remaining)}",
-                    color = hintColor,
-                    fontSize = 15.sp,
-                )
-            }
-            if (status == "expired") {
-                Text("Code expired — generating a new one…", color = TvColors.TextMuted, fontSize = 15.sp)
-            }
-
-            TvTextButton(label = if (showEmail) "Back to QR sign-in" else "Use email + password", onClick = { showEmail = !showEmail })
-
-            if (showEmail) {
+        if (showEmail) {
+            Column(
+                modifier = Modifier.fillMaxWidth(0.58f),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text("1 · Email and password", color = TvColors.TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 EmailSignInForm(
                     onSuccess = { token ->
                         scope.launch {
@@ -231,16 +230,71 @@ fun SignInScreen(store: TvStore, nav: NavHostController) {
                     },
                 )
             }
-        }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(56.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text("2 · Scan with the Yaver app", color = TvColors.TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text("1. Open Yaver on a phone that is already signed in", color = TvColors.TextSecondary, fontSize = 20.sp)
+                    Text("2. Settings → Scan TV QR, then scan this code", color = TvColors.TextSecondary, fontSize = 20.sp)
+                    Text("3. Confirm the code and tap Approve", color = TvColors.TextSecondary, fontSize = 20.sp)
 
-        // Right column: QR pane.
-        Box(
-            modifier = Modifier.size(width = 300.dp, height = 300.dp)
-                .background(Color.White, RoundedCornerShape(20.dp))
-                .padding(20.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            start?.let { Image(bitmap = renderQr(it.verifyUrl, 260), contentDescription = "Sign-in QR code", modifier = Modifier.size(260.dp)) }
+                    start?.let { s ->
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("OR ENTER THIS CODE", color = TvColors.TextMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                            Text(
+                                s.userCode,
+                                color = TvColors.Accent,
+                                fontSize = 40.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 4.sp,
+                            )
+                        }
+                    }
+
+                    lanPending?.let { lp ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Approve sign-in from ${lp.approverEmail ?: "your phone"}?", color = TvColors.TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                Text("Match code: ${lp.matchCode ?: "—"}", color = TvColors.Accent, fontSize = 24.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                            }
+                            TvTextButton(label = "Allow", onClick = { lanDecision(true) })
+                            TvTextButton(label = "Deny", onClick = { lanDecision(false) })
+                        }
+                    }
+
+                    error?.let { Text(it, color = TvColors.Red, fontSize = 16.sp) }
+                    start?.let { s ->
+                        val elapsed = ((now - (s.expiresAt - 15 * 60 * 1000)) / 1000).toInt().coerceAtLeast(0)
+                        val remaining = ((s.expiresAt - now) / 1000).toInt().coerceAtLeast(0)
+                        val hintColor = if (unreachable != null) TvColors.Orange else TvColors.TextMuted
+                        Text(
+                            unreachable ?: "Waiting for approval · ${clock(elapsed)} elapsed · code expires in ${clock(remaining)}",
+                            color = hintColor,
+                            fontSize = 15.sp,
+                        )
+                    }
+                    if (status == "expired") {
+                        Text("Code expired — generating a new one…", color = TvColors.TextMuted, fontSize = 15.sp)
+                    }
+                }
+
+                Box(
+                    modifier = Modifier.size(width = 300.dp, height = 300.dp)
+                        .background(Color.White, RoundedCornerShape(20.dp))
+                        .padding(20.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    start?.let { Image(bitmap = renderQr(it.verifyUrl, 260), contentDescription = "Sign-in QR code", modifier = Modifier.size(260.dp)) }
+                }
+            }
         }
     }
 }
@@ -294,7 +348,7 @@ private fun EmailSignInForm(onSuccess: (String) -> Unit) {
                         err = when (e) {
                             is io.yaver.tv.EmailAuthError.InvalidCredentials -> "Invalid email or password."
                             is io.yaver.tv.EmailAuthError.LockedOut -> "Too many failed attempts. Wait a bit, then try again."
-                            is io.yaver.tv.EmailAuthError.RequiresTwoFactor -> "Two-factor authentication is on. Approve with the QR code above from your phone, or in a browser."
+                            is io.yaver.tv.EmailAuthError.RequiresTwoFactor -> "Two-factor authentication is on. Choose option 2 and approve from your signed-in phone."
                             is io.yaver.tv.EmailAuthError.Server -> e.message
                         }
                     } catch (e: Throwable) {

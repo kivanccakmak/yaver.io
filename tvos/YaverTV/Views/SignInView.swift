@@ -1,18 +1,14 @@
 // SignInView.swift — TV sign-in.
 //
-// Two paths, and the fast one leads:
+// Exactly two account-login paths:
 //
-//   * Sign in with Apple, natively. The TV already holds an Apple ID, so this
-//     needs no second device and no transcription at all — one click, confirmed
-//     on the paired iPhone. Seconds.
-//   * Device code + QR, for everything Apple can't serve: a Google/Microsoft/
-//     GitHub/passkey account, or an account with 2FA. Unlike the headset, a QR
-//     genuinely works here — a TV is a real screen and a phone's camera can see
-//     it. (VisionSignInView drops the QR for exactly that reason.)
+//   1. Email + password directly on the TV.
+//   2. Device-code QR approved by an already-authenticated Yaver phone. The
+//      phone may itself have signed in with Apple, Google, Microsoft, GitHub,
+//      GitLab, passkey, or email; the TV never implements those providers.
 //
 // Mirrors mobile/app/tv-signin.tsx.
 
-import AuthenticationServices
 import Combine
 import SwiftUI
 import UIKit
@@ -24,7 +20,7 @@ struct SignInView: View {
     @State private var error: String?
     @State private var expired = false
     @State private var approving = false      // approval seen; token arriving
-    @State private var appleBusy = false
+    @State private var rotatingCode = false   // coalesce expiry from both poll lanes
     // Email/password (2026-08-13): an account that isn't Apple-linked, or an
     // Apple account with 2FA, can still sign in on the couch. Typed with the
     // remote's on-screen keyboard; hits POST /auth/login (Backend.EmailAuth).
@@ -42,9 +38,6 @@ struct SignInView: View {
     /// approve without a QR scan. Started when a code is minted, stopped on
     /// sign-in / disappear / code rotation.
     @State private var beacon = LanApprovalBeacon()
-    /// Holds the ASAuthorizationController delegate so it isn't deallocated
-    /// mid-flight (the classic "white button does nothing").
-    @State private var appleDelegate: AppleAuthControllerDelegate?
     @State private var pollTask: Task<Void, Never>?
     @State private var fallbackPollTask: Task<Void, Never>?
     /// Non-nil while polls are failing to reach the backend — surfaced verbatim
@@ -71,7 +64,35 @@ struct SignInView: View {
                     .font(.system(size: 44, weight: .heavy))
                     .padding(.bottom, 12)
 
-                Text("Scan with the Yaver app:")
+                Text("1 · Email and password")
+                    .font(.system(size: 20, weight: .bold))
+
+                TextField("Email", text: $email)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 20))
+                    .keyboardType(.emailAddress)
+                    .textContentType(.emailAddress)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(.gray.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
+                    .focused($emailFocused)
+                SecureField("Password", text: $password)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 20))
+                    .textContentType(.password)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(.gray.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
+                    .focused($passwordFocused)
+                Button(emailBusy ? "Signing in…" : "Sign in with email") {
+                    handleEmailSignIn()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(emailBusy || email.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
+
+                Divider().padding(.vertical, 16)
+
+                Text("2 · Scan with the Yaver app")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(.secondary)
 
@@ -196,67 +217,6 @@ struct SignInView: View {
                 }
                 if expired { Text("Code expired — generating a new one…").foregroundStyle(.secondary).padding(.top, 8) }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Secondary sign-in")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.secondary)
-                    Button {
-                        startNativeAppleSignIn()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "apple.logo")
-                            Text(appleBusy ? "Signing in…" : "Sign in with Apple")
-                                .font(.system(size: 20, weight: .semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.white)
-                    .foregroundStyle(.black)
-                    .disabled(appleBusy)
-                    Text("Uses the Apple ID already on this Apple TV. If nothing happens when you press it, the build's provisioning profile may be missing the Sign in with Apple capability — use the QR or email below instead.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.top, 28)
-
-                // Email/password — the third path. The QR covers every
-                // provider but needs a phone; Apple needs a linked account.
-                // Email needs neither. Same /auth/login the web uses.
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("or sign in with email")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 22)
-                    TextField("Email", text: $email)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 20))
-                        .keyboardType(.emailAddress)
-                        .textContentType(.emailAddress)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                        .padding(.horizontal, 16).padding(.vertical, 12)
-                        .background(.gray.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
-                        .focused($emailFocused)
-                    SecureField("Password", text: $password)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 20))
-                        .textContentType(.password)
-                        .padding(.horizontal, 16).padding(.vertical, 12)
-                        .background(.gray.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
-                        .focused($passwordFocused)
-                    HStack(spacing: 14) {
-                        Button(emailBusy ? "Signing in…" : "Sign in") {
-                            handleEmailSignIn()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(emailBusy || email.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty)
-                        Text("Type with the remote — or approve the QR above from your phone.")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                    }
-                }
               }
               .frame(maxWidth: .infinity, alignment: .leading)
               .padding(.bottom, 36)
@@ -308,60 +268,6 @@ struct SignInView: View {
     private func clock(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded())
         return String(format: "%d:%02d", total / 60, total % 60)
-    }
-
-    /// Native Apple sign-in via a MANUAL ASAuthorizationController (2026-08-13).
-    ///
-    /// SwiftUI's SignInWithAppleButton swallowed failures on tvOS: when the
-    /// build's provisioning profile lacks the Sign in with Apple capability,
-    /// pressing the white button did NOTHING — no sheet, no callback, no error
-    /// to the app. A manual controller surfaces every failure through the
-    /// delegate, so "does nothing" becomes a named message pointing at the fix
-    /// (profile capability) or at the QR/email fallbacks.
-    private func startNativeAppleSignIn() {
-        guard !appleBusy else { return }
-        error = nil
-        appleBusy = true
-        defer { appleBusy = false }
-        let request = ASAuthorizationAppleIDProvider().createRequest()
-        request.requestedScopes = [.fullName, .email]
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        let delegate = AppleAuthControllerDelegate { result in
-            Task { @MainActor in
-                await handleAppleAuthResult(result)
-            }
-        }
-        // Strong ref so the delegate (and the controller) outlive the call —
-        // deallocating either mid-flight is a silent no-op.
-        appleDelegate = delegate
-        controller.delegate = delegate
-        controller.presentationContextProvider = delegate
-        controller.performRequests()
-    }
-
-    private func handleAppleAuthResult(_ result: Result<ASAuthorization, Error>) async {
-        switch result {
-        case .failure(let err):
-            // Backing out of the Apple sheet is a choice, not a failure.
-            if (err as? ASAuthorizationError)?.code == .canceled { return }
-            let ns = err as NSError
-            if ns.domain == "AuthenticationServicesErrorDomain" && ns.code == ASAuthorizationError.failed.rawValue {
-                error = "Apple sign-in isn't available in this build — its provisioning profile is likely missing the Sign in with Apple capability. Use the QR code or email below."
-            } else {
-                error = err.localizedDescription
-            }
-        case .success(let authorization):
-            do {
-                let token = try await AppleNativeAuth.completeSignIn(with: authorization)
-                beacon.stop()
-                pollTask?.cancel()      // the device code is moot now
-                store.signIn(token: token)
-            } catch {
-                // Covers 2FA and accounts that sign in with another provider —
-                // both point at the QR/email paths which serve every case.
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            }
-        }
     }
 
     /// Email/password sign-in — the couch path for an account that isn't
@@ -471,15 +377,20 @@ struct SignInView: View {
     }
 
     private func handlePollResult(_ r: DevicePollResult, for s: DeviceCodeStart) async -> Bool {
+        if store.isAuthenticated { return true }
         unreachable = r.unreachableReason
-        switch r.status {
-        case .authorized:
+        switch DeviceCodeDeliveryDecision.decide(status: r.status, token: r.token, claimInFlight: approving) {
+        case .signIn(let token):
             beacon.stop()
-            if approving { return true }
+            pollTask?.cancel()
+            fallbackPollTask?.cancel()
+            store.signIn(token: token)
+            return true
+        case .claim:
+            beacon.stop()
             approving = true
-            let claimed = r.token == nil
-                ? await DeviceCodeAuth.claim(deviceCode: s.deviceCode, claimHandle: r.claimHandle)
-                : r
+            let claimed = await DeviceCodeAuth.claim(deviceCode: s.deviceCode, claimHandle: r.claimHandle)
+            if store.isAuthenticated { return true }
             if let token = claimed.token {
                 pollTask?.cancel()
                 fallbackPollTask?.cancel()
@@ -489,20 +400,23 @@ struct SignInView: View {
             approving = false
             unreachable = claimed.unreachableReason ?? "Approved, but this Apple TV could not pick up the session yet. Retrying..."
             return false
-        case .expired:
+        case .rotate:
+            if rotatingCode { return true }
+            rotatingCode = true
+            defer { rotatingCode = false }
             expired = true
             await begin()
             return true
-        case .pending:
+        case .wait:
             // LAN approval surfaced — render Allow/Deny while the 60s window
             // is open; clear the prompt once the window lapses server-side.
-            if let pending = r.lanPending {
+            if r.status == .pending, let pending = r.lanPending {
                 if pending.expiresAt == nil || (pending.expiresAt ?? 0) > Date().timeIntervalSince1970 * 1000 {
                     lanApprover = pending
                 } else {
                     lanApprover = nil
                 }
-            } else {
+            } else if r.status == .pending {
                 lanApprover = nil
             }
             return false
@@ -517,40 +431,5 @@ struct SignInView: View {
         guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 12, y: 12)),
               let cg = context.createCGImage(output, from: output.extent) else { return nil }
         return UIImage(cgImage: cg)
-    }
-}
-
-/// Manual ASAuthorizationController delegate (2026-08-13).
-///
-/// SwiftUI's SignInWithAppleButton swallowed failures on tvOS — when the
-/// provisioning profile lacks the Sign in with Apple capability, the button
-/// did NOTHING (no sheet, no callback), which read as a dead button. A manual
-/// controller reaches the delegate with the real error in every case, so the
-/// TV can name the cause (missing profile capability) and point at the
-/// QR/email fallbacks instead of leaving the user staring at a button.
-private final class AppleAuthControllerDelegate: NSObject, ASAuthorizationControllerDelegate,
-    ASAuthorizationControllerPresentationContextProviding {
-    private let completion: (Result<ASAuthorization, Error>) -> Void
-
-    init(completion: @escaping (Result<ASAuthorization, Error>) -> Void) {
-        self.completion = completion
-    }
-
-    func authorizationController(controller: ASAuthorizationController,
-                                 didCompleteWithAuthorization authorization: ASAuthorization) {
-        completion(.success(authorization))
-    }
-
-    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
-        completion(.failure(error))
-    }
-
-    /// tvOS presentation anchor: the key window's root view controller.
-    @MainActor
-    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        let windows = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-        return windows.first(where: { $0.isKeyWindow }) ?? windows.first ?? ASPresentationAnchor()
     }
 }

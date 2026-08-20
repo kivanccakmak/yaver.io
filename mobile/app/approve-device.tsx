@@ -15,7 +15,7 @@
 
 import { router, useLocalSearchParams } from "expo-router";
 import * as LocalAuthentication from "expo-local-authentication";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -36,7 +36,7 @@ import DeviceCodeScanner from "../src/components/DeviceCodeScanner";
 import {
   approveDeviceCode,
   extractUserCode,
-  fetchDeviceCodeInfo,
+  fetchDeviceCodeInfoResult,
   normalizeUserCode,
   type DeviceCodeInfo,
 } from "../src/lib/deviceCodeApprove";
@@ -44,7 +44,7 @@ import {
 export default function ApproveDeviceScreen() {
   const c = useColors();
   const { token, user, isLoading: authLoading } = useAuth();
-  const params = useLocalSearchParams<{ code?: string; url?: string }>();
+  const params = useLocalSearchParams<{ code?: string; url?: string; scan?: string }>();
 
   // Seed the code from either ?code= or a full ?url= (the deep-link
   // handler forwards the raw scanned URL).
@@ -55,6 +55,22 @@ export default function ApproveDeviceScreen() {
   );
 
   const [code, setCode] = useState(initialCode);
+  const routedCodeRef = useRef(initialCode);
+
+  // A second universal link can arrive while this route is already mounted.
+  // Route params are not initial state: adopt the new code and discard every
+  // verdict belonging to the previous TV before approval can be pressed.
+  useEffect(() => {
+    if (!initialCode || initialCode === routedCodeRef.current) return;
+    routedCodeRef.current = initialCode;
+    setCode(initialCode);
+    setInfo(null);
+    setUnknownCode(false);
+    setLookupError(null);
+    setError(null);
+    setDone(false);
+    setClaimedByDevice(false);
+  }, [initialCode]);
 
   // Signed out but arrived with a code (scanned an Apple TV QR while logged
   // out)? Don't sit here and fail — approveDeviceCode would run with an empty
@@ -85,11 +101,17 @@ export default function ApproveDeviceScreen() {
   // server TTL) or was mistyped. Say so, instead of leaving an enabled Approve
   // button that fails with a backend string.
   const [unknownCode, setUnknownCode] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [lookupNonce, setLookupNonce] = useState(0);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [claimedByDevice, setClaimedByDevice] = useState(false);
-  const [scanning, setScanning] = useState(false);
+  const [scanning, setScanning] = useState(params.scan === "1" && !initialCode);
+
+  useEffect(() => {
+    if (params.scan === "1" && !initialCode) setScanning(true);
+  }, [params.scan, initialCode]);
 
   // A normalized code is 9 chars (ABCD-1234). Look up the waiting
   // machine so we can name it in the prompt.
@@ -98,16 +120,28 @@ export default function ApproveDeviceScreen() {
     if (c9.length !== 9) {
       setInfo(null);
       setUnknownCode(false);
+      setLookupError(null);
+      setLoadingInfo(false);
       return;
     }
     let cancelled = false;
     setLoadingInfo(true);
     setUnknownCode(false);
-    fetchDeviceCodeInfo(c9)
+    setLookupError(null);
+    fetchDeviceCodeInfoResult(c9)
       .then((res) => {
         if (cancelled) return;
-        setInfo(res);
-        setUnknownCode(res === null);
+        if (res.kind === "found") {
+          setInfo(res.info);
+          setUnknownCode(false);
+        } else if (res.kind === "not_found") {
+          setInfo(null);
+          setUnknownCode(true);
+        } else {
+          setInfo(null);
+          setUnknownCode(false);
+          setLookupError(res.message);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingInfo(false);
@@ -115,16 +149,15 @@ export default function ApproveDeviceScreen() {
     return () => {
       cancelled = true;
     };
-  }, [code]);
+  }, [code, lookupNonce]);
 
   const onApprove = useCallback(async () => {
     if (approving) return;
     setApproving(true);
     setError(null);
     // Biometric gate: authorizing a remote machine is sensitive, so require a
-    // fresh Face ID / Touch ID before it goes through — possession of an
-    // already-unlocked phone shouldn't be enough. disableDeviceFallback keeps
-    // it to biometrics (no passcode substitute). If the device has no
+    // fresh Face ID / Touch ID or the phone passcode before it goes through —
+    // possession of an already-unlocked phone shouldn't be enough. If there is no
     // biometric hardware/enrollment we don't lock the user out: the signed-in
     // session token already proves account control.
     try {
@@ -135,30 +168,37 @@ export default function ApproveDeviceScreen() {
       if (hasHw && enrolled) {
         const r = await LocalAuthentication.authenticateAsync({
           promptMessage: `Approve sign-in for ${info?.machineName || "this machine"}`,
-          disableDeviceFallback: true,
+          disableDeviceFallback: false,
+          fallbackLabel: "Use passcode",
           cancelLabel: "Cancel",
         });
         if (!r.success) {
           setApproving(false);
-          setError("Face ID / Touch ID is required to approve a sign-in.");
+          setError("Device authentication is required to approve a sign-in.");
           return;
         }
       }
     } catch {
-      // A biometric subsystem error shouldn't hard-block a valid session.
+      // An authentication subsystem failure is not proof of user presence.
+      setApproving(false);
+      setError("Couldn't verify this approval with your device. Try again.");
+      return;
     }
     const res = await approveDeviceCode(code, token ?? "");
     if (res.ok) {
       const c9 = normalizeUserCode(code);
       let claimed = false;
-      for (let i = 0; i < 12; i += 1) {
-        const latest = await fetchDeviceCodeInfo(c9);
-        if (latest) setInfo(latest);
-        if (latest?.claimed) {
+      const confirmDeadline = Date.now() + 12_000;
+      while (Date.now() < confirmDeadline) {
+        const remaining = confirmDeadline - Date.now();
+        const latest = await fetchDeviceCodeInfoResult(c9, Math.min(2_500, remaining));
+        if (latest.kind === "found") setInfo(latest.info);
+        if (latest.kind === "found" && latest.info.claimed) {
           claimed = true;
           break;
         }
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const sleepMs = Math.min(1_000, Math.max(0, confirmDeadline - Date.now()));
+        if (sleepMs > 0) await new Promise((resolve) => setTimeout(resolve, sleepMs));
       }
       // Only now is the stash spent. Clearing it earlier (the old finishLogin
       // did, before navigating) meant a navigation lost to another redirect
@@ -209,7 +249,8 @@ export default function ApproveDeviceScreen() {
   }
 
   const codeReady = normalizeUserCode(code).length === 9;
-  const canApprove = codeReady && !!token && !unknownCode;
+  const canApprove = codeReady && !!token && !!info && info.status === "pending"
+    && !loadingInfo && !unknownCode && !lookupError;
   const machineLabel = info?.machineName || "this machine";
 
   // Full-screen camera scanner — decodes the box's QR and drops the
@@ -219,6 +260,9 @@ export default function ApproveDeviceScreen() {
       <DeviceCodeScanner
         onScanned={(scanned) => {
           setCode(scanned);
+          setInfo(null);
+          setUnknownCode(false);
+          setLookupError(null);
           setScanning(false);
           setError(null);
         }}
@@ -233,7 +277,7 @@ export default function ApproveDeviceScreen() {
         <Text style={[styles.title, { color: c.textPrimary }]}>Approve sign-in</Text>
         <Text style={[styles.subtitle, { color: c.textSecondary }]}>
           {codeReady
-            ? `Sign ${machineLabel} into ${user?.email ?? "your account"}? It'll connect without a browser or password on the machine.`
+            ? `Sign ${machineLabel} into ${user?.email ?? "your account"}? Confirm this code also appears on the TV.`
             : "Scan the QR your machine printed, or type the code it shows after running yaver auth."}
         </Text>
 
@@ -251,13 +295,29 @@ export default function ApproveDeviceScreen() {
             </Text>
           </View>
         ) : info ? (
-          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: info.status === "pending" ? c.border : c.warn }]}>
             <Text style={[styles.cardName, { color: c.textPrimary }]}>{info.machineName || "Unknown machine"}</Text>
             {(info.platform || info.arch) ? (
               <Text style={[styles.cardMeta, { color: c.textMuted }]}>
                 {[info.platform, info.arch].filter(Boolean).join(" · ")}
               </Text>
             ) : null}
+            <Text style={[styles.confirmCode, { color: c.accent }]}>{normalizeUserCode(code)}</Text>
+            <Text style={[styles.cardMeta, { color: info.status === "pending" ? c.textSecondary : c.warn }]}>
+              {info.status === "pending"
+                ? "Approve only if this code matches the TV."
+                : "This code was already used or expired. Scan the current QR shown by the TV."}
+            </Text>
+          </View>
+        ) : null}
+
+        {lookupError ? (
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.warn }]}>
+            <Text style={[styles.cardName, { color: c.warn }]}>Couldn't verify the TV</Text>
+            <Text style={[styles.cardMeta, { color: c.textSecondary }]}>{lookupError}</Text>
+            <Pressable onPress={() => setLookupNonce((n) => n + 1)} style={styles.retryLookupBtn}>
+              <Text style={{ color: c.accent, fontWeight: "700" }}>Try again</Text>
+            </Pressable>
           </View>
         ) : null}
 
@@ -269,7 +329,15 @@ export default function ApproveDeviceScreen() {
             <Text style={[styles.cardLabel, { color: c.textMuted }]}>CODE FROM YOUR MACHINE</Text>
             <TextInput
               value={code}
-              onChangeText={setCode}
+              onChangeText={(next) => {
+                // A verdict belongs to one exact code. Clear it in the same
+                // input event so the old TV cannot keep Approve enabled for a
+                // newly typed 9-character code before its lookup begins.
+                setCode(next);
+                setInfo(null);
+                setUnknownCode(false);
+                setLookupError(null);
+              }}
               placeholder="ABCD-1234"
               placeholderTextColor={c.textMuted}
               autoCapitalize="characters"
@@ -304,6 +372,8 @@ export default function ApproveDeviceScreen() {
                 ? "Sign in on this phone first"
                 : unknownCode
                   ? "Enter the TV's current code"
+                  : info && info.status !== "pending"
+                    ? "Scan the TV's current QR"
                   : `Approve ${machineLabel}`}
             </Text>
           )}
@@ -326,6 +396,8 @@ const styles = StyleSheet.create({
   card: { borderWidth: 1, borderRadius: 14, padding: 16, marginBottom: 16 },
   cardName: { fontSize: 16, fontWeight: "600" },
   cardMeta: { fontSize: 12, marginTop: 4 },
+  confirmCode: { fontSize: 28, fontWeight: "800", letterSpacing: 3, marginTop: 12, fontFamily: "Courier" },
+  retryLookupBtn: { alignSelf: "flex-start", paddingTop: 12, paddingVertical: 6 },
   cardLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 1, marginBottom: 10 },
   input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12, fontSize: 16, fontFamily: "Courier" },
   scanBtn: { marginTop: 12, borderWidth: 1, borderRadius: 10, paddingVertical: 11, alignItems: "center" },

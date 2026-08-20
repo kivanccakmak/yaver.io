@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		0AEECA73B0908A0415B8654C /* WakeProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76EA211ABDF521DD6CC22C3 /* WakeProgressView.swift */; };
 		0B73B4DE4DEB8BA5F3F1075D /* YaverDictationField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A900B18B742454D4D6C7359 /* YaverDictationField.swift */; };
-		0F3AD5C101105E22CCC5C114 /* AppleSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */; };
 		16587396CA5360A34F2C4342 /* Backend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62AA4F93DB55D50601FA4253 /* Backend.swift */; };
 		18F7F25A9DC46548215628BB /* YaverTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 053F14BB4784ACE0F6940C93 /* YaverTVApp.swift */; };
 		1A6CB9DFD7829D4144D6A82D /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 276D29BCA1F4A3A8DD33A6D3 /* Models.swift */; };
@@ -22,6 +21,7 @@
 		3338C731056621FCCE8FE13A /* BoxLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB2DF3A66DAE025B2B780C8 /* BoxLifecycle.swift */; };
 		34141A6D2B59625100F05D4A /* SessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A96BEDB7B91310E39E99DED2 /* SessionClient.swift */; };
 		61443E7517C16C82728D68E7 /* LanApprovalBeacon.swift in Sources */ = {isa = PBXBuildFile; fileRef = C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */; };
+		666A5E815C7F1592A0FF7AE2 /* DeviceCodeDeliveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71087255383CB959DB30A9E6 /* DeviceCodeDeliveryTests.swift */; };
 		6ADE17F0073254B1F4424366 /* RemoteRuntimeWebRTCView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F656E1723EA3FA1FA0C7CE46 /* RemoteRuntimeWebRTCView.swift */; };
 		6EEAC350F5A3D4E89CE1C473 /* DroidStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFF6CEE51B6A221D57E35F68 /* DroidStreamView.swift */; };
 		7379174AE578C3B3EE112B4E /* TVSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59F5766C895CDA0075AE65E7 /* TVSettingsView.swift */; };
@@ -48,7 +48,6 @@
 		B9052B586A74B907CB88B108 /* TVOverlayInputState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA2AA1F3D8766737B9CC697 /* TVOverlayInputState.swift */; };
 		BA1C4E5FB968311F8B9C37C7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */; };
 		BA348ACA3E9B639767CD13E5 /* TVInputStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66293D9C377C3A9C9D374E3 /* TVInputStatus.swift */; };
-		BA38FFCFED1DC4D4EE799E82 /* OAuthSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */; };
 		C925CDA83769C16357214E99 /* AgentClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30B780D2E7490982C5B7E328 /* AgentClient.swift */; };
 		CAF1C4F283907ED5436FC317 /* FeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */; };
 		CC251EEE9B8247F7E633165D /* BoxlessDeepSeekClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0040D8EF80EF80251239D541 /* BoxlessDeepSeekClient.swift */; };
@@ -107,6 +106,7 @@
 		6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speech.swift; sourceTree = "<group>"; };
 		701043D706CE4793A50A17DD /* YaverTVTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = YaverTVTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		706F27D55F944D59C8ECD555 /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasksView.swift; sourceTree = "<group>"; };
+		71087255383CB959DB30A9E6 /* DeviceCodeDeliveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCodeDeliveryTests.swift; sourceTree = "<group>"; };
 		72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibingPlanTests.swift; sourceTree = "<group>"; };
 		7F41D8521019355088BB2706 /* TaskRuntimePlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRuntimePlan.swift; sourceTree = "<group>"; };
 		8B47351433BB0B87175F60EA /* MachineRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MachineRegistry.swift; sourceTree = "<group>"; };
@@ -121,7 +121,6 @@
 		ACCF092B4BD1BC1CC9DAA844 /* BoxlessCredentialSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoxlessCredentialSource.swift; sourceTree = "<group>"; };
 		AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRuntimePlanTests.swift; sourceTree = "<group>"; };
 		AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVRemoteView.swift; sourceTree = "<group>"; };
-		B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthSignIn.swift; sourceTree = "<group>"; };
 		B66293D9C377C3A9C9D374E3 /* TVInputStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVInputStatus.swift; sourceTree = "<group>"; };
 		C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsView.swift; sourceTree = "<group>"; };
 		C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanApprovalBeacon.swift; sourceTree = "<group>"; };
@@ -136,7 +135,6 @@
 		DFF6CEE51B6A221D57E35F68 /* DroidStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroidStreamView.swift; sourceTree = "<group>"; };
 		E0279D581187CF7B6DAB53B5 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		E202BFD986DE7C7B55C7F3F4 /* RuntimeDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeDashboardView.swift; sourceTree = "<group>"; };
-		E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignIn.swift; sourceTree = "<group>"; };
 		E883FFE32672CAF75087F1E5 /* FrameworkStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameworkStyle.swift; sourceTree = "<group>"; };
 		F305D583F562FDFA98285065 /* YaverTV.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = YaverTV.entitlements; sourceTree = "<group>"; };
 		F656E1723EA3FA1FA0C7CE46 /* RemoteRuntimeWebRTCView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteRuntimeWebRTCView.swift; sourceTree = "<group>"; };
@@ -159,7 +157,6 @@
 			children = (
 				3856FA2ADBC347EA996932EA /* AddBoxView.swift */,
 				30B780D2E7490982C5B7E328 /* AgentClient.swift */,
-				E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */,
 				51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */,
 				62AA4F93DB55D50601FA4253 /* Backend.swift */,
 				ACCF092B4BD1BC1CC9DAA844 /* BoxlessCredentialSource.swift */,
@@ -170,7 +167,6 @@
 				C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */,
 				8B47351433BB0B87175F60EA /* MachineRegistry.swift */,
 				276D29BCA1F4A3A8DD33A6D3 /* Models.swift */,
-				B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */,
 				CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */,
 				A96BEDB7B91310E39E99DED2 /* SessionClient.swift */,
 				6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */,
@@ -283,6 +279,7 @@
 		FFF5EADFCBAE2A1555B317FD /* YaverTVTests */ = {
 			isa = PBXGroup;
 			children = (
+				71087255383CB959DB30A9E6 /* DeviceCodeDeliveryTests.swift */,
 				AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */,
 				CEC220759259856D0FC5E298 /* TVOverlayInputStateTests.swift */,
 				72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */,
@@ -412,6 +409,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				666A5E815C7F1592A0FF7AE2 /* DeviceCodeDeliveryTests.swift in Sources */,
 				B1D5377964FD0FB970A270BA /* TVOverlayInputStateTests.swift in Sources */,
 				95EC8FC56B71667C9E11BE83 /* TaskRuntimePlanTests.swift in Sources */,
 				DC2819DC5C2145D82D127460 /* VibingPlanTests.swift in Sources */,
@@ -425,7 +423,6 @@
 			files = (
 				852CC39FBF2CFDEF2DCD3BB1 /* AddBoxView.swift in Sources */,
 				C925CDA83769C16357214E99 /* AgentClient.swift in Sources */,
-				0F3AD5C101105E22CCC5C114 /* AppleSignIn.swift in Sources */,
 				22B21BB28D6FC910AA51413E /* AppleTVRemoteView.swift in Sources */,
 				16587396CA5360A34F2C4342 /* Backend.swift in Sources */,
 				3338C731056621FCCE8FE13A /* BoxLifecycle.swift in Sources */,
@@ -441,7 +438,6 @@
 				7E0CEDAA389C30B231F33D93 /* MachinePickerView.swift in Sources */,
 				28F88FA5024DEAE3CEBE040F /* MachineRegistry.swift in Sources */,
 				1A6CB9DFD7829D4144D6A82D /* Models.swift in Sources */,
-				BA38FFCFED1DC4D4EE799E82 /* OAuthSignIn.swift in Sources */,
 				E6360E3A224D67440371A632 /* ProjectsView.swift in Sources */,
 				EEEB8D804BA1E102F39CD2E0 /* RemoteRuntimeModels.swift in Sources */,
 				6ADE17F0073254B1F4424366 /* RemoteRuntimeWebRTCView.swift in Sources */,
@@ -583,6 +579,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -601,6 +598,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -643,6 +641,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -726,6 +725,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				"EXCLUDED_ARCHS[sdk=appletvsimulator*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

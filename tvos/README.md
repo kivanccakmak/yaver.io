@@ -11,9 +11,11 @@ future `expo prebuild` / native overlay in `mobile/ios/` for a surface that is 9
 UI a Siri Remote can't drive. So Apple TV is a **small standalone SwiftUI app** that talks to a
 Yaver agent over the **same** surfaces everything else uses:
 
-- **Auth:** RFC 8628 device-code flow against Convex (`POST /auth/device-code`,
-  `GET /auth/device-code/poll`) — identical to `mobile/src/lib/tvSignIn.ts` and `yaver auth`.
-  The TV shows a QR + short code; an already-signed-in phone approves it.
+- **Auth:** exactly two choices: email/password on the TV, or the RFC 8628
+  device-code flow against Convex (`POST /auth/device-code`,
+  `GET /auth/device-code/poll`). The TV shows a QR + short code; an
+  already-signed-in Yaver phone approves it. The phone's original login method
+  (Apple, Google, Microsoft, GitHub, GitLab, passkey, or email) is irrelevant.
 - **Control:** direct LAN first, relay fallback when account settings provide relay
   metadata for the selected machine. Ops calls use `POST /ops` with
   `{ "verb": ..., "payload": ..., "machine": "local" }`
@@ -52,19 +54,23 @@ what the remote runtime is doing.
 
 ## QR auth handoff
 
-Apple TV follows the same sign-in pattern users expect from streaming apps:
+Apple TV exposes exactly two Yaver account sign-in options:
 
-- Yaver account/runtime auth shows a QR plus a short code. The QR targets
+- Email and password entered directly on the TV.
+- QR login shows a short code. The QR targets
   `https://yaver.io/auth/device?code=...`; the signed-in Yaver phone app opens
-  the approver via Universal Links/App Links and authorizes the TV or remote
-  machine.
+  the approver via Universal Links/App Links. Mobile Settings puts **Scan TV
+  QR** first and opens its in-app camera immediately. Approval uses the phone's
+  current bearer, so every supported phone login provider authorizes the same
+  TV flow.
 - Claude Code and Codex auth is started on the selected runtime through
   `runner_auth browser_start`. tvOS renders the returned provider URL as a QR;
   the phone opens the system browser and completes OAuth/device-code handling.
 
-The TV never asks for passwords, provider tokens, API keys, or long codes with
-the Siri Remote. Watch, car, Android TV, and Android Auto should use the same
-phone-mediated handoff shape.
+The TV never renders a provider grid, OAuth browser, provider token/API-key
+form, or native Apple sign-in. Accounts with two-factor email login finish via
+the QR option on an already-authenticated phone. Android TV uses the same two
+choices and the same Convex contract.
 
 ## Transport note
 
@@ -91,8 +97,9 @@ it keeps compiling whatever file list it was generated with, so a Swift file add
 commit produces "cannot find X in scope" against code that is plainly on disk. Regenerating is
 the fix, and it is cheap — make it reflexive.
 
-Build & run on the tvOS Simulator or a real Apple TV. Sign-in: scan the QR with the Yaver
-phone app, approve — the TV gets a 1-year session.
+Build & run on the tvOS Simulator or a real Apple TV. Sign in with email/password,
+or scan the QR with the signed-in Yaver phone app and approve; the TV gets an
+installation-bound 1-year companion session.
 
 Submission mirrors the iOS path (App Store Connect, same team/API key), and the bundle id is
 `io.yaver.mobile` — the **same** as the iPhone app, on purpose, so Apple treats TV/iOS/visionOS
@@ -115,11 +122,11 @@ exceed the current ASC max.
 | File | Role |
 |---|---|
 | `YaverTVApp.swift` | `@main` App; injects `YaverStore`. |
-| `Backend.swift` | Convex origin + device-code auth (create + poll). |
+| `Backend.swift` | Convex origin + email/password and device-code auth (create + event/poll + claim). |
 | `AgentClient.swift` | `POST /ops` to a box over LAN HTTP, Bearer auth. |
 | `Models.swift` | `Codable` for now-playing, capture status, devices. |
 | `YaverStore.swift` | `@MainActor ObservableObject` — session token, selected box, persistence. |
-| `Views/SignInView.swift` | QR + short code, polls until approved. |
+| `Views/SignInView.swift` | The two account choices: email/password or phone-approved QR. |
 | `Views/DashboardView.swift` | Lean-back tile launcher. |
 | `Views/RuntimeDashboardView.swift` | Runtime control room: status, Claude/Codex sessions, voice, QR OAuth, reload, Apple surface readiness. |
 | `Views/AppleTVRemoteView.swift` | D-pad / transport / now-playing. |
@@ -127,11 +134,10 @@ exceed the current ASC max.
 
 ## Verifying `FailureSignals`
 
-`project.yml` declares one application target and no test target, and the
-generated `.xcodeproj` is gitignored — so there is nowhere here for an XCTest
-to live that a reviewer could run. `FailureSignals.swift` is deliberately
-Foundation-only so the Swift toolchain alone can prove it, without Xcode, a
-simulator, or an Apple TV:
+`project.yml` declares the app plus unit/UI test targets; regenerate the tracked
+project with `xcodegen generate` before building so added sources and tests are
+not silently omitted. Pure failure classification can also be checked without
+a simulator or Apple TV:
 
 ```bash
 swiftc -O -parse-as-library \

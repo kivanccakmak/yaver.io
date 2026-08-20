@@ -1,4 +1,4 @@
-// YaverTVApp.swift — @main entry. Gates on auth: device-code sign-in until a
+// YaverTVApp.swift — @main entry. Gates on auth: email/password or phone-approved QR until a
 // session token exists, then the lean-back dashboard.
 
 import SwiftUI

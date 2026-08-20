@@ -1874,6 +1874,21 @@ func isCompanionSessionScope(scope string) bool {
 	}
 }
 
+// tvTaskMutationAllowed is deliberately narrower than a /tasks/ prefix. A TV
+// approved from the owner's signed-in phone can use the task conversation UI it
+// ships (create, continue and fork), but cannot cancel/delete tasks or inherit
+// future task-control routes by accident.
+func tvTaskMutationAllowed(method, path, scope string) bool {
+	if normalizeSessionScope(scope) != "tv" || strings.ToUpper(strings.TrimSpace(method)) != http.MethodPost {
+		return false
+	}
+	if path == "/tasks" {
+		return true
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 3 && parts[0] == "tasks" && parts[1] != "" && (parts[2] == "continue" || parts[2] == "fork")
+}
+
 func companionSessionAllowed(method, path, scope string) bool {
 	method = strings.ToUpper(strings.TrimSpace(method))
 	switch normalizeSessionScope(scope) {
@@ -1896,6 +1911,8 @@ func companionSessionAllowed(method, path, scope string) bool {
 		}
 	case "tv", "vision", "spatial":
 		switch {
+		case tvTaskMutationAllowed(method, path, scope):
+			return true
 		case method == http.MethodGet && (path == "/health" || path == "/info" || path == "/agent/status" || path == "/agent/runners" || path == "/tasks" || path == "/projects" || path == "/workspace/apps" || path == "/project/preview-capabilities" || path == "/project/profile" || path == "/tmux/sessions" || path == "/tmux/stream" || path == "/mcp/servers"):
 			return true
 		case method == http.MethodGet && (path == "/remote-runtime/capabilities" || path == "/remote-runtime/turn-credentials"):
@@ -1915,8 +1932,9 @@ func companionSessionAllowed(method, path, scope string) bool {
 		// docs/audits/tv-vibing-scope-wall-deep-analysis-2026-07.md). Guarded
 		// by companion_scope_parity_test.go, which keys off the Swift source.
 		// Deliberately still closed: /exec, /vault, /settings, /ws/terminal,
-		// task mutation — a stolen TV token can watch previews and start dev
-		// servers, not run commands.
+		// and task cancellation/deletion. A stolen TV token can use the shipped
+		// task conversation and preview UI, but cannot invoke raw exec or read
+		// secrets directly.
 		case method == http.MethodGet && (path == "/droid/frame" || path == "/capture/frame.jpg" || path == "/dev/events" || path == "/dev/status" || path == "/dev/target"):
 			return true
 		case method == http.MethodGet && (path == "/vibing/preview/status" || path == "/vibing/preview/release" || path == "/vibing/preview/summaries" || path == "/vibing/preview/clips" || path == "/vibing/preview/events"):

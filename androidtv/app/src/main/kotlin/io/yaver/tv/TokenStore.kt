@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -25,6 +26,7 @@ object TokenStore {
     private const val KEY_ALIAS = "io.yaver.tv.session"
     private const val PREFS = "io.yaver.tv.secure"
     private const val CIPHER_TEXT = "session_token"
+    private const val INSTALLATION_ID = "installation_id"
 
     private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
 
@@ -81,5 +83,16 @@ object TokenStore {
     fun clear(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().remove(CIPHER_TEXT).apply()
+    }
+
+    /** Stable, non-secret identity for replacing only this TV's prior session.
+     * It intentionally survives sign-out; the encrypted bearer does not. */
+    @Synchronized
+    fun installationId(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs.getString(INSTALLATION_ID, null)?.takeIf { it.isNotEmpty() }?.let { return it }
+        val created = "tv_${UUID.randomUUID().toString().lowercase()}"
+        prefs.edit().putString(INSTALLATION_ID, created).commit()
+        return prefs.getString(INSTALLATION_ID, created) ?: created
     }
 }

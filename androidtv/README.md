@@ -7,7 +7,10 @@ and TV-specific runtime screens.
 
 ## Current slice
 
-- Keystore-backed device-code/email sign-in with LAN approval beacon.
+- Exactly two account choices: email/password on the TV, or a QR approved by
+  an already-signed-in Yaver phone. The phone may have authenticated through
+  any supported OAuth/passkey/email provider; the TV receives the same
+  installation-bound companion session through Convex.
 - LAN-first, relay-fallback agent transport with relay credential repair.
 - Machine picker, wake lifecycle, settings, agent update requests.
 - D-pad-activated dashboard controls and a real task list/detail flow.
@@ -20,8 +23,8 @@ Vibing preview, Android-device stream, and project preview.
 ## Verify locally
 
 ```bash
-gradle -p androidtv assembleDebug --no-daemon
-gradle -p androidtv test --no-daemon
+<gradle-8.7-or-newer> -p androidtv assembleDebug --no-daemon
+<gradle-8.7-or-newer> -p androidtv test --no-daemon
 ```
 
 Install the debug APK on an Android TV emulator or Google TV and exercise all

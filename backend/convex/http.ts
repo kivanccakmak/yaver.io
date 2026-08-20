@@ -22,6 +22,7 @@ import {
   hashPassword,
   verifyPassword,
 } from "./authPasswordPolicy";
+import { clientIpFromRequest } from "./rateLimiter";
 import {
   githubAppEnvFromProcess,
   parseGitHubRepoFullName,
@@ -5468,17 +5469,38 @@ http.route({
   path: "/auth/device-code",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
+    const ip = clientIpFromRequest(request);
+    const perIp = await ctx.runMutation(internal.rateLimiter.enforceRateLimit, {
+      limitName: "device-code-ip",
+      subject: ip,
+    });
+    const global = await ctx.runMutation(internal.rateLimiter.enforceRateLimit, {
+      limitName: "device-code-global",
+      subject: "all",
+    });
+    if (!perIp.allowed || !global.allowed) {
+      return errorResponse("Too many TV sign-in requests. Wait a moment and try again.", 429, "rate_limited");
+    }
     const body = await request.json().catch(() => ({}));
+    // This route is anonymous by design. Bound every stored label before it
+    // crosses into Convex so a QR-code flood cannot also become oversized-row
+    // storage abuse. Empty strings are absent, not device identities.
+    const bounded = (value: unknown, max: number): string | undefined => {
+      if (typeof value !== "string") return undefined;
+      const clean = value.trim().slice(0, max);
+      return clean || undefined;
+    };
     const result = await ctx.runMutation(api.deviceCode.createDeviceCode, {
-      machineName: typeof body?.machineName === "string" ? body.machineName : undefined,
-      platform: typeof body?.platform === "string" ? body.platform : undefined,
-      arch: typeof body?.arch === "string" ? body.arch : undefined,
-      shell: typeof body?.shell === "string" ? body.shell : undefined,
-      environment: typeof body?.environment === "string" ? body.environment : undefined,
-      runtimeVersion: typeof body?.runtimeVersion === "string" ? body.runtimeVersion : undefined,
-      preferredProvider: typeof body?.preferredProvider === "string" ? body.preferredProvider : undefined,
+      machineName: bounded(body?.machineName, 120),
+      platform: bounded(body?.platform, 40),
+      arch: bounded(body?.arch, 40),
+      shell: bounded(body?.shell, 80),
+      environment: bounded(body?.environment, 40),
+      runtimeVersion: bounded(body?.runtimeVersion, 80),
+      preferredProvider: bounded(body?.preferredProvider, 40),
       isWsl: typeof body?.isWsl === "boolean" ? body.isWsl : undefined,
-      deviceId: typeof body?.deviceId === "string" ? body.deviceId : undefined,
+      deviceId: bounded(body?.deviceId, 128),
+      ownerUserIdHint: bounded(body?.ownerUserIdHint, 80),
     });
     return jsonResponse(result);
   }),

@@ -73,6 +73,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.yaver.tv.uitests
+        'EXCLUDED_ARCHS[sdk=appletvsimulator*]': x86_64
         TEST_TARGET_NAME: YaverTV
         GENERATE_INFOPLIST_FILE: "YES"
 
@@ -87,6 +88,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.yaver.tv.tests
+        'EXCLUDED_ARCHS[sdk=appletvsimulator*]': x86_64
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Yaver.app/Yaver"
         BUNDLE_LOADER: "$(TEST_HOST)"

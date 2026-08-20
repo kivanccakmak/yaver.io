@@ -14,6 +14,19 @@
 // there is no shared apiFetch helper in this app).
 
 import { getConvexSiteUrlSync as getConvexSiteUrl } from "./backendConfig";
+import * as Crypto from "expo-crypto";
+import { getItem, setItem } from "./secure-storage";
+
+const TV_INSTALLATION_ID_KEY = "yaver.tv.installation-id";
+
+async function tvInstallationId(): Promise<string> {
+  const existing = await getItem(TV_INSTALLATION_ID_KEY);
+  if (existing) return existing;
+  const bytes = Crypto.getRandomBytes(16);
+  const id = `tv_${Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+  await setItem(TV_INSTALLATION_ID_KEY, id);
+  return id;
+}
 
 export interface DeviceCodeStart {
   userCode: string;
@@ -37,6 +50,7 @@ export function deviceVerifyUrl(userCode: string): string {
 }
 
 export async function createTVDeviceCode(machineName: string, platform: string): Promise<DeviceCodeStart> {
+  const deviceId = await tvInstallationId();
   const res = await fetch(`${getConvexSiteUrl()}/auth/device-code`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -44,6 +58,7 @@ export async function createTVDeviceCode(machineName: string, platform: string):
       machineName,
       platform,
       environment: "tv",
+      deviceId,
     }),
   });
   if (!res.ok) {

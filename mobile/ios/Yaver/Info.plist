@@ -89,7 +89,7 @@
 	<key>NSContactsUsageDescription</key>
 	<string>Allow $(PRODUCT_NAME) to access your contacts</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Allow $(PRODUCT_NAME) to use Face ID</string>
+	<string>Yaver uses Face ID to confirm sensitive actions such as approving a TV sign-in.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Yaver discovers your Mac on the same Wi-Fi so your phone can connect directly for lowest-latency, end-to-end encrypted control of your AI coding sessions.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

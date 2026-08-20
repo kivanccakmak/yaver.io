@@ -108,6 +108,15 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="yaver"/>
       </intent-filter>
+      <!-- Verified device-code links let the system camera hand a TV QR
+           directly to the signed-in Yaver approver. The in-app Settings
+           scanner remains the deterministic primary route. -->
+      <intent-filter android:autoVerify="true">
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="https" android:host="yaver.io" android:pathPrefix="/auth/device"/>
+      </intent-filter>
       <intent-filter data-generated="true">
         <action android:name="android.intent.action.VIEW"/>
         <data android:scheme="yaver"/>

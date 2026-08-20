@@ -41,6 +41,24 @@ function httpRouteBlock(path: string, method?: string): string {
   return httpSource.slice(start, next === -1 ? undefined : next);
 }
 
+test("anonymous TV device-code creation is rate-limited and input-bounded", () => {
+  const block = httpRouteBlock("/auth/device-code", "POST");
+  assert.match(block, /limitName: "device-code-ip"/);
+  assert.match(block, /limitName: "device-code-global"/);
+  assert.match(block, /clientIpFromRequest\(request\)/);
+  assert.match(block, /\.trim\(\)\.slice\(0, max\)/);
+  assert.match(block, /deviceId: bounded\(body\?\.deviceId, 128\)/);
+  assert.match(block, /ownerUserIdHint: bounded\(body\?\.ownerUserIdHint, 80\)/);
+});
+
+test("TV approval inherits the phone session identity, not an OAuth provider", () => {
+  const block = httpRouteBlock("/auth/device-code/authorize", "POST");
+  assert.match(block, /authenticateRequest\(ctx, request\)/);
+  assert.match(block, /getUserDocId/);
+  assert.match(block, /authorizeDeviceCode/);
+  assert.doesNotMatch(block, /github|gitlab|google|microsoft|apple/i);
+});
+
 test("customer auto-park validation requires a machine id", () => {
   assert.deepEqual(validateCustomerAutoParkRequest({ enabled: true }), {
     ok: false,

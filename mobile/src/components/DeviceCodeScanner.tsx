@@ -14,11 +14,11 @@
 // act" contract.
 
 import React from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from "expo-camera";
 
 import { useColors } from "../context/ThemeContext";
-import { extractUserCode } from "../lib/deviceCodeApprove";
+import { extractScannedDeviceCode } from "../lib/deviceCodeQr";
 
 interface Props {
   /** Fires once with the normalized ABCD-1234 code when a valid
@@ -37,7 +37,7 @@ export default function DeviceCodeScanner({ onScanned, onClose }: Props) {
   const onBarcode = React.useCallback(
     (result: BarcodeScanningResult) => {
       if (handledRef.current) return;
-      const code = extractUserCode(result?.data ?? "");
+      const code = extractScannedDeviceCode(result?.data ?? "");
       // A normalized device code is 9 chars (ABCD-1234). Ignore any
       // other QR the camera happens to catch.
       if (code.length !== 9) return;
@@ -66,10 +66,12 @@ export default function DeviceCodeScanner({ onScanned, onClose }: Props) {
           also type the code instead.
         </Text>
         <Pressable
-          onPress={() => void requestPermission()}
+          onPress={() => void (permission.canAskAgain ? requestPermission() : Linking.openSettings())}
           style={({ pressed }) => [styles.primaryBtn, { backgroundColor: c.accent }, pressed && { opacity: 0.85 }]}
         >
-          <Text style={[styles.primaryBtnText, { color: "#000" }]}>Allow camera</Text>
+          <Text style={[styles.primaryBtnText, { color: "#000" }]}>
+            {permission.canAskAgain ? "Allow camera" : "Open phone settings"}
+          </Text>
         </Pressable>
         <Pressable onPress={onClose} style={({ pressed }) => [styles.linkBtn, pressed && { opacity: 0.6 }]}>
           <Text style={[styles.linkText, { color: c.textSecondary }]}>Type the code instead</Text>

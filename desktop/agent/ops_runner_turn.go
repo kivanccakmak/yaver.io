@@ -84,7 +84,7 @@ func init() {
 		},
 		Handler:        opsRunnerSessionsHandler,
 		Streaming:      false,
-		AllowCompanion: false,
+		AllowCompanion: true, // read-only; TV session picker calls this through /ops
 	})
 }
 

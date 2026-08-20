@@ -104,6 +104,7 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
     }
 
     fun signOut() {
+        val sessionToRevoke = _token.value
         TokenStore.clear(appContext)
         _token.value = ""
         _boxes.value = emptyList()
@@ -111,6 +112,9 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
         _settings.value = null
         prefs.edit().remove(SELECTED_BOX_ID).apply()
         prefs.edit().remove(BOXES_KEY).apply()
+        if (sessionToRevoke.isNotEmpty()) {
+            scope.launch { Backend.revokeSession(sessionToRevoke) }
+        }
     }
 
     suspend fun refreshSessionOnLaunch() {

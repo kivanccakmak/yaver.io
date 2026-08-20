@@ -384,6 +384,16 @@ async function mintTokenForAuthorizedCode(
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
   const tokenHash = await sha256Hex(token);
+  const installationDeviceId = code.deviceId;
+  if (installationDeviceId) {
+    const existing = await ctx.db
+      .query("sessions")
+      .withIndex("by_deviceId", (q) => q.eq("deviceId", installationDeviceId))
+      .collect();
+    for (const session of existing) {
+      if (session.userId === code.approvedUserId) await ctx.db.delete(session._id);
+    }
+  }
   await ctx.db.insert("sessions", {
     tokenHash,
     userId: code.approvedUserId,

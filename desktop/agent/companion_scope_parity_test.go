@@ -39,6 +39,9 @@ var tvClientEndpoints = []struct {
 	{http.MethodGet, "/agent/runners"},
 	{http.MethodGet, "/tasks"},
 	{http.MethodGet, "/tasks/task-123"},
+	{http.MethodPost, "/tasks"},
+	{http.MethodPost, "/tasks/task-123/continue"},
+	{http.MethodPost, "/tasks/task-123/fork"},
 	{http.MethodGet, "/projects"},
 	{http.MethodGet, "/workspace/apps"},
 	{http.MethodGet, "/project/preview-capabilities"},
@@ -83,8 +86,8 @@ var tvClientEndpoints = []struct {
 }
 
 // companionDeniedEndpoints must stay closed for tv/vision/spatial: the blast
-// radius of a stolen TV token is "can watch previews and start dev servers",
-// never "can run commands or read secrets".
+// radius of a stolen TV token includes its owner-visible task conversation and
+// preview UI, never direct exec, terminal, shutdown, or secret access.
 var companionDeniedEndpoints = []struct {
 	method string
 	path   string
@@ -94,7 +97,8 @@ var companionDeniedEndpoints = []struct {
 	{http.MethodGet, "/vault/list"},
 	{http.MethodPost, "/agent/shutdown"},
 	{http.MethodGet, "/ws/terminal"},
-	{http.MethodPost, "/tasks"},
+	{http.MethodPost, "/tasks/task-123/cancel"},
+	{http.MethodDelete, "/tasks/task-123"},
 	{http.MethodPost, "/settings/repair-relay"},
 	{http.MethodPost, "/dev/reload"},
 	{http.MethodGet, "/host-share/fs/read"},
@@ -131,12 +135,32 @@ func TestCompanionScopeAdmitsShippedWatchClient(t *testing.T) {
 }
 
 func TestCompanionScopeAdmitsShippedTVClient(t *testing.T) {
-	for _, scope := range []string{"tv", "vision", "spatial"} {
-		for _, ep := range tvClientEndpoints {
+	for _, ep := range tvClientEndpoints {
+		scopes := []string{"tv", "vision", "spatial"}
+		if tvTaskMutationAllowed(ep.method, ep.path, "tv") {
+			scopes = []string{"tv"}
+		}
+		for _, scope := range scopes {
 			if !companionSessionAllowed(ep.method, ep.path, scope) {
-				t.Errorf("scope %q forbids %s %s — the shipped tvOS app calls this endpoint; widen companionSessionAllowed or remove the call from tvos/YaverTV", scope, ep.method, ep.path)
+				t.Errorf("scope %q forbids %s %s — the shipped client calls this endpoint; widen companionSessionAllowed or remove the call", scope, ep.method, ep.path)
 			}
 		}
+	}
+}
+
+func TestTVTaskMutationScopeIsExact(t *testing.T) {
+	for _, path := range []string{"/tasks", "/tasks/t1/continue", "/tasks/t1/fork"} {
+		if !tvTaskMutationAllowed(http.MethodPost, path, "tv") {
+			t.Errorf("expected TV task conversation route %s to be allowed", path)
+		}
+	}
+	for _, path := range []string{"/tasks/t1", "/tasks/t1/cancel", "/tasks/t1/delete", "/tasks/t1/continue/again"} {
+		if tvTaskMutationAllowed(http.MethodPost, path, "tv") {
+			t.Errorf("unexpected TV task mutation route %s is allowed", path)
+		}
+	}
+	if tvTaskMutationAllowed(http.MethodPost, "/tasks", "vision") || tvTaskMutationAllowed(http.MethodDelete, "/tasks/t1", "tv") {
+		t.Error("TV task mutations leaked to another scope or method")
 	}
 }
 
