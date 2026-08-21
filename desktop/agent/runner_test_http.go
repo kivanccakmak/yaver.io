@@ -251,7 +251,7 @@ func runRunnerProbe(cfg RunnerConfig, runnerID, prompt string, timeout time.Dura
 			provider = model[:slash]
 		}
 		meta, runErr := openCodeProbeRunnerFactory(sandboxRunnerSelection{
-			Model: model, Mode: "build", Provider: provider,
+			Model: model, Mode: "build", Provider: provider, SkipYaverMCP: true,
 		})(ctx, workDir, prompt)
 		return meta.rationale, runErr
 	}

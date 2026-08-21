@@ -40,6 +40,9 @@ func TestRunRunnerProbeOpenCodeUsesMobileWorkspaceLauncher(t *testing.T) {
 	if gotSelection.Model != "deepseek/deepseek-v4-flash" || gotSelection.Provider != "deepseek" || gotSelection.Mode != "build" {
 		t.Fatalf("selection = %+v", gotSelection)
 	}
+	if !gotSelection.SkipYaverMCP {
+		t.Fatal("provider readiness probe must not spawn the Yaver MCP tool tree")
+	}
 }
 
 func TestLiveMobileWorkspaceOpenCodeDeepSeek(t *testing.T) {

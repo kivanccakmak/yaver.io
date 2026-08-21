@@ -305,9 +305,10 @@ func processSandboxRun(ctx context.Context, req sandboxRunRequest, runFn sandbox
 }
 
 type sandboxRunnerSelection struct {
-	Model    string
-	Mode     string
-	Provider string
+	Model        string
+	Mode         string
+	Provider     string
+	SkipYaverMCP bool // provider probes do not need tools and must stay one process deep
 }
 
 // resolveSandboxRunnerSelection keeps Mobile Workspace on the same primary model
@@ -368,7 +369,11 @@ func newOpenCodeSandboxRunner(selection sandboxRunnerSelection) sandboxRunnerFn 
 		}
 
 		args := openCodeSandboxArgs(selection, prompt, workDir)
-		mcpScope := prepareRunnerMCPScope("opencode", workDir, []string{}, []string{"1"})
+		includeYaverMCP := "1"
+		if selection.SkipYaverMCP {
+			includeYaverMCP = "0"
+		}
+		mcpScope := prepareRunnerMCPScope("opencode", workDir, []string{}, []string{includeYaverMCP})
 		args = append(args, mcpScope.Args...)
 
 		cmd := exec.CommandContext(ctx, bin, args...)
