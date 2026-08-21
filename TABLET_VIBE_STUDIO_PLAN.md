@@ -1,11 +1,37 @@
 # Tablet Vibe Studio — Deep Audit & Implementation
 
-**Date:** 2026-08-21 · **Status:** Phases 1–5 IMPLEMENTED (uncommitted at write time)
+**Date:** 2026-08-21 · **Status:** Phases 1–5 IMPLEMENTED + DEPLOYED (2026-08-21 second session)
 **Target:** Samsung ~10" tablet, native Yaver Android app, vibe-coding SFMG (React Native / Expo)
 **Remote box:** Ubuntu 4 GB — runs the coding agent AND renders via headless Chrome
 **Goal:** landscape = left live app view (browser lane) / right chat, portrait = chat + preview peek — mirroring the tvOS and web split interfaces.
 
 > Golden rule: every `.md` in this repo drifts. The code is the source of truth — grep before acting on any claim below. File:line citations were verified on disk at write time.
+
+---
+
+## 2c. Deploy status (2026-08-21, second session)
+
+| Surface | Status | Detail |
+|---|---|---|
+| iOS TestFlight | ✅ uploaded | build 202608181336 (Delivery `ef975f4d`) |
+| tvOS | ✅ uploaded | build 296 accepted |
+| visionOS (AR/VR) | ✅ uploaded | Delivery `de18046a` (after fixing a pre-existing broken visionOS build — see below) |
+| CarPlay | ✅ | ships inside the iOS app; gate preflight passed |
+| watchOS | ✅ builds | embedded in iOS (no separate record) |
+| macOS desktop (TestFlight) | ✅ uploaded | build 20260821024152 (Delivery `68654092`) |
+| Convex backend | ✅ success | release-backend workflow |
+| Web (Cloudflare) | ⏳ CI in progress | release-web workflow (needs CF token, only in GH secrets) |
+| npm CLI (yaver-cli) | ⏳ CI in progress | release-cli workflow with publish_npm=true — ships the viewer registry + TV-scoped `POST /tasks` allowlist (`6a70b7e3f`) |
+| Android Play internal | ⏳ CI in progress | release-mobile workflow (uses `PLAY_STORE_SERVICE_ACCOUNT_JSON` secret) |
+| Wear OS / AndroidTV / Android Auto | ⛔ blocked locally | no Play service-account key / release keystore in the deploy clone; these need the user's key (`keys/google-play-service-account.json`) or a CI lane |
+
+**Pre-existing broken surface fixed during deploy:** `6a70b7e3f` (TV-login) deleted `tvos/YaverTV/AppleSignIn.swift` + `OAuthSignIn.swift` when it consolidated tvOS sign-in, but left `visionos/project.yml` referencing them + the visionOS `VisionSignInView` still using `OAuthSignIn`/`AppleNativeAuth` — so visionOS had not compiled since that commit. Restored both files (gated `#if !os(tvOS)`), added the two missing `TaskComposerView` deps (`YaverDictationField.swift`, `TVInputStatus.swift`) to `visionos/project.yml`. Committed as `811106a79`.
+
+**Deploy-machine notes for the next session:**
+- `~/Workspace/yaver-deploy-runner` is the deploy clone (created 2026-08-21). Gitignored generated `mobile/ios/` + `visionos/YaverVision.xcodeproj` + RNAudioAPI `iphoneos` binaries must be synced from the main working repo into the clone (they don't exist in a fresh clone).
+- Missing local secrets: `~/.yaver/local-secrets.env`, `~/.npmrc`, `~/.cloudflare/yaver.env`, `keys/google-play-service-account.json`. The Apple surfaces worked via `~/.appstoreconnect/yaver.env` + GUI-unlocked keychain; everything else went through GitHub Actions secrets.
+- A stale TestFlight deploy-lease (dead same-host pid) blocked a re-run; clear with the store's crash-reclaim (`sqlite3 ~/.yaver/autoruns.db "DELETE FROM deploy_leases WHERE target='testflight' AND holder LIKE '<host>/pid<pid>'"`).
+- Known pre-existing flake: full `go test .` main-package times out on `TestCustodianAbandonsAHangingWarden` (passes in isolation; present on clean HEAD).
 
 ---
 
