@@ -92,9 +92,12 @@ func mcpAppStoreTestFlight(bundleID string) interface{} {
 
 // mcpTestFlightPromote makes an uploaded build available to a TestFlight beta
 // group — the App Store Connect analog of the Play "promote release" action
-// (assign build to group; for an EXTERNAL group the first build triggers Beta
-// App Review). Policy-aware: mutating, so it is owner-gated (mcp_owner_gate.go).
-func mcpTestFlightPromote(bundleID, buildNumber, groupName string) interface{} {
+// (assign build to group). POLICY-AWARE: an EXTERNAL group's first build goes
+// through Beta App Review before testers see it, so promoting to an external
+// group requires explicit `confirm` (acknowledge the review) — no silent
+// submission to review. Internal groups need no confirmation. Mutating, so it
+// is owner-gated (mcp_owner_gate.go).
+func mcpTestFlightPromote(bundleID, buildNumber, groupName, confirm string) interface{} {
 	if strings.TrimSpace(bundleID) == "" {
 		return map[string]interface{}{"error": "bundle_id is required, e.g. io.yaver.mobile"}
 	}
@@ -156,6 +159,7 @@ func mcpTestFlightPromote(bundleID, buildNumber, groupName string) interface{} {
 			break
 		}
 	}
+	created := false
 	if group == nil {
 		if len(groups) > 0 && targetName == "External" {
 			group = &groups[0] // no External group yet — promote to the first existing group
@@ -165,10 +169,27 @@ func mcpTestFlightPromote(bundleID, buildNumber, groupName string) interface{} {
 				return map[string]interface{}{"error": fmt.Sprintf("create beta group %q: %v", targetName, cerr)}
 			}
 			group = g
+			created = true
+		}
+	}
+	// POLICY: external TestFlight groups route the first build through Beta App
+	// Review. Require explicit acknowledgement before assigning to an external
+	// group — never silently submit a build to review.
+	external := created || !group.IsInternal
+	if external && !strings.EqualFold(confirm, "external") {
+		return map[string]interface{}{
+			"error":  fmt.Sprintf("POLICY_REFUSED: group %q is EXTERNAL — its first build goes through Beta App Review before testers see it.", group.Name),
+			"action": "Re-run with confirm='external' to acknowledge the Beta App Review requirement.",
 		}
 	}
 	if err := client.AssignBuildToGroup(group.ID, build.ID); err != nil {
 		return map[string]interface{}{"error": fmt.Sprintf("assign build to group %q: %v", group.Name, err)}
+	}
+	note := "Build added to the TestFlight beta group."
+	if external {
+		note += " EXTERNAL group: the first build is now pending Beta App Review — external testers see it after review approves it."
+	} else {
+		note += " Internal group: testers can install it immediately."
 	}
 	return map[string]interface{}{
 		"ok":          true,
@@ -178,7 +199,7 @@ func mcpTestFlightPromote(bundleID, buildNumber, groupName string) interface{} {
 		"group":       group.Name,
 		"group_id":    group.ID,
 		"is_internal": group.IsInternal,
-		"note":        "Build added to the TestFlight beta group. External groups see it after Beta App Review for the first build.",
+		"note":        note,
 	}
 }
 
@@ -346,9 +367,12 @@ func playPython() string {
 // mcpPlayStorePromote promotes an already-uploaded versionCode to a target Play
 // track (alpha / beta / production) via scripts/play-promote.py — the same
 // edits+commit path the Play Console "Promote release" button uses. It does NOT
-// re-upload the AAB. A Play declaration gate (e.g. the Health-apps form) is
-// surfaced as a named error with the exact console step to unblock it.
-func mcpPlayStorePromote(packageName, versionCode, track, notes string) interface{} {
+// re-upload the AAB. POLICY-AWARE: the staged ladder internal→alpha→beta→
+// production is enforced (a skipped stage is refused unless `confirm` matches
+// the target), Play's declaration gates surface as named DECLARATION_BLOCKED
+// errors with the exact console step, and production reminds about device
+// support. Owner-gated (mcp_owner_gate.go).
+func mcpPlayStorePromote(packageName, versionCode, track, notes, confirm string) interface{} {
 	keyPath := findGooglePlayKey()
 	if keyPath == "" {
 		return map[string]interface{}{"error": "Google Play service account key not found.", "setup": "Place it at keys/google-play-service-account.json"}
@@ -373,6 +397,9 @@ func mcpPlayStorePromote(packageName, versionCode, track, notes string) interfac
 	)
 	if notes != "" {
 		cmd.Env = append(cmd.Env, "PLAY_RELEASE_NOTES="+notes)
+	}
+	if confirm != "" {
+		cmd.Env = append(cmd.Env, "PLAY_CONFIRM="+confirm)
 	}
 	out, err := cmd.CombinedOutput()
 	res := map[string]interface{}{

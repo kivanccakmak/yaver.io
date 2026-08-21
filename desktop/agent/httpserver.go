@@ -10428,9 +10428,10 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			BundleID    string `json:"bundle_id"`
 			BuildNumber string `json:"buildNumber"`
 			GroupName   string `json:"groupName"`
+			Confirm     string `json:"confirm"`
 		}
 		json.Unmarshal(call.Arguments, &a)
-		return mcpToolJSON(mcpTestFlightPromote(a.BundleID, a.BuildNumber, a.GroupName))
+		return mcpToolJSON(mcpTestFlightPromote(a.BundleID, a.BuildNumber, a.GroupName, a.Confirm))
 	case "xcode_build":
 		var a struct {
 			Dir    string `json:"directory"`
@@ -10504,9 +10505,10 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			VersionCode string `json:"versionCode"`
 			Track       string `json:"track"`
 			Notes       string `json:"releaseNotes"`
+			Confirm     string `json:"confirm"`
 		}
 		json.Unmarshal(call.Arguments, &a)
-		return mcpToolJSON(mcpPlayStorePromote(a.Package, a.VersionCode, a.Track, a.Notes))
+		return mcpToolJSON(mcpPlayStorePromote(a.Package, a.VersionCode, a.Track, a.Notes, a.Confirm))
 	case "gradle_build":
 		var a struct {
 			Dir  string `json:"directory"`
