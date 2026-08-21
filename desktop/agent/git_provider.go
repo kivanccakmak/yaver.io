@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -1615,14 +1616,25 @@ func (s *HTTPServer) handleGitProviderRepoCreate(w http.ResponseWriter, r *http.
 }
 
 func createRepoOnGitHub(token, name, description string, private bool) (cloneURL, sshURL, fullName string, err error) {
+	authUser := ""
+	if strings.Contains(strings.Trim(name, "/"), "/") {
+		authUser, _, err = verifyGitHubToken(token)
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolve GitHub owner for repository creation: %w", err)
+		}
+	}
+	endpoint, repoName, err := githubCreateRepoTarget(authUser, name)
+	if err != nil {
+		return "", "", "", err
+	}
 	body := map[string]interface{}{
-		"name":        name,
+		"name":        repoName,
 		"description": description,
 		"private":     private,
 		"auto_init":   true,
 	}
 	buf, _ := json.Marshal(body)
-	req, _ := http.NewRequest("POST", "https://api.github.com/user/repos", strings.NewReader(string(buf)))
+	req, _ := http.NewRequest("POST", endpoint, strings.NewReader(string(buf)))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -1645,6 +1657,34 @@ func createRepoOnGitHub(token, name, description string, private bool) (cloneURL
 		return "", "", "", err
 	}
 	return data.CloneURL, data.SSHURL, data.FullName, nil
+}
+
+// githubCreateRepoTarget resolves `name` or `owner/name` to GitHub's correct
+// creation endpoint. The old user-only endpoint rejected organization-qualified
+// names even when the authenticated user could create repositories there,
+// forcing Mobile Workspace users to leave Yaver for the most common team case.
+func githubCreateRepoTarget(authUser, name string) (endpoint, repoName string, err error) {
+	name = strings.Trim(strings.TrimSpace(name), "/")
+	parts := strings.Split(name, "/")
+	switch len(parts) {
+	case 1:
+		if parts[0] == "" {
+			return "", "", fmt.Errorf("GitHub repository name is required")
+		}
+		return "https://api.github.com/user/repos", parts[0], nil
+	case 2:
+		owner := strings.TrimSpace(parts[0])
+		repo := strings.TrimSpace(parts[1])
+		if owner == "" || repo == "" {
+			return "", "", fmt.Errorf("GitHub repository must be name or owner/name")
+		}
+		if strings.EqualFold(owner, strings.TrimSpace(authUser)) {
+			return "https://api.github.com/user/repos", repo, nil
+		}
+		return "https://api.github.com/orgs/" + url.PathEscape(owner) + "/repos", repo, nil
+	default:
+		return "", "", fmt.Errorf("GitHub repository must be name or owner/name")
+	}
 }
 
 func createRepoOnGitLab(host, token, name, description string, private bool) (cloneURL, sshURL, fullName string, err error) {
