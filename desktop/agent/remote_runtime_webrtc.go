@@ -80,6 +80,13 @@ type remoteRuntimeLiveState struct {
 	// idle timeout. Enforced by ExecuteControl and manipulated by
 	// runtime_take_control / runtime_release_control MCP verbs.
 	lease *ControlLease
+
+	// viewers is the Phase-A shared-session roster: who is watching /
+	// participating, keyed by clientId. Populated on offer attach
+	// (webrtc) and /frame polling (frame-poll). Presence changes
+	// broadcast viewer_joined / viewer_left on the events channel.
+	// See remote_runtime_viewers.go.
+	viewers map[string]*remoteRuntimeViewer
 }
 
 // ensureLease lazily creates the control lease on first use so old
@@ -475,6 +482,11 @@ func (m *RemoteRuntimeManager) ApplyWebRTCOffer(sessionID string, offer webrtc.S
 			// CloseSession so a momentary disconnect-and-reconnect
 			// from the same viewer doesn't restart the encoder.
 			live.mu.Lock()
+			// Phase-A: unregister this peer's viewer so the roster
+			// drops them and other viewers see viewer_left.
+			if vid := live.viewerIDForPeerLocked(peer); vid != "" {
+				live.unregisterViewerLocked(vid)
+			}
 			live.dropPeerLocked(peer)
 			remaining := len(live.peers)
 			rtpMode := live.videoTrack != nil
@@ -655,6 +667,33 @@ func (live *remoteRuntimeLiveState) sendEventJSON(payload map[string]any) {
 	}
 	live.mu.Unlock()
 
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	text := string(buf)
+	for _, dc := range channels {
+		_ = dc.SendText(text)
+	}
+}
+
+// sendEventJSONLocked is sendEventJSON's locked-core variant for callers
+// that ALREADY hold live.mu (the viewer-registry broadcasts in
+// remote_runtime_viewers.go). It must not call sendEventJSON — that would
+// re-lock live.mu and deadlock. Presence events are rare and tiny, so
+// holding the lock across SendText here is acceptable; the hot paths
+// (frame pumps) keep using sendEventJSON which unlocks before SendText.
+func (live *remoteRuntimeLiveState) sendEventJSONLocked(payload map[string]any) {
+	channels := make([]*webrtc.DataChannel, 0, len(live.peers))
+	for _, p := range live.peers {
+		if p != nil && p.eventsDC != nil && p.eventsDC.ReadyState() == webrtc.DataChannelStateOpen {
+			channels = append(channels, p.eventsDC)
+		}
+	}
+	if len(channels) == 0 {
+		live.queueEventLocked(payload)
+		return
+	}
 	buf, err := json.Marshal(payload)
 	if err != nil {
 		return
@@ -1124,6 +1163,36 @@ func (s *HTTPServer) handleRemoteRuntimeSessionRoute(w http.ResponseWriter, r *h
 		}
 	}
 	switch {
+	case strings.HasSuffix(path, "/leave"):
+		sessionID := strings.TrimSuffix(path, "/leave")
+		sessionID = strings.Trim(sessionID, "/")
+		if r.Method != http.MethodPost {
+			jsonError(w, http.StatusMethodNotAllowed, "use POST")
+			return
+		}
+		var req struct {
+			ClientID string `json:"clientId,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if strings.TrimSpace(req.ClientID) == "" {
+			jsonError(w, http.StatusBadRequest, "clientId is required to leave a shared session")
+			return
+		}
+		updated, closed, err := mgr.leaveViewer(sessionID, req.ClientID)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]any{
+			"ok":        true,
+			"closed":    closed,
+			"session":   updated,
+			"sessionId": sessionID,
+		})
+		return
 	case strings.HasSuffix(path, "/command"):
 		s.handleRemoteRuntimeSessionCommand(w, r)
 		return
@@ -1133,6 +1202,21 @@ func (s *HTTPServer) handleRemoteRuntimeSessionRoute(w http.ResponseWriter, r *h
 		if r.Method != http.MethodGet {
 			jsonError(w, http.StatusMethodNotAllowed, "use GET")
 			return
+		}
+		// Phase-A: a relay-jpeg-poll client pulling frames IS a viewer —
+		// register it so the roster shows who is watching and viewerCount
+		// reflects them. ?clientId= is the stable identity; without it the
+		// pull still works but is anonymous (counted, not addressable).
+		if cid := strings.TrimSpace(r.URL.Query().Get("clientId")); cid != "" {
+			if live, ok := mgr.getLive(sessionID); ok {
+				live.mu.Lock()
+				live.registerViewerLocked(remoteRuntimeViewer{
+					ID:      cid,
+					Surface: string(surfaceFromRequest(r)),
+					Kind:    "frame-poll",
+				})
+				live.mu.Unlock()
+			}
 		}
 		session, payload, err := mgr.CaptureFrame(sessionID)
 		if err != nil {
@@ -1155,6 +1239,11 @@ func (s *HTTPServer) handleRemoteRuntimeSessionRoute(w http.ResponseWriter, r *h
 		var req struct {
 			SDP  string `json:"sdp"`
 			Type string `json:"type"`
+			// ClientID identifies the attaching viewer in the shared-session
+			// roster (e.g. "tvos-<uuid>"). Empty = legacy anonymous viewer.
+			ClientID string `json:"clientId,omitempty"`
+			// Surface names the X-Yaver-Surface of the attaching viewer.
+			Surface string `json:"surface,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, http.StatusBadRequest, "invalid json body")
@@ -1167,6 +1256,24 @@ func (s *HTTPServer) handleRemoteRuntimeSessionRoute(w http.ResponseWriter, r *h
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		// Phase-A: attribute + roster the attaching viewer, then stamp the
+		// refreshed viewerCount on the response session so the caller (and
+		// Convex) sees the real audience. The offer already attached the
+		// peer; registering here ties that peer to a clientId for `leave`.
+		if req.ClientID != "" {
+			if live, ok := mgr.getLive(sessionID); ok {
+				live.mu.Lock()
+				live.registerViewerLocked(remoteRuntimeViewer{
+					ID:      req.ClientID,
+					Surface: string(normalizeSurface(req.Surface)),
+					Kind:    "webrtc",
+					peer:    live.latestPeerLocked(),
+				})
+				live.mu.Unlock()
+			}
+			answerSession, _ = mgr.Get(sessionID)
+			answerSession = mgr.stampViewerCount(answerSession)
 		}
 		jsonReply(w, http.StatusOK, map[string]any{
 			"session": answerSession,
@@ -1213,8 +1320,12 @@ func (s *HTTPServer) handleRemoteRuntimeSessionRoute(w http.ResponseWriter, r *h
 				jsonError(w, http.StatusNotFound, "remote runtime session not found")
 				return
 			}
-			jsonReply(w, http.StatusOK, session)
+			jsonReply(w, http.StatusOK, mgr.stampViewerCount(session))
 		case http.MethodDelete:
+			// A client deleting "its" session is the legacy single-viewer
+			// stop. For shared sessions the client should call /leave with
+			// its clientId so other viewers survive; DELETE remains the
+			// explicit force-stop (owner's "end the room").
 			mgr.CloseSession(sessionID)
 			jsonReply(w, http.StatusOK, map[string]any{"ok": true, "sessionId": sessionID})
 		default:

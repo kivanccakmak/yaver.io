@@ -725,6 +725,7 @@ implementation as the doc is updated alongside code.
 | **7.** Relay TURN allocation | `relay/turn.go` Pion long-term-credential server. Agent endpoint `/remote-runtime/turn-credentials` mints short-lived creds. Web viewer fetches them on session start. | ✅ shipped |
 | **8.** Swift logic on Linux | `swift_toolchain.go` + `swift_cmd.go`: `yaver swift doctor` probes the toolchain, `yaver swift logic [path]` runs `swift build` + `swift test` on a SwiftPM project and mirrors swift's exit code. | ✅ shipped |
 | **9.** Compliance + privacy + Hermes-isolation gate | `hermes_isolation_test.go` parses the WebRTC region's source and fails the build if any file references a Hermes-only symbol. Multi-viewer fan-out: `remoteRuntimeLiveState.peers` lets N PeerConnections share one Pion video track; second offer no longer kicks the first viewer. | ✅ shipped |
+| **10.** Shared-session viewer registry ("vibe room") | `remote_runtime_viewers.go`: per-session viewer registry keyed by clientId, `viewer_joined`/`viewer_left` presence broadcasts, refcounted `leave` (a viewer detaching never kills the session for the others), roster GET filters by project/device and stamps `viewerCount` + `startedBy` + `sourceSurface`. A returning surface (TV/web/phone) polls the roster and rejoins the same capture by id instead of creating a second one. | ✅ shipped 2026-08-21 |
 
 Implementation order chosen for this iteration: **0 → 2 → 1 → 3 → 6 →
 4 → 5 → 7 → 8 → 9**. Deps before features; web viewer rewritten only

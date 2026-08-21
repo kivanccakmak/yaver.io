@@ -42,6 +42,16 @@ eq(viewportMatchesSurface("tablet", realPhone).ok, false,
 ok(viewportMatchesSurface("tablet", { width: 810, height: 1080, isMobile: true, hasTouch: true }).ok,
   "the tablet profile passes as tablet");
 
+// ── landscape tablet = the Vibe Studio split shape ────────────────────────
+ok(viewportMatchesSurface("tabletLandscape", { width: 1024, height: 640, isMobile: true, hasTouch: true }).ok,
+  "a ~10\" Android tablet in landscape passes as tabletLandscape");
+eq(viewportMatchesSurface("tabletLandscape", { width: 810, height: 1080, isMobile: true, hasTouch: true }).ok, false,
+  "portrait 810x1080 is NOT tabletLandscape — the studio split only exists in the tablet-landscape tree");
+eq(viewportMatchesSurface("tabletLandscape", realPhone).ok, false,
+  "a phone is not a landscape tablet either");
+eq(profileFor("tabletLandscape").playwrightDevice, "Galaxy Tab S9 landscape",
+  "tabletLandscape maps to a real Android-tablet descriptor");
+
 // ── desktop ──────────────────────────────────────────────────────────────
 ok(viewportMatchesSurface("web", { width: 1600, height: 1100, isMobile: false, hasTouch: false }).ok,
   "the dashboard profile passes as web");

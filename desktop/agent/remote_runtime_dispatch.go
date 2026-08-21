@@ -66,7 +66,7 @@ func splitSessionRoutePath(path string) (sessionID, suffix string) {
 	if path == "" {
 		return "", ""
 	}
-	for _, s := range []string{"/webrtc/offer", "/command", "/control", "/frame"} {
+	for _, s := range []string{"/webrtc/offer", "/command", "/control", "/frame", "/leave"} {
 		if strings.HasSuffix(path, s) {
 			return strings.TrimSuffix(path, s), s
 		}

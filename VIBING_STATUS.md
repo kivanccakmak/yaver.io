@@ -23,9 +23,10 @@ honest render path is:
 
 `SFMG → Expo web sibling → headless Chrome on box → vibe frame session → TV`
 
-The box also reports a WebRTC option. The current native tvOS app ships no
-WebRTC decoder, so WebRTC must remain visible-but-unavailable on TV rather than
-becoming a black-screen button. Mobile/web may negotiate it independently.
+The box also reports a WebRTC option. tvOS now ships a real WebRTC viewer
+(LiveKitWebRTC + `LKRTCMTLVideoView`, `RemoteRuntimeWebRTCView.swift`) — it
+can negotiate H.264 RTP or JPEG-over-data-channel. Frames remain the default
+lane over the relay; WebRTC is used when a direct path is reachable.
 
 ## Why the session hurt
 
@@ -79,8 +80,10 @@ the public relay, zero relay 401s.
 
 ## Remaining truthful constraint
 
-True WebRTC on tvOS is not implemented. Adding it requires a tvOS-compatible
-native WebRTC decoder/framework and an end-to-end decoded-first-frame test.
+tvOS WebRTC is implemented and builds (LiveKitWebRTC + Metal view) but the
+decode path needs an end-to-end decoded-first-frame test on a real box +
+device pair before it can be promoted to the default over a flaky link.
 `react-native-webrtc`/Jitsi is not the native SwiftUI app's transport and must
-not be represented by a settings toggle. Until that work lands, frames are the
-supported tvOS lane and WebRTC is named as available on mobile/web only.
+not be represented by a settings toggle. Until the closed loop lands, frames
+remain the default tvOS lane over the relay; WebRTC is used when a direct path
+is reachable. visionOS ships no WebRTC client yet — frames only.

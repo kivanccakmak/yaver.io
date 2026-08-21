@@ -54,6 +54,10 @@ struct RemoteRuntimeCapabilities: Decodable, Equatable {
     }
 }
 
+struct RemoteRuntimeRoster: Decodable {
+    let sessions: [RemoteRuntimeSession]?
+}
+
 struct RemoteRuntimeSession: Decodable, Equatable {
     let id: String
     let workDir: String
@@ -71,6 +75,13 @@ struct RemoteRuntimeSession: Decodable, Equatable {
     let textInputFocused: Bool?
     let note: String?
     let deviceDims: RemoteRuntimeDeviceDims?
+    /// Phase-A shared-session fields: how many surfaces are attached, and who
+    /// created the room. Used by the rejoin path ("is this project already
+    /// live on this box?") and the roster attribution ("Kivan · phone started
+    /// this"). Optional so older agents decode cleanly.
+    let viewerCount: Int?
+    let startedBy: String?
+    let sourceSurface: String?
 }
 
 struct RemoteRuntimeICECredentials: Decodable {

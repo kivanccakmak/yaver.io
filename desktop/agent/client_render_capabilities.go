@@ -10,10 +10,16 @@ package main
 // that cannot decode WebRTC and a visionOS app that can looked identical to the
 // agent, and every surface was offered lanes it might be unable to render.
 //
-// Measured the same day: tvOS and visionOS ship ZERO WebRTC client code (no
-// RTCPeer anywhere under tvos/ or visionos/), while the agent happily advertises
-// `native-webrtc`. A TV picking that lane fails at the last possible moment —
-// after a task has run — with nothing naming the real cause.
+// Originally (2026-08-03) both tvOS and visionOS shipped ZERO WebRTC client
+// code while the agent happily advertised `native-webrtc` — a TV picking that
+// lane failed at the last possible moment, after a task had run, with nothing
+// naming the real cause.
+//
+// LIFTED 2026-08-21: tvOS now ships a real WebRTC viewer via LiveKitWebRTC +
+// LKRTCMTLVideoView (tvos/YaverTV/Views/RemoteRuntimeWebRTCView.swift:906) —
+// it can negotiate H.264 or JPEG-over-data-channel. visionOS still ships none.
+// The inventory/operation intersection below stays: the box's lane list is not
+// an answer until it is intersected with what the client can actually decode.
 //
 // This is the "inventory says yes, the operation says no" rule applied to
 // transports: the box's inventory of lanes is not an answer until it is
@@ -116,8 +122,8 @@ func clientLaneRemedy(surface string, mode RenderMode) string {
 	switch {
 	case mode == RenderIframe && surface == "tvos":
 		return "tvOS has no WebKit control at all — use the frames lane, which this app already renders."
-	case mode == RenderWebRTC && (surface == "tvos" || surface == "visionos"):
-		return "This app ships no WebRTC client yet — use the frames lane. Adding WebRTC is a client change, not a setting."
+	case mode == RenderWebRTC && surface == "visionos":
+		return "visionOS ships no WebRTC client yet — use the frames lane. Adding WebRTC is a client change, not a setting."
 	case mode == RenderHermes:
 		return "Hermes loads into the phone's RN container only; other surfaces use frames or a web lane."
 	default:

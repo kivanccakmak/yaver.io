@@ -19,6 +19,7 @@ import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import { useColors } from "../../src/context/ThemeContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
+import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 import { quicClient, type HealthMonitorTarget, type MachineInfo } from "../../src/lib/quic";
 import { useAuth } from "../../src/context/AuthContext";
 import { getUserSettings } from "../../src/lib/auth";
@@ -1999,6 +2000,7 @@ export default function MoreScreen() {
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
   const insets = useSafeAreaInsets();
+  const layout = useResponsiveLayout();
   const handleDevices = useCallback(() => router.navigate("/(tabs)/devices" as any), [router]);
   const handleConnection = useCallback(() => router.navigate("/connection" as any), [router]);
   const handleMcpServers = useCallback(() => router.navigate("/mcp-servers" as any), [router]);
@@ -2008,6 +2010,7 @@ export default function MoreScreen() {
   const handleEvStations = useCallback(() => router.navigate("/ev-stations" as any), [router]);
   const handleCarVoice = useCallback(() => router.navigate("/car-voice-coding" as any), [router]);
   const handleVibe = useCallback(() => router.navigate("/vibe" as any), [router]);
+  const handleVibeStudio = useCallback(() => router.navigate("/vibe-studio" as any), [router]);
   const handleDataCollection = useCallback(() => router.navigate("/data-collection" as any), [router]);
   const handleTwinMode = useCallback(() => router.navigate("/twin" as any), [router]);
   const handleScrewCell = useCallback(() => router.navigate("/screw-cell" as any), [router]);
@@ -2391,6 +2394,24 @@ export default function MoreScreen() {
               </View>
               <Text style={{ color: c.textMuted, fontSize: 16 }}>{"›"}</Text>
             </Pressable>
+
+            {/* Tablet Vibe Studio — landscape preview-LEFT / chat-RIGHT split.
+                Only shown on tablets so the phone More menu stays untouched. */}
+            {layout.isTablet ? (
+              <Pressable
+                style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
+                onPress={handleVibeStudio}
+              >
+                <Text style={[s.icon, { color: c.textMuted }]}>{"\u{1F4F1}\u00b7\u{1F4AC}"}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.label, { color: c.textPrimary }]}>Vibe Studio</Text>
+                  <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>
+                    {"Split view — app preview beside chat. Landscape for the two-pane cockpit"}
+                  </Text>
+                </View>
+                <Text style={{ color: c.textMuted, fontSize: 16 }}>{"›"}</Text>
+              </Pressable>
+            ) : null}
 
             {showOptionalTool("car-voice") ? (
             <Pressable

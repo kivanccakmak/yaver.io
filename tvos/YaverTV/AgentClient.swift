@@ -850,23 +850,43 @@ actor AgentClient {
     func startRemoteRuntimeSession(
         for project: ProjectSummary,
         targetId: String,
-        transportMode: String = "direct-webrtc"
+        transportMode: String = "direct-webrtc",
+        clientId: String? = nil,
+        surface: String? = nil
     ) async throws -> RemoteRuntimeSession {
         guard let workDir = project.path, !workDir.isEmpty else {
             throw AgentError(message: "This project has no path on the selected machine.")
         }
+        var body: [String: Any] = [
+            "workDir": workDir,
+            "framework": project.framework ?? "",
+            "targetId": targetId,
+            "transportMode": transportMode,
+        ]
+        if let clientId { body["clientId"] = clientId }
+        if let surface { body["surface"] = surface }
         let data = try await request(
             "POST",
             path: "/remote-runtime/sessions",
-            jsonBody: [
-                "workDir": workDir,
-                "framework": project.framework ?? "",
-                "targetId": targetId,
-                "transportMode": transportMode,
-            ],
+            jsonBody: body,
             failure: "couldn't start the interactive runtime"
         )
         return try JSONDecoder().decode(RemoteRuntimeSession.self, from: data)
+    }
+
+    /// List the live shared-session roster, optionally filtered to one project.
+    /// A returning surface polls this to find "the room that was vibing while I
+    /// was gone" and rejoin it by id instead of creating a second capture.
+    /// The agent stamps each entry with viewerCount + startedBy + sourceSurface.
+    func listRemoteRuntimeSessions(project: String? = nil) async throws -> [RemoteRuntimeSession] {
+        var path = "/remote-runtime/sessions"
+        if let project, !project.isEmpty {
+            let escaped = project.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? project
+            path += "?project=\(escaped)"
+        }
+        let data = try await request("GET", path: path, failure: "couldn't list live sessions")
+        let decoded = try JSONDecoder().decode(RemoteRuntimeRoster.self, from: data)
+        return decoded.sessions ?? []
     }
 
     func remoteRuntimeICECredentials() async throws -> RemoteRuntimeICECredentials {

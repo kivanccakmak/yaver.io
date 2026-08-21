@@ -129,6 +129,17 @@ type RemoteRuntimeSession struct {
 	CreatedAt        string `json:"createdAt"`
 	UpdatedAt        string `json:"updatedAt"`
 	Note             string `json:"note,omitempty"`
+	// ViewerCount is the number of live viewers/participants attached to
+	// this session (webrtc peers + fresh frame-pollers). Stamped from live
+	// state on List/Get/Create responses; 0 for proxied builder sessions
+	// where the builder holds the real viewers.
+	ViewerCount int `json:"viewerCount,omitempty"`
+	// StartedBy is the stable clientId of the surface that created the
+	// session (e.g. "tvos-<uuid>"), so the roster can say "Kivan · phone".
+	StartedBy string `json:"startedBy,omitempty"`
+	// SourceSurface is the normalized X-Yaver-Surface of the creator
+	// ("mobile" | "tvos" | "web" | "desktop" | ...).
+	SourceSurface string `json:"sourceSurface,omitempty"`
 	// RemoteBuilderId is the alias (NOT the URL or token) of the
 	// builder this session is dispatched to. Set when a Linux dev
 	// box forwards a Swift session to a paired Mac via the Phase-5
@@ -1090,6 +1101,29 @@ func (m *RemoteRuntimeManager) Delete(id string) {
 }
 
 func (m *RemoteRuntimeManager) Create(workDir, framework, targetID, transportMode string) (RemoteRuntimeSession, error) {
+	return m.CreateWith(workDir, framework, targetID, transportMode, remoteRuntimeCreator{})
+}
+
+// remoteRuntimeCreator identifies who is starting a session, so the
+// shared-session roster can attribute it ("Kivan · phone started this").
+type remoteRuntimeCreator struct {
+	ClientID string
+	Surface  string
+}
+
+// sourceSurfaceForCreator keeps the DTO honest for legacy (anonymous)
+// creates: normalizeSurface("") is "unknown", but a session started with no
+// creator should carry NO source surface — empty means "unspecified", which
+// is exactly what a legacy client means. A real creator always has a
+// normalized surface (even "unknown" when the header named something odd).
+func sourceSurfaceForCreator(creator remoteRuntimeCreator) string {
+	if strings.TrimSpace(creator.ClientID) == "" && strings.TrimSpace(creator.Surface) == "" {
+		return ""
+	}
+	return string(normalizeSurface(creator.Surface))
+}
+
+func (m *RemoteRuntimeManager) CreateWith(workDir, framework, targetID, transportMode string, creator remoteRuntimeCreator) (RemoteRuntimeSession, error) {
 	// Phase-5 closer: when this host can't run the requested target
 	// natively (e.g. Linux + Swift/iOS) and a paired Mac builder is
 	// configured, dispatch the create call to the builder. Every
@@ -1168,13 +1202,25 @@ func (m *RemoteRuntimeManager) Create(workDir, framework, targetID, transportMod
 		TransportMode:    transportMode,
 		FrameTransport:   frameTransport,
 		Status:           "control-ready",
+		StartedBy:        strings.TrimSpace(creator.ClientID),
+		SourceSurface:    sourceSurfaceForCreator(creator),
 		CreatedAt:        now,
 		UpdatedAt:        now,
 		Note:             note,
 	}
 	m.mu.Lock()
 	m.sessions[session.ID] = session
-	m.live[session.ID] = &remoteRuntimeLiveState{sessionID: session.ID, targetID: selected.ID, platform: selected.Platform}
+	live := &remoteRuntimeLiveState{sessionID: session.ID, targetID: selected.ID, platform: selected.Platform}
+	if strings.TrimSpace(creator.ClientID) != "" {
+		live.viewers = map[string]*remoteRuntimeViewer{
+			strings.TrimSpace(creator.ClientID): {
+				ID:      strings.TrimSpace(creator.ClientID),
+				Surface: session.SourceSurface,
+				Kind:    "webrtc", // creator holds the capture; roster shows them first
+			},
+		}
+	}
+	m.live[session.ID] = live
 	m.mu.Unlock()
 
 	// browser-window is the ONLY target where the session is content-less by
@@ -1885,7 +1931,24 @@ func (s *HTTPServer) handleRemoteRuntimeSessions(w http.ResponseWriter, r *http.
 	mgr := s.ensureRemoteRuntimeManager()
 	switch r.Method {
 	case http.MethodGet:
-		jsonReply(w, http.StatusOK, map[string]interface{}{"sessions": mgr.List()})
+		// Roster: list live sessions, optionally filtered by the
+		// project (workDir) or device a client is attached to, so a
+		// surface can show "live sessions on this box" instead of
+		// forcing its own capture. Each entry carries viewerCount.
+		project := strings.TrimSpace(r.URL.Query().Get("project"))
+		device := strings.TrimSpace(r.URL.Query().Get("device"))
+		sessions := mgr.List()
+		out := make([]RemoteRuntimeSession, 0, len(sessions))
+		for _, sess := range sessions {
+			if project != "" && !strings.Contains(sess.WorkDir, project) && filepath.Base(sess.WorkDir) != project {
+				continue
+			}
+			if device != "" && sess.DeviceID != device {
+				continue
+			}
+			out = append(out, mgr.stampViewerCount(sess))
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{"sessions": out})
 	case http.MethodPost:
 		var req struct {
 			WorkDir   string `json:"workDir"`
@@ -1893,12 +1956,29 @@ func (s *HTTPServer) handleRemoteRuntimeSessions(w http.ResponseWriter, r *http.
 			TargetID  string `json:"targetId"`
 			Transport string `json:"transportMode"`
 			Runner    string `json:"runner,omitempty"`
+			// ClientID + Surface attribute WHO created the session, so the
+			// shared-session roster can say "Kivan · phone started this" and a
+			// returning surface can find the room it began. Mirrors the offer
+			// path's attribution fields (remote_runtime_webrtc.go:1244-1246).
+			ClientID string `json:"clientId,omitempty"`
+			Surface  string `json:"surface,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		session, err := mgr.Create(req.WorkDir, req.Framework, req.TargetID, req.Transport)
+		// Fall back to the X-Yaver-Surface header when the body omits it, so
+		// every existing client (mobile, web, TV, watch) attributes the creator
+		// without a client bump. The header is advisory metadata, never auth.
+		bodySurface := strings.TrimSpace(req.Surface)
+		if bodySurface == "" {
+			bodySurface = r.Header.Get(surfaceHeader)
+		}
+		creator := remoteRuntimeCreator{
+			ClientID: strings.TrimSpace(req.ClientID),
+			Surface:  string(normalizeSurface(bodySurface)),
+		}
+		session, err := mgr.CreateWith(req.WorkDir, req.Framework, req.TargetID, req.Transport, creator)
 		if err == nil && strings.TrimSpace(req.Runner) != "" {
 			// Optional runner override at create; empty defaults to the box's
 			// primary (resolved when a feedback fix task is dispatched).

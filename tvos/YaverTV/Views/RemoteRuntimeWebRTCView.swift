@@ -1056,12 +1056,32 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
                 throw AgentError(message: reason)
             }
 
-            status = "Opening \(target.label)…"
-            let created = try await client.startRemoteRuntimeSession(
-                for: project,
-                targetId: target.id,
-                transportMode: preferAuthenticatedFrames ? "relay-jpeg-poll" : "direct-webrtc"
-            )
+            // REJOIN FIRST — the vibe-room contract. If a live session for this
+            // project already exists on the box (started on the phone, web, or
+            // another TV), attach to it instead of creating a second capture.
+            // This is what makes "left it on the TV, kept vibing from the car,
+            // came home and the TV shows the same room" work: the roster is the
+            // box's answer to "is this project already live?"
+            status = "Looking for a live session on this machine…"
+            var created: RemoteRuntimeSession
+            let live = (try? await client.listRemoteRuntimeSessions(project: project.path)) ?? []
+            if let existing = live.first(where: { $0.status != "closed" && $0.status != "error" }) {
+                status = "Rejoining the live \(project.name) session…"
+                created = existing
+            } else {
+                status = "Opening \(target.label)…"
+                created = try await client.startRemoteRuntimeSession(
+                    for: project,
+                    targetId: target.id,
+                    transportMode: preferAuthenticatedFrames ? "relay-jpeg-poll" : "direct-webrtc",
+                    // Attribute the creator in the shared-session roster: the
+                    // TV's stable installation id + its surface, so a phone or
+                    // web viewer can see "TV started this room" and a returning
+                    // TV can find its own room by id.
+                    clientId: TokenStore.installationID(),
+                    surface: Backend.surface
+                )
+            }
             guard generation == thisGeneration else {
                 try? await client.closeRemoteRuntimeSession(created.id)
                 return
@@ -1613,7 +1633,10 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
                     height: height,
                     scale: object["scale"] as? Double,
                     rotation: object["rotation"] as? String
-                )
+                ),
+                viewerCount: current.viewerCount,
+                startedBy: current.startedBy,
+                sourceSurface: current.sourceSurface
             )
         case "taken-over":
             controlNote = "Another viewer took over this remote session."

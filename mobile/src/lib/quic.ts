@@ -7352,6 +7352,19 @@ export class QuicClient {
     return Platform.OS === "web" ? {} : { "X-Client-Platform": Platform.OS };
   }
 
+  /** Optional surface marker the tablet Vibe Studio sets on mount
+   *  (e.g. "mobile-tablet") so the agent can tune behavior for a
+   *  tablet client. Opt-in and additive; phones never set it. */
+  private surfaceMarker?: string;
+
+  setSurfaceMarker(surface: string): void {
+    this.surfaceMarker = surface;
+  }
+
+  clearSurfaceMarker(): void {
+    this.surfaceMarker = undefined;
+  }
+
   private get authHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.token}`,
@@ -7362,6 +7375,9 @@ export class QuicClient {
     }
     if (this._tunnelUrl && this._tunnelHeaders) {
       Object.assign(headers, this._tunnelHeaders);
+    }
+    if (this.surfaceMarker) {
+      headers["X-Yaver-Surface"] = this.surfaceMarker;
     }
     return headers;
   }

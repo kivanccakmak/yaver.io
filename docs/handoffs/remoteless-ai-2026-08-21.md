@@ -48,12 +48,13 @@ Make any owned remote box usable/fixable from every surface (electron, mobile, t
 
 Another session was editing the repo concurrently (tvOS QR auth + remote-runtime viewer registry + vibe-studio). It was closed by the user, but its work is **uncommitted and currently does NOT compile**. Do not assume the tree is green.
 
-Uncommitted (NOT mine — do not commit blindly; it's broken mid-edit):
-- Modified: `desktop/agent/remote_runtime.go`, `remote_runtime_dispatch.go`, `remote_runtime_webrtc.go`; `mobile/app/(tabs)/more.tsx`, `mobile/src/lib/quic.ts`; `docs/handoffs/tvos-qr-auth-audit-2026-08-21.md`.
-- Untracked: `desktop/agent/remote_runtime_viewers.go`, `remote_runtime_viewers_test.go`; `mobile/app/vibe-studio.tsx`; `mobile/src/components/studio/`; `TABLET_VIBE_STUDIO_PLAN.md`; `docs/architecture/TVOS_SURFACE_SYNERGY_AUDIT.md`.
-- Known breakage seen: `remote_runtime_webrtc.go:1244` `undefined: latestPeerLocked`; `remote_runtime_viewers.go:26` `"sync" imported and not used`; `remote_runtime.go:1194` `normalizeSurface(...).String undefined`. Re-check — the other session may still have been editing when these were observed.
+**UPDATE (2026-08-21, second session): RESOLVED.** The follow-up session finished the viewer registry (deadlock fixed, 10 tests green, guard broken+restored), wired creator attribution through the POST handler, added tvOS rejoin-by-roster, fixed the stale docs, and landed the tablet Vibe Studio. The tree now builds: `go build ./...` green in `desktop/agent/`, viewer/creator/remoteless tests green, tvOS simulator build green, mobile `tsc` clean for the new files. All of it is committed in one change.
 
-`git log origin/main -1` at end = `ecfc52c62`. Push of `9ec167d3a` was in-flight.
+> Known pre-existing flake (NOT this change): `go test .` full main-package
+> times out on `TestCustodianAbandonsAHangingWarden` in the full-suite context
+> (passes in isolation; reproduced on clean HEAD via worktree).
+
+`git log origin/main -1` at end = `f9ccfb262` (handoff commit).
 
 ## Related handoff you must read
 
