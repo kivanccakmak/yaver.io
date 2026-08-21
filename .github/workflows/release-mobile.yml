@@ -234,12 +234,74 @@ jobs:
         run: |
           echo "$ANDROID_KEYSTORE" | base64 --decode > mobile/android/app/release.keystore
 
+      - name: Decode Play service account
+        env:
+          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_STORE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "ERROR: PLAY_STORE_SERVICE_ACCOUNT_JSON secret is not set."
+            echo "Set it with:  gh secret set PLAY_STORE_SERVICE_ACCOUNT_JSON < keys/google-play-service-account.json"
+            exit 1
+          fi
+          python3 -m pip install --quiet --upgrade google-auth google-api-python-client
+          KEYFILE="$RUNNER_TEMP/play-service-account.json"
+          # The secret may be stored as raw JSON or base64. Try base64 first,
+          # fall back to raw when the decoded value doesn't look like JSON.
+          python3 -c "import base64, os, sys; sys.stdout.buffer.write(base64.b64decode(os.environ['PLAY_STORE_SERVICE_ACCOUNT_JSON']))" > "$KEYFILE" 2>/dev/null || true
+          if ! head -c1 "$KEYFILE" | grep -q '{'; then
+            printf '%s' "$PLAY_STORE_SERVICE_ACCOUNT_JSON" > "$KEYFILE"
+          fi
+          if ! head -c1 "$KEYFILE" | grep -q '{'; then
+            echo "ERROR: PLAY_STORE_SERVICE_ACCOUNT_JSON is neither base64 nor raw JSON."
+            exit 1
+          fi
+          chmod 600 "$KEYFILE"
+
       - name: Bump versionCode
+        # The old `100 + github.run_number` collided the moment a dispatch
+        # re-ran (run_number is per-run, not monotonic across history) — Play
+        # rejected "Version code 212 has already been used". Derive from the
+        # live max instead, exactly like the local deploy-playstore.sh:
+        # query Play's current max versionCode via the service account, then
+        # max+1. Deterministic, collision-free, idempotent across CI re-runs.
+        env:
+          PLAY_STORE_KEY_FILE: ${{ runner.temp }}/play-service-account.json
         run: |
           GRADLE_FILE="mobile/android/app/build.gradle"
-          NEW_CODE=$((100 + ${{ github.run_number }}))
+          CURRENT_VERSION_CODE=$(grep 'versionCode ' "$GRADLE_FILE" | head -1 | sed 's/[^0-9]//g')
+          REMOTE_MAX_VERSION_CODE=$(python3 - <<'PY'
+import os
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+
+key = os.environ.get("PLAY_STORE_KEY_FILE")
+if not key or not os.path.exists(key):
+    raise SystemExit(0)
+
+creds = Credentials.from_service_account_file(
+    key,
+    scopes=["https://www.googleapis.com/auth/androidpublisher"],
+)
+service = build("androidpublisher", "v3", credentials=creds)
+edit = service.edits().insert(body={}, packageName="io.yaver.mobile").execute()
+edit_id = edit["id"]
+try:
+    bundles = service.edits().bundles().list(
+        packageName="io.yaver.mobile",
+        editId=edit_id,
+    ).execute().get("bundles", [])
+    print(max((int(bundle["versionCode"]) for bundle in bundles), default=0))
+finally:
+    service.edits().delete(packageName="io.yaver.mobile", editId=edit_id).execute()
+PY
+)
+          if [ -n "$REMOTE_MAX_VERSION_CODE" ] && [ "$REMOTE_MAX_VERSION_CODE" -ge "$CURRENT_VERSION_CODE" ]; then
+            NEW_CODE=$((REMOTE_MAX_VERSION_CODE + 1))
+          else
+            NEW_CODE=$((CURRENT_VERSION_CODE + 1))
+          fi
           sed -i "s/versionCode [0-9]*/versionCode $NEW_CODE/" "$GRADLE_FILE"
-          echo "versionCode: $NEW_CODE"
+          echo "versionCode $CURRENT_VERSION_CODE -> $NEW_CODE"
 
       - name: Build release AAB
         env:
@@ -290,30 +352,13 @@ jobs:
       - name: Upload AAB to Google Play (internal testing)
         # Tag-triggered runs always upload. workflow_dispatch runs honour the
         # upload_playstore input so manual runs can build-only for testing.
-        # If PLAY_STORE_SERVICE_ACCOUNT_JSON isn't set the step fails loudly.
+        # The service account was decoded by the "Decode Play service account"
+        # step above (shared by Bump versionCode + this upload).
         if: github.event_name == 'push' || github.event.inputs.upload_playstore == 'true'
         env:
-          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          PLAY_STORE_KEY_FILE: ${{ runner.temp }}/play-service-account.json
         run: |
-          if [ -z "$PLAY_STORE_SERVICE_ACCOUNT_JSON" ]; then
-            echo "ERROR: PLAY_STORE_SERVICE_ACCOUNT_JSON secret is not set."
-            echo "Set it with:  gh secret set PLAY_STORE_SERVICE_ACCOUNT_JSON < keys/google-play-service-account.json"
-            exit 1
-          fi
-          python3 -m pip install --quiet --upgrade google-auth google-api-python-client
-          KEYFILE="$RUNNER_TEMP/play-service-account.json"
-          # The secret may be stored as raw JSON or base64. Try base64 first,
-          # fall back to raw when the decoded value doesn't look like JSON.
-          python3 -c "import base64, os, sys; sys.stdout.buffer.write(base64.b64decode(os.environ['PLAY_STORE_SERVICE_ACCOUNT_JSON']))" > "$KEYFILE" 2>/dev/null || true
-          if ! head -c1 "$KEYFILE" | grep -q '{'; then
-            printf '%s' "$PLAY_STORE_SERVICE_ACCOUNT_JSON" > "$KEYFILE"
-          fi
-          if ! head -c1 "$KEYFILE" | grep -q '{'; then
-            echo "ERROR: PLAY_STORE_SERVICE_ACCOUNT_JSON is neither base64 nor raw JSON."
-            exit 1
-          fi
-          chmod 600 "$KEYFILE"
-          PLAY_STORE_KEY_FILE="$KEYFILE" python3 scripts/upload-playstore.py
+          PLAY_STORE_KEY_FILE="$PLAY_STORE_KEY_FILE" python3 scripts/upload-playstore.py
 
   update-versions:
     needs: [validate, ios, android]
