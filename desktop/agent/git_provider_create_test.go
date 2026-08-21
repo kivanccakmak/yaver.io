@@ -36,3 +36,17 @@ func TestGitHubCreateRepoTargetRejectsNestedPath(t *testing.T) {
 		t.Fatal("nested GitHub repository path must be rejected")
 	}
 }
+
+func TestManagedGitMirrorMatchesQualifiedAndPersonalNames(t *testing.T) {
+	github := ManagedGitMirrorMeta{Provider: "github", Host: "github.com", FullName: "yaver-io/mobile-todo"}
+	if !managedGitMirrorMatches(github, "github", "github.com", "yaver-io/mobile-todo") {
+		t.Fatal("qualified GitHub mirror should be reusable")
+	}
+	gitlab := ManagedGitMirrorMeta{Provider: "gitlab", Host: "gitlab.com", FullName: "example-user/mobile-todo"}
+	if !managedGitMirrorMatches(gitlab, "gitlab", "gitlab.com", "mobile-todo") {
+		t.Fatal("personal GitLab mirror should match its repository basename")
+	}
+	if managedGitMirrorMatches(gitlab, "github", "github.com", "mobile-todo") {
+		t.Fatal("a mirror from another provider must not match")
+	}
+}

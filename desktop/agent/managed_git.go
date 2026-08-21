@@ -453,14 +453,30 @@ func ManagedGitMirrorToProvider(workDir, provider, host, repoName, visibility, d
 	if token == "" {
 		return nil, fmt.Errorf("no %s token configured on this machine", provider)
 	}
+	for _, existing := range meta.Mirrors {
+		if !managedGitMirrorMatches(existing, provider, host, repoName) {
+			continue
+		}
+		credentialed := credentialedGitURL(provider, host, username, token, existing.FullName)
+		if out, pushErr := managedGitCmd(workDir, "push", credentialed, "HEAD:main"); pushErr != nil {
+			safeOut := strings.ReplaceAll(out, token, "<redacted>")
+			return nil, fmt.Errorf("mirror push: %s: %w", safeOut, pushErr)
+		}
+		existing.LastPushAt = time.Now().UTC().Format(time.RFC3339)
+		meta.Mirrors = upsertManagedGitMirror(meta.Mirrors, existing)
+		if saveErr := SaveManagedGitMeta(workDir, meta); saveErr != nil {
+			return nil, saveErr
+		}
+		return &existing, nil
+	}
 	private := normalizeManagedGitVisibility(visibility) != "public"
 	var cloneURL, fullName string
 	var sshURL string
 	switch provider {
 	case "github":
-		cloneURL, sshURL, fullName, err = createRepoOnGitHub(token, repoName, description, private)
+		cloneURL, sshURL, fullName, err = createEmptyRepoOnGitHub(token, repoName, description, private)
 	case "gitlab":
-		cloneURL, sshURL, fullName, err = createRepoOnGitLab(host, token, repoName, description, private)
+		cloneURL, sshURL, fullName, err = createEmptyRepoOnGitLab(host, token, repoName, description, private)
 	}
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already_exists") && !strings.Contains(strings.ToLower(err.Error()), "name already exists") {
 		return nil, err
@@ -499,6 +515,17 @@ func ManagedGitMirrorToProvider(workDir, provider, host, repoName, visibility, d
 		return nil, err
 	}
 	return &mirror, nil
+}
+
+func managedGitMirrorMatches(m ManagedGitMirrorMeta, provider, host, repoName string) bool {
+	if !strings.EqualFold(strings.TrimSpace(m.Provider), strings.TrimSpace(provider)) ||
+		!strings.EqualFold(strings.TrimSpace(m.Host), strings.TrimSpace(host)) {
+		return false
+	}
+	fullName := strings.Trim(strings.TrimSpace(m.FullName), "/")
+	want := strings.Trim(strings.TrimSpace(repoName), "/")
+	return strings.EqualFold(fullName, want) ||
+		(!strings.Contains(want, "/") && strings.EqualFold(filepath.Base(fullName), want))
 }
 
 // ManagedGitMirrorSyncAll pushes the current HEAD to every connected mirror

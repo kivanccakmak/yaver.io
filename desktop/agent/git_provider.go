@@ -1616,6 +1616,14 @@ func (s *HTTPServer) handleGitProviderRepoCreate(w http.ResponseWriter, r *http.
 }
 
 func createRepoOnGitHub(token, name, description string, private bool) (cloneURL, sshURL, fullName string, err error) {
+	return createRepoOnGitHubWithInit(token, name, description, private, true)
+}
+
+func createEmptyRepoOnGitHub(token, name, description string, private bool) (cloneURL, sshURL, fullName string, err error) {
+	return createRepoOnGitHubWithInit(token, name, description, private, false)
+}
+
+func createRepoOnGitHubWithInit(token, name, description string, private, initialize bool) (cloneURL, sshURL, fullName string, err error) {
 	authUser := ""
 	if strings.Contains(strings.Trim(name, "/"), "/") {
 		authUser, _, err = verifyGitHubToken(token)
@@ -1631,7 +1639,7 @@ func createRepoOnGitHub(token, name, description string, private bool) (cloneURL
 		"name":        repoName,
 		"description": description,
 		"private":     private,
-		"auto_init":   true,
+		"auto_init":   initialize,
 	}
 	buf, _ := json.Marshal(body)
 	req, _ := http.NewRequest("POST", endpoint, strings.NewReader(string(buf)))
@@ -1688,6 +1696,14 @@ func githubCreateRepoTarget(authUser, name string) (endpoint, repoName string, e
 }
 
 func createRepoOnGitLab(host, token, name, description string, private bool) (cloneURL, sshURL, fullName string, err error) {
+	return createRepoOnGitLabWithInit(host, token, name, description, private, true)
+}
+
+func createEmptyRepoOnGitLab(host, token, name, description string, private bool) (cloneURL, sshURL, fullName string, err error) {
+	return createRepoOnGitLabWithInit(host, token, name, description, private, false)
+}
+
+func createRepoOnGitLabWithInit(host, token, name, description string, private, initialize bool) (cloneURL, sshURL, fullName string, err error) {
 	visibility := "public"
 	if private {
 		visibility = "private"
@@ -1696,7 +1712,7 @@ func createRepoOnGitLab(host, token, name, description string, private bool) (cl
 		"name":                   name,
 		"description":            description,
 		"visibility":             visibility,
-		"initialize_with_readme": true,
+		"initialize_with_readme": initialize,
 	}
 	buf, _ := json.Marshal(body)
 	req, _ := http.NewRequest("POST", "https://"+host+"/api/v4/projects", strings.NewReader(string(buf)))
