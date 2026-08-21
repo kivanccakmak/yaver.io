@@ -111,7 +111,10 @@ async function backendlessArc(browser, url) {
   await page.getByText(title, { exact: true }).waitFor();
   await page.reload({ waitUntil: "networkidle" });
   await page.getByRole("tab", { name: "done" }).click();
-  assert(await page.getByRole("checkbox", { name: title }).isChecked(), "backendless completion did not persist");
+  assert(
+    await page.getByRole("checkbox", { name: title }).getAttribute("aria-checked") === "true",
+    "backendless completion did not hydrate as checked",
+  );
   await page.screenshot({ path: join(artifactRoot, "backendless", "completed.png"), fullPage: true });
   await page.getByRole("button", { name: `Delete ${title}` }).click();
   await page.getByRole("tab", { name: "all" }).click();
