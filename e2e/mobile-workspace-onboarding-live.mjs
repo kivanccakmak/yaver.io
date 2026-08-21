@@ -11,7 +11,7 @@ function assert(condition, message) {
 }
 
 const iphone = devices["iPhone 15 Pro"];
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const context = await browser.newContext(iphone);
 await context.addInitScript((authToken) => {
   localStorage.setItem("yaver.secure.yaver_auth_token", authToken);
