@@ -4,7 +4,6 @@ import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -70,6 +69,7 @@ export default function App() {
   const [message, setMessage] = useState("Opening local cache…");
   const [projectToken, setProjectToken] = useState("");
   const [tokenDraft, setTokenDraft] = useState("");
+  const [tokenError, setTokenError] = useState("");
 
   useEffect(() => {
     void Promise.all([
@@ -231,7 +231,10 @@ export default function App() {
             <TextInput
               accessibilityLabel="Yaver Serverless project token"
               value={tokenDraft}
-              onChangeText={setTokenDraft}
+              onChangeText={(value) => {
+                setTokenDraft(value);
+                if (tokenError) setTokenError("");
+              }}
               placeholder="pp_…"
               placeholderTextColor="#64748b"
               autoCapitalize="none"
@@ -239,12 +242,15 @@ export default function App() {
               secureTextEntry
               style={styles.input}
             />
+            {tokenError ? (
+              <Text accessibilityRole="alert" style={styles.tokenError}>{tokenError}</Text>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               onPress={() => {
                 const next = tokenDraft.trim();
                 if (!next.startsWith("pp_")) {
-                  Alert.alert("Project token required", "Use the project-scoped pp_… token from your Yaver Serverless workspace.");
+                  setTokenError("Project token required · use the project-scoped pp_… token from your Yaver Serverless workspace.");
                   return;
                 }
                 void SecureStore.setItemAsync(TOKEN_KEY, next).then(() => {
@@ -320,6 +326,7 @@ const styles = StyleSheet.create({
   tokenCard: { backgroundColor: "#11162b", borderRadius: 18, padding: 16, marginTop: 14, borderWidth: 1, borderColor: "#312e81" },
   tokenTitle: { color: "#e0e7ff", fontSize: 16, fontWeight: "800", marginBottom: 5 },
   tokenHelp: { color: "#94a3b8", fontSize: 13, lineHeight: 19, marginBottom: 10 },
+  tokenError: { color: "#fca5a5", fontSize: 13, lineHeight: 18, marginTop: 8 },
   input: { flex: 1, minHeight: 52, backgroundColor: "#11162b", color: "#f8fafc", borderRadius: 16, paddingHorizontal: 16, borderWidth: 1, borderColor: "#252d4f", fontSize: 16 },
   addButton: { minWidth: 70, minHeight: 52, alignItems: "center", justifyContent: "center", borderRadius: 16, backgroundColor: "#818cf8" },
   addText: { color: "#11162b", fontWeight: "900", fontSize: 15 },

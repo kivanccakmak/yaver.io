@@ -136,11 +136,10 @@ async function serverlessArc(browser, url) {
   await page.getByRole("checkbox", { name: `Mark open: ${title}` }).waitFor();
 
   await page.getByLabel("Yaver Serverless project token").fill("invalid-test-token");
-  const dialog = page.waitForEvent("dialog");
   await page.getByRole("button", { name: "Save securely" }).click();
-  const alert = await dialog;
-  assert(alert.message().includes("pp_"), `invalid-token alert lacks repair guidance: ${alert.message()}`);
-  await alert.dismiss();
+  const alert = page.getByRole("alert");
+  await alert.waitFor();
+  assert((await alert.textContent())?.includes("pp_"), "invalid-token alert lacks project-token repair guidance");
 
   await page.reload({ waitUntil: "networkidle" });
   await page.getByText("done", { exact: true }).click();
