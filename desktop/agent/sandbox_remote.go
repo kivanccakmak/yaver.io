@@ -427,6 +427,7 @@ func openCodeSandboxArgs(selection sandboxRunnerSelection, prompt, workDir strin
 // an empty rationale is fine.
 func parseStreamJSONResult(out []byte) string {
 	var resultText, lastAssistant string
+	sawJSONEvent := false
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for sc.Scan() {
@@ -447,6 +448,7 @@ func parseStreamJSONResult(out []byte) string {
 		if json.Unmarshal(line, &ev) != nil {
 			continue
 		}
+		sawJSONEvent = true
 		switch ev.Type {
 		case "result":
 			if strings.TrimSpace(ev.Result) != "" {
@@ -467,7 +469,19 @@ func parseStreamJSONResult(out []byte) string {
 	if strings.TrimSpace(resultText) != "" {
 		return strings.TrimSpace(resultText)
 	}
-	return strings.TrimSpace(lastAssistant)
+	if strings.TrimSpace(lastAssistant) != "" {
+		return strings.TrimSpace(lastAssistant)
+	}
+	// OpenCode's current non-interactive `run` mode writes the assistant's
+	// answer as plain stdout, not Claude-style stream-json. Returning empty on
+	// that successful operation made /agent/runners/test report a false green
+	// with no proof text and hid the response from Mobile Workspace. Preserve
+	// JSON-event behavior above, but fall back to terminal-clean raw output when
+	// the process did not emit JSON events at all.
+	if !sawJSONEvent {
+		return strings.TrimSpace(stripANSI(string(out)))
+	}
+	return ""
 }
 
 // handleSandboxRun serves POST /sandbox/run. Auth is the standard same-user

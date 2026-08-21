@@ -377,3 +377,17 @@ func TestBuildSandboxRemotePrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestParseStreamJSONResultFallsBackToRawOpenCodeOutput(t *testing.T) {
+	got := parseStreamJSONResult([]byte("\x1b[32mYAVER_DEEPSEEK_OK\x1b[0m\n"))
+	if got != "YAVER_DEEPSEEK_OK" {
+		t.Fatalf("raw OpenCode output = %q, want sentinel", got)
+	}
+}
+
+func TestParseStreamJSONResultPrefersStructuredResult(t *testing.T) {
+	got := parseStreamJSONResult([]byte("plain prelude\n{\"type\":\"result\",\"result\":\"structured answer\"}\n"))
+	if got != "structured answer" {
+		t.Fatalf("structured result = %q", got)
+	}
+}
