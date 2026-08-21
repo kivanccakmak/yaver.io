@@ -26,13 +26,13 @@ page.on("console", (message) => {
 try {
   await page.goto(`${appURL}/phone-projects`, { waitUntil: "domcontentloaded", timeout: 120_000 });
   await page.getByText("Mobile Workspace", { exact: true }).waitFor({ timeout: 60_000 });
+  const viewport = page.viewportSize();
   const device = await page.evaluate(() => ({
     dpr: window.devicePixelRatio,
     touch: navigator.maxTouchPoints,
     ua: navigator.userAgent,
-    viewport: [window.innerWidth, window.innerHeight],
   }));
-  assert(device.viewport[0] === iphone.viewport.width && device.viewport[1] === iphone.viewport.height, "not using the iPhone device viewport");
+  assert(viewport?.width === iphone.viewport.width && viewport?.height === iphone.viewport.height, "not using the iPhone device viewport");
   assert(device.touch > 0 && /Mobile|iPhone/i.test(device.ua) && device.dpr >= 2, "not using a genuine mobile/touch context");
 
   await page.getByText("+ New mobile app", { exact: true }).click();
