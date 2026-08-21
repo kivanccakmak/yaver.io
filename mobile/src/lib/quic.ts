@@ -1261,6 +1261,36 @@ export interface RunnerTestResult {
   checkedAt?: number;
 }
 
+export interface MobileWorkspaceAction {
+  label: string;
+  method: string;
+  path: string;
+  stream?: string;
+}
+
+export interface MobileWorkspaceGate {
+  id: string;
+  code: string;
+  label: string;
+  ready: boolean;
+  configured: boolean;
+  detail?: string;
+  model?: string;
+  provider?: string;
+  action?: MobileWorkspaceAction;
+}
+
+export interface MobileWorkspaceStatus {
+  ok: boolean;
+  ready: boolean;
+  stack: Record<string, string>;
+  device: MobileWorkspaceGate;
+  runners: MobileWorkspaceGate[];
+  openCode: MobileWorkspaceGate;
+  gitProviders: MobileWorkspaceGate[];
+  backend: MobileWorkspaceGate;
+}
+
 export interface RunnerAuthStatusRow {
   id: string;
   name: string;
@@ -4836,6 +4866,21 @@ export class QuicClient {
     return probe.runners;
   }
 
+  /** Read the agent's canonical runner + model discovery for a selected peer.
+   * This keeps Mobile Workspace on the same model catalogue as Devices/Tasks. */
+  async getRunnersForTarget(target?: string): Promise<RunnerInfo[] | null> {
+    if (!this.isConnected && !this.hasConnectionInfo) return null;
+    try {
+      const base = this.peerEndpoint(target, "/agent/runners");
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders }, 15000);
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      return Array.isArray(data?.runners) ? data.runners as RunnerInfo[] : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Get runners with an honest fetch outcome so callers can distinguish loading/failure from "[]". */
   async getRunnersProbe(timeoutMs = 15000): Promise<RunnerFetchProbe> {
     if (!this.isConnected && !this.hasConnectionInfo) {
@@ -5057,6 +5102,21 @@ export class QuicClient {
       const data = await res.json().catch(() => null);
       if (!data) return null;
       return Array.isArray(data?.runners) ? data.runners : [];
+    } catch {
+      return null;
+    }
+  }
+
+  /** One remote-box readiness contract for the Mobile Workspace wizard.
+   * Every non-ready gate includes the agent route that resolves it. */
+  async mobileWorkspaceStatus(target?: string): Promise<MobileWorkspaceStatus | null> {
+    if (!this.isConnected && !this.hasConnectionInfo) return null;
+    try {
+      const base = this.peerEndpoint(target, "/mobile-workspace/status");
+      const res = await this.fetchWithTimeout(base, { headers: this.authHeaders }, 20000);
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      return data?.ok === true ? data as MobileWorkspaceStatus : null;
     } catch {
       return null;
     }
@@ -10742,10 +10802,12 @@ export class QuicClient {
     content?: string;
     title?: string;
     runner?: string;
+    model?: string;
+    mode?: string;
     workDir?: string;
-  }): Promise<ConversationImportPlan | null> {
+  }, target?: string): Promise<ConversationImportPlan | null> {
     try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/imports/conversation/plan`, {
+      const res = await this.fetchWithTimeout(this.peerEndpoint(target, "/imports/conversation/plan"), {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -11474,8 +11536,8 @@ export class QuicClient {
     }
   }
 
-  /** Mobile Sandbox → remote runner (GLM). Ship the phone sandbox's files +
-   *  prompt to the connected box's POST /sandbox/run; it runs the GLM runner
+  /** Mobile Workspace → remote OpenCode runner. Ship the phone-authored files +
+   *  prompt to the connected box's POST /sandbox/run; it runs the selected
    *  over a throwaway workdir and returns an EditPlan-shaped diff. See
    *  desktop/agent/sandbox_remote.go and llmRemote.ts. The box-side run can take
    *  minutes, so the client timeout is the requested budget + a buffer. */

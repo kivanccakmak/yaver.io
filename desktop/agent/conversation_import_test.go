@@ -14,6 +14,9 @@ func TestAnalyzeConversationImportFromPastedContent(t *testing.T) {
 		if !strings.Contains(spec.Prompt, "Imported material:") {
 			t.Fatalf("prompt missing imported material")
 		}
+		if spec.Runner != "opencode" || spec.Model != "deepseek/deepseek-v4-flash" || spec.Mode != "build" {
+			t.Fatalf("import analyzer selection drifted: runner=%q model=%q mode=%q", spec.Runner, spec.Model, spec.Mode)
+		}
 		return `{
 			"suggestedName":"Thread Import",
 			"productGoal":"Let a user paste an AI conversation and start building from it.",
@@ -32,6 +35,9 @@ func TestAnalyzeConversationImportFromPastedContent(t *testing.T) {
 
 	out, err := AnalyzeConversationImport(ConversationImportRequest{
 		Content: "User wants to paste a Claude thread and turn it into an app plan.",
+		Runner:  "opencode",
+		Model:   "deepseek/deepseek-v4-flash",
+		Mode:    "build",
 		WorkDir: ".",
 	})
 	if err != nil {

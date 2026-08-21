@@ -1,16 +1,16 @@
 // llmRemote.ts — "remote runner" implementation of the LlmProvider contract
 // (llmClient.ts). Unlike the on-device / BYO-key cloud backends, this one does
 // NOT call a model API from the phone: it ships the sandbox's files + prompt to
-// a connected Yaver box, which runs OpenCode against z.ai's coding-plan GLM
-// model over them and returns an EditPlan-shaped diff. The phone
+// a connected Yaver box, which runs OpenCode with that box's saved primary
+// model and returns an EditPlan-shaped diff. The phone
 // then previews + applies that plan against its local sandbox tree, exactly like
 // every other backend.
 //
-// Why this exists: the Mobile Sandbox is phone-only (no checkout on any box), so
+// Why this exists: Mobile Workspace source is phone-authored (no persistent checkout on a box), so
 // the usual remote-coding paths (sendTask / agent graphs) — which edit a repo on
 // the machine — don't apply. The agent's POST /sandbox/run closes that gap.
 //
-// OpenCode-only for now. The box holds the z.ai credential; the phone never does.
+// OpenCode-only for now. The box holds provider credentials; the phone never does.
 //
 // PURE + RN-free (tsx-tested): the network call is injected as `dispatch`, so
 // codingBackendStore wires it to quicClient.sandboxRun and tests pass a fake.
@@ -31,6 +31,9 @@ export interface RemoteSandboxRequest {
   framework?: string;
   schema?: unknown;
   runner?: string;
+  model?: string;
+  mode?: string;
+  provider?: string;
   timeoutMs?: number;
 }
 
@@ -57,8 +60,10 @@ export type RemoteSandboxDispatch = (
 
 export interface RemoteProviderOptions {
   dispatch: RemoteSandboxDispatch;
-  /** Label for the UI ("zai-coding-plan/glm-4.7"). */
+  /** Optional explicit provider/model. Empty lets the box resolve its primary. */
   model?: string;
+  mode?: string;
+  provider?: string;
 }
 
 /** Build an LlmProvider that runs the remote OpenCode runner on a connected box. */
@@ -66,7 +71,7 @@ export function createRemoteProvider(opts: RemoteProviderOptions): LlmProvider {
   if (typeof opts.dispatch !== "function") {
     throw new Error("createRemoteProvider: dispatch is required (the box round-trip).");
   }
-  const model = opts.model ?? "zai-coding-plan/glm-4.7";
+  const model = opts.model ?? "OpenCode primary";
 
   return {
     id: "remote",
@@ -81,6 +86,9 @@ export function createRemoteProvider(opts: RemoteProviderOptions): LlmProvider {
         framework: req.framework,
         schema: req.schema,
         runner: "opencode",
+        model: opts.model,
+        mode: opts.mode,
+        provider: opts.provider,
         timeoutMs: req.timeoutMs,
       });
 

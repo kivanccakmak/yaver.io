@@ -1,4 +1,4 @@
-// llmRemote.test.mts — the "remote runner (GLM)" LlmProvider. Ships the sandbox
+// llmRemote.test.mts — the remote OpenCode LlmProvider. Ships the sandbox
 // to a box and maps the box's sandboxRunResponse back into an EditPlan.
 // Run: npx tsx src/lib/llmRemote.test.mts
 
@@ -27,10 +27,7 @@ test("requires a dispatch function", () => {
   assert.throws(() => createRemoteProvider({ dispatch: undefined as any }), /dispatch is required/);
 });
 
-// GLM is reached THROUGH OpenCode — llmRemote.ts dispatches runner "opencode"
-// and the model selects GLM inside it. The old expectation ("glm" as a runner
-// id) predates that split and asserted a runner the dispatcher never sends.
-test("forces runner=opencode and forwards prompt + files + framework + schema", async () => {
+test("uses runner=opencode and lets the box resolve its saved primary model", async () => {
   const rec = recorder(() => ({ ok: true, edits: [], runner: "opencode", model: "glm-4.7" }));
   const provider = createRemoteProvider({ dispatch: rec.dispatch });
   assert.equal(provider.id, "remote");
@@ -42,6 +39,22 @@ test("forces runner=opencode and forwards prompt + files + framework + schema", 
   assert.equal(sent.framework, "react-native");
   assert.deepEqual(sent.files, [{ path: "app/index.tsx", content: "color: red" }]);
   assert.deepEqual(sent.schema, { tables: [{ name: "todos" }] });
+  assert.equal(sent.model, undefined);
+});
+
+test("forwards an explicit OpenCode DeepSeek selection without exposing credentials", async () => {
+  const rec = recorder(() => ({ ok: true, edits: [], runner: "opencode", model: "deepseek/deepseek-v4-flash" }));
+  const provider = createRemoteProvider({
+    dispatch: rec.dispatch,
+    model: "deepseek/deepseek-v4-flash",
+    mode: "build",
+    provider: "deepseek",
+  });
+  await provider.editFiles(baseReq);
+  assert.equal(rec.calls[0].model, "deepseek/deepseek-v4-flash");
+  assert.equal(rec.calls[0].mode, "build");
+  assert.equal(rec.calls[0].provider, "deepseek");
+  assert.equal(JSON.stringify(rec.calls[0]).includes("apiKey"), false);
 });
 
 test("maps a successful response into an EditPlan", async () => {

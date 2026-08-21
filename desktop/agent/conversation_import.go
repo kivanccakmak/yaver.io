@@ -17,6 +17,8 @@ type ConversationImportRequest struct {
 	Content string `json:"content,omitempty"`
 	Title   string `json:"title,omitempty"`
 	Runner  string `json:"runner,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Mode    string `json:"mode,omitempty"`
 	WorkDir string `json:"workDir,omitempty"`
 }
 
@@ -88,6 +90,8 @@ func AnalyzeConversationImport(req ConversationImportRequest) (*ConversationImpo
 	}
 	body, err := runConversationImportGenerator(AIGeneratorSpec{
 		Runner:  req.Runner,
+		Model:   req.Model,
+		Mode:    req.Mode,
 		WorkDir: workDir,
 		Prompt:  buildConversationImportAIPrompt(resolved),
 		Timeout: 6 * time.Minute,

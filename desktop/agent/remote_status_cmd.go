@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -30,6 +31,7 @@ type remoteRunnerSummary struct {
 	Installed      bool   `json:"installed"`
 	Ready          bool   `json:"ready"`
 	AuthConfigured bool   `json:"authConfigured"`
+	AuthVerified   bool   `json:"authVerified"`
 	AuthSource     string `json:"authSource,omitempty"`
 	Warning        string `json:"warning,omitempty"`
 	Error          string `json:"error,omitempty"`
@@ -42,32 +44,34 @@ type remoteRunnerSummary struct {
 // `--json` flag away from the underlying /info + /agent/runners
 // payloads.
 type remoteAgentStatusReport struct {
-	DeviceID         string                 `json:"deviceId"`
-	Name             string                 `json:"name"`
-	Alias            string                 `json:"alias,omitempty"`
-	Platform         string                 `json:"platform,omitempty"`
-	Hostname         string                 `json:"hostname,omitempty"`
-	Version          string                 `json:"version,omitempty"`
-	WorkDir          string                 `json:"workDir,omitempty"`
-	LifecycleState   string                 `json:"lifecycleState,omitempty"`
-	NeedsAuth        bool                   `json:"needsAuth,omitempty"`
-	IsOnline         bool                   `json:"isOnline"`
-	SSHReachable     *bool                  `json:"sshReachable,omitempty"`
-	Transport        string                 `json:"transport,omitempty"`
-	BaseURL          string                 `json:"baseUrl,omitempty"`
-	DefaultRunner    string                 `json:"defaultRunner,omitempty"`
-	Runners          []remoteRunnerSummary  `json:"runners,omitempty"`
-	DevServer        map[string]interface{} `json:"devServer,omitempty"`
-	Sandbox          map[string]interface{} `json:"sandbox,omitempty"`
-	Project          map[string]interface{} `json:"project,omitempty"`
-	TaskStats        map[string]interface{} `json:"taskStats,omitempty"`
-	TodoCount        interface{}            `json:"todoCount,omitempty"`
-	TodoTotal        interface{}            `json:"todoTotal,omitempty"`
-	Info             map[string]interface{} `json:"info,omitempty"`
-	HTTPStatusInfo   int                    `json:"httpStatusInfo,omitempty"`
-	HTTPStatusRunner int                    `json:"httpStatusRunners,omitempty"`
-	Git              *gitStatusSummary      `json:"git,omitempty"`
-	HTTPStatusGit    int                    `json:"httpStatusGit,omitempty"`
+	DeviceID                  string                 `json:"deviceId"`
+	Name                      string                 `json:"name"`
+	Alias                     string                 `json:"alias,omitempty"`
+	Platform                  string                 `json:"platform,omitempty"`
+	Hostname                  string                 `json:"hostname,omitempty"`
+	Version                   string                 `json:"version,omitempty"`
+	WorkDir                   string                 `json:"workDir,omitempty"`
+	LifecycleState            string                 `json:"lifecycleState,omitempty"`
+	NeedsAuth                 bool                   `json:"needsAuth,omitempty"`
+	IsOnline                  bool                   `json:"isOnline"`
+	SSHReachable              *bool                  `json:"sshReachable,omitempty"`
+	Transport                 string                 `json:"transport,omitempty"`
+	BaseURL                   string                 `json:"baseUrl,omitempty"`
+	DefaultRunner             string                 `json:"defaultRunner,omitempty"`
+	Runners                   []remoteRunnerSummary  `json:"runners,omitempty"`
+	DevServer                 map[string]interface{} `json:"devServer,omitempty"`
+	Sandbox                   map[string]interface{} `json:"sandbox,omitempty"`
+	Project                   map[string]interface{} `json:"project,omitempty"`
+	TaskStats                 map[string]interface{} `json:"taskStats,omitempty"`
+	TodoCount                 interface{}            `json:"todoCount,omitempty"`
+	TodoTotal                 interface{}            `json:"todoTotal,omitempty"`
+	Info                      map[string]interface{} `json:"info,omitempty"`
+	HTTPStatusInfo            int                    `json:"httpStatusInfo,omitempty"`
+	HTTPStatusRunner          int                    `json:"httpStatusRunners,omitempty"`
+	Git                       *gitStatusSummary      `json:"git,omitempty"`
+	HTTPStatusGit             int                    `json:"httpStatusGit,omitempty"`
+	MobileWorkspace           *mobileWorkspaceStatus `json:"mobileWorkspace,omitempty"`
+	HTTPStatusMobileWorkspace int                    `json:"httpStatusMobileWorkspace,omitempty"`
 }
 
 func fetchRemoteAgentStatusByHint(ctx context.Context, deviceHint string) (*remoteAgentStatusReport, error) {
@@ -306,6 +310,20 @@ func fetchRemoteAgentStatus(ctx context.Context, candidates []RemoteAgentCandida
 			}
 		}
 	}
+
+	// Canonical Mobile Workspace failure plumbing. This remains additive so a
+	// newer coordinator can still inspect an older remote agent; nil means the
+	// target must be upgraded before a client can claim onboarding parity.
+	workspaceCtx, workspaceCancel := context.WithTimeout(ctx, 12*time.Second)
+	_, wstatus, wraw, werr := doRemoteAgentRequest(workspaceCtx, candidates, token, http.MethodGet, "/mobile-workspace/status", nil, 10*time.Second)
+	workspaceCancel()
+	report.HTTPStatusMobileWorkspace = wstatus
+	if werr == nil && wstatus >= 200 && wstatus < 300 && len(wraw) > 0 {
+		var workspace mobileWorkspaceStatus
+		if err := json.Unmarshal(wraw, &workspace); err == nil && workspace.OK {
+			report.MobileWorkspace = &workspace
+		}
+	}
 	return report, nil
 }
 
@@ -417,6 +435,9 @@ func renderRemoteAgentStatus(report *remoteAgentStatusReport, asJSON bool) {
 	if report.Git != nil {
 		renderGitStatusBlock(os.Stdout, *report.Git, "  ")
 	}
+	if report.MobileWorkspace != nil {
+		renderMobileWorkspaceStatusBlock(os.Stdout, *report.MobileWorkspace, "  ")
+	}
 	if len(report.Runners) > 0 {
 		fmt.Println("  runners:")
 		// Widened RUNNER column from 10 → 20 chars so synthetic
@@ -458,6 +479,38 @@ func renderRemoteAgentStatus(report *remoteAgentStatusReport, asJSON bool) {
 		}
 	} else if report.HTTPStatusRunner != 0 {
 		fmt.Printf("  runners:        (could not fetch — HTTP %d on /agent/runners)\n", report.HTTPStatusRunner)
+	}
+}
+
+func renderMobileWorkspaceStatusBlock(w io.Writer, status mobileWorkspaceStatus, indent string) {
+	if status.Ready {
+		fmt.Fprintf(w, "%smobile workspace: ready · remote box · React Native · Yaver Serverless\n", indent)
+		return
+	}
+	var failure *mobileWorkspaceGate
+	if !status.Device.Ready {
+		failure = &status.Device
+	} else if !status.OpenCode.Ready {
+		failure = &status.OpenCode
+	} else {
+		for i := range status.Runners {
+			if !status.Runners[i].Ready {
+				failure = &status.Runners[i]
+				break
+			}
+		}
+	}
+	if failure == nil {
+		fmt.Fprintf(w, "%smobile workspace: not ready\n", indent)
+		return
+	}
+	fmt.Fprintf(w, "%smobile workspace: %s · %s\n", indent, failure.Code, failure.Detail)
+	if failure.Action != nil {
+		fmt.Fprintf(w, "%s  fix: %s %s", indent, failure.Action.Method, failure.Action.Path)
+		if failure.Action.Stream != "" {
+			fmt.Fprintf(w, " · stream %s", failure.Action.Stream)
+		}
+		fmt.Fprintln(w)
 	}
 }
 

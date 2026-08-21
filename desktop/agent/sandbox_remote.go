@@ -1,24 +1,26 @@
 package main
 
-// sandbox_remote.go — Mobile Sandbox → remote runner (OpenCode + z.ai GLM).
+// sandbox_remote.go — Mobile Workspace → remote OpenCode runner.
 //
-// The phone-only Mobile Sandbox (see mobile/src/lib/phoneSandbox*.ts) edits a
+// The phone-authored Mobile Workspace (see mobile/src/lib/phoneSandbox*.ts) edits a
 // project whose source lives in the phone's local filesystem/SQLite — there is
 // NO checkout of that project on this box. So the usual remote-coding paths
 // (/tasks, /agent/graphs) don't apply: they operate on a workDir that already
 // exists on the agent. This endpoint closes that gap.
 //
 // Flow: the mobile client ships the sandbox's source files + a natural-language
-// prompt → we materialize them into a throwaway workdir → run OpenCode against
-// z.ai's coding-plan GLM model → diff the workdir against the input → return an
+// prompt → we materialize them into a throwaway workdir → run OpenCode with the
+// machine's selected model → diff the workdir against the input → return an
 // EditPlan-shaped result the phone applies to its local project (apply-with-
 // preview, reversible — identical to the on-device / BYO-key backends).
 //
 // OpenCode-only by design for now: the runner is fixed to "opencode" and the
-// request is rejected for any other runner id. The GLM credential lives only on
-// this box (ZAI_API_KEY / GLM_API_KEY) — the phone never has to hold it.
+// request is rejected for any other runner id. Provider credentials live only
+// on this box — the phone never has to hold them. Model selection follows the
+// same contract as normal tasks: explicit request, then this device's saved
+// primary preference, then OpenCode's own configured default.
 //
-// The GLM exec is isolated behind sandboxRunnerFn so the file-write / snapshot /
+// The OpenCode exec is isolated behind sandboxRunnerFn so the file-write / snapshot /
 // diff logic (where the real correctness risk is) is fully unit-tested without a
 // network or the runner binary. See sandbox_remote_test.go.
 
@@ -51,6 +53,9 @@ type sandboxRunRequest struct {
 	Framework string          `json:"framework,omitempty"`
 	Schema    json.RawMessage `json:"schema,omitempty"` // phone-project backend schema, forwarded into the prompt
 	Runner    string          `json:"runner,omitempty"` // only "opencode" (or empty → opencode) is accepted
+	Model     string          `json:"model,omitempty"`
+	Mode      string          `json:"mode,omitempty"`
+	Provider  string          `json:"provider,omitempty"`
 	TimeoutMs int             `json:"timeoutMs,omitempty"`
 }
 
@@ -237,7 +242,6 @@ func buildSandboxRemotePrompt(req sandboxRunRequest) string {
 		framework = "React Native (Expo)"
 	}
 	b.WriteString("You are editing a phone-authored ")
-	b.WriteString(framework)
 	b.WriteString(" project. Its source files are in the CURRENT WORKING DIRECTORY.\n")
 	b.WriteString("Make the requested change by creating, editing, or deleting files in place using your file tools. ")
 	b.WriteString("Do not run dev servers, install dependencies, or initialize git. Only change source files.\n\n")
@@ -300,58 +304,121 @@ func processSandboxRun(ctx context.Context, req sandboxRunRequest, runFn sandbox
 	return resp
 }
 
-// runGLMSandbox is the default sandboxRunnerFn: it runs OpenCode against
-// z.ai's bundled coding-plan provider over workDir.
-func runGLMSandbox(ctx context.Context, workDir, prompt string) (sandboxRunMeta, error) {
-	rc := GetRunnerConfig("opencode")
-	meta := sandboxRunMeta{model: "zai-coding-plan/glm-4.7"}
+type sandboxRunnerSelection struct {
+	Model    string
+	Mode     string
+	Provider string
+}
 
-	if value, _ := hostSecretValue("ZAI_API_KEY"); strings.TrimSpace(value) == "" {
-		return meta, fmt.Errorf("GLM via OpenCode is not configured on this box — add ZAI_API_KEY (or GLM_API_KEY) so OpenCode can use zai-coding-plan/glm-4.7")
+// resolveSandboxRunnerSelection keeps Mobile Workspace on the same primary model
+// as normal tasks. The endpoint used to hard-code GLM here, so onboarding could
+// truthfully save OpenCode + DeepSeek while the first real operation silently
+// launched a different provider.
+func resolveSandboxRunnerSelection(ctx context.Context, s *HTTPServer, req sandboxRunRequest) sandboxRunnerSelection {
+	selection := sandboxRunnerSelection{
+		Model:    strings.TrimSpace(req.Model),
+		Mode:     strings.TrimSpace(req.Mode),
+		Provider: strings.TrimSpace(req.Provider),
 	}
-
-	bin, err := exec.LookPath(rc.Command)
-	if err != nil {
-		if bin = findInExpandedPath(rc.Command); bin == "" {
-			return meta, fmt.Errorf("%s binary not found — install OpenCode on this box", rc.Command)
+	if selection.Model == "" {
+		pref := resolvePrimaryRunnerPrefForSelf(ctx, s)
+		if normalizeRunnerID(pref.RunnerID) == "opencode" {
+			selection.Model = strings.TrimSpace(pref.Model)
+			if selection.Mode == "" {
+				selection.Mode = strings.TrimSpace(pref.Mode)
+			}
+			if selection.Provider == "" {
+				selection.Provider = strings.TrimSpace(pref.Provider)
+			}
 		}
 	}
-
-	args := []string{
-		"run",
-		"--model", meta.model,
-		"--dangerously-skip-permissions",
-		prompt,
-	}
-
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Dir = workDir
-	env := append(os.Environ(), "PATH="+expandedPath())
-	if isRootProcess() {
-		env = append(env, "IS_SANDBOX=1")
-	}
-	cmd.Env = env
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
-	meta.rationale = parseStreamJSONResult(stdout.Bytes())
-	if runErr != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = strings.TrimSpace(stdout.String())
+	if selection.Model == "" {
+		if cfg, err := loadOpenCodeConfigSummary(); err == nil {
+			selection.Model = strings.TrimSpace(cfg.Model)
+			if selection.Model == "" && selection.Mode == "build" {
+				selection.Model = strings.TrimSpace(cfg.BuildModel)
+			}
+			if selection.Model == "" && selection.Mode == "plan" {
+				selection.Model = strings.TrimSpace(cfg.PlanModel)
+			}
 		}
-		if len(detail) > 600 {
-			detail = detail[:600] + "…"
-		}
-		if ctx.Err() == context.DeadlineExceeded {
-			return meta, fmt.Errorf("opencode runner timed out")
-		}
-		return meta, fmt.Errorf("opencode runner failed: %v: %s", runErr, detail)
 	}
-	return meta, nil
+	return selection
+}
+
+// newOpenCodeSandboxRunner runs OpenCode over workDir. Authentication is
+// deliberately proven by the operation itself: OpenCode may source provider
+// credentials from its own config, OAuth, or environment, so a provider-specific
+// environment-variable precheck would produce false negatives.
+func newOpenCodeSandboxRunner(selection sandboxRunnerSelection) sandboxRunnerFn {
+	return func(ctx context.Context, workDir, prompt string) (sandboxRunMeta, error) {
+		rc := GetRunnerConfig("opencode")
+		rc.Model = strings.TrimSpace(selection.Model)
+		rc.Mode = strings.TrimSpace(selection.Mode)
+		meta := sandboxRunMeta{model: strings.TrimSpace(selection.Model)}
+		if meta.model != "" && !runnerModelCompatible("opencode", meta.model) {
+			return meta, fmt.Errorf("OpenCode model %q must include its provider (for example deepseek/deepseek-v4-flash)", meta.model)
+		}
+
+		bin, err := exec.LookPath(rc.Command)
+		if err != nil {
+			if bin = findInExpandedPath(rc.Command); bin == "" {
+				return meta, fmt.Errorf("%s binary not found — install OpenCode on this box", rc.Command)
+			}
+		}
+
+		args := openCodeSandboxArgs(selection, prompt, workDir)
+		mcpScope := prepareRunnerMCPScope("opencode", workDir, []string{}, []string{"1"})
+		args = append(args, mcpScope.Args...)
+
+		cmd := exec.CommandContext(ctx, bin, args...)
+		cmd.Dir = workDir
+		// Reuse the exact environment contract proven by normal Mobile Tasks:
+		// host/vault provider secrets, terminal-safe raw output, source metadata,
+		// and the per-run scoped OpenCode config. The old one-off os.Environ path
+		// hung before emitting a byte while /tasks completed in seconds.
+		probeTask := &Task{ID: "mobile-workspace", Source: "mobile-workspace", RunnerID: "opencode", runner: rc}
+		cmd.Env = append(taskEnv(probeTask), mcpScope.Env...)
+		if devNull, openErr := os.Open(os.DevNull); openErr == nil {
+			defer devNull.Close()
+			cmd.Stdin = devNull
+		}
+
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		runErr := cmd.Run()
+		meta.rationale = parseStreamJSONResult(stdout.Bytes())
+		if runErr != nil {
+			detail := strings.TrimSpace(stderr.String())
+			if detail == "" {
+				detail = strings.TrimSpace(stdout.String())
+			}
+			if len(detail) > 600 {
+				detail = detail[:600] + "…"
+			}
+			if ctx.Err() == context.DeadlineExceeded {
+				return meta, fmt.Errorf("opencode runner timed out")
+			}
+			modelHint := meta.model
+			if modelHint == "" {
+				modelHint = "its configured default"
+			}
+			return meta, fmt.Errorf("OpenCode could not run %s; configure its provider/API key or OAuth on this machine, then retry: %v: %s", modelHint, runErr, detail)
+		}
+		return meta, nil
+	}
+}
+
+func openCodeSandboxArgs(selection sandboxRunnerSelection, prompt, workDir string) []string {
+	runner := GetRunnerConfig("opencode")
+	runner.Mode = strings.TrimSpace(selection.Mode)
+	args := buildRunnerArgsWithWorkDir(runner, prompt, workDir)
+	if model := strings.TrimSpace(selection.Model); model != "" {
+		args = insertRunnerFlagAfter(args, "run", "--model", model)
+	}
+	return args
 }
 
 // parseStreamJSONResult extracts a human-readable rationale from stream-json-ish
@@ -450,6 +517,7 @@ func (s *HTTPServer) handleSandboxRun(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	resp := processSandboxRun(ctx, req, runGLMSandbox)
+	selection := resolveSandboxRunnerSelection(ctx, s, req)
+	resp := processSandboxRun(ctx, req, newOpenCodeSandboxRunner(selection))
 	writeJSON(w, http.StatusOK, resp)
 }

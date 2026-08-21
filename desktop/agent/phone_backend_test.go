@@ -171,6 +171,24 @@ func TestCreatePhoneProject_BlankTemplate(t *testing.T) {
 	}
 }
 
+func TestCreatePhoneProject_WritesPortableServerlessManifest(t *testing.T) {
+	setupPhoneTestHome(t)
+	p, err := CreatePhoneProject(PhoneCreateSpec{Name: "Serverless Todo", Template: "todos"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(p.Dir, "yaver.serverless.yaml"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	text := string(b)
+	for _, want := range []string{"runtime: yaver-serverless-lite", "engine: sqlite", "mobile-workspace", "/data/todos"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("manifest missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestCreatePhoneProject_DuplicateSlug(t *testing.T) {
 	setupPhoneTestHome(t)
 	if _, err := CreatePhoneProject(PhoneCreateSpec{Name: "dup"}); err != nil {
@@ -186,6 +204,9 @@ func TestCreatePhoneProject_FromPromptUsesGeneratedSpec(t *testing.T) {
 	old := runPhonePromptGenerator
 	t.Cleanup(func() { runPhonePromptGenerator = old })
 	runPhonePromptGenerator = func(spec AIGeneratorSpec) (string, error) {
+		if spec.Runner != "opencode" || spec.Model != "deepseek/deepseek-v4-flash" || spec.Mode != "build" {
+			t.Fatalf("generator selection drifted: runner=%q model=%q mode=%q", spec.Runner, spec.Model, spec.Mode)
+		}
 		return `{
   "name": "Prompt Todos",
   "schema": {
@@ -234,6 +255,9 @@ func TestCreatePhoneProject_FromPromptUsesGeneratedSpec(t *testing.T) {
 	p, err := CreatePhoneProject(PhoneCreateSpec{
 		Name:   "prompt-app",
 		Prompt: "todo app with login",
+		Runner: "opencode",
+		Model:  "deepseek/deepseek-v4-flash",
+		Mode:   "build",
 	})
 	if err != nil {
 		t.Fatalf("create from prompt: %v", err)

@@ -1,12 +1,46 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRunRunnerProbeOpenCodeUsesMobileWorkspaceLauncher(t *testing.T) {
+	original := openCodeProbeRunnerFactory
+	t.Cleanup(func() { openCodeProbeRunnerFactory = original })
+
+	var gotSelection sandboxRunnerSelection
+	openCodeProbeRunnerFactory = func(selection sandboxRunnerSelection) sandboxRunnerFn {
+		gotSelection = selection
+		return func(_ context.Context, workDir, prompt string) (sandboxRunMeta, error) {
+			if prompt != "prove provider auth" {
+				t.Fatalf("prompt = %q", prompt)
+			}
+			if info, err := os.Stat(workDir); err != nil || !info.IsDir() {
+				t.Fatalf("isolated workdir is not usable: info=%v err=%v", info, err)
+			}
+			return sandboxRunMeta{rationale: "provider verified", model: selection.Model}, nil
+		}
+	}
+
+	out, err := runRunnerProbe(RunnerConfig{
+		RunnerID: "opencode",
+		Model:    "deepseek/deepseek-v4-flash",
+	}, "opencode", "prove provider auth", 2*time.Second)
+	if err != nil {
+		t.Fatalf("runRunnerProbe failed: %v", err)
+	}
+	if out != "provider verified" {
+		t.Fatalf("output = %q", out)
+	}
+	if gotSelection.Model != "deepseek/deepseek-v4-flash" || gotSelection.Provider != "deepseek" || gotSelection.Mode != "build" {
+		t.Fatalf("selection = %+v", gotSelection)
+	}
+}
 
 func TestRunRunnerProbeCodexUsesDangerousBypass(t *testing.T) {
 	dir := t.TempDir()

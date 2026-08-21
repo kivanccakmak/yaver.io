@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -233,9 +234,27 @@ func (s *HTTPServer) handleRunnerTest(w http.ResponseWriter, r *http.Request) {
 // runRunnerProbe builds the per-runner argv for a one-shot test
 // generation. Stays close to how the loop actually invokes each
 // runner so a test pass means a real loop kick will pass.
+var openCodeProbeRunnerFactory = newOpenCodeSandboxRunner
+
 func runRunnerProbe(cfg RunnerConfig, runnerID, prompt string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	if runnerID == "opencode" {
+		workDir, err := os.MkdirTemp("", "yaver-opencode-probe-")
+		if err != nil {
+			return "", fmt.Errorf("create isolated OpenCode probe workspace: %w", err)
+		}
+		defer os.RemoveAll(workDir)
+		model := strings.TrimSpace(cfg.Model)
+		provider := ""
+		if slash := strings.Index(model, "/"); slash > 0 {
+			provider = model[:slash]
+		}
+		meta, runErr := openCodeProbeRunnerFactory(sandboxRunnerSelection{
+			Model: model, Mode: "build", Provider: provider,
+		})(ctx, workDir, prompt)
+		return meta.rationale, runErr
+	}
 
 	var args []string
 	switch runnerID {
@@ -261,12 +280,6 @@ func runRunnerProbe(cfg RunnerConfig, runnerID, prompt string, timeout time.Dura
 		}
 	case "goose":
 		args = []string{"run", "--text", prompt}
-	case "opencode":
-		args = []string{"run", "--dangerously-skip-permissions"}
-		if mid := strings.TrimSpace(cfg.Model); mid != "" {
-			args = append(args, "--model", mid)
-		}
-		args = append(args, prompt)
 	case "amp":
 		args = []string{"run", prompt}
 	default:

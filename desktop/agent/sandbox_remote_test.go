@@ -4,9 +4,41 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestOpenCodeSandboxArgsPreserveSelectedDeepSeekModelAndMode(t *testing.T) {
+	got := openCodeSandboxArgs(sandboxRunnerSelection{
+		Model:    "deepseek/deepseek-v4-flash",
+		Mode:     "build",
+		Provider: "deepseek",
+	}, "audit the todo app", "/tmp/project")
+	want := []string{
+		"run",
+		"--model", "deepseek/deepseek-v4-flash",
+		"--agent", "build",
+		"--dangerously-skip-permissions",
+		"audit the todo app",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("OpenCode args = %#v, want %#v", got, want)
+	}
+	for _, arg := range got {
+		if strings.Contains(arg, "zai-coding-plan") || strings.Contains(arg, "glm-4.7") {
+			t.Fatalf("saved DeepSeek selection was replaced by hard-coded GLM: %#v", got)
+		}
+	}
+}
+
+func TestResolveSandboxRunnerSelectionPrefersExplicitRequest(t *testing.T) {
+	req := sandboxRunRequest{Model: "deepseek/deepseek-v4-flash", Mode: "build", Provider: "deepseek"}
+	got := resolveSandboxRunnerSelection(context.Background(), nil, req)
+	if got.Model != req.Model || got.Mode != req.Mode || got.Provider != req.Provider {
+		t.Fatalf("selection = %+v, want explicit request %+v", got, req)
+	}
+}
 
 func TestSandboxSafeRelPath(t *testing.T) {
 	ok := map[string]string{

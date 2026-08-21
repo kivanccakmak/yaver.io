@@ -1690,12 +1690,12 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		{"name": "mobile_test_open", "description": "Open the Yaver mobile app (RN-web) for testing at a REAL mobile viewport. mode=open (default) launches a headed Chromium window at iPhone 13 viewport with touch + a persistent profile so a human can sign in and test; mode=verify runs the headless closed-loop assertion that the task-detail LiveConsoleSection rendered the streamed opencode console (e2e/verify_live_console.mjs). Ensures Metro is up first. Never substitute a narrowed desktop Chrome window for the mobile app — RN-web renders a different component tree without the device context (AGENTS.md viewport rule).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"mode": map[string]interface{}{"type": "string", "enum": []string{"open", "verify"}, "description": "open = headed window for a human (default). verify = headless closed-loop assertion."}, "profile": map[string]interface{}{"type": "string", "description": "Persistent profile for mode=open. Default ~/.yaver-e2e-profile; use a fresh one when the default is locked by another Chromium instance."}, "url": map[string]interface{}{"type": "string", "description": "Mobile web URL. Default http://localhost:8081 (Metro)."}, "timeout_sec": map[string]interface{}{"type": "integer", "description": "Max seconds to wait (verify mode, and Metro start in open mode). Default 180."}}}},
 		{
 			"name":        "sandbox_run",
-			"description": "Run the Mobile Sandbox edit loop from a headless MCP client. Ships a phone-style React Native / Expo source tree to this machine or an owned remote Yaver device, runs OpenCode with GLM there, and returns an EditPlan-shaped diff. The GLM key stays on the machine that runs the tool; configure it with runner_auth_set/runner_auth_setup or ZAI_API_KEY/GLM_API_KEY.",
+			"description": "Run the Mobile Workspace edit loop from a headless MCP client. Ships a phone-authored React Native / Expo source tree to its selected remote development device, runs OpenCode with the selected or saved primary model there, and returns an EditPlan-shaped diff. Provider credentials stay on the runner. The sandbox_run name is retained for API compatibility; it does not claim container isolation.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"prompt", "files"},
 				"properties": map[string]interface{}{
-					"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias to run OpenCode/GLM on. Empty = this machine."},
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional owned Yaver device id/name/alias to run OpenCode on. Empty = this machine."},
 					"prompt":    map[string]interface{}{"type": "string", "description": "Requested change to make in the sandbox source tree."},
 					"files": map[string]interface{}{
 						"type":        "array",
@@ -1712,6 +1712,9 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 					"framework": map[string]interface{}{"type": "string", "description": "Framework label for prompting, default React Native (Expo)."},
 					"schema":    map[string]interface{}{"type": "object", "description": "Optional phone-project backend schema context."},
 					"runner":    map[string]interface{}{"type": "string", "description": "Only opencode is currently supported."},
+					"model":     map[string]interface{}{"type": "string", "description": "Optional provider/model override. Empty uses this device's saved primary OpenCode model, then OpenCode's configured default."},
+					"mode":      map[string]interface{}{"type": "string", "description": "Optional OpenCode agent mode such as build or plan."},
+					"provider":  map[string]interface{}{"type": "string", "description": "Optional provider label retained with the selection; credentials remain on the runner."},
 					"timeoutMs": map[string]interface{}{"type": "integer", "description": "Runner timeout in milliseconds, default 180000, max 600000."},
 				},
 			},
@@ -3208,6 +3211,26 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 						"type":        "boolean",
 						"description": "When true, return only mobile-capable projects (mobile + Flutter + Swift + Kotlin).",
 					},
+				},
+			},
+		},
+		{
+			"name":        "mobile_workspace_onboarding_status",
+			"description": "Read Mobile Workspace onboarding defaults: existing primary device, its operational runner choices and saved runner/model/provider, Yaver Serverless SQLite portability, plus token-free Yaver Git/GitHub/GitLab integration readiness. Probes the selected box instead of trusting inventory.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		},
+		{
+			"name":        "mobile_workspace_onboarding_select",
+			"description": "Persist the selected Mobile Workspace development device and task runner as one Convex-backed primary choice. Validates that the runner is installed, authenticated, and operational on that owned device before writing. The workspace backend remains portable SQLite-first Yaver Serverless.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"device", "runner"},
+				"properties": map[string]interface{}{
+					"device":   map[string]interface{}{"type": "string", "description": "Owned device ID, unique prefix, name, or alias."},
+					"runner":   map[string]interface{}{"type": "string", "enum": []string{"claude", "claude-code", "codex", "opencode"}},
+					"model":    map[string]interface{}{"type": "string", "description": "Optional model, for example deepseek/deepseek-v4-flash."},
+					"mode":     map[string]interface{}{"type": "string", "description": "Optional OpenCode mode."},
+					"provider": map[string]interface{}{"type": "string", "description": "Optional OpenCode provider, for example deepseek."},
 				},
 			},
 		},

@@ -4,6 +4,7 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   RefreshControl,
@@ -13,11 +14,14 @@ import {
   TextInput,
   View,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useColors } from "../src/context/ThemeContext";
-import { useDevice, type Device, type RunnerInfo } from "../src/context/DeviceContext";
+import { DEFAULT_MODEL_BY_RUNNER, useDevice, type Device, type RunnerInfo } from "../src/context/DeviceContext";
 import { AppScreenHeader } from "../src/components/AppScreenHeader";
+import RunnerAuthModal from "../src/components/RunnerAuthModal";
+import { OpenCodeConfigModal } from "../src/components/OpenCodeConfigModal";
 import { useAuth } from "../src/context/AuthContext";
 import { getLocalSecret, getUserSettings, LOCAL_KEYS, saveLocalSecret } from "../src/lib/auth";
 import { isCloudPreviewUser } from "../src/lib/cloudPreview";
@@ -25,8 +29,7 @@ import { HIDE_PAID_UI } from "../src/lib/launchFlags";
 import { buildImportedConversationBrief, mergeImportedConversationPrompt } from "../src/lib/conversationImport";
 import { getManagedSubscription } from "../src/lib/subscription";
 import { getYaverCloudBaseUrl } from "../src/lib/yaverCloud";
-import { quicClient } from "../src/lib/quic";
-import { pingProvider } from "../src/lib/llmOpenAI";
+import { quicClient, type MobileWorkspaceStatus, type RunnerInfo as DiscoveredRunnerInfo } from "../src/lib/quic";
 import {
   PhoneProject,
   PhonePushTarget,
@@ -50,6 +53,7 @@ type CodingMode = "phone" | "runner";
 type MobileAiProvider = "openai" | "glm";
 type GitProvider = "github" | "gitlab";
 type RepoVisibility = "private" | "public";
+type GitIntegrationState = "checking" | "connected" | "clone-only" | "not-connected" | "unavailable";
 
 // Survey is the optional Step 3. Questions are intentionally short
 // + multiple-choice so the user can finish in 30 s on a phone, and
@@ -88,15 +92,6 @@ const SURVEY_QUESTIONS: Array<{
   options: Array<{ value: string; label: string; sub?: string }>;
 }> = [
   {
-    key: "platform",
-    title: "Where will it run?",
-    options: [
-      { value: "web", label: "Web only", sub: "Browser, no app store" },
-      { value: "mobile", label: "Mobile only", sub: "iOS + Android" },
-      { value: "both", label: "Web and mobile", sub: "Both ship together" },
-    ],
-  },
-  {
     key: "audience",
     title: "Who's the user?",
     options: [
@@ -114,14 +109,6 @@ const SURVEY_QUESTIONS: Array<{
       { value: "apple", label: "Apple", sub: "Sign in with Apple" },
       { value: "google", label: "Google", sub: "Sign in with Google" },
       { value: "email", label: "Email + password", sub: "Classic" },
-    ],
-  },
-  {
-    key: "persistence",
-    title: "Does it save data between sessions?",
-    options: [
-      { value: "persist", label: "Yes, remember everything", sub: "DB-backed" },
-      { value: "ephemeral", label: "No, ephemeral only", sub: "Resets on reload" },
     ],
   },
   {
@@ -195,7 +182,18 @@ export default function PhoneProjectsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { token, user } = useAuth();
-  const { connectionStatus, devices, activeDevice } = useDevice();
+  const {
+    connectionStatus,
+    devices,
+    activeDevice,
+    primaryDeviceId,
+    setPrimaryDevice,
+    primaryRunnerByDevice,
+    primaryModelByDevice,
+    primaryModeByDevice,
+    primaryProviderByDevice,
+    setPrimaryRunnerForDevice,
+  } = useDevice();
   const connected = connectionStatus === "connected";
   const canUseCloudPreview = isCloudPreviewUser(user?.email);
   const [hasManagedCloud, setHasManagedCloud] = useState(false);
@@ -216,6 +214,7 @@ export default function PhoneProjectsScreen() {
   const [importedConversation, setImportedConversation] = useState("");
   const [analyzingImport, setAnalyzingImport] = useState(false);
   const [runner, setRunner] = useState<string>("");
+  const [model, setModel] = useState<string>("");
   const [creating, setCreating] = useState(false);
   // Live "starting" checklist shown while a project spins up, so creation feels
   // real: AI connectivity (GLM/OpenAI pong) → runtime → generate → init.
@@ -226,19 +225,32 @@ export default function PhoneProjectsScreen() {
     setCreateSteps((prev) => prev.map((s) => (s.key === key ? { ...s, status } : s)));
   const [gitMode, setGitMode] = useState<GitMode>("yaver-managed");
   const [step, setStep] = useState(0);
-  const [codingMode, setCodingMode] = useState<CodingMode>(connected ? "runner" : "phone");
+  const [codingMode, setCodingMode] = useState<CodingMode>("runner");
   const [mobileAiProvider, setMobileAiProvider] = useState<MobileAiProvider>("openai");
   const [openAiKey, setOpenAiKey] = useState("");
   const [glmKey, setGlmKey] = useState("");
   const mobileAiProviderTouchedRef = useRef(false);
+  const placementTouchedRef = useRef(false);
+  const runnerDeviceRef = useRef<string | null>(null);
 
-  const [startMode, setStartMode] = useState<StartMode>("this-phone");
+  const [startMode, setStartMode] = useState<StartMode>("current-agent");
   // Step 1 — Git config (optional). gitMode === "skip" means the
   // user explicitly bypassed git setup; in that case the
   // gitProvider/repoVisibility/repoName fields are ignored at create
   // time. Repo name auto-fills from the slug of the project name so
   // the user rarely has to type it.
   const [gitProvider, setGitProvider] = useState<GitProvider>("github");
+  const [gitIntegrations, setGitIntegrations] = useState<Record<GitProvider, GitIntegrationState>>({
+    github: "checking",
+    gitlab: "checking",
+  });
+  const [workspaceStatus, setWorkspaceStatus] = useState<MobileWorkspaceStatus | null>(null);
+  const [discoveredRunners, setDiscoveredRunners] = useState<DiscoveredRunnerInfo[]>([]);
+  const [workspaceStatusLoading, setWorkspaceStatusLoading] = useState(false);
+  const [runnerInstall, setRunnerInstall] = useState<{ runner: string; line: string } | null>(null);
+  const [runnerAuthModalRunner, setRunnerAuthModalRunner] = useState<string | null>(null);
+  const [openCodeConfigVisible, setOpenCodeConfigVisible] = useState(false);
+  const [startingGitOAuth, setStartingGitOAuth] = useState<GitProvider | null>(null);
   const [repoVisibility, setRepoVisibility] = useState<RepoVisibility>("private");
   const [repoName, setRepoName] = useState<string>("");
   const repoNameSlug = useMemo(() => {
@@ -252,10 +264,9 @@ export default function PhoneProjectsScreen() {
   // empty and the description prompt is the user's text alone.
   const [surveyIndex, setSurveyIndex] = useState(0);
   const [surveySkipped, setSurveySkipped] = useState(false);
-  // Pre-seed the first survey question ("Where will it run?") to the
-  // third option — "Web and mobile" — so the survey opens with a
-  // sensible, visible default the user can keep or change.
-  const [surveyAnswers, setSurveyAnswers] = useState<SurveyAnswers>({ platform: "both" });
+  // Stack is predetermined (React Native + TypeScript + Yaver Serverless),
+  // so the optional survey starts empty and asks only product questions.
+  const [surveyAnswers, setSurveyAnswers] = useState<SurveyAnswers>({});
   // Optional logo URL — concatenated into the description prompt so
   // the LLM can use it as a visual reference. We accept any URL the
   // user can paste (CDN, gist, GitHub raw, etc.) — gallery upload is
@@ -291,34 +302,37 @@ export default function PhoneProjectsScreen() {
     () => pickDevMachines(devices, activeDevice?.id),
     [devices, activeDevice?.id],
   );
+  const preferredDevice = useMemo(
+    () => devices.find((device) =>
+      device.id === primaryDeviceId &&
+      device.online &&
+      !device.needsAuth &&
+      device.deviceClass !== "edge-mobile",
+    ) ?? null,
+    [devices, primaryDeviceId],
+  );
   const [selectedDevMachineId, setSelectedDevMachineId] = useState<string | null>(null);
-  // Run the "Setting up your project" checklist. Triggered deterministically
-  // from the Next button when advancing onto step 4 (and from the effect as a
-  // backup) — GLM pong + runtime, so the project feels like it's spinning up.
+  // Run the visible setup narration without touching phone-local provider
+  // secrets. Coding credentials live on the selected remote box and are
+  // audited by /mobile-workspace/status plus the real runner probe on Next.
   const runSetup = useCallback(() => {
     if (setupRanRef.current) return;
     setupRanRef.current = true;
-    const key = mobileAiProvider === "glm" ? glmKey.trim() : openAiKey.trim();
-    const providerLabel = mobileAiProvider === "glm" ? "GLM" : "OpenAI";
     const runtimeLabel =
-      startMode === "this-phone" ? "Preparing on-device runtime"
-      : startMode === "yaver-cloud" ? "Connecting Yaver Cloud"
+      startMode === "yaver-cloud" ? "Connecting Yaver Cloud"
       : "Connecting remote dev runner";
     setSetupSteps([
-      { key: "ai", label: `Connecting to ${providerLabel}`, status: key ? "pending" : "skipped" },
+      { key: "ai", label: "Verifying remote OpenCode provider", status: "pending" },
       { key: "runtime", label: runtimeLabel, status: "pending" },
     ]);
     void (async () => {
-      if (key) {
-        markSetup("ai", "running");
-        await pingProvider({ flavor: mobileAiProvider as "openai" | "glm", apiKey: key });
-        markSetup("ai", "done");
-      }
+      markSetup("ai", "running");
+      markSetup("ai", workspaceStatus?.openCode.ready ? "done" : "skipped");
       markSetup("runtime", "running");
       await new Promise((r) => setTimeout(r, 600));
       markSetup("runtime", "done");
     })();
-  }, [mobileAiProvider, glmKey, openAiKey, startMode]);
+  }, [startMode, workspaceStatus?.openCode.ready]);
   useEffect(() => {
     if (step === 4) runSetup();
     else setupRanRef.current = false;
@@ -366,16 +380,200 @@ export default function PhoneProjectsScreen() {
     () => runnersForDevice(selectedDevMachine),
     [runnersForDevice, selectedDevMachine],
   );
+  const selectedRunnerDevice = startMode === "dev-hw" ? selectedDevMachine : activeRunnerDevice;
+  const selectedRunnerList = startMode === "dev-hw" ? devMachineRunners : availableRunners;
   const runnerChoiceEnabled = !!activeRunnerDevice;
   useEffect(() => {
     // Seed a default runner from whichever remote target is in play —
     // the picked online box wins when dev-hw is selected, otherwise the
     // connected machine's runners.
-    const seed = startMode === "dev-hw" ? devMachineRunners : availableRunners;
-    if (!runner && seed.length) {
-      setRunner(seed[0].runnerId);
+    const deviceId = selectedRunnerDevice?.id ?? null;
+    if (!deviceId || selectedRunnerList.length === 0) return;
+    const targetChanged = runnerDeviceRef.current !== deviceId;
+    const currentStillValid = selectedRunnerList.some((item) => item.runnerId === runner);
+    if (targetChanged || !currentStillValid) {
+      const preferred = primaryRunnerByDevice[deviceId];
+      const next = selectedRunnerList.find((item) => item.runnerId === preferred)
+        ?? selectedRunnerList.find((item) => item.runnerId.toLowerCase() === "opencode")
+        ?? selectedRunnerList[0];
+      setRunner(next.runnerId);
+      runnerDeviceRef.current = deviceId;
     }
-  }, [availableRunners, devMachineRunners, startMode, runner]);
+  }, [primaryRunnerByDevice, runner, selectedRunnerDevice?.id, selectedRunnerList]);
+
+  useEffect(() => {
+    if (!showForm || placementTouchedRef.current) return;
+    const target = preferredDevice ?? activeRunnerDevice ?? devMachines[0] ?? null;
+    if (!target) return;
+    setCodingMode("runner");
+    if (target.id === activeRunnerDevice?.id) {
+      setStartMode("current-agent");
+    } else {
+      setSelectedDevMachineId(target.id);
+      setStartMode("dev-hw");
+    }
+  }, [activeRunnerDevice, devMachines, preferredDevice, showForm]);
+
+  const loadWorkspaceReadiness = useCallback(async () => {
+    if (!selectedRunnerDevice) {
+      setWorkspaceStatus(null);
+      setDiscoveredRunners([]);
+      return;
+    }
+    const target = selectedRunnerDevice.id === activeDevice?.id ? undefined : selectedRunnerDevice.id;
+    setWorkspaceStatusLoading(true);
+    setGitIntegrations({ github: "checking", gitlab: "checking" });
+    const [status, runnerInventory] = await Promise.all([
+      quicClient.mobileWorkspaceStatus(target),
+      quicClient.getRunnersForTarget(target),
+    ]);
+    setWorkspaceStatus(status);
+    setDiscoveredRunners(runnerInventory ?? []);
+    if (status) {
+      const providerState = (provider: GitProvider): GitIntegrationState => {
+        const gate = status.gitProviders.find((item) => item.id === provider);
+        if (!gate) return "not-connected";
+        return gate.ready ? "connected" : gate.configured ? "clone-only" : "not-connected";
+      };
+      setGitIntegrations({ github: providerState("github"), gitlab: providerState("gitlab") });
+    } else {
+      // Older agents do not expose the aggregate route. Preserve an honest
+      // unavailable state instead of turning a transport miss into "not configured".
+      setGitIntegrations({ github: "unavailable", gitlab: "unavailable" });
+    }
+    setWorkspaceStatusLoading(false);
+  }, [activeDevice?.id, selectedRunnerDevice]);
+
+  useEffect(() => {
+    if (!showForm || (step !== 1 && step !== 2) || !selectedRunnerDevice) return;
+    void loadWorkspaceReadiness();
+  }, [loadWorkspaceReadiness, selectedRunnerDevice, showForm, step]);
+
+  useEffect(() => {
+    if (!selectedRunnerDevice || !workspaceStatus) return;
+    const ready = workspaceStatus.runners.filter((item) => item.ready);
+    if (ready.length === 0) {
+      setRunner("");
+      setModel("");
+      return;
+    }
+    const normalizedCurrent = runner === "claude-code" ? "claude" : runner;
+    if (ready.some((item) => item.id === normalizedCurrent)) return;
+    const saved = primaryRunnerByDevice[selectedRunnerDevice.id];
+    const next = ready.find((item) => item.id === saved)
+      ?? ready.find((item) => item.id === "opencode")
+      ?? ready[0];
+    setRunner(next.id);
+  }, [primaryRunnerByDevice, runner, selectedRunnerDevice, workspaceStatus]);
+
+  useEffect(() => {
+    if (!runner || !selectedRunnerDevice) return;
+    const normalized = runner === "claude-code" ? "claude" : runner;
+    const inventory = discoveredRunners.find((item) => item.id === normalized);
+    const saved = primaryRunnerByDevice[selectedRunnerDevice.id] === normalized
+      ? primaryModelByDevice[selectedRunnerDevice.id]
+      : "";
+    const discoveredDefault = inventory?.models.find((item) => item.isDefault)?.id || inventory?.models[0]?.id;
+    setModel(saved || discoveredDefault || DEFAULT_MODEL_BY_RUNNER[normalized] || "");
+  }, [discoveredRunners, primaryModelByDevice, primaryRunnerByDevice, runner, selectedRunnerDevice]);
+
+  const configureWorkspaceRunner = useCallback(async (runnerId: string, code?: string) => {
+    if (code === "mobile_workspace.runner.not_installed") {
+      if (!selectedRunnerDevice || runnerInstall) return;
+      const target = selectedRunnerDevice.id === activeDevice?.id ? undefined : selectedRunnerDevice.id;
+      setRunnerInstall({ runner: runnerId, line: `Starting ${runnerId} installer…` });
+      try {
+        const result = await quicClient.installRunner(runnerId, {
+          target,
+          onProgress: (line) => {
+            const trimmed = line.trim();
+            if (trimmed) setRunnerInstall({ runner: runnerId, line: trimmed.slice(0, 120) });
+          },
+        });
+        if (!result.ok) throw new Error(result.error || `${runnerId} installation failed.`);
+        await loadWorkspaceReadiness();
+        if (runnerId === "opencode") setOpenCodeConfigVisible(true);
+        else setRunnerAuthModalRunner(runnerId);
+      } catch (error) {
+        Alert.alert("Runner installation failed", error instanceof Error ? error.message : "Try again from this remote-box setup.");
+      } finally {
+        setRunnerInstall(null);
+      }
+      return;
+    }
+    if (runnerId === "opencode") {
+      setOpenCodeConfigVisible(true);
+      return;
+    }
+    setRunnerAuthModalRunner(runnerId);
+  }, [activeDevice?.id, loadWorkspaceReadiness, runnerInstall, selectedRunnerDevice]);
+
+  const testWorkspaceRunner = useCallback(async (runnerId: string) => {
+    if (!selectedRunnerDevice) return;
+    const probeModel = runnerId === runner ? model : DEFAULT_MODEL_BY_RUNNER[runnerId] || "";
+    try {
+      const response = await quicClient.agentRequest(
+        selectedRunnerDevice.id,
+        "/agent/runners/test",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runner: runnerId, model: probeModel, timeoutMs: 75000 }),
+        },
+        80000,
+      );
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result?.ok !== true) {
+        if (result?.needsAuth) void configureWorkspaceRunner(runnerId);
+        Alert.alert("Runner test failed", result?.error || `The remote ${runnerId} probe did not complete.`);
+        return;
+      }
+      await loadWorkspaceReadiness();
+      Alert.alert("Runner ready", `${runnerId} answered through ${probeModel || "its selected model"} on ${selectedRunnerDevice.name}.`);
+    } catch (error) {
+      Alert.alert("Runner test failed", error instanceof Error ? error.message : "The remote runner could not be tested.");
+    }
+  }, [configureWorkspaceRunner, loadWorkspaceReadiness, model, runner, selectedRunnerDevice]);
+
+  const configureGitProvider = useCallback(async (provider: GitProvider) => {
+    if (!selectedRunnerDevice || startingGitOAuth) return;
+    const target = selectedRunnerDevice.id === activeDevice?.id ? undefined : selectedRunnerDevice.id;
+    setStartingGitOAuth(provider);
+    try {
+      const start = await quicClient.gitOAuthStart(provider, target);
+      if (!start.ok || !start.sessionId || !start.userCode || !start.verificationUri) {
+        throw new Error(start.error || `${provider} sign-in could not start on the remote box.`);
+      }
+      await Clipboard.setStringAsync(start.userCode).catch(() => {});
+      Alert.alert(
+        `Configure ${provider === "github" ? "GitHub" : "GitLab"}`,
+        `Code ${start.userCode} was copied. Complete sign-in in the browser; the credential stays on ${selectedRunnerDevice.name}.`,
+        [
+          { text: "Later", style: "cancel" },
+          { text: "Open browser", onPress: () => void Linking.openURL(start.verificationUri) },
+        ],
+      );
+      void Linking.openURL(start.verificationUri).catch(() => {});
+      const intervalMs = Math.max(2, start.interval || 5) * 1000;
+      const deadline = start.expiresAt || Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        const status = await quicClient.gitOAuthStatus(start.sessionId, provider, target);
+        if (status.state === "pending") continue;
+        if (status.state === "done") {
+          await loadWorkspaceReadiness();
+          Alert.alert("Git ready", `${provider === "github" ? "GitHub" : "GitLab"} is configured on ${selectedRunnerDevice.name}.`);
+          return;
+        }
+        throw new Error(status.error || `${provider} authorization ${status.state}.`);
+      }
+      throw new Error(`${provider} authorization expired.`);
+    } catch (error) {
+      Alert.alert("Git configuration failed", error instanceof Error ? error.message : "Try again from the remote-box settings.");
+    } finally {
+      setStartingGitOAuth(null);
+    }
+  }, [activeDevice?.id, loadWorkspaceReadiness, selectedRunnerDevice, startingGitOAuth]);
   useEffect(() => {
     let cancelled = false;
     const loadMobileAi = async () => {
@@ -425,20 +623,74 @@ export default function PhoneProjectsScreen() {
   }, [token]);
 
   useEffect(() => {
-    if (!runnerChoiceEnabled && codingMode === "runner") {
-      setCodingMode("phone");
-    }
-  }, [codingMode, runnerChoiceEnabled]);
-  useEffect(() => {
-    if (!connected && startMode !== "this-phone" && startMode !== "yaver-cloud") {
-      setStartMode("this-phone");
-    }
-  }, [connected, startMode]);
-  useEffect(() => {
-    if (codingMode === "runner" && runnerChoiceEnabled) {
+    if (!connected && startMode === "dev-hw" && devMachines.length === 0) {
       setStartMode("current-agent");
     }
-  }, [codingMode, runnerChoiceEnabled]);
+  }, [connected, devMachines.length, startMode]);
+
+  const persistPrimaryTaskTarget = useCallback(async (): Promise<boolean> => {
+    if (startMode !== "current-agent" && startMode !== "dev-hw") return true;
+    if (!selectedRunnerDevice || !runner) return false;
+    const info = selectedRunnerList.find((item) => item.runnerId === runner);
+    const isOpenCode = runner.toLowerCase() === "opencode";
+    const previousRunner = primaryRunnerByDevice[selectedRunnerDevice.id];
+    const effectiveModel = model || info?.model || "";
+    const inferredProvider = effectiveModel.includes("/") ? effectiveModel.split("/", 1)[0] : undefined;
+    try {
+      setWorkspaceStatusLoading(true);
+      const probe = await quicClient.agentRequest(
+        selectedRunnerDevice.id,
+        "/agent/runners/test",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ runner, model: effectiveModel, timeoutMs: 75000 }),
+        },
+        80000,
+      );
+      const probeResult = await probe.json().catch(() => ({}));
+      if (!probe.ok || probeResult?.ok !== true) {
+        if (probeResult?.needsAuth) configureWorkspaceRunner(runner);
+        Alert.alert(
+          "Runner isn't operational yet",
+          probeResult?.error || `${runner} could not answer through ${effectiveModel || "the selected model"} on ${selectedRunnerDevice.name}.`,
+        );
+        return false;
+      }
+      await setPrimaryDevice(selectedRunnerDevice.id);
+      await setPrimaryRunnerForDevice(
+        selectedRunnerDevice.id,
+        runner,
+        model || info?.model || (previousRunner === runner ? primaryModelByDevice[selectedRunnerDevice.id] : undefined),
+        isOpenCode && previousRunner === runner ? primaryModeByDevice[selectedRunnerDevice.id] : null,
+        isOpenCode
+          ? inferredProvider || (previousRunner === runner ? primaryProviderByDevice[selectedRunnerDevice.id] : undefined)
+          : null,
+      );
+      return true;
+    } catch (error) {
+      Alert.alert(
+        "Couldn't save primary task target",
+        error instanceof Error ? error.message : "Check your connection and try again.",
+      );
+      return false;
+    } finally {
+      setWorkspaceStatusLoading(false);
+    }
+  }, [
+    configureWorkspaceRunner,
+    primaryModeByDevice,
+    primaryModelByDevice,
+    primaryProviderByDevice,
+    primaryRunnerByDevice,
+    runner,
+    model,
+    selectedRunnerDevice,
+    selectedRunnerList,
+    setPrimaryDevice,
+    setPrimaryRunnerForDevice,
+    startMode,
+  ]);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -475,12 +727,15 @@ export default function PhoneProjectsScreen() {
     if (connected) {
       setAnalyzingImport(true);
       try {
+        const target = selectedRunnerDevice?.id === activeDevice?.id ? undefined : selectedRunnerDevice?.id;
         const plan = await quicClient.analyzeConversationImport({
           url: importedBrief.sourceUrl,
           content: importedConversation,
           title: importedBrief.title,
           runner: runner || undefined,
-        });
+          model: model || undefined,
+          mode: runner === "opencode" ? primaryModeByDevice[selectedRunnerDevice?.id || ""] || "build" : undefined,
+        }, target);
         if (!plan) {
           throw new Error("Analysis failed");
         }
@@ -503,7 +758,7 @@ export default function PhoneProjectsScreen() {
       setName(importedBrief.suggestedName);
     }
     setPrompt((prev) => mergeImportedConversationPrompt(prev, importedConversation));
-  }, [connected, importedBrief, importedConversation, name, runner]);
+  }, [activeDevice?.id, connected, importedBrief, importedConversation, model, name, primaryModeByDevice, runner, selectedRunnerDevice]);
 
   async function create() {
     if (!name.trim() && !importedBrief?.suggestedName) {
@@ -598,6 +853,13 @@ export default function PhoneProjectsScreen() {
         app: draft.app,
         prompt: effectivePrompt || undefined,
         runner: effectivePrompt && codingMode === "runner" ? runner || undefined : undefined,
+        model: effectivePrompt && codingMode === "runner" ? model || undefined : undefined,
+        mode: effectivePrompt && codingMode === "runner" && runner === "opencode"
+          ? primaryModeByDevice[selectedRunnerDevice?.id || ""] || "build"
+          : undefined,
+        provider: effectivePrompt && codingMode === "runner" && runner === "opencode" && model.includes("/")
+          ? model.split("/", 1)[0]
+          : undefined,
         importUrl: !effectivePrompt && importedConversation.trim() ? importedBrief?.sourceUrl : undefined,
         importContent: !effectivePrompt && importedConversation.trim() ? importedConversation.trim() : undefined,
         importTitle: !effectivePrompt && importedConversation.trim() ? importedBrief?.title : undefined,
@@ -686,7 +948,7 @@ export default function PhoneProjectsScreen() {
           if (repo) {
             Alert.alert(
               "Mirror created",
-              `${repo.fullName} on ${gitProvider}.com${repo.sandboxWritten ? "\n\nyaver.workspace.yaml committed — repo flagged as Yaver-sandbox-aware." : ""}\n\n${repo.cloneUrl}`,
+              `${repo.fullName} on ${gitProvider}.com${repo.sandboxWritten ? "\n\nyaver.workspace.yaml committed — repo registered as a Mobile Workspace." : ""}\n\n${repo.cloneUrl}`,
             );
           } else {
             // Agent too old for this endpoint — record the
@@ -715,7 +977,7 @@ export default function PhoneProjectsScreen() {
       setRefineQuestions([]);
       setRefineAnswers({});
       setRefineUsed(false);
-      setSurveyAnswers({ platform: "both" });
+      setSurveyAnswers({});
       setSurveyIndex(0);
       setSurveySkipped(false);
       setStep(0);
@@ -781,8 +1043,10 @@ export default function PhoneProjectsScreen() {
             <Pressable
               onPress={() => {
                 setStep(0);
-                setStartMode("this-phone");
-                setCodingMode("phone");
+                placementTouchedRef.current = false;
+                runnerDeviceRef.current = null;
+                setStartMode("current-agent");
+                setCodingMode("runner");
                 setShowForm(true);
               }}
               style={[styles.btn, { backgroundColor: c.accent, marginTop: 12 }]}
@@ -799,7 +1063,9 @@ export default function PhoneProjectsScreen() {
               <Text style={[styles.btnText, { color: c.textPrimary }]}>Clone a GitHub repo & code with AI</Text>
             </Pressable>
             <Text style={[styles.muted, { color: c.textMuted, marginTop: 8 }]}>
-              {connected ? "Start on your phone or a Yaver backend." : "Runs locally on this phone."}
+              {connected
+                ? "Your primary remote device handles vibing, Yaver Serverless, and rendering."
+                : "Connect a remote development device to create a Mobile Workspace."}
             </Text>
             {projects.length > 0 ? (
               <Text style={[styles.muted, { color: c.textMuted, marginTop: 4 }]}>
@@ -812,8 +1078,8 @@ export default function PhoneProjectsScreen() {
             <Text style={[styles.stepTitle, { color: c.textPrimary }]}>
               {[
                 "1. Name your app",
-                "2. Code storage",
-                "3. Where should it run?",
+                "2. Development target",
+                "3. Git provider",
                 "4. Quick survey (optional)",
                 "5. Setting up your project",
                 "6. Branding (optional)",
@@ -823,8 +1089,8 @@ export default function PhoneProjectsScreen() {
             <Text style={[styles.stepSubtitle, { color: c.textMuted }]}>
               {[
                 "You can change this later.",
-                "Yaver can manage git for you. Mirror to GitHub or GitLab now or later.",
-                "Choose this phone, your connected machine, another online box, or Yaver Cloud.",
+                "Your existing primary device and runner are selected. Next makes this the default for tasks.",
+                "Yaver Git is built in. GitHub and GitLab show their live integration status.",
                 "Five quick multiple-choice questions. Skip if you'd rather just type.",
                 "Getting things ready — checking AI and your runtime.",
                 "Pick a colour palette and logo (optional). You can skip.",
@@ -871,13 +1137,13 @@ export default function PhoneProjectsScreen() {
               </>
             ) : null}
 
-            {step === 1 ? (
+            {step === 2 ? (
               <>
                 {/* Yaver Managed Git is the default. Provider setup is
                  * an optional mirror/export path, not a prerequisite. */}
                 <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
                   {[
-                    { id: "yaver-managed" as GitMode, label: "Yaver manages it" },
+                    { id: "yaver-managed" as GitMode, label: "Yaver Git · Ready" },
                     { id: "providers-now" as GitMode, label: "Mirror now" },
                   ].map((opt) => {
                     const active = gitMode === opt.id;
@@ -965,8 +1231,14 @@ export default function PhoneProjectsScreen() {
                     <Text style={[styles.label, { color: c.textMuted, marginTop: 14 }]}>Provider</Text>
                     <View style={{ flexDirection: "row", gap: 8 }}>
                       {([
-                        { id: "github" as GitProvider, label: "GitHub" },
-                        { id: "gitlab" as GitProvider, label: "GitLab" },
+                        {
+                          id: "github" as GitProvider,
+                          label: `GitHub · ${gitIntegrations.github === "connected" ? "Connected" : gitIntegrations.github === "clone-only" ? "Clone ready" : gitIntegrations.github === "not-connected" ? "Not connected" : gitIntegrations.github === "checking" ? "Checking…" : "Unavailable"}`,
+                        },
+                        {
+                          id: "gitlab" as GitProvider,
+                          label: `GitLab · ${gitIntegrations.gitlab === "connected" ? "Connected" : gitIntegrations.gitlab === "clone-only" ? "Clone ready" : gitIntegrations.gitlab === "not-connected" ? "Not connected" : gitIntegrations.gitlab === "checking" ? "Checking…" : "Unavailable"}`,
+                        },
                       ]).map((opt) => {
                         const active = gitProvider === opt.id;
                         return (
@@ -989,6 +1261,19 @@ export default function PhoneProjectsScreen() {
                         );
                       })}
                     </View>
+                    {gitIntegrations[gitProvider] !== "connected" ? (
+                      <Pressable
+                        onPress={() => void configureGitProvider(gitProvider)}
+                        disabled={startingGitOAuth !== null || gitIntegrations[gitProvider] === "checking"}
+                        style={[styles.btnSecondary, { borderColor: c.border, marginTop: 10, opacity: startingGitOAuth || gitIntegrations[gitProvider] === "checking" ? 0.55 : 1 }]}
+                      >
+                        {startingGitOAuth === gitProvider ? (
+                          <ActivityIndicator color={c.textMuted} />
+                        ) : (
+                          <Text style={[styles.btnText, { color: c.textPrimary }]}>Configure {gitProvider === "github" ? "GitHub" : "GitLab"} on remote box</Text>
+                        )}
+                      </Pressable>
+                    ) : null}
                     <Text style={[styles.label, { color: c.textMuted, marginTop: 12 }]}>Visibility</Text>
                     <View style={{ flexDirection: "row", gap: 8 }}>
                       {([
@@ -1037,29 +1322,28 @@ export default function PhoneProjectsScreen() {
               </>
             ) : null}
 
-            {step === 2 ? (
+            {step === 1 ? (
               <>
-                <Text style={[styles.label, { color: c.textMuted }]}>Where should this sandbox run?</Text>
+                <Text style={[styles.label, { color: c.textMuted }]}>Where should this workspace run?</Text>
                 {(
                   [
                     {
-                      id: "this-phone" as StartMode,
-                      label: "This phone",
-                      sub: "Private local sandbox. Works without a remote box.",
-                    },
-                    {
                       id: "current-agent" as StartMode,
-                      label: "Connected machine",
+                      label: activeRunnerDevice && primaryDeviceId === activeRunnerDevice.id
+                        ? "Primary device · Recommended"
+                        : "Connected machine",
                       sub: activeRunnerDevice
-                        ? `${activeRunnerDevice.name} will build and run it`
+                        ? `${activeRunnerDevice.name} will handle vibing and rendering${primaryRunnerByDevice[activeRunnerDevice.id] ? ` · ${primaryRunnerByDevice[activeRunnerDevice.id]}${primaryModelByDevice[activeRunnerDevice.id] ? ` · ${primaryModelByDevice[activeRunnerDevice.id]}` : ""}` : ""}`
                         : "Connect a Yaver machine first",
                     },
                     ...(devMachines.length > 0
                       ? [{
                           id: "dev-hw" as StartMode,
-                          label: "Other online box",
+                          label: selectedDevMachine && primaryDeviceId === selectedDevMachine.id
+                            ? "Primary device · Recommended"
+                            : "Other online box",
                           sub: selectedDevMachine
-                            ? `${selectedDevMachine.name} selected`
+                            ? `${selectedDevMachine.name} will handle vibing and rendering${primaryRunnerByDevice[selectedDevMachine.id] ? ` · ${primaryRunnerByDevice[selectedDevMachine.id]}${primaryModelByDevice[selectedDevMachine.id] ? ` · ${primaryModelByDevice[selectedDevMachine.id]}` : ""}` : ""}`
                             : "Pick a Mac, Linux box, or Pi",
                         }]
                       : []),
@@ -1075,8 +1359,9 @@ export default function PhoneProjectsScreen() {
                   <Pressable
                     key={opt.id}
                     onPress={() => {
+                      placementTouchedRef.current = true;
                       setStartMode(opt.id);
-                      setCodingMode(opt.id === "this-phone" ? "phone" : "runner");
+                      setCodingMode("runner");
                     }}
                     style={[
                       styles.choiceCard,
@@ -1091,78 +1376,30 @@ export default function PhoneProjectsScreen() {
                   </Pressable>
                 ))}
 
-                {startMode === "this-phone" ? (
+                {(
                   <>
-                    <Text style={[styles.label, { color: c.textMuted, marginTop: 12 }]}>AI provider</Text>
-                    <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
-                      {([
-                        { id: "openai" as MobileAiProvider, label: "OpenAI" },
-                        { id: "glm" as MobileAiProvider, label: "GLM" },
-                      ]).map((provider) => {
-                        const active = mobileAiProvider === provider.id;
-                        return (
-                          <Pressable
-                            key={provider.id}
-                            onPress={() => {
-                              mobileAiProviderTouchedRef.current = true;
-                              setMobileAiProvider(provider.id);
-                            }}
-                            hitSlop={8}
-                            style={[
-                              styles.modeChip,
-                              { backgroundColor: active ? c.accent : c.bgCard, borderColor: active ? c.accent : c.border },
-                            ]}
-                          >
-                            <Text style={{ color: active ? c.bg : c.textPrimary, fontWeight: "600" }}>
-                              {provider.label}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                    <Text style={[styles.label, { color: c.textMuted, marginTop: 12 }]}>
-                      {mobileAiProvider === "glm" ? "GLM API key" : "OpenAI API key"}
-                    </Text>
-                    <TextInput
-                      value={mobileAiProvider === "glm" ? glmKey : openAiKey}
-                      onChangeText={mobileAiProvider === "glm" ? setGlmKey : setOpenAiKey}
-                      placeholder={mobileAiProvider === "glm" ? "zai_..." : "sk-..."}
-                      placeholderTextColor={c.textMuted}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      spellCheck={false}
-                      style={[styles.input, { color: c.textPrimary, borderColor: c.border }]}
-                    />
-                    <Text style={[styles.muted, { color: c.textMuted, marginTop: 6 }]}>
-                      Only needed when you want Yaver to turn a prompt or imported thread into the first draft. Pure template starts work without it.
-                    </Text>
-                  </>
-                ) : null}
-
-                {startMode !== "this-phone" ? (
-                  <>
-                    <Text style={[styles.label, { color: c.textMuted, marginTop: 12 }]}>Backend</Text>
+                    <Text style={[styles.label, { color: c.textMuted, marginTop: 12 }]}>Yaver Serverless</Text>
                     <View style={[styles.reviewCard, { backgroundColor: c.bg, borderColor: c.border, marginTop: 4 }]}>
                       <Text style={[styles.reviewTitle, { color: c.textPrimary }]}>
                         {startMode === "yaver-cloud"
-                          ? "Yaver Cloud selected"
+                          ? "Yaver Cloud selected · SQLite-first"
                           : startMode === "dev-hw"
                             ? selectedDevMachine
-                              ? "Online box selected"
+                              ? "Online box selected · SQLite-first"
                               : "Pick an online box"
                             : activeRunnerDevice
-                              ? "Connected machine ready"
+                              ? "Connected machine ready · SQLite-first"
                               : "No machine connected"}
                       </Text>
                       <Text style={[styles.muted, { color: c.textMuted, marginTop: 4 }]}>
                         {startMode === "yaver-cloud"
-                          ? "Yaver will create this sandbox on a managed cloud machine."
+                          ? "Yaver Serverless will create this portable workspace on a managed cloud machine."
                           : startMode === "dev-hw"
                             ? selectedDevMachine
-                              ? `${selectedDevMachine.name} will own this sandbox.`
-                              : "Choose which online box should own this sandbox."
+                              ? `${selectedDevMachine.name} will own this portable Yaver Serverless workspace.`
+                              : "Choose which online box should own this workspace."
                             : activeRunnerDevice
-                              ? `${activeRunnerDevice.name} is connected. This project will be created there.`
+                              ? `${activeRunnerDevice.name} is connected. This Yaver Serverless project will be created there.`
                               : "Open Devices to connect a Yaver machine, then come back and select Connected machine."}
                       </Text>
                       <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
@@ -1176,15 +1413,6 @@ export default function PhoneProjectsScreen() {
                             </Text>
                           </Pressable>
                         ) : null}
-                        <Pressable
-                          onPress={() => {
-                            setCodingMode("phone");
-                            setStartMode("this-phone");
-                          }}
-                          style={[styles.btnSecondary, { borderColor: c.border, flex: 1 }]}
-                        >
-                          <Text style={[styles.btnText, { color: c.textPrimary }]}>Use this phone instead</Text>
-                        </Pressable>
                       </View>
                     </View>
 
@@ -1201,7 +1429,11 @@ export default function PhoneProjectsScreen() {
                           return (
                             <Pressable
                               key={m.id}
-                              onPress={() => setSelectedDevMachineId(m.id)}
+                              onPress={() => {
+                                placementTouchedRef.current = true;
+                                runnerDeviceRef.current = null;
+                                setSelectedDevMachineId(m.id);
+                              }}
                               style={[
                                 styles.choiceCard,
                                 {
@@ -1211,7 +1443,7 @@ export default function PhoneProjectsScreen() {
                               ]}
                             >
                               <Text style={[styles.templateLabel, { color: c.textPrimary }]}>
-                                {m.name}{m.local ? "  (LAN)" : ""}
+                                {m.name}{m.local ? "  (LAN)" : ""}{primaryDeviceId === m.id ? "  · Primary" : ""}
                               </Text>
                               <Text style={[styles.muted, { color: c.textMuted }]} numberOfLines={1}>
                                 {m.os || "machine"}
@@ -1237,23 +1469,13 @@ export default function PhoneProjectsScreen() {
                       return (
                     <>
                     <Text style={[styles.label, { color: c.textMuted, marginTop: 12 }]}>Runner</Text>
-                    {runnerList.length === 0 ? (
-                      // No authed runner on the picked machine —
-                      // surface an actionable provisioning hint
-                      // instead of letting the user pick a runner
-                      // that'll fail at task creation. The Devices
-                      // tab is where the existing RunnerAuthModal +
-                      // device-auth flow lives, so we route there
-                      // rather than reimplementing it inside this
-                      // wizard.
+                    {!runnerDevice ? (
                       <View style={[styles.reviewCard, { backgroundColor: c.bg, borderColor: c.border, marginTop: 4 }]}>
                         <Text style={[styles.reviewTitle, { color: c.textPrimary }]}>
-                          {runnerDevice ? "No coding runner is signed in yet" : "Connect a Yaver machine first"}
+                          Connect a Yaver machine first
                         </Text>
                         <Text style={[styles.muted, { color: c.textMuted, marginTop: 4 }]}>
-                          {runnerDevice
-                            ? `Open Devices, pick ${runnerDevice.name}, and sign in Claude / Codex or configure OpenCode. Come back here once one runner is ready.`
-                            : "Pair a Yaver machine from the Devices tab, then return here. Phone-side coding works without one."}
+                          Pair a remote development box, then return here. The box will handle both vibing and rendering.
                         </Text>
                         <Pressable
                           onPress={() => router.push("/(tabs)/devices" as any)}
@@ -1265,33 +1487,99 @@ export default function PhoneProjectsScreen() {
                         </Pressable>
                       </View>
                     ) : (
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                        {runnerList.map((item) => ({
-                          id: item.runnerId,
-                          label: item.title || item.runnerId,
-                        })).map((item) => {
-                          const active = runner === item.id;
+                      <>
+                        {workspaceStatusLoading ? <ActivityIndicator color={c.textMuted} style={{ marginTop: 10 }} /> : null}
+                        {(["opencode", "claude", "codex"] as const).map((runnerId) => {
+                          const gate = workspaceStatus?.runners.find((item) => item.id === runnerId);
+                          const inventory = discoveredRunners.find((item) => item.id === runnerId);
+                          const active = runner === runnerId || (runner === "claude-code" && runnerId === "claude");
+                          const saved = primaryRunnerByDevice[runnerDevice.id] === runnerId;
+                          const recommended = runnerId === "opencode";
+                          const installing = runnerInstall?.runner === runnerId;
+                          const label = runnerId === "opencode" ? "OpenCode" : runnerId === "claude" ? "Claude Code" : "Codex";
+                          const ready = gate?.ready === true;
+                          const statusLabel = ready
+                            ? "Ready"
+                            : gate?.configured
+                              ? "Needs verification"
+                              : inventory?.installed || gate
+                                ? "Not configured"
+                                : "Not installed";
                           return (
                             <Pressable
-                              key={item.id}
-                              onPress={() => setRunner(item.id)}
+                              key={runnerId}
+                              onPress={() => ready ? setRunner(runnerId) : void configureWorkspaceRunner(runnerId, gate?.code)}
+                              disabled={runnerInstall !== null}
                               style={[
-                                styles.modeChip,
+                                styles.choiceCard,
                                 {
-                                  backgroundColor: active ? c.accent : c.bgCard,
+                                  backgroundColor: active ? c.accent + "22" : c.bgCard,
                                   borderColor: active ? c.accent : c.border,
-                                  marginRight: 8,
                                   marginTop: 8,
                                 },
                               ]}
                             >
-                              <Text style={{ color: active ? c.bg : c.textPrimary, fontWeight: "600" }}>
-                                {item.label}
+                              <Text style={{ color: c.textPrimary, fontWeight: "600" }}>
+                                {label}
+                                {saved ? " · Preferred" : recommended ? " · Recommended" : ""}
                               </Text>
+                              <Text style={{ color: ready ? c.success : c.textMuted, fontSize: 11, marginTop: 3 }}>
+                                {statusLabel}{gate?.detail ? ` · ${gate.detail}` : ""}
+                              </Text>
+                              {installing ? (
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
+                                  <ActivityIndicator size="small" color={c.accent} />
+                                  <Text numberOfLines={2} style={{ color: c.textMuted, fontSize: 11, flex: 1 }}>
+                                    {runnerInstall.line}
+                                  </Text>
+                                </View>
+                              ) : null}
+                              {!installing && !ready && gate?.configured ? (
+                                <Pressable onPress={() => void testWorkspaceRunner(runnerId)} style={{ marginTop: 8 }}>
+                                  <Text style={{ color: c.accent, fontWeight: "600", fontSize: 12 }}>Test on remote box →</Text>
+                                </Pressable>
+                              ) : !installing && !ready ? (
+                                <Text style={{ color: c.accent, fontWeight: "600", fontSize: 12, marginTop: 8 }}>
+                                  {gate?.action?.label || (inventory?.installed ? `Configure ${label}` : `Install ${label}`)} →
+                                </Text>
+                              ) : null}
                             </Pressable>
                           );
                         })}
-                      </ScrollView>
+                        {runner ? (() => {
+                          const normalizedRunner = runner === "claude-code" ? "claude" : runner;
+                          const inventory = discoveredRunners.find((item) => item.id === normalizedRunner);
+                          if (!inventory?.models?.length) return null;
+                          return (
+                            <>
+                              <Text style={[styles.label, { color: c.textMuted, marginTop: 12 }]}>Model</Text>
+                              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                {inventory.models.map((item) => {
+                                  const activeModel = model === item.id;
+                                  return (
+                                    <Pressable
+                                      key={item.id}
+                                      onPress={() => setModel(item.id)}
+                                      style={[
+                                        styles.modeChip,
+                                        {
+                                          backgroundColor: activeModel ? c.accent : c.bgCard,
+                                          borderColor: activeModel ? c.accent : c.border,
+                                          marginRight: 8,
+                                          marginTop: 8,
+                                        },
+                                      ]}
+                                    >
+                                      <Text style={{ color: activeModel ? c.bg : c.textPrimary, fontWeight: "600" }}>{item.name}</Text>
+                                      <Text style={{ color: activeModel ? c.bg : c.textMuted, fontSize: 11, marginTop: 2 }}>{item.id}</Text>
+                                    </Pressable>
+                                  );
+                                })}
+                              </ScrollView>
+                            </>
+                          );
+                        })() : null}
+                      </>
                     )}
                     </>
                       );
@@ -1299,7 +1587,7 @@ export default function PhoneProjectsScreen() {
                       </>
                     ) : null}
                   </>
-                ) : null}
+                )}
               </>
             ) : null}
 
@@ -1677,7 +1965,7 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
                     {gitMode === "skip"
                       ? "no git"
                       : `${gitProvider} (${repoVisibility})`} ·{" "}
-                    {codingMode === "phone" ? `Phone AI (${mobileAiProvider.toUpperCase()})` : "Remote runner"} ·{" "}
+                    {runner ? `${runner}${model ? ` · ${model}` : ""}` : "Remote runner"} ·{" "}
                     {surveySkipped || Object.keys(surveyAnswers).length === 0
                       ? "no survey"
                       : `${Object.keys(surveyAnswers).length}-Q survey`}
@@ -1714,6 +2002,7 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
       analyzingImport,
       selectedDevMachine,
       selectedDevMachineId,
+      selectedRunnerDevice,
       devMachines,
       devMachineRunners,
       runnersForDevice,
@@ -1723,9 +2012,20 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
       openAiKey,
       glmKey,
       availableRunners,
+      gitIntegrations,
+      configureGitProvider,
+      configureWorkspaceRunner,
+      discoveredRunners,
+      model,
+      primaryDeviceId,
+      primaryRunnerByDevice,
       runner,
       runnerChoiceEnabled,
+      startingGitOAuth,
       setupSteps,
+      testWorkspaceRunner,
+      workspaceStatus,
+      workspaceStatusLoading,
       primaryHex,
       secondaryHex,
       logoUrl,
@@ -1742,34 +2042,31 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
   const wizardFooter = useMemo(() => {
     if (!showForm) return null;
     const nameOk = name.trim().length > 0;
-    const placementOk =
-      step !== 2 ||
-      startMode === "this-phone" ||
-      startMode === "yaver-cloud" ||
-      (startMode === "current-agent" && !!activeRunnerDevice) ||
-      // A picked "other online box" must have an authenticated coding
-      // runner before we let the user finalize — otherwise the cross-
-      // device create lands on a machine with no runner and the first
-      // task fails. The runner card below already routes to Devices.
-      (startMode === "dev-hw" && !!selectedDevMachine && devMachineRunners.length > 0);
+    const normalizedRunner = runner === "claude-code" ? "claude" : runner;
+    const selectedRunnerReady = !!workspaceStatus?.runners.find((item) => item.id === normalizedRunner)?.ready;
+    const placementOk = step !== 1 || startMode === "yaver-cloud" || (
+      !!selectedRunnerDevice && !!runner && selectedRunnerReady && !!model
+    );
     const descOk = prompt.trim().length > 0 || importedConversation.trim().length > 0;
     const canAdvance = step === 0 ? nameOk : placementOk;
     const primaryLabel =
-      step < 6
+      workspaceStatusLoading && step === 1
+        ? "Testing runner…"
+        : step < 6
         ? !canAdvance && step === 0
           ? "Name required"
-          : !canAdvance && step === 2
-            ? startMode === "current-agent"
+          : !canAdvance && step === 1
+            ? !selectedRunnerDevice
               ? "Connect machine"
-              : startMode === "dev-hw"
-                ? !selectedDevMachine
-                  ? "Choose a machine"
-                  : "Sign in a runner"
-                : "Choose location"
+              : !runner
+                ? "Choose a runner"
+                : !selectedRunnerReady
+                  ? "Configure runner"
+                  : "Choose a model"
             : "Next"
         : !descOk
           ? "Description required"
-          : "Create sandbox";
+          : "Create workspace";
 
     return (
       <>
@@ -1826,15 +2123,16 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
         </Pressable>
         {step < 6 ? (
           <Pressable
-            disabled={!canAdvance}
-            onPress={() => {
+            disabled={!canAdvance || workspaceStatusLoading}
+            onPress={async () => {
+              if (step === 1 && !(await persistPrimaryTaskTarget())) return;
               const next = Math.min(6, step + 1);
               if (next === 4) runSetup();
               setStep(next);
             }}
             style={[
               styles.btn,
-              { backgroundColor: c.accent, flex: 1, opacity: canAdvance ? 1 : 0.4 },
+              { backgroundColor: c.accent, flex: 1, opacity: canAdvance && !workspaceStatusLoading ? 1 : 0.4 },
             ]}
           >
             <Text style={[styles.btnText, { color: c.bg }]}>{primaryLabel}</Text>
@@ -1867,12 +2165,17 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
     importedConversation,
     insets.bottom,
     name,
+    model,
     prompt,
+    persistPrimaryTaskTarget,
     selectedDevMachine,
     devMachineRunners,
+    selectedRunnerDevice,
+    runner,
     showForm,
     startMode,
     step,
+    workspaceStatus,
   ]);
 
   return (
@@ -1881,7 +2184,7 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
       keyboardVerticalOffset={Platform.OS === "ios" ? 84 : 0}
       style={{ flex: 1, backgroundColor: c.bg }}
     >
-      <AppScreenHeader title="Mobile Sandbox" onBack={() => router.back()} />
+      <AppScreenHeader title="Mobile Workspace" onBack={() => router.back()} />
       <FlatList
         data={projects}
         keyExtractor={(p) => p.slug}
@@ -1930,6 +2233,23 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
         )}
       />
       {wizardFooter}
+      <RunnerAuthModal
+        visible={runnerAuthModalRunner !== null}
+        runner={runnerAuthModalRunner || "codex"}
+        deviceName={selectedRunnerDevice?.name || "remote box"}
+        target={selectedRunnerDevice?.id === activeDevice?.id ? undefined : selectedRunnerDevice?.id}
+        onClose={() => setRunnerAuthModalRunner(null)}
+        onCompleted={() => void loadWorkspaceReadiness()}
+      />
+      <OpenCodeConfigModal
+        visible={openCodeConfigVisible}
+        target={selectedRunnerDevice?.id === activeDevice?.id ? undefined : selectedRunnerDevice?.id}
+        startInAddProvider={!workspaceStatus?.openCode.configured}
+        onClose={() => {
+          setOpenCodeConfigVisible(false);
+          void loadWorkspaceReadiness();
+        }}
+      />
     </KeyboardAvoidingView>
   );
 }

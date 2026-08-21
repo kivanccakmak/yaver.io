@@ -15,7 +15,7 @@ func phoneProjectMCPTools() []map[string]interface{} {
 	return []map[string]interface{}{
 		{
 			"name":        "phone_project_list",
-			"description": "List all phone-first mini-backend projects on this agent. Each project is its own local SQLite-backed Yaver project under ~/.yaver/phone-projects/<slug>/. Multiple projects can coexist; nothing is promoted off-machine until you explicitly export, push, or promote it.",
+			"description": "List all Yaver Serverless Mobile Workspace projects on this agent. Each project is SQLite-first under ~/.yaver/phone-projects/<slug>/ with a portable yaver.serverless.yaml; nothing moves off-machine until the user explicitly exports, pushes, or changes placement.",
 			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		},
 		{
@@ -25,7 +25,7 @@ func phoneProjectMCPTools() []map[string]interface{} {
 		},
 		{
 			"name":        "phone_project_create",
-			"description": "Create a new phone-first mini-backend project. Writes schema.yaml, auth.yaml, seed.json, and local.db under ~/.yaver/phone-projects/<slug>/. Returns the created project summary.",
+			"description": "Create a portable SQLite-first Yaver Serverless Mobile Workspace project. Writes yaver.serverless.yaml, schema.yaml, auth.yaml, seed.json, and local.db under ~/.yaver/phone-projects/<slug>/. The manifest can later migrate to the user's own hardware or Yaver Cloud without changing the app contract.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"name"},
@@ -238,7 +238,7 @@ func dispatchPhoneMCP(s *HTTPServer, name string, arguments json.RawMessage) (bo
 			return true, mcpToolError(err.Error())
 		}
 		return true, mcpToolResult(fmt.Sprintf(
-			"Created phone project %q (slug: %s, template: %s).\nDir: %s\nNext: phone_project_schema to customise or phone_project_promote to migrate to a real backend.",
+			"Created Yaver Serverless Mobile Workspace %q (slug: %s, template: %s).\nDir: %s\nBackend: portable SQLite-first yaver.serverless.yaml.\nNext: phone_project_schema to vibe the schema or phone_project_promote to change placement.",
 			p.Name, p.Slug, p.Template, p.Dir,
 		))
 

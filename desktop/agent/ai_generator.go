@@ -40,6 +40,11 @@ type AIGeneratorSpec struct {
 	// "ollama:qwen2.5-coder:32b"). Takes precedence over Engine.
 	Runner string
 
+	// Model and Mode are separate onboarding choices. Model is the runner's
+	// canonical model id; Mode is currently meaningful for OpenCode agents.
+	Model string
+	Mode  string
+
 	// WorkDir is the project root the runner sees. Required.
 	WorkDir string
 
@@ -130,7 +135,11 @@ func runAIGeneratorClaude(ctx context.Context, spec AIGeneratorSpec) (string, er
 		"--permission-mode", "bypassPermissions",
 		"--add-dir", spec.WorkDir,
 	}
-	if _, model := splitAgentSpec(spec.Runner); model != "" {
+	model := strings.TrimSpace(spec.Model)
+	if model == "" {
+		_, model = splitAgentSpec(spec.Runner)
+	}
+	if model != "" {
 		args = append(args, "--model", model)
 	}
 	cmd := osexec.CommandContext(ctx, "claude", args...)
@@ -161,7 +170,12 @@ func runAIGeneratorCodex(ctx context.Context, spec AIGeneratorSpec) (string, err
 	if err := CheckRunnerReady(GetRunnerConfig("codex"), spec.WorkDir); err != nil {
 		return "", err
 	}
-	cmd := osexec.CommandContext(ctx, "codex", "exec", "--full-auto", "-")
+	args := []string{"exec", "--full-auto"}
+	if model := strings.TrimSpace(spec.Model); model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, "-")
+	cmd := osexec.CommandContext(ctx, "codex", args...)
 	cmd.Dir = spec.WorkDir
 	cmd.Stdin = strings.NewReader(spec.Prompt)
 	cmd.Stderr = os.Stderr
@@ -177,24 +191,23 @@ func runAIGeneratorOpenCode(ctx context.Context, spec AIGeneratorSpec) (string, 
 	if err := CheckRunnerReady(GetRunnerConfig("opencode"), spec.WorkDir); err != nil {
 		return "", err
 	}
-	// Current opencode uses `opencode run <message>` for non-interactive
-	// runs. The old `--message` flag was removed in sst/opencode.
-	args := []string{"run", "--dangerously-skip-permissions"}
-	model := strings.TrimSpace(envOr("YAVER_OPENCODE_MODEL", ""))
-	if _, runnerModel := splitAgentSpec(spec.Runner); runnerModel != "" {
+	model := strings.TrimSpace(spec.Model)
+	if model == "" {
+		model = strings.TrimSpace(envOr("YAVER_OPENCODE_MODEL", ""))
+	}
+	if _, runnerModel := splitAgentSpec(spec.Runner); model == "" && runnerModel != "" {
 		model = runnerModel
 	}
-	if model != "" {
-		args = append(args, "--model", model)
+	// Use the same launcher as Mobile Workspace edits and runner readiness.
+	// It supplies the task environment, scoped MCP config, stdin handling, and
+	// model grammar that a real task uses; a special one-off command here was a
+	// false green when /tasks worked but prompt generation hung.
+	meta, err := newOpenCodeSandboxRunner(sandboxRunnerSelection{
+		Model: model,
+		Mode:  strings.TrimSpace(spec.Mode),
+	})(ctx, spec.WorkDir, spec.Prompt)
+	if err != nil {
+		return "", err
 	}
-	args = append(args, spec.Prompt)
-	cmd := osexec.CommandContext(ctx, "opencode", args...)
-	cmd.Dir = spec.WorkDir
-	cmd.Stderr = os.Stderr
-	var buf bytes.Buffer
-	cmd.Stdout = io.MultiWriter(&buf, os.Stderr)
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("opencode: %w", err)
-	}
-	return buf.String(), nil
+	return meta.rationale, nil
 }

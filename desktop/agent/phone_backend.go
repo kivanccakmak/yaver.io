@@ -269,6 +269,9 @@ type PhoneCreateSpec struct {
 	App           *PhoneAppSpec            `json:"app,omitempty"`
 	Prompt        string                   `json:"prompt,omitempty"`
 	Runner        string                   `json:"runner,omitempty"`
+	Model         string                   `json:"model,omitempty"`
+	Mode          string                   `json:"mode,omitempty"`
+	Provider      string                   `json:"provider,omitempty"`
 	ImportURL     string                   `json:"importUrl,omitempty"`
 	ImportContent string                   `json:"importContent,omitempty"`
 	ImportTitle   string                   `json:"importTitle,omitempty"`
@@ -324,6 +327,8 @@ func CreatePhoneProject(spec PhoneCreateSpec) (*PhoneProject, error) {
 			Content: spec.ImportContent,
 			Title:   spec.ImportTitle,
 			Runner:  spec.Runner,
+			Model:   spec.Model,
+			Mode:    spec.Mode,
 			WorkDir: ".",
 		})
 		if err != nil {
@@ -435,6 +440,9 @@ func CreatePhoneProject(spec PhoneCreateSpec) (*PhoneProject, error) {
 			return nil, fmt.Errorf("apply app: %w", err)
 		}
 	}
+	if err := refreshPhoneServerlessManifest(slug); err != nil {
+		return nil, fmt.Errorf("write yaver serverless manifest: %w", err)
+	}
 
 	// Also drop a minimal ProjectManifest so /manifest/* works.
 	_ = SaveManifest(dir, &ProjectManifest{
@@ -471,6 +479,8 @@ func generatePhoneProjectFromPrompt(spec PhoneCreateSpec) (*generatedPhoneProjec
 	wd, _ := os.Getwd()
 	body, err := runPhonePromptGenerator(AIGeneratorSpec{
 		Runner:  spec.Runner,
+		Model:   spec.Model,
+		Mode:    spec.Mode,
 		WorkDir: wd,
 		Prompt: fmt.Sprintf(`You are generating a phone-first Yaver mini-backend project.
 
@@ -910,7 +920,10 @@ func ApplyPhoneSchema(slug string, schema *PhoneSchema) error {
 			}
 		}
 	}
-	return savePhoneSchema(dir, schema)
+	if err := savePhoneSchema(dir, schema); err != nil {
+		return err
+	}
+	return refreshPhoneServerlessManifest(slug)
 }
 
 // ApplyPhoneAuth writes auth.yaml and mirrors personas into a `users` table if
@@ -1181,7 +1194,7 @@ func phoneServerlessManifest(p *PhoneProject, opts PhoneExportOptions) ([]byte, 
 			BasePath: "/p/" + p.Slug,
 			DataPath: "/data/" + p.Slug,
 		},
-		Placements: []string{"mobile-sandbox", "self-hosted", "yaver-managed-cloud"},
+		Placements: []string{"mobile-workspace", "self-hosted", "yaver-managed-cloud"},
 		Export: yaverServerlessExport{
 			IncludesData: opts.IncludeData,
 			Secrets:      "excluded-by-default",
@@ -1204,6 +1217,18 @@ func phoneServerlessManifest(p *PhoneProject, opts PhoneExportOptions) ([]byte, 
 		}
 	}
 	return yaml.Marshal(m)
+}
+
+func refreshPhoneServerlessManifest(slug string) error {
+	p, err := LoadPhoneProject(slug)
+	if err != nil {
+		return err
+	}
+	b, err := phoneServerlessManifest(p, PhoneExportOptions{})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(p.Dir, "yaver.serverless.yaml"), b, 0o644)
 }
 
 // collectPhoneExportFiles is the single source of truth for what an

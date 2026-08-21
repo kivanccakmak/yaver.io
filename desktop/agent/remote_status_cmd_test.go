@@ -1,6 +1,28 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
+
+func TestRenderMobileWorkspaceStatusCarriesNamedFixRoute(t *testing.T) {
+	status := mobileWorkspaceStatus{
+		Device: mobileWorkspaceGate{Ready: true},
+		OpenCode: mobileWorkspaceGate{
+			Code:   "mobile_workspace.opencode.provider_required",
+			Detail: "Connect a provider on this remote box",
+			Action: &mobileWorkspaceAction{Label: "Configure OpenCode", Method: "PATCH", Path: "/runner/opencode/config"},
+		},
+	}
+	var out bytes.Buffer
+	renderMobileWorkspaceStatusBlock(&out, status, "  ")
+	for _, want := range []string{"mobile_workspace.opencode.provider_required", "PATCH /runner/opencode/config"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("CLI Mobile Workspace output missing %q: %s", want, out.String())
+		}
+	}
+}
 
 func TestParseRunnerStatusFlowAcceptsAliasStatus(t *testing.T) {
 	target, sub, extra, ok := parseRunnerStatusFlow([]string{"test", "status"})

@@ -191,6 +191,9 @@ export interface PhoneCreateSpec {
   app?: PhoneAppSpec;
   prompt?: string;
   runner?: string;
+  model?: string;
+  mode?: string;
+  provider?: string;
   importUrl?: string;
   importContent?: string;
   importTitle?: string;

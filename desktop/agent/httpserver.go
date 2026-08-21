@@ -404,8 +404,8 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/v2/project-sessions/", s.auth(s.handleV2ProjectSessionByID))
 	mux.HandleFunc("/finalize", s.auth(s.handleFinalize))
 	mux.HandleFunc("/finalize/", s.auth(s.handleFinalizeByID))
-	// Mobile Sandbox → remote runner (GLM): edit the phone-only sandbox tree on
-	// this box. See sandbox_remote.go.
+	// Mobile Workspace compatibility route: edit the phone-authored source tree
+	// with the selected remote OpenCode model. See sandbox_remote.go.
 	mux.HandleFunc("/sandbox/run", s.auth(s.handleSandboxRun))
 	mux.HandleFunc("/chain", s.auth(s.handleChainCreate))
 	mux.HandleFunc("/chain/", s.auth(s.handleChainStatus))
@@ -446,6 +446,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/auth/ssh/authorized-keys", s.auth(s.handleSSHAuthorizedKeys))
 	mux.HandleFunc("/runner-auth/setup", s.authSDK(s.handleRunnerAuthSetup))
 	mux.HandleFunc("/runner/opencode/config", s.auth(s.handleOpenCodeConfig))
+	mux.HandleFunc("/mobile-workspace/status", s.auth(s.handleMobileWorkspaceStatus))
 	// Browser/device-auth sub-family is also reachable by SDK tokens that
 	// carry the "runner-auth" scope — lets the embedded Feedback SDK on
 	// carrotbytes.xyz / an RN host trigger `codex login --device-auth`
@@ -1239,7 +1240,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// remove handler below so they take precedence.
 	mux.HandleFunc("/git/provider/oauth/start", s.auth(s.handleGitProviderOAuthStart))
 	mux.HandleFunc("/git/provider/oauth/status", s.auth(s.handleGitProviderOAuthStatus))
-	// New repo creation — used by the mobile sandbox wizard's
+	// New repo creation — used by the Mobile Workspace wizard's
 	// "Configure now" git step. Owner-only (uses the user's stored
 	// PAT to call the provider API on their behalf + commit a
 	// yaver.workspace.yaml). Not opened to SDK or constrained companion tokens.
@@ -3326,7 +3327,7 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 			// DeviceContext.DEFAULT_MODEL_BY_RUNNER.opencode. The runner
 			// resolves provider/model against its own opencode.json; the
 			// deepseek provider ships in the probed catalogue.
-			{ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash", Provider: "deepseek", Source: "builtin", IsDefault: true},
+			{ID: "deepseek/deepseek-v4-flash", Name: "DeepSeek V4 Flash", Provider: "deepseek", Source: "builtin", IsDefault: true},
 			{ID: "zai-coding-plan/glm-4.7", Name: "GLM 4.7 Coding Plan (z.ai)", Provider: "zai-coding-plan", Source: "builtin", IsDefault: false},
 			{ID: "zai/glm-4.7", Name: "GLM 4.7 (z.ai)", Provider: "zai", Source: "builtin", IsDefault: false},
 			{ID: "openrouter/z-ai/glm-4.7", Name: "GLM 4.7 (OpenRouter)", Provider: "openrouter", Source: "builtin", IsDefault: false},
@@ -8975,6 +8976,9 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			Framework string          `json:"framework"`
 			Schema    json.RawMessage `json:"schema"`
 			Runner    string          `json:"runner"`
+			Model     string          `json:"model"`
+			Mode      string          `json:"mode"`
+			Provider  string          `json:"provider"`
 			TimeoutMs int             `json:"timeoutMs"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
@@ -8986,6 +8990,9 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			Framework: args.Framework,
 			Schema:    args.Schema,
 			Runner:    args.Runner,
+			Model:     args.Model,
+			Mode:      args.Mode,
+			Provider:  args.Provider,
 			TimeoutMs: args.TimeoutMs,
 		}
 		if strings.TrimSpace(args.DeviceID) != "" {
@@ -9023,7 +9030,8 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		return mcpToolJSON(processSandboxRun(ctx, req, runGLMSandbox))
+		selection := resolveSandboxRunnerSelection(ctx, s, req)
+		return mcpToolJSON(processSandboxRun(ctx, req, newOpenCodeSandboxRunner(selection)))
 	case "mobile_hermes_doctor":
 		var args mobileHermesDoctorInput
 		json.Unmarshal(call.Arguments, &args)
@@ -14319,11 +14327,15 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 	// --- Primary device preference ---
 	case "device_primary_get":
 		ctx := context.Background()
-		current, err := primaryGetCurrent(ctx, s.token, s.convexURL)
+		convexURL := strings.TrimSpace(s.convexURL)
+		if convexURL == "" {
+			convexURL = defaultConvexSiteURL
+		}
+		current, err := primaryGetCurrent(ctx, s.token, convexURL)
 		if err != nil {
 			return mcpToolError("failed to read settings: " + err.Error())
 		}
-		devices, err := primaryListDevices(ctx, s.token, s.convexURL)
+		devices, err := primaryListDevices(ctx, s.token, convexURL)
 		if err != nil {
 			return mcpToolError("failed to list devices: " + err.Error())
 		}
@@ -14376,8 +14388,12 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &args)
 		ctx := context.Background()
+		convexURL := strings.TrimSpace(s.convexURL)
+		if convexURL == "" {
+			convexURL = defaultConvexSiteURL
+		}
 		if args.Clear {
-			if err := primarySaveRaw(ctx, s.token, s.convexURL, "", true); err != nil {
+			if err := primarySaveRaw(ctx, s.token, convexURL, "", true); err != nil {
 				return mcpToolError(err.Error())
 			}
 			return mcpToolResult("Primary device cleared.")
@@ -14386,7 +14402,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		if target == "" {
 			return mcpToolError("deviceId or clear=true is required")
 		}
-		devices, err := primaryListDevices(ctx, s.token, s.convexURL)
+		devices, err := primaryListDevices(ctx, s.token, convexURL)
 		if err != nil {
 			return mcpToolError("failed to list devices: " + err.Error())
 		}
@@ -14407,7 +14423,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolError(fmt.Sprintf("%q matches %d devices — use a longer prefix", target, len(matches)))
 		}
 		chosen := matches[0]
-		if err := primarySaveRaw(ctx, s.token, s.convexURL, chosen.DeviceID, false); err != nil {
+		if err := primarySaveRaw(ctx, s.token, convexURL, chosen.DeviceID, false); err != nil {
 			return mcpToolError(err.Error())
 		}
 		return mcpToolResult(fmt.Sprintf("Primary device set to %s (%s).", chosen.Name, chosen.DeviceID))
@@ -14432,6 +14448,16 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpPrimaryProjects(a.MobileOnly))
+
+	case "mobile_workspace_onboarding_status":
+		return mcpToolJSON(mcpMobileWorkspaceOnboardingStatus())
+
+	case "mobile_workspace_onboarding_select":
+		var a mobileWorkspaceOnboardingSelectArgs
+		if err := json.Unmarshal(call.Arguments, &a); err != nil {
+			return mcpToolError("bad arguments: " + err.Error())
+		}
+		return mcpToolJSON(mcpMobileWorkspaceOnboardingSelect(a))
 
 	case "sandbox_status":
 		return mcpToolJSON(s.sandboxSummary())

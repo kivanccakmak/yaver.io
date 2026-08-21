@@ -15,11 +15,224 @@ package main
 //   primary_projects (with mobile_only flag) → /projects [/mobile]
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 )
+
+type mobileWorkspaceOnboardingSelectArgs struct {
+	Device   string `json:"device"`
+	Runner   string `json:"runner"`
+	Model    string `json:"model,omitempty"`
+	Mode     string `json:"mode,omitempty"`
+	Provider string `json:"provider,omitempty"`
+}
+
+func remoteRunnerReadyForMobileWorkspace(option remoteRunnerSummary) bool {
+	return option.Installed && option.Ready && option.AuthConfigured && option.AuthVerified
+}
+
+// mcpMobileWorkspaceOnboardingStatus is the machine-readable counterpart of the
+// Mobile Workspace target + git steps. It intentionally returns capability
+// probes from the selected box (runner auth and git clone/CI readiness), not
+// PATH inventory, and never includes provider tokens.
+func mcpMobileWorkspaceOnboardingStatus() map[string]interface{} {
+	cfg, err := LoadConfig()
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.AuthToken) == "" {
+		return map[string]interface{}{"ok": false, "error": "not signed in — run 'yaver auth' first"}
+	}
+	convex := strings.TrimSpace(cfg.ConvexSiteURL)
+	if convex == "" {
+		convex = defaultConvexSiteURL
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	settings, err := fetchUserSettings(ctx, nil)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": "read onboarding settings: " + err.Error()}
+	}
+	devices, err := primaryListDevices(ctx, cfg.AuthToken, convex)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": "list devices: " + err.Error()}
+	}
+	primaryID := strings.TrimSpace(settings.PrimaryDeviceID)
+	if primaryID == "" && len(devices) == 1 {
+		primaryID = devices[0].DeviceID
+	}
+	options := make([]map[string]interface{}, 0, len(devices))
+	for _, device := range devices {
+		options = append(options, map[string]interface{}{
+			"deviceId": device.DeviceID,
+			"name":     device.Name,
+			"platform": device.Platform,
+			"online":   device.IsOnline,
+			"primary":  device.DeviceID == primaryID,
+		})
+	}
+	out := map[string]interface{}{
+		"ok": true,
+		"backend": map[string]interface{}{
+			"id":        "yaver-serverless",
+			"engine":    "sqlite",
+			"portable":  true,
+			"migration": "schema.yaml + yaver.serverless.yaml",
+		},
+		"devices":         options,
+		"primaryDeviceId": primaryID,
+		"gitProviders": []map[string]interface{}{
+			{"id": "yaver-git", "configured": true, "ready": true, "builtIn": true},
+			{"id": "github", "configured": false, "ready": false},
+			{"id": "gitlab", "configured": false, "ready": false},
+		},
+	}
+	if primaryID == "" {
+		return out
+	}
+	report, err := fetchRemoteAgentStatusByDeviceID(ctx, primaryID)
+	if err != nil {
+		out["targetError"] = err.Error()
+		return out
+	}
+	out["primaryDevice"] = report
+	if report.MobileWorkspace != nil {
+		out["workspace"] = report.MobileWorkspace
+	} else {
+		out["workspace"] = map[string]interface{}{
+			"ok":     false,
+			"code":   "mobile_workspace.agent_upgrade_required",
+			"detail": "The selected remote agent does not expose Mobile Workspace readiness yet",
+			"action": map[string]interface{}{"label": "Update Yaver agent", "method": "POST", "path": "/agent/update", "stream": "/streams/agent-update"},
+		}
+	}
+	for _, pref := range settings.PrimaryRunnerByDevice {
+		if pref.DeviceID == primaryID {
+			out["primaryRunner"] = map[string]interface{}{
+				"runner": pref.RunnerID, "model": pref.Model, "mode": pref.Mode, "provider": pref.Provider,
+			}
+			break
+		}
+	}
+	if report.Git != nil {
+		states := []map[string]interface{}{{"id": "yaver-git", "configured": true, "ready": true, "builtIn": true}}
+		for _, provider := range report.Git.Providers {
+			states = append(states, map[string]interface{}{
+				"id":         provider.ID,
+				"configured": provider.Configured,
+				"ready":      provider.Ready,
+				"cloneReady": provider.CloneReady,
+				"ciReady":    provider.CIReady,
+				"username":   provider.Username,
+				"detail":     provider.Detail,
+				"warning":    provider.Warning,
+			})
+		}
+		out["gitProviders"] = states
+	}
+	return out
+}
+
+// mcpMobileWorkspaceOnboardingSelect persists the exact target highlighted by the
+// onboarding picker. The device + runner preference is written in one Convex
+// /settings request so "Next" cannot save half of the pair.
+func mcpMobileWorkspaceOnboardingSelect(args mobileWorkspaceOnboardingSelectArgs) map[string]interface{} {
+	cfg, err := LoadConfig()
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.AuthToken) == "" {
+		return map[string]interface{}{"ok": false, "error": "not signed in — run 'yaver auth' first"}
+	}
+	convex := strings.TrimSpace(cfg.ConvexSiteURL)
+	if convex == "" {
+		convex = defaultConvexSiteURL
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	devices, err := primaryListDevices(ctx, cfg.AuthToken, convex)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": "list devices: " + err.Error()}
+	}
+	device, err := resolveMachineRoleDevice(strings.TrimSpace(args.Device), devices)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": err.Error()}
+	}
+	runner := normalizeRunnerAuthName(args.Runner)
+	if runner == "" && strings.EqualFold(strings.TrimSpace(args.Runner), "opencode") {
+		runner = "opencode"
+	}
+	if runner != "claude" && runner != "codex" && runner != "opencode" {
+		return map[string]interface{}{"ok": false, "error": "runner must be claude-code, codex, or opencode"}
+	}
+	report, err := fetchRemoteAgentStatusByDeviceID(ctx, device.DeviceID)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": "probe selected device: " + err.Error()}
+	}
+	ready := false
+	for _, option := range report.Runners {
+		if normalizeRunnerAuthName(option.ID) == runner || strings.EqualFold(option.ID, runner) {
+			ready = remoteRunnerReadyForMobileWorkspace(option)
+			break
+		}
+	}
+	if !ready {
+		return map[string]interface{}{"ok": false, "error": fmt.Sprintf("%s is not installed, authenticated, and operational on %s", runner, device.Name)}
+	}
+	preference := map[string]interface{}{
+		"deviceId": device.DeviceID,
+		"runnerId": runner,
+	}
+	if model := strings.TrimSpace(args.Model); model != "" {
+		preference["model"] = model
+	}
+	if runner == "opencode" {
+		if mode := strings.TrimSpace(args.Mode); mode != "" {
+			preference["mode"] = mode
+		}
+		if provider := strings.TrimSpace(args.Provider); provider != "" {
+			preference["provider"] = provider
+		}
+	} else {
+		// A Claude/Codex selection must not inherit stale OpenCode metadata.
+		preference["mode"] = nil
+		preference["provider"] = nil
+	}
+	payload := map[string]interface{}{
+		"primaryDeviceId":        device.DeviceID,
+		"primaryRunnerForDevice": preference,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(convex, "/")+"/settings", bytes.NewReader(body))
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": err.Error()}
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return map[string]interface{}{"ok": false, "error": err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return map[string]interface{}{"ok": false, "error": fmt.Sprintf("save onboarding selection: HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(raw)))}
+	}
+	userSettingsCacheMu.Lock()
+	userSettingsCacheVal = nil
+	userSettingsCacheExpiry = time.Time{}
+	userSettingsCacheMu.Unlock()
+	return map[string]interface{}{
+		"ok":                true,
+		"primaryDeviceId":   device.DeviceID,
+		"primaryDeviceName": device.Name,
+		"primaryRunner":     runner,
+		"model":             strings.TrimSpace(args.Model),
+		"mode":              strings.TrimSpace(args.Mode),
+		"provider":          strings.TrimSpace(args.Provider),
+		"backend":           "yaver-serverless",
+	}
+}
 
 // resolvePrimaryDeviceIDForMCP looks up the caller's
 // userSettings.primaryDeviceId. If unset, falls back to the only
