@@ -25,6 +25,23 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+async function waitForPersistedTodo(page, title, completed) {
+  await page.waitForFunction(
+    ({ expectedTitle, expectedCompleted }) => Object.values(localStorage).some((raw) => {
+      try {
+        const value = JSON.parse(raw);
+        return Array.isArray(value) && value.some((todo) =>
+          todo?.title === expectedTitle && todo?.completed === expectedCompleted,
+        );
+      } catch {
+        return false;
+      }
+    }),
+    { expectedTitle: title, expectedCompleted: completed },
+    { timeout: 10_000 },
+  );
+}
+
 function startStaticServer(root) {
   assert(existsSync(join(root, "index.html")), `missing web export: ${root}/index.html`);
   const server = createServer((request, response) => {
@@ -89,6 +106,7 @@ async function backendlessArc(browser, url) {
   await page.getByLabel("New task").fill(title);
   await page.getByRole("button", { name: "Add task" }).click();
   await page.getByRole("checkbox", { name: title }).click();
+  await waitForPersistedTodo(page, title, true);
   await page.getByRole("tab", { name: "done" }).click();
   await page.getByText(title, { exact: true }).waitFor();
   await page.reload({ waitUntil: "networkidle" });
@@ -110,6 +128,7 @@ async function serverlessArc(browser, url) {
   await page.getByRole("button", { name: "Add task" }).click();
   await page.getByText("Saved locally · sync pending", { exact: true }).waitFor();
   await page.getByRole("checkbox", { name: `Complete: ${title}` }).click();
+  await waitForPersistedTodo(page, title, true);
   await page.getByText("done", { exact: true }).click();
   await page.getByRole("checkbox", { name: `Mark open: ${title}` }).waitFor();
 
