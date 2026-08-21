@@ -5,8 +5,8 @@ import { extname, join, normalize, resolve } from "node:path";
 import { chromium, devices } from "playwright";
 
 const roots = {
-  backendless: resolve(process.env.YAVER_BACKENDLESS_DIST || "../demo/mobile/workspace-todo-backendless/dist"),
-  serverless: resolve(process.env.YAVER_SERVERLESS_DIST || "../demo/mobile/workspace-todo-serverless/dist"),
+  backendless: resolve(process.env.YAVER_BACKENDLESS_DIST || "../demo/mobile/workspace-todo-backendless/apps/mobile/dist"),
+  serverless: resolve(process.env.YAVER_SERVERLESS_DIST || "../demo/mobile/workspace-todo-serverless/apps/mobile/dist"),
 };
 const artifactRoot = resolve(process.env.YAVER_EXAMPLE_ARTIFACTS || "../test-results/mobile-workspace-examples");
 const mime = {
