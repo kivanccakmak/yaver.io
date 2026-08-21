@@ -54,9 +54,10 @@ function startStaticServer(root) {
 async function openMobile(browser, name, url) {
   const videoDir = join(artifactRoot, name, "video");
   await mkdir(videoDir, { recursive: true });
+  const iphone = devices["iPhone 15 Pro"];
   const context = await browser.newContext({
-    ...devices["iPhone 15 Pro"],
-    recordVideo: { dir: videoDir, size: { width: 393, height: 852 } },
+    ...iphone,
+    recordVideo: { dir: videoDir, size: iphone.viewport },
   });
   const page = await context.newPage();
   const errors = [];
@@ -71,7 +72,10 @@ async function openMobile(browser, name, url) {
     ua: navigator.userAgent,
     viewport: [window.innerWidth, window.innerHeight],
   }));
-  assert(device.viewport[0] === 393 && device.viewport[1] === 852, `wrong mobile viewport: ${device.viewport}`);
+  assert(
+    device.viewport[0] === iphone.viewport.width && device.viewport[1] === iphone.viewport.height,
+    `wrong mobile viewport: ${device.viewport}; expected ${iphone.viewport.width},${iphone.viewport.height}`,
+  );
   assert(device.maxTouchPoints > 0, "browser context is not touch-capable");
   assert(device.dpr >= 2, `browser context has desktop pixel ratio: ${device.dpr}`);
   assert(/Mobile|iPhone/i.test(device.ua), `browser context has desktop user-agent: ${device.ua}`);
