@@ -102,7 +102,7 @@ Goal: CI-driven "can a user sign in via provider X" tests that never touch `acco
   - Agentless Hetzner shell authenticates directly to Convex as a guest, joins a host-share invite for a live host device, verifies the guest can see `codex` in `/agent/runners`, and writes/runs `hello_yaver.py` over the brokered terminal.
   - Helper added: `desktop/agent/cmd/hostshare-terminal-smoke`
 - [ ] Run `verify_host_share_agentless.sh` against the real host MacBook
-  - Host = `kivanc.cakmak@icloud.com` on the actively running MacBook agent
+  - Host = configured owner account on the actively running MacBook agent
   - Guest = email/password-only Hetzner test user
   - Current scope: invite/join + runner visibility + brokered terminal hello-world
   - Not yet a `/tasks`-driven Codex-edit smoke; host-share still does not expose guest `/tasks`

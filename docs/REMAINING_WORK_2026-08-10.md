@@ -1,7 +1,7 @@
 # Yaver Remaining Work — Dependency-Ordered Dump (2026-08-10)
 
 Status: code is the source of truth. Every item cites what was verified live this
-session (owner account `kivanc.cakmak@icloud.com`, prod Convex
+session (configured owner account, prod Convex
 `perceptive-minnow-557`, real Hetzner boxes) or a committed audit. Priorities are
 expressed as **dependency order** — a later phase should not start before the
 phases it depends on are green.

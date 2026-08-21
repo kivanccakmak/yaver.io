@@ -6673,7 +6673,7 @@ http.route({
  *  managed Relay Pro relay on the owner's real Hetzner account WITHOUT a
  *  LemonSqueezy subscription. The owner userId bypass in
  *  subscriptions.canProvisionManaged authorises the spend (fail-closed for
- *  everyone else), so kivanc.cakmak@icloud.com can exercise the full Relay
+ *  everyone else), so the configured owner account can exercise the full Relay
  *  Pro provision → health-check → user-wiring → deprovision lifecycle headless
  *  before billing goes live.
  *

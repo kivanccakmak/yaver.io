@@ -150,7 +150,7 @@ unfixed. The cost-control system's own availability is the same shape as the
 ## 4. Owner-only + credential safety — verified live
 
 - `/subscription` owner session → `cloudPreviewOwner:true`, `cloudAccess:true`
-  (env allowlist is configured for kivanc.cakmak@icloud.com in production).
+  (the owner identity is configured through the production env allowlist).
 - `/relay/validate` bogus password → `401 {"ok":false,"reason":"bad_password"}`;
   missing password → 400. Fail-closed.
 - `/subscription` returns relay status/domain/region/ports — **never

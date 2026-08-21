@@ -4,7 +4,7 @@
 
 Complete setup documentation for using Yaver mobile app to connect to Hetzner remote device with OpenCode and GLM 4.7 API.
 
-**Target:** Use iPhone (kivanc.cakmak@icloud.com) → Hetzner Ubuntu (selected-machine) → OpenCode + GLM 4.7
+**Target:** Use iPhone (configured owner account) → Hetzner Ubuntu (selected-machine) → OpenCode + GLM 4.7
 
 ---
 
@@ -312,7 +312,7 @@ yaver code detach  # First detach
 
 **Step 1: Open Yaver Mobile App**
 - Launch app on iPhone
-- Sign in with kivanc.cakmak@icloud.com
+- Sign in with the configured owner account
 
 **Step 2: Navigate to Devices Tab**
 - Bottom tab navigation → "Devices"
@@ -703,7 +703,7 @@ yaver vault add zai-api --category api-key --value <new-key>
 ### Mobile App
 
 - [x] Mobile app installed on iPhone
-- [x] User signed in (kivanc.cakmak@icloud.com)
+- [x] User signed in (configured owner account)
 - [x] Device discovered and listed in app
 - [x] Remote connection infrastructure ready
 - [x] OpenCode configuration management available

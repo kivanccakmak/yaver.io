@@ -14,7 +14,7 @@ package main
 // `tailscale ping ${node}`:
 //
 //     yaver-test-ephemeral [2859819c…] via relay (203 ms)
-//       agent v1.99.127, lifecycle ready-to-connect, owner kivanc.cakmak@icloud.com (you)
+//       agent v1.99.127, lifecycle ready-to-connect, owner account (you)
 //
 // On failure, the line names the cause:
 //

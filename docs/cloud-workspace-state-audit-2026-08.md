@@ -137,5 +137,5 @@ mapped plan-section → reality.
 
 ## 13. Not verified (no access from this box)
 
-- Prod Convex env values (`CLOUD_PREVIEW_OWNER_EMAIL` / `CLOUD_PREVIEW_OWNER_USER_IDS` — must contain `kivanc.cakmak@icloud.com` for owner-only Hetzner spend; the allowlist is env-configured and fail-closed when unset).
+- Prod Convex env values (`CLOUD_PREVIEW_OWNER_EMAIL` / `CLOUD_PREVIEW_OWNER_USER_IDS` — must contain the configured owner identity for owner-only Hetzner spend; the allowlist is env-configured and fail-closed when unset).
 - Live provider state (volume contents, existing boxes).

@@ -1,6 +1,6 @@
 const { chromium } = require('playwright');
 const TOKEN = process.env.YMH_AUTH_TOKEN || '';
-const USER = JSON.stringify({ id: 'u', email: 'kivanc.cakmak@icloud.com', name: 'Kivanc' });
+const USER = JSON.stringify({ id: 'demo-user', email: 'demo-user@example.invalid', name: 'Demo User' });
 (async () => {
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 414, height: 896 }, recordVideo: { dir: '/tmp/todo-eval/appvid', size: { width: 414, height: 896 } } });

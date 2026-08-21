@@ -8,7 +8,7 @@ Paused mid-setup. Pick up here when you want CI's `--cloudflare` test to flip fr
 - **22 GitHub secrets set** via `gh secret set`. See `CLAUDE.md § Secrets management` for the full list and the pattern (stdin input, never `--body` for sensitive values).
 - **Anthropic API usage removed from CI** (`776a628f`) — deleted `autodev-e2e.yml`, pruned `claude:sonnet` matrix entry from `runner-integrations.yml`. No workflow reads `ANTHROPIC_API_KEY` anymore.
 - **Cloudflare tunnel `yaver` exists** but has no connector (status: DOWN). Mac's cloudflared was uninstalled when we started the Hetzner migration.
-- **Yaver agent running on `yaver-relay-free`** (authed as `kivanc.cakmak@icloud.com`, device `3f6e3ca6...`, listening on 18080).
+- **Yaver agent running on `yaver-relay-free`** (authed as the configured owner account, device identifier redacted, listening on 18080).
 - **`CF_AUTOMATION_TOKEN`** created as a Cloudflare API token and stored as a GitHub secret. Its resources (Account + Zone) were misconfigured in the dashboard — current value in local `.env.test` returns 401 "Invalid access token". Needs the form redone with all 4 permissions + both resource scopes attached.
 
 ## Remaining — required to make `--cloudflare` test go from skip → pass
