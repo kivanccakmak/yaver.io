@@ -40,7 +40,14 @@ try {
   await page.getByText("Next", { exact: true }).click();
 
   await page.getByText("2. Development target", { exact: true }).waitFor();
-  await page.getByText("Primary device · Recommended", { exact: true }).waitFor({ timeout: 30_000 });
+  await page.getByText(/Primary device · Recommended|Connected machine|Other online box|Connect a Yaver machine first/).first().waitFor({ timeout: 30_000 });
+  const placement = await page.locator("body").innerText().then((text) => ({
+    primary: text.includes("Primary device · Recommended"),
+    connected: text.includes("Connected machine"),
+    other: text.includes("Other online box"),
+    missing: text.includes("Connect a Yaver machine first"),
+  }));
+  assert(placement.primary, `primary recommendation missing: ${JSON.stringify(placement)}`);
   await page.getByText(/OpenCode · (Preferred|Recommended)/).waitFor({ timeout: 30_000 });
   await page.getByText("Ready", { exact: true }).first().waitFor({ timeout: 30_000 });
   await page.getByText("deepseek/deepseek-v4-flash", { exact: true }).waitFor({ timeout: 30_000 });
