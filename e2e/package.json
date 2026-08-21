@@ -8,6 +8,7 @@
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
     "test:mobile-workspace-examples": "node mobile-workspace-examples.mjs",
+    "test:mobile-workspace-onboarding": "node mobile-workspace-onboarding-live.mjs",
     "report": "playwright show-report",
     "install-browsers": "playwright install --with-deps chromium"
   },
