@@ -10,6 +10,16 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function safeErrorClasses(messages) {
+  const text = messages.join("\n").toLowerCase();
+  return {
+    count: messages.length,
+    auth: /401|403|auth|token|sign.?in/.test(text),
+    cors: /cors|cross-origin/.test(text),
+    network: /fetch|network|connect|transport|timeout/.test(text),
+  };
+}
+
 const iphone = devices["iPhone 15 Pro"];
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const context = await browser.newContext(iphone);
@@ -47,7 +57,10 @@ try {
     other: text.includes("Other online box"),
     missing: text.includes("Connect a Yaver machine first"),
   }));
-  assert(placement.primary, `primary recommendation missing: ${JSON.stringify(placement)}`);
+  assert(
+    placement.primary,
+    `primary recommendation missing: ${JSON.stringify(placement)} errors=${JSON.stringify(safeErrorClasses(errors))}`,
+  );
   await page.getByText(/OpenCode · (Preferred|Recommended)/).waitFor({ timeout: 30_000 });
   await page.getByText("Ready", { exact: true }).first().waitFor({ timeout: 30_000 });
   await page.getByText("deepseek/deepseek-v4-flash", { exact: true }).waitFor({ timeout: 30_000 });
