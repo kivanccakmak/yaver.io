@@ -10423,6 +10423,14 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpAppStoreTestFlight(a.BundleID))
+	case "testflight_promote":
+		var a struct {
+			BundleID    string `json:"bundle_id"`
+			BuildNumber string `json:"buildNumber"`
+			GroupName   string `json:"groupName"`
+		}
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpTestFlightPromote(a.BundleID, a.BuildNumber, a.GroupName))
 	case "xcode_build":
 		var a struct {
 			Dir    string `json:"directory"`

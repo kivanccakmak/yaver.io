@@ -39,15 +39,17 @@ var ownerOnlyToolPrefixes = []string{
 	"railway_deploy",
 	"pscale_deploy",
 	"mobile_platform_deploy",
-	"robot_",   // robot arm / robotics ops (incl. robot_camera image tool)
-	"arm_",     // generic multi-DOF arm layer
-	"jig_",     // wiring-harness / fixture jig ops
-	"circuit_", // circuit simulator (incl. circuit_plot image tool)
-	"printer_", // 3D printer control
-	"cad_",     // OpenSCAD / CAD render
-	"screw_",   // screw-driving cell analytics
-	"appletv_", // Apple TV control (incl. appletv_now_playing image tool)
-	"capture_", // capture-card / HDMI streaming
+	"playstore_promote",  // mutates Play release tracks (internal→beta→production)
+	"testflight_promote", // mutates TestFlight build availability (owner-only publish)
+	"robot_",             // robot arm / robotics ops (incl. robot_camera image tool)
+	"arm_",               // generic multi-DOF arm layer
+	"jig_",               // wiring-harness / fixture jig ops
+	"circuit_",           // circuit simulator (incl. circuit_plot image tool)
+	"printer_",           // 3D printer control
+	"cad_",               // OpenSCAD / CAD render
+	"screw_",             // screw-driving cell analytics
+	"appletv_",           // Apple TV control (incl. appletv_now_playing image tool)
+	"capture_",           // capture-card / HDMI streaming
 }
 
 // mcpToolIsOwnerOnly reports whether a tool name belongs to an owner-only

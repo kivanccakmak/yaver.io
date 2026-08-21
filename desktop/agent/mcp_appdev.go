@@ -90,6 +90,107 @@ func mcpAppStoreTestFlight(bundleID string) interface{} {
 	return map[string]interface{}{"bundle_id": bundleID, "app_id": app.ID, "count": len(rows), "builds": rows}
 }
 
+// mcpTestFlightPromote makes an uploaded build available to a TestFlight beta
+// group — the App Store Connect analog of the Play "promote release" action
+// (assign build to group; for an EXTERNAL group the first build triggers Beta
+// App Review). Policy-aware: mutating, so it is owner-gated (mcp_owner_gate.go).
+func mcpTestFlightPromote(bundleID, buildNumber, groupName string) interface{} {
+	if strings.TrimSpace(bundleID) == "" {
+		return map[string]interface{}{"error": "bundle_id is required, e.g. io.yaver.mobile"}
+	}
+	client, err := newASCClient("mobile")
+	if err != nil {
+		return map[string]interface{}{
+			"error":  fmt.Sprintf("App Store Connect credentials unavailable: %v", err),
+			"remedy": "Set APP_STORE_KEY_PATH, APP_STORE_KEY_ID and APP_STORE_KEY_ISSUER (see ~/.appstoreconnect/yaver.env).",
+		}
+	}
+	app, err := client.AppByBundleID(bundleID)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("resolve app %s: %v", bundleID, err)}
+	}
+	if app == nil {
+		return map[string]interface{}{"error": fmt.Sprintf("no App Store Connect app for bundle id %s", bundleID)}
+	}
+	builds, err := client.ListBuilds(app.ID)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("list builds: %v", err)}
+	}
+	var build *ASCBuild
+	if buildNumber != "" {
+		for i := range builds {
+			if builds[i].Version == buildNumber {
+				build = &builds[i]
+				break
+			}
+		}
+		if build == nil {
+			return map[string]interface{}{"error": fmt.Sprintf("no build %s found for %s (recent builds: %s)", buildNumber, bundleID, buildVersions(builds))}
+		}
+	} else if len(builds) > 0 {
+		build = &builds[0] // ListBuilds sorts by -uploadedDate, so [0] is the newest
+	} else {
+		return map[string]interface{}{"error": "no builds uploaded yet for this app"}
+	}
+	if build.Expired {
+		return map[string]interface{}{"error": fmt.Sprintf("build %s is expired and cannot be promoted", build.Version)}
+	}
+	if !strings.EqualFold(build.ProcessingState, "VALID") {
+		return map[string]interface{}{
+			"error":  fmt.Sprintf("build %s is not installable yet (processing=%s)", build.Version, build.ProcessingState),
+			"action": "Wait for TestFlight processing to finish (or set export compliance), then retry.",
+		}
+	}
+	groups, err := client.ListBetaGroups(app.ID)
+	if err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("list beta groups: %v", err)}
+	}
+	targetName := strings.TrimSpace(groupName)
+	if targetName == "" {
+		targetName = "External"
+	}
+	var group *ASCBetaGroup
+	for i := range groups {
+		if groups[i].Name == targetName {
+			group = &groups[i]
+			break
+		}
+	}
+	if group == nil {
+		if len(groups) > 0 && targetName == "External" {
+			group = &groups[0] // no External group yet — promote to the first existing group
+		} else {
+			g, cerr := client.CreateBetaGroup(app.ID, targetName, false)
+			if cerr != nil {
+				return map[string]interface{}{"error": fmt.Sprintf("create beta group %q: %v", targetName, cerr)}
+			}
+			group = g
+		}
+	}
+	if err := client.AssignBuildToGroup(group.ID, build.ID); err != nil {
+		return map[string]interface{}{"error": fmt.Sprintf("assign build to group %q: %v", group.Name, err)}
+	}
+	return map[string]interface{}{
+		"ok":          true,
+		"bundle_id":   bundleID,
+		"build":       build.Version,
+		"build_id":    build.ID,
+		"group":       group.Name,
+		"group_id":    group.ID,
+		"is_internal": group.IsInternal,
+		"note":        "Build added to the TestFlight beta group. External groups see it after Beta App Review for the first build.",
+	}
+}
+
+// buildVersions renders the recent build version strings for error messages.
+func buildVersions(builds []ASCBuild) string {
+	vs := make([]string, 0, len(builds))
+	for _, b := range builds {
+		vs = append(vs, b.Version)
+	}
+	return strings.Join(vs, ", ")
+}
+
 func mcpXcodeBuild(dir, scheme, destination string) interface{} {
 	if dir == "" {
 		dir, _ = os.Getwd()
