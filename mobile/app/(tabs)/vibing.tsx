@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { router } from "expo-router";
+import { Redirect, router } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../../src/context/AuthContext";
@@ -12,6 +12,7 @@ import { getUserSettings } from "../../src/lib/auth";
 import { takePendingVibingProject } from "../../src/lib/vibingStore";
 import { getCodingMode, listLocalWorkspaces, validateLocalWorkspace, type CodingMode, type LocalWorkspace, type StaticValidationReport } from "../../src/lib/coding-runtime";
 import { remoteRenderRequiredFailure } from "../../src/lib/renderCapability";
+import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 
 type Project = { name: string; path: string; framework?: string };
 type DevStatus = {
@@ -58,6 +59,7 @@ function deviceBaseUrl(device: Device, token: string | null): string | null {
 
 export default function VibingScreen() {
   const c = useColors();
+  const layout = useResponsiveLayout();
   const { token } = useAuth();
   const { activeDevice, connectionStatus, disconnect } = useDevice();
   const { activeProjectSession } = useCloudStudio();
@@ -343,6 +345,13 @@ export default function VibingScreen() {
 
   const serving = !!status?.serving;
   const building = !serving && status?.running === false && !!status?.port;
+
+  // Keep legacy phone/tvOS behavior reachable, but tablets have one canonical
+  // workspace. This also makes old /vibing deep links converge instead of
+  // opening a fourth tablet layout.
+  if (layout.isTablet && !isTV) {
+    return <Redirect href="/vibe-studio" />;
+  }
 
   if (!isLocalVibing && (!activeDevice || connectionStatus !== "connected")) {
     return (

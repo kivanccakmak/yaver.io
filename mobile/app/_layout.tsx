@@ -30,6 +30,7 @@ import { AppState, Dimensions, NativeModules, Platform, ScrollView, Text, View }
 import { breakpoints } from "../src/theme/tokens";
 import { AuthProvider } from "../src/context/AuthContext";
 import { DeviceProvider } from "../src/context/DeviceContext";
+import { CloudStudioProvider } from "../src/context/CloudStudioContext";
 import { ThemeProvider, useTheme } from "../src/context/ThemeContext";
 import { FeedbackOverlay } from "../src/components/FeedbackOverlay";
 import { ShareComposeModal } from "../src/components/ShareComposeModal";
@@ -186,7 +187,9 @@ export default function RootLayout() {
       <ThemeProvider>
         <AuthProvider>
           <DeviceProvider>
-            <InnerLayout />
+            <CloudStudioProvider>
+              <InnerLayout />
+            </CloudStudioProvider>
           </DeviceProvider>
         </AuthProvider>
       </ThemeProvider>

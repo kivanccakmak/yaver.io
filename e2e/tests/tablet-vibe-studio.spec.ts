@@ -71,7 +71,7 @@ test("tablet vibe studio renders the landscape split", async ({ browser }) => {
   await page.waitForTimeout(12_000);
 
   // The studio screen rendered (its own header).
-  await expect(page.getByText(/^Vibe Studio$/).first(), "tablet: /vibe-studio did not render")
+  await expect(page.getByText(/^Vibing$/).first(), "tablet: /vibe-studio did not render")
     .toBeVisible({ timeout: 30_000 });
 
   // LANDSCAPE SPLIT — the lane switcher is the landscape-only control.
@@ -85,6 +85,16 @@ test("tablet vibe studio renders the landscape split", async ({ browser }) => {
     page.getByPlaceholder(/^Vibe — what should we change\?$|^Connect a box first$|^What should we change\?$/i).first(),
     "tabletLandscape: chat composer missing in the right pane",
   ).toBeVisible({ timeout: 15_000 });
+
+  // Geometry contract: preview is physically left of chat and both retain a
+  // usable first-class width. Text visibility alone cannot prove the split.
+  const left = await page.getByTestId("studio-left-pane").boundingBox();
+  const right = await page.getByTestId("studio-right-pane").boundingBox();
+  expect(left, "tabletLandscape: preview pane has no geometry").not.toBeNull();
+  expect(right, "tabletLandscape: chat pane has no geometry").not.toBeNull();
+  expect(left!.x + left!.width).toBeLessThanOrEqual(right!.x + 20);
+  expect(left!.width).toBeGreaterThan(300);
+  expect(right!.width).toBeGreaterThan(300);
 
   await context.close();
 });
@@ -112,7 +122,7 @@ test("tablet vibe studio shows portrait peek without the split", async ({ browse
   });
   await page.waitForTimeout(12_000);
 
-  await expect(page.getByText(/^Vibe Studio$/).first(), "tablet(portrait): /vibe-studio did not render")
+  await expect(page.getByText(/^Vibing$/).first(), "tablet(portrait): /vibe-studio did not render")
     .toBeVisible({ timeout: 30_000 });
 
   // PORTRAIT — no landscape split: the lane switcher must NOT exist.
@@ -120,6 +130,12 @@ test("tablet vibe studio shows portrait peek without the split", async ({ browse
 
   // The peek tab is the portrait-only affordance.
   await expect(page.getByText(/^Preview$/).first(), "tablet(portrait): preview peek tab missing")
+    .toBeVisible({ timeout: 15_000 });
+
+  await page.getByText(/^Preview$/).first().click();
+  await expect(page.getByText(/^Collapse$/).first(), "tablet(portrait): preview did not expand")
+    .toBeVisible({ timeout: 15_000 });
+  await expect(page.getByPlaceholder(/^Connect a box first$|^What should we change\?$|^Continue this task…$/i).first())
     .toBeVisible({ timeout: 15_000 });
 
   await context.close();
@@ -211,13 +227,13 @@ test("tablet vibe studio keeps the phone frame while the box has no dev server",
   });
   await page.waitForTimeout(12_000);
 
-  await expect(page.getByText(/^Vibe Studio$/).first(), "tablet: /vibe-studio?project= did not render")
+  await expect(page.getByText(/^Vibing$/).first(), "tablet: /vibe-studio?project= did not render")
     .toBeVisible({ timeout: 30_000 });
 
   // THE GUARD: the persistent phone frame renders its ready pane even though no
   // dev server exists and no project can be selected yet.
   await expect(
-    page.getByText(/The mobile frame is ready/).first(),
+    page.getByText(/Pick a project to open its preview|Preview this project beside the conversation/).first(),
     "tabletLandscape: left phone frame went blank with no dev server (DevPreview null path)",
   ).toBeVisible({ timeout: 15_000 });
 

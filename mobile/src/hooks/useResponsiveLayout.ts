@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { Platform, useWindowDimensions } from "react-native";
 import { breakpoints, layoutTokens } from "../theme/tokens";
+import { classifyResponsiveLayout, type LayoutClass } from "../lib/responsiveLayoutCore";
 
-export type LayoutClass = "phone" | "tablet-portrait" | "tablet-landscape";
+export type { LayoutClass } from "../lib/responsiveLayoutCore";
 
 export type ResponsiveLayout = {
   width: number;
@@ -32,21 +33,8 @@ export function useResponsiveLayout(): ResponsiveLayout {
   const { width, height } = useWindowDimensions();
 
   return useMemo(() => {
-    const isLandscape = width > height;
-    // Tablet detection by short-edge: catches portrait iPads (768)
-    // and Android tablets while excluding phones in landscape.
-    const shortEdge = Math.min(width, height);
-    const isTablet = shortEdge >= breakpoints.tablet;
+    const { isLandscape, isTablet, layoutClass } = classifyResponsiveLayout(width, height);
     const isPhone = !isTablet;
-
-    let layoutClass: LayoutClass;
-    if (!isTablet) {
-      layoutClass = "phone";
-    } else if (isLandscape || width >= breakpoints.tabletLandscape) {
-      layoutClass = "tablet-landscape";
-    } else {
-      layoutClass = "tablet-portrait";
-    }
 
     let paneCount: 1 | 2 | 3 = 1;
     if (layoutClass === "tablet-landscape") {

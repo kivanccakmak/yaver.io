@@ -2812,6 +2812,10 @@ export class QuicClient {
       title: t.title,
       description: t.description,
       status: t.status,
+      runnerId: t.runnerId || undefined,
+      model: typeof t.model === "string" && t.model.trim() ? t.model.trim() : undefined,
+      mode: t.mode || undefined,
+      source: t.source || undefined,
       output: typeof t.output === "string" && t.output
         ? t.output.split("\n").filter((l: string) => l)
         : Array.isArray(t.output) ? t.output : [],
@@ -2829,6 +2833,7 @@ export class QuicClient {
       turns: t.turns || undefined,
       pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
       turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
+      failure: t.failure || undefined,
       tmuxSession: t.tmuxSession || undefined,
       tmuxSessionId: t.tmuxSessionId || undefined,
       tmuxWindowIndex: t.tmuxWindowIndex || undefined,

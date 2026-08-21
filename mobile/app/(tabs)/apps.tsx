@@ -1180,7 +1180,7 @@ export default function AppsScreen() {
     // The tablet studio is also the loading surface. Navigate immediately so
     // the device frame and vibe console remain visible while the box starts
     // or recovers its browser lane.
-    if (layout.isTablet && layout.isLandscape) {
+    if (layout.isTablet) {
       router.push({
         pathname: "/vibe-studio",
         params: { project: runningProject || fresh?.workDir || "" },
@@ -1375,6 +1375,16 @@ export default function AppsScreen() {
     }
 
     if (action.type === "vibing") {
+      // Tablet has one canonical workspace: preview + conversation in
+      // landscape, chat + preview peek in portrait. Every tablet entry point
+      // must land on the same stateful surface.
+      if (layout.isTablet) {
+        router.push({
+          pathname: "/vibe-studio",
+          params: { project: path || project },
+        });
+        return;
+      }
       // Open vibing mode — delay to let action sheet modal fully close first
       setTimeout(async () => {
         try {
@@ -1540,7 +1550,7 @@ export default function AppsScreen() {
         `${action.label} for ${project}`,
       );
     }
-  }, [actionSheet, selectedTarget, isConnected, connectionStatus, sendTaskOrWarn]);
+  }, [actionSheet, selectedTarget, isConnected, connectionStatus, sendTaskOrWarn, layout.isTablet, router]);
 
   useEffect(() => {
     AsyncStorage.getItem(PREVIEW_TARGET_KEY)
@@ -2220,6 +2230,11 @@ export default function AppsScreen() {
     setWebRuntimeLogOpen(false);
     setPreviewFullScreen(false);
 
+    if (layout.isTablet) {
+      router.push({ pathname: "/vibe-studio", params: { project: path || project } });
+      return;
+    }
+
     // DO NOT TEAR THE PREVIEW DOWN.
     //
     // This used to call setShowWebView(false) — for a real reason: the Vibing
@@ -2247,7 +2262,7 @@ export default function AppsScreen() {
     } catch {
       setVibingState({ project, path, suggestions: [], quickActions: [], history: [] });
     }
-  }, [devStatus?.framework, devStatus?.workDir, projects]);
+  }, [devStatus?.framework, devStatus?.workDir, projects, layout.isTablet, router]);
 
   // WHICH url the preview loads — previewBundlePath (shared with
   // DevPreview.tsx) applies the agent-is-authority rule, the single legacy

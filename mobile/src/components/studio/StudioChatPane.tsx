@@ -1,20 +1,18 @@
 // StudioChatPane.tsx — the RIGHT pane of the tablet Vibe Studio.
 //
-// A lean, self-contained chat/composer/live-console pane for landscape
-// vibe sessions. It deliberately reuses the app's shared primitives
+// A lean chat/composer/live-console pane for tablet vibe sessions. It
+// deliberately reuses the app's shared task and console primitives
 // instead of re-deriving them:
 //   - streamTaskOutput (quic.ts) for the raw runner stdout SSE lane
 //   - summarizeRawConsole + AnsiConsoleText for the foldable live console
 //   - MessageBubble for user/assistant rows
-//   - executeVibingSuggestion for the vibe prompt → task round-trip
-// No task machinery is copied here; the pane talks to the connected box
-// exactly like the Tasks screen does, so there is one live-console
-// implementation, not a per-surface drift.
+//   - executeVibingSuggestion once, then continueTask for one conversation
+// The pane talks to the connected box exactly like the Tasks screen does;
+// finished consoles fold quietly while live output remains one tap away.
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -56,12 +54,14 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
   const [showTasks, setShowTasks] = useState(false);
   const [rawText, setRawText] = useState("");
   const [rawLive, setRawLive] = useState(false);
-  const [consoleExpanded, setConsoleExpanded] = useState(true);
+  const [consoleExpanded, setConsoleExpanded] = useState(false);
   const [lastRawVersion, setLastRawVersion] = useState(0);
   const [loadingTasks, setLoadingTasks] = useState(false);
 
   const streamAbortRef = useRef<null | (() => void)>(null);
   const listScrollRef = useRef<ScrollView>(null);
+  const consolePreferenceRef = useRef<boolean | null>(null);
+  const projectPathRef = useRef(projectPath);
 
   // Refresh the recent-task list when the pane mounts and after each send.
   const refreshTasks = useCallback(async () => {
@@ -88,15 +88,13 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
     };
   }, []);
 
-  const subscribeTask = useCallback((taskId: string, title?: string) => {
+  const subscribeTask = useCallback((taskId: string, status?: Task["status"]) => {
     streamAbortRef.current?.();
     setRawText("");
     setRawLive(false);
     setLastRawVersion((v) => v + 1);
-    setConsoleExpanded(true);
-    if (title) {
-      setRows((prev) => [...prev, { kind: "user", text: title }]);
-    }
+    consolePreferenceRef.current = null;
+    setConsoleExpanded(status === "running" || status === "queued");
     // Seed with the retained tail (rawSince=0 → raw_replay full=true) so a
     // just-finished task paints its console immediately.
     streamAbortRef.current = quicClient.streamTaskOutput(
@@ -106,12 +104,13 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
       },
       (status) => {
         setRawLive(false);
-        if (status === "completed" || status === "review") {
-          setRows((prev) => [...prev, { kind: "assistant", text: `Done (${status}).` }]);
-        } else {
-          setRows((prev) => [...prev, { kind: "system", text: `Task ${status}.` }]);
-        }
+        setActiveTask((prev) => prev?.id === taskId ? { ...prev, status: status as Task["status"] } : prev);
+        if (consolePreferenceRef.current === null) setConsoleExpanded(false);
         setLastRawVersion((v) => v + 1);
+        void quicClient.getTask(taskId).then((task) => {
+          setActiveTask(task);
+          setRows([]);
+        }).catch(() => {});
         void refreshTasks();
       },
       (evt) => {
@@ -126,6 +125,8 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
             return next.length > 512 * 1024 ? next.slice(next.length - 512 * 1024) : next;
           });
           setRawLive(true);
+          setActiveTask((prev) => prev?.id === taskId ? { ...prev, status: "running" } : prev);
+          if (consolePreferenceRef.current === null) setConsoleExpanded(true);
           setLastRawVersion((v) => v + 1);
         },
         onEnd: () => setRawLive(false),
@@ -139,36 +140,84 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
     setComposerText("");
     setSending(true);
     setSendError(null);
+    setRows((prev) => [...prev, { kind: "user", text }]);
     try {
-      // Vibe prompt → box task. Falls back to a plain task when no project
-      // path is bound (still runs on the connected box's default project).
-      const result = await quicClient.executeVibingSuggestion(text, projectPath || "");
-      const taskId = (result as any)?.taskId;
-      if (taskId) {
-        subscribeTask(String(taskId), text);
+      if (activeTask) {
+        // A chat stays one task. Creating a fresh /vibing/execute task for every
+        // message made the Studio look conversational while discarding context.
+        await quicClient.continueTask(activeTask.id, text);
+        setActiveTask((prev) => prev ? { ...prev, status: "running" } : prev);
+        subscribeTask(activeTask.id, "running");
       } else {
-        setRows((prev) => [...prev, { kind: "user", text }, { kind: "system", text: result?.message || "Sent — no task id returned." }]);
+        const result = await quicClient.executeVibingSuggestion(text, projectPath || "");
+        const taskId = (result as any)?.taskId;
+        if (taskId) {
+          const now = Date.now();
+          setActiveTask({ id: String(taskId), title: text, description: "", status: "queued", output: [], createdAt: now, updatedAt: now });
+          subscribeTask(String(taskId), "queued");
+          void quicClient.getTask(String(taskId)).then((task) => {
+            setActiveTask(task);
+            if (task.turns?.length) setRows([]);
+          }).catch(() => {});
+        } else {
+          setRows((prev) => [...prev, { kind: "system", text: result?.message || "Sent — no task id returned." }]);
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Could not send";
+      // A rejected prompt was never part of the conversation. Restore it to
+      // the composer so retrying does not require retyping it.
+      setRows((prev) => prev.slice(0, -1));
+      setComposerText(text);
       setSendError(msg);
-      setRows((prev) => [...prev, { kind: "system", text: `Send failed: ${msg}` }]);
     } finally {
       setSending(false);
       void refreshTasks();
     }
-  }, [composerText, sending, connected, projectPath, subscribeTask, refreshTasks]);
+  }, [composerText, sending, connected, projectPath, subscribeTask, refreshTasks, activeTask]);
 
   const handleTaskTap = useCallback(
     (task: Task) => {
       setActiveTask(task);
-      subscribeTask(task.id, undefined);
+      setRows([]);
+      void quicClient.getTask(task.id).then((hydrated) => setActiveTask(hydrated)).catch(() => {});
+      subscribeTask(task.id, task.status);
     },
     [subscribeTask],
   );
 
   const isRunning = activeTask?.status === "running" || activeTask?.status === "queued";
   const isRenderable = activeTask?.status === "completed" || activeTask?.status === "review";
+  const consoleStatus = activeTask?.status === "failed" || activeTask?.status === "cancelled"
+    ? `○ ${activeTask.status}`
+    : isRenderable
+      ? "○ done"
+      : "○ idle";
+  const conversationRows = useMemo<ChatRow[]>(() => {
+    const hydrated: ChatRow[] = (activeTask?.turns || []).map((turn) => ({
+      kind: turn.role === "user" ? "user" : "assistant",
+      text: turn.content,
+    }));
+    return [...hydrated, ...rows];
+  }, [activeTask?.turns, rows]);
+
+  const resetConversation = useCallback(() => {
+    streamAbortRef.current?.();
+    streamAbortRef.current = null;
+    setActiveTask(null);
+    setRows([]);
+    setRawText("");
+    setRawLive(false);
+    setSendError(null);
+    consolePreferenceRef.current = null;
+    setConsoleExpanded(false);
+  }, []);
+
+  useEffect(() => {
+    if (projectPathRef.current === projectPath) return;
+    projectPathRef.current = projectPath;
+    resetConversation();
+  }, [projectPath, resetConversation]);
 
   return (
     <View style={[styles.wrap, { backgroundColor: c.bg }]}>
@@ -190,20 +239,37 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
             </Pressable>
           ) : null}
         </View>
-        <Pressable
-          onPress={() => setShowTasks((v) => !v)}
-          hitSlop={8}
-          style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-          accessibilityRole="button"
-          accessibilityLabel={showTasks ? "Hide task list" : "Show task list"}
-        >
-          <Ionicons name={showTasks ? "list" : "list-outline"} size={18} color={c.textSecondary} />
-        </Pressable>
+        <View style={styles.headerActions}>
+          {activeTask ? (
+            <Pressable
+              onPress={resetConversation}
+              hitSlop={8}
+              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+              accessibilityRole="button"
+              accessibilityLabel="New conversation"
+            >
+              <Ionicons name="add-circle-outline" size={19} color={c.textSecondary} />
+            </Pressable>
+          ) : null}
+          <Pressable
+            onPress={() => setShowTasks((v) => !v)}
+            hitSlop={8}
+            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+            accessibilityRole="button"
+            accessibilityLabel={showTasks ? "Hide task list" : "Show task list"}
+          >
+            <Ionicons name={showTasks ? "list" : "list-outline"} size={18} color={c.textSecondary} />
+          </Pressable>
+        </View>
       </View>
 
       {/* Task list (foldable, advisory) */}
       {showTasks ? (
-        <View style={[styles.taskList, { borderBottomColor: c.borderSubtle, backgroundColor: c.surfaceMuted }]}>
+        <ScrollView
+          style={[styles.taskList, { borderBottomColor: c.borderSubtle, backgroundColor: c.surfaceMuted }]}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+        >
           {loadingTasks ? <ActivityIndicator size="small" color={c.textMuted} style={{ padding: 12 }} /> : null}
           {tasks.map((t) => (
             <Pressable
@@ -221,7 +287,7 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
           {tasks.length === 0 && !loadingTasks ? (
             <Text style={[styles.taskEmpty, { color: c.textMuted }]}>No tasks yet — send a vibe prompt below.</Text>
           ) : null}
-        </View>
+        </ScrollView>
       ) : null}
 
       {/* Conversation / live console */}
@@ -231,47 +297,56 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
         contentContainerStyle={styles.conversationContent}
         onContentSizeChange={() => listScrollRef.current?.scrollToEnd({ animated: true })}
       >
-        {rows.length === 0 && !rawText.trim() ? (
+        {conversationRows.length === 0 && !rawText.trim() ? (
           <Text style={[styles.emptyHint, { color: c.textTertiary }]}>
             {connected
               ? "Type a vibe prompt — the box's runner will edit the project and the live console will show it working."
               : "Connect a box to start vibing."}
           </Text>
         ) : null}
-        {rows.map((row, i) => {
+        {conversationRows.map((row, i) => {
           if (row.kind === "user") return <MessageBubble key={i} variant="user" content={row.text} mono />;
           if (row.kind === "assistant") return <MessageBubble key={i} variant="tool" content={row.text} />;
           return <MessageBubble key={i} variant="system" content={row.text} />;
         })}
 
         {/* Foldable live console — same grammar as the opencode console */}
-        {rawText.trim() ? (
+        {activeTask || rawText.trim() ? (
           <View style={[styles.consoleWrap, { borderColor: c.border }]}>
             <Pressable
-              onPress={() => setConsoleExpanded((v) => !v)}
+              onPress={() => setConsoleExpanded((v) => {
+                consolePreferenceRef.current = !v;
+                return !v;
+              })}
               style={({ pressed }) => [styles.consoleToggle, { backgroundColor: c.surface }, pressed && { opacity: 0.7 }]}
               accessibilityRole="button"
               accessibilityState={{ expanded: consoleExpanded }}
             >
               <Text style={[styles.consoleCaret, { color: c.textMuted }]}>{consoleExpanded ? "▼" : "▶"}</Text>
-              <Text style={[styles.consoleTitle, { color: c.textSecondary }]}>Live console</Text>
+              <Text style={[styles.consoleTitle, { color: c.textSecondary }]}>Console</Text>
               {rawLive && isRunning ? (
                 <Text style={[styles.consoleDot, { color: "#4ade80" }]}>● live</Text>
               ) : (
-                <Text style={[styles.consoleDot, { color: c.textTertiary }]}>{isRenderable ? "○ done" : "○ idle"}</Text>
+                <Text style={[styles.consoleDot, { color: activeTask?.status === "failed" ? c.error : c.textTertiary }]}>{consoleStatus}</Text>
               )}
               <Text style={[styles.consoleCount, { color: c.textTertiary }]}>
                 {rawText.length > 1024 ? `${Math.round(rawText.length / 1024)} KB` : `${rawText.length} B`}
               </Text>
             </Pressable>
-            {consoleExpanded && rawText.trim() ? (
+            {consoleExpanded ? (
               <ScrollView
                 style={[styles.consoleBody, { backgroundColor: c.bgCard, borderTopColor: c.border }]}
                 nestedScrollEnabled
                 showsVerticalScrollIndicator
               >
                 {/* re-render on rawVersion so streaming frames repaint */}
-                <AnsiConsoleText key={lastRawVersion} text={summarizeRawConsole(rawText, isRunning)} fontSize={11} />
+                {rawText.trim() ? (
+                  <AnsiConsoleText key={lastRawVersion} text={summarizeRawConsole(rawText, isRunning)} fontSize={11} />
+                ) : (
+                  <Text style={{ color: c.textTertiary, fontSize: 12 }}>
+                    {isRunning ? "Waiting for runner output…" : "No console output was retained for this task."}
+                  </Text>
+                )}
               </ScrollView>
             ) : null}
           </View>
@@ -292,17 +367,17 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
           style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.borderSubtle }]}
           value={composerText}
           onChangeText={setComposerText}
-          placeholder={connected ? "Vibe — what should we change?" : "Connect a box first"}
+          placeholder={!connected ? "Connect a box first" : isRunning ? "Runner is coding…" : activeTask ? "Continue this task…" : "What should we change?"}
           placeholderTextColor={c.textTertiary}
           multiline
-          editable={connected}
+          editable={connected && !isRunning}
           onSubmitEditing={handleSend}
           blurOnSubmit={false}
         />
         <Pressable
           onPress={handleSend}
-          disabled={!connected || sending || !composerText.trim()}
-          style={[styles.sendBtn, { backgroundColor: c.brandPrimary }, (!connected || sending || !composerText.trim()) && { opacity: 0.4 }]}
+          disabled={!connected || isRunning || sending || !composerText.trim()}
+          style={[styles.sendBtn, { backgroundColor: c.brandPrimary }, (!connected || isRunning || sending || !composerText.trim()) && { opacity: 0.4 }]}
           accessibilityRole="button"
           accessibilityLabel="Send vibe prompt"
         >
@@ -325,6 +400,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerChips: { flexDirection: "row", gap: 6, flex: 1, minWidth: 0 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 2 },
   chip: {
     flexDirection: "row",
     alignItems: "center",
@@ -333,7 +409,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    maxWidth: "60%",
+    maxWidth: "48%",
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
   chipText: { fontSize: 12, fontWeight: "700", flexShrink: 1 },

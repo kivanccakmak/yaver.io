@@ -7,6 +7,7 @@ import { useDevice } from "../../src/context/DeviceContext";
 import { useColors } from "../../src/context/ThemeContext";
 import { quicClient, type RemoteProject } from "../../src/lib/quic";
 import { setPendingVibingProject } from "../../src/lib/vibingStore";
+import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 
 const IS_TV = Boolean((Platform as typeof Platform & { isTV?: boolean }).isTV);
 
@@ -14,6 +15,7 @@ export default function ProjectsScreen() {
   const c = useColors();
   const { activeDevice, connectionStatus } = useDevice();
   const cloud = useCloudStudio();
+  const layout = useResponsiveLayout();
   const legacyTvRunner = IS_TV
     && activeDevice?.name.trim().toLowerCase().replace(/\.local$/, "") === "ubuntu-4gb-hel1-1"
     && !activeDevice.cloudWorkspaceId;
@@ -182,6 +184,10 @@ export default function ProjectsScreen() {
         ) : localProjects.map((project) => (
           <Pressable key={project.path} style={({ focused }) => [styles.card, { backgroundColor: c.bgCard, borderColor: c.border }, focused && styles.focused]} onPress={() => {
             quicClient.setWorkDir(project.path).catch(() => {});
+            if (layout.isTablet) {
+              router.push({ pathname: "/vibe-studio", params: { project: project.path } });
+              return;
+            }
             setPendingVibingProject(project.path);
             router.push("/vibing");
           }}>

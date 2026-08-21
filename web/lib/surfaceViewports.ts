@@ -80,14 +80,14 @@ export const SURFACE_PROFILES: Record<YaverSurface, SurfaceProfile> = {
   // A ~10" Android tablet in LANDSCAPE (Playwright's Galaxy Tab S9 landscape
   // descriptor: 1024x640 CSS @2.5x, a real Samsung ~11" panel). This is the
   // geometry that trips the app's tablet-landscape branch (short-edge >= 600
-  // AND landscape/width >= 900 in useResponsiveLayout), which is the shape the
+  // AND actual landscape orientation in useResponsiveLayout), which is the shape the
   // Vibe Studio split (preview-LEFT / chat-RIGHT) is built for. Portrait tablet
   // stays the plain `tablet` profile above.
   tabletLandscape: {
     playwrightDevice: "Galaxy Tab S9 landscape",
     width: 1024, height: 640, deviceScaleFactor: 2.5,
     isMobile: true, hasTouch: true,
-    why: "useResponsiveLayout classifies a ~10\" Android tablet in landscape as tablet-landscape (short-edge 640 >= 600, width 1024 >= 900) and renders the two-pane Vibe Studio; a portrait 810x1080 profile drives the tablet-portrait tree instead. Dimensions come from Playwright's Galaxy Tab S9 landscape descriptor.",
+    why: "useResponsiveLayout classifies a ~10\" Android tablet in landscape as tablet-landscape (short-edge 640 >= 600 and width > height) and renders the two-pane Vibe Studio; a portrait 810x1080 profile drives the tablet-portrait tree instead. Dimensions come from Playwright's Galaxy Tab S9 landscape descriptor.",
   },
   tv: {
     playwrightDevice: null,

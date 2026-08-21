@@ -146,7 +146,7 @@ import {
 import { visibleProjectPickerRows } from "../../src/lib/projectPickerRows";
 import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
 import { withAlpha } from "../../src/lib/themeUtils";
-import { lightCardShadow, monoFamily, spacing, typography } from "../../src/theme/tokens";
+import { layoutTokens, lightCardShadow, monoFamily, spacing, typography } from "../../src/theme/tokens";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 import { CommandsPanel } from "../../src/components/CommandCard";
 import {
@@ -1727,8 +1727,10 @@ function LiveConsoleSection({
   rawVersion: number;
 }) {
   const c = useColors();
-  const [expanded, setExpanded] = useState(true);
   const isRunning = task.status === "running" || task.status === "queued";
+  // A finished task opens as a quiet folded console; live work opens so the
+  // runner narrates itself. The user can override either state with one tap.
+  const [expanded, setExpanded] = useState(isRunning);
   // Only render when there is something to show — either live bytes now
   // or a retained tail from a finished task. rawVersion is read so a
   // streaming task's new frames re-render this section.
@@ -7745,7 +7747,28 @@ export default function TasksScreen() {
               // "tap the empty strip to dismiss" half-measure. The +
               // opens the composer; the ‹ chevron collapses back to the
               // full-width single-pane list.
-              <View style={[s.cockpitListPane, { backgroundColor: c.bg, borderRightColor: c.border, paddingTop: insets.top + 8 }]}>
+              <View style={[
+                s.cockpitListPane,
+                {
+                  backgroundColor: c.bg,
+                  borderRightColor: c.border,
+                  paddingTop: insets.top + 8,
+                  width: Math.min(
+                    layoutTokens.pane.maxListWidth,
+                    Math.max(layoutTokens.pane.minListWidth, layout.width * 0.38),
+                  ),
+                  // RN-web maps `flex: 0` to a ZERO flex-basis, which wins
+                  // over width and collapsed this pane to a 1px strip while
+                  // the detail covered the whole tablet. Pin both width and
+                  // basis explicitly so native and web keep the same cockpit.
+                  flexBasis: Math.min(
+                    layoutTokens.pane.maxListWidth,
+                    Math.max(layoutTokens.pane.minListWidth, layout.width * 0.38),
+                  ),
+                  flexGrow: 0,
+                  flexShrink: 0,
+                },
+              ]}>
                 <View style={s.cockpitListHeader}>
                   <Text style={[s.cockpitListTitle, { color: c.textPrimary }]}>Tasks</Text>
                   <View style={{ flex: 1 }} />
@@ -7819,7 +7842,8 @@ export default function TasksScreen() {
                   s.chatModal,
                   { backgroundColor: c.bg },
                   tabletDualPane ? {
-                    width: Math.max(560, layout.width * 0.58),
+                    flex: 1,
+                    minWidth: layoutTokens.pane.detailMinWidth,
                     borderTopLeftRadius: 24,
                     borderBottomLeftRadius: 24,
                     borderTopRightRadius: 0,
@@ -8319,6 +8343,7 @@ export default function TasksScreen() {
                           defaultExpanded={selectedTask.status === "failed"}
                         />
                         <LiveConsoleSection
+                          key={selectedTask.id}
                           task={selectedTask}
                           rawText={rawBufRef.current}
                           live={rawLive}

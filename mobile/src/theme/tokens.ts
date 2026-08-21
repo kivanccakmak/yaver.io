@@ -1,3 +1,5 @@
+import { TABLET_SHORT_EDGE } from "../lib/responsiveLayoutCore";
+
 export const spacing = {
   xs: 4,
   sm: 8,
@@ -9,13 +11,11 @@ export const spacing = {
 } as const;
 
 // Width breakpoints used by useResponsiveLayout. Anything below
-// `tablet` is treated as a phone; tablet-portrait flips into
-// landscape behaviour above `tabletLandscape`. Foldables that
-// stretch into the 600-900pt band land in tablet-portrait, which
-// is intentional — single-pane with grids feels right at that
-// size.
+// `tablet` is treated as a phone. Orientation alone selects portrait versus
+// landscape; `tabletLandscape` remains a content-density breakpoint for
+// individual grids, never an orientation override.
 export const breakpoints = {
-  tablet: 600,
+  tablet: TABLET_SHORT_EDGE,
   tabletLandscape: 900,
   desktop: 1200,
 } as const;

@@ -22,6 +22,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -59,6 +60,9 @@ export default function VibeStudioScreen() {
   const [paramMissed, setParamMissed] = useState<string | null>(null);
   const [lane, setLane] = useState<Lane>("browser");
   const [peekOpen, setPeekOpen] = useState(false);
+  const [previewTargetUrl, setPreviewTargetUrl] = useState<string | null>(null);
+  const [previewStarting, setPreviewStarting] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   // Drag-divider split ratio (web parity — WebReloadView/RuntimeLabView). The
   // left preview pane flexes to splitRatio, the right chat pane to 1-splitRatio.
   const [splitRatio, setSplitRatio] = useState(0.55);
@@ -67,6 +71,10 @@ export default function VibeStudioScreen() {
   const loadedOnceRef = useRef(false);
 
   const landscape = layout.layoutClass === "tablet-landscape";
+  const mobileTarget = !!project && (
+    (project.surfaces || []).includes("mobile") ||
+    /expo|react-native|flutter|ios|android|mobile/i.test(project.framework || "")
+  );
 
   // Load projects from the box on connect. Auto-select the first mobile/web
   // project so the pane isn't empty on first open; the user can change it.
@@ -128,15 +136,66 @@ export default function VibeStudioScreen() {
   const pickProject = useCallback((p: Project) => {
     setProject(p);
     setParamMissed(null);
+    setPreviewTargetUrl(null);
+    setPreviewError(null);
     setShowProjectPicker(false);
   }, []);
 
-  const targetUrl = useCallback((): string | undefined => {
-    if (!project) return undefined;
-    // Browser-lane target for the frame lane: point headless Chrome at the
-    // box's dev server when we can, else let the pane start on its own.
-    return undefined;
-  }, [project]);
+  const refreshPreviewTarget = useCallback(async () => {
+    if (!connected || !project) {
+      setPreviewTargetUrl(null);
+      return null;
+    }
+    try {
+      const status = await quicClient.getDevServerStatus();
+      const normalizedWorkDir = status?.workDir?.replace(/\/$/, "");
+      const normalizedProject = project.path.replace(/\/$/, "");
+      const sameProject = !normalizedWorkDir ||
+        normalizedWorkDir === normalizedProject ||
+        normalizedWorkDir.startsWith(`${normalizedProject}/`) ||
+        normalizedProject.startsWith(`${normalizedWorkDir}/`);
+      const ready = !!status && sameProject && (status.serving ?? status.running) && status.port > 0;
+      const next = ready ? `http://127.0.0.1:${status.port}/` : null;
+      setPreviewTargetUrl(next);
+      return next;
+    } catch {
+      setPreviewTargetUrl(null);
+      return null;
+    }
+  }, [connected, project]);
+
+  useEffect(() => {
+    void refreshPreviewTarget();
+  }, [refreshPreviewTarget]);
+
+  const startBrowserPreview = useCallback(async () => {
+    if (!connected || !project || previewStarting) return;
+    setPreviewStarting(true);
+    setPreviewError(null);
+    try {
+      const started = await quicClient.startDevServer({
+        framework: project.framework || "",
+        workDir: project.path,
+        web: true,
+      });
+      let url = started && (started.serving ?? started.running) && started.port > 0
+        ? `http://127.0.0.1:${started.port}/`
+        : null;
+      // /dev/start may return while a cold web compile is still starting.
+      for (let attempt = 0; !url && attempt < 12; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        url = await refreshPreviewTarget();
+      }
+      if (!url) {
+        throw new Error("The box accepted the preview request but did not begin serving it yet.");
+      }
+      setPreviewTargetUrl(url);
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : "Could not start the project preview.");
+    } finally {
+      setPreviewStarting(false);
+    }
+  }, [connected, previewStarting, project, refreshPreviewTarget]);
 
   const headerRight = (
     <View style={styles.headerRight}>
@@ -147,6 +206,9 @@ export default function VibeStudioScreen() {
               key={l}
               onPress={() => setLane(l)}
               style={[styles.laneBtn, lane === l && { backgroundColor: c.accentSoft }]}
+              accessibilityRole="button"
+              accessibilityState={{ selected: lane === l }}
+              accessibilityLabel={`${l === "browser" ? "Browser" : "Live"} preview lane`}
             >
               <Text style={[styles.laneBtnText, { color: lane === l ? c.accent : c.textSecondary }]}>
                 {l === "browser" ? "Browser" : "Live"}
@@ -158,6 +220,8 @@ export default function VibeStudioScreen() {
       <Pressable
         onPress={handleRequestProject}
         style={[styles.projectBtn, { borderColor: c.border }]}
+        accessibilityRole="button"
+        accessibilityLabel={project ? `Change project, currently ${project.name}` : "Pick project"}
       >
         <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "700" }} numberOfLines={1}>
           {project ? project.name : loadingProjects ? "Loading projects…" : "Pick project"}
@@ -168,14 +232,22 @@ export default function VibeStudioScreen() {
 
   const projectPicker = showProjectPicker ? (
     <View style={[styles.pickerOverlay, { backgroundColor: "rgba(0,0,0,0.5)" }]}>
-      <View style={[styles.pickerCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+      <View
+        style={[styles.pickerCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
+        accessibilityViewIsModal
+      >
         <View style={[styles.pickerHeader, { borderBottomColor: c.borderSubtle }]}>
           <Text style={[styles.pickerTitle, { color: c.textPrimary }]}>Project</Text>
-          <Pressable onPress={() => setShowProjectPicker(false)} hitSlop={10}>
+          <Pressable
+            onPress={() => setShowProjectPicker(false)}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Close project picker"
+          >
             <Ionicons name="close" size={18} color={c.textMuted} />
           </Pressable>
         </View>
-        <View style={styles.pickerList}>
+        <ScrollView style={styles.pickerList} showsVerticalScrollIndicator>
           {loadingProjects ? <ActivityIndicator color={c.textMuted} style={{ padding: 16 }} /> : null}
           {projects.map((p) => (
             <Pressable
@@ -200,14 +272,14 @@ export default function VibeStudioScreen() {
               No projects discovered yet — connect a box and refresh.
             </Text>
           ) : null}
-        </View>
+        </ScrollView>
       </View>
     </View>
   ) : null;
 
   return (
     <View style={[styles.safe, { backgroundColor: c.bg }]}>
-      <AppScreenHeader title="Vibe Studio" onBack={() => router.back()} right={headerRight} />
+      <AppScreenHeader title="Vibing" onBack={() => router.back()} right={headerRight} />
 
       {landscape ? (
         /* ── LANDSCAPE: preview LEFT / chat RIGHT ─────────────────── */
@@ -220,31 +292,57 @@ export default function VibeStudioScreen() {
         >
           <View style={[styles.leftPane, { flex: splitRatio }]} testID="studio-left-pane">
             <View style={styles.deviceStage}>
-              <View style={[styles.deviceFrame, { backgroundColor: "#09090b", borderColor: c.border }]}> 
-                <View style={[styles.deviceSpeaker, { backgroundColor: c.border }]} />
-                <View style={[styles.deviceScreen, { backgroundColor: c.bgCard }]}> 
+              <View style={[
+                mobileTarget ? styles.deviceFrame : styles.browserFrame,
+                { backgroundColor: "#09090b", borderColor: c.border },
+              ]}>
+                {mobileTarget ? <View style={[styles.deviceSpeaker, { backgroundColor: c.border }]} /> : null}
+                <View style={[
+                  styles.deviceScreen,
+                  !mobileTarget && styles.browserScreen,
+                  { backgroundColor: c.bgCard },
+                ]}>
                   {/* Persistent phone-frame content. The base empty pane sits
                       beneath EVERY lane so the frame is never a blank box while
                       the box has no dev server or the preview has not rendered
                       (paneMode DevPreview returns null until a status exists). */}
                   <View style={[styles.emptyPaneFill, { borderColor: c.borderSubtle }]}> 
-                    <Ionicons name="phone-portrait-outline" size={28} color={c.textTertiary} />
+                    <Ionicons name={mobileTarget ? "phone-portrait-outline" : "browsers-outline"} size={28} color={c.textTertiary} />
                     <Text style={{ color: c.textTertiary, fontSize: 13, marginTop: 8, textAlign: "center" }}>
-                      The mobile frame is ready. Pick a project or wait for the preview to load.
+                      {project ? "Preview this project beside the conversation." : "Pick a project to open its preview."}
                     </Text>
                     {paramMissed ? (
                       <Text style={{ color: c.warn, fontSize: 12, marginTop: 8, textAlign: "center", paddingHorizontal: 12 }}>
                         {paramMissed}
                       </Text>
                     ) : null}
+                    {previewError ? (
+                      <Text style={{ color: c.error, fontSize: 12, marginTop: 8, textAlign: "center", paddingHorizontal: 12 }}>
+                        {previewError}
+                      </Text>
+                    ) : null}
+                    {project && connected && !previewTargetUrl ? (
+                      <Pressable
+                        onPress={() => void startBrowserPreview()}
+                        disabled={previewStarting}
+                        style={[styles.startPreviewBtn, { backgroundColor: c.accentSoft }]}
+                        accessibilityRole="button"
+                        accessibilityLabel="Start project preview"
+                      >
+                        {previewStarting ? <ActivityIndicator size="small" color={c.accent} /> : null}
+                        <Text style={{ color: c.accent, fontSize: 13, fontWeight: "700" }}>
+                          {previewStarting ? "Starting preview…" : "Start preview"}
+                        </Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                   {lane === "browser" ? (
                     <View style={styles.paneHost}>
                       <DevPreview paneMode />
                     </View>
-                  ) : project ? (
+                  ) : project && previewTargetUrl ? (
                     <View style={styles.paneHost}>
-                      <LivePreviewPane key={project.path} project={project.name} targetUrl={targetUrl()} />
+                      <LivePreviewPane key={`${project.path}:${previewTargetUrl}`} project={project.name} targetUrl={previewTargetUrl} />
                     </View>
                   ) : null}
                 </View>
@@ -257,6 +355,12 @@ export default function VibeStudioScreen() {
             testID="studio-divider"
             accessibilityRole="adjustable"
             accessibilityLabel="Resize preview split"
+            accessibilityValue={{ min: 32, max: 72, now: Math.round(splitRatio * 100), text: `${Math.round(splitRatio * 100)} percent preview` }}
+            accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+            onAccessibilityAction={(event) => {
+              const delta = event.nativeEvent.actionName === "increment" ? 0.05 : -0.05;
+              setSplitRatio((value) => Math.max(0.32, Math.min(0.72, value + delta)));
+            }}
             onStartShouldSetResponder={() => true}
             onResponderGrant={(e) => {
               dividerDragRef.current = { startX: e.nativeEvent.pageX, startRatio: splitRatio };
@@ -307,11 +411,27 @@ export default function VibeStudioScreen() {
                   <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: "600" }}>Collapse</Text>
                 </Pressable>
               </View>
-              {project ? (
-                <LivePreviewPane key={project.path} project={project.name} targetUrl={targetUrl()} height={280} />
+              {project && previewTargetUrl ? (
+                <LivePreviewPane key={`${project.path}:${previewTargetUrl}`} project={project.name} targetUrl={previewTargetUrl} height={Math.min(360, Math.round(layout.height * 0.36))} />
               ) : (
                 <View style={[styles.emptyPane, { borderColor: c.borderSubtle }]}>
-                  <Text style={{ color: c.textTertiary, fontSize: 13 }}>Pick a project to preview.</Text>
+                  <Text style={{ color: c.textTertiary, fontSize: 13, textAlign: "center" }}>
+                    {project ? previewError || "Start the project preview to show it here." : "Pick a project to preview."}
+                  </Text>
+                  {project && connected ? (
+                    <Pressable
+                      onPress={() => void startBrowserPreview()}
+                      disabled={previewStarting}
+                      style={[styles.startPreviewBtn, { backgroundColor: c.accentSoft }]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Start project preview"
+                    >
+                      {previewStarting ? <ActivityIndicator size="small" color={c.accent} /> : null}
+                      <Text style={{ color: c.accent, fontSize: 13, fontWeight: "700" }}>
+                        {previewStarting ? "Starting preview…" : "Start preview"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               )}
             </View>
@@ -319,6 +439,8 @@ export default function VibeStudioScreen() {
             <Pressable
               onPress={() => setPeekOpen(true)}
               style={[styles.peekTab, { borderTopColor: c.border, backgroundColor: c.surface }]}
+              accessibilityRole="button"
+              accessibilityLabel="Open project preview"
             >
               <Ionicons name="expand-outline" size={14} color={c.textSecondary} />
               <Text style={{ color: c.textSecondary, fontSize: 12, fontWeight: "600" }}>Preview</Text>
@@ -385,8 +507,16 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     alignItems: "center",
   },
+  browserFrame: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 18,
+    borderWidth: 4,
+    padding: 4,
+  },
   deviceSpeaker: { width: 76, height: 5, borderRadius: 3, marginBottom: 6 },
   deviceScreen: { flex: 1, width: "100%", minHeight: 0, borderRadius: 20, overflow: "hidden" },
+  browserScreen: { borderRadius: 12 },
   // Absolute-fill base beneath every lane so the phone frame is never blank
   // while the preview is loading or the box has no dev server.
   emptyPaneFill: {
@@ -424,11 +554,24 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   emptyPane: {
-    flex: 1,
+    minHeight: 220,
     alignItems: "center",
     justifyContent: "center",
+    padding: 18,
+    gap: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 12,
+  },
+  startPreviewBtn: {
+    minHeight: 38,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 10,
   },
   pickerOverlay: {
     ...StyleSheet.absoluteFillObject,

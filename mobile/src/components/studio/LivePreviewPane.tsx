@@ -59,6 +59,7 @@ export function LivePreviewPane({
   const [fps, setFps] = useState<string>("");
   const unsubscribeRef = useRef<null | (() => void)>(null);
   const startedRef = useRef(false);
+  const ownsSessionRef = useRef(false);
 
   // Establish or reuse a session, then subscribe to the SSE frame stream.
   useEffect(() => {
@@ -76,9 +77,16 @@ export function LivePreviewPane({
           setStarting(true);
           s = await startPreview({ project, targetUrl, mode: "live" });
           setStarting(false);
+          ownsSessionRef.current = !!s;
         }
         if (cancelled) return;
-        if (s) setFps(`${s.profile.fps} fps · ${s.profile.name}`);
+        if (s) {
+          setFps(`${s.profile.fps} fps · ${s.profile.name}`);
+        } else {
+          setError(targetUrl
+            ? "The box did not start a live preview session. Retry after the browser preview is serving."
+            : "Start the browser preview first so Yaver has a render target.");
+        }
         setLoading(false);
       } catch (e) {
         if (cancelled) return;
@@ -120,7 +128,10 @@ export function LivePreviewPane({
   // eating RAM on a 4 GB box (the box renders the capture in this lane).
   useEffect(() => {
     return () => {
-      if (startedRef.current) void stopPreview(project);
+      // Reusing another viewer's session does not make this pane its owner.
+      // Stopping it on navigation would blank web/TV viewers that are still
+      // watching the same project.
+      if (ownsSessionRef.current) void stopPreview(project);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
@@ -178,7 +189,10 @@ export function LivePreviewPane({
                   void startPreview({ project, targetUrl, mode: "live" })
                     .then((s) => {
                       setLoading(false);
-                      if (s) setFps(`${s.profile.fps} fps · ${s.profile.name}`);
+                      if (s) {
+                        ownsSessionRef.current = true;
+                        setFps(`${s.profile.fps} fps · ${s.profile.name}`);
+                      }
                     })
                     .catch((e: Error) => {
                       setLoading(false);
