@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -60,10 +61,12 @@ func TestPhoneOnlyTodoE2E_MobileHTTPFlow(t *testing.T) {
 	baseURL, cancel := startTestServer(t, "phone-tok", tm)
 	defer cancel()
 
+	// Keep the CRUD/HTTP arc deterministic. A non-empty prompt invokes a real
+	// runner and turns provider auth into an unrelated prerequisite; live model
+	// verification belongs to the separate runner probe and vibe loop.
 	create := phoneOnlyPostJSON(t, baseURL, "phone-tok", "/phone/projects/create", `{
 		"name":"Phone Only Todo",
-		"template":"todos",
-		"prompt":"Build a mobile-only todo app with a local backend."
+		"template":"todos"
 	}`)
 	slug, _ := create["slug"].(string)
 	projectDir, _ := create["dir"].(string)
@@ -92,7 +95,10 @@ func TestPhoneOnlyTodoE2E_MobileHTTPFlow(t *testing.T) {
 		t.Fatalf("expected seeded todos, got %+v", browse)
 	}
 
-	vibing := phoneOnlyGetJSON(t, baseURL, "phone-tok", "/vibing?query="+projectDir)
+	// The create response already gives us the canonical absolute path. Passing
+	// it as path avoids asking project discovery to rediscover a backend-only
+	// scaffold that intentionally has no package manifest yet.
+	vibing := phoneOnlyGetJSON(t, baseURL, "phone-tok", "/vibing?path="+url.QueryEscape(projectDir))
 	if vibing["path"] != projectDir {
 		t.Fatalf("vibing path = %v, want %s", vibing["path"], projectDir)
 	}
@@ -107,7 +113,10 @@ func TestPhoneOnlyTodoE2E_MobileHTTPFlow(t *testing.T) {
 	}
 
 	execBody, _ := json.Marshal(map[string]string{
-		"prompt":      prompt,
+		// Quick actions may be deterministic runtime operations (deploy/switch)
+		// and legitimately return no coding task. Exercise the coding lane with
+		// an explicit edit request while retaining the quick-action UI assertion.
+		"prompt":      "Add a completed-state filter to the todo list.",
 		"projectPath": projectDir,
 		"projectName": "Phone Only Todo",
 	})

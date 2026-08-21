@@ -8097,7 +8097,7 @@ func runSSHWrap(args []string) {
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			if ee, ok := err.(*osexec.ExitError); ok {
-				printSSHResolutionDiagnostic(target, dest, resolvedDevice)
+				reportSSHExitFailure(ee.ExitCode(), target, dest, passthrough, resolvedDevice)
 				os.Exit(ee.ExitCode())
 			}
 			fmt.Fprintf(os.Stderr, "ssh: %v\n", err)
@@ -8120,8 +8120,33 @@ func runSSHWrap(args []string) {
 		}
 		fmt.Fprintf(os.Stderr, "  relay shell also unavailable.\n")
 	}
-	printSSHResolutionDiagnostic(target, dest, resolvedDevice)
+	reportSSHExitFailure(exitCode, target, dest, passthrough, resolvedDevice)
 	os.Exit(exitCode)
+}
+
+// reportSSHExitFailure keeps transport failures separate from failures of a
+// command that SSH successfully ran. OpenSSH reserves 255 for connection,
+// authentication, and protocol errors; every other non-zero code came from the
+// remote command. Treating (for example) 127 as "did not connect" hid the real
+// issue and sent users toward relay/network repair even though the box answered.
+func reportSSHExitFailure(exitCode int, target, dest string, passthrough []string, dev *DeviceInfo) {
+	if sshExitIsTransportFailure(exitCode) {
+		printSSHResolutionDiagnostic(target, dest, dev)
+		return
+	}
+	if message := sshRemoteCommandFailureMessage(exitCode, passthrough); message != "" {
+		fmt.Fprint(os.Stderr, message)
+	}
+}
+
+func sshExitIsTransportFailure(exitCode int) bool { return exitCode == 255 }
+
+func sshRemoteCommandFailureMessage(exitCode int, passthrough []string) string {
+	if exitCode != 127 || len(passthrough) == 0 {
+		return ""
+	}
+	return "yaver ssh: the box connected, but the remote command was not found (exit 127).\n" +
+		"  hint: non-interactive SSH may have a smaller PATH; run the command through a login shell (`bash -lc ...`).\n"
 }
 
 // printSSHResolutionDiagnostic explains what `yaver ssh` resolved to

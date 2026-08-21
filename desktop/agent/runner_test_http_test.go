@@ -42,6 +42,22 @@ func TestRunRunnerProbeOpenCodeUsesMobileWorkspaceLauncher(t *testing.T) {
 	}
 }
 
+func TestLiveMobileWorkspaceOpenCodeDeepSeek(t *testing.T) {
+	if os.Getenv("YAVER_LIVE_OPENCODE_DEEPSEEK") != "1" {
+		t.Skip("set YAVER_LIVE_OPENCODE_DEEPSEEK=1 on a configured remote box")
+	}
+	out, err := runRunnerProbe(RunnerConfig{
+		RunnerID: "opencode",
+		Model:    "deepseek/deepseek-v4-flash",
+	}, "opencode", "Reply with exactly YAVER_DEEPSEEK_OK and nothing else.", 75*time.Second)
+	if err != nil {
+		t.Fatalf("live OpenCode + DeepSeek probe failed: %v; output=%q", err, out)
+	}
+	if !strings.Contains(out, "YAVER_DEEPSEEK_OK") {
+		t.Fatalf("live OpenCode + DeepSeek probe returned unexpected output: %q", out)
+	}
+}
+
 func TestRunRunnerProbeCodexUsesDangerousBypass(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args.txt")

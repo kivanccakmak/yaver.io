@@ -93,3 +93,25 @@ func TestSSHArgsWithSurvivabilityAcceptsNewHostKeys(t *testing.T) {
 		t.Fatalf("watchdog ssh must not fail after offering unrelated agent keys, got %s", watchdogArgs)
 	}
 }
+
+func TestReportSSHExitFailureSeparatesRemoteCommandFromTransport(t *testing.T) {
+	if !sshExitIsTransportFailure(255) {
+		t.Fatal("OpenSSH exit 255 must be classified as a transport failure")
+	}
+	for _, exitCode := range []int{1, 2, 126, 127} {
+		if sshExitIsTransportFailure(exitCode) {
+			t.Fatalf("remote command exit %d must not be classified as a transport failure", exitCode)
+		}
+	}
+
+	message := sshRemoteCommandFailureMessage(127, []string{"missing-command"})
+	if !strings.Contains(message, "box connected") || !strings.Contains(message, "bash -lc") {
+		t.Fatalf("exit 127 must provide the login-shell recovery route, got %q", message)
+	}
+	if strings.Contains(message, "did not connect") {
+		t.Fatalf("remote command failure must not claim the SSH transport failed: %q", message)
+	}
+	if got := sshRemoteCommandFailureMessage(1, []string{"false"}); got != "" {
+		t.Fatalf("ordinary remote exit should pass through without invented advice, got %q", got)
+	}
+}
