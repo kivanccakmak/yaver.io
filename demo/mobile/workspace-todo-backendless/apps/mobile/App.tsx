@@ -197,6 +197,7 @@ export default function App() {
                 onPress={() => dispatch({ type: "toggle", id: item.id })}
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: item.completed }}
+                aria-checked={item.completed}
                 accessibilityLabel={item.title}
                 accessibilityHint={item.completed ? "Marks task as open" : "Marks task as complete"}
                 style={[styles.checkbox, item.completed && styles.checkboxChecked]}

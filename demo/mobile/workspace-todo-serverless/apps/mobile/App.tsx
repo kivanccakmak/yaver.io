@@ -287,6 +287,7 @@ export default function App() {
               <Pressable
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: todo.completed }}
+                aria-checked={todo.completed}
                 accessibilityLabel={`${todo.completed ? "Mark open" : "Complete"}: ${todo.title}`}
                 onPress={() => toggleTodo(todo.id)}
                 style={[styles.checkbox, todo.completed && styles.checkboxDone]}
