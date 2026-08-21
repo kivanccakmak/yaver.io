@@ -12,7 +12,7 @@ import {
   mergeStartedHtml,
   verifyEmailHtml,
 } from "./email";
-import { base32Decode, verifyTOTP } from "./totp";
+import { base32Decode, matchingTOTPStep } from "./totp";
 
 type OAuthProvider =
   | "google"
@@ -166,6 +166,7 @@ async function requireFreshTotp(
     totpEnabled?: boolean;
     totpSecret?: string;
     totpRecoveryCodes?: string;
+    totpLastUsedStep?: number;
   },
   providedCode: string | undefined,
 ) {
@@ -178,11 +179,17 @@ async function requireFreshTotp(
   if (!user.totpSecret) throw new Error("TOTP_MISCONFIGURED");
 
   const secretBytes = base32Decode(user.totpSecret);
-  const ok = await verifyTOTP(secretBytes, code);
-  if (ok) return;
+  const matchedStep = await matchingTOTPStep(secretBytes, code);
+  if (
+    matchedStep !== null &&
+    (user.totpLastUsedStep === undefined || matchedStep > user.totpLastUsedStep)
+  ) {
+    await ctx.db.patch(user._id, { totpLastUsedStep: matchedStep });
+    return;
+  }
 
   if (user.totpRecoveryCodes) {
-    const codeHash = await sha256Hex(code);
+    const codeHash = await sha256Hex(code.toLowerCase());
     const hashes: string[] = JSON.parse(user.totpRecoveryCodes);
     const idx = hashes.indexOf(codeHash);
     if (idx !== -1) {
@@ -571,6 +578,7 @@ export async function validateSessionInternal(
     totpSecret?: string;
     totpEnabled?: boolean;
     totpRecoveryCodes?: string;
+    totpLastUsedStep?: number;
     emailVerified?: boolean;
     emailVerifiedAt?: number;
     createdAt: number;

@@ -4473,12 +4473,12 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "totp_disable",
-			"description": "Disable two-factor authentication. Requires a current 6-digit code from the authenticator (recovery codes are intentionally NOT accepted for disable, to stop an attacker with only leaked recovery codes from turning 2FA off).",
+			"description": "Disable two-factor authentication. Requires a current 6-digit authenticator code or one unused recovery code, in addition to the caller's authenticated session.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"code"},
 				"properties": map[string]interface{}{
-					"code": map[string]interface{}{"type": "string", "description": "Current 6-digit TOTP code from the authenticator"},
+					"code": map[string]interface{}{"type": "string", "description": "Current 6-digit TOTP code or one unused recovery code"},
 				},
 			},
 		},

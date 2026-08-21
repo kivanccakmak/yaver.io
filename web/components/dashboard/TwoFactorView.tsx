@@ -295,10 +295,10 @@ export default function TwoFactorView({ token, autoStart = false }: TwoFactorVie
         </div>
       )}
 
-      {/* Disable state — requires TOTP code */}
+      {/* Disable state — requires TOTP or recovery code */}
       {step === "disable" && (
         <div>
-          <p className="mb-3 text-sm text-surface-400">Enter a code from your authenticator app to disable 2FA:</p>
+          <p className="mb-3 text-sm text-surface-400">Enter a current authenticator code or one unused recovery code to disable 2FA:</p>
 
           {error && (
             <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-400">
@@ -310,12 +310,12 @@ export default function TwoFactorView({ token, autoStart = false }: TwoFactorVie
             <input
               type="text"
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
-              placeholder="000000"
-              inputMode="numeric"
+              onChange={(e) => setCode(e.target.value.toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, 32))}
+              placeholder="Authenticator or recovery code"
+              inputMode="text"
               autoComplete="one-time-code"
               autoFocus
-              className="w-32 rounded-lg border border-surface-700 bg-surface-900 px-3 py-2 text-center font-mono text-lg text-surface-100 placeholder-surface-600 outline-none focus:border-surface-500"
+              className="w-64 max-w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-2 text-center font-mono text-sm text-surface-100 placeholder-surface-600 outline-none focus:border-surface-500"
             />
             <button
               onClick={handleDisable}

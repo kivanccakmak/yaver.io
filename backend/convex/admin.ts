@@ -113,6 +113,7 @@ export const importUserBundle = internalMutation({
       totpSecret: v.optional(v.string()),
       totpEnabled: v.optional(v.boolean()),
       totpRecoveryCodes: v.optional(v.string()),
+      totpLastUsedStep: v.optional(v.number()),
     }),
     settings: v.optional(v.object({
       forceRelay: v.optional(v.boolean()),
@@ -171,6 +172,7 @@ export const importUserBundle = internalMutation({
       totpSecret: args.user.totpSecret,
       totpEnabled: args.user.totpEnabled,
       totpRecoveryCodes: args.user.totpRecoveryCodes,
+      totpLastUsedStep: args.user.totpLastUsedStep,
     };
 
     if (userDocId) {

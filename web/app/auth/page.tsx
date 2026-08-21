@@ -57,7 +57,9 @@ function AuthContent() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rePassword, setRePassword] = useState("");
-  const [setup2faAfterSignup, setSetup2faAfterSignup] = useState(true);
+  // Optional means opt-in: new accounts are not diverted into enrollment
+  // unless the user explicitly checks the box.
+  const [setup2faAfterSignup, setSetup2faAfterSignup] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);

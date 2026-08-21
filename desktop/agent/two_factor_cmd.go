@@ -61,7 +61,7 @@ func printTwoFactorHelp() {
 Usage:
   yaver 2fa status         Show whether 2FA is enabled for your account
   yaver 2fa enable         Enroll a TOTP app (Microsoft/Google Authenticator, 1Password…)
-  yaver 2fa disable        Remove 2FA from your account (requires a current code)
+  yaver 2fa disable        Remove 2FA (authenticator or unused recovery code)
 
 Notes:
   - 2FA is optional. If you never run 'enable', nothing changes.
@@ -69,9 +69,8 @@ Notes:
     sessions and the QUIC channel to your dev box are not affected.
   - At enrollment you receive 8 recovery codes. Keep them somewhere safe —
     each works once if you ever lose your authenticator device.
-  - Disabling requires a current TOTP code from your authenticator, not a
-    recovery code, to prevent an attacker with only a recovery-code leak from
-    turning 2FA off on your behalf.`)
+  - If the authenticator is lost, an unused recovery code plus this signed-in
+    session can disable 2FA so you can enroll a replacement.`)
 }
 
 func runTwoFactorStatus() {
@@ -166,7 +165,7 @@ func runTwoFactorDisable(args []string) {
 		code = strings.TrimSpace(args[0])
 	}
 	if code == "" {
-		fmt.Print("Enter a current 6-digit code from your authenticator to disable 2FA: ")
+		fmt.Print("Enter a current authenticator code or unused recovery code to disable 2FA: ")
 		reader := bufio.NewReader(os.Stdin)
 		codeLine, _ := reader.ReadString('\n')
 		code = strings.TrimSpace(codeLine)

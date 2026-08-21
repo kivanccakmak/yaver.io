@@ -37,6 +37,7 @@ interface SettingsViewProps {
     avatarUrl?: string;
   } | null;
   onLogout: () => void;
+  onOpenTwoFactor: () => void;
 }
 
 function AuthProviderIcon({
@@ -352,7 +353,7 @@ function RuntimeProjectDefaultsCard({ token, devices }: { token: string | null; 
   );
 }
 
-export default function SettingsView({ user, onLogout }: SettingsViewProps) {
+export default function SettingsView({ user, onLogout, onOpenTwoFactor }: SettingsViewProps) {
   const [identities, setIdentities] = useState<Array<{ provider: string; email: string | null; isPrimary: boolean }>>([]);
   const [emailPasswordEnabled, setEmailPasswordEnabled] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -688,6 +689,21 @@ export default function SettingsView({ user, onLogout }: SettingsViewProps) {
 
   return (
     <>
+      {/* Account security belongs in Settings. Keep the full enrollment flow
+          one level deeper so the default settings surface stays compact. */}
+      <button
+        type="button"
+        onClick={onOpenTwoFactor}
+        className="card mb-6 flex w-full items-center justify-between gap-4 text-left transition-colors hover:border-surface-700 hover:bg-surface-800/60"
+      >
+        <span>
+          <span className="block text-sm font-medium text-surface-100">Two-factor authentication</span>
+          <span className="mt-1 block text-xs leading-5 text-surface-500">
+            Optional · Google Authenticator, Microsoft Authenticator, 1Password, and other TOTP apps
+          </span>
+        </span>
+        <span aria-hidden className="shrink-0 text-surface-500">→</span>
+      </button>
       <PasskeysCard />
 
       <div className="card mb-6">

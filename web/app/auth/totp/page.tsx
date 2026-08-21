@@ -137,8 +137,9 @@ function TotpContent() {
 
   const handleCodeChange = (val: string) => {
     if (useRecovery) {
-      // Recovery codes are 10-char hex
-      setCode(val.toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, 10));
+      // Current recovery codes are 32-char hex (128 bits). Keep accepting the
+      // legacy 10-char form until every previously issued code is consumed.
+      setCode(val.toLowerCase().replace(/[^a-f0-9]/g, "").slice(0, 32));
     } else {
       // TOTP is 6 digits
       setCode(val.replace(/[^0-9]/g, "").slice(0, 6));

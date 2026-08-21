@@ -97,6 +97,11 @@ export default defineSchema({
     totpSecret: v.optional(v.string()),
     totpEnabled: v.optional(v.boolean()),
     totpRecoveryCodes: v.optional(v.string()),
+    // Highest 30-second RFC 6238 counter successfully used by this account.
+    // TOTP is only a one-time password if a verifier remembers successful
+    // use: accepting the same code through a second pending login inside the
+    // same time window is a replay (RFC 6238 section 5.2).
+    totpLastUsedStep: v.optional(v.number()),
     // emailVerified gates email-keyed auto-linking. OAuth-signup users
     // are verified-by-construction (the IdP attested the address).
     // Email + passkey signups start unverified and graduate to true
@@ -190,7 +195,8 @@ export default defineSchema({
     expiresAt: v.number(),
     createdAt: v.number(),
   })
-    .index("by_pendingToken", ["pendingToken"]),
+    .index("by_pendingToken", ["pendingToken"])
+    .index("by_userId", ["userId"]),
 
   // WebAuthn / passkey credentials. Strictly additive to the existing
   // password + OAuth flows: a user can have N passkeys attached to a

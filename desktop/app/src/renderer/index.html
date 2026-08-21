@@ -170,8 +170,8 @@
     </div>
     <!-- TOTP -->
     <div class="auth-box hidden" id="totp-box">
-      <p style="font-size:13px;color:var(--text-secondary);text-align:center">Enter your 2FA code</p>
-      <input class="input no-drag" id="totp-code" placeholder="6-digit code" maxlength="6" style="text-align:center;letter-spacing:4px;font-size:18px">
+      <p style="font-size:13px;color:var(--text-secondary);text-align:center">Enter your 6-digit authenticator code or a recovery code</p>
+      <input class="input no-drag" id="totp-code" placeholder="Authenticator or recovery code" maxlength="32" autocomplete="one-time-code" style="text-align:center;letter-spacing:2px;font-size:18px">
       <div id="totp-error" class="auth-error hidden"></div>
       <button class="btn btn-accent no-drag" onclick="handleTotpVerify()" style="width:100%">Verify</button>
     </div>
@@ -326,6 +326,10 @@
             <div id="settings-user" class="item" style="flex-direction:column;align-items:flex-start;gap:2px"></div>
             <button class="btn btn-ghost btn-sm no-drag hidden" id="btn-edit-name" onclick="editProfileName()" style="margin-top:6px;width:100%">Edit Name</button>
             <button class="btn btn-ghost btn-sm no-drag hidden" id="btn-change-pw" onclick="handleChangePw()" style="margin-top:4px;width:100%">Change Password</button>
+          </div>
+          <div class="section"><div class="section-title">Security</div>
+            <button class="btn btn-ghost btn-sm no-drag" onclick="window.yaver.openExternal('https://yaver.io/dashboard?tab=security')" style="width:100%">Two-factor authentication (optional)</button>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.5">Manage Google Authenticator, Microsoft Authenticator, and other TOTP apps in your account settings.</div>
           </div>
           <div class="section"><div class="section-title">AI Runner</div>
             <div id="settings-runners"></div>

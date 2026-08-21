@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -28,9 +29,9 @@ import {
 // optional; accounts that never visit this screen retain the exact same
 // sign-in flow as today (OAuth/email only). Recovery codes are shown
 // once at enrollment — the user must save them. If they lose the
-// authenticator AND the recovery codes, they keep all existing recovery
-// paths (device-code re-auth, password reset for email accounts, OAuth
-// re-sign-in via a trusted device).
+// authenticator, one unused recovery code plus an existing/authenticated
+// session can disable 2FA and enroll a replacement. Password reset and OAuth
+// never bypass the second factor.
 
 type Mode =
   | { kind: "loading" }
@@ -158,12 +159,19 @@ export default function TwoFactorSetupScreen() {
               <Text style={[styles.secretHint, { color: c.textMuted }]}>long-press to copy</Text>
             </Pressable>
             <Text style={[styles.cardBody, { color: c.textSecondary, marginTop: 12 }]}>
-              Or tap the otpauth link to send it to your authenticator:
+              Or open the setup link in an authenticator app:
             </Text>
-            <Pressable onPress={() => Clipboard.setStringAsync(mode.otpAuthUrl)}>
-              <Text style={[styles.link, { color: c.accent }]} numberOfLines={2}>
-                {mode.otpAuthUrl}
-              </Text>
+            <Pressable
+              onPress={async () => {
+                try {
+                  await Linking.openURL(mode.otpAuthUrl);
+                } catch {
+                  await Clipboard.setStringAsync(mode.otpAuthUrl);
+                  Alert.alert("Setup link copied", "Paste it into your authenticator app.");
+                }
+              }}
+            >
+              <Text style={[styles.link, { color: c.accent }]}>Open authenticator app</Text>
             </Pressable>
 
             <Text style={[styles.cardBody, { color: c.textSecondary, marginTop: 16 }]}>
@@ -225,7 +233,7 @@ export default function TwoFactorSetupScreen() {
               {mode.recoveryRemaining} recovery code{mode.recoveryRemaining === 1 ? "" : "s"} remaining.
             </Text>
             <Text style={[styles.cardBody, { color: c.textSecondary, marginTop: 12 }]}>
-              To turn 2FA off, enter a current 6-digit code:
+              To turn 2FA off, enter a current 6-digit code or one unused recovery code:
             </Text>
             <TextInput
               style={[styles.input, { color: c.textPrimary, borderColor: c.border }]}
@@ -233,8 +241,9 @@ export default function TwoFactorSetupScreen() {
               onChangeText={setCode}
               placeholder="123456"
               placeholderTextColor={c.textMuted}
-              keyboardType="number-pad"
-              maxLength={6}
+              keyboardType="default"
+              autoCapitalize="none"
+              maxLength={32}
             />
             <Pressable
               style={[styles.danger, { borderColor: "#ef4444", opacity: working ? 0.6 : 1 }]}

@@ -5388,7 +5388,9 @@ http.route({
       const result = await ctx.runMutation(api.totp.setupTotp, { tokenHash });
       return jsonResponse(result);
     } catch (e: any) {
-      return errorResponse(e.message || "Failed to setup TOTP", 400);
+      if (errorMessageIncludes(e, "Unauthorized")) return errorResponse("Unauthorized", 401, "unauthorized");
+      if (errorMessageIncludes(e, "already enabled")) return errorResponse("2FA is already enabled", 409, "already_enabled");
+      return errorResponse("Failed to set up TOTP", 400);
     }
   }),
 });
@@ -5419,7 +5421,7 @@ http.route({
   }),
 });
 
-/** POST /auth/totp/disable — Disable 2FA (authenticated, requires TOTP code). */
+/** POST /auth/totp/disable — Disable 2FA (authenticated, TOTP or recovery code). */
 http.route({
   path: "/auth/totp/disable",
   method: "POST",
@@ -5490,6 +5492,13 @@ http.route({
   path: "/auth/verify-totp",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
+    const perIp = await ctx.runMutation(internal.rateLimiter.enforceRateLimit, {
+      limitName: "auth-totp-ip",
+      subject: clientIpFromRequest(request),
+    });
+    if (!perIp.allowed) {
+      return errorResponse("Too many two-factor attempts. Wait a moment and sign in again.", 429, "rate_limited");
+    }
     const body = await request.json();
     if (!body.pendingToken || !body.code) {
       return errorResponse("pendingToken and code required", 400);
@@ -5500,7 +5509,13 @@ http.route({
         pendingToken: body.pendingToken,
         code: body.code,
       });
-      return jsonResponse(result);
+      if (result.ok) return jsonResponse({ token: result.token });
+      const s = result.code;
+      if (s === "INVALID_CODE") return errorResponse("Invalid code", 401, sentinelCode(s));
+      if (s === "INVALID_PENDING") return errorResponse("Invalid or expired session", 404, sentinelCode(s));
+      if (s === "PENDING_EXPIRED") return errorResponse("Session expired, please login again", 410, sentinelCode(s));
+      if (s === "TOO_MANY_ATTEMPTS") return errorResponse("Too many attempts, please login again", 429, sentinelCode(s));
+      return errorResponse("Verification failed", 400);
     } catch (e: any) {
       const s = thrownSentinel(e);
       if (s === "INVALID_CODE") return errorResponse("Invalid code", 401, sentinelCode(s));
@@ -10081,7 +10096,10 @@ http.route({
 
     if (!email) return redirectToAuth({ oidc_error: "no_email" });
 
-    // Upsert + session mint.
+    // Upsert, then apply the SAME second-factor gate as email, passkey,
+    // Apple-native, and the provider-specific OAuth callback. This callback
+    // used to mint a full session directly, so enabling generic enterprise
+    // OIDC silently bypassed TOTP for the account.
     const upserted = await ctx.runMutation(internal.admin.upsertOidcUser, {
       issuer: cfg.issuerUrl,
       sub,
@@ -10089,6 +10107,23 @@ http.route({
       name: name || undefined,
       avatarUrl: picture,
     });
+
+    const totpCheck = await ctx.runQuery(internal.auth.getUserWithTotp, {
+      userId: upserted.userDocId,
+    });
+    if (totpCheck?.totpEnabled) {
+      const { pendingToken } = await ctx.runMutation(internal.totp.createPendingAuth, {
+        userId: upserted.userDocId,
+      });
+      const challenge = new URL("/auth/totp", webBase);
+      challenge.searchParams.set("pendingToken", pendingToken);
+      challenge.searchParams.set("client", "web");
+      if (attempt.returnTo) challenge.searchParams.set("return", attempt.returnTo);
+      return new Response(null, {
+        status: 302,
+        headers: { Location: challenge.toString() },
+      });
+    }
 
     // Mint a Yaver session via the existing helper. The raw token
     // returned here is what the web client persists, mirroring the

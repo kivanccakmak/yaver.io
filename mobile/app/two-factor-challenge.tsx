@@ -92,7 +92,7 @@ export default function TwoFactorChallengeScreen() {
             keyboardType="number-pad"
             autoFocus
             autoCapitalize="characters"
-            maxLength={16}
+            maxLength={32}
           />
 
           {error ? (

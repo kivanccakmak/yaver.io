@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation } from "./_generated/server";
 import { validateSessionInternal, sha256Hex, randomHex } from "./auth";
+import { checkAndBumpRateLimit } from "./rateLimiter";
 
 // ── TOTP Algorithm (RFC 6238) ───────────────────────────────────────
 
@@ -86,15 +87,21 @@ async function generateTOTP(secret: Uint8Array, counter: number): Promise<string
 }
 
 /** Verify a TOTP code against a secret, allowing a time window. */
-export async function verifyTOTP(secret: Uint8Array, code: string): Promise<boolean> {
+export async function matchingTOTPStep(secret: Uint8Array, code: string): Promise<number | null> {
+  if (!/^\d{6}$/.test(code)) return null;
   const now = Math.floor(Date.now() / 1000);
   const counter = Math.floor(now / TOTP_PERIOD);
 
   for (let i = -TOTP_WINDOW; i <= TOTP_WINDOW; i++) {
     const expected = await generateTOTP(secret, counter + i);
-    if (expected === code) return true;
+    if (expected === code) return counter + i;
   }
-  return false;
+  return null;
+}
+
+/** Compatibility helper for callers that do not need replay state. */
+export async function verifyTOTP(secret: Uint8Array, code: string): Promise<boolean> {
+  return (await matchingTOTPStep(secret, code)) !== null;
 }
 
 // ── Mutations/Queries ───────────────────────────────────────────────
@@ -144,14 +151,18 @@ export const verifyAndEnableTotp = mutation({
     if (result.user.totpEnabled) throw new Error("2FA is already enabled.");
 
     const secretBytes = base32Decode(secret);
-    const valid = await verifyTOTP(secretBytes, args.code.trim());
-    if (!valid) throw new Error("INVALID_CODE");
+    const matchedStep = await matchingTOTPStep(secretBytes, args.code.trim());
+    if (matchedStep === null) throw new Error("INVALID_CODE");
 
     // Generate 8 recovery codes
     const recoveryCodes: string[] = [];
     const recoveryHashes: string[] = [];
     for (let i = 0; i < 8; i++) {
-      const code = randomHex(5); // 10-char hex
+      // 128 bits. Recovery codes are verifier-stored lookup secrets, so a
+      // database reader must not be able to exhaust their source space. Older
+      // 10-character codes remain valid until used; newly issued codes are
+      // deliberately stronger.
+      const code = randomHex(16); // 32-char hex
       recoveryCodes.push(code);
       recoveryHashes.push(await sha256Hex(code));
     }
@@ -159,6 +170,14 @@ export const verifyAndEnableTotp = mutation({
     await ctx.db.patch(result.user._id, {
       totpEnabled: true,
       totpRecoveryCodes: JSON.stringify(recoveryHashes),
+      totpLastUsedStep: matchedStep,
+    });
+    await ctx.db.insert("securityEvents", {
+      userId: result.user._id,
+      eventType: "totp_enabled",
+      details: JSON.stringify({ recoveryCodesIssued: recoveryCodes.length }),
+      read: false,
+      createdAt: Date.now(),
     });
 
     return { recoveryCodes };
@@ -166,7 +185,9 @@ export const verifyAndEnableTotp = mutation({
 });
 
 /**
- * Disable 2FA. Requires a valid TOTP code.
+ * Disable 2FA. Requires a valid TOTP code or one unused recovery code.
+ * The caller must also hold an authenticated session, so this is the route
+ * back into the account when the authenticator device is lost.
  */
 export const disableTotp = mutation({
   args: {
@@ -182,14 +203,32 @@ export const disableTotp = mutation({
     const secret = result.user.totpSecret;
     if (!secret) throw new Error("No TOTP secret.");
 
+    const entered = args.code.trim().toLowerCase();
     const secretBytes = base32Decode(secret);
-    const valid = await verifyTOTP(secretBytes, args.code.trim());
+    const matchedStep = await matchingTOTPStep(secretBytes, entered);
+    let valid = matchedStep !== null && (
+      result.user.totpLastUsedStep === undefined ||
+      matchedStep > result.user.totpLastUsedStep
+    );
+    if (!valid && result.user.totpRecoveryCodes) {
+      const codeHash = await sha256Hex(entered);
+      const hashes = JSON.parse(result.user.totpRecoveryCodes) as string[];
+      valid = hashes.includes(codeHash);
+    }
     if (!valid) throw new Error("INVALID_CODE");
 
     await ctx.db.patch(result.user._id, {
       totpSecret: undefined,
       totpEnabled: undefined,
       totpRecoveryCodes: undefined,
+      totpLastUsedStep: undefined,
+    });
+    await ctx.db.insert("securityEvents", {
+      userId: result.user._id,
+      eventType: "totp_disabled",
+      details: JSON.stringify({ method: /^\d{6}$/.test(entered) ? "totp" : "recovery_code" }),
+      read: false,
+      createdAt: Date.now(),
     });
 
     return { ok: true };
@@ -229,6 +268,16 @@ export const getTotpStatus = query({
 export const createPendingAuth = internalMutation({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
+    // One live challenge per account. Abandoned five-minute rows previously
+    // remained forever, making ordinary cancelled sign-ins an unbounded Convex
+    // storage leak. Replacing a challenge is safe because attempt throttling is
+    // also account-scoped (not stored only on this row).
+    const previous = await ctx.db
+      .query("pendingAuth")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const row of previous) await ctx.db.delete(row._id);
+
     const pendingToken = randomHex(20); // 40-char hex
     await ctx.db.insert("pendingAuth", {
       pendingToken,
@@ -256,25 +305,37 @@ export const verifyTotpForLogin = internalMutation({
       .withIndex("by_pendingToken", (q) => q.eq("pendingToken", args.pendingToken))
       .unique();
 
-    if (!pending) throw new Error("INVALID_PENDING");
+    if (!pending) return { ok: false as const, code: "INVALID_PENDING" as const };
     if (pending.expiresAt < Date.now()) {
       await ctx.db.delete(pending._id);
-      throw new Error("PENDING_EXPIRED");
+      return { ok: false as const, code: "PENDING_EXPIRED" as const };
     }
     if (pending.attempts >= 5) {
       await ctx.db.delete(pending._id);
-      throw new Error("TOO_MANY_ATTEMPTS");
+      return { ok: false as const, code: "TOO_MANY_ATTEMPTS" as const };
     }
 
-    // Increment attempts
-    await ctx.db.patch(pending._id, { attempts: pending.attempts + 1 });
-
     const user = await ctx.db.get(pending.userId);
-    if (!user || !user.totpSecret) throw new Error("USER_NOT_FOUND");
+    if (!user || !user.totpEnabled || !user.totpSecret) {
+      await ctx.db.delete(pending._id);
+      return { ok: false as const, code: "INVALID_PENDING" as const };
+    }
 
-    const code = args.code.trim();
+    const code = args.code.trim().toLowerCase();
     const secretBytes = base32Decode(user.totpSecret);
-    let valid = await verifyTOTP(secretBytes, code);
+    const matchedStep = await matchingTOTPStep(secretBytes, code);
+    let valid = matchedStep !== null;
+
+    // RFC 6238 section 5.2: a verifier MUST NOT accept a successful OTP a
+    // second time. A new pending token must not turn the current 30-second code
+    // back into a fresh credential.
+    if (
+      matchedStep !== null &&
+      user.totpLastUsedStep !== undefined &&
+      matchedStep <= user.totpLastUsedStep
+    ) {
+      valid = false;
+    }
 
     // Try recovery code if TOTP failed
     if (!valid && user.totpRecoveryCodes) {
@@ -291,7 +352,36 @@ export const verifyTotpForLogin = internalMutation({
       }
     }
 
-    if (!valid) throw new Error("INVALID_CODE");
+    if (!valid) {
+      // Per-pending counters alone are bypassable by asking the first factor
+      // for another pending token. This durable *failure* bucket follows the
+      // authenticator across pending tokens and Convex action instances,
+      // without penalizing many legitimate successful sign-ins.
+      const accountLimit = await checkAndBumpRateLimit(
+        ctx,
+        `auth-totp-user:${String(user._id)}`,
+        10,
+        15 * 60 * 1000,
+        Date.now(),
+      );
+      if (!accountLimit.allowed) {
+        await ctx.db.delete(pending._id);
+        return { ok: false as const, code: "TOO_MANY_ATTEMPTS" as const };
+      }
+      const attempts = pending.attempts + 1;
+      if (attempts >= 5) {
+        await ctx.db.delete(pending._id);
+        return { ok: false as const, code: "TOO_MANY_ATTEMPTS" as const };
+      }
+      // Return, do not throw: Convex rolls a mutation back on throw. The old
+      // patch-then-throw shape meant attempts stayed at zero forever.
+      await ctx.db.patch(pending._id, { attempts });
+      return { ok: false as const, code: "INVALID_CODE" as const };
+    }
+
+    if (matchedStep !== null) {
+      await ctx.db.patch(user._id, { totpLastUsedStep: matchedStep });
+    }
 
     // Create session
     const tokenBytes = new Uint8Array(32);
@@ -312,6 +402,6 @@ export const verifyTotpForLogin = internalMutation({
     // Clean up pending auth
     await ctx.db.delete(pending._id);
 
-    return { token };
+    return { ok: true as const, token };
   },
 });

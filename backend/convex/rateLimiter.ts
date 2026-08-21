@@ -89,6 +89,7 @@ export const NAMED_LIMITS: Record<string, { limit: number; windowMs: number }> =
   // retrying, tight enough to make a scripted loop pointless.
   "auth-signup-ip": { limit: 20, windowMs: 60 * 60 * 1000 }, // 20 signups/hr/IP
   "auth-login-ip": { limit: 60, windowMs: 10 * 60 * 1000 }, // 60 login tries/10min/IP
+  "auth-totp-ip": { limit: 30, windowMs: 10 * 60 * 1000 }, // 30 second-factor tries/10min/IP
   "auth-email-ip": { limit: 10, windowMs: 60 * 60 * 1000 }, // 10 verification emails/hr/IP
   "device-code-ip": { limit: 30, windowMs: 60 * 60 * 1000 }, // 30 headless-auth starts/hr/IP
   "oauth-callback-ip": { limit: 120, windowMs: 60 * 60 * 1000 }, // OAuth round-trips/hr/IP
