@@ -27,6 +27,9 @@ enum BoxlessDeepSeekKeyStore {
     private static let account = "api-key"
 
     static func load() -> String {
+        if let value = try? CredentialStore.withCredential(kind: "deepseek-api-key", { data in
+            String(data: data, encoding: .utf8) ?? ""
+        }), !value.isEmpty { return value }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -38,6 +41,10 @@ enum BoxlessDeepSeekKeyStore {
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data,
               let value = String(data: data, encoding: .utf8) else { return "" }
+        // Migrate the legacy per-provider Keychain item into the shared
+        // allowlisted vault, then remove the duplicate.
+        try? CredentialStore.save(kind: "deepseek-api-key", value: data)
+        clear()
         return value
     }
 
@@ -48,6 +55,7 @@ enum BoxlessDeepSeekKeyStore {
             return
         }
         let data = Data(normalized.utf8)
+        if (try? CredentialStore.save(kind: "deepseek-api-key", value: data)) != nil { clear(); return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

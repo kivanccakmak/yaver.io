@@ -16,6 +16,9 @@ packages:
   LiveKitWebRTC:
     url: https://github.com/livekit/webrtc-xcframework.git
     exactVersion: 144.7559.13
+  Sodium:
+    url: https://github.com/jedisct1/swift-sodium.git
+    exactVersion: 0.10.0
 targets:
   YaverTV:
     type: application
@@ -34,6 +37,7 @@ targets:
       # does not introduce a second media server. This binary ships explicit
       # tvOS device + simulator slices.
       - package: LiveKitWebRTC
+      - package: Sodium
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.yaver.mobile   # universal w/ the iPhone app (Universal Purchase)

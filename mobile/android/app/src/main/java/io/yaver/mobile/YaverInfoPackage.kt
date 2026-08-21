@@ -12,7 +12,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class YaverInfoPackage : ReactPackage {
   override fun createNativeModules(ctx: ReactApplicationContext): List<NativeModule> =
-      listOf(YaverInfoModule(ctx))
+      listOf(YaverInfoModule(ctx), YaverCredentialBleModule(ctx))
 
   override fun createViewManagers(
       ctx: ReactApplicationContext

@@ -695,15 +695,11 @@ export default function SettingsScreen() {
   // Load user settings, runners, and usage from Convex + local secrets
   useEffect(() => {
     if (!token) return;
-    // Load key storage preference (cloud setting wins over local)
+    // Provider credentials never sync through Convex. Migrate the stale cloud
+    // preference to device-only while preserving non-secret roaming prefs.
     getUserSettings(token).then(async (s) => {
-      if (s.keyStorage === "cloud" || s.keyStorage === "local") {
-        setKeyStorage(s.keyStorage);
-        await saveKeyStoragePreference(s.keyStorage);
-      } else {
-        const localPref = await getKeyStoragePreference();
-        setKeyStorage(localPref);
-      }
+      setKeyStorage("local");
+      await saveKeyStoragePreference("local");
       if (s.forceRelay !== undefined) {
         setForceRelay(s.forceRelay);
         quicClient.setForceRelay(s.forceRelay);
@@ -849,24 +845,12 @@ export default function SettingsScreen() {
         [LOCAL_KEYS.anthropicApiKey, anthropicApiKey],
         [LOCAL_KEYS.mobileCodingProvider, mobileCodingProvider],
       ];
-      if (keyStorage === "cloud") {
-        cloudSettings.openAiApiKey = openAiApiKey || "";
-        cloudSettings.glmApiKey = glmApiKey || "";
-        cloudSettings.anthropicApiKey = anthropicApiKey || "";
-        cloudSettings.mobileCodingProvider = mobileCodingProvider;
-        for (const [key] of secrets) {
-          await deleteLocalSecret(key);
-        }
-      } else {
-        for (const [key, value] of secrets) {
-          if (value) await saveLocalSecret(key, value);
-          else await deleteLocalSecret(key);
-        }
-        cloudSettings.openAiApiKey = "";
-        cloudSettings.glmApiKey = "";
-        cloudSettings.anthropicApiKey = "";
-        cloudSettings.mobileCodingProvider = "";
+      for (const [key, value] of secrets) {
+        if (value) await saveLocalSecret(key, value);
+        else await deleteLocalSecret(key);
       }
+      await saveKeyStoragePreference("local");
+      setKeyStorage("local");
       await saveUserSettings(token, cloudSettings);
       const now = Date.now();
       const statuses: ProviderKeyState[] = [];
@@ -4570,52 +4554,16 @@ export default function SettingsScreen() {
               <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 12 }}>
                 Where to store API keys, relay passwords, and other secrets
               </Text>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                <Pressable
-                  style={({ pressed }) => [
-                    {
-                      flex: 1, paddingVertical: 10, paddingHorizontal: 12,
-                      borderRadius: 8, borderWidth: 1, alignItems: "center",
-                      backgroundColor: keyStorage === "local" ? c.accent : c.bg,
-                      borderColor: keyStorage === "local" ? c.accent : c.border,
-                    },
-                    pressed && { opacity: 0.7 },
-                  ]}
-                  onPress={async () => {
-                    setKeyStorage("local");
-                    await saveKeyStoragePreference("local");
-                  }}
-                >
-                  <Text style={{ color: keyStorage === "local" ? "#fff" : c.textPrimary, fontWeight: "600", fontSize: 13 }}>
-                    Device only
-                  </Text>
-                  <Text style={{ color: keyStorage === "local" ? "rgba(255,255,255,0.7)" : c.textMuted, fontSize: 10, marginTop: 2, textAlign: "center" }}>
-                    Keychain / SecureStore
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={({ pressed }) => [
-                    {
-                      flex: 1, paddingVertical: 10, paddingHorizontal: 12,
-                      borderRadius: 8, borderWidth: 1, alignItems: "center",
-                      backgroundColor: keyStorage === "cloud" ? c.accent : c.bg,
-                      borderColor: keyStorage === "cloud" ? c.accent : c.border,
-                    },
-                    pressed && { opacity: 0.7 },
-                  ]}
-                  onPress={async () => {
-                    setKeyStorage("cloud");
-                    await saveKeyStoragePreference("cloud");
-                  }}
-                >
-                  <Text style={{ color: keyStorage === "cloud" ? "#fff" : c.textPrimary, fontWeight: "600", fontSize: 13 }}>
-                    Sync to cloud
-                  </Text>
-                  <Text style={{ color: keyStorage === "cloud" ? "rgba(255,255,255,0.7)" : c.textMuted, fontSize: 10, marginTop: 2, textAlign: "center" }}>
-                    Accessible from all devices
-                  </Text>
-                </Pressable>
+              <View style={{ paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.bg }}>
+                <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 13 }}>Device only</Text>
+                <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }}>iOS/tvOS Keychain · Android Keystore-backed SecureStore</Text>
               </View>
+              <Pressable
+                onPress={() => router.push("/secure-handoff")}
+                style={({ pressed }) => [{ marginTop: 10, paddingVertical: 11, paddingHorizontal: 12, borderRadius: 8, backgroundColor: c.accent }, pressed && { opacity: 0.75 }]}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>Share securely with another device</Text>
+              </Pressable>
             </View>
           </View>
         </View>}

@@ -274,6 +274,48 @@ Preferred flow when the phone already knows the device public key from Convex:
 
 This is the modern no-plaintext-on-LAN path.
 
+## Client-to-Client Secure Credential Handoff
+
+Provider API keys and Git tokens are not roaming preferences. Convex may store
+non-secret preferences and `hasApiKey`-style capability metadata, but raw
+credentials must stay in platform secure storage or a user-owned machine vault.
+`POST /settings` rejects raw credential fields with
+`SETTINGS_RAW_SECRET_FORBIDDEN`.
+
+The phone/tablet implementation lives in:
+
+- `mobile/src/lib/credentialHandoff.ts` — X25519 authenticated envelope,
+  account/device binding, two-minute expiry, replay protection, and the
+  verification code
+- `mobile/src/lib/credentialHandoffStore.ts` — device identity and direct
+  Keychain/Android-Keystore-backed SecureStore import
+- `mobile/src/lib/credentialHandoffBle.ts` — QR-independent nearby carrier
+- `mobile/app/secure-handoff.tsx` — request/approve/verify UI
+- `mobile/android/app/src/main/java/io/yaver/mobile/YaverInfoModule.kt` — Android
+  GATT peripheral receiver (Android can receive from iPhone or another Android
+  client; the existing `react-native-ble-plx` client remains the sender)
+- `backend/convex/credentialHandoffDevices.ts` — authenticated directory of
+  public device ids + X25519 keys only; there is deliberately no envelope
+  upload/mailbox route
+- `tvos/YaverTV/CredentialHandoff.swift` and `Views/SecureHandoffView.swift` —
+  NaCl-compatible receive path, public request QR, Continuity Camera encrypted
+  response scan, SAS confirmation, replay rejection, and this-device-only
+  Keychain import
+
+QR and BLE carry the same encrypted envelope. The receiver first creates a
+short-lived request. The sender must be signed into the same account, explicitly
+select one allowlisted credential, and show the same six-digit code as the
+receiver. The receiver decrypts once and writes directly to secure storage; UI,
+logs, clipboard, URLs, task events, and Convex never receive plaintext.
+
+tvOS cannot advertise as a BLE peripheral. On supported physical Apple TV
+hardware it uses Apple's Continuity Device Picker to borrow an explicitly
+selected iPhone/iPad camera for the encrypted response QR. Simulator builds can
+compile and exercise the crypto fixture but cannot prove Continuity Camera.
+Non-secret preferences continue through authenticated `/settings`; they are not
+smuggled into the credential envelope. The desktop GUI adapter remains pending
+and must use the OS credential vault, never browser `localStorage`.
+
 ## Remote Auth Recovery
 
 Primary code:

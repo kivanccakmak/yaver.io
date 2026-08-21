@@ -9,17 +9,20 @@
 /* Begin PBXBuildFile section */
 		0AEECA73B0908A0415B8654C /* WakeProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D76EA211ABDF521DD6CC22C3 /* WakeProgressView.swift */; };
 		0B73B4DE4DEB8BA5F3F1075D /* YaverDictationField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A900B18B742454D4D6C7359 /* YaverDictationField.swift */; };
+		0F3AD5C101105E22CCC5C114 /* AppleSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */; };
 		16587396CA5360A34F2C4342 /* Backend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62AA4F93DB55D50601FA4253 /* Backend.swift */; };
 		18F7F25A9DC46548215628BB /* YaverTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 053F14BB4784ACE0F6940C93 /* YaverTVApp.swift */; };
 		1A6CB9DFD7829D4144D6A82D /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 276D29BCA1F4A3A8DD33A6D3 /* Models.swift */; };
 		1DF8243D967F35FF81A77D85 /* RuntimeDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E202BFD986DE7C7B55C7F3F4 /* RuntimeDashboardView.swift */; };
 		229C96D90BE4C06BFCD7F34E /* TaskDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE9E4B8D55E6F9BE758452A /* TaskDetailView.swift */; };
 		22B21BB28D6FC910AA51413E /* AppleTVRemoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */; };
+		2549B68933EAA52EC5BA7082 /* ContinuityQRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568598E6E282524EB57B6DA5 /* ContinuityQRScannerView.swift */; };
 		28F88FA5024DEAE3CEBE040F /* MachineRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B47351433BB0B87175F60EA /* MachineRegistry.swift */; };
 		2B768810EB7C0232820C5AAB /* TaskComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10853B34BB3F067BDF0C02E9 /* TaskComposerView.swift */; };
 		2C9A4C73F2E72A79D846BE4C /* YaverDictationFieldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3E21135A06858CFDFB198C2 /* YaverDictationFieldTests.swift */; };
 		3338C731056621FCCE8FE13A /* BoxLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB2DF3A66DAE025B2B780C8 /* BoxLifecycle.swift */; };
 		34141A6D2B59625100F05D4A /* SessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A96BEDB7B91310E39E99DED2 /* SessionClient.swift */; };
+		45D15A16832BA03672354B1F /* CredentialHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9153BD847AA22692E65287D /* CredentialHandoff.swift */; };
 		61443E7517C16C82728D68E7 /* LanApprovalBeacon.swift in Sources */ = {isa = PBXBuildFile; fileRef = C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */; };
 		666A5E815C7F1592A0FF7AE2 /* DeviceCodeDeliveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71087255383CB959DB30A9E6 /* DeviceCodeDeliveryTests.swift */; };
 		6ADE17F0073254B1F4424366 /* RemoteRuntimeWebRTCView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F656E1723EA3FA1FA0C7CE46 /* RemoteRuntimeWebRTCView.swift */; };
@@ -39,6 +42,7 @@
 		95EC8FC56B71667C9E11BE83 /* TaskRuntimePlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */; };
 		9D0BB56F661FC19E222F21AC /* TVChatPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E917EDECD2B19968A57D16 /* TVChatPlan.swift */; };
 		A2031FCCF6C82A44E0A3478B /* TVWebPreviewLoopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925084532D186202A5CA57D2 /* TVWebPreviewLoopTests.swift */; };
+		A43C8F3FEA5811AC5A281823 /* Sodium in Frameworks */ = {isa = PBXBuildFile; productRef = EAC99382A0736A789A83F5E0 /* Sodium */; };
 		A652521801330E483E8F0DEE /* FailureSignals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9383688971427E7DF15B2D1C /* FailureSignals.swift */; };
 		A7B9CB81DB7E411F73C9F730 /* TVChatNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6E50DABA5FE87AF986E197 /* TVChatNavigationTests.swift */; };
 		AD43610B33A8368A49E512B9 /* YaverStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC27F01B0DAD177B10DAC04 /* YaverStore.swift */; };
@@ -48,15 +52,19 @@
 		B9052B586A74B907CB88B108 /* TVOverlayInputState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA2AA1F3D8766737B9CC697 /* TVOverlayInputState.swift */; };
 		BA1C4E5FB968311F8B9C37C7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */; };
 		BA348ACA3E9B639767CD13E5 /* TVInputStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = B66293D9C377C3A9C9D374E3 /* TVInputStatus.swift */; };
+		BA38FFCFED1DC4D4EE799E82 /* OAuthSignIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */; };
 		C925CDA83769C16357214E99 /* AgentClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30B780D2E7490982C5B7E328 /* AgentClient.swift */; };
+		CA41CEB459F38A711DB22C1C /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFD8EEDEC85690973786CB73 /* CredentialStore.swift */; };
 		CAF1C4F283907ED5436FC317 /* FeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */; };
 		CC251EEE9B8247F7E633165D /* BoxlessDeepSeekClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0040D8EF80EF80251239D541 /* BoxlessDeepSeekClient.swift */; };
+		CE7533A3ED843557F0FE12E1 /* SecureHandoffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C07AC346E76881B8FBB7FA9 /* SecureHandoffView.swift */; };
 		D299F8FE54C7BF349DB540D5 /* Speech.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */; };
 		D35115170BD592449BB9E6A2 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 44E779189DD0B98EC6AC2052 /* LiveKitWebRTC */; };
 		D7BD4B86D4F7E9BB55EFDC13 /* TokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2168C1CC5D76DE846256CFAD /* TokenStore.swift */; };
 		DC2819DC5C2145D82D127460 /* VibingPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72C2006AA5DE6D7B3F706F05 /* VibingPlanTests.swift */; };
 		E0D42899FE615119C171E320 /* TaskRuntimePlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F41D8521019355088BB2706 /* TaskRuntimePlan.swift */; };
 		E6360E3A224D67440371A632 /* ProjectsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */; };
+		EC7C19BB4F488F251D7496A2 /* CredentialHandoffInteropTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A2E3F6614B8AD75EEA4B08 /* CredentialHandoffInteropTests.swift */; };
 		EEEB8D804BA1E102F39CD2E0 /* RemoteRuntimeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */; };
 		F6D6FD0612F8F2E9DD6D3A5C /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 407EAB8C318A209F3AE94A17 /* SignInView.swift */; };
 		F7BEBB07F0E592CAFCFD739E /* VibeTurnPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ED0118C15F635CF31061B51 /* VibeTurnPanel.swift */; };
@@ -86,6 +94,7 @@
 		10853B34BB3F067BDF0C02E9 /* TaskComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskComposerView.swift; sourceTree = "<group>"; };
 		13160FC9012BA60947E3FE74 /* VibingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibingPlan.swift; sourceTree = "<group>"; };
 		13B09883C3220F3715E4F3DF /* WebPreviewStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPreviewStreamView.swift; sourceTree = "<group>"; };
+		15A2E3F6614B8AD75EEA4B08 /* CredentialHandoffInteropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialHandoffInteropTests.swift; sourceTree = "<group>"; };
 		1E6E9B680E701DC27F124C4F /* yaver-login-wordmark-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "yaver-login-wordmark-light.png"; sourceTree = "<group>"; };
 		2168C1CC5D76DE846256CFAD /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
 		276D29BCA1F4A3A8DD33A6D3 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -100,9 +109,11 @@
 		4ED0118C15F635CF31061B51 /* VibeTurnPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeTurnPanel.swift; sourceTree = "<group>"; };
 		51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		538F76DE5F0CE7ABB59354A3 /* BoxlessCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoxlessCodeView.swift; sourceTree = "<group>"; };
+		568598E6E282524EB57B6DA5 /* ContinuityQRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuityQRScannerView.swift; sourceTree = "<group>"; };
 		59F5766C895CDA0075AE65E7 /* TVSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSettingsView.swift; sourceTree = "<group>"; };
 		5E6E50DABA5FE87AF986E197 /* TVChatNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVChatNavigationTests.swift; sourceTree = "<group>"; };
 		62AA4F93DB55D50601FA4253 /* Backend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backend.swift; sourceTree = "<group>"; };
+		6C07AC346E76881B8FBB7FA9 /* SecureHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureHandoffView.swift; sourceTree = "<group>"; };
 		6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speech.swift; sourceTree = "<group>"; };
 		701043D706CE4793A50A17DD /* YaverTVTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = YaverTVTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		706F27D55F944D59C8ECD555 /* TasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TasksView.swift; sourceTree = "<group>"; };
@@ -121,6 +132,7 @@
 		ACCF092B4BD1BC1CC9DAA844 /* BoxlessCredentialSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoxlessCredentialSource.swift; sourceTree = "<group>"; };
 		AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskRuntimePlanTests.swift; sourceTree = "<group>"; };
 		AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVRemoteView.swift; sourceTree = "<group>"; };
+		B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthSignIn.swift; sourceTree = "<group>"; };
 		B66293D9C377C3A9C9D374E3 /* TVInputStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVInputStatus.swift; sourceTree = "<group>"; };
 		C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsView.swift; sourceTree = "<group>"; };
 		C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanApprovalBeacon.swift; sourceTree = "<group>"; };
@@ -128,6 +140,7 @@
 		CCC27F01B0DAD177B10DAC04 /* YaverStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YaverStore.swift; sourceTree = "<group>"; };
 		CEC220759259856D0FC5E298 /* TVOverlayInputStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVOverlayInputStateTests.swift; sourceTree = "<group>"; };
 		CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteRuntimeModels.swift; sourceTree = "<group>"; };
+		CFD8EEDEC85690973786CB73 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
 		D76EA211ABDF521DD6CC22C3 /* WakeProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeProgressView.swift; sourceTree = "<group>"; };
 		D9E917EDECD2B19968A57D16 /* TVChatPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVChatPlan.swift; sourceTree = "<group>"; };
 		DB4A93B698F49F0230F8DABF /* SessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionView.swift; sourceTree = "<group>"; };
@@ -135,9 +148,11 @@
 		DFF6CEE51B6A221D57E35F68 /* DroidStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroidStreamView.swift; sourceTree = "<group>"; };
 		E0279D581187CF7B6DAB53B5 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		E202BFD986DE7C7B55C7F3F4 /* RuntimeDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeDashboardView.swift; sourceTree = "<group>"; };
+		E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignIn.swift; sourceTree = "<group>"; };
 		E883FFE32672CAF75087F1E5 /* FrameworkStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameworkStyle.swift; sourceTree = "<group>"; };
 		F305D583F562FDFA98285065 /* YaverTV.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = YaverTV.entitlements; sourceTree = "<group>"; };
 		F656E1723EA3FA1FA0C7CE46 /* RemoteRuntimeWebRTCView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteRuntimeWebRTCView.swift; sourceTree = "<group>"; };
+		F9153BD847AA22692E65287D /* CredentialHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialHandoff.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,6 +161,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D35115170BD592449BB9E6A2 /* LiveKitWebRTC in Frameworks */,
+				A43C8F3FEA5811AC5A281823 /* Sodium in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -157,16 +173,20 @@
 			children = (
 				3856FA2ADBC347EA996932EA /* AddBoxView.swift */,
 				30B780D2E7490982C5B7E328 /* AgentClient.swift */,
+				E5B1B48A87472E6256348AC5 /* AppleSignIn.swift */,
 				51EFCF4225A51F7B640FCFC8 /* Assets.xcassets */,
 				62AA4F93DB55D50601FA4253 /* Backend.swift */,
 				ACCF092B4BD1BC1CC9DAA844 /* BoxlessCredentialSource.swift */,
 				0040D8EF80EF80251239D541 /* BoxlessDeepSeekClient.swift */,
 				3DB2DF3A66DAE025B2B780C8 /* BoxLifecycle.swift */,
+				F9153BD847AA22692E65287D /* CredentialHandoff.swift */,
+				CFD8EEDEC85690973786CB73 /* CredentialStore.swift */,
 				9383688971427E7DF15B2D1C /* FailureSignals.swift */,
 				E883FFE32672CAF75087F1E5 /* FrameworkStyle.swift */,
 				C772C9E727A828940D3C13D7 /* LanApprovalBeacon.swift */,
 				8B47351433BB0B87175F60EA /* MachineRegistry.swift */,
 				276D29BCA1F4A3A8DD33A6D3 /* Models.swift */,
+				B03E9E6D1299CFE73B36171A /* OAuthSignIn.swift */,
 				CED29C305D92275C2606A73C /* RemoteRuntimeModels.swift */,
 				A96BEDB7B91310E39E99DED2 /* SessionClient.swift */,
 				6EE3AEA54A8B2ABC407F2AD0 /* Speech.swift */,
@@ -206,6 +226,7 @@
 			children = (
 				AFECA9530BAC12BAD2E220AB /* AppleTVRemoteView.swift */,
 				538F76DE5F0CE7ABB59354A3 /* BoxlessCodeView.swift */,
+				568598E6E282524EB57B6DA5 /* ContinuityQRScannerView.swift */,
 				E0279D581187CF7B6DAB53B5 /* DashboardView.swift */,
 				DFF6CEE51B6A221D57E35F68 /* DroidStreamView.swift */,
 				DBF063F0AE76E23D574B56F7 /* FeedbackView.swift */,
@@ -213,6 +234,7 @@
 				C67130BF2C4EAD354C30FF32 /* ProjectsView.swift */,
 				F656E1723EA3FA1FA0C7CE46 /* RemoteRuntimeWebRTCView.swift */,
 				E202BFD986DE7C7B55C7F3F4 /* RuntimeDashboardView.swift */,
+				6C07AC346E76881B8FBB7FA9 /* SecureHandoffView.swift */,
 				DB4A93B698F49F0230F8DABF /* SessionView.swift */,
 				407EAB8C318A209F3AE94A17 /* SignInView.swift */,
 				10853B34BB3F067BDF0C02E9 /* TaskComposerView.swift */,
@@ -279,6 +301,7 @@
 		FFF5EADFCBAE2A1555B317FD /* YaverTVTests */ = {
 			isa = PBXGroup;
 			children = (
+				15A2E3F6614B8AD75EEA4B08 /* CredentialHandoffInteropTests.swift */,
 				71087255383CB959DB30A9E6 /* DeviceCodeDeliveryTests.swift */,
 				AEBBF88FEFA5E078BA41AB0E /* TaskRuntimePlanTests.swift */,
 				CEC220759259856D0FC5E298 /* TVOverlayInputStateTests.swift */,
@@ -324,6 +347,7 @@
 			name = YaverTV;
 			packageProductDependencies = (
 				44E779189DD0B98EC6AC2052 /* LiveKitWebRTC */,
+				EAC99382A0736A789A83F5E0 /* Sodium */,
 			);
 			productName = YaverTV;
 			productReference = A7D4D91DB76D5F6AEBDD3D48 /* YaverTV.app */;
@@ -379,6 +403,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E99B115601E2359F3CF1153A /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
+				06327D7AA3EBAF9072AB1BA9 /* XCRemoteSwiftPackageReference "swift-sodium" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = D6587CEE72510E3268F9262F /* Products */;
@@ -409,6 +434,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EC7C19BB4F488F251D7496A2 /* CredentialHandoffInteropTests.swift in Sources */,
 				666A5E815C7F1592A0FF7AE2 /* DeviceCodeDeliveryTests.swift in Sources */,
 				B1D5377964FD0FB970A270BA /* TVOverlayInputStateTests.swift in Sources */,
 				95EC8FC56B71667C9E11BE83 /* TaskRuntimePlanTests.swift in Sources */,
@@ -423,12 +449,16 @@
 			files = (
 				852CC39FBF2CFDEF2DCD3BB1 /* AddBoxView.swift in Sources */,
 				C925CDA83769C16357214E99 /* AgentClient.swift in Sources */,
+				0F3AD5C101105E22CCC5C114 /* AppleSignIn.swift in Sources */,
 				22B21BB28D6FC910AA51413E /* AppleTVRemoteView.swift in Sources */,
 				16587396CA5360A34F2C4342 /* Backend.swift in Sources */,
 				3338C731056621FCCE8FE13A /* BoxLifecycle.swift in Sources */,
 				8FEEAFB430FCFEB954769889 /* BoxlessCodeView.swift in Sources */,
 				812D0A475176A47B5F8B7695 /* BoxlessCredentialSource.swift in Sources */,
 				CC251EEE9B8247F7E633165D /* BoxlessDeepSeekClient.swift in Sources */,
+				2549B68933EAA52EC5BA7082 /* ContinuityQRScannerView.swift in Sources */,
+				45D15A16832BA03672354B1F /* CredentialHandoff.swift in Sources */,
+				CA41CEB459F38A711DB22C1C /* CredentialStore.swift in Sources */,
 				859933A9F2FF6DBD55DA507D /* DashboardView.swift in Sources */,
 				6EEAC350F5A3D4E89CE1C473 /* DroidStreamView.swift in Sources */,
 				A652521801330E483E8F0DEE /* FailureSignals.swift in Sources */,
@@ -438,10 +468,12 @@
 				7E0CEDAA389C30B231F33D93 /* MachinePickerView.swift in Sources */,
 				28F88FA5024DEAE3CEBE040F /* MachineRegistry.swift in Sources */,
 				1A6CB9DFD7829D4144D6A82D /* Models.swift in Sources */,
+				BA38FFCFED1DC4D4EE799E82 /* OAuthSignIn.swift in Sources */,
 				E6360E3A224D67440371A632 /* ProjectsView.swift in Sources */,
 				EEEB8D804BA1E102F39CD2E0 /* RemoteRuntimeModels.swift in Sources */,
 				6ADE17F0073254B1F4424366 /* RemoteRuntimeWebRTCView.swift in Sources */,
 				1DF8243D967F35FF81A77D85 /* RuntimeDashboardView.swift in Sources */,
+				CE7533A3ED843557F0FE12E1 /* SecureHandoffView.swift in Sources */,
 				34141A6D2B59625100F05D4A /* SessionClient.swift in Sources */,
 				81DB028736C4430E2622C6F9 /* SessionView.swift in Sources */,
 				F6D6FD0612F8F2E9DD6D3A5C /* SignInView.swift in Sources */,
@@ -782,6 +814,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		06327D7AA3EBAF9072AB1BA9 /* XCRemoteSwiftPackageReference "swift-sodium" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jedisct1/swift-sodium.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.10.0;
+			};
+		};
 		E99B115601E2359F3CF1153A /* XCRemoteSwiftPackageReference "webrtc-xcframework" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/livekit/webrtc-xcframework.git";
@@ -797,6 +837,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E99B115601E2359F3CF1153A /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
 			productName = LiveKitWebRTC;
+		};
+		EAC99382A0736A789A83F5E0 /* Sodium */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 06327D7AA3EBAF9072AB1BA9 /* XCRemoteSwiftPackageReference "swift-sodium" */;
+			productName = Sodium;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

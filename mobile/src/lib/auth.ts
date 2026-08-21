@@ -696,7 +696,7 @@ export interface UserSettings {
   ttsEnabled?: boolean;
   ttsTaskMode?: boolean; // run tasks in TTS mode: agent leads replies with a spoken-style summary (text only)
   verbosity?: number; // 0-10: response detail level
-  keyStorage?: KeyStorage; // "local" = device Keychain only, "cloud" = sync to Convex
+  keyStorage?: KeyStorage; // legacy preference; provider credentials are always device/vault-only
   /** When true, the mobile tasks `+` button opens a device + agent
    *  picker before the compose modal. Stored on the user record so it
    *  roams across phones / re-installs. Default: undefined → off. */
@@ -1032,10 +1032,13 @@ export async function getUserSettings(token: string): Promise<UserSettings> {
 }
 
 export async function saveUserSettings(token: string, settings: Partial<UserSettings>): Promise<void> {
-  // Speech credentials are local-only. Keep API keys in SecureStore or
-  // the agent vault-backed /voice/config path; never send them to Convex.
+  // Credentials are local-only. Keep API keys in SecureStore or the agent
+  // vault; never send them to Convex, including from a stale UI/client path.
   const safeSettings = { ...settings };
   delete safeSettings.speechApiKey;
+  delete safeSettings.openAiApiKey;
+  delete safeSettings.glmApiKey;
+  delete safeSettings.anthropicApiKey;
   let res: Response;
   try {
     res = await fetch(`${getConvexSiteUrl()}/settings`, {

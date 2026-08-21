@@ -599,6 +599,21 @@ export default defineSchema({
     .index("by_deviceId", ["deviceId"])
     .index("by_hardwareId", ["hardwareId"]),
 
+  // Public client keys for direct credential handoff. This table is a device
+  // directory, never a mailbox: API keys, encrypted envelopes, nonces and QR
+  // payloads are forbidden here. A sender uses the authenticated account list
+  // to prove that a scanned request's deviceId + X25519 key belong to its own
+  // account before it reveals which credentials are available.
+  credentialHandoffDevices: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    publicKey: v.string(),
+    platform: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_device", ["userId", "deviceId"]),
+
   // Pending device claims — bootstrap-mode boxes that registered a relay
   // tunnel but have no Convex row yet. Created when a fresh agent runs
   // `yaver serve` with no token AND no prior Convex device record:

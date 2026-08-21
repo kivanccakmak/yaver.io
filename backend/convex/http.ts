@@ -37,6 +37,7 @@ import {
   subscriptionPeriodEnd,
   subscriptionPlanFromPayload,
 } from "./billingWebhook";
+import { rawSecretFieldsInSettings, settingsWithoutSecrets } from "./settingsSecretPolicy";
 export {
   billingStateFlags,
   normalizeBillingProduct,
@@ -3230,6 +3231,49 @@ http.route({
   }),
 });
 
+/** Public-key directory for same-account, direct credential handoff.
+ * Deliberately has no envelope upload route: Convex never receives secrets,
+ * even encrypted ones. */
+http.route({
+  path: "/credential-handoff/devices",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    try {
+      const devices = await ctx.runQuery((api as any).credentialHandoffDevices.list, { tokenHash });
+      return jsonResponse({ ok: true, devices });
+    } catch (error) {
+      return errorResponse(String((error as Error)?.message || error).includes("Unauthorized") ? "Unauthorized" : "Handoff directory unavailable", 401);
+    }
+  }),
+});
+
+http.route({
+  path: "/credential-handoff/devices",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    let body: any;
+    try { body = await request.json(); } catch { return errorResponse("Body must be JSON", 400); }
+    try {
+      await ctx.runMutation((api as any).credentialHandoffDevices.register, {
+        tokenHash,
+        deviceId: String(body?.deviceId || ""),
+        publicKey: String(body?.publicKey || ""),
+        platform: String(body?.platform || ""),
+      });
+      return jsonResponse({ ok: true });
+    } catch (error) {
+      const message = String((error as Error)?.message || error);
+      return errorResponse(message.includes("Unauthorized") ? "Unauthorized" : "Invalid handoff device metadata", message.includes("Unauthorized") ? 401 : 400);
+    }
+  }),
+});
+
 /**
  * GET /devices/flight?deviceId=<id>[&limit=<n>] — read a device's black box.
  *
@@ -4952,7 +4996,7 @@ http.route({
     if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
     const tokenHash = await sha256Hex(authHeader.slice(7));
     const settings = await ctx.runQuery(api.userSettings.getByToken, { tokenHash });
-    const safeSettings = settings ? { ...settings, speechApiKey: undefined } : null;
+    const safeSettings = settings ? settingsWithoutSecrets({ ...settings }) : null;
     return jsonResponse({
       ok: true,
       settings: safeSettings || { forceRelay: false, runnerId: undefined, customRunnerCommand: undefined, relayUrl: undefined, relayPassword: undefined, tunnelUrl: undefined },
@@ -4990,6 +5034,15 @@ http.route({
       body = await request.json();
     } catch {
       return errorResponse("Body must be JSON", 400);
+    }
+    const rawSecretFields = rawSecretFieldsInSettings(body);
+    if (rawSecretFields.length > 0) {
+      return jsonResponse({
+        ok: false,
+        code: "SETTINGS_RAW_SECRET_FORBIDDEN",
+        error: "Provider keys and credentials must use device secure storage, a local vault, or Yaver Secure Handoff — never /settings.",
+        fields: rawSecretFields,
+      }, 400);
     }
     try {
       await ctx.runMutation(api.userSettings.setByToken, {

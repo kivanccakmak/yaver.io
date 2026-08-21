@@ -72,6 +72,22 @@ form, or native Apple sign-in. Accounts with two-factor email login finish via
 the QR option on an already-authenticated phone. Android TV uses the same two
 choices and the same Convex contract.
 
+## Secure credential handoff
+
+Settings → Secure credential handoff receives one explicitly approved provider
+key or Git token without putting it in Convex. The TV registers only its public
+X25519 key under the authenticated account, displays a two-minute public request
+QR, then uses tvOS 17 Continuity Camera to scan the phone's authenticated
+encrypted response. Both screens show the same six-digit comparison code before
+the TV saves to a `ThisDeviceOnly` Keychain item. Expiry, wrong device/account,
+tampering, and replay fail closed.
+
+Continuity Camera requires Apple TV 4K (2nd generation or newer), tvOS 17+, and
+a compatible iPhone/iPad. It cannot be tested in Simulator. tvOS cannot
+advertise BLE services, so BLE receiver UI is intentionally not offered there.
+Ordinary non-secret preferences already follow the account through `/settings`;
+they do not enter the secret envelope or Keychain.
+
 ## Transport note
 
 This app connects direct-first: LAN host/port when available, then the relay HTTP proxy for
@@ -84,15 +100,15 @@ relay row.
 
 ## Creating the Xcode target (one-time)
 
-The repo intentionally does **not** check in an `.xcodeproj` (generated, churny) — it is
-generated from `tvos/project.yml` by XcodeGen. Do **not** hand-build the target in Xcode;
-edit `project.yml` instead.
+The `.xcodeproj` is generated from `tvos/project.yml` by XcodeGen and is currently
+tracked so non-XcodeGen consumers see the same package and source graph. Do not
+hand-edit it: edit `project.yml`, regenerate, and include both resulting changes.
 
 ```bash
 cd tvos && xcodegen generate     # ALWAYS run this before a build or deploy
 ```
 
-Because the `.xcodeproj` is gitignored and generated, a local one goes stale **silently**:
+Because the `.xcodeproj` is generated, a local copy can still go stale **silently**:
 it keeps compiling whatever file list it was generated with, so a Swift file added by another
 commit produces "cannot find X in scope" against code that is plainly on disk. Regenerating is
 the fix, and it is cheap — make it reflexive.

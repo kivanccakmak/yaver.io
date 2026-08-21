@@ -102,6 +102,12 @@ struct TVSettingsView: View {
                     }
 
                     accountSection
+                    NavigationLink(destination: SecureHandoffView()) {
+                        Label("Secure credential handoff", systemImage: "qrcode.viewfinder")
+                            .font(.system(size: 20, weight: .semibold)).frame(maxWidth: .infinity, alignment: .leading).padding(22)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("settings.secure-handoff")
                 }
                 .padding(40)
             }

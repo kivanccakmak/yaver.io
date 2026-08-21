@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, ipcMain, shell, Tray, Menu, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, shell, Tray, Menu, nativeImage, dialog, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -27,6 +27,7 @@ let tray = null;
 // Current connection state
 let agentBaseUrl = null; // set when connected to a device (direct or relay)
 let authToken = null;
+let sessionOnlyDesktopToken = '';
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -56,8 +57,8 @@ function loadDesktopSettings() {
 }
 
 function saveDesktopSettings(settings) {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(DESKTOP_SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(DESKTOP_SETTINGS_FILE, JSON.stringify(settings, null, 2), { mode: 0o600 });
 }
 
 // Desktop app stores its own token separately from CLI token.
@@ -68,12 +69,32 @@ function saveDesktopSettings(settings) {
 
 function getDesktopToken() {
   const s = loadDesktopSettings();
-  return s.authToken || '';
+  if (s.authTokenEncrypted && safeStorage.isEncryptionAvailable()) {
+    try { return safeStorage.decryptString(Buffer.from(s.authTokenEncrypted, 'base64')); } catch {}
+  }
+  // One-time migration from the old plaintext desktop setting. Never leave a
+  // second copy behind after OS-backed encryption succeeds.
+  if (s.authToken && safeStorage.isEncryptionAvailable() && !(process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) {
+    try {
+      const token = String(s.authToken);
+      delete s.authToken;
+      s.authTokenEncrypted = safeStorage.encryptString(token).toString('base64');
+      saveDesktopSettings(s);
+      return token;
+    } catch {}
+  }
+  return sessionOnlyDesktopToken;
 }
 
 function setDesktopToken(token) {
   const s = loadDesktopSettings();
-  s.authToken = token;
+  delete s.authToken;
+  delete s.authTokenEncrypted;
+  sessionOnlyDesktopToken = token || '';
+  if (token && safeStorage.isEncryptionAvailable() && !(process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) {
+    s.authTokenEncrypted = safeStorage.encryptString(token).toString('base64');
+    sessionOnlyDesktopToken = '';
+  }
   saveDesktopSettings(s);
 }
 

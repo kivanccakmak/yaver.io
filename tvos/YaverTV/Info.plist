@@ -49,7 +49,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Yaver connects to a machine on your network running the Yaver agent to control your Apple TV and view its now-playing card.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Yaver uses camera APIs provided by connected runtime components when you test apps on Apple TV.</string>
+	<string>Yaver uses a connected iPhone or iPad camera to scan encrypted secure-handoff QR codes that you choose to share with this Apple TV.</string>
 	<!-- Per-user token isolation: without RunsAsCurrentUser, @AppStorage
 	     ("yaver.tv.token") lands in one container shared by every user on
 	     the Apple TV. On a family TV, another user opening Yaver would be
