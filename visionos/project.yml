@@ -91,6 +91,13 @@ targets:
       - path: ../tvos/YaverTV/BoxLifecycle.swift
       - path: ../tvos/YaverTV/Views/WakeProgressView.swift
       - path: ../tvos/YaverTV/Views/TaskComposerView.swift
+      # TaskComposerView is a shared destination (ProjectsView routes into it)
+      # and uses both the shared dictation field and its named input-state
+      # reporter. Omitting them broke the visionOS build: the headset shares
+      # TaskComposerView but the tvOS-only target files that name its
+      # dependencies were not in this list.
+      - path: ../tvos/YaverTV/Views/YaverDictationField.swift
+      - path: ../tvos/YaverTV/Views/TVInputStatus.swift
       - path: ../tvos/YaverTV/Views/VibeTurnPanel.swift
       - path: ../tvos/YaverTV/Views/UpdateAgentView.swift
       # DroidStreamView is the Android-project branch of ProjectsView's
