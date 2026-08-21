@@ -52,6 +52,10 @@ export interface CodingTool<Args = any, Result = any> {
    *  preview/confirm hook so the user keeps the human-in-loop they have today
    *  with EditPlan previews. Read/list/grep are side-effect-free → false. */
   mutating: boolean;
+  /** What the mutation changes. Read-only tools may omit this. The agent run
+   *  policy uses this below the UI so a prompt cannot commit or push merely
+   *  because a surface forgot to install a confirmation dialog. */
+  effect?: "workspace" | "repository" | "network";
   invoke: (args: Args, box: CodingSandbox) => Promise<Result>;
 }
 
@@ -232,6 +236,7 @@ const writeFileTool: CodingTool<{ path: string; content: string }, unknown> = {
     additionalProperties: false,
   },
   mutating: true,
+  effect: "workspace",
   async invoke(args, box) {
     if (!args?.path) return { error: "write_file requires a path" };
     if (typeof args.content !== "string") return { error: "write_file requires string content" };
@@ -266,6 +271,7 @@ const editFileTool: CodingTool<
     additionalProperties: false,
   },
   mutating: true,
+  effect: "workspace",
   async invoke(args, box) {
     if (!args?.path) return { error: "edit_file requires a path" };
     if (typeof args.old !== "string" || !args.old) return { error: "edit_file requires non-empty 'old'" };
@@ -309,6 +315,7 @@ const deleteFileTool: CodingTool<{ path: string }, unknown> = {
     additionalProperties: false,
   },
   mutating: true,
+  effect: "workspace",
   async invoke(args, box) {
     if (!args?.path) return { error: "delete_file requires a path" };
     let existed = true;

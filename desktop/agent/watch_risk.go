@@ -164,6 +164,19 @@ func watchIsReadCodeRequest(transcript string) bool {
 	return watchReadVerbs.MatchString(t) && watchReadSubjects.MatchString(t)
 }
 
+// Git finalization needs a readable diff and deliberate full-surface controls.
+// A watch transcript is useful for starting/monitoring a vibe turn, but is not
+// the commit/push review surface. Mirrors executionPolicy.ts exactly.
+func watchIsGitFinalizationRequest(transcript string) bool {
+	t := " " + strings.ToLower(strings.TrimSpace(transcript)) + " "
+	repositoryContext := regexp.MustCompile(`\b(git|github|gitlab|repo|repository|branch|changes|working tree)\b`).MatchString(t)
+	if regexp.MustCompile(`\bpush\b`).MatchString(t) {
+		return repositoryContext
+	}
+	return regexp.MustCompile(`\bcommit\b`).MatchString(t) &&
+		(repositoryContext || regexp.MustCompile(`\bcommit (it|this|these|everything|all)\b`).MatchString(t))
+}
+
 // ── Complication intents ─────────────────────────────────────────────
 // A watch-face complication sends a fixed {"kind":"intent","intent":...}
 // instead of a transcript. Expand the small fixed set into the transcript

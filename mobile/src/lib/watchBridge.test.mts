@@ -57,6 +57,18 @@ test("a safe transcript dispatches and streams ack then summary", async () => {
   assert.equal(kinds.at(-1), "summary");      // summary last
 });
 
+test("watch hands commit and push to a full diff-review surface", async () => {
+  let dispatched = false;
+  const final = await handleWatchTurn(
+    { v: 1, kind: "transcript", text: "commit these changes and push the git branch" } as WatchTurn,
+    deps({ dispatch: async () => { dispatched = true; return "task"; } }),
+  );
+  assert.equal(dispatched, false);
+  assert.equal(final.kind, "handoff");
+  assert.equal(final.target, "full-surface");
+  assert.match(final.spoken!, /review the diff/i);
+});
+
 test("walking idea is dispatched as idea capture, not blind code edit", async () => {
   let dispatchedPrompt = "";
   const final = await handleWatchTurn(

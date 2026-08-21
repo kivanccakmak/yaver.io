@@ -109,12 +109,19 @@ func (s *HTTPServer) handleWatchTurn(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleWatchTranscript applies the two guards (read-code, risk) before
+// handleWatchTranscript applies the surface, read-code, and risk guards before
 // dispatching. Shared by the transcript and intent paths.
 func (s *HTTPServer) handleWatchTranscript(w http.ResponseWriter, text, project string) {
 	clean := strings.TrimSpace(text)
 	if clean == "" {
 		writeJSON(w, http.StatusOK, watchReply{V: 1, Kind: "error", Spoken: "I didn't catch that."})
+		return
+	}
+	if watchIsGitFinalizationRequest(clean) {
+		writeJSON(w, http.StatusOK, watchReply{
+			V: 1, Kind: "handoff", Target: "full-surface",
+			Spoken: "Review the diff and commit or push on your phone, tablet, web, or desktop.",
+		})
 		return
 	}
 	if watchIsReadCodeRequest(clean) {

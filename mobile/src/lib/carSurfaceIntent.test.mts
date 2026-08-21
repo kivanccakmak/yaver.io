@@ -45,6 +45,19 @@ test("classifies GitLab pipeline status", () => {
   assert.equal(intent?.payload.provider, "gitlab");
 });
 
+test("car hands Git commit and push to a full review surface without calling ops", async () => {
+  const classified = classifyCarSurfaceIntent("push the current git branch");
+  assert.equal(classified?.kind, "git_finish_handoff");
+  let called = false;
+  const result = await executeCarSurfaceIntent("commit these changes", async () => {
+    called = true;
+    return {};
+  });
+  assert.equal(called, false);
+  assert.equal(result.handled, true);
+  assert.match(result.spoken, /review the diff/i);
+});
+
 test("classifies YouTube live stream open", () => {
   const intent = classifyCarSurfaceIntent("open Hasan Arda Kasikci live stream");
   assert.equal(intent?.kind, "media_open");

@@ -38,6 +38,7 @@ import {
 } from "./carSurfaceIntent";
 import { buildWatchPrompt } from "./watchPrompt";
 import type { RuntimeTurnRequest, RuntimeTurnResponse } from "./runtimeSurfaceTypes";
+import { isGitFinalizationRequest } from "./codingAgent/executionPolicy";
 
 // ── Wire protocol v1 ─────────────────────────────────────────────────
 // The single TS source of truth. Mirrored byte-for-byte by:
@@ -182,6 +183,13 @@ async function runTranscript(
 ): Promise<WatchReply> {
   const clean = (text || "").trim();
   if (!clean) return emit(send, reply("error", { spoken: "I didn't catch that." }));
+
+  if (isGitFinalizationRequest(clean)) {
+    return emit(send, reply("handoff", {
+      target: "full-surface",
+      spoken: "Review the diff and commit or push on your phone, tablet, web, or desktop.",
+    }));
+  }
 
   if (isReadCodeRequest(clean)) {
     return emit(send, reply("handoff", {

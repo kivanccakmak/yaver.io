@@ -9,7 +9,7 @@ import {
   defaultCodingAgentConfig,
   type CodingAgentConfig,
 } from "./runner.ts";
-import type { CodingSandbox, CodingSandboxEntry } from "./sandboxTools.ts";
+import type { CodingSandbox, CodingSandboxEntry, CodingTool } from "./sandboxTools.ts";
 
 function memSandbox(initial: Record<string, string> = {}): CodingSandbox & { dump: () => Record<string, string> } {
   const files = new Map<string, string>(Object.entries(initial));
@@ -204,6 +204,38 @@ test("read-only tools are never gated by confirmMutation", async () => {
     },
   });
   assert.equal(asked, 0); // read_file is not mutating → no confirm
+});
+
+test("custom tools execute through the registry supplied to the runner", async () => {
+  const box = memSandbox();
+  const customTool: CodingTool = {
+    name: "git_status",
+    description: "Read the repository status.",
+    parameters: { type: "object", properties: {} },
+    mutating: false,
+    async invoke() {
+      return { branch: "main", changes: [{ path: "App.tsx", status: "modified" }] };
+    },
+  };
+  const { fetchImpl, requests } = scriptedFetch([
+    oaiTurn({ toolCalls: [{ id: "g1", name: "git_status", args: {} }] }),
+    oaiTurn({ content: "The working tree has one modified file." }),
+  ]);
+
+  const result = await runCodingAgent({
+    prompt: "inspect git status",
+    sandbox: box,
+    config: GLM_CFG,
+    tools: [customTool],
+    fetchImpl,
+  });
+
+  assert.deepEqual(result.toolCalls[0].result, {
+    branch: "main",
+    changes: [{ path: "App.tsx", status: "modified" }],
+  });
+  const toolMessage = requests[1].body.messages.find((message: any) => message.role === "tool");
+  assert.match(toolMessage.content, /\"branch\":\"main\"/);
 });
 
 test("hitMaxSteps when the model never stops calling tools", async () => {

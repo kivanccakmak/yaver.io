@@ -6,9 +6,10 @@
 > covers the **Hermes-native agentic loop** — the thing you run when you can't or
 > won't ship a binary, defaulting to a cheap BYO GLM key.
 >
-> Status 2026-06-08: first slice landed (uncommitted) — the coding tool registry
-> + the provider-agnostic agentic loop + 19 tsx tests. Not yet wired into the
-> sandbox UI. See "What's built" / "What remains".
+> Status 2026-08-21: wired into the sandbox, repo-coding, and phone-local task
+> surfaces. A vibe turn may edit the scoped working tree and inspect Git, but it
+> cannot mutate Git history or a remote. Undo uses a non-Git turn transaction;
+> commit and push are explicit user actions after diff review.
 
 ## The ask, restated
 
@@ -53,12 +54,12 @@ to the phone sandbox, default it to GLM.** That's it. ~70% recombination.
 
 ```
 sandbox-ai.tsx  (UI: "Agent" mode alongside the existing "Quick edit")
-      │  prompt + slug + confirmMutation hook (diff preview / yolo)
+      │  prompt + slug + audit/vibe execution policy
       ▼
 runCodingAgent(opts)                         mobile/src/lib/codingAgent/runner.ts
   ├─ provider transport (GLM/OpenAI/OpenRouter = OpenAI-compatible; Anthropic native)
   ├─ tool-use loop: model → tool_calls → execTool → results fed back → repeat
-  └─ execTool: gate mutations (confirmMutation) → dispatchCodingTool → record path
+  └─ execTool: invoke the advertised registry entry → record path
       ▼
 CODING_TOOLS dispatcher                      mobile/src/lib/codingAgent/sandboxTools.ts
   list_files · read_file · grep · write_file · edit_file · delete_file
@@ -77,8 +78,9 @@ in-memory `CodingSandbox`.
 ## The tools (`sandboxTools.ts`)
 
 Provider-agnostic `CodingTool` (same shape as `yaverAgentTools.YaverAgentTool`:
-`name` + `description` + JSON-Schema `parameters` + `invoke`), plus one extra
-field — `mutating: boolean` — so the runner knows which calls to gate.
+`name` + `description` + JSON-Schema `parameters` + `invoke`), plus mutation
+metadata (`mutating` + `effect`) so policy can distinguish working-tree edits
+from repository and network mutations below the UI.
 
 | Tool | Mutating | Why it matters vs single-shot |
 |---|---|---|
@@ -107,11 +109,15 @@ A fork of `yaverAgentRunner.ts`'s tool-use loop, generic over a tool registry:
 - **GLM robustness**: the loop continues whenever `tool_calls` are present,
   **ignoring `finish_reason`** (GLM sometimes returns tool calls with
   `finish_reason: "stop"`). It ends only when a turn has no tool calls.
-- **Mutation gate** (`execTool`): before any `mutating` tool runs, call
-  `confirmMutation({name, args})`. Return `false` and the model is told "user
-  rejected this change" and adapts. Omit the hook for **yolo** mode (matches the
-  always-dangerous runner preference). `mutatedPaths` only records calls that
-  actually applied (`result.ok`), so a rejected anchor doesn't count.
+- **Execution policy** (`executionPolicy.ts`): audit receives read-only file and
+  Git tools. Vibe receives those plus workspace edit tools. Commit, branch,
+  merge, remote changes, pull, and push are never advertised to the model.
+  `confirmMutation` remains an optional embedding hook, but normal vibe editing
+  applies scoped file changes directly.
+- **Turn undo** (`turnTransaction.ts`): capture each path's original contents on
+  first mutation, then restore those bytes on Undo Turn. This neither stages nor
+  commits a user's pre-existing dirty work. Failed or aborted turns roll back
+  partial edits automatically.
 - **Result accounting**: `{ finalText, toolCalls, mutatedPaths, steps,
   inputTokens, outputTokens, hitMaxSteps }`. `maxSteps` defaults to 16 (coding
   needs more rounds than the 6-step control plane); `timeoutMs` 90 s per turn.
@@ -147,6 +153,17 @@ slot the single-shot GLM backend uses — one key powers both paths.
 | **iOS standalone** | this Hermes loop, **GLM default** | only option — no exec, no JIT, no Node. This is the upgrade to Tier 2 in `coding-agent-on-device.md`. |
 | **Android standalone** | this Hermes loop **or** the real `opencode` binary under proot (`sandbox_proot.go`) | Hermes loop ships now, zero rootfs download, cross-platform; proot is the full-fidelity (bash/LSP) option for power users. |
 | **Any phone + paired box** | real `claude`/`codex`/`opencode` over `/ws/terminal` (`agentLaunch.ts`) | best fidelity when a machine is reachable. |
+
+The Git interaction contract is form-factor aware, while the safety boundary is
+identical everywhere:
+
+| Surface | Vibe/edit | Undo | Commit/push |
+|---|---|---|---|
+| phone, tablet, web, desktop GUI, full XR | local or remote working-tree turn | on the same full surface | explicit local controls after diff review |
+| TV | may start/monitor a turn and review status | when its review UI can represent it | hand off to a full surface |
+| watch, car, compact glass | start/monitor only | hand off | hand off to phone/tablet/web/desktop/XR |
+
+No surface interprets a voice phrase or model tool call as commit/push approval.
 
 The selector is `localAgent/brain.ts`'s remote-first policy: box reachable →
 remote runner; else → this Hermes loop on GLM. The future `run` tool routes
@@ -186,13 +203,15 @@ The agent core stays shared and pure.
 | File | Purpose | Tests |
 |---|---|---|
 | `mobile/src/lib/codingAgent/sandboxTools.ts` | 6-tool coding registry + dispatcher + glob | `sandboxTools.test.mts` (10) |
-| `mobile/src/lib/codingAgent/runner.ts` | provider-agnostic agentic loop (GLM/OpenAI/OpenRouter + Anthropic), mutation gate, **GLM Coding-Plan default endpoint** | `runner.test.mts` (9) |
+| `mobile/src/lib/codingAgent/runner.ts` | provider-agnostic agentic loop; executes the exact injected registry entry (including Git inspection tools) | `runner.test.mts` |
 | `mobile/src/lib/codingAgent/sandboxBinding.ts` | RN wiring: `sandboxForSlug` + `loadGlmCodingConfig` (reuses the single-shot GLM key slot). RN-only. | — (expo-coupled) |
 | `mobile/src/lib/codingAgent/sandboxGit.ts` | sandbox VCS on isomorphic-git: init/commit/status/log + before/after checkpoints + **blob-based revert** (works around isomorphic-git's force-checkout-doesn't-overwrite-modified-files bug) | `sandboxGit.test.mts` (6) |
 | `mobile/src/lib/codingAgent/sandboxGitOps.ts` | FULL git: branches, merge + conflict markers/listing/resolution, file diffs, remotes, clone/fetch/push/pull with per-host PAT auth | `sandboxGitOps.test.mts` (8) |
 | `mobile/src/lib/codingAgent/gitFsExpo.ts` | on-device fs adapter: isomorphic-git over expo-file-system (base64⇄bytes, ENOENT/EEXIST codes); `gitForSlug` binding | `gitFsExpo.test.mts` (3, real isomorphic-git round-trip) |
-| `mobile/src/lib/codingAgent/gitTools.ts` | git as agentic tools (status/diff/log/commit/branch/merge/conflict; push when creds wired) → plug into `runCodingAgent({tools})` | `gitTools.test.mts` (4) |
-| `mobile/src/components/SandboxAiPanel.tsx` | **Quick edit / Agent** mode toggle; Agent runs the loop with file+git tools, auto-checkpoints each run, live tool trace, **Revert this run** | (RN; project tsc clean) |
+| `mobile/src/lib/codingAgent/executionPolicy.ts` | audit/vibe tool filtering + full/companion surface capability contract | `executionPolicy.test.mts` |
+| `mobile/src/lib/codingAgent/turnTransaction.ts` | dirty-tree-safe turn snapshot, rollback, and Undo Turn | `turnTransaction.test.mts` |
+| `mobile/src/lib/codingAgent/gitTools.ts` | full Git library adapters; the model run receives only its read-only subset | `gitTools.test.mts` |
+| `mobile/src/components/SandboxAiPanel.tsx` | **Quick edit / Agent** mode toggle; live trace + non-Git **Undo this turn** | mobile TypeScript check |
 | `mobile-headless/src/bin/cli.ts` | `sandbox-agent` verb — runs the loop headless against a phone-project tree | proven live (below) |
 
 Note: `sandboxGit*` / `gitFsExpo` / `gitTools` were built in a parallel session;
@@ -222,14 +241,14 @@ All three legs verified end-to-end with a real GLM Coding-Plan key:
 
 ## What remains
 
-1. ~~Wire into the editor panel~~ — **done** (`SandboxAiPanel.tsx` Agent mode + auto-checkpoint + revert).
+1. ~~Wire into the editor panel~~ — **done** (`SandboxAiPanel.tsx` Agent mode + turn transaction + undo).
 2. ~~On-device git~~ — **done** (`gitFsExpo.ts` + `gitForSlug`).
 3. **`run` tool → remote box** — when `brain.ts` says a box is reachable, expose
    `run(cmd)` that proxies `tsc`/test to it over the existing runner transport;
    else omit the tool. Unlocks self-repair.
-4. **Push creds in the UI** — `makeGitTools` enables `git_push` only when a
-   `net` (http + onAuth) is passed; wire a PAT entry so the agent can push to
-   GitHub/GitLab from the phone (auth shapes already in `sandboxGitOps`).
+4. **Commit/push UI parity** — keep credentials in the existing injected
+   transport, but invoke commit/push only from explicit full-surface controls.
+   Companion surfaces receive a named handoff route, never a fake success.
 5. **Persistence + streaming** — append-only message log so a backgrounded loop
    resumes; SSE so it feels responsive.
 6. **Android proot fidelity** — flip the same UI to the real `opencode` binary

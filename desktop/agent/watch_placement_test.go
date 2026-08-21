@@ -91,3 +91,25 @@ func TestWatchTurnDefersCloudPlacementInsteadOfRunningLocal(t *testing.T) {
 		t.Fatalf("backend paths = %#v", seen)
 	}
 }
+
+func TestStandaloneWatchHandsGitFinalizationToFullSurface(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	tm.DummyMode = true
+	s := NewHTTPServer(0, "owner-token", "owner-user", "local-dev", "", "host", tm)
+	req := httptest.NewRequest(http.MethodPost, "/watch/turn", bytes.NewReader([]byte(`{
+		"v":1,"kind":"transcript","text":"commit these changes and push the git branch"
+	}`)))
+	rec := httptest.NewRecorder()
+	s.handleWatchTurn(rec, req)
+
+	var resp watchReply
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || resp.Kind != "handoff" || resp.Target != "full-surface" {
+		t.Fatalf("status=%d response=%#v", rec.Code, resp)
+	}
+	if tasks := tm.ListTasks(); len(tasks) != 0 {
+		t.Fatalf("Git finalization handoff dispatched %d task(s)", len(tasks))
+	}
+}

@@ -1,18 +1,25 @@
 // codingAgent/codingAgentRun.ts — RN glue that runs the agentic coding loop on a
-// phone-local project with (a) the full git tool set available to the agent and
-// (b) automatic before/after git checkpoints wrapping the run, so any autonomous
-// edit is one tap from revert. This is the production entry the sandbox editor
+// phone-local project with read-only Git inspection available to the agent and
+// a reversible working-tree transaction around each vibe turn. Commits and
+// pushes are deliberate UI actions; an agent turn never changes history or a
+// remote. This is the production entry the sandbox editor
 // calls; it pulls in expo (via sandboxBinding + gitFsExpo), so headless tests
-// don't import it — the pieces it composes are each tested:
-//   runWithCheckpoints (sandboxGitOps.test), makeGitTools (gitTools.test),
-//   the loop itself (runner/sandboxTools tests).
+// don't import it — the pieces it composes are each tested: execution policy,
+// turn transaction, Git tool factory, and the loop itself.
 
 import { createExpoGitFs, gitDirForSlug } from "./gitFsExpo";
 import { sandboxForSlug } from "./sandboxBinding";
 import { CODING_TOOLS, type CodingSandbox, type CodingTool } from "./sandboxTools";
 import { makeGitTools } from "./gitTools";
-import { runWithCheckpoints, type NetOptions, type CheckpointedRun } from "./sandboxGitOps";
+import type { NetOptions } from "./sandboxGitOps";
 import type { SandboxGitOptions } from "./sandboxGit";
+import { toolsForRun, type CodingRunMode } from "./executionPolicy";
+import {
+  changedFilesForTurn,
+  createTurnTransaction,
+  type TurnChangedFile,
+  type TurnSnapshot,
+} from "./turnTransaction";
 import {
   runCodingAgent,
   type CodingAgentConfig,
@@ -29,14 +36,16 @@ export interface AgenticRunOptions {
   slug: string;
   prompt: string;
   config: CodingAgentConfig;
-  /** Provide to enable git_push (http = isomorphic-git/http/web + onAuth). */
+  /** Git network context for future explicit UI actions; model policy filters network tools. */
   net?: NetOptions;
-  /** Human-in-the-loop gate for mutating file/git tools. Omit for yolo. */
+  /** Audit is structurally read-only; vibe may edit files but never commit/push. */
+  mode?: CodingRunMode;
+  /** Optional per-file gate. Omit for normal auto-applied vibe edits. */
   confirmMutation?: (call: { name: string; args: unknown }) => Promise<boolean> | boolean;
   onProgress?: (e: CodingAgentProgress) => void;
   signal?: AbortSignal;
   maxSteps?: number;
-  /** Disable the before/after checkpoints (default: checkpoints ON). */
+  /** @deprecated Git checkpoints are no longer created by coding turns. */
   noCheckpoint?: boolean;
   /**
    * The file-tool sandbox. Defaults to sandboxForSlug (src/-only — right for
@@ -47,20 +56,33 @@ export interface AgenticRunOptions {
   sandbox?: CodingSandbox;
 }
 
+export interface AgenticCodingRun {
+  result: CodingAgentResult;
+  snapshot: TurnSnapshot;
+  changed: TurnChangedFile[];
+  /** @deprecated Always null. Kept temporarily for source compatibility. */
+  before: null;
+  /** @deprecated Always null. Kept temporarily for source compatibility. */
+  after: null;
+}
+
 /**
  * Run the agentic coding loop against a phone-local project. The agent gets the
- * file tools (read/grep/edit) AND the git tools (commit/branch/merge/conflict/
- * push), and the whole run is bracketed by git checkpoints unless disabled.
+ * file tools plus read-only Git inspection. Vibe edits are recorded in a
+ * non-Git transaction for one-tap undo; audit cannot receive mutating tools.
  */
-export async function runAgenticCoding(opts: AgenticRunOptions): Promise<CheckpointedRun<CodingAgentResult>> {
+export async function runAgenticCoding(opts: AgenticRunOptions): Promise<AgenticCodingRun> {
   const sandbox = opts.sandbox ?? sandboxForSlug(opts.slug);
   const git = gitContextForSlug(opts.slug);
-  const tools: CodingTool[] = [...CODING_TOOLS, ...makeGitTools(git, opts.net)];
+  const mode = opts.mode ?? "vibe";
+  const transaction = createTurnTransaction(sandbox);
+  const advertised: CodingTool[] = [...CODING_TOOLS, ...makeGitTools(git, opts.net)];
+  const tools = toolsForRun(advertised, mode);
 
-  const run = () =>
-    runCodingAgent({
+  try {
+    const result = await runCodingAgent({
       prompt: opts.prompt,
-      sandbox,
+      sandbox: transaction.sandbox,
       config: opts.config,
       tools,
       confirmMutation: opts.confirmMutation,
@@ -68,12 +90,12 @@ export async function runAgenticCoding(opts: AgenticRunOptions): Promise<Checkpo
       signal: opts.signal,
       maxSteps: opts.maxSteps,
     });
-
-  if (opts.noCheckpoint) {
-    const result = await run();
-    return { result, before: null, after: null, changed: [] };
+    const snapshot = transaction.snapshot();
+    const changed = await changedFilesForTurn(sandbox, snapshot);
+    return { result, snapshot, changed, before: null, after: null };
+  } catch (error) {
+    // An interrupted/failed model turn must not strand invisible partial edits.
+    await transaction.rollback();
+    throw error;
   }
-
-  const label = opts.prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "agent run";
-  return runWithCheckpoints(git, label, run);
 }

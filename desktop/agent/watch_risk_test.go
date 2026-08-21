@@ -56,6 +56,19 @@ func TestWatchIsReadCodeRequest(t *testing.T) {
 	}
 }
 
+func TestWatchGitFinalizationRequiresFullSurface(t *testing.T) {
+	for _, command := range []string{"commit these changes", "push the current git branch"} {
+		if !watchIsGitFinalizationRequest(command) {
+			t.Errorf("expected %q to require full-surface Git review", command)
+		}
+	}
+	for _, command := range []string{"show git status", "push the build to my phone"} {
+		if watchIsGitFinalizationRequest(command) {
+			t.Errorf("expected %q to remain available on the watch", command)
+		}
+	}
+}
+
 func TestWatchIntentToTranscript(t *testing.T) {
 	if watchIntentToTranscript("run-tests") == "" {
 		t.Error("run-tests should expand")

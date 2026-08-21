@@ -147,6 +147,8 @@ function labelForBackend(id: CodingBackendId): string {
       return "OpenAI-compatible backend";
     case "glm":
       return "GLM backend";
+    case "deepseek":
+      return "DeepSeek backend";
     case "remote":
       return "Remote runner (GLM)";
   }

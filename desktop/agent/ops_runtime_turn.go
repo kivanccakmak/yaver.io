@@ -227,6 +227,18 @@ func executeRuntimeTurn(c OpsContext, req RuntimeTurnRequest) RuntimeTurnRespons
 	if req.Utterance == "" && req.Choice == "" {
 		return RuntimeTurnResponse{OK: false, State: runtimeQueueStateFailed, Code: "bad_payload", Error: "utterance or choice is required", Spoken: "I didn't catch that."}
 	}
+	if runtimeTurnRequiresGitHandoff(req) {
+		return RuntimeTurnResponse{
+			OK:     true,
+			State:  runtimeQueueStateDone,
+			Code:   "git_finalization_requires_full_surface",
+			Spoken: "Review the diff and commit or push on your phone, tablet, web, or desktop.",
+			Handoff: map[string]string{
+				"target": "full-surface",
+				"reason": "git-finalization-review",
+			},
+		}
+	}
 
 	item := runtimeQueue.add(&RuntimeTurnQueueItem{
 		OwnerUserID: c.ActorUserID,
@@ -287,6 +299,18 @@ func executeRuntimeTurn(c OpsContext, req RuntimeTurnRequest) RuntimeTurnRespons
 	}
 
 	return startRuntimeTurnTask(c, req, intentClass, item.ItemID)
+}
+
+func runtimeTurnRequiresGitHandoff(req RuntimeTurnRequest) bool {
+	if !watchIsGitFinalizationRequest(req.Utterance) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Surface.Class)) {
+	case "watch", "watchos", "wear", "wearos", "car", "carplay", "android-auto", "automotive", "tv", "tvos", "androidtv", "shared-tv", "glass", "compact-glass":
+		return true
+	default:
+		return false
+	}
 }
 
 // startRuntimeTurnTask creates the backing task for an existing queue item and

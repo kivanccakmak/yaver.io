@@ -8,7 +8,7 @@
 // Flow: add a GLM key (the engine) + optional GitHub token (private repos / push)
 // → clone a repo onto the phone (isomorphic-git over expo-file-system) → ask the
 // agent to make a change → it edits the whole tree (incl. convex/) with a git
-// checkpoint wrapped around the run → commit/push from the embedded git panel.
+// reversible working-tree turn → explicit commit/push in the embedded Git panel.
 //
 // Everything here is on-device. Only Convex (the backend) is remote — and the
 // agent edits convex/*.ts locally; deploying those is the one step that still
@@ -41,7 +41,8 @@ import { listPhoneProjects, type PhoneProject } from "../src/lib/phoneProjects";
 import { runAgenticCoding, gitContextForSlug } from "../src/lib/codingAgent/codingAgentRun";
 import { repoSandboxForSlug } from "../src/lib/codingAgent/repoSandbox";
 import { gitNetForSlug, loadCodingConfig } from "../src/lib/codingAgent/sandboxBinding";
-import { isRepo, revertTo } from "../src/lib/codingAgent/sandboxGit";
+import { isRepo } from "../src/lib/codingAgent/sandboxGit";
+import { restoreTurnSnapshot, type TurnSnapshot } from "../src/lib/codingAgent/turnTransaction";
 import type { CodingAgentProgress } from "../src/lib/codingAgent/runner";
 import { redactProgressText, redactSecrets, redactValue } from "../src/lib/codingAgent/secretRedaction";
 
@@ -72,7 +73,7 @@ export default function RepoCodingScreen() {
   const [runMode, setRunMode] = useState<"audit" | "edit">("audit");
   const [running, setRunning] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
-  const [beforeOid, setBeforeOid] = useState<string | null>(null);
+  const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const reload = useCallback(async () => {
@@ -192,7 +193,7 @@ export default function RepoCodingScreen() {
     if (!slug || !p) return;
     const agentPrompt = runMode === "audit"
       ? `Perform a deep, read-only audit. Do not edit files, commit, push, build, test, render, or deploy.\n\n${p}`
-      : `Implement this request carefully. Ask for approval before every file or Git mutation.\n\n${p}`;
+      : `Implement this request carefully in the working tree. Do not commit or push; the user reviews the diff and does those explicitly.\n\n${p}`;
     const config = await loadCodingConfig();
     if (!config) {
       Alert.alert(
@@ -202,27 +203,6 @@ export default function RepoCodingScreen() {
       return;
     }
     const net = await gitNetForSlug(slug); // credentials stay inside the injected git transport
-    const confirmMutation = ({ name, args }: { name: string; args: unknown }) => new Promise<boolean>((resolve) => {
-      const a = args as Record<string, unknown> | null;
-      const target = typeof a?.path === "string"
-        ? a.path
-        : typeof a?.branch === "string"
-          ? `branch ${a.branch}`
-          : name === "git_push" ? "the current branch"
-            : name === "git_commit" ? "the staged changes"
-              : "the project";
-      let settled = false;
-      const finish = (value: boolean) => { if (!settled) { settled = true; resolve(value); } };
-      Alert.alert(
-        "Approve coding-agent change?",
-        `${name} · ${target}\n\nSecrets and file contents are not shown here.`,
-        [
-          { text: "Deny", style: "cancel", onPress: () => finish(false) },
-          { text: "Approve", onPress: () => finish(true) },
-        ],
-        { cancelable: true, onDismiss: () => finish(false) },
-      );
-    });
     const safeProgress = (event: CodingAgentProgress): void => {
       if (event.kind === "model_text") {
         onProgress({ ...event, text: redactProgressText(event.text, [config.apiKey]) });
@@ -244,19 +224,19 @@ export default function RepoCodingScreen() {
     abortRef.current = ctrl;
     setRunning(true);
     setLogLines([`▶ ${p}`]);
-    setBeforeOid(null);
+    setTurnSnapshot(null);
     try {
       const run = await runAgenticCoding({
         slug,
         prompt: agentPrompt,
         config,
-        net,
+        mode: runMode === "audit" ? "audit" : "vibe",
+        net: net ?? undefined,
         sandbox: repoSandboxForSlug(slug), // whole repo (convex/, app.json, …), not just src/
         onProgress: safeProgress,
-        confirmMutation: runMode === "audit" ? () => false : confirmMutation,
         signal: ctrl.signal,
       });
-      setBeforeOid(run.before);
+      setTurnSnapshot(run.snapshot.entries.length ? run.snapshot : null);
       const r = run.result;
       const changed = r.mutatedPaths.length;
       appendLog(
@@ -277,16 +257,16 @@ export default function RepoCodingScreen() {
   const stop = useCallback(() => abortRef.current?.abort(), []);
 
   const revert = useCallback(async () => {
-    if (!selected || !beforeOid) return;
+    if (!selected || !turnSnapshot) return;
     try {
-      await revertTo(gitContextForSlug(selected), beforeOid);
-      appendLog("↩ reverted to the pre-run checkpoint");
-      setBeforeOid(null);
+      await restoreTurnSnapshot(repoSandboxForSlug(selected), turnSnapshot);
+      appendLog("↩ undid this vibe turn without changing Git history");
+      setTurnSnapshot(null);
       await reload();
     } catch (e: any) {
       Alert.alert("Revert failed", e?.message ?? String(e));
     }
-  }, [selected, beforeOid, appendLog, reload]);
+  }, [selected, turnSnapshot, appendLog, reload]);
 
   const gitProjects = projects.filter((p) => repoSlugs.has(p.slug));
   const canRunAgent = !!selected && repoSlugs.has(selected) && hasDeepSeek && !running;
@@ -302,7 +282,7 @@ export default function RepoCodingScreen() {
           <View style={{ marginLeft: 8, flex: 1 }}>
             <Text style={[styles.h1, { color: c.textPrimary }]}>Code on this phone</Text>
             <Text style={{ color: c.textMuted, fontSize: 12 }}>
-              Yaver Agent · DeepSeek V4 Flash — runs fully on your iPhone, no remote box
+              Yaver Agent · DeepSeek V4 Flash — runs on this device, no remote box
             </Text>
           </View>
         </View>
@@ -419,7 +399,7 @@ export default function RepoCodingScreen() {
                     style={[styles.modeButton, { borderColor: runMode === mode ? c.accent : c.border, backgroundColor: runMode === mode ? c.accent + "22" : c.bg }]}
                   >
                     <Text style={{ color: runMode === mode ? c.accent : c.textMuted, fontWeight: "600", fontSize: 12 }}>
-                      {mode === "audit" ? "Deep audit · read-only" : "Implement · approve changes"}
+                      {mode === "audit" ? "Deep audit · read-only" : "Vibe · auto-edit, review diff"}
                     </Text>
                   </Pressable>
                 ))}
@@ -443,9 +423,9 @@ export default function RepoCodingScreen() {
                   <Pressable onPress={stop} style={[styles.stopBtn, { borderColor: c.border, marginLeft: 8 }]}>
                     <Text style={{ color: c.textPrimary, fontWeight: "600" }}>Stop</Text>
                   </Pressable>
-                ) : beforeOid ? (
+                ) : turnSnapshot ? (
                   <Pressable onPress={revert} style={[styles.stopBtn, { borderColor: c.border, marginLeft: 8 }]}>
-                    <Text style={{ color: c.textPrimary, fontWeight: "600" }}>Revert</Text>
+                    <Text style={{ color: c.textPrimary, fontWeight: "600" }}>Undo turn</Text>
                   </Pressable>
                 ) : null}
               </View>

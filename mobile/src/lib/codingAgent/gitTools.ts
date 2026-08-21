@@ -77,6 +77,7 @@ export function makeGitTools(git: SandboxGitOptions, net?: NetOptions): CodingTo
       description: "Stage ALL current changes and commit them with the given message. Returns the new commit oid, or null if nothing changed.",
       parameters: obj({ message: STR }, ["message"]),
       mutating: true,
+      effect: "repository",
       async invoke(a: { message: string }) {
         return { oid: await commitAll(git, a.message) };
       },
@@ -95,6 +96,7 @@ export function makeGitTools(git: SandboxGitOptions, net?: NetOptions): CodingTo
       description: "Create a branch at HEAD (optionally switch to it), or switch to / delete an existing one. action: 'create' | 'switch' | 'delete'.",
       parameters: obj({ action: { type: "string", enum: ["create", "switch", "delete"] }, name: STR, checkout: { type: "boolean" } }, ["action", "name"]),
       mutating: true,
+      effect: "repository",
       async invoke(a: { action: "create" | "switch" | "delete"; name: string; checkout?: boolean }) {
         if (a.action === "create") await createBranch(git, a.name, { checkout: a.checkout ?? true });
         else if (a.action === "switch") await switchBranch(git, a.name);
@@ -107,6 +109,7 @@ export function makeGitTools(git: SandboxGitOptions, net?: NetOptions): CodingTo
       description: "Merge another branch into the current one. Clean merges auto-commit; on conflict, returns the conflicting file paths (now carrying <<<<<<< markers) and a theirsOid — resolve each with git_resolve_conflict then call git_complete_merge with that theirsOid.",
       parameters: obj({ branch: STR }, ["branch"]),
       mutating: true,
+      effect: "repository",
       async invoke(a: { branch: string }) {
         return mergeBranch(git, a.branch);
       },
@@ -125,6 +128,7 @@ export function makeGitTools(git: SandboxGitOptions, net?: NetOptions): CodingTo
       description: "Write the final, conflict-free content for a conflicted file and stage it. Provide the FULL resolved file content (no markers).",
       parameters: obj({ path: STR, content: STR }, ["path", "content"]),
       mutating: true,
+      effect: "repository",
       async invoke(a: { path: string; content: string }) {
         await resolveConflict(git, a.path, a.content);
         return { ok: true, remaining: await listConflicts(git) };
@@ -135,6 +139,7 @@ export function makeGitTools(git: SandboxGitOptions, net?: NetOptions): CodingTo
       description: "After all conflicts are resolved, create the merge commit (two parents). Pass the theirsOid returned by git_merge.",
       parameters: obj({ message: STR, theirsOid: STR }, ["message"]),
       mutating: true,
+      effect: "repository",
       async invoke(a: { message: string; theirsOid?: string }) {
         return { oid: await completeMerge(git, a.message, { theirsOid: a.theirsOid }) };
       },
@@ -144,6 +149,7 @@ export function makeGitTools(git: SandboxGitOptions, net?: NetOptions): CodingTo
       description: "Add or list remotes. action: 'add' | 'list'. For 'add', provide name + url.",
       parameters: obj({ action: { type: "string", enum: ["add", "list"] }, name: STR, url: STR }, ["action"]),
       mutating: true,
+      effect: "repository",
       async invoke(a: { action: "add" | "list"; name?: string; url?: string }) {
         if (a.action === "add") {
           if (!a.name || !a.url) throw new Error("git_remote add needs name + url");
@@ -160,6 +166,7 @@ export function makeGitTools(git: SandboxGitOptions, net?: NetOptions): CodingTo
       description: "Push the current branch (or the given ref) to a remote (default 'origin'). Requires configured auth. Force-push is not available from the mobile agent.",
       parameters: obj({ remote: STR, ref: STR }),
       mutating: true,
+      effect: "network",
       async invoke(a: { remote?: string; ref?: string; force?: boolean }) {
         return push(git, net, { ...a, force: false });
       },

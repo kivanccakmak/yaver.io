@@ -3,10 +3,9 @@
 //   • Quick edit — single-shot generate → preview → apply (the original flow;
 //     every backend returns one EditPlan we preview with formatEditPlan and
 //     apply with applyEditPlan).
-//   • Agent — the opencode-style iterative loop (codingAgent/runner) that reads,
-//     greps, edits, and uses git on-device until the task is done. Each run is
-//     wrapped in a git checkpoint (codingAgent/sandboxGit) so it can be reverted
-//     in one tap. GLM by default (the cheap BYO path). See
+//   • Agent — the opencode-style iterative loop that reads, greps, and edits
+//     until the task is done. Each run records a non-Git turn transaction so it
+//     can be undone without committing the user's dirty tree. GLM by default.
 //     docs/agentic-coding-sandbox.md.
 //
 // The source store re-validates every path so a bad model response can't escape
@@ -40,18 +39,10 @@ import {
   resolveActiveBackend,
   type ActiveBackendResult,
 } from "../lib/codingBackendStore";
-// Agentic loop + on-device git.
-import { runCodingAgent, type CodingAgentResult, type CodingToolCall } from "../lib/codingAgent/runner";
-import { CODING_TOOLS } from "../lib/codingAgent/sandboxTools";
-import { makeGitTools } from "../lib/codingAgent/gitTools";
-import { sandboxForSlug, gitForSlug, gitNetForSlug, loadCodingConfig } from "../lib/codingAgent/sandboxBinding";
-import {
-  ensureRepo,
-  checkpointBefore,
-  checkpointAfter,
-  revertTo,
-  type SandboxGitOptions,
-} from "../lib/codingAgent/sandboxGit";
+import { type CodingAgentResult, type CodingToolCall } from "../lib/codingAgent/runner";
+import { runAgenticCoding } from "../lib/codingAgent/codingAgentRun";
+import { sandboxForSlug, gitNetForSlug, loadCodingConfig } from "../lib/codingAgent/sandboxBinding";
+import { restoreTurnSnapshot, type TurnSnapshot } from "../lib/codingAgent/turnTransaction";
 
 interface Props {
   slug: string;
@@ -85,8 +76,7 @@ export function SandboxAiPanel({ slug, openPath, onApplied }: Props) {
   const [trace, setTrace] = useState<CodingToolCall[]>([]);
   const [agentRes, setAgentRes] = useState<CodingAgentResult | null>(null);
   const [agentErr, setAgentErr] = useState<string | null>(null);
-  const [beforeOid, setBeforeOid] = useState<string | null>(null);
-  const [gitNote, setGitNote] = useState<string | null>(null);
+  const [turnSnapshot, setTurnSnapshot] = useState<TurnSnapshot | null>(null);
   const [reverting, setReverting] = useState(false);
 
   // Re-resolve the backend whenever the editor regains focus (the user may have
@@ -184,7 +174,7 @@ export function SandboxAiPanel({ slug, openPath, onApplied }: Props) {
     setPhase("idle");
   }, []);
 
-  // ── Agent (iterative loop + git checkpoint) ───────────────────────────
+  // ── Agent (iterative loop + reversible working-tree turn) ─────────────
 
   const runAgent = useCallback(async () => {
     const prompt = agentPrompt.trim();
@@ -192,8 +182,7 @@ export function SandboxAiPanel({ slug, openPath, onApplied }: Props) {
     setAgentErr(null);
     setAgentRes(null);
     setTrace([]);
-    setBeforeOid(null);
-    setGitNote(null);
+    setTurnSnapshot(null);
 
     // Managed mode (Premium) routes through the Yaver Gateway authed by the
     // session token; otherwise the BYO GLM key (one key powers this and the
@@ -206,42 +195,20 @@ export function SandboxAiPanel({ slug, openPath, onApplied }: Props) {
 
     setAgentPhase("running");
 
-    // Best-effort git checkpoint so the whole run is revertible. If git fails on
-    // this device we still code — just without the safety net.
-    let git: SandboxGitOptions | null = null;
     try {
-      git = gitForSlug(slug);
-      await ensureRepo(git);
-      const oid = await checkpointBefore(git, prompt.slice(0, 60));
-      setBeforeOid(oid);
-    } catch {
-      git = null;
-      setGitNote("Version control unavailable on this device — this run can't be auto-reverted.");
-    }
-
-    // Resolve push creds for this project's remote (if connected). When present,
-    // makeGitTools exposes git_push so the agent can push to GitHub/GitLab itself.
-    const net = git ? await gitNetForSlug(slug).catch(() => null) : null;
-
-    try {
-      const res = await runCodingAgent({
+      const run = await runAgenticCoding({
+        slug,
         prompt,
         sandbox: sandboxForSlug(slug),
         config,
-        // Full file tools + local git tools (commit/branch/diff/merge); git_push
-        // too when a remote + token are configured (net).
-        tools: git ? [...CODING_TOOLS, ...makeGitTools(git, net ?? undefined)] : [...CODING_TOOLS],
+        mode: "vibe",
+        net: await gitNetForSlug(slug).catch(() => null) ?? undefined,
         onProgress: (e) => {
           if (e.kind === "tool_call") setTrace((t) => [...t, e.call]);
         },
       });
-      if (git) {
-        try {
-          await checkpointAfter(git, prompt.slice(0, 60));
-        } catch {
-          /* checkpoint is best-effort */
-        }
-      }
+      const res = run.result;
+      setTurnSnapshot(run.snapshot.entries.length ? run.snapshot : null);
       setAgentRes(res);
       setAgentPhase("done");
       await onApplied(res.mutatedPaths);
@@ -252,27 +219,26 @@ export function SandboxAiPanel({ slug, openPath, onApplied }: Props) {
   }, [agentPrompt, slug, onApplied, router]);
 
   const revertRun = useCallback(async () => {
-    if (!beforeOid) return;
+    if (!turnSnapshot) return;
     setReverting(true);
     try {
-      const git = gitForSlug(slug);
-      await revertTo(git, beforeOid);
+      await restoreTurnSnapshot(sandboxForSlug(slug), turnSnapshot);
       await onApplied(agentRes?.mutatedPaths ?? []);
       setAgentRes(null);
       setTrace([]);
-      setBeforeOid(null);
+      setTurnSnapshot(null);
       setAgentPhase("idle");
     } catch (e: any) {
       setAgentErr(String(e?.message ?? e));
     } finally {
       setReverting(false);
     }
-  }, [beforeOid, slug, onApplied, agentRes]);
+  }, [turnSnapshot, slug, onApplied, agentRes]);
 
   const newTask = useCallback(() => {
     setAgentRes(null);
     setTrace([]);
-    setBeforeOid(null);
+    setTurnSnapshot(null);
     setAgentErr(null);
     setAgentPrompt("");
     setAgentPhase("idle");
@@ -423,7 +389,6 @@ export function SandboxAiPanel({ slug, openPath, onApplied }: Props) {
             </ScrollView>
           )}
 
-          {gitNote ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>{gitNote}</Text> : null}
           {agentErr ? <Text style={{ color: "#ff6b6b", fontSize: 12, marginTop: 6 }}>{agentErr}</Text> : null}
 
           {agentPhase === "running" ? (
@@ -440,7 +405,7 @@ export function SandboxAiPanel({ slug, openPath, onApplied }: Props) {
                 {agentRes.inputTokens + agentRes.outputTokens} tokens
               </Text>
               <View style={{ flexDirection: "row", marginTop: 8 }}>
-                {beforeOid ? (
+                {turnSnapshot ? (
                   <Pressable
                     onPress={revertRun}
                     disabled={reverting}
@@ -449,13 +414,13 @@ export function SandboxAiPanel({ slug, openPath, onApplied }: Props) {
                     {reverting ? (
                       <ActivityIndicator color={c.textPrimary} />
                     ) : (
-                      <Text style={{ color: c.textPrimary, fontWeight: "500" }}>Revert this run</Text>
+                      <Text style={{ color: c.textPrimary, fontWeight: "500" }}>Undo this turn</Text>
                     )}
                   </Pressable>
                 ) : null}
                 <Pressable
                   onPress={newTask}
-                  style={[styles.btnPrimary, { backgroundColor: c.accent, borderColor: c.border, marginLeft: beforeOid ? 8 : 0, flex: 1 }]}
+                  style={[styles.btnPrimary, { backgroundColor: c.accent, borderColor: c.border, marginLeft: turnSnapshot ? 8 : 0, flex: 1 }]}
                 >
                   <Text style={{ color: c.bg, fontWeight: "600" }}>New task</Text>
                 </Pressable>

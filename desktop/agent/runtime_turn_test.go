@@ -45,6 +45,33 @@ func TestRuntimeTurnCapturesIdeaWithoutRunningByDefault(t *testing.T) {
 	}
 }
 
+func TestCompactRuntimeSurfacesHandGitFinalizationToFullSurface(t *testing.T) {
+	for _, surface := range []string{"watch", "car", "tvos", "androidtv", "compact-glass"} {
+		t.Run(surface, func(t *testing.T) {
+			withIsolatedRuntimeQueue(t)
+			resp := executeRuntimeTurn(OpsContext{}, RuntimeTurnRequest{
+				Utterance: "commit these changes and push the git branch",
+				Surface:   RuntimeTurnSurface{Class: surface},
+			})
+			if !resp.OK || resp.Code != "git_finalization_requires_full_surface" || resp.Handoff["target"] != "full-surface" {
+				t.Fatalf("unexpected response: %+v", resp)
+			}
+			if items := runtimeQueue.list("", 10); len(items) != 0 {
+				t.Fatalf("compact Git handoff queued %d item(s)", len(items))
+			}
+		})
+	}
+}
+
+func TestFullRuntimeSurfaceCanRequestGitFinalization(t *testing.T) {
+	if runtimeTurnRequiresGitHandoff(RuntimeTurnRequest{
+		Utterance: "commit these changes",
+		Surface:   RuntimeTurnSurface{Class: "desktop_gui"},
+	}) {
+		t.Fatal("desktop GUI should retain its explicit full-surface Git workflow")
+	}
+}
+
 func TestRuntimeTurnCreatesQueuedTaskWhenAskedToRun(t *testing.T) {
 	withIsolatedRuntimeQueue(t)
 	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())

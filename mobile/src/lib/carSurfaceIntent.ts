@@ -7,6 +7,8 @@
  * a coding task.
  */
 
+import { isGitFinalizationRequest } from "./codingAgent/executionPolicy";
+
 export type CarSurfaceIntentKind =
   | "meeting_next"
   | "meeting_join_next"
@@ -16,6 +18,7 @@ export type CarSurfaceIntentKind =
   | "git_issues"
   | "git_connect"
   | "git_ci_status"
+  | "git_finish_handoff"
   | "media_open"
   | "maps_open"
   | "storage_scan"
@@ -244,6 +247,13 @@ export function classifyCarSurfaceIntent(
     };
   }
 
+  if (isGitFinalizationRequest(clean)) {
+    return {
+      kind: "git_finish_handoff",
+      payload: { provider: gitProviderFromText(t), surface: "car", target: "full-surface" },
+    };
+  }
+
   const gitish =
     /\b(github|gitlab|git|pull request|pull requests|pr|prs|merge request|merge requests|mr|mrs|issue|issues|ci|pipeline|pipelines|actions|workflow|workflows|oauth|authorize|authenticate)\b/.test(
       t,
@@ -303,6 +313,14 @@ export async function executeCarSurfaceIntent(
 ): Promise<CarSurfaceResult> {
   const intent = classifyCarSurfaceIntent(text);
   if (!intent) return { handled: false, spoken: "" };
+
+  if (intent.kind === "git_finish_handoff") {
+    return {
+      handled: true,
+      spoken: "The vibe turn can continue here. Review the diff and commit or push on your phone, tablet, web, or desktop when safe.",
+      intent,
+    };
+  }
 
   // The driver cannot speak coordinates — the screen supplies them.
   if (intent.kind === "ev_charging") {
@@ -476,6 +494,8 @@ export function spokenForCarIntent(
         )}. Check your phone for the link.`;
       return `${provider} authorization started. Check your phone for the browser approval.`;
     }
+    case "git_finish_handoff":
+      return "Review the diff and finish Git on your phone, tablet, web, or desktop when safe.";
     case "media_open":
     case "maps_open": {
       if (typeof data?.spoken === "string" && data.spoken.trim())

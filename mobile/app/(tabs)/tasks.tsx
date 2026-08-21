@@ -126,6 +126,7 @@ import { gitContextForSlug, runAgenticCoding } from "../../src/lib/codingAgent/c
 import { gitNetForSlug, loadCodingConfig } from "../../src/lib/codingAgent/sandboxBinding";
 import { repoSandboxForSlug } from "../../src/lib/codingAgent/repoSandbox";
 import { isRepo } from "../../src/lib/codingAgent/sandboxGit";
+import { restoreTurnSnapshot, type TurnSnapshot } from "../../src/lib/codingAgent/turnTransaction";
 import { redactProgressText, redactSecrets, redactValue } from "../../src/lib/codingAgent/secretRedaction";
 import type { YaverAgentToolContext } from "../../src/lib/yaverAgentTools";
 import {
@@ -2222,7 +2223,7 @@ export default function TasksScreen() {
                     >
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{project.name}</Text>
-                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>This iPhone · {project.slug}</Text>
+                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>This device · {project.slug}</Text>
                       </View>
                       {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
                     </Pressable>
@@ -2685,6 +2686,10 @@ export default function TasksScreen() {
    *  task id. handleStopTask aborts the matching controller; the
    *  runner unwinds via AbortError and the task ends up "stopped". */
   const yaverAgentAbortersRef = useRef<Map<string, AbortController>>(new Map());
+  /** Latest successful phone-local vibe turn per task. Contents stay in memory
+   *  only; Undo restores the exact pre-turn bytes without touching Git. */
+  const localTurnUndoRef = useRef<Map<string, { slug: string; snapshot: TurnSnapshot }>>(new Map());
+  const [localTurnUndoEpoch, setLocalTurnUndoEpoch] = useState(0);
   const didApplyRouteSeedRef = useRef(false);
 
   // Project + Todo state
@@ -4425,7 +4430,7 @@ export default function TasksScreen() {
     if (!config) {
       Alert.alert(
         "Add a DeepSeek API key",
-        "This iPhone task needs a DeepSeek API key in the phone's secure settings.",
+        "This device task needs a DeepSeek API key in secure settings.",
       );
       return;
     }
@@ -4449,7 +4454,7 @@ export default function TasksScreen() {
       turns: [{ role: "user", content: promptText, timestamp: startedIso }],
       createdAt: startedAt,
       updatedAt: startedAt,
-      deviceName: "This iPhone",
+      deviceName: "This device",
     };
     setTasks((prev) => [initialTask, ...prev]);
     pendingOpenTaskRef.current = initialTask;
@@ -4464,31 +4469,14 @@ export default function TasksScreen() {
     };
     const controller = new AbortController();
     yaverAgentAbortersRef.current.set(taskId, controller);
-    const confirmMutation = ({ name, args }: { name: string; args: unknown }) => new Promise<boolean>((resolve) => {
-      const a = args as Record<string, unknown> | null;
-      const target = typeof a?.path === "string"
-        ? a.path
-        : name === "git_push" ? "the current branch"
-          : name === "git_commit" ? "the staged changes"
-            : "the project";
-      Alert.alert(
-        "Approve phone-local change?",
-        `${name} · ${target}\n\nThe local agent cannot build or render on this iPhone. Secrets and file contents are not shown here.`,
-        [
-          { text: "Deny", style: "cancel", onPress: () => resolve(false) },
-          { text: "Approve", onPress: () => resolve(true) },
-        ],
-        { cancelable: true, onDismiss: () => resolve(false) },
-      );
-    });
     try {
       const result = await runAgenticCoding({
         slug,
         prompt: promptText,
         config,
-        net: await gitNetForSlug(slug),
+        mode: "vibe",
+        net: (await gitNetForSlug(slug)) ?? undefined,
         sandbox: repoSandboxForSlug(slug),
-        confirmMutation,
         signal: controller.signal,
         onProgress: (event) => {
           if (event.kind === "model_text") {
@@ -4508,6 +4496,10 @@ export default function TasksScreen() {
           }
         },
       });
+      if (result.snapshot.entries.length) {
+        localTurnUndoRef.current.set(taskId, { slug, snapshot: result.snapshot });
+        setLocalTurnUndoEpoch((value) => value + 1);
+      }
       const reply = redactSecrets(result.result.finalText.trim() || "Done.", [config.apiKey]);
       const finishedAt = Date.now();
       updateTask((task) => ({
@@ -5013,6 +5005,25 @@ export default function TasksScreen() {
     return () => clearTimeout(timer);
   }, [showNewTask, showTargetWizard, showTmuxSessions, flushAfterDismiss]);
 
+  const handleUndoPhoneTurn = async (taskId: string) => {
+    const undo = localTurnUndoRef.current.get(taskId);
+    if (!undo) return;
+    try {
+      await restoreTurnSnapshot(repoSandboxForSlug(undo.slug), undo.snapshot);
+      localTurnUndoRef.current.delete(taskId);
+      setLocalTurnUndoEpoch((value) => value + 1);
+      const note = "Undid the last phone-local vibe turn without changing Git history.";
+      setTasks((prev) => prev.map((task) => task.id === taskId
+        ? { ...task, output: [...task.output, note], updatedAt: Date.now() }
+        : task));
+      setSelectedTask((prev) => prev?.id === taskId
+        ? { ...prev, output: [...prev.output, note], updatedAt: Date.now() }
+        : prev);
+    } catch (error) {
+      Alert.alert("Undo failed", error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const handleStopTask = async (taskId: string) => {
     // Yaver-agent tasks live entirely on the phone — no server to call,
     // just abort the local runner. The runner's finally block flips
@@ -5113,7 +5124,7 @@ export default function TasksScreen() {
       const config = await loadCodingConfig();
       if (!config) {
         setIsSendingFollowUp(false);
-        Alert.alert("Add a DeepSeek API key", "This iPhone task needs a DeepSeek API key in secure settings.");
+        Alert.alert("Add a DeepSeek API key", "This device task needs a DeepSeek API key in secure settings.");
         return;
       }
       const taskId = selectedTask.id;
@@ -5134,22 +5145,14 @@ export default function TasksScreen() {
       setFollowUpImages([]);
       const controller = new AbortController();
       yaverAgentAbortersRef.current.set(taskId, controller);
-      const confirmMutation = ({ name, args }: { name: string; args: unknown }) => new Promise<boolean>((resolve) => {
-        const a = args as Record<string, unknown> | null;
-        const target = typeof a?.path === "string" ? a.path : name === "git_push" ? "the current branch" : "the project";
-        Alert.alert("Approve phone-local change?", `${name} · ${target}\n\nSecrets and file contents are not shown here.`, [
-          { text: "Deny", style: "cancel", onPress: () => resolve(false) },
-          { text: "Approve", onPress: () => resolve(true) },
-        ], { cancelable: true, onDismiss: () => resolve(false) });
-      });
       try {
         const result = await runAgenticCoding({
           slug,
           prompt: `Previous conversation:\n${prior}\n\nNew request:\n${promptText}`,
           config,
-          net: await gitNetForSlug(slug),
+          mode: "vibe",
+          net: (await gitNetForSlug(slug)) ?? undefined,
           sandbox: repoSandboxForSlug(slug),
-          confirmMutation,
           signal: controller.signal,
           onProgress: (event) => {
             if (event.kind === "model_text") {
@@ -5161,6 +5164,10 @@ export default function TasksScreen() {
             }
           },
         });
+        if (result.snapshot.entries.length) {
+          localTurnUndoRef.current.set(taskId, { slug, snapshot: result.snapshot });
+          setLocalTurnUndoEpoch((value) => value + 1);
+        }
         const reply = redactSecrets(result.result.finalText.trim() || "Done.", [config.apiKey]);
         const finishedAt = Date.now();
         updateTask((task) => ({
@@ -8585,6 +8592,28 @@ export default function TasksScreen() {
                         </Text>
                       </View>
                     </Pressable>
+                    {!isRunning &&
+                    selectedTask.runnerId === "yaver-phone" &&
+                    localTurnUndoRef.current.has(selectedTask.id) ? (
+                      <Pressable
+                        key={`local-turn-undo-${localTurnUndoEpoch}`}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={({ pressed }) => [
+                          {
+                            width: 44, height: 44, borderRadius: 12,
+                            backgroundColor: c.bg,
+                            alignItems: "center", justifyContent: "center",
+                            borderWidth: 1, borderColor: c.border,
+                          },
+                          pressed && { opacity: 0.7 },
+                        ]}
+                        onPress={() => void handleUndoPhoneTurn(selectedTask.id)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Undo last vibe turn"
+                      >
+                        <Ionicons name="arrow-undo-outline" size={20} color={c.textPrimary} />
+                      </Pressable>
+                    ) : null}
                     {isRunning ? (
                       <Pressable
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}

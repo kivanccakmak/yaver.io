@@ -14,7 +14,6 @@
 
 import {
   CODING_TOOLS,
-  dispatchCodingTool,
   type CodingSandbox,
   type CodingTool,
 } from "./sandboxTools";
@@ -67,7 +66,7 @@ Work in a loop:
 4. When the change is complete, STOP calling tools and reply with a short plain-text summary of what you changed and why. No markdown headings, no code fences.
 
 Audit policy: for audit or review requests, begin read-only, inspect evidence, identify policy/security/dependency risks, and do not mutate files unless the user explicitly asks for a fix. Never claim that a build, test, simulator, render, deploy, or shell command ran here. Those require a remote runtime; state the exact handoff instead.
-Git policy: inspect status and diff before commit; never force-push; never add credentials to files, remotes, commit messages, or tool arguments.
+Git policy: use Git tools only to inspect status, diff, log, branches, and conflicts. Never commit, branch, merge, change remotes, pull, or push during a model turn. The user performs history and network actions explicitly after reviewing the diff. Never add credentials to files or tool arguments.
 Path rules: every path is posix-relative inside the scoped project — no leading slash, no '..'.
 If a tool returns an error, read the message and adjust (e.g. re-read the file if an anchor didn't match). Don't repeat a failing call unchanged.
 Be concise. Don't narrate every step; act.`;
@@ -168,6 +167,18 @@ async function execTool(
   state: ExecState,
 ): Promise<{ resultJson: string; isError: boolean }> {
   const def = tools.find((t) => t.name === name);
+  if (!def) {
+    const call: CodingToolCall = {
+      name,
+      args,
+      result: { error: `unknown coding tool: ${name}` },
+      mutating: false,
+      error: `unknown coding tool: ${name}`,
+    };
+    state.toolCalls.push(call);
+    opts.onProgress?.({ kind: "tool_call", call });
+    return { resultJson: JSON.stringify(call.result), isError: true };
+  }
   const mutating = !!def?.mutating;
   const call: CodingToolCall = { name, args, result: null, mutating };
 
@@ -189,7 +200,10 @@ async function execTool(
   }
 
   try {
-    const result = await dispatchCodingTool(name, args, opts.sandbox);
+    // Execute the definition from the exact registry advertised to the model.
+    // Git and future injected tools close over their own capabilities; routing
+    // back through CODING_TOOLS made those advertised tools fail at runtime.
+    const result = await def.invoke(args, opts.sandbox);
     call.result = result;
     // A tool may apply nothing and return {error} (e.g. anchor not found) — only
     // count a real mutation toward mutatedPaths when the tool reported ok.
