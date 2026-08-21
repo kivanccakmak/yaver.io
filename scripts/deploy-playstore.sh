@@ -224,7 +224,15 @@ if [ ! -f "$WORKLETS_EXPECTED/arm64-v8a/libworklets.so" ]; then
   exit 1
 fi
 
-"$GRADLE" bundleRelease
+# bundleRelease with the same lint skip CI uses (release-mobile.yml): local
+# lintVital* is slow AND downloads ~200 MB of lint jars — neither is needed to
+# produce the AAB. YAVER_PLAYSTORE_ABI (e.g. arm64-v8a) restricts the build to
+# one ABI via AGP's android.injected.build.abi — a 4x smaller native footprint
+# for a disk-constrained machine doing an internal-test build; the CI build
+# keeps all ABIs.
+"$GRADLE" bundleRelease \
+  ${YAVER_PLAYSTORE_ABI:+-Pandroid.injected.build.abi="$YAVER_PLAYSTORE_ABI"} \
+  -x lint -x lintVitalRelease -x lintVitalAnalyzeRelease
 
 PAYMENT_DEP_REPORT="$(mktemp -t yaver-android-release-deps.XXXXXX)"
 if ! "$GRADLE" :app:dependencies --configuration releaseRuntimeClasspath >"$PAYMENT_DEP_REPORT"; then

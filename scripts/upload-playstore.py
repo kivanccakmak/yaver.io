@@ -32,13 +32,15 @@ AAB_PATH = os.environ.get("AAB_PATH", AAB_PATH)
 AAB_PATHS = [p.strip() for p in os.environ.get("AAB_PATHS", AAB_PATH).split(",") if p.strip()]
 # internal | alpha | beta | production (Google Play track names).
 TRACK = os.environ.get("PLAY_TRACK", "internal")
-# Internal testing (≤100 testers) is the SAFE automated lane: a release must
-# be `inProgress` to actually reach testers. The old blanket "draft" default
+# Internal testing (≤100 testers) is the SAFE automated lane: a release must be
+# LIVE to actually reach testers. `completed` is the 100%-to-testers state for a
+# fixed-track like internal (the API refuses an inProgress release without a
+# <1 userFraction, and completed needs none). The old blanket "draft" default
 # made every automated internal upload a silent dead end — the AAB was on the
 # track, but no tester could ever receive it (measured 2026-08-21). alpha/beta/
 # production MUST stay draft by default: those never auto-go-live without an
 # explicit promote. An explicit PLAY_RELEASE_STATUS always wins.
-_DEFAULT_RELEASE_STATUS = "inProgress" if TRACK == "internal" else "draft"
+_DEFAULT_RELEASE_STATUS = "completed" if TRACK == "internal" else "draft"
 RELEASE_STATUS = os.environ.get("PLAY_RELEASE_STATUS", _DEFAULT_RELEASE_STATUS)
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
@@ -188,16 +190,23 @@ def main():
         print(f"Uploaded bundle: versionCode={version_code}", flush=True)
 
     # Assign to internal track
+    release_body = {
+        "versionCodes": version_codes,
+        "status": RELEASE_STATUS,
+    }
+    if RELEASE_STATUS == "inProgress":
+        # The API refuses an inProgress release without a rollout fraction
+        # ("IN_PROGRESS release must have fraction"), and the fraction must be
+        # < 1. completed needs none. Only set a fraction for an explicit
+        # inProgress caller.
+        release_body["userFraction"] = 0.99
     service.edits().tracks().update(
         packageName=PACKAGE,
         editId=edit_id,
         track=TRACK,
         body={
             "track": TRACK,
-            "releases": [{
-                "versionCodes": version_codes,
-                "status": RELEASE_STATUS,
-            }],
+            "releases": [release_body],
         }
     ).execute()
     print(f"Assigned versionCodes={','.join(version_codes)} to {TRACK} track with status={RELEASE_STATUS}", flush=True)
