@@ -10490,6 +10490,15 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		json.Unmarshal(call.Arguments, &a)
 		return mcpToolJSON(mcpPlayStoreTrack(a.Package, a.Track))
+	case "playstore_promote":
+		var a struct {
+			Package     string `json:"package"`
+			VersionCode string `json:"versionCode"`
+			Track       string `json:"track"`
+			Notes       string `json:"releaseNotes"`
+		}
+		json.Unmarshal(call.Arguments, &a)
+		return mcpToolJSON(mcpPlayStorePromote(a.Package, a.VersionCode, a.Track, a.Notes))
 	case "gradle_build":
 		var a struct {
 			Dir  string `json:"directory"`

@@ -219,6 +219,74 @@ func mcpPlayStoreTrack(packageName, track string) interface{} {
 	return map[string]interface{}{"track": track, "output": out}
 }
 
+// playPython resolves a python3 that can import the Google API client. The
+// deploy machine's default `python3` (e.g. /usr/local/bin) often lacks it while
+// the Homebrew/system pythons have it, so probe candidates instead of guessing.
+func playPython() string {
+	candidates := []string{"/opt/homebrew/bin/python3", "/usr/bin/python3"}
+	if p := os.Getenv("PYTHON3"); p != "" {
+		candidates = append([]string{p}, candidates...)
+	}
+	for _, py := range candidates {
+		if _, err := os.Stat(py); err != nil {
+			continue
+		}
+		out, err := runCmd(py, "-c", "import google, googleapiclient")
+		if err == nil && !strings.Contains(out, "Error") {
+			return py
+		}
+	}
+	if out, err := runCmd("python3", "-c", "import google, googleapiclient"); err == nil && !strings.Contains(out, "Error") {
+		return "python3"
+	}
+	return ""
+}
+
+// mcpPlayStorePromote promotes an already-uploaded versionCode to a target Play
+// track (alpha / beta / production) via scripts/play-promote.py — the same
+// edits+commit path the Play Console "Promote release" button uses. It does NOT
+// re-upload the AAB. A Play declaration gate (e.g. the Health-apps form) is
+// surfaced as a named error with the exact console step to unblock it.
+func mcpPlayStorePromote(packageName, versionCode, track, notes string) interface{} {
+	keyPath := findGooglePlayKey()
+	if keyPath == "" {
+		return map[string]interface{}{"error": "Google Play service account key not found.", "setup": "Place it at keys/google-play-service-account.json"}
+	}
+	py := playPython()
+	if py == "" {
+		return map[string]interface{}{
+			"error": "No python3 with the Google API client found.",
+			"setup": "pip install --user --break-system-packages google-auth google-api-python-client, or set PYTHON3 to a python that has them.",
+		}
+	}
+	script := filepath.Join("scripts", "play-promote.py")
+	if _, err := os.Stat(script); err != nil {
+		return map[string]interface{}{"error": "scripts/play-promote.py not found in the agent workdir."}
+	}
+	cmd := osexec.Command(py, script)
+	cmd.Env = append(os.Environ(),
+		"PLAY_STORE_KEY_FILE="+keyPath,
+		"PLAY_PACKAGE_NAME="+packageName,
+		"PLAY_VERSION_CODE="+versionCode,
+		"PLAY_TARGET_TRACK="+track,
+	)
+	if notes != "" {
+		cmd.Env = append(cmd.Env, "PLAY_RELEASE_NOTES="+notes)
+	}
+	out, err := cmd.CombinedOutput()
+	res := map[string]interface{}{
+		"output":      string(out),
+		"package":     packageName,
+		"versionCode": versionCode,
+		"track":       track,
+	}
+	if err != nil {
+		res["error"] = err.Error()
+		res["detail"] = string(out)
+	}
+	return res
+}
+
 func mcpGradleBuild(dir, task string) interface{} {
 	if dir == "" {
 		dir, _ = os.Getwd()
