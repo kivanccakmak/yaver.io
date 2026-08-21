@@ -46,10 +46,16 @@ test("tablet vibe studio renders the landscape split", async ({ browser }) => {
   const context = await browser.newContext({ ...devices[MOBILE_LANDSCAPE.playwrightDevice!] });
   const page = await context.newPage();
 
-  // VIEWPORT FIRST — the device-context guard.
+  // VIEWPORT FIRST — the device-context guard. Measure the emulated DEVICE
+  // geometry (screen.*), not window.innerWidth: on about:blank Chromium's
+  // mobile emulation reports the 980px default layout viewport for iPad/Android
+  // tablet descriptors (measured 2026-08-21: iPad gen 7 → 980x1307 inner vs
+  // 810x1080 screen), so innerWidth is a false negative for every tablet
+  // profile. screen.width/height report the true device CSS geometry and still
+  // catch a narrowed desktop (screen.width stays the monitor width there).
   const vp = await page.evaluate(() => ({
-    width: window.innerWidth,
-    height: window.innerHeight,
+    width: screen.width,
+    height: screen.height,
     hasTouch: "ontouchstart" in window || navigator.maxTouchPoints > 0,
     isMobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent),
   }));
@@ -90,8 +96,8 @@ test("tablet vibe studio shows portrait peek without the split", async ({ browse
   const page = await context.newPage();
 
   const vp = await page.evaluate(() => ({
-    width: window.innerWidth,
-    height: window.innerHeight,
+    width: screen.width,
+    height: screen.height,
     hasTouch: "ontouchstart" in window || navigator.maxTouchPoints > 0,
     isMobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent),
   }));
@@ -114,6 +120,109 @@ test("tablet vibe studio shows portrait peek without the split", async ({ browse
 
   // The peek tab is the portrait-only affordance.
   await expect(page.getByText(/^Preview$/).first(), "tablet(portrait): preview peek tab missing")
+    .toBeVisible({ timeout: 15_000 });
+
+  await context.close();
+});
+
+test("tablet vibe studio drag divider resizes the split", async ({ browser }) => {
+  test.skip(!MOBILE_WEB_URL, "MOBILE_WEB_URL is unset — the RN-web app is not served");
+
+  // The split is a fixed 55/45 layout unless the drag divider works. Drive it
+  // with TOUCH (CDP Input.dispatchTouchEvent), the input a real tablet uses:
+  // RN-web's mouse-emulation path drops all but the first mousemove after the
+  // responder grants (measured 2026-08-21), so a Playwright page.mouse drag
+  // "sticks" at a few px and is NOT a valid harness for this gesture.
+  const context = await browser.newContext({ ...devices[MOBILE_LANDSCAPE.playwrightDevice!] });
+  const page = await context.newPage();
+
+  const vp = await page.evaluate(() => ({
+    width: screen.width,
+    height: screen.height,
+    hasTouch: "ontouchstart" in window || navigator.maxTouchPoints > 0,
+    isMobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent),
+  }));
+  const vpCheck = viewportMatchesSurface("tabletLandscape", vp);
+  expect(vpCheck.ok,
+    `tabletLandscape viewport: ${vpCheck.reason} (saw ${vp.width}x${vp.height}, touch=${vp.hasTouch}, mobileUA=${vp.isMobile})`)
+    .toBe(true);
+
+  await page.goto(`${MOBILE_WEB_URL.replace(/\/$/, "")}/vibe-studio`, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  await page.waitForTimeout(12_000);
+
+  const divider = page.getByTestId("studio-divider");
+  const leftPane = page.getByTestId("studio-left-pane");
+  await expect(divider, "tabletLandscape: drag divider missing").toBeVisible({ timeout: 15_000 });
+
+  const before = (await leftPane.boundingBox())!;
+  const dbox = (await divider.boundingBox())!;
+  const y = Math.round(dbox.y + Math.min(200, dbox.height / 2));
+  const x0 = Math.round(dbox.x + dbox.width / 2);
+
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: x0, y }] });
+  for (let i = 1; i <= 8; i += 1) {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x0 + i * 18, y }] });
+    await page.waitForTimeout(30);
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await cdp.detach();
+
+  await expect
+    .poll(async () => (await leftPane.boundingBox())?.width ?? 0, {
+      timeout: 10_000,
+      message: "tabletLandscape: dragging the divider did not grow the left preview pane",
+    })
+    .toBeGreaterThan(before.width + 60);
+
+  await context.close();
+});
+
+test("tablet vibe studio keeps the phone frame while the box has no dev server", async ({ browser }) => {
+  test.skip(!MOBILE_WEB_URL, "MOBILE_WEB_URL is unset — the RN-web app is not served");
+
+  // Regression guard (2026-08-21): with the browser lane as default, the left
+  // phone frame used to render as an EMPTY box whenever the box had no dev
+  // server — DevPreview returns null before a /dev/status exists, and the
+  // "mobile frame is ready" pane only showed for the live lane with no project.
+  // This spec runs against local Metro with no connected box (the documented
+  // headless-CI scenario), so the frame must paint its ready pane + the split
+  // must stay intact even with a project= URL pinned.
+  const context = await browser.newContext({ ...devices[MOBILE_LANDSCAPE.playwrightDevice!] });
+  const page = await context.newPage();
+
+  const vp = await page.evaluate(() => ({
+    width: screen.width,
+    height: screen.height,
+    hasTouch: "ontouchstart" in window || navigator.maxTouchPoints > 0,
+    isMobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent),
+  }));
+  const vpCheck = viewportMatchesSurface("tabletLandscape", vp);
+  expect(vpCheck.ok,
+    `tabletLandscape viewport: ${vpCheck.reason} (saw ${vp.width}x${vp.height}, touch=${vp.hasTouch}, mobileUA=${vp.isMobile})`)
+    .toBe(true);
+
+  await page.goto(`${MOBILE_WEB_URL.replace(/\/$/, "")}/vibe-studio?project=sfmg`, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  await page.waitForTimeout(12_000);
+
+  await expect(page.getByText(/^Vibe Studio$/).first(), "tablet: /vibe-studio?project= did not render")
+    .toBeVisible({ timeout: 30_000 });
+
+  // THE GUARD: the persistent phone frame renders its ready pane even though no
+  // dev server exists and no project can be selected yet.
+  await expect(
+    page.getByText(/The mobile frame is ready/).first(),
+    "tabletLandscape: left phone frame went blank with no dev server (DevPreview null path)",
+  ).toBeVisible({ timeout: 15_000 });
+
+  // The split is still intact around the frame.
+  await expect(page.getByText(/^Browser$/).first(), "tabletLandscape: lane switcher (Browser) missing")
     .toBeVisible({ timeout: 15_000 });
 
   await context.close();

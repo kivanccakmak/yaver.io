@@ -3094,7 +3094,7 @@ export default function TasksScreen() {
   //      queued only AFTER the previous one settles, so probes can never
   //      overlap and a synchronous failure still costs real wall-clock time.
   useEffect(() => {
-    if (connectionStatus !== "connected" && selectedTask.runnerId !== "yaver-phone") {
+    if (connectionStatus !== "connected" && selectedTask?.runnerId !== "yaver-phone") {
       setAgentStatus(null);
       setAvailableRunners((prev) => (prev.length === 0 ? prev : []));
       setAvailableModels((prev) => (prev.length === 0 ? prev : []));
@@ -3114,7 +3114,7 @@ export default function TasksScreen() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [activeDevice?.id, connectionStatus, refreshRunnerState]);
+  }, [activeDevice?.id, connectionStatus, refreshRunnerState, selectedTask?.runnerId]);
 
   const openRunnerAuthModal = useCallback((runnerId: string, targetDeviceId?: string | null) => {
     const normalized = String(runnerId || "").trim().toLowerCase();
@@ -5694,53 +5694,6 @@ export default function TasksScreen() {
     }
   };
 
-  // Ship It — one-tap deploy
-  const handleShipIt = async () => {
-    try {
-      const { targets } = await quicClient.getDeployTargets();
-      if (targets.length === 0) {
-        Alert.alert("No Deploy Targets", "Could not detect any deploy targets for this project.");
-        return;
-      }
-      if (targets.length === 1) {
-        // Single target — deploy directly
-        Alert.alert(
-          "Ship It",
-          `Deploy to ${targets[0].name}?`,
-          [
-            { text: "Cancel", style: "cancel" },
-            { text: "Ship It", onPress: async () => {
-              try {
-                const result = await quicClient.deploy(targets[0].id);
-                Alert.alert("Deploying", `Deploying to ${result.target}...`);
-                await fetchTasks();
-              } catch (e) {
-                Alert.alert("Deploy Failed", e instanceof Error ? e.message : String(e));
-              }
-            }},
-          ]
-        );
-      } else {
-        // Multiple targets — let user pick
-        const buttons: { text: string; onPress?: () => void; style?: "cancel" | "destructive" | "default" }[] = targets.map(t => ({
-          text: t.name,
-          onPress: () => {
-            quicClient.deploy(t.id).then((result) => {
-              Alert.alert("Deploying", `Deploying to ${result.target}...`);
-              fetchTasks();
-            }).catch((e) => {
-              Alert.alert("Deploy Failed", e instanceof Error ? e.message : String(e));
-            });
-          },
-        }));
-        buttons.push({ text: "Cancel", style: "cancel" });
-        Alert.alert("Pick Deploy Target", "Where do you want to ship?", buttons);
-      }
-    } catch (e) {
-      Alert.alert("Error", e instanceof Error ? e.message : String(e));
-    }
-  };
-
   // Summary — last 24h activity digest
   const handleShowSummary = async () => {
     try {
@@ -6480,11 +6433,6 @@ export default function TasksScreen() {
               <Pressable style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]} onPress={() => setShowLogs(true)}>
                 <Text style={[s.actionButtonText, { color: "#94a3b8" }]}>Logs</Text>
               </Pressable>
-              {isEffectivelyConnected && (
-                <Pressable style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]} onPress={handleShipIt}>
-                  <Text style={[s.actionButtonText, { color: "#f97316" }]}>Ship It</Text>
-                </Pressable>
-              )}
               {isEffectivelyConnected && (
                 <Pressable style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]} onPress={handleShowSummary}>
                   <Text style={[s.actionButtonText, { color: "#06b6d4" }]}>Summary</Text>

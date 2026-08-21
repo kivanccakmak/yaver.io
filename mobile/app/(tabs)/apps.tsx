@@ -1177,6 +1177,16 @@ export default function AppsScreen() {
   async function openRunningPreview() {
     const fresh = await quicClient.getDevServerStatus();
     if (fresh) setDevStatus(fresh);
+    // The tablet studio is also the loading surface. Navigate immediately so
+    // the device frame and vibe console remain visible while the box starts
+    // or recovers its browser lane.
+    if (layout.isTablet && layout.isLandscape) {
+      router.push({
+        pathname: "/vibe-studio",
+        params: { project: runningProject || fresh?.workDir || "" },
+      });
+      return;
+    }
     if (!fresh || !isActiveDevServerStatus(fresh)) {
       const known = fresh as DevServerStatus | null;
       Alert.alert(
@@ -2495,7 +2505,7 @@ export default function AppsScreen() {
                 Reload / Screenshots / Ship It were removed on purpose. */}
             <View style={s.cardActions}>
               <Pressable
-                style={[s.actionBtn, s.openBtn, { flex: 1 }, devServerBusy && { opacity: 0.5 }]}
+                style={[s.actionBtn, s.openBtn, layout.isTablet ? { flex: 0, minWidth: 168, maxWidth: 210 } : { flex: 1 }, devServerBusy && { opacity: 0.5 }]}
                 onPress={() => { openRunningPreview().catch((e) => Alert.alert("Open in Yaver failed", e instanceof Error ? e.message : String(e))); }}
                 disabled={devServerBusy}
                 accessibilityRole="button"
@@ -2565,63 +2575,6 @@ export default function AppsScreen() {
               </View>
             )}
 
-            {/* Quick actions */}
-            <View style={s.quickActions}>
-              {[
-                { icon: "\u{1F680}", label: "Ship It", prompt: `Ship ${runningProject}: bump version, build iOS + Android, upload to TestFlight and Google Play, generate changelog from recent git commits. Report progress.` },
-                { icon: "\u{1F4F1}", label: "Screenshots", prompt: `Generate App Store and Google Play screenshots for ${runningProject}: capture all key screens at iPhone 6.7", iPhone 6.1", iPad 12.9", and Android phone/tablet sizes. Save to a screenshots/ folder.` },
-              ].map((action) => (
-                <Pressable
-                  key={action.label}
-                  style={s.quickBtn}
-                  onPress={() => {
-                    if (!isConnected) {
-                      Alert.alert(
-                        "Dev Machine Offline",
-                        `Yaver ${describeConnectionStatus(connectionStatus)}. Reconnect before running "${action.label}".`,
-                      );
-                      return;
-                    }
-                    if (action.label === "Ship It") {
-                      const iosBlocker = deployBlocker("testflight", activeDevice?.os);
-                      if (iosBlocker) {
-                        Alert.alert(
-                          "Can't Ship From This Dev Machine",
-                          `${iosBlocker}\n\nAndroid can still be built here; run Deploy to Play Store from Vibing if that's what you want.`,
-                        );
-                        return;
-                      }
-                      if (Platform.OS === "ios" && quicClient.connectionMode === "direct" && isHermesMobileFramework(devStatus?.framework)) {
-                        // Direct device install — build with Xcode and install on device
-                        handleDirectBuild();
-                        return;
-                      }
-                    }
-                    // Send as task but stay on this page — surface failures
-                    // inline instead of silently swallowing them.
-                    setQuickActionStatus(`${action.label}…`);
-                    quicClient.sendTask(action.prompt, `[Quick Action] ${action.label} for ${runningProject}`)
-                      .then(() => {
-                        setQuickActionStatus(`${action.label} sent`);
-                        setTimeout(() => setQuickActionStatus(null), 3000);
-                      })
-                      .catch((e) => {
-                        setQuickActionStatus(null);
-                        Alert.alert(
-                          `Couldn't Send "${action.label}"`,
-                          `${e instanceof Error ? e.message : String(e)}\n\nYaver ${describeConnectionStatus(connectionStatus)}.`,
-                        );
-                      });
-                  }}
-                >
-                  <Text style={s.quickIcon}>{action.icon}</Text>
-                  <Text style={s.quickLabel}>{action.label}</Text>
-                </Pressable>
-              ))}
-            </View>
-            {quickActionStatus && (
-              <Text style={{ color: "#22c55e", fontSize: 11, textAlign: "center", marginTop: 4 }}>{quickActionStatus}</Text>
-            )}
           </View>
         )}
 
@@ -2807,7 +2760,7 @@ export default function AppsScreen() {
           renderItem={({ item }) => {
             const isRunning = devStatus?.workDir === item.path;
             const isStarting = startingProject === item.name;
-            const cols = layout.gridCols("repos");
+            const cols = layout.gridCols("projects");
 
             return (
               <Pressable
@@ -3464,7 +3417,7 @@ export default function AppsScreen() {
               </View>
             );
           })()}
-          {(previewFullScreen || (bundleUrl && !webPreviewContentLoaded)) && (
+          {previewFullScreen && (
             <View style={[s.previewEscapeBar, { top: insets.top + 8 }]}>
               <Pressable
                 onPress={() => setShowWebView(false)}
@@ -4259,20 +4212,6 @@ const s = StyleSheet.create({
     borderColor: "transparent",
   },
   tagText: { color: "#818cf8", fontSize: 11, fontWeight: "600" },
-
-  // Quick actions
-  quickActions: { flexDirection: "row", gap: 6, marginTop: 10 },
-  quickBtn: {
-    flex: 1,
-    backgroundColor: "#111",
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#1a1a1a",
-  },
-  quickIcon: { fontSize: 18, marginBottom: 2 },
-  quickLabel: { fontSize: 9, color: "#999", fontWeight: "600" },
 
   // Action sheet
   actionSheetOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },

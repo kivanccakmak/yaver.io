@@ -132,9 +132,21 @@ The same studio surface runs on both platforms, but the **preview lanes availabl
 ## 3. Remaining follow-ups (after the implemented phases)
 
 - **Retire the legacy `/vibing/frame` poll** in `mobile/app/(tabs)/vibing.tsx:296-342` in favour of the modern `/vibing/preview/*` lane (the shipped Vibing tab still uses the old route; `VIBING_STATUS.md:35` says native surfaces moved to the modern lane).
-- **Drag-divider** between the studio's panes (the web's `WebReloadView.tsx:186-207` / `RuntimeLabView.tsx:1851-1877` pointer-capture pattern) — currently a fixed 55/45 split.
 - **`VibePreviewModal` clipping of clips** stays for full-screen/clips use; the studio pane is intentionally clip-free to keep the split clean.
 - `VIBING_STATUS.md` + CLAUDE.md cross-surface note.
+
+**Drag-divider: IMPLEMENTED 2026-08-21** (`mobile/app/vibe-studio.tsx`) — touch-driven split resize via the RN responder system (`onStartShouldSetResponder` + `onResponderMove`), clamped 32–72%, verified by `tablet-vibe-studio.spec.ts` "drag divider resizes the split". Note for future readers: RN-web's MOUSE-emulation path drops all but the first mousemove after grant, so the E2E drives the divider with CDP touch events (real tablet input), not `page.mouse`.
+
+## 2d. Post-audit fixes (2026-08-21, deep-audit session)
+
+Deep audit: [`docs/IPAD_VIBE_STUDIO_AUDIT.md`](docs/IPAD_VIBE_STUDIO_AUDIT.md). The tablet E2E spec had **never been run**; the route's "crash" was a harness bug + three product defects:
+
+1. **E2E harness bug (fixed in `e2e/tests/tablet-vibe-studio.spec.ts`):** the device-context guard measured `window.innerWidth` on `about:blank`, where Chromium mobile emulation reports the 980px default layout viewport for every tablet descriptor (iPad gen 7 → 980x1307 inner vs 810x1080 screen). Now measures `screen.width`/`screen.height` — true device geometry, still catches a narrowed desktop.
+2. **Blank left frame (fixed in `mobile/app/vibe-studio.tsx`):** with no dev server, `DevPreview` returns `null`, so the browser-lane frame was an empty box. Added a persistent `emptyPaneFill` base beneath every lane ("The mobile frame is ready…").
+3. **Full-screen Modal over the split (fixed in `mobile/src/components/DevPreview.tsx`):** added `paneMode` — no card, no Modal; the WebView fills the host frame. `hostedInModal` and default paths unchanged.
+4. **Silent `?project=` fallback (fixed in `mobile/app/vibe-studio.tsx`):** no-match now shows "Project `<x>` isn't on the connected box" instead of silently selecting `mapped[0]`.
+
+New regression guard: "tablet vibe studio keeps the phone frame while the box has no dev server" (proved by breaking it). `tsc` clean (same four pre-existing errors).
 
 ## 4. File-touch list (implemented)
 

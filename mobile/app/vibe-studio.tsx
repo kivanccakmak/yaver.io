@@ -28,6 +28,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { AppScreenHeader } from "../src/components/AppScreenHeader";
 import { DevPreview } from "../src/components/DevPreview";
 import { LivePreviewPane } from "../src/components/studio/LivePreviewPane";
@@ -44,16 +45,25 @@ type Project = { name: string; path: string; framework?: string; surfaces?: stri
 export default function VibeStudioScreen() {
   const c = useColors();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const layout = useResponsiveLayout();
   const { activeDevice, connectionStatus } = useDevice();
+  const params = useLocalSearchParams<{ project?: string }>();
+  const requestedProject = typeof params.project === "string" ? params.project.trim().toLowerCase() : "";
   const connected = connectionStatus === "connected" && !!activeDevice;
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [project, setProject] = useState<Project | null>(null);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [paramMissed, setParamMissed] = useState<string | null>(null);
   const [lane, setLane] = useState<Lane>("browser");
   const [peekOpen, setPeekOpen] = useState(false);
+  // Drag-divider split ratio (web parity — WebReloadView/RuntimeLabView). The
+  // left preview pane flexes to splitRatio, the right chat pane to 1-splitRatio.
+  const [splitRatio, setSplitRatio] = useState(0.55);
+  const dividerDragRef = useRef<{ startX: number; startRatio: number } | null>(null);
+  const rowWidthRef = useRef(0);
   const loadedOnceRef = useRef(false);
 
   const landscape = layout.layoutClass === "tablet-landscape";
@@ -71,17 +81,35 @@ export default function VibeStudioScreen() {
       setProjects(mapped);
       if (!loadedOnceRef.current) {
         loadedOnceRef.current = true;
-        const preferred =
-          mapped.find((p) => (p.surfaces || []).includes("mobile") || /expo|react-native|flutter|mobile/i.test(p.framework || "")) ||
-          mapped[0];
-        setProject(preferred || null);
+        const byParam = requestedProject
+          ? mapped.find(
+              (p) =>
+                p.name.trim().toLowerCase() === requestedProject ||
+                p.path.trim().toLowerCase() === requestedProject ||
+                p.path.trim().toLowerCase().endsWith(`/${requestedProject}`),
+            )
+          : undefined;
+        if (requestedProject && !byParam) {
+          // The URL pinned a project the box does not have. Say so instead of
+          // silently opening the first mobile project.
+          setParamMissed(`Project "${requestedProject}" isn't on the connected box — pick one below.`);
+          setProject(null);
+        } else {
+          setParamMissed(null);
+          setProject(
+            byParam ||
+              mapped.find((p) => (p.surfaces || []).includes("mobile") || /expo|react-native|flutter|mobile/i.test(p.framework || "")) ||
+              mapped[0] ||
+              null,
+          );
+        }
       }
     } catch {
       // advisory — the picker stays available, the pane shows a connect hint
     } finally {
       setLoadingProjects(false);
     }
-  }, [connected]);
+  }, [connected, requestedProject]);
 
   useEffect(() => {
     void loadProjects();
@@ -99,6 +127,7 @@ export default function VibeStudioScreen() {
 
   const pickProject = useCallback((p: Project) => {
     setProject(p);
+    setParamMissed(null);
     setShowProjectPicker(false);
   }, []);
 
@@ -178,26 +207,77 @@ export default function VibeStudioScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: c.bg }]}>
-      <AppScreenHeader title="Vibe Studio" onBack={() => ({} as any)} right={headerRight} />
+      <AppScreenHeader title="Vibe Studio" onBack={() => router.back()} right={headerRight} />
 
       {landscape ? (
         /* ── LANDSCAPE: preview LEFT / chat RIGHT ─────────────────── */
-        <View style={styles.landscapeRow}>
-          <View style={styles.leftPane}>
-            {lane === "browser" ? (
-              <DevPreview />
-            ) : project ? (
-              <LivePreviewPane key={project.path} project={project.name} targetUrl={targetUrl()} />
-            ) : (
-              <View style={[styles.emptyPane, { borderColor: c.borderSubtle }]}>
-                <Ionicons name="phone-portrait-outline" size={28} color={c.textTertiary} />
-                <Text style={{ color: c.textTertiary, fontSize: 13, marginTop: 8 }}>
-                  Pick a project to start the live lane.
-                </Text>
+        <View
+          style={styles.landscapeRow}
+          testID="studio-landscape-row"
+          onLayout={(e) => {
+            rowWidthRef.current = e.nativeEvent.layout.width;
+          }}
+        >
+          <View style={[styles.leftPane, { flex: splitRatio }]} testID="studio-left-pane">
+            <View style={styles.deviceStage}>
+              <View style={[styles.deviceFrame, { backgroundColor: "#09090b", borderColor: c.border }]}> 
+                <View style={[styles.deviceSpeaker, { backgroundColor: c.border }]} />
+                <View style={[styles.deviceScreen, { backgroundColor: c.bgCard }]}> 
+                  {/* Persistent phone-frame content. The base empty pane sits
+                      beneath EVERY lane so the frame is never a blank box while
+                      the box has no dev server or the preview has not rendered
+                      (paneMode DevPreview returns null until a status exists). */}
+                  <View style={[styles.emptyPaneFill, { borderColor: c.borderSubtle }]}> 
+                    <Ionicons name="phone-portrait-outline" size={28} color={c.textTertiary} />
+                    <Text style={{ color: c.textTertiary, fontSize: 13, marginTop: 8, textAlign: "center" }}>
+                      The mobile frame is ready. Pick a project or wait for the preview to load.
+                    </Text>
+                    {paramMissed ? (
+                      <Text style={{ color: c.warn, fontSize: 12, marginTop: 8, textAlign: "center", paddingHorizontal: 12 }}>
+                        {paramMissed}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {lane === "browser" ? (
+                    <View style={styles.paneHost}>
+                      <DevPreview paneMode />
+                    </View>
+                  ) : project ? (
+                    <View style={styles.paneHost}>
+                      <LivePreviewPane key={project.path} project={project.name} targetUrl={targetUrl()} />
+                    </View>
+                  ) : null}
+                </View>
               </View>
-            )}
+            </View>
           </View>
-          <View style={styles.rightPane}>
+          {/* Drag divider — same pointer pattern as the web's split panes. */}
+          <View
+            style={styles.divider}
+            testID="studio-divider"
+            accessibilityRole="adjustable"
+            accessibilityLabel="Resize preview split"
+            onStartShouldSetResponder={() => true}
+            onResponderGrant={(e) => {
+              dividerDragRef.current = { startX: e.nativeEvent.pageX, startRatio: splitRatio };
+            }}
+            onResponderMove={(e) => {
+              const d = dividerDragRef.current;
+              if (!d) return;
+              const w = rowWidthRef.current || 1;
+              const ratio = Math.max(0.32, Math.min(0.72, d.startRatio + (e.nativeEvent.pageX - d.startX) / w));
+              setSplitRatio(ratio);
+            }}
+            onResponderRelease={() => {
+              dividerDragRef.current = null;
+            }}
+            onResponderTerminate={() => {
+              dividerDragRef.current = null;
+            }}
+          >
+            <View style={[styles.dividerKnob, { backgroundColor: c.border }]} />
+          </View>
+          <View style={[styles.rightPane, { flex: 1 - splitRatio }]} testID="studio-right-pane">
             <StudioChatPane
               projectPath={project?.path}
               projectName={project?.name}
@@ -273,13 +353,54 @@ const styles = StyleSheet.create({
   },
   landscapeRow: { flex: 1, flexDirection: "row", minHeight: 0 },
   leftPane: {
-    flex: 0.55,
     minWidth: 0,
     padding: 10,
     borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: "transparent",
   },
-  rightPane: { flex: 0.45, minWidth: 0 },
+  divider: {
+    width: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "stretch",
+    marginHorizontal: -4,
+    zIndex: 3,
+  },
+  dividerKnob: {
+    width: 4,
+    height: 48,
+    borderRadius: 2,
+    opacity: 0.45,
+  },
+  deviceStage: { flex: 1, alignItems: "center", justifyContent: "center", minHeight: 0 },
+  deviceFrame: {
+    width: "100%",
+    maxWidth: 430,
+    height: "100%",
+    maxHeight: 760,
+    borderRadius: 30,
+    borderWidth: 8,
+    paddingTop: 8,
+    paddingHorizontal: 4,
+    paddingBottom: 8,
+    alignItems: "center",
+  },
+  deviceSpeaker: { width: 76, height: 5, borderRadius: 3, marginBottom: 6 },
+  deviceScreen: { flex: 1, width: "100%", minHeight: 0, borderRadius: 20, overflow: "hidden" },
+  // Absolute-fill base beneath every lane so the phone frame is never blank
+  // while the preview is loading or the box has no dev server.
+  emptyPaneFill: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 20,
+  },
+  paneHost: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: "hidden",
+  },
+  rightPane: { minWidth: 0 },
   portraitCol: { flex: 1, minHeight: 0 },
   portraitChat: { flex: 1, minHeight: 0 },
   peekPanel: {

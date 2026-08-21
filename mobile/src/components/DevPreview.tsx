@@ -174,7 +174,10 @@ type PreviewProbeState = {
   mediaCount?: number;
 };
 
-export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean } = {}) {
+export function DevPreview({
+  hostedInModal = false,
+  paneMode = false,
+}: { hostedInModal?: boolean; paneMode?: boolean } = {}) {
   const c = useColors();
   const layout = useResponsiveLayout();
   const [status, setStatus] = useState<DevServerStatus | null>(null);
@@ -331,6 +334,15 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
 
   // Reset the retry budget whenever a fresh preview opens or the WebView loads.
   useEffect(() => () => { if (webRetryTimer.current) clearTimeout(webRetryTimer.current); }, []);
+
+  // PANE MODE (tablet Vibe Studio): the host renders this component inside its
+  // own phone-frame pane, so the preview must be treated as ALWAYS open — no
+  // card, no full-screen <Modal>, the WebView fills the host frame. showPreview
+  // drives the status-poll / SSE / shake / auto-render effects below, so flip
+  // it on once on mount instead of waiting for an "Open in Yaver" tap.
+  useEffect(() => {
+    if (paneMode) setShowPreview(true);
+  }, [paneMode]);
 
   // Shake-to-feedback for the BROWSER lane. The app runs in a WebView inside
   // Yaver, so a phone shake (caught by the global bridge in feedbackTrigger.ts)
@@ -867,6 +879,7 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
 
   return (
     <>
+      {!paneMode ? (
       <View style={[styles.card, styles.activeCard]}>
         {/* Mirror the Projects-tab card layout so the Tasks tab's
             dev-server section reads as the same component. The previous
@@ -967,6 +980,7 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
           </Pressable>
         </View>
       </View>
+      ) : null}
       {/* Full-screen preview. Presentation is host-aware: iOS cannot reliably
           present a second native <Modal> while another one is on screen — the
           newcomer mounts invisibly behind it and the flow dead-ends (same
@@ -980,10 +994,14 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
         const previewBody = (
         <View style={[styles.container, { backgroundColor: c.bg }, hostedInModal && styles.inlineOverlay]}>
           {/* Header */}
-          <View style={[styles.header, { backgroundColor: "#111", borderBottomColor: "#333" }]}>
-            <Pressable onPress={() => setShowPreview(false)} style={styles.headerBtn}>
-              <Text style={styles.headerBtnClose}>Back</Text>
-            </Pressable>
+          <View style={[styles.header, { backgroundColor: "#111", borderBottomColor: "#333", paddingTop: paneMode ? 8 : 54 }]}>
+            {paneMode ? (
+              <View style={{ width: 44 }} />
+            ) : (
+              <Pressable onPress={() => setShowPreview(false)} style={styles.headerBtn}>
+                <Text style={styles.headerBtnClose}>Back</Text>
+              </Pressable>
+            )}
             <View style={styles.headerCenter}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <View style={[styles.dotSmall, { backgroundColor: "#22c55e" }]} />
@@ -1516,6 +1534,11 @@ export function DevPreview({ hostedInModal = false }: { hostedInModal?: boolean 
           )}
         </View>
         );
+        if (paneMode) {
+          // Pane mode: render the preview content inline so it fills the host
+          // frame — never a second full-screen <Modal> over the split.
+          return previewBody;
+        }
         if (hostedInModal) {
           return showPreview ? previewBody : null;
         }

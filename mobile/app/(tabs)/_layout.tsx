@@ -425,9 +425,9 @@ export default function TabLayout() {
               borderRightColor: c.borderSubtle,
               borderRightWidth: 1,
               borderTopWidth: 0,
-              width: layout.rail.expandedWidth,
-              paddingTop: 16,
-              paddingHorizontal: 10,
+              width: layout.rail.width,
+              paddingTop: 12,
+              paddingHorizontal: 8,
             }
           : {
               backgroundColor: "transparent",
@@ -449,7 +449,7 @@ export default function TabLayout() {
         tabBarActiveTintColor: c.tabActive,
         tabBarInactiveTintColor: c.tabInactive,
         tabBarItemStyle: useLeftRail
-          ? { height: 56, marginBottom: 4 }
+          ? { height: 64, marginBottom: 4 }
           : isTabletPortrait
           ? { paddingVertical: 0 }
           : undefined,
@@ -577,18 +577,18 @@ const styles = StyleSheet.create({
   // Expanded landscape rail: horizontal icon+label row filling the
   // widened rail, with room for the active-item accent pill.
   tabIconWrapRail: {
-    flexDirection: "row",
-    justifyContent: "flex-start",
+    flexDirection: "column",
+    justifyContent: "center",
     alignItems: "center",
     alignSelf: "stretch",
     minWidth: 0,
     paddingTop: 0,
-    paddingLeft: 14,
+    paddingHorizontal: 2,
     paddingVertical: 8,
-    gap: 12,
+    gap: 3,
     borderRadius: 12,
   },
-  tabLabelRail: { marginTop: 0, fontSize: 15, letterSpacing: 0 },
+  tabLabelRail: { marginTop: 0, fontSize: 10, letterSpacing: -0.1 },
   // Plain centered slot for the glyph — no pill. Active state is conveyed
   // by the accent tint + solid icon, matching iOS-native tab bars.
   iconSlot: {
