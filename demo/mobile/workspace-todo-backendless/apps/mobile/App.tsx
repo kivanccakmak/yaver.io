@@ -262,7 +262,7 @@ const styles = StyleSheet.create({
   checkbox: { width: 44, height: 44, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "#94a3b8" },
   checkboxChecked: { backgroundColor: "#14b8a6", borderColor: "#14b8a6" },
   checkmark: { color: "#ffffff", fontSize: 20, fontWeight: "900" },
-  todoTitle: { flex: 1, color: "#1e293b", fontSize: 16, lineHeight: 22, fontWeight: "650" },
+  todoTitle: { flex: 1, color: "#1e293b", fontSize: 16, lineHeight: 22, fontWeight: "600" },
   todoDone: { color: "#94a3b8", textDecorationLine: "line-through" },
   deleteButton: { width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   deleteText: { color: "#94a3b8", fontSize: 28, lineHeight: 30 },
