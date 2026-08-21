@@ -24,6 +24,9 @@ const iphone = devices["iPhone 15 Pro"];
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const context = await browser.newContext(iphone);
 await context.addInitScript((authToken) => {
+  // A fresh browser context otherwise executes the native reinstall guard and
+  // intentionally clears the token before AuthContext can validate it.
+  localStorage.setItem("yaver_installed", "1");
   localStorage.setItem("yaver.secure.yaver_auth_token", authToken);
 }, token);
 const page = await context.newPage();
