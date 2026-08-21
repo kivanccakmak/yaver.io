@@ -1186,6 +1186,10 @@ export default function RuntimeLabView({
   const [speaking, setSpeaking] = useState(false);
   const [webPreviewFrameReady, setWebPreviewFrameReady] = useState(false);
   const [webPreviewBusy, setWebPreviewBusy] = useState(false);
+  // A reload is in flight but the previous frame must STAY visible underneath —
+  // the user may be reading it. Drives the subtle "reloading…" pill over the
+  // preview and suppresses the full branded loader during a refresh.
+  const [webPreviewReloading, setWebPreviewReloading] = useState(false);
   const [webPreviewStopping, setWebPreviewStopping] = useState(false);
   const [webPreviewNote, setWebPreviewNote] = useState<string | null>(null);
   // Raw dev-server output tail feeding the compile-failure card (gap D5).
@@ -1229,6 +1233,21 @@ export default function RuntimeLabView({
   // the (signed) bundle URL is unchanged — e.g. a fast reload that
   // re-served the existing fresh bundle.
   const [webPreviewNonce, setWebPreviewNonce] = useState(0);
+  // The iframe stays MOUNTED across reloads (stable key) so the last-good
+  // frame never blanks; the reload nonce rides in the src query instead.
+  // A src change reloads the iframe in place — the old page stays visible
+  // until the new document starts painting.
+  const previewFrameSrc = useMemo(() => {
+    if (!webPreviewUrl) return null;
+    try {
+      const u = new URL(webPreviewUrl);
+      u.searchParams.set("__preview_reload", String(webPreviewNonce));
+      return u.toString();
+    } catch {
+      const join = webPreviewUrl.includes("?") ? "&" : "?";
+      return `${webPreviewUrl}${join}__preview_reload=${webPreviewNonce}`;
+    }
+  }, [webPreviewUrl, webPreviewNonce]);
   const [mobilePreviewMode, setMobilePreviewMode] = useState<MobilePreviewMode>("phone");
   const [viewportHeight, setViewportHeight] = useState(() => typeof window === "undefined" ? 900 : window.innerHeight);
   const [runtimeProjectDefaultByDevice, setRuntimeProjectDefaultByDevice] = useState<Record<string, RuntimeProjectPreference>>({});
@@ -2731,6 +2750,13 @@ export default function RuntimeLabView({
     }
   }, [appendLog, log, connectedDevice]);
 
+  const clearRuntimeConsole = useCallback(() => {
+    setLog([]);
+    setDevLogTail([]);
+    setBuildProgress(null);
+    appendLog("runtime console cleared");
+  }, [appendLog, setBuildProgress, setLog]);
+
   const copyTaskConsole = useCallback(async () => {
     const text = activeTaskStream?.lines.length
       ? activeTaskStream.lines.join("\n")
@@ -3043,6 +3069,9 @@ export default function RuntimeLabView({
     setRuntimeConsoleOpen(true);
     setError(null);
     setWebPreviewBusy(true);
+    // The prior frame stays mounted and visible; only a subtle "reloading…"
+    // pill marks the refresh. Cleared when the new frame actually loads.
+    setWebPreviewReloading(true);
     if (staticBundleFramework) {
       setWebPreviewNote(kind === "fast" ? "Fast reload: checking bundle freshness..." : "Full reload: re-exporting web bundle...");
       try {
@@ -3065,6 +3094,7 @@ export default function RuntimeLabView({
         const message = err instanceof Error ? err.message : "Reload failed.";
         setWebPreviewNote(message);
         setError(message);
+        setWebPreviewReloading(false);
         appendLog(`${kind} reload failed: ${message}`);
       } finally {
         webPreviewReloadInFlightRef.current = false;
@@ -3081,6 +3111,7 @@ export default function RuntimeLabView({
       appendLog(`${kind} reload failed: ${err instanceof Error ? err.message : String(err)}`);
       setWebPreviewNote(err instanceof Error ? err.message : `${kind} reload failed`);
       setError(err instanceof Error ? err.message : `${kind} reload failed`);
+      setWebPreviewReloading(false);
     } finally {
       webPreviewReloadInFlightRef.current = false;
       setWebPreviewBusy(false);
@@ -3102,6 +3133,7 @@ export default function RuntimeLabView({
     setRuntimeConsoleOpen(true);
     setWebPreviewUrl(null);
     setWebPreviewFrameReady(false);
+    setWebPreviewReloading(false);
     setWebPreviewNote(null);
     setBuildProgress(null);
   }, []);
@@ -3221,6 +3253,7 @@ export default function RuntimeLabView({
   useEffect(() => {
     if (!webPreviewUrl) {
       setWebPreviewFrameReady(false);
+      setWebPreviewReloading(false);
       return;
     }
     setWebPreviewFrameReady(false);
@@ -3855,19 +3888,20 @@ export default function RuntimeLabView({
                         </div>
                       ) : null}
                       {buildProgress ? (
-                        // One lean heartbeat row while the box compiles: thin
-                        // bar + real percent + elapsed + last-output age. No
-                        // spinner walls; verbatim lines stay in the console.
-                        <div className="flex min-h-10 items-center gap-3 rounded-md border border-[#d7dce3] bg-white px-3 py-2.5 text-[11px] text-[#667085] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#9aa3af]">
+                        // Compact single-line transport strip while the box
+                        // compiles — deliberately slim (h-8) so it never eats
+                        // the vertical space the mobile app preview needs.
+                        <div className="flex h-8 items-center gap-2.5 rounded-md border border-[#d7dce3] bg-white px-2.5 text-[10px] text-[#667085] dark:border-[#2a3039] dark:bg-[#161b22] dark:text-[#9aa3af]">
                           <span className="min-w-0 shrink truncate font-medium text-[#344054] dark:text-[#d7dce3]">
                             {buildProgress.topic}{buildProgress.phase ? ` · ${buildProgress.phase}` : ""}
                           </span>
-                          <div className="h-1 min-w-[80px] flex-1 overflow-hidden rounded-full bg-[#e4e7ec] dark:bg-[#242b35]">
+                          <div className="h-0.5 min-w-[60px] flex-1 overflow-hidden rounded-full bg-[#e4e7ec] dark:bg-[#242b35]">
                             <div className="h-full rounded-full bg-sky-500 transition-[width] duration-500" style={{ width: `${buildProgress.pct}%` }} />
                           </div>
-                          <span className="shrink-0 font-semibold tabular-nums text-[#344054] dark:text-[#d7dce3]">{buildProgress.pct}%</span>
-                          <span className="shrink-0 tabular-nums">{formatBuildElapsed(buildNowTick - buildProgress.startedAt)} elapsed</span>
-                          <span className="shrink-0 tabular-nums">last output {Math.max(0, Math.round((buildNowTick - buildProgress.lastOutputAt) / 1000))}s ago</span>
+                          <span className="shrink-0 font-medium tabular-nums text-[#344054] dark:text-[#d7dce3]">{buildProgress.pct}%</span>
+                          <span className="hidden shrink-0 tabular-nums opacity-70 sm:inline">
+                            {formatBuildElapsed(buildNowTick - buildProgress.startedAt)} · last output {Math.max(0, Math.round((buildNowTick - buildProgress.lastOutputAt) / 1000))}s ago
+                          </span>
                         </div>
                       ) : null}
                       {!webPreviewUrl ? (
@@ -3904,25 +3938,33 @@ export default function RuntimeLabView({
                               }}
                             >
                               <iframe
-                                key={`mobile-preview-${webPreviewNonce}`}
+                                key="mobile-preview"
                                 ref={(n) => {
                                   mobilePreviewFrameRef.current = n;
                                   domInspectFrameRef.current = n;
                                 }}
-                                src={webPreviewUrl}
+                                src={previewFrameSrc ?? undefined}
                                 width={mobilePreviewDevice.width}
                                 height={mobilePreviewDevice.height}
                                 className="border-none bg-white"
                                 style={{ touchAction: "pan-y" }}
                                 title={`${mobilePreviewDevice.label} Web UI preview`}
-                                onLoad={() => window.setTimeout(() => setWebPreviewFrameReady(true), 900)}
+                                onLoad={() => window.setTimeout(() => { setWebPreviewFrameReady(true); setWebPreviewReloading(false); }, 900)}
                               />
-                              {!webPreviewFrameReady && !webPreviewBusy ? (
+                              {!webPreviewFrameReady && !webPreviewBusy && !webPreviewReloading ? (
                                 <div className="absolute inset-0">
                                   <RuntimePreviewLoadingScreen
                                     note={webPreviewNote || "Starting mobile web preview..."}
                                     projectName={selectedProject?.name}
                                   />
+                                </div>
+                              ) : null}
+                              {webPreviewReloading ? (
+                                <div className="pointer-events-none absolute inset-x-0 top-1.5 flex justify-center">
+                                  <div className="flex items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-semibold text-white/90 backdrop-blur">
+                                    <span className="h-2 w-2 animate-spin rounded-full border border-emerald-400 border-t-transparent" />
+                                    reloading…
+                                  </div>
                                 </div>
                               ) : null}
                             </div>
@@ -3932,21 +3974,29 @@ export default function RuntimeLabView({
                       ) : (
                         <div className="relative h-[520px] w-full overflow-hidden rounded-md border border-[#d7dce3] bg-[#0b0d11]">
                           <iframe
-                            key={`web-preview-${webPreviewNonce}`}
+                            key="web-preview"
                             ref={(n) => {
                               domInspectFrameRef.current = n;
                             }}
-                            src={webPreviewUrl}
+                            src={previewFrameSrc ?? undefined}
                             className="h-full w-full border-none bg-white"
                             title="Project Web UI preview"
-                            onLoad={() => window.setTimeout(() => setWebPreviewFrameReady(true), 900)}
+                            onLoad={() => window.setTimeout(() => { setWebPreviewFrameReady(true); setWebPreviewReloading(false); }, 900)}
                           />
-                          {!webPreviewFrameReady && !webPreviewBusy ? (
+                          {!webPreviewFrameReady && !webPreviewBusy && !webPreviewReloading ? (
                             <div className="absolute inset-0">
                               <RuntimePreviewLoadingScreen
                                 note={webPreviewNote || "Starting web preview..."}
                                 projectName={selectedProject?.name}
                               />
+                            </div>
+                          ) : null}
+                          {webPreviewReloading ? (
+                            <div className="pointer-events-none absolute inset-x-0 top-2 flex justify-center">
+                              <div className="flex items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-semibold text-white/90 backdrop-blur">
+                                <span className="h-2 w-2 animate-spin rounded-full border border-emerald-400 border-t-transparent" />
+                                reloading…
+                              </div>
                             </div>
                           ) : null}
                         </div>
@@ -4751,6 +4801,20 @@ export default function RuntimeLabView({
               <div className="mt-0.5 text-[11px] text-[#667085] dark:text-[#9aa3af]">{log.length} events</div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={clearRuntimeConsole}
+              disabled={log.length === 0}
+              title="Clear session logs"
+              aria-label="Clear session logs"
+              className="rounded-md border border-[#d7dce3] bg-white p-1.5 text-[#475467] hover:text-rose-600 disabled:opacity-40 dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 6h18" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
             <button
               type="button"
               onClick={() => void copyRuntimeConsole()}
