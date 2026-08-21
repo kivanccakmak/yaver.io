@@ -28,9 +28,26 @@ await context.addInitScript((authToken) => {
 }, token);
 const page = await context.newPage();
 const errors = [];
+const probes = { devices: null, settings: null };
 page.on("pageerror", (error) => errors.push(`page: ${error.message}`));
 page.on("console", (message) => {
   if (message.type() === "error") errors.push(`console: ${message.text()}`);
+});
+page.on("response", async (response) => {
+  const pathname = new URL(response.url()).pathname;
+  if (pathname.endsWith("/devices/list")) {
+    const body = await response.json().catch(() => ({}));
+    probes.devices = {
+      status: response.status(),
+      count: Array.isArray(body.devices) ? body.devices.length : Array.isArray(body) ? body.length : null,
+    };
+  } else if (pathname.endsWith("/settings")) {
+    const body = await response.json().catch(() => ({}));
+    probes.settings = {
+      status: response.status(),
+      primaryConfigured: Boolean(body.primaryDeviceId ?? body.settings?.primaryDeviceId),
+    };
+  }
 });
 
 try {
@@ -59,7 +76,7 @@ try {
   }));
   assert(
     placement.primary,
-    `primary recommendation missing: ${JSON.stringify(placement)} errors=${JSON.stringify(safeErrorClasses(errors))}`,
+    `primary recommendation missing: ${JSON.stringify(placement)} probes=${JSON.stringify(probes)} errors=${JSON.stringify(safeErrorClasses(errors))}`,
   );
   await page.getByText(/OpenCode · (Preferred|Recommended)/).waitFor({ timeout: 30_000 });
   await page.getByText("Ready", { exact: true }).first().waitFor({ timeout: 30_000 });
