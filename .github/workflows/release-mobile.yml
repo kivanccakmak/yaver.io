@@ -269,32 +269,34 @@ jobs:
         run: |
           GRADLE_FILE="mobile/android/app/build.gradle"
           CURRENT_VERSION_CODE=$(grep 'versionCode ' "$GRADLE_FILE" | head -1 | sed 's/[^0-9]//g')
-          REMOTE_MAX_VERSION_CODE=$(python3 - <<'PY'
-import os
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+          # Heredoc inside a YAML `run: |` block conflicts with the indented
+          # terminator (bash needs `PY` at column 0, YAML needs it indented).
+          # Use python3 -c with an embedded script instead.
+          REMOTE_MAX_VERSION_CODE=$(PLAY_STORE_KEY_FILE="$PLAY_STORE_KEY_FILE" python3 -c '
+          import os
+          from google.oauth2.service_account import Credentials
+          from googleapiclient.discovery import build
 
-key = os.environ.get("PLAY_STORE_KEY_FILE")
-if not key or not os.path.exists(key):
-    raise SystemExit(0)
+          key = os.environ.get("PLAY_STORE_KEY_FILE")
+          if not key or not os.path.exists(key):
+              raise SystemExit(0)
 
-creds = Credentials.from_service_account_file(
-    key,
-    scopes=["https://www.googleapis.com/auth/androidpublisher"],
-)
-service = build("androidpublisher", "v3", credentials=creds)
-edit = service.edits().insert(body={}, packageName="io.yaver.mobile").execute()
-edit_id = edit["id"]
-try:
-    bundles = service.edits().bundles().list(
-        packageName="io.yaver.mobile",
-        editId=edit_id,
-    ).execute().get("bundles", [])
-    print(max((int(bundle["versionCode"]) for bundle in bundles), default=0))
-finally:
-    service.edits().delete(packageName="io.yaver.mobile", editId=edit_id).execute()
-PY
-)
+          creds = Credentials.from_service_account_file(
+              key,
+              scopes=["https://www.googleapis.com/auth/androidpublisher"],
+          )
+          service = build("androidpublisher", "v3", credentials=creds)
+          edit = service.edits().insert(body={}, packageName="io.yaver.mobile").execute()
+          edit_id = edit["id"]
+          try:
+              bundles = service.edits().bundles().list(
+                  packageName="io.yaver.mobile",
+                  editId=edit_id,
+              ).execute().get("bundles", [])
+              print(max((int(bundle["versionCode"]) for bundle in bundles), default=0))
+          finally:
+              service.edits().delete(packageName="io.yaver.mobile", editId=edit_id).execute()
+          ')
           if [ -n "$REMOTE_MAX_VERSION_CODE" ] && [ "$REMOTE_MAX_VERSION_CODE" -ge "$CURRENT_VERSION_CODE" ]; then
             NEW_CODE=$((REMOTE_MAX_VERSION_CODE + 1))
           else
