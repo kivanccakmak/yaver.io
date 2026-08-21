@@ -1,0 +1,21 @@
+version: 1
+name: workspace-todo-serverless
+workspace:
+  root: .
+  primary_device: auto
+  vault: local
+  placement:
+    default_execution_role: remote-development
+    managed_cloud_fallback: false
+apps:
+  - name: mobile
+    path: apps/mobile
+    stack: react-native-expo
+    stacks: [react-native-expo, typescript, yaver-serverless, yaver-xml]
+    surfaces: [mobile, web]
+    test_surfaces: [browser, rn-hermes]
+    env:
+      - EXPO_PUBLIC_YAVER_SERVERLESS_URL
+      - EXPO_PUBLIC_YAVER_PROJECT_SLUG
+    runtime:
+      machine_role: remote-development

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<yaver version="1">
+  <workspace kind="mobile" execution="remote-development" isolation="project-local" />
+  <stack frontend="react-native-expo" language="typescript" storage="async-storage" backend="none" />
+  <render targets="mobile,web" />
+</yaver>

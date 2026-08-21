@@ -1,0 +1,17 @@
+stages: [validate]
+
+variables:
+  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+
+cache:
+  key:
+    files: [package-lock.json]
+  paths: [.npm/]
+
+validate:
+  stage: validate
+  timeout: 10 minutes
+  script:
+    - npm ci
+    - npm run typecheck
+    - npm run export:web

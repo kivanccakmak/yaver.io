@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Todo · Yaver Serverless",
+    "slug": "workspace-todo-serverless",
+    "entryPoint": "./index.js",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "system",
+    "ios": {
+      "bundleIdentifier": "io.yaver.examples.workspaceTodoServerless",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyAccessedAPITypes": []
+      }
+    },
+    "android": {
+      "package": "io.yaver.examples.workspacetodoserverless"
+    },
+    "newArchEnabled": true
+  }
+}

@@ -1,0 +1,27 @@
+version: 1
+tables:
+  - name: todos
+    columns:
+      - name: id
+        type: text
+        primary: true
+      - name: title
+        type: text
+        required: true
+      - name: completed
+        type: boolean
+        required: true
+        default: false
+      - name: created_at
+        type: datetime
+        required: true
+        default: now
+      - name: updated_at
+        type: datetime
+        required: true
+        default: now
+
+meta:
+  app_name: Todo · Yaver Serverless
+  backend: sqlite
+  portability: yaver-continuum

@@ -1,0 +1,35 @@
+version: 1
+runtime: yaver-serverless-lite
+name: Todo · Yaver Serverless
+slug: workspace-todo-serverless
+database:
+  engine: sqlite
+  file: data/app.sqlite
+  schema: schema.yaml
+auth:
+  mode: local
+  config: auth.yaml
+api:
+  basePath: /p/workspace-todo-serverless
+  dataPath: /data/workspace-todo-serverless
+  routes:
+    - method: GET
+      path: /data/todos
+    - method: POST
+      path: /data/todos
+    - method: GET
+      path: /data/todos/:id
+    - method: PATCH
+      path: /data/todos/:id
+    - method: DELETE
+      path: /data/todos/:id
+placements:
+  - mobile-workspace
+  - self-hosted
+  - yaver-managed-cloud
+tables:
+  - name: todos
+    columns: [id, title, completed, created_at, updated_at]
+export:
+  includesData: false
+  secrets: excluded-by-default

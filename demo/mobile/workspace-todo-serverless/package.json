@@ -1,0 +1,14 @@
+{
+  "name": "yaver-workspace-todo-serverless",
+  "version": "0.0.1",
+  "private": true,
+  "engines": { "node": ">=22.13 <23" },
+  "description": "Canonical Mobile Workspace todo example backed by portable Yaver Serverless and SQLite.",
+  "workspaces": ["apps/mobile"],
+  "scripts": {
+    "dev": "npm run start --workspace @yaver-example/workspace-todo-serverless-mobile",
+    "web": "npm run web --workspace @yaver-example/workspace-todo-serverless-mobile",
+    "typecheck": "npm run typecheck --workspace @yaver-example/workspace-todo-serverless-mobile",
+    "export:web": "npm run export:web --workspace @yaver-example/workspace-todo-serverless-mobile"
+  }
+}

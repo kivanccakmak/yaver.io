@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Todo · Backendless",
+    "slug": "workspace-todo-backendless",
+    "entryPoint": "./index.js",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "system",
+    "ios": {
+      "bundleIdentifier": "io.yaver.examples.workspaceTodoBackendless",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyAccessedAPITypes": []
+      }
+    },
+    "android": {
+      "package": "io.yaver.examples.workspacetodobackendless"
+    },
+    "newArchEnabled": true
+  }
+}

@@ -1,0 +1,7 @@
+providers:
+  email_password: false
+  apple: false
+  google: false
+  microsoft: false
+
+personas: []

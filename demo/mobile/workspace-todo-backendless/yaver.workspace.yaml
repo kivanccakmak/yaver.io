@@ -1,0 +1,18 @@
+version: 1
+name: workspace-todo-backendless
+workspace:
+  root: .
+  primary_device: auto
+  vault: local
+  placement:
+    default_execution_role: remote-development
+    managed_cloud_fallback: false
+apps:
+  - name: mobile
+    path: apps/mobile
+    stack: react-native-expo
+    stacks: [react-native-expo, typescript, yaver-xml]
+    surfaces: [mobile, web]
+    test_surfaces: [browser, rn-hermes]
+    runtime:
+      machine_role: remote-development

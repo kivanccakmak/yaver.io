@@ -1,0 +1,29 @@
+{
+  "name": "@yaver-example/workspace-todo-backendless-mobile",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./index.js",
+  "scripts": {
+    "prebuild": "expo prebuild",
+    "start": "expo start",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "export:web": "expo export --platform web --output-dir dist",
+    "ios": "cd ios && xcodebuild -workspace *.xcworkspace -scheme Pocket Tasks Offline -configuration Debug",
+    "android": "cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "3.1.1",
+    "expo": "~57.0.15",
+    "expo-status-bar": "~57.0.1",
+    "@expo/metro-runtime": "~57.0.12",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-web": "~0.21.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.18",
+    "typescript": "~5.9.2"
+  }
+}
