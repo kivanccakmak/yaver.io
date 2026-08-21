@@ -32,7 +32,14 @@ AAB_PATH = os.environ.get("AAB_PATH", AAB_PATH)
 AAB_PATHS = [p.strip() for p in os.environ.get("AAB_PATHS", AAB_PATH).split(",") if p.strip()]
 # internal | alpha | beta | production (Google Play track names).
 TRACK = os.environ.get("PLAY_TRACK", "internal")
-RELEASE_STATUS = os.environ.get("PLAY_RELEASE_STATUS", "draft")
+# Internal testing (≤100 testers) is the SAFE automated lane: a release must
+# be `inProgress` to actually reach testers. The old blanket "draft" default
+# made every automated internal upload a silent dead end — the AAB was on the
+# track, but no tester could ever receive it (measured 2026-08-21). alpha/beta/
+# production MUST stay draft by default: those never auto-go-live without an
+# explicit promote. An explicit PLAY_RELEASE_STATUS always wins.
+_DEFAULT_RELEASE_STATUS = "inProgress" if TRACK == "internal" else "draft"
+RELEASE_STATUS = os.environ.get("PLAY_RELEASE_STATUS", _DEFAULT_RELEASE_STATUS)
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
 
