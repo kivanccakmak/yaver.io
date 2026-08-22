@@ -44,7 +44,11 @@ TRACK = os.environ.get("PLAY_TRACK", "internal")
 # track, but no tester could ever receive it (measured 2026-08-21). alpha/beta/
 # production MUST stay draft by default: those never auto-go-live without an
 # explicit promote. An explicit PLAY_RELEASE_STATUS always wins.
-_DEFAULT_RELEASE_STATUS = "completed" if TRACK == "internal" else "draft"
+def track_is_internal(track: str):
+    return track in {"internal", "qa"} or track.endswith((":internal", ":qa"))
+
+
+_DEFAULT_RELEASE_STATUS = "completed" if track_is_internal(TRACK) else "draft"
 RELEASE_STATUS = os.environ.get("PLAY_RELEASE_STATUS", _DEFAULT_RELEASE_STATUS)
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
@@ -260,6 +264,17 @@ def main():
                 "declare every service type present in the release manifest, "
                 "submit the declaration, then rerun android-upload with the same "
                 "signed AAB. Console: https://play.google.com/console/developers",
+                flush=True,
+            )
+        elif "health features" in detail.lower():
+            print(
+                "PLAY HEALTH DECLARATION REQUIRED: Google accepted the bundle "
+                "upload but refused to publish the edit until the app answers "
+                "the Health apps declaration. In Play Console, open "
+                f"{PACKAGE} > Policy and programs > App content > Health apps, "
+                "declare whether this app includes health features, submit the "
+                "answer, then rerun the same deploy with this signed AAB. "
+                "Console: https://play.google.com/console/developers",
                 flush=True,
             )
         raise
