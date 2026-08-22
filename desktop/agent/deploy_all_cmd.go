@@ -391,7 +391,7 @@ func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, swe
 	fmt.Printf("  %s bumping cli version: %s → %s\n", ctx.prefix, currentVersion, nextVersion)
 
 	if dryRun {
-		fmt.Printf("  %s [dry-run] would write %s to versions.json + cli/package.json + cli/package-lock.json + cli/sdk-manifest.json\n", ctx.prefix, nextVersion)
+		fmt.Printf("  %s [dry-run] would write %s to CLI, SDK, and public MCP discovery version files\n", ctx.prefix, nextVersion)
 		fmt.Printf("  %s [dry-run] would commit, push main, and dispatch release-cli.yml with publish_npm=true\n", ctx.prefix)
 		return nil
 	}
@@ -412,6 +412,8 @@ func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, swe
 			"versions.json",
 			"cli/package.json",
 			"cli/package-lock.json",
+			"server.json",
+			"web/public/.well-known/mcp/server.json",
 		}
 		// sdk-manifest.json doesn't always carry a version field — only
 		// stage it if the bump touched it.
@@ -582,7 +584,36 @@ func writeCliVersionFiles(repoRoot, version string) error {
 			return err
 		}
 	}
+	// MCP Registry publication used to update only an ephemeral CI checkout.
+	// The public /.well-known manifest therefore stayed several releases behind
+	// even while npm and the official registry were current. Persist both the
+	// registry source and its web copy in the signed release commit.
+	serverPath := filepath.Join(repoRoot, "server.json")
+	if err := updateMCPServerVersions(serverPath, version); err != nil {
+		return err
+	}
+	serverData, err := os.ReadFile(serverPath)
+	if err != nil {
+		return fmt.Errorf("read updated server.json: %w", err)
+	}
+	publicServerPath := filepath.Join(repoRoot, "web", "public", ".well-known", "mcp", "server.json")
+	if err := os.WriteFile(publicServerPath, serverData, 0o644); err != nil {
+		return fmt.Errorf("write public MCP server.json: %w", err)
+	}
 	return nil
+}
+
+func updateMCPServerVersions(path, version string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	pat := regexp.MustCompile(`("version"\s*:\s*")[^"]*(")`)
+	if len(pat.FindAllIndex(data, -1)) < 2 {
+		return fmt.Errorf("%s: expected registry and npm package version fields", path)
+	}
+	out := pat.ReplaceAll(data, []byte(`${1}`+version+`${2}`))
+	return os.WriteFile(path, out, 0o644)
 }
 
 // updateJSONField rewrites a single top-level key in a JSON file

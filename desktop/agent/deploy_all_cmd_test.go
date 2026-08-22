@@ -135,3 +135,19 @@ func TestHasVersionKey(t *testing.T) {
 		t.Error("hasVersionKey: false positive on file without version field")
 	}
 }
+
+func TestUpdateMCPServerVersions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.json")
+	original := `{"version":"1.2.3","packages":[{"version":"1.2.3"}]}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateMCPServerVersions(path, "1.2.4"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if strings.Count(string(got), `"version":"1.2.4"`) != 2 {
+		t.Fatalf("both MCP versions must update: %s", got)
+	}
+}

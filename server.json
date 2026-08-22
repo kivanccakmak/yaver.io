@@ -14,17 +14,17 @@
     }
   ],
   "repository": {
-    "url": "https://github.com/kivanccakmak/yaver.io",
+    "url": "https://github.com/yaver-io/yaver.io",
     "source": "github",
     "id": "1186019621"
   },
-  "version": "1.99.415",
+  "version": "1.99.417",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "yaver-cli",
-      "version": "1.99.415",
+      "version": "1.99.417",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
