@@ -12,12 +12,15 @@
  * must never decide which desktop bytes a user downloads.
  */
 export const GUI_VERSION = "0.1.4";
+export const GUI_WINDOWS_VERSION = "0.1.2";
 export const GUI_BASE_URL =
   `https://github.com/yaver-io/yaver.io/releases/download/gui/v${GUI_VERSION}`;
+export const GUI_WINDOWS_BASE_URL =
+  `https://github.com/yaver-io/yaver.io/releases/download/gui/v${GUI_WINDOWS_VERSION}`;
 export const GUI_DOWNLOADS = {
   macArm64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-mac-arm64.dmg`,
   macX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-mac-x64.dmg`,
-  winX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-win-x64-setup.exe`,
+  winX64: `${GUI_WINDOWS_BASE_URL}/yaver-gui-${GUI_WINDOWS_VERSION}-win-setup.exe`,
   linuxX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-x64.AppImage`,
   linuxArm64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-arm64.AppImage`,
   debX64: `${GUI_BASE_URL}/yaver-gui-${GUI_VERSION}-linux-x64.deb`,

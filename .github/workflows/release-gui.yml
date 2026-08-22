@@ -68,7 +68,9 @@ jobs:
   build:
     needs: [validate, test]
     # Signing/notarization credentials live in the protected production
-    # environment. Keep every platform in the same guarded release matrix.
+    # environment. Windows remains pinned to the last published GUI release on
+    # yaver.io/download until an Authenticode identity is provisioned; never
+    # replace it with an unsigned installer.
     environment: production
     runs-on: ${{ matrix.os }}
     strategy:
@@ -80,9 +82,6 @@ jobs:
             arch: arm64
           - os: macos-15-intel
             platform: mac
-            arch: x64
-          - os: windows-latest
-            platform: win
             arch: x64
           - os: ubuntu-latest
             platform: linux

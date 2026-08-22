@@ -219,9 +219,10 @@ jobs:
 
   build:
     needs: validate
-    # Windows Authenticode and macOS Developer ID credentials are scoped to
-    # the protected production environment. Without this declaration a manual
-    # release gets empty WIN_CSC_* values and fails after every binary builds.
+    # macOS Developer ID credentials are scoped to the protected production
+    # environment. Windows users run the CLI through WSL2, which consumes the
+    # signed Linux artifact; the native Windows agent is intentionally not part
+    # of this matrix until an Authenticode identity is provisioned.
     environment: production
     strategy:
       # Each platform publishes independently — a flaky darwin sign+notarize must
@@ -241,9 +242,6 @@ jobs:
           - goos: linux
             goarch: amd64
             runner: ubuntu-latest
-          - goos: windows
-            goarch: amd64
-            runner: windows-latest
     runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.validate.outputs.version }}
@@ -411,8 +409,8 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          # npm postinstall fetches these tarballs (and the WSL2 .exe)
-          # from GitHub Releases; they're the only artifacts we ship.
+          # npm postinstall fetches these tarballs from GitHub Releases.
+          # WSL2 reports Linux and therefore consumes the Linux tarball.
           find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" \) -exec cp {} release/ \;
           cd release
           sha256sum * > checksums.txt
