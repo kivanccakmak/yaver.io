@@ -874,6 +874,32 @@ consumption restored in ddf56ea15).
   `mobile/src/lib/secureStoreCompat.ts`), drive with `devices["iPhone 15 Pro"]`
   — see `e2e/verify_live_console7.mjs` (verified 2026-08-09).
 
+### Shared browser-automation queue (concurrent sessions)
+
+Browser preview state is exclusive even though coding threads are concurrent.
+Threads therefore dump one append-only Markdown case into
+`e2e/browser-automation/test-cases/YYYY-MM-DD/` and never start competing
+closed-loop sessions. The coordinator drains the oldest queued date with one
+isolated Chromium profile; every attempt writes a new Markdown result under
+`e2e/browser-automation/results/YYYY-MM-DD/` so failures and reruns do not
+overwrite history.
+
+```bash
+cd e2e
+npm run browser-queue:validate
+MOBILE_WEB_URL=http://127.0.0.1:8081 npm run browser-queue:open
+```
+
+The launcher requires an explicit RN-web URL, takes an owner-only singleton
+lock, uses the full Playwright `iPhone 15 Pro` descriptor, and asserts the
+viewport before opening the app. It never guesses port 8081 and never
+substitutes the dashboard. Cases and results must not contain credentials,
+customer/project names, machine addresses, or absolute home paths; screenshots
+and traces remain untracked and are referenced by safe relative labels. Run the
+headless verb/test first, then queue only the PIXELS/NAMED/SILENT proof. Full
+format and status rules live in `e2e/browser-automation/README.md`; the
+validator and launcher are code-level truth when prose drifts.
+
 ### Hermes-push (default for RN/Expo)
 
 `yaver-cli push` and the agent's `/dev/build-native` both produce a Hermes

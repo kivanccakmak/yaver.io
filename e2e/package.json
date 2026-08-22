@@ -9,6 +9,8 @@
     "test:ui": "playwright test --ui",
     "test:mobile-workspace-examples": "node mobile-workspace-examples.mjs",
     "test:mobile-workspace-onboarding": "node mobile-workspace-onboarding-live.mjs",
+    "browser-queue:validate": "node browser-automation/validate.mjs",
+    "browser-queue:open": "node browser-automation/open-session.mjs",
     "report": "playwright show-report",
     "install-browsers": "playwright install --with-deps chromium"
   },

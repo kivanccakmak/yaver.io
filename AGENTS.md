@@ -235,6 +235,20 @@ absolute gap, not a flaky one. Rules, full version in [`CLAUDE.md`](CLAUDE.md):
   `mobile/src/lib/secureStoreCompat.ts`), then drive the app with
   `devices["iPhone 15 Pro"]` context. Verified 2026-08-09 with
   `e2e/verify_live_console7.mjs` (task detail → LiveConsoleSection).
+- **Shared browser queue for concurrent threads:** when a closed-loop arc must
+  wait for the browser coordinator, add one Markdown file under
+  `e2e/browser-automation/test-cases/YYYY-MM-DD/`; never append to another
+  thread's file. Every attempt gets a separate Markdown result under
+  `e2e/browser-automation/results/YYYY-MM-DD/`. Run `cd e2e && npm run
+  browser-queue:validate`, then the coordinator alone runs `MOBILE_WEB_URL=...
+  npm run browser-queue:open`. The launcher enforces one owner-only session,
+  an isolated profile, a full `iPhone 15 Pro` device descriptor, and the real
+  RN-web URL—no guessed port or dashboard fallback. Cases/results contain no
+  secrets, customer names, machine addresses, or absolute home paths; artifacts
+  remain untracked and are referenced only by safe relative labels. Headless
+  first still applies: the queue is for the PIXELS/NAMED/SILENT proof, not API
+  discovery. The executable validator and launcher are the source of truth;
+  `e2e/browser-automation/README.md` explains the append-only workflow.
 - **Mobile tasks render the LIVE opencode console, not a collapsed summary.**
   `mobile/app/(tabs)/tasks.tsx` consumes the RAW runner stdout lane
   (`?rawSince=` + `onRaw` SSE) into a per-task 512 KB buffer and renders it in a
