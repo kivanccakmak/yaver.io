@@ -61,6 +61,32 @@ func ascCredsFromEnv() *ascCreds {
 	return &ascCreds{KeyPEM: string(pem), KeyID: keyID, IssuerID: issuer}
 }
 
+// ascCredsFromDeployEnvFile mirrors the canonical local Apple deploy fallback
+// for this machine's own app. Long-running agent/MCP processes do not inherit a
+// shell's `source ~/.appstoreconnect/yaver.env`, so env-only resolution made
+// TestFlight status claim credentials were missing immediately after a
+// successful canonical upload. Never use this for a named third-party project.
+func ascCredsFromDeployEnvFile() *ascCreds {
+	keyPath := os.ExpandEnv(strings.TrimSpace(deployEnvFileValue("APP_STORE_KEY_PATH")))
+	keyID := strings.TrimSpace(deployEnvFileValue("APP_STORE_KEY_ID"))
+	issuer := strings.TrimSpace(deployEnvFileValue("APP_STORE_KEY_ISSUER"))
+	if keyPath == "" || keyID == "" || issuer == "" {
+		return nil
+	}
+	pem, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil
+	}
+	return &ascCreds{KeyPEM: string(pem), KeyID: keyID, IssuerID: issuer}
+}
+
+func ownAppleASCCredsFallback() *ascCreds {
+	if c := ascCredsFromEnv(); c != nil {
+		return c
+	}
+	return ascCredsFromDeployEnvFile()
+}
+
 func resolveAppleASCCreds(project string) (*ascCreds, error) {
 	// The vault is the source of truth, but it is not always openable: an
 	// auth-token rotation or a lost ~/.yaver/master.key locks it ("wrong
@@ -77,7 +103,7 @@ func resolveAppleASCCreds(project string) (*ascCreds, error) {
 	vs, err := openVaultOptional()
 	if err != nil || vs == nil {
 		if ownProject {
-			if c := ascCredsFromEnv(); c != nil {
+			if c := ownAppleASCCredsFallback(); c != nil {
 				return c, nil
 			}
 		}
@@ -97,7 +123,7 @@ func resolveAppleASCCreds(project string) (*ascCreds, error) {
 	issuer := get("APP_STORE_KEY_ISSUER")
 	if keyPath == "" || keyID == "" || issuer == "" {
 		if ownProject {
-			if c := ascCredsFromEnv(); c != nil {
+			if c := ownAppleASCCredsFallback(); c != nil {
 				return c, nil
 			}
 		}
