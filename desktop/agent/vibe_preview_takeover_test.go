@@ -241,7 +241,7 @@ func TestPreviewLock_GapIsARouteNotADeadEnd(t *testing.T) {
 // sentence.
 func TestPreviewNoBrowser_OffersAnInstallRoute(t *testing.T) {
 	mgr := NewVibePreviewManager(nil)
-	_, err := mgr.Start(VibePreviewStartOpts{Project: "p", TargetURL: "http://x"})
+	_, err := mgr.Start(VibePreviewStartOpts{Project: "p", TargetURL: stubTarget(t)})
 
 	var noBrowser *PreviewBrowserUnavailableError
 	if !errors.As(err, &noBrowser) {

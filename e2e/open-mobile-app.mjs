@@ -2,12 +2,19 @@
 // You sign in by hand once; the profile keeps the session so the automated
 // lane matrix can reuse it instead of re-authenticating every run.
 import { chromium, devices } from '@playwright/test';
+import { existsSync } from 'node:fs';
 
 const URL = process.env.MOBILE_WEB_URL || 'http://localhost:8081';
 const PROFILE = process.env.E2E_PROFILE || `${process.env.HOME}/.yaver-e2e-profile`;
 const iphone = devices['iPhone 13'];
+const executablePath = [
+  process.env.YAVER_CHROMIUM_PATH,
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+].find((candidate) => candidate && existsSync(candidate));
 
 const ctx = await chromium.launchPersistentContext(PROFILE, {
+  ...(executablePath ? { executablePath } : {}),
   headless: false,
   viewport: iphone.viewport,
   userAgent: iphone.userAgent,

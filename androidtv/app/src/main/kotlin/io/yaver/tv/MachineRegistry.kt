@@ -86,6 +86,7 @@ object MachineRegistry {
                 relayUrl = s.optString("relayUrl").ifEmpty { null },
                 relayPassword = s.optString("relayPassword").ifEmpty { null },
                 primaryDeviceId = s.optString("primaryDeviceId").ifEmpty { null },
+                secondaryDeviceId = s.optString("secondaryDeviceId").ifEmpty { null },
                 primaryRunnerByDevice = s.optJSONObject("primaryRunnerByDevice")?.toMap()
                     ?: null,
                 defaultRuntimeProjectByDevice = s.optJSONObject("defaultRuntimeProjectByDevice")?.toNestedStringMap()

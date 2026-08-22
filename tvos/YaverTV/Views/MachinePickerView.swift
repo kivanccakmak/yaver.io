@@ -192,7 +192,7 @@ struct MachinePickerView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("No machine right now?")
                 .font(.system(size: 18, weight: .semibold))
-            Text("You can continue with Yaver Code for Tasks without connecting a device. Vibing and live app previews still need a render machine.")
+            Text("Remoteless fallback supports DeepSeek analysis/chat only on this TV. Git edits, shell commands, builds, tests, deploys, Vibing, and live previews still need your primary/secondary machine.")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
@@ -200,7 +200,7 @@ struct MachinePickerView: View {
                 store.useRemotelessMode()
                 dismiss()
             } label: {
-                Label("Continue without a device", systemImage: "arrow.forward.circle")
+                Label("Use analysis fallback", systemImage: "arrow.forward.circle")
             }
             .buttonStyle(.bordered)
             .accessibilityIdentifier("devices.continue-remoteless")

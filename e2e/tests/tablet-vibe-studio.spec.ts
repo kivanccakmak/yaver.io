@@ -233,7 +233,7 @@ test("tablet vibe studio keeps the phone frame while the box has no dev server",
   // THE GUARD: the persistent phone frame renders its ready pane even though no
   // dev server exists and no project can be selected yet.
   await expect(
-    page.getByText(/Pick a project to open its preview|Preview this project beside the conversation/).first(),
+    page.getByText(/Pick a project to open its preview|Preview this project beside the conversation|Connect the box to open the selected project/).first(),
     "tabletLandscape: left phone frame went blank with no dev server (DevPreview null path)",
   ).toBeVisible({ timeout: 15_000 });
 

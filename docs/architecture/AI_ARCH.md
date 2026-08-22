@@ -256,13 +256,23 @@ There are two pairing styles.
 Flow:
 
 1. target machine starts pairing session
-2. target exposes `/auth/pair/info` and `/auth/pair/submit?code=...`
-3. phone submits:
+2. `yaver auth pair` prints a canonical short-lived pair URL as a QR, plus the
+   6-character passkey and reachable URLs as fallbacks
+3. the mobile Pair Machine sheet scans the QR first, shows the decoded machine
+   for explicit confirmation, and keeps segmented code + URL entry behind the
+   manual fallback
+4. target exposes `/auth/pair/info` and `/auth/pair/submit?code=...`
+5. phone submits:
    - token
    - convex site URL
    - optional user ID
 
 This is intentionally unauthenticated except for possession of the short-lived code.
+Scanning never submits by itself. `mobile/src/components/PairQrScanner.tsx`
+only validates/decodes; `mobile/app/(tabs)/more.tsx` performs the separate
+confirmation and submit. The manual form is keyboard-avoiding and scrollable on
+phone/tablet; short codes use one real input behind visual character boxes so
+paste, backspace, autofill, and accessibility do not drift across six fields.
 
 ### Encrypted pairing
 

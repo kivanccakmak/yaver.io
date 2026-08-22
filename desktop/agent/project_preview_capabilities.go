@@ -74,10 +74,53 @@ type ProjectPreviewCapabilities struct {
 	// that guesses wrong would render options the project cannot support.
 	Framework string `json:"framework"`
 	// SelfDevelopment marks Yaver developing Yaver, which removes Hermes.
-	SelfDevelopment bool                   `json:"selfDevelopment"`
-	HasPairedDevice bool                   `json:"hasPairedDevice"`
-	Options         []ProjectPreviewOption `json:"options"`
-	Reason          string                 `json:"reason,omitempty"`
+	SelfDevelopment bool `json:"selfDevelopment"`
+	HasPairedDevice bool `json:"hasPairedDevice"`
+	// HermesBuildState is the operation-level bundle state for this exact
+	// checkout. Surfaces use it to render ONE Hermes action: compile before a
+	// usable artifact exists, reload after it does. Empty means Hermes does not
+	// apply to this project.
+	HermesBuildState string                 `json:"hermesBuildState,omitempty"`
+	Options          []ProjectPreviewOption `json:"options"`
+	Reason           string                 `json:"reason,omitempty"`
+}
+
+// ApplyHermesBuildState makes the Hermes actions mutually exclusive.
+//
+// Framework detection answers whether Hermes CAN apply. The on-disk build
+// status answers which operation can happen NOW. Advertising Reload before a
+// bundle exists produces a disabled dead end beside the actual route to fix;
+// advertising Compile after a usable artifact exists duplicates the reload
+// path. The artifact check in readNativeBuildStatus probes the real bundle on
+// disk, not a remembered success flag.
+func ApplyHermesBuildState(caps ProjectPreviewCapabilities, workDir, platform string) ProjectPreviewCapabilities {
+	if !hermesCapableFramework(caps.Framework) || caps.SelfDevelopment {
+		return caps
+	}
+
+	state := readNativeBuildStatus(workDir)
+	ready := state.State == "ready"
+	if ready && strings.TrimSpace(platform) != "" && strings.TrimSpace(state.Platform) != "" {
+		ready = strings.EqualFold(strings.TrimSpace(platform), strings.TrimSpace(state.Platform))
+	}
+	if ready {
+		caps.HermesBuildState = "ready"
+	} else {
+		caps.HermesBuildState = "needs_build"
+	}
+
+	filtered := make([]ProjectPreviewOption, 0, len(caps.Options))
+	for _, option := range caps.Options {
+		if ready && option.ID == PreviewOptionHermes {
+			continue
+		}
+		if !ready && option.ID == PreviewOptionOpenNative {
+			continue
+		}
+		filtered = append(filtered, option)
+	}
+	caps.Options = filtered
+	return caps
 }
 
 // hermesCapableFramework is the single source of truth for "can this stack load

@@ -15,7 +15,6 @@ import { useRouter } from "expo-router";
 import { useColors } from "../context/ThemeContext";
 import { useAuth } from "../context/AuthContext";
 import { AppScreenHeader } from "./AppScreenHeader";
-import EmptyState from "./EmptyState";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { useDevice, type Device } from "../context/DeviceContext";
 import { useTabletContentStyle } from "../hooks/useTabletContentStyle";
@@ -40,7 +39,7 @@ import type { ManagedCloudMachineSummary } from "../lib/subscription";
 interface Props {
   visible: boolean;
   onClose: () => void;
-  onSelected?: (device: Device) => void;
+  onSelected?: (device: Device | null) => void;
 }
 
 type CodingStatus = {
@@ -425,6 +424,8 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
     connectedDeviceIds,
     primaryDeviceId,
     secondaryDeviceId,
+    codingMode,
+    setCodingMode,
     latestCliVersion,
     lastError,
   } = deviceCtx;
@@ -475,6 +476,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
   );
 
   const [pickedDeviceId, setPickedDeviceId] = React.useState<string | null>(null);
+  const [pickedRemoteless, setPickedRemoteless] = React.useState(false);
   const [switching, setSwitching] = React.useState(false);
   const [switchError, setSwitchError] = React.useState<string | null>(null);
   // Brief "✓ connected" confirmation shown before the modal auto-closes, so a
@@ -506,12 +508,18 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
       setProbeStage(null);
       return;
     }
+    if (codingMode === "local-only") {
+      setPickedRemoteless(true);
+      setPickedDeviceId(null);
+      return;
+    }
+    setPickedRemoteless(false);
     if (activeDevice?.id && eligibleDevices.some((d) => d.id === activeDevice.id)) {
       setPickedDeviceId(activeDevice.id);
       return;
     }
     setPickedDeviceId(eligibleDevices[0]?.id ?? null);
-  }, [visible, activeDevice?.id, eligibleDevices]);
+  }, [visible, activeDevice?.id, eligibleDevices, codingMode]);
 
   const runPing = React.useCallback(async (device: Device) => {
     const direct = connectionManager.clientFor(device.id);
@@ -621,6 +629,22 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
 
   const handleContinue = React.useCallback(async (targetOverride?: Device | null) => {
     const target = targetOverride ?? pickedDevice;
+    if (pickedRemoteless && !targetOverride) {
+      setSwitching(true);
+      setSwitchError(null);
+      setProbeStage("Switching to phone-only coding…");
+      try {
+        await setCodingMode("local-only");
+        setSwitchSuccess("No remote box · this phone");
+        setTimeout(() => {
+          onSelected?.(null);
+          onClose();
+        }, 700);
+      } catch (err: any) {
+        setSwitchError(err?.message || "Could not save the phone-only execution choice.");
+      }
+      return;
+    }
     if (!target) return;
     setSwitching(true);
     setSwitchError(null);
@@ -712,7 +736,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
       // list, which made failures look identical to successes.
       setSwitchError(switchErrorMessage(target.name, err));
     }
-  }, [pickedDevice, selectDevice, activeDevice?.id, lastError, onSelected, onClose, deviceCtx]);
+  }, [pickedDevice, pickedRemoteless, selectDevice, activeDevice?.id, lastError, onSelected, onClose, deviceCtx, setCodingMode]);
 
   const pickedDeviceIsCurrent = !!pickedDevice && activeDevice?.id === pickedDevice.id;
   const pickedDeviceIsConnected = !!pickedDevice && connectedSet.has(pickedDevice.id);
@@ -911,43 +935,63 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
             style={{ flex: 1 }}
             contentContainerStyle={[{ padding: 16, paddingBottom: 32 }, tabletContent]}
           >
-            {/* Title + subtitle only make sense when there IS a list to choose
-                from. With an empty roster they framed a void: a heading that
-                promised a choice, a subtitle pointing at a Confirm bar that
-                could never confirm. Empty → the EmptyState below carries its
-                own title and the ONE action that unblocks the user. */}
-            {eligibleDevices.length > 0 ? (
-              <>
-                <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: "700", marginBottom: 4 }}>
-                  Choose remote box
+            <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: "700", marginBottom: 4 }}>
+              Choose where work runs
+            </Text>
+            <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 20 }}>
+              Remote boxes support builds, shells, tests, and live reload. No remote box keeps coding and Git work on this phone with DeepSeek; it is never selected by default.
+            </Text>
+
+            <Pressable
+              onPress={() => {
+                setPickedRemoteless(true);
+                setPickedDeviceId(null);
+              }}
+              style={({ pressed }) => ({
+                marginBottom: 14,
+                padding: 14,
+                borderRadius: 10,
+                borderWidth: pickedRemoteless ? 1.5 : 1,
+                borderColor: pickedRemoteless ? c.accent : c.border,
+                backgroundColor: c.bgCard,
+                opacity: pressed ? 0.85 : 1,
+              })}
+              accessibilityRole="button"
+              accessibilityLabel="Use no remote box"
+              accessibilityState={{ selected: pickedRemoteless }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>No remote box</Text>
+                  <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }}>
+                    This phone · DeepSeek coding · GitHub/GitLab projects
+                  </Text>
+                  <Text style={{ color: c.warn, fontSize: 11, marginTop: 4 }}>
+                    No shell, build, test, simulator, dev server, or deploy runtime
+                  </Text>
+                </View>
+                <Text style={{ color: pickedRemoteless ? c.accent : c.textMuted, fontSize: 12, fontWeight: "700" }}>
+                  {pickedRemoteless ? "SELECTED" : "LOCAL"}
                 </Text>
-                <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 20 }}>
-                  Select the machine Yaver should use for app builds, live reload, and project tools. Confirm at the bottom when you're ready.
-                </Text>
-              </>
-            ) : null}
+              </View>
+            </Pressable>
+
             {eligibleDevices.length === 0 ? (
-              // NOTE: deliberately bare EmptyState, NOT NoMachineEmpty —
-              // NoMachineEmpty renders this very modal, so using it here
-              // would recurse.
-              <EmptyState
-                icon="desktop-outline"
-                title="No remote boxes ready"
-                body={
-                  sleepingMachines.length > 0
-                    ? "Wake one of the sleeping machines below, or pair a new one on the Devices tab."
-                    : "Devices handles pairing, auth recovery, and deep diagnostics. Come back once a machine shows as live."
-                }
-                action={{
-                  label: "Open Devices",
-                  onPress: () => {
-                    onClose();
-                    router.push("/(tabs)/devices" as any);
-                  },
+              <Pressable
+                onPress={() => {
+                  onClose();
+                  router.push("/(tabs)/devices" as any);
                 }}
-              />
-            ) : (
-              eligibleDevices.map((device) => {
+                style={{ paddingVertical: 10, marginBottom: 8 }}
+              >
+                <Text style={{ color: c.textMuted, fontSize: 12 }}>
+                  No remote boxes are ready. Pair or wake one from Devices when you need a full runtime.
+                </Text>
+                <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700", marginTop: 4 }}>Open Devices →</Text>
+              </Pressable>
+            ) : null}
+
+            {eligibleDevices.map((device) => {
                 const ping = pingByDevice[device.id];
                 const codingStatus = codingStatusByDevice[device.id];
                 const codingRunners = codingStatus ? sortedCodingRunners(codingStatus.runners) : [];
@@ -1028,6 +1072,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
                         void signInDevice(device);
                         return;
                       }
+                      setPickedRemoteless(false);
                       setPickedDeviceId(device.id);
                     }}
                     // Long-press a device → quick actions (Disconnect). Tearing
@@ -1220,8 +1265,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
                     </View>
                   </Pressable>
                 );
-              })
-            )}
+              })}
 
             {/* The outcome blocks below are deliberately OUTSIDE the row list.
                 A wake ends by removing its row from this list — the box becomes
@@ -1291,35 +1335,32 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
               </View>
             ) : null}
 
-            {/* No eligible boxes → no Confirm bar. A dead "Pick a machine to
-                continue" button under an empty list is an action that cannot
-                work in this state. */}
-            {eligibleDevices.length > 0 ? (
-              <>
-                <View style={{ height: 16 }} />
-                <Pressable
-                  onPress={() => { void handleContinue(); }}
-                  disabled={!pickedDevice}
-                  style={({ pressed }) => ({
-                    backgroundColor: !pickedDevice ? c.border : c.accent,
-                    paddingVertical: 14,
-                    borderRadius: 10,
-                    alignItems: "center",
-                    opacity: pressed ? 0.85 : 1,
-                  })}
-                >
-                  <Text style={{ color: !pickedDevice ? c.textMuted : "#000", fontWeight: "700" }}>
-                    {!pickedDevice
-                      ? "Pick a machine to continue"
-                      : pickedDeviceIsCurrent && pickedDeviceIsConnected
-                        ? "Keep using this machine"
-                        : pickedDeviceIsCurrent
-                          ? "Reconnect to this machine"
-                          : "Use selected machine"}
-                  </Text>
-                </Pressable>
-              </>
-            ) : null}
+            <View style={{ height: 16 }} />
+            <Pressable
+              onPress={() => { void handleContinue(); }}
+              disabled={!pickedRemoteless && !pickedDevice}
+              style={({ pressed }) => ({
+                backgroundColor: !pickedRemoteless && !pickedDevice ? c.border : c.accent,
+                paddingVertical: 14,
+                borderRadius: 10,
+                alignItems: "center",
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
+              <Text style={{ color: !pickedRemoteless && !pickedDevice ? c.textMuted : "#000", fontWeight: "700" }}>
+                {pickedRemoteless
+                  ? codingMode === "local-only"
+                    ? "Keep using no remote box"
+                    : "Use no remote box"
+                  : !pickedDevice
+                    ? "Choose where work runs"
+                    : pickedDeviceIsCurrent && pickedDeviceIsConnected
+                      ? "Keep using this machine"
+                      : pickedDeviceIsCurrent
+                        ? "Reconnect to this machine"
+                        : "Use selected machine"}
+              </Text>
+            </Pressable>
           </ScrollView>
         )}
       </View>

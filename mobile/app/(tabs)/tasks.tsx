@@ -62,6 +62,7 @@ import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { rerenderActivePreviewSurface } from "../../src/lib/feedbackTrigger";
+import { publishAutoRenderVibing, subscribeAutoRenderVibing } from "../../src/lib/autoRenderVibing";
 import { mustUseNativePreview } from "../../src/lib/devLane";
 import {
   AgentStatus,
@@ -121,13 +122,18 @@ import {
   loadYaverAgentLocalConfig,
   type YaverAgentHistoryTurn,
 } from "../../src/lib/yaverAgentRunner";
-import { listPhoneProjects, type PhoneProject } from "../../src/lib/phoneProjects";
+import type { PhoneProject } from "../../src/lib/phoneProjects";
+import { listLocalPhoneProjectsMeta } from "../../src/lib/phoneSandboxLocal";
 import { gitContextForSlug, runAgenticCoding } from "../../src/lib/codingAgent/codingAgentRun";
 import { gitNetForSlug, loadCodingConfig } from "../../src/lib/codingAgent/sandboxBinding";
 import { repoSandboxForSlug } from "../../src/lib/codingAgent/repoSandbox";
 import { isRepo } from "../../src/lib/codingAgent/sandboxGit";
 import { restoreTurnSnapshot, type TurnSnapshot } from "../../src/lib/codingAgent/turnTransaction";
 import { redactProgressText, redactSecrets, redactValue } from "../../src/lib/codingAgent/secretRedaction";
+import {
+  listRemotelessTasks,
+  recoverInterruptedRemotelessTasks,
+} from "../../src/lib/remotelessTaskLifecycle";
 import type { YaverAgentToolContext } from "../../src/lib/yaverAgentTools";
 import {
   loadKeepLastProjectEnabled,
@@ -165,8 +171,11 @@ import { MessageBubble } from "../../src/components/MessageBubble";
 import { openTaskBus } from "../../src/lib/runningTasksBus";
 import { ErrorMessage, detectSmartRetry } from "../../src/components/ErrorMessage";
 import { AgentContextPanel, type AgentContextRow } from "../../src/components/AgentContextPanel";
+import SandboxGitPanel from "../../src/components/SandboxGitPanel";
 import { deriveRunnerBannerState, type RunnerFetchState } from "../../src/lib/runnerBannerState";
 import { runnerPollCadenceMs, sameAgentStatus, sameRunnerList } from "../../src/lib/runnerPollPolicy";
+import { resolveRemotelessPlacement, type ExecutionCandidate } from "../../src/_core/remoteless";
+import { isPhoneLocalTask, phoneLocalTurnStatus } from "../../src/lib/phoneLocalTaskRoutingCore";
 import { TaskHeader } from "../../src/components/TaskHeader";
 import {
   displayRunnerLabel,
@@ -717,7 +726,7 @@ function normalizeTaskTitle(title: string): string {
 // "reload the user list after delete" — falls through to a normal task
 // because "the user list…" contains spaces and fails the `\s*$` anchor.
 const RELOAD_INTENT =
-  /^\s*(hot\s*reload|reload|hermes(\s+reload)?|rebuild(\s+bundle)?|push\s+bundle)(\s+[a-z0-9._-]{1,40})?\s*$/i;
+  /^\s*(please\s+)?(fast\s+)?(hot\s*reload|reload|re-?render|refresh|hermes(\s+reload)?|rebuild(\s+bundle)?|push\s+bundle)(\s+(it|again|the\s+(app|preview|ui)|[a-z0-9._-]{1,40}))?\s*[.!?]?\s*$/i;
 function isReloadIntent(text: string): boolean {
   return RELOAD_INTENT.test(text.trim());
 }
@@ -1667,6 +1676,7 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
 
   if (task.turns && task.turns.length > 0) {
     for (const turn of task.turns) {
+      if (turn.hidden === true) continue;
       pushMessage(turn.role, turn.content);
     }
   } else {
@@ -1914,15 +1924,34 @@ export default function TasksScreen() {
     title?: string;
     runner?: string;
     openNew?: string;
+    autoSubmit?: string;
+    hideInitialPrompt?: string;
+    selectProject?: string;
+    phoneCheckout?: string;
   }>();
   const routeProjectDir = typeof taskParams.dir === "string" ? taskParams.dir : "";
   const initialPrompt = typeof taskParams.prompt === "string" ? taskParams.prompt : "";
   const initialTitle = typeof taskParams.title === "string" ? taskParams.title : "";
   const initialRunner = typeof taskParams.runner === "string" ? taskParams.runner : "";
+  const initialPhoneCheckout = typeof taskParams.phoneCheckout === "string" ? taskParams.phoneCheckout : "";
   const shouldOpenNew =
     typeof taskParams.openNew === "string" &&
     (taskParams.openNew === "1" || taskParams.openNew === "true");
-  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles } = useDevice();
+  const shouldAutoSubmit = taskParams.autoSubmit === "1" || taskParams.autoSubmit === "true";
+  const shouldHideInitialPrompt = taskParams.hideInitialPrompt === "1" || taskParams.hideInitialPrompt === "true";
+  const shouldSelectRouteProject = taskParams.selectProject === "1" || taskParams.selectProject === "true";
+  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, secondaryDeviceId, codingMode, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles } = useDevice();
+  // Use transport truth, not the optimistic focused-device status. This must
+  // be declared before the route auto-submit effect below consumes it.
+  const anyPoolConnected = connectedDeviceIds.length > 0;
+  const activeLiveInPool = !!activeDevice && connectedDeviceIds.includes(activeDevice.id);
+  const effectiveState: ConnectionState =
+    activeLiveInPool ? "connected" :
+    connectionStatus === "error" ? "connecting" :
+    (!activeDevice && anyPoolConnected) ? "connected" :
+    connectionStatus === "connected" ? "connecting" :
+    connectionStatus;
+  const isEffectivelyConnected = effectiveState === "connected";
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(getLogEntries());
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
@@ -1955,7 +1984,7 @@ export default function TasksScreen() {
   const [composerProjects, setComposerProjects] = useState<ComposerProject[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState<string>(routeProjectDir);
   const [phoneProjects, setPhoneProjects] = useState<PhoneProject[]>([]);
-  const [selectedPhoneCheckout, setSelectedPhoneCheckout] = useState<string | null>(null);
+  const [selectedPhoneCheckout, setSelectedPhoneCheckout] = useState<string | null>(initialPhoneCheckout || null);
   // A blank project chosen by the user is intentional task context, not
   // "project discovery has not finished". Track it per runner device so the
   // restore effect cannot immediately overwrite No project with the old row.
@@ -1998,7 +2027,7 @@ export default function TasksScreen() {
   // advisory and must never block the remote project catalog or remote send.
   useEffect(() => {
     let cancelled = false;
-    void listPhoneProjects()
+    void listLocalPhoneProjectsMeta()
       .then(async (projects) => {
         const repos: PhoneProject[] = [];
         for (const project of projects) {
@@ -2008,13 +2037,19 @@ export default function TasksScreen() {
             // A metadata row without a usable local checkout is not selectable.
           }
         }
-        if (!cancelled) setPhoneProjects(repos);
+        if (!cancelled) {
+          setPhoneProjects(repos);
+          if (initialPhoneCheckout && repos.some((project) => project.slug === initialPhoneCheckout)) {
+            setSelectedPhoneCheckout(initialPhoneCheckout);
+            setSelectedProjectPath("");
+          }
+        }
       })
       .catch(() => {
         if (!cancelled) setPhoneProjects([]);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [initialPhoneCheckout]);
 
   const closeProjectPicker = useCallback(() => {
     Keyboard.dismiss();
@@ -2204,28 +2239,38 @@ export default function TasksScreen() {
           <View>
             {phoneProjects.length > 0 ? (
               <>
-                <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 14 }]}>ON THIS IPHONE</Text>
+                <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 14 }]}>{codingMode === "local-only" ? "ON THIS PHONE" : "REMOTELESS FALLBACK"}</Text>
                 <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 10 }}>
-                  Boxless DeepSeek coding uses the selected checkout on this phone. Remote rendering and builds remain unavailable here.
+                  {codingMode === "local-only"
+                    ? "You explicitly selected No remote box. DeepSeek can audit and edit a checkout here; builds, shells, tests, previews, and deploys remain unavailable."
+                    : "Used only when no eligible primary or secondary runner is connected. Rendering, builds, shells, tests, and deploys remain unavailable here."}
                 </Text>
                 {phoneProjects.map((project) => {
                   const active = selectedPhoneCheckout === project.slug;
+                  const remotePreferred = taskExecutionPlacement.lane === "remote";
                   return (
                     <Pressable
                       key={`phone:${project.slug}`}
                       onPress={() => {
+                        if (remotePreferred) {
+                          Alert.alert(
+                            "Remote runner preferred",
+                            `${taskExecutionPlacement.target.name} is available, so new work goes there. Remoteless activates automatically when your primary and secondary runners are unavailable.`,
+                          );
+                          return;
+                        }
                         setSelectedPhoneCheckout(project.slug);
                         setSelectedProjectPath("");
                         explicitProjectChoiceRef.current = null;
                       }}
-                      style={[s.projectPickerRow, { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg }]}
+                      style={[s.projectPickerRow, { borderColor: active ? c.accent : c.border, backgroundColor: active ? withAlpha(c.accent, "1f") : c.bg, opacity: remotePreferred ? 0.55 : 1 }]}
                       accessibilityRole="button"
                       accessibilityLabel={`Use local checkout ${project.name}`}
                       accessibilityState={{ selected: active }}
                     >
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }} numberOfLines={1}>{project.name}</Text>
-                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>This device · {project.slug}</Text>
+                        <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>{remotePreferred ? `Fallback only · ${taskExecutionPlacement.target.name} available` : `This device · ${project.slug}`}</Text>
                       </View>
                       {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
                     </Pressable>
@@ -2233,6 +2278,22 @@ export default function TasksScreen() {
                 })}
               </>
             ) : null}
+            {codingMode === "local-only" ? (
+              <Pressable
+                onPress={() => {
+                  closeProjectPicker();
+                  taskRouter.navigate("/(tabs)/projects" as any);
+                }}
+                style={[s.projectPickerRow, { borderColor: c.accent, backgroundColor: c.accentSoft }]}
+              >
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: c.accent, fontSize: 14, fontWeight: "700" }}>Browse GitHub & GitLab projects</Text>
+                  <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>Clone a connected provider repository to this phone</Text>
+                </View>
+                <Ionicons name="arrow-forward" size={16} color={c.accent} />
+              </Pressable>
+            ) : null}
+            {codingMode !== "local-only" ? (
             <Pressable
               onPress={() => {
                 const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
@@ -2256,7 +2317,8 @@ export default function TasksScreen() {
               </View>
               {!selectedProjectPath ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}
             </Pressable>
-            {composerProjects.length === 0 ? (
+            ) : null}
+            {codingMode !== "local-only" && (composerProjects.length === 0 ? (
               <Text style={{ color: c.textMuted, fontSize: 13, paddingVertical: 18 }}>
                 No projects reported by the runner machine yet.
               </Text>
@@ -2307,8 +2369,8 @@ export default function TasksScreen() {
                   </Pressable>
                 );
               })
-            )}
-            {remoteProjectRows.length > 0 ? (
+            ))}
+            {codingMode !== "local-only" && remoteProjectRows.length > 0 ? (
               <>
                 <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 16 }]}>
                   ON OTHER MACHINES
@@ -2554,6 +2616,11 @@ export default function TasksScreen() {
   const [availableRunners, setAvailableRunners] = useState<RunnerInfo[]>([]);
   const [runnersFetchState, setRunnersFetchState] = useState<RunnerFetchState>("idle");
   const [selectedRunner, setSelectedRunner] = useState<string>(""); // "" = default
+  useEffect(() => {
+    if (normalizeTaskRunnerId(selectedRunner) !== "remoteless") return;
+    const preferred = availableRunners.find((runner) => runner.ready && normalizeTaskRunnerId(runner.id) !== "remoteless");
+    if (preferred) setSelectedRunner(preferred.id);
+  }, [availableRunners, selectedRunner]);
   // OpenCode-only: which agent (build / plan / custom) drives the
   // task. Forwarded as `mode` on the task POST and turned into
   // `--agent <mode>` on `opencode run`. Empty = use the user's
@@ -2594,8 +2661,12 @@ export default function TasksScreen() {
   useEffect(() => {
     if (routeProjectDir) {
       setSelectedProjectPath(routeProjectDir);
+      if (shouldSelectRouteProject) {
+        const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+        explicitProjectChoiceRef.current = { deviceId: runnerDeviceId, path: routeProjectDir };
+      }
     }
-  }, [routeProjectDir]);
+  }, [activeDevice?.id, routeProjectDir, shouldSelectRouteProject]);
 
   useEffect(() => {
     if (!showNewTask) return;
@@ -2692,7 +2763,9 @@ export default function TasksScreen() {
    *  only; Undo restores the exact pre-turn bytes without touching Git. */
   const localTurnUndoRef = useRef<Map<string, { slug: string; snapshot: TurnSnapshot }>>(new Map());
   const [localTurnUndoEpoch, setLocalTurnUndoEpoch] = useState(0);
+  const [localGitExpandedTaskId, setLocalGitExpandedTaskId] = useState<string | null>(null);
   const didApplyRouteSeedRef = useRef(false);
+  const didAutoSubmitRoutePromptRef = useRef(false);
 
   // Project + Todo state
   const [projectName, setProjectName] = useState<string>("");
@@ -2703,6 +2776,21 @@ export default function TasksScreen() {
 
   // Speech state
   const { token, user, logout } = useAuth();
+  const [autoRenderVibing, setAutoRenderVibing] = useState(false);
+  useEffect(() => subscribeAutoRenderVibing(setAutoRenderVibing), []);
+  useEffect(() => {
+    if (!token) {
+      setAutoRenderVibing(false);
+      return;
+    }
+    let cancelled = false;
+    void getUserSettings(token)
+      .then((settings) => {
+        if (!cancelled) publishAutoRenderVibing(settings.autoRenderVibing === true);
+      })
+      .catch(() => { if (!cancelled) publishAutoRenderVibing(false); });
+    return () => { cancelled = true; };
+  }, [token]);
   // Persist the MCP selection to Convex — same mcpServersByDevice row the web
   // chat + Vibing composers and tvOS write, so a selection made on the phone
   // is remembered on the web and vice versa (2026-08-10). Fire-and-forget:
@@ -3147,10 +3235,11 @@ export default function TasksScreen() {
     if (didApplyRouteSeedRef.current) return;
     if (!shouldOpenNew && !initialPrompt && !initialRunner) return;
     didApplyRouteSeedRef.current = true;
+    if (shouldAutoSubmit) return;
     if (initialPrompt) setNewTaskText(initialPrompt);
     if (initialRunner) setSelectedRunner(initialRunner);
     setShowNewTask(true);
-  }, [initialPrompt, initialRunner, shouldOpenNew]);
+  }, [initialPrompt, initialRunner, shouldAutoSubmit, shouldOpenNew]);
 
   // Ping agent every 10s when connected
   useEffect(() => {
@@ -3230,8 +3319,6 @@ export default function TasksScreen() {
         ...pendingCloudTasks,
         ...capped.filter((task) => !pendingCloudTasks.some((pending) => pending.id === task.id)),
       ];
-      // Persist the (turns-stripped, small) list so a cold start paints instantly.
-      void cacheTaskList(nextTasks);
       // The list endpoint STRIPS turns to bound its payload, so a fresh row
       // carries no history. Merging it verbatim onto an open task would wipe the
       // hydrated thread on every 3s poll (and hydration won't re-run — same id).
@@ -3242,7 +3329,17 @@ export default function TasksScreen() {
           : fresh;
       setTasks((prev) => {
         const prevById = new Map(prev.map((t) => [t.id, t]));
-        return nextTasks.map((t) => keepTurns(t, prevById.get(t.id)));
+        // Phone-local tasks have no server row. A successful remote poll must
+        // not erase work that is executing on this device.
+        const local = prev.filter((task) => task.source === "phone-local");
+        const merged = [
+          ...local,
+          ...nextTasks
+            .filter((task) => !local.some((localTask) => localTask.id === task.id))
+            .map((task) => keepTurns(task, prevById.get(task.id))),
+        ];
+        void cacheTaskList(merged);
+        return merged;
       });
       // Keep selected task in sync with latest data, but never let the stripped
       // list clobber the open thread's history.
@@ -3430,9 +3527,22 @@ export default function TasksScreen() {
     cachePaintedRef.current = true;
     (async () => {
       try {
-        const cached = await getCachedTaskList();
-        if (cached.length > 0) {
-          setTasks((prev) => (prev.length === 0 ? cached : prev));
+        await recoverInterruptedRemotelessTasks();
+        const [cached, lifecycle] = await Promise.all([getCachedTaskList(), listRemotelessTasks()]);
+        const reviewById = new Map(
+          lifecycle
+            .filter((record) => record.state === "review")
+            .map((record) => [record.id, record.detail || "Review the working tree, then retry."]),
+        );
+        const reconciled = cached.map((task) => {
+          const detail = reviewById.get(task.id);
+          return detail && task.status === "running" && task.source === "phone-local"
+            ? { ...task, status: "review" as TaskStatus, resultText: detail, output: [...task.output, detail], updatedAt: Date.now() }
+            : task;
+        });
+        if (reconciled.length > 0) {
+          void cacheTaskList(reconciled);
+          setTasks((prev) => (prev.length === 0 ? reconciled : prev));
         }
       } catch { /* no cache — the fetch below fills it */ }
     })();
@@ -3488,7 +3598,7 @@ export default function TasksScreen() {
   // Listen for streaming output — buffer updates to avoid UI freezing
   const outputBufferRef = useRef<Record<string, string[]>>({});
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string } | null>(null);
+  const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string; explicit?: boolean } | null>(null);
 
   // ── raw-lane (live console) ─────────────────────────────────────────
   // Every runner (opencode, codex, claude, …) streams its RAW runner
@@ -3548,6 +3658,7 @@ export default function TasksScreen() {
   // that this is never empty-and-silent: a queued render that then doesn't
   // happen is indistinguishable from a broken product unless it says why.
   const [renderSkipNotice, setRenderSkipNotice] = useState<string | null>(null);
+  const [renderReady, setRenderReady] = useState(false);
   useEffect(() => {
     // Cleanup previous SSE
     if (sseAbortRef.current) {
@@ -3809,6 +3920,7 @@ export default function TasksScreen() {
   // than swallowed.
   useEffect(() => {
     if (!selectedTask || !taskStatusAllowsRuntimeRender(selectedTask.status)) return;
+    if ((selectedTask.pendingFollowUps?.length ?? 0) > 0) return;
     const pending = pendingRuntimeRenderRef.current;
     if (!pending || pending.taskId !== selectedTask.id) return;
     pendingRuntimeRenderRef.current = null;
@@ -3817,17 +3929,23 @@ export default function TasksScreen() {
         source: pending.source,
         workDir: pending.workDir,
         taskStatus: selectedTask.status,
+        autoRenderEnabled: pending.explicit === true || autoRenderVibing,
       });
       // "no preview open" is the ordinary case for someone who never opened
       // one — not worth a banner. Everything else is a render the user had
       // reason to expect and did not get, so it must say so.
-      if (decision.action === "skip" && decision.reason !== "no-active-surface") {
+      if (decision.action === "offer") {
+        setRenderReady(true);
+        setRenderSkipNotice(decision.message);
+      } else if (decision.action === "skip" && decision.reason !== "no-active-surface") {
+        setRenderReady(false);
         setRenderSkipNotice(decision.message);
       } else {
+        setRenderReady(false);
         setRenderSkipNotice(null);
       }
     })();
-  }, [selectedTask?.id, selectedTask?.status]);
+  }, [autoRenderVibing, selectedTask?.id, selectedTask?.pendingFollowUps?.length, selectedTask?.status]);
 
   // Second half of the same guard: a question that arrived over SSE for
   // a task you have since closed would otherwise linger with no owner
@@ -4431,8 +4549,12 @@ export default function TasksScreen() {
     const config = await loadCodingConfig();
     if (!config) {
       Alert.alert(
-        "Add a DeepSeek API key",
-        "This device task needs a DeepSeek API key in secure settings.",
+        "Set up coding on this phone",
+        "Add a DeepSeek or GLM API key, or enable managed coding, then retry. Keys stay in this device's keychain.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Open settings", onPress: () => taskRouter.push("/sandbox-ai") },
+        ],
       );
       return;
     }
@@ -4458,7 +4580,11 @@ export default function TasksScreen() {
       updatedAt: startedAt,
       deviceName: "This device",
     };
-    setTasks((prev) => [initialTask, ...prev]);
+    setTasks((prev) => {
+      const next = [initialTask, ...prev];
+      void cacheTaskList(next);
+      return next;
+    });
     pendingOpenTaskRef.current = initialTask;
     setShowNewTask(false);
     setNewTaskText("");
@@ -4466,7 +4592,11 @@ export default function TasksScreen() {
     setInputFromSpeech(false);
 
     const updateTask = (mut: (task: Task) => Task) => {
-      setTasks((prev) => prev.map((task) => (task.id === taskId ? mut(task) : task)));
+      setTasks((prev) => {
+        const next = prev.map((task) => (task.id === taskId ? mut(task) : task));
+        void cacheTaskList(next);
+        return next;
+      });
       setSelectedTask((prev) => (prev && prev.id === taskId ? mut(prev) : prev));
     };
     const controller = new AbortController();
@@ -4476,10 +4606,12 @@ export default function TasksScreen() {
         slug,
         prompt: promptText,
         config,
-        mode: "vibe",
+        mode: askModeEnabled ? "audit" : "vibe",
         net: (await gitNetForSlug(slug)) ?? undefined,
         sandbox: repoSandboxForSlug(slug),
         signal: controller.signal,
+        lifecycleTaskId: taskId,
+        lifecycleTitle: `Coding · ${slug}`,
         onProgress: (event) => {
           if (event.kind === "model_text") {
             const text = redactProgressText(event.text, [config.apiKey]);
@@ -4506,7 +4638,7 @@ export default function TasksScreen() {
       const finishedAt = Date.now();
       updateTask((task) => ({
         ...task,
-        status: "completed" as TaskStatus,
+        status: phoneLocalTurnStatus(result.changed.length) as TaskStatus,
         resultText: reply,
         turns: [...(task.turns ?? []), { role: "assistant", content: reply, timestamp: new Date(finishedAt).toISOString() }],
         updatedAt: finishedAt,
@@ -4526,9 +4658,9 @@ export default function TasksScreen() {
       yaverAgentAbortersRef.current.delete(taskId);
       setIsSubmitting(false);
     }
-  }, [selectedPhoneCheckout]);
+  }, [askModeEnabled, selectedPhoneCheckout, taskRouter]);
 
-  const handleCreateTask = async (promptOverride?: string) => {
+  const handleCreateTask = async (promptOverride?: string, options?: { hideInitialPrompt?: boolean }) => {
     const submittedText = (promptOverride ?? newTaskTextRef.current).trim();
     if (!submittedText && attachedImages.length === 0) return;
 
@@ -4546,6 +4678,7 @@ export default function TasksScreen() {
         pendingRuntimeRenderRef.current = {
           taskId: selectedTask.id,
           source: "mobile-user-reload-after-task",
+          explicit: true,
         };
         setNewTaskText("");
         setInputFromSpeech(false);
@@ -4553,13 +4686,32 @@ export default function TasksScreen() {
         setTimeout(() => setReloadFlash((cur) => (cur === "Reload queued until the current task finishes." ? null : cur)), 3500);
         return;
       }
-      await triggerHermesReload();
+      const decision = await rerenderActivePreviewSurface({
+        source: "mobile-explicit-chat-render",
+        taskStatus: "completed",
+        autoRenderEnabled: true,
+      });
+      if (decision.action === "skip" && decision.reason === "no-active-surface") {
+        await triggerHermesReload();
+      }
+      return;
+    }
+
+    if (codingMode === "local-only" && !selectedPhoneCheckout) {
+      Alert.alert(
+        "Choose a phone project",
+        "No remote box is selected. Choose or clone a GitHub/GitLab project before starting a phone-local DeepSeek task.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Open Projects", onPress: () => taskRouter.push("/(tabs)/projects") },
+        ],
+      );
       return;
     }
 
     // Explicit phone-local target: this is the repository-scoped DeepSeek
     // agent, not the control-plane Yaver agent and not a remote fallback.
-    if (selectedPhoneCheckout) {
+    if (selectedPhoneCheckout && taskExecutionPlacement.lane !== "remote") {
       await runPhoneLocalTask(submittedText);
       return;
     }
@@ -4569,7 +4721,7 @@ export default function TasksScreen() {
     // with "agent not ready". Streams the assistant's text + tool calls
     // into the task as they happen so users see progress before the
     // final reply lands. Cancellable via Stop on the task card.
-    if (!isEffectivelyConnected) {
+    if (taskExecutionPlacement.lane !== "remote") {
       const localCfg = await loadYaverAgentLocalConfig();
       if (!localCfg) {
         Alert.alert(
@@ -4686,7 +4838,7 @@ export default function TasksScreen() {
       return;
     }
 
-    if (selectedRunnerRow?.ready === false) {
+    if (selectedRunnerRow?.ready === false && taskExecutionPlacement.lane === "remote" && taskExecutionPlacement.target.id === activeDevice?.id) {
       const detail =
         selectedRunnerAuthIssue ||
         selectedRunnerRow.error ||
@@ -4714,7 +4866,7 @@ export default function TasksScreen() {
         ttsProvider,
         verbosity,
       } : undefined;
-      const title = initialTitle || submittedText;
+      const title = options?.hideInitialPrompt && initialTitle ? initialTitle : submittedText;
       // pendingTarget — set by TaskTargetWizard when multi-target mode
       // is on — overrides the in-modal runner/model picker for this
       // single submission. The wizard already switched the QUIC client
@@ -4745,15 +4897,21 @@ export default function TasksScreen() {
       // the wizard's runner/model attached. Going through clientFor
       // is deterministic: the URL + headers match the device we
       // genuinely picked.
-      // Precedence: an explicit wizard pick wins; otherwise the machine-role
-      // RUNNER box (userSettings.machineRolesByProject) is the default send
-      // target; otherwise the focused box — today's single-box behavior.
-      const runnerRoleId = pendingTarget?.deviceId ? null : connectionManager.roleDeviceId("runner");
+      // Precedence: an explicit wizard pick wins; otherwise use the exact
+      // target selected by the shared placement decision (assigned runner,
+      // primary, secondary, then focused). This must not fall back to the
+      // focused proxy: the placement banner may be naming a live secondary.
+      const runnerRoleId = pendingTarget?.deviceId
+        ? null
+        : taskExecutionPlacement.lane === "remote"
+          ? taskExecutionPlacement.target.id
+          : null;
       const sendClient = pendingTarget?.deviceId
         ? connectionManager.clientFor(pendingTarget.deviceId)
         : runnerRoleId
           ? connectionManager.clientFor(runnerRoleId)
           : quicClient;
+      const executionDeviceId = pendingTarget?.deviceId || runnerRoleId || activeDevice?.id || "";
       // Make sure focus follows so any post-send streams (logs, output)
       // arrive on the same client the new task ran on.
       if (pendingTarget?.deviceId) {
@@ -4867,9 +5025,10 @@ export default function TasksScreen() {
         taskParams.goal,
         taskParams.includeYaverMcp,
         taskParams.askMode,
+        options?.hideInitialPrompt === true,
       );
       if (taskParams.projectName && keepLastProject) {
-        const runnerDeviceId = connectionManager.roleDeviceId("runner") || pendingTarget?.deviceId || activeDevice?.id || "default";
+        const runnerDeviceId = executionDeviceId || "default";
         // Write BOTH stores: AsyncStorage (offline fallback) + Convex
         // defaultRuntimeProjectByDevice (canonical cross-surface memory —
         // the web dashboard reads the same row, so a project remembered on
@@ -4889,10 +5048,12 @@ export default function TasksScreen() {
       // pool the legitimate source is whichever client we picked).
       // Without this, the task card would later label itself with
       // activeDevice.name even though the work ran on a sibling box.
+      const dispatchedDeviceId = executionDeviceId || rawTask.deviceId;
+      const dispatchedDevice = dispatchedDeviceId ? devices.find((device) => device.id === dispatchedDeviceId) : null;
       const task: Task = {
         ...rawTask,
-        deviceId: pendingTarget?.deviceId || activeDevice?.id || rawTask.deviceId,
-        deviceName: pendingTarget?.deviceName || activeDevice?.name || rawTask.deviceName,
+        deviceId: dispatchedDeviceId,
+        deviceName: pendingTarget?.deviceName || dispatchedDevice?.name || rawTask.deviceName,
         model: rawTask.model || (effectiveRunner !== "custom" ? effectiveModel : undefined),
       };
       setNewTaskText("");
@@ -4941,6 +5102,25 @@ export default function TasksScreen() {
       setIsSubmitting(false);
     }
   };
+
+  // The initializer owns this kickoff. Submit it exactly once after the
+  // generated directory is selected, without flashing the compose modal. The
+  // hidden structured turn means the visible Developing chat starts with the
+  // agent asking what the app should do.
+  useEffect(() => {
+    if (!shouldAutoSubmit || !initialPrompt || didAutoSubmitRoutePromptRef.current) return;
+    if (!isEffectivelyConnected) return;
+    if (routeProjectDir && selectedProjectPath !== routeProjectDir) return;
+    didAutoSubmitRoutePromptRef.current = true;
+    void handleCreateTask(initialPrompt, { hideInitialPrompt: shouldHideInitialPrompt });
+  }, [
+    initialPrompt,
+    isEffectivelyConnected,
+    routeProjectDir,
+    selectedProjectPath,
+    shouldAutoSubmit,
+    shouldHideInitialPrompt,
+  ]);
 
   // Modal handoff. iOS cannot present a second native <Modal> while
   // another one is still on screen — the newcomer mounts invisibly
@@ -5035,6 +5215,20 @@ export default function TasksScreen() {
       localAborter.abort();
       return;
     }
+    const localTask = tasks.find((task) => task.id === taskId && isPhoneLocalTask(task));
+    if (localTask) {
+      const stoppedAt = Date.now();
+      const stopLocal = (task: Task): Task => task.id === taskId
+        ? { ...task, status: "stopped" as TaskStatus, resultText: "Stopped.", updatedAt: stoppedAt }
+        : task;
+      setTasks((prev) => {
+        const next = prev.map(stopLocal);
+        void cacheTaskList(next);
+        return next;
+      });
+      setSelectedTask((prev) => prev ? stopLocal(prev) : prev);
+      return;
+    }
     try {
       await quicClient.stopTask(taskId);
       // ACK received — immediately update UI
@@ -5048,6 +5242,11 @@ export default function TasksScreen() {
   };
 
   const handleExitTask = async (taskId: string) => {
+    const task = tasks.find((candidate) => candidate.id === taskId) ?? (selectedTask?.id === taskId ? selectedTask : null);
+    if (isPhoneLocalTask(task)) {
+      await handleStopTask(taskId);
+      return;
+    }
     try {
       await quicClient.exitTask(taskId);
       // ACK received — immediately update UI
@@ -5097,7 +5296,7 @@ export default function TasksScreen() {
     // message would vanish with zero feedback (the 2026-07-21 "second follow-up
     // never submitted" report). The main composer already guards this way; the
     // follow-up path did not. Return BEFORE clearing the input so the text is kept.
-    if (connectionStatus !== "connected") {
+    if (!isPhoneLocalTask(selectedTask) && connectionStatus !== "connected") {
       Alert.alert(
         "Not connected",
         `Can't reach ${activeDevice?.name ?? "your machine"} right now — wait for the status dot to turn green, then tap Send again. Your message is kept.`,
@@ -5116,7 +5315,7 @@ export default function TasksScreen() {
     // Phone-local follow-up: continue against the same checkout without
     // touching the remote connection. The previous turns are compacted into
     // the prompt because the repository agent has no server-side session.
-    if (selectedTask.runnerId === "yaver-phone") {
+    if (isPhoneLocalTask(selectedTask)) {
       const promptText = submittedText;
       const slug = selectedTask.localCheckoutId;
       if (!promptText || !slug) {
@@ -5126,7 +5325,14 @@ export default function TasksScreen() {
       const config = await loadCodingConfig();
       if (!config) {
         setIsSendingFollowUp(false);
-        Alert.alert("Add a DeepSeek API key", "This device task needs a DeepSeek API key in secure settings.");
+        Alert.alert(
+          "Set up coding on this phone",
+          "Add a DeepSeek or GLM API key, or enable managed coding, then retry. Your message is kept.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open settings", onPress: () => taskRouter.push("/sandbox-ai") },
+          ],
+        );
         return;
       }
       const taskId = selectedTask.id;
@@ -5134,7 +5340,11 @@ export default function TasksScreen() {
       const turnIso = new Date(turnAt).toISOString();
       const prior = (selectedTask.turns ?? []).slice(-12).map((turn) => `${turn.role}: ${turn.content}`).join("\n\n");
       const updateTask = (mut: (task: Task) => Task) => {
-        setTasks((prev) => prev.map((task) => (task.id === taskId ? mut(task) : task)));
+        setTasks((prev) => {
+          const next = prev.map((task) => (task.id === taskId ? mut(task) : task));
+          void cacheTaskList(next);
+          return next;
+        });
         setSelectedTask((prev) => (prev && prev.id === taskId ? mut(prev) : prev));
       };
       updateTask((task) => ({
@@ -5152,10 +5362,12 @@ export default function TasksScreen() {
           slug,
           prompt: `Previous conversation:\n${prior}\n\nNew request:\n${promptText}`,
           config,
-          mode: "vibe",
+          mode: askModeEnabled ? "audit" : "vibe",
           net: (await gitNetForSlug(slug)) ?? undefined,
           sandbox: repoSandboxForSlug(slug),
           signal: controller.signal,
+          lifecycleTaskId: taskId,
+          lifecycleTitle: `Coding · ${slug}`,
           onProgress: (event) => {
             if (event.kind === "model_text") {
               const text = redactProgressText(event.text, [config.apiKey]);
@@ -5174,7 +5386,7 @@ export default function TasksScreen() {
         const finishedAt = Date.now();
         updateTask((task) => ({
           ...task,
-          status: "completed" as TaskStatus,
+          status: phoneLocalTurnStatus(result.changed.length) as TaskStatus,
           resultText: reply,
           turns: [...(task.turns ?? []), { role: "assistant", content: reply, timestamp: new Date(finishedAt).toISOString() }],
           updatedAt: finishedAt,
@@ -5607,6 +5819,10 @@ export default function TasksScreen() {
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
     // Remember deletion so it won't reappear after refresh/re-login
     markTaskDeleted(taskId);
+    if (isPhoneLocalTask(task)) {
+      void cacheTaskList(tasks.filter((candidate) => candidate.id !== taskId));
+      return;
+    }
     try {
       if (task?.isAdopted && task.tmuxSession) {
         await quicClient.closeTmuxTask(taskId).catch((e) => {
@@ -5621,6 +5837,19 @@ export default function TasksScreen() {
   };
 
   const handleCompleteTask = async (taskId: string) => {
+    const localTask = tasks.find((task) => task.id === taskId && isPhoneLocalTask(task));
+    if (localTask) {
+      const completeLocal = (task: Task): Task => task.id === taskId
+        ? { ...task, status: "completed" as TaskStatus, updatedAt: Date.now() }
+        : task;
+      setTasks((prev) => {
+        const next = prev.map(completeLocal);
+        void cacheTaskList(next);
+        return next;
+      });
+      setSelectedTask((prev) => prev ? completeLocal(prev) : prev);
+      return;
+    }
     try {
       await quicClient.completeTask(taskId);
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: "completed" as TaskStatus } : t));
@@ -5797,7 +6026,6 @@ export default function TasksScreen() {
   // boxes as CONNECTED. Promote effectiveState to "connected" whenever
   // any pool client reports live, so the banner mirrors the source of
   // truth the Devices tab is already reading from.
-  const anyPoolConnected = connectedDeviceIds.length > 0;
   // Honest connection state. `connectionStatus` goes "connected" the
   // instant selectDevice's connect resolves — which is OPTIMISTIC: a
   // relay tunnel can come up while the agent behind it is unreachable,
@@ -5808,16 +6036,43 @@ export default function TasksScreen() {
   // (connectionManager's transport truth). The pool-any fallback is kept
   // ONLY for the no-device-focused case so a cold start with a warm pool
   // still reads connected.
-  const activeLiveInPool = !!activeDevice && connectedDeviceIds.includes(activeDevice.id);
-  const effectiveState: ConnectionState =
-    activeLiveInPool ? "connected" :
-    connectionStatus === "error" ? "connecting" :
-    (!activeDevice && anyPoolConnected) ? "connected" :
-    // Active device selected but not actually live (incl. an optimistic
-    // connectionStatus==="connected") → still connecting, not green.
-    connectionStatus === "connected" ? "connecting" :
-    connectionStatus;
-  const isEffectivelyConnected = effectiveState === "connected";
+  const taskExecutionCandidates = useMemo(() => {
+    const rows: ExecutionCandidate[] = [];
+    const seen = new Set<string>();
+    const add = (id: string | null | undefined, role: ExecutionCandidate["role"]) => {
+      if (!id || seen.has(id)) return;
+      const device = devices.find((row) => row.id === id);
+      if (!device) return;
+      seen.add(id);
+      rows.push({ id, name: device.name || id.slice(0, 8), role, connected: connectedDeviceIds.includes(id) });
+    };
+    add(machineRoles?.runnerDeviceId, "primary");
+    add(machineRoles?.secondaryRunnerDeviceId, "secondary");
+    add(primaryDeviceId, "primary");
+    add(secondaryDeviceId, "secondary");
+    add(activeDevice?.id, "focused");
+    return rows;
+  }, [activeDevice?.id, connectedDeviceIds, devices, machineRoles, primaryDeviceId, secondaryDeviceId]);
+  const taskExecutionPlacement = useMemo(
+    () => resolveRemotelessPlacement({
+      capability: "code-edit",
+      surface: Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : "web",
+      candidates: taskExecutionCandidates,
+      forceLocal: codingMode === "local-only",
+    }),
+    [codingMode, taskExecutionCandidates],
+  );
+  const phoneFallbackInUse = taskExecutionPlacement.lane === "remoteless" && (
+    !!selectedPhoneCheckout || tasks.some((task) => task.source === "phone-local" && (task.status === "running" || task.status === "queued"))
+  );
+
+  // A reconnected primary/secondary resumes precedence immediately. Keeping a
+  // stale phone checkout selected made the next Send silently bypass the box.
+  useEffect(() => {
+    if (taskExecutionPlacement.lane === "remote" && selectedPhoneCheckout) {
+      setSelectedPhoneCheckout(null);
+    }
+  }, [selectedPhoneCheckout, taskExecutionPlacement.lane]);
 
   useEffect(() => {
     if (!isEffectivelyConnected) return;
@@ -6121,6 +6376,27 @@ export default function TasksScreen() {
         <RemoteBoxBanner
           extra={
             <>
+              {taskExecutionPlacement.lane === "remote" && taskExecutionPlacement.banner ? (
+                <View style={s.bannerActionRow}>
+                  <Ionicons name="git-compare-outline" size={14} color={c.warn} />
+                  <Text style={[s.bannerStatusCopy, { color: c.warn, flex: 1 }]} numberOfLines={2}>
+                    {taskExecutionPlacement.banner}
+                  </Text>
+                </View>
+              ) : phoneFallbackInUse ? (
+                <View style={s.bannerActionRow}>
+                  <Ionicons name="phone-portrait-outline" size={14} color={c.warn} />
+                  <Text style={[s.bannerStatusCopy, { color: c.warn, flex: 1 }]} numberOfLines={2}>
+                    {taskExecutionPlacement.banner}
+                  </Text>
+                  <Pressable
+                    style={[s.bannerInlineBtn, { backgroundColor: c.accentSoft }]}
+                    onPress={() => taskRouter.navigate("/devices" as any)}
+                  >
+                    <Text style={[s.bannerInlineBtnText, { color: c.accent }]}>Devices</Text>
+                  </Pressable>
+                </View>
+              ) : null}
               {showReconnectProgress || showRetryButton ? (
                 <View style={s.bannerActionRow}>
                   {showReconnectProgress ? (
@@ -6500,6 +6776,13 @@ export default function TasksScreen() {
                 icon="file-tray-outline"
                 title="All Clear"
                 body="No tasks yet. Start one and it runs on your machine."
+                action={{ label: "New task", onPress: openCreateTask }}
+              />
+            ) : codingMode === "local-only" ? (
+              <EmptyState
+                icon="phone-portrait-outline"
+                title="Code on this phone"
+                body="Choose a phone checkout and use DeepSeek. Remote builds, shells, tests, previews, and deploys stay off."
                 action={{ label: "New task", onPress: openCreateTask }}
               />
             ) : devices.length === 1 && connectionStatus === "connecting" ? (
@@ -7023,7 +7306,22 @@ export default function TasksScreen() {
                     at task creation, not only after the task starts. */}
                 {showTaskOptions ? <>
                 <View style={s.modalTargetRow}>
-                  {pendingTarget ? (
+                  {codingMode === "local-only" ? (
+                    // Remoteless is an explicit execution target, not an
+                    // offline machine state. Never offer "Pick a machine"
+                    // here: this turn runs on the phone with DeepSeek.
+                    <View
+                      style={[
+                        s.agentBadge,
+                        { backgroundColor: c.bgCardElevated, borderColor: c.accent, flexShrink: 1 },
+                      ]}
+                      accessibilityLabel="This phone, DeepSeek"
+                    >
+                      <Text style={[s.agentBadgeText, { color: c.textSecondary, flexShrink: 1 }]} numberOfLines={1}>
+                        This phone · DeepSeek
+                      </Text>
+                    </View>
+                  ) : pendingTarget ? (
                     // Locked target chip: when the wizard chose this
                     // device + runner, the picker is non-interactive so
                     // the user can't accidentally redirect a single task
@@ -7084,7 +7382,7 @@ export default function TasksScreen() {
                       Only the agents actually installed on this box are
                       offered, so the picker never lists something that can't
                       run. Hidden while a wizard-locked target is bound. */}
-                  {!pendingTarget && (availableRunners.length > 0 || !!selectedRunner) && (
+                  {codingMode !== "local-only" && !pendingTarget && (availableRunners.length > 0 || !!selectedRunner) && (
                     <Pressable
                       hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                       style={({ pressed }) => [
@@ -7193,9 +7491,6 @@ export default function TasksScreen() {
                     value={newTaskText}
                     onChangeText={(t) => { newTaskTextRef.current = t; setNewTaskText(t); setInputFromSpeech(false); }}
                     multiline numberOfLines={4} textAlignVertical="top" autoFocus
-                    returnKeyType="send"
-                    blurOnSubmit
-                    onSubmitEditing={() => { void handleCreateTask(); }}
                     autoCorrect={textCorrectionEnabled}
                     autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
                   />
@@ -8058,7 +8353,20 @@ export default function TasksScreen() {
                         {renderSkipNotice}
                       </Text>
                       <Pressable
-                        onPress={() => setRenderSkipNotice(null)}
+                        onPress={() => {
+                          if (!renderReady) {
+                            setRenderSkipNotice(null);
+                            return;
+                          }
+                          setRenderReady(false);
+                          setRenderSkipNotice(null);
+                          void rerenderActivePreviewSurface({
+                            source: "mobile-explicit-render",
+                            workDir: selectedTask?.workDir || projectDir || undefined,
+                            taskStatus: selectedTask?.status,
+                            autoRenderEnabled: true,
+                          });
+                        }}
                         style={{
                           marginTop: 8,
                           alignSelf: "flex-start",
@@ -8070,7 +8378,7 @@ export default function TasksScreen() {
                         }}
                       >
                         <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>
-                          Dismiss
+                          {renderReady ? "Render updates" : "Dismiss"}
                         </Text>
                       </Pressable>
                     </View>
@@ -8349,6 +8657,50 @@ export default function TasksScreen() {
                           live={rawLive}
                           rawVersion={rawVersion}
                         />
+                        {isPhoneLocalTask(selectedTask) && selectedTask.localCheckoutId && !isRunning ? (
+                          <View style={{ marginTop: 12 }}>
+                            <Pressable
+                              onPress={() => setLocalGitExpandedTaskId((current) => current === selectedTask.id ? null : selectedTask.id)}
+                              accessibilityRole="button"
+                              accessibilityLabel="Review and deliver phone-local changes"
+                              accessibilityState={{ expanded: localGitExpandedTaskId === selectedTask.id }}
+                              style={{
+                                minHeight: 48,
+                                borderWidth: 1,
+                                borderColor: c.border,
+                                borderRadius: 12,
+                                backgroundColor: c.bgCard,
+                                paddingHorizontal: 14,
+                                flexDirection: "row",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                              }}
+                            >
+                              <View style={{ flex: 1 }}>
+                                <Text style={{ color: c.textPrimary, fontWeight: "700" }}>Review &amp; deliver</Text>
+                                <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>Diff, commit, branch, and push from this task</Text>
+                              </View>
+                              <Ionicons
+                                name={localGitExpandedTaskId === selectedTask.id ? "chevron-up" : "chevron-down"}
+                                size={18}
+                                color={c.textMuted}
+                              />
+                            </Pressable>
+                            {localGitExpandedTaskId === selectedTask.id ? (
+                              <View style={{ marginTop: 8 }}>
+                                <SandboxGitPanel
+                                  slug={selectedTask.localCheckoutId}
+                                  embedded
+                                  onChanged={() => {
+                                    setSelectedTask((current) => current?.id === selectedTask.id
+                                      ? { ...current, status: "review" as TaskStatus, updatedAt: Date.now() }
+                                      : current);
+                                  }}
+                                />
+                              </View>
+                            ) : null}
+                          </View>
+                        ) : null}
                         <CommandsPanel models={cmdCardsByTask[selectedTask.id]} />
                         <DebugSection task={selectedTask} connMode={connMode} c={c} />
                       </>
@@ -8496,9 +8848,6 @@ export default function TasksScreen() {
                       value={followUpText}
                       onChangeText={(t) => { followUpTextRef.current = t; setFollowUpText(t); setInputFromSpeech(false); }}
                       multiline numberOfLines={4} textAlignVertical="top" autoFocus
-                      returnKeyType="send"
-                      blurOnSubmit
-                      onSubmitEditing={() => { void handleFollowUp(); }}
                       autoCorrect={textCorrectionEnabled}
                       autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
                     />

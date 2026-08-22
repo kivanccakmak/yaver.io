@@ -194,6 +194,8 @@ function RemoteWindowStack({ cfg }: { cfg: BridgeConfig }) {
             cfg={cfg}
             sessionId={s.id}
             deviceId={s.deviceId}
+            sessionStatus={s.status}
+            sessionNote={s.note}
             url={s.url}
             title={s.title}
             position={[x, Y, z]}

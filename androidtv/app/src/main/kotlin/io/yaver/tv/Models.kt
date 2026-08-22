@@ -99,6 +99,7 @@ data class UserSettings(
     val relayUrl: String? = null,
     val relayPassword: String? = null,
     val primaryDeviceId: String? = null,
+    val secondaryDeviceId: String? = null,
     val primaryRunnerByDevice: Map<String, String>? = null,
     val defaultRuntimeProjectByDevice: Map<String, Map<String, String>>? = null,
     val mcpServersByDevice: Map<String, Map<String, Any>>? = null,

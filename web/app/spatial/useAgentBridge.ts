@@ -267,6 +267,7 @@ export interface GlassPCSession {
   framework: string;
   targetId: string;
   status: string;
+  note?: string;
   url?: string;
   title?: string;
 }
@@ -299,6 +300,7 @@ export function useGlassPCSessions(cfg: BridgeConfig | null): {
             framework: String(s.framework),
             targetId: String(s.targetId),
             status: String(s.status ?? ""),
+            note: typeof s.note === "string" ? s.note : undefined,
             url: typeof s.note === "string" && s.note.startsWith("navigated to ") ? s.note.slice(13) : undefined,
             title: undefined,
           }));

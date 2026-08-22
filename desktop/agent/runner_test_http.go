@@ -203,6 +203,7 @@ func (s *HTTPServer) handleRunnerTest(w http.ResponseWriter, r *http.Request) {
 	}
 	output, err := runRunnerProbe(cfg, runnerID, prompt, timeout)
 	duration := time.Since(started).Milliseconds()
+	observeRunnerProbeOutcome(runnerID, output, err)
 	if err != nil {
 		combined := strings.TrimSpace(output) + "\n" + err.Error()
 		result := runnerTestResult{
@@ -229,6 +230,20 @@ func (s *HTTPServer) handleRunnerTest(w http.ResponseWriter, r *http.Request) {
 		DurationMs: duration,
 		Model:      cfg.Model,
 	})
+}
+
+// observeRunnerProbeOutcome closes the loop between the explicit Test action
+// and every readiness surface. A successful provider generation is stronger
+// evidence than any local credential inventory, so persist it in the same
+// in-memory proof ledger consumed by /runner-auth/status and
+// /mobile-workspace/status. Before this wiring, Test returned ok:true while the
+// next readiness poll still said verification_required forever.
+func observeRunnerProbeOutcome(runnerID, output string, err error) {
+	if err == nil {
+		MarkRunnerAuthProven(runnerID)
+		return
+	}
+	ObserveRunnerAuthFromOutput(runnerID, strings.TrimSpace(output)+"\n"+err.Error(), string(TaskStatusFailed))
 }
 
 // runRunnerProbe builds the per-runner argv for a one-shot test

@@ -59,6 +59,17 @@ export interface ConversationTurn {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
+  hidden?: boolean;
+}
+
+export type ProjectStartGitProvider = "yaver-git" | "github" | "gitlab";
+
+export interface ProjectStartResult {
+  ok: boolean;
+  directory: string;
+  gitProvider: ProjectStartGitProvider;
+  palette: string;
+  task: Task;
 }
 
 export interface PendingFollowUp {
@@ -2431,6 +2442,33 @@ export class AgentClient {
     const data = await res.json().catch(() => ({}));
     const task = await this.getTask(data.taskId);
     return { ...task, capabilityGap: data.capabilityGap || task.capabilityGap };
+  }
+
+  /** Initialize a project and atomically begin its hidden Developing kickoff.
+   *  This route is shared by web, Electron, TV, spatial, and native clients. */
+  async startProject(params: {
+    name: string;
+    gitProvider?: ProjectStartGitProvider;
+    palette?: string;
+  }): Promise<ProjectStartResult> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(
+      `${this.taskBaseUrl}/project/start`,
+      {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: params.name,
+          gitProvider: params.gitProvider || "yaver-git",
+          palette: params.palette || "ocean",
+        }),
+      },
+      60_000,
+    );
+    if (!res.ok) {
+      throw new Error(await responseErrorMessage(res, `Could not start project: ${res.status}`));
+    }
+    return res.json() as Promise<ProjectStartResult>;
   }
 
   async listTasks(limit?: number): Promise<Task[]> {
@@ -5243,15 +5281,62 @@ export class AgentClient {
     return res.json();
   }
 
+  async prepareRemoteRuntimeBrowserLane(workDir: string, framework: string): Promise<void> {
+    const ready = (status: Awaited<ReturnType<AgentClient["getDevServerStatus"]>>): boolean => {
+      if (!status?.running || status.error) return false;
+      if (status.workDir && workDir && status.workDir !== workDir) return false;
+      const fw = framework.trim().toLowerCase();
+      return fw === "expo" || fw === "react-native"
+        ? Number(status.webPort || 0) > 0
+        : Number(status.port || 0) > 0;
+    };
+    let status = await this.getDevServerStatus();
+    if (!ready(status)) {
+      await this.startDevServer({ framework, workDir, platform: "web" });
+    }
+    const deadline = Date.now() + 150_000;
+    let siblingStartAttempted = false;
+    while (Date.now() < deadline) {
+      status = await this.getDevServerStatus();
+      if (ready(status)) return;
+      if ((framework.trim().toLowerCase() === "expo" || framework.trim().toLowerCase() === "react-native") && status?.running && !siblingStartAttempted) {
+        siblingStartAttempted = true;
+        await this.startWebPreview();
+      }
+      if (status?.error && !status.serving) {
+        throw new Error(`Browser runtime could not start: ${status.error}`);
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 600));
+    }
+    throw new Error("Browser runtime did not expose a usable web port within 150 seconds.");
+  }
+
   async startRemoteRuntimeSession(workDir: string, framework: string, targetId: string, transportMode?: string): Promise<RemoteRuntimeSession> {
     this.assertConnected();
+    if (targetId === "browser-window") {
+      await this.prepareRemoteRuntimeBrowserLane(workDir, framework);
+    }
+    let clientId = "web-anonymous";
+    if (typeof window !== "undefined") {
+      const generated = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      try {
+        const key = "yaver.remoteRuntime.clientId";
+        clientId = window.localStorage.getItem(key) || generated;
+        window.localStorage.setItem(key, clientId);
+      } catch {
+        clientId = generated;
+      }
+    }
     const res = await fetch(`${this.devBaseUrl}/remote-runtime/sessions`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ workDir, framework, targetId, transportMode }),
+      body: JSON.stringify({ workDir, framework, targetId, transportMode, clientId, surface: "web" }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to start remote runtime session: HTTP ${res.status}`);
+    if (targetId === "browser-window" && ["waiting-for-dev-server", "attach-failed", "navigate-failed", "failed"].includes(String(data?.status))) {
+      throw new Error(data?.note || `Browser runtime session failed with status ${data?.status}.`);
+    }
     return data as RemoteRuntimeSession;
   }
 

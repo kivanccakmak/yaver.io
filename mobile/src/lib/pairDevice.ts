@@ -2,10 +2,11 @@
 // target that's running `yaver auth pair`.
 //
 // Flow:
-//   1. Target prints a 6-char passkey and its reachable URLs.
-//   2. User opens Yaver mobile → More → Pair a device.
-//   3. User enters the passkey + target URL.
-//   4. Mobile POSTs {token, convexSiteUrl, userId} to
+//   1. Target prints a short-lived QR, 6-char passkey, and reachable URLs.
+//   2. User opens Yaver mobile → More → Pair Machine → Scan QR.
+//   3. Mobile decodes the target + passkey and asks for confirmation.
+//      Manual passkey/URL entry remains the fallback.
+//   4. After confirmation, mobile POSTs {token, convexSiteUrl, userId} to
 //      {targetUrl}/auth/pair/submit?code=XXXXXX.
 //   5. Target saves the token and goes online.
 //

@@ -206,7 +206,7 @@ var wizardQuestions = []WizardQuestion{
 	{ID: "legal_privacy_notes", Kind: QText, Prompt: "Extra privacy / compliance notes", Help: "Optional short notes like local-only processing, no third-party ads, or export-delete support.", Default: ""},
 
 	// Git remote — create + push the fresh monorepo.
-	{ID: "git_provider", Kind: QChoice, Prompt: "Yaver Git remote mirror", Help: "Yaver creates the local monorepo first. Pick GitHub/GitLab as the remote mirror, or none to keep it local.", Choices: []string{"github", "gitlab", "none"}, Default: "github"},
+	{ID: "git_provider", Kind: QChoice, Prompt: "Where should Yaver keep this project?", Help: "Yaver Git keeps private managed history on your selected box. GitHub and GitLab create the project in your connected provider account.", Choices: []string{"yaver-git", "github", "gitlab"}, Default: "yaver-git"},
 	{ID: "git_visibility", Kind: QChoice, Prompt: "Repo visibility", Choices: []string{"private", "public"}, Default: "private"},
 	{ID: "git_org", Kind: QText, Prompt: "GitHub org / GitLab group (blank = your personal account)", Default: ""},
 	{ID: "git_repo_name", Kind: QText, Prompt: "Repo name", Help: "Defaults to the slug you picked above.", Default: ""},
@@ -386,8 +386,11 @@ func nextQuestion(sess *WizardSession) *WizardQuestion {
 			sess.Answers[q.ID] = "none"
 			continue
 		}
-		// Git questions collapse to nothing when provider=none
-		if (q.ID == "git_visibility" || q.ID == "git_org" || q.ID == "git_repo_name") && sess.Answers["git_provider"] == "none" {
+		// Yaver Git is a private managed repository and needs none of the
+		// external-host naming fields. Keep `none` as a compatibility value for
+		// older callers, but no current initializer offers it.
+		if (q.ID == "git_visibility" || q.ID == "git_org" || q.ID == "git_repo_name") &&
+			(sess.Answers["git_provider"] == "yaver-git" || sess.Answers["git_provider"] == "none") {
 			sess.Answers[q.ID] = ""
 			continue
 		}
@@ -465,7 +468,17 @@ func GenerateProject(id, parentDir string) (*ProjectGenerationResult, error) {
 		a["tagline"] = deriveTagline(base, a["app_name"])
 	}
 	if parentDir == "" {
-		parentDir, _ = os.Getwd()
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("resolve home directory for project workspace: %w", err)
+		}
+		if strings.TrimSpace(homeDir) == "" {
+			return nil, fmt.Errorf("resolve home directory for project workspace: empty path")
+		}
+		parentDir = filepath.Join(homeDir, "Workspace")
+	}
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create project workspace %s: %w", parentDir, err)
 	}
 	dir := filepath.Join(parentDir, slug)
 	if _, err := os.Stat(dir); err == nil {
@@ -688,7 +701,14 @@ func GenerateProject(id, parentDir string) (*ProjectGenerationResult, error) {
 	// --- Git init + push ---
 	gitInit(dir)
 	pushResult := ""
-	if a["git_provider"] != "" && a["git_provider"] != "none" {
+	if a["git_provider"] == "yaver-git" {
+		if _, err := EnsureManagedGitForProject(dir, a["slug"], a["app_name"], &ManagedGitCreateOptions{
+			Enabled: true, Visibility: "private",
+		}); err != nil {
+			return nil, fmt.Errorf("initialize Yaver Git: %w", err)
+		}
+		pushResult = "Yaver Git · private managed history"
+	} else if a["git_provider"] != "" && a["git_provider"] != "none" {
 		if url, err := createRemoteRepo(a); err == nil {
 			if err := gitPushInitial(dir, url); err == nil {
 				pushResult = url

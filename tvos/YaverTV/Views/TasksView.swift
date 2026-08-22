@@ -187,7 +187,7 @@ struct TasksView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 760, alignment: .leading)
             if store.taskRuntimePlan().kind == .boxlessUnavailable {
-                Text("Boxless Git+coding is an optional executor and is not configured on this TV yet. Nothing was sent and no render machine was probed.")
+                Text("remoteless.code-edit.unavailable · This TV's fallback is analysis/chat only. Nothing was sent. Use a primary/secondary runner for Git editing, or open the analysis fallback below.")
                     .font(.system(size: 16))
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: 760, alignment: .leading)

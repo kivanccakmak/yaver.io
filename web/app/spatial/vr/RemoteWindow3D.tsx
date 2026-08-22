@@ -26,6 +26,8 @@ interface Props {
   cfg: BridgeConfig;
   sessionId: string;
   deviceId: string;
+  sessionStatus: string;
+  sessionNote?: string;
   url?: string;
   title?: string;
   position: [number, number, number];
@@ -45,6 +47,8 @@ export function RemoteWindow3D({
   cfg,
   sessionId,
   deviceId,
+  sessionStatus,
+  sessionNote,
   url,
   title,
   position,
@@ -72,6 +76,11 @@ export function RemoteWindow3D({
   // runtime target supports today.
   useEffect(() => {
     if (!cfg.agentUrl || !cfg.token || !sessionId) return;
+    if (["waiting-for-dev-server", "attach-failed", "navigate-failed", "failed"].includes(sessionStatus)) {
+      setStatus("failed");
+      setStatusDetail(sessionNote || `Browser runtime is ${sessionStatus}.`);
+      return;
+    }
     const canvas = document.createElement("canvas");
     canvas.width = 1280;
     canvas.height = 800;
@@ -83,6 +92,7 @@ export function RemoteWindow3D({
     textureRef.current = tex;
 
     let cancelled = false;
+    let blankSince = 0;
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
@@ -136,6 +146,29 @@ export function RemoteWindow3D({
           if (!ctx) return;
           ctx.drawImage(bitmap, 0, 0);
           bitmap.close?.();
+          const sample = document.createElement("canvas");
+          sample.width = 12;
+          sample.height = 12;
+          const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
+          if (sampleCtx) {
+            sampleCtx.drawImage(c, 0, 0, 12, 12);
+            const pixels = sampleCtx.getImageData(0, 0, 12, 12).data;
+            let min = 255, max = 0, sum = 0;
+            for (let i = 0; i < pixels.length; i += 4) {
+              const y = Math.round(pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114);
+              min = Math.min(min, y); max = Math.max(max, y); sum += y;
+            }
+            const average = sum / (pixels.length / 4);
+            if (max - min <= 6 && (average <= 12 || average >= 243)) {
+              blankSince ||= Date.now();
+              setStatus("offering");
+              setStatusDetail(Date.now() - blankSince >= 8_000
+                ? "Blank frames: the project runtime did not render usable pixels."
+                : "Waiting for usable app pixels…");
+              return;
+            }
+            blankSince = 0;
+          }
           const t = textureRef.current;
           if (t) t.needsUpdate = true;
         } catch (err) {
@@ -213,7 +246,7 @@ export function RemoteWindow3D({
       canvasRef.current = null;
       textureRef.current = null;
     };
-  }, [cfg.agentUrl, cfg.token, sessionId]);
+  }, [cfg.agentUrl, cfg.token, sessionId, sessionNote, sessionStatus]);
 
   // Tick the texture once per frame so the CanvasTexture commits
   // its latest drawImage call. We don't fight VR frame pacing — the

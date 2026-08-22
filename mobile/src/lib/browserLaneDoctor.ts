@@ -55,7 +55,7 @@ export function reconcileBrowserLaneProbe(
     ok: false,
     stage: "client-render",
     detail: `The box rendered locally, but this device reports ${reason} (${clientDetail}).`,
-    remedy: "The phone did not receive or execute the complete browser bundle. Retry the preview; if a script keeps failing, use Fix in Yaver from Preview logs.",
+    remedy: "The phone did not receive or execute the complete browser bundle. Retry the preview; if a script keeps failing, open Logs and use Fix in Yaver.",
   };
 }
 

@@ -119,6 +119,11 @@ run_client_ts() {
 
 run_headless() {
   section "Headless Client Surrogates"
+  if need node && [[ -x scripts/test-deepseek-headless.sh ]] && [[ -x backend/node_modules/.bin/esbuild ]]; then
+    run_step "DeepSeek request compatibility (hermetic)" ./scripts/test-deepseek-headless.sh --hermetic
+  else
+    skip_step "DeepSeek request compatibility (hermetic)" "node, backend esbuild, or probe script missing"
+  fi
   if need bun && [[ -d mobile-headless/node_modules ]]; then
     run_step "mobile-headless bun test" bash -lc "cd mobile-headless && bun test"
   else

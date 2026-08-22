@@ -79,6 +79,11 @@ fun TasksScreen(store: TvStore, nav: NavHostController) {
         BackBar("Tasks", box?.name?.let { "Coding work on $it" }, onBack = { nav.popBackStack() })
         TvTextButton("Refresh", onClick = ::reload)
         when {
+            box == null -> {
+                Text("remoteless.code-edit.unavailable", color = TvColors.Orange, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("Android TV has no phone-local repository or safe background coding runtime. Choose your primary/secondary machine; use Cloud Workspace when neither can provide the required capability.", color = TvColors.TextSecondary, fontSize = 20.sp)
+                TvTextButton("Choose a capable device", onClick = { nav.navigate(Routes.MACHINES) })
+            }
             loading -> Text("Loading tasks…", color = TvColors.TextSecondary, fontSize = 22.sp)
             error != null -> ErrorPanel(error!!, onRetry = ::reload)
             tasks.isEmpty() -> Text("No tasks on this machine yet.", color = TvColors.TextSecondary, fontSize = 22.sp)
@@ -170,7 +175,16 @@ fun SessionScreen(store: TvStore, nav: NavHostController) {
 
 @Composable
 fun VibingScreen(store: TvStore, nav: NavHostController) {
-    placeholder(Modifier, "Vibing")
+    val box by store.selectedBox.collectAsState()
+    Column(
+        modifier = Modifier.fillMaxSize().background(TvColors.Bg).padding(56.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        BackBar("Vibing", box?.name?.let { "Render on $it" }, onBack = { nav.popBackStack() })
+        Text("remoteless.dev-server.unavailable", color = TvColors.Orange, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text("This TV can display an already-served preview, but cannot run a shell, package manager, Flutter SDK, dev server, simulator, build, test, or deploy. Use the primary/secondary render machine or Cloud Workspace.", color = TvColors.TextSecondary, fontSize = 20.sp)
+        TvTextButton("Choose a capable device", onClick = { nav.navigate(Routes.MACHINES) })
+    }
 }
 
 @Composable

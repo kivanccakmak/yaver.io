@@ -85,6 +85,7 @@ export default function RemoteRuntimeViewer({
   // can revoke it before swapping in the next frame. Without this
   // we'd leak ~80 KB per frame at 1.4 FPS = a slow but real OOM.
   const jpegUrlRef = useRef<string | null>(null);
+  const blankFrameSinceRef = useRef<number | null>(null);
   // Non-scalar session fields + parent callbacks are read through refs so the
   // lifecycle effect can key on SCALARS only. session.deviceDims is a freshly
   // parsed object on every /webrtc/offer response — having it in the effect
@@ -258,6 +259,39 @@ export default function RemoteRuntimeViewer({
         jpegDecodePending = false;
         jpegUrlRef.current = url;
         if (previousUrl) URL.revokeObjectURL(previousUrl);
+        try {
+          const sample = document.createElement("canvas");
+          sample.width = 12;
+          sample.height = 12;
+          const ctx = sample.getContext("2d", { willReadFrequently: true });
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, 12, 12);
+            const pixels = ctx.getImageData(0, 0, 12, 12).data;
+            let min = 255;
+            let max = 0;
+            let sum = 0;
+            for (let i = 0; i < pixels.length; i += 4) {
+              const y = Math.round(pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114);
+              min = Math.min(min, y);
+              max = Math.max(max, y);
+              sum += y;
+            }
+            const average = sum / (pixels.length / 4);
+            if (max - min <= 6 && (average <= 12 || average >= 243)) {
+              blankFrameSinceRef.current ??= Date.now();
+              const age = Date.now() - blankFrameSinceRef.current;
+              setConnected(false);
+              setViewerNote(age >= 8_000
+                ? "The box is sending blank frames. The project runtime did not render usable pixels."
+                : "Connected, waiting for usable app pixels…");
+              return;
+            }
+          }
+          blankFrameSinceRef.current = null;
+        } catch {
+          // A canvas diagnostic must not suppress a valid frame on browsers
+          // that disallow reading pixels from a decoded blob.
+        }
         setConnected(true);
         setMediaState("jpeg");
         markFrame();
@@ -297,6 +331,7 @@ export default function RemoteRuntimeViewer({
       setMediaState("waiting");
       setIceCandidateCount(0);
       lastFrameStampRef.current = 0;
+      blankFrameSinceRef.current = null;
       setLastFrameAt(null);
       setFallbackNote(null);
 
@@ -392,13 +427,45 @@ export default function RemoteRuntimeViewer({
           setMediaState("track");
           videoRef.current.onloadedmetadata = () => {
             setMediaState("metadata");
+          };
+          const verifyVideoPixels = () => {
+            const video = videoRef.current;
+            if (!video || !video.videoWidth || !video.videoHeight) return;
+            try {
+              const sample = document.createElement("canvas");
+              sample.width = 12;
+              sample.height = 12;
+              const ctx = sample.getContext("2d", { willReadFrequently: true });
+              if (!ctx) return;
+              ctx.drawImage(video, 0, 0, 12, 12);
+              const pixels = ctx.getImageData(0, 0, 12, 12).data;
+              let min = 255, max = 0, sum = 0;
+              for (let i = 0; i < pixels.length; i += 4) {
+                const y = Math.round(pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114);
+                min = Math.min(min, y); max = Math.max(max, y); sum += y;
+              }
+              const average = sum / (pixels.length / 4);
+              if (max - min <= 6 && (average <= 12 || average >= 243)) {
+                blankFrameSinceRef.current ??= Date.now();
+                setConnected(false);
+                setViewerNote(Date.now() - blankFrameSinceRef.current >= 8_000
+                  ? "The H.264 stream is blank. The project runtime did not render usable pixels."
+                  : "Connected, waiting for usable app pixels…");
+                return;
+              }
+              blankFrameSinceRef.current = null;
+            } catch {
+              // MediaStream canvas reads are normally permitted. If a browser
+              // refuses, do not let the diagnostic suppress the live stream.
+            }
+            setConnected(true);
             markFrame();
           };
           videoRef.current.onplaying = () => {
             setMediaState("playing");
-            markFrame();
+            verifyVideoPixels();
           };
-          videoRef.current.ontimeupdate = () => markFrame();
+          videoRef.current.ontimeupdate = verifyVideoPixels;
           void videoRef.current.play().catch(() => {
             /* user gesture required — handled by tap on the surface */
             setMediaState("blocked");

@@ -86,6 +86,50 @@ class SandboxModule(private val ctx: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun beginRemotelessTask(id: String, title: String, phase: String, promise: Promise) {
+    try {
+      val intent = Intent(ctx, RemotelessTaskService::class.java).apply {
+        action = RemotelessTaskService.ACTION_START
+        putExtra(RemotelessTaskService.EXTRA_ID, id)
+        putExtra(RemotelessTaskService.EXTRA_TITLE, title)
+        putExtra(RemotelessTaskService.EXTRA_PHASE, phase)
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(intent) else ctx.startService(intent)
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("remoteless_start_failed", e.message, e)
+    }
+  }
+
+  @ReactMethod
+  fun updateRemotelessTask(id: String, phase: String, promise: Promise) {
+    try {
+      ctx.startService(Intent(ctx, RemotelessTaskService::class.java).apply {
+        action = RemotelessTaskService.ACTION_UPDATE
+        putExtra(RemotelessTaskService.EXTRA_ID, id)
+        putExtra(RemotelessTaskService.EXTRA_PHASE, phase)
+      })
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("remoteless_update_failed", e.message, e)
+    }
+  }
+
+  @ReactMethod
+  fun endRemotelessTask(id: String, status: String, promise: Promise) {
+    try {
+      ctx.startService(Intent(ctx, RemotelessTaskService::class.java).apply {
+        action = RemotelessTaskService.ACTION_FINISH
+        putExtra(RemotelessTaskService.EXTRA_ID, id)
+        putExtra(RemotelessTaskService.EXTRA_STATUS, status)
+      })
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("remoteless_finish_failed", e.message, e)
+    }
+  }
+
+  @ReactMethod
   fun openFactoryResetSettings(promise: Promise) {
     try {
       val i = Intent(Settings.ACTION_PRIVACY_SETTINGS).apply {

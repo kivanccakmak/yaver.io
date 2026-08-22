@@ -71,8 +71,9 @@ export function shortAgentVersion(version: string): string {
 
 function RemoteBoxBannerInner({ extra, onDeviceChange, disableTap }: RemoteBoxBannerProps) {
   const c = useColors();
-  const { activeDevice, devices, connectionStatus, connectedDeviceIds, primaryDeviceId, secondaryDeviceId, deviceListError, everHadDevices, isLoadingDevices, refreshDevices, autoConnecting, autoConnectTarget, cancelAutoConnect } = useDevice();
+  const { activeDevice, devices, connectionStatus, connectedDeviceIds, primaryDeviceId, secondaryDeviceId, deviceListError, everHadDevices, isLoadingDevices, refreshDevices, autoConnecting, autoConnectTarget, cancelAutoConnect, codingMode } = useDevice();
   const { token } = useAuth();
+  const remotelessSelected = codingMode === "local-only";
 
   // Live reachability of the focused device (transport truth). Computed up
   // front so the wake/park lifecycle hook can tell "booting" from "online".
@@ -164,14 +165,21 @@ function RemoteBoxBannerInner({ extra, onDeviceChange, disableTap }: RemoteBoxBa
   // …and a signed-out agent is never "connected", however good the transport
   // looks. Demote it to `error` so the row is red + actionable instead of a
   // green promise the box cannot keep.
-  const effective = noDevicesYet
+  const effective = remotelessSelected
+    ? "disconnected"
+    : noDevicesYet
     ? "disconnected"
     : needsSignIn
     ? "error"
     : activeDevice
     ? (activeLive ? "connected" : connectionStatus === "error" ? "error" : "connecting")
     : deriveEffectiveConnectionState(connectionStatus, connectedDeviceIds);
-  const palette: BannerPalette = {
+  const palette: BannerPalette = remotelessSelected ? {
+    stripe: c.accent,
+    dot: c.accent,
+    text: c.textSecondary,
+    label: "No remote box",
+  } : ({
     connected: { stripe: c.success, dot: c.success, text: c.textSecondary, label: "Connected" },
     connecting: { stripe: c.warn, dot: c.warn, text: c.textSecondary, label: activeLive ? "Reconnecting" : "Connecting" },
     // "Disconnected" would be its own small lie for a signed-out box — it IS
@@ -184,7 +192,7 @@ function RemoteBoxBannerInner({ extra, onDeviceChange, disableTap }: RemoteBoxBa
       label: needsSignIn ? "Needs sign-in" : "Disconnected",
     },
     disconnected: { stripe: c.textMuted, dot: c.textMuted, text: c.textSecondary, label: "Disconnected" },
-  }[effective];
+  }[effective]);
 
   // Lead with the focused device name so the user sees immediately
   // which box this tab is reading from. When no device is selected
@@ -199,7 +207,7 @@ function RemoteBoxBannerInner({ extra, onDeviceChange, disableTap }: RemoteBoxBa
   // selected" — the user is connecting, not stranded.
   const autoStatus = autoConnecting ? autoConnectBannerStatus(autoConnectTarget) : null;
   const deviceLabel =
-    activeDevice?.name?.trim() ||
+    (remotelessSelected ? "This phone · DeepSeek + Git" : activeDevice?.name?.trim()) ||
     (autoStatus
       ? autoStatus.detail
       : stillLooking
@@ -207,12 +215,12 @@ function RemoteBoxBannerInner({ extra, onDeviceChange, disableTap }: RemoteBoxBa
         : noDevicesYet
           ? "No remote device added"
           : "No device selected");
-  const ctaLabel = activeDevice ? "Switch" : noDevicesYet ? "Add" : "Pick";
+  const ctaLabel = remotelessSelected ? "Switch" : activeDevice ? "Switch" : noDevicesYet ? "Add" : "Pick";
   // "Pool is warm but you haven't chosen which box runs your tasks" is its own
   // state — painting it green "Connected" (because some pooled client is live)
   // while the row also says "No device selected" reads as a contradiction. Flag
   // it as an attention state with a prominent CTA so the next action is obvious.
-  const needsPick = !activeDevice && !noDevicesYet && !autoConnecting;
+  const needsPick = !remotelessSelected && !activeDevice && !noDevicesYet && !autoConnecting;
   const roleLabel =
     activeDevice?.id === primaryDeviceId
       ? "Primary"
@@ -243,7 +251,7 @@ function RemoteBoxBannerInner({ extra, onDeviceChange, disableTap }: RemoteBoxBa
               <View style={styles.statusLine}>
                 <View style={[styles.dot, { backgroundColor: running ? (lifecycle.phase === "error" ? c.error : c.accent) : autoConnecting ? c.accent : needsPick ? c.warn : asleep ? c.accent : palette.dot }]} />
                 <Text style={[styles.label, { color: running ? (lifecycle.phase === "error" ? c.error : c.accent) : autoConnecting ? c.accent : needsPick ? c.warn : asleep ? c.accent : palette.text }]} numberOfLines={1}>
-                  {noDevicesYet ? "Not set up" : autoConnecting ? autoStatus!.label : needsPick ? "No machine selected" : running ? lifecycle.meta.short : asleep ? "Asleep" : palette.label}
+                  {remotelessSelected ? "No remote box" : noDevicesYet ? "Not set up" : autoConnecting ? autoStatus!.label : needsPick ? "No machine selected" : running ? lifecycle.meta.short : asleep ? "Asleep" : palette.label}
                 </Text>
               </View>
               {roleLabel ? (

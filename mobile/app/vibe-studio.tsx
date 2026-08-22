@@ -63,6 +63,7 @@ export default function VibeStudioScreen() {
   const [previewTargetUrl, setPreviewTargetUrl] = useState<string | null>(null);
   const [previewStarting, setPreviewStarting] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLogState, setPreviewLogState] = useState<{ lines: string[]; live: boolean }>({ lines: [], live: false });
   // Drag-divider split ratio (web parity — WebReloadView/RuntimeLabView). The
   // left preview pane flexes to splitRatio, the right chat pane to 1-splitRatio.
   const [splitRatio, setSplitRatio] = useState(0.55);
@@ -82,19 +83,38 @@ export default function VibeStudioScreen() {
     if (!connected) return;
     setLoadingProjects(true);
     try {
-      const list = await quicClient.listProjects(true);
+      // The running preview is stronger evidence than the discovery inventory.
+      // A nested project may already be serving while listProjects is stale or
+      // has not finished scanning; keep that real workDir selectable.
+      const [list, servingStatus] = await Promise.all([
+        quicClient.listProjects(true),
+        quicClient.getDevServerStatus().catch(() => null),
+      ]);
       const mapped: Project[] = (list || [])
         .map((p) => ({ name: p.name, path: p.path, framework: p.framework, surfaces: p.surfaces }))
         .filter((p) => p.name && p.path);
+      if (servingStatus?.workDir && !mapped.some((candidate) => candidate.path === servingStatus.workDir)) {
+        mapped.unshift({
+          name: servingStatus.workDir.split("/").filter(Boolean).pop() || servingStatus.framework || "Preview",
+          path: servingStatus.workDir,
+          framework: servingStatus.framework,
+          surfaces: servingStatus.platform ? [servingStatus.platform] : undefined,
+        });
+      }
       setProjects(mapped);
       if (!loadedOnceRef.current) {
         loadedOnceRef.current = true;
+        // Older entry points sent the human-facing label ("sfmg / mobile")
+        // instead of the workDir. Accept its project-name prefix so an already
+        // selected preview cannot fall into a false project-picker dead end.
+        const requestedProjectName = requestedProject.split(/\s+\/\s+/)[0]?.trim() || requestedProject;
         const byParam = requestedProject
           ? mapped.find(
               (p) =>
                 p.name.trim().toLowerCase() === requestedProject ||
                 p.path.trim().toLowerCase() === requestedProject ||
-                p.path.trim().toLowerCase().endsWith(`/${requestedProject}`),
+                p.path.trim().toLowerCase().endsWith(`/${requestedProject}`) ||
+                p.name.trim().toLowerCase() === requestedProjectName,
             )
           : undefined;
         if (requestedProject && !byParam) {
@@ -217,16 +237,18 @@ export default function VibeStudioScreen() {
           ))}
         </View>
       ) : null}
-      <Pressable
-        onPress={handleRequestProject}
-        style={[styles.projectBtn, { borderColor: c.border }]}
-        accessibilityRole="button"
-        accessibilityLabel={project ? `Change project, currently ${project.name}` : "Pick project"}
-      >
-        <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "700" }} numberOfLines={1}>
-          {project ? project.name : loadingProjects ? "Loading projects…" : "Pick project"}
-        </Text>
-      </Pressable>
+      {!project && (!requestedProject || Boolean(paramMissed)) ? (
+        <Pressable
+          onPress={handleRequestProject}
+          style={[styles.projectBtn, { borderColor: c.border }]}
+          accessibilityRole="button"
+          accessibilityLabel="Pick project"
+        >
+          <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "700" }} numberOfLines={1}>
+            {loadingProjects ? "Loading projects…" : "Pick project"}
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 
@@ -309,7 +331,11 @@ export default function VibeStudioScreen() {
                   <View style={[styles.emptyPaneFill, { borderColor: c.borderSubtle }]}> 
                     <Ionicons name={mobileTarget ? "phone-portrait-outline" : "browsers-outline"} size={28} color={c.textTertiary} />
                     <Text style={{ color: c.textTertiary, fontSize: 13, marginTop: 8, textAlign: "center" }}>
-                      {project ? "Preview this project beside the conversation." : "Pick a project to open its preview."}
+                      {project
+                        ? "Preview this project beside the conversation."
+                        : requestedProject
+                          ? connected ? "Opening the selected project…" : "Connect the box to open the selected project."
+                          : "Pick a project to open its preview."}
                     </Text>
                     {paramMissed ? (
                       <Text style={{ color: c.warn, fontSize: 12, marginTop: 8, textAlign: "center", paddingHorizontal: 12 }}>
@@ -338,7 +364,7 @@ export default function VibeStudioScreen() {
                   </View>
                   {lane === "browser" ? (
                     <View style={styles.paneHost}>
-                      <DevPreview paneMode />
+                      <DevPreview paneMode onLogStateChange={setPreviewLogState} />
                     </View>
                   ) : project && previewTargetUrl ? (
                     <View style={styles.paneHost}>
@@ -386,6 +412,8 @@ export default function VibeStudioScreen() {
               projectPath={project?.path}
               projectName={project?.name}
               onRequestProject={handleRequestProject}
+              previewLogs={previewLogState.lines}
+              previewLogsLive={previewLogState.live || previewStarting}
             />
           </View>
         </View>
@@ -397,6 +425,8 @@ export default function VibeStudioScreen() {
               projectPath={project?.path}
               projectName={project?.name}
               onRequestProject={handleRequestProject}
+              previewLogs={previewLogState.lines}
+              previewLogsLive={previewLogState.live || previewStarting}
             />
           </View>
           {peekOpen ? (

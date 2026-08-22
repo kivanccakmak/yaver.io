@@ -42,6 +42,7 @@ import * as ExpoLinking from "expo-linking";
 import { getLogEntries, clearLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { quicClient, type AgentStatus, type CapabilitySnapshot, type EnvironmentProfileApplyResult, type GitOAuthStatus, type IncidentEvent, type MachineOnboardingProviderStatus, type RelayServer, type RunnerAuthStatusRow, type TunnelServer } from "../../src/lib/quic";
 import { loadTaskVideoSummaryEnabled, saveTaskVideoSummaryEnabled } from "../../src/lib/taskComposerPrefs";
+import { publishAutoRenderVibing } from "../../src/lib/autoRenderVibing";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
 
 import {
@@ -180,6 +181,8 @@ export default function SettingsScreen() {
     setPrimaryDevice,
     secondaryDeviceId,
     setSecondaryDevice,
+    codingMode,
+    setCodingMode,
   } = useDevice();
   const { isDark, toggleTheme } = useTheme();
   const c = useColors();
@@ -199,6 +202,7 @@ export default function SettingsScreen() {
   // Opening screen. Local copy is authoritative for boot; the account copy in
   // Convex follows so the choice travels between the user's devices.
   const [startupScreen, setStartupScreenState] = useState<StartupScreen>(DEFAULT_STARTUP_SCREEN);
+  const [autoRenderVibing, setAutoRenderVibing] = useState(false);
   useEffect(() => {
     getStartupScreen().then(setStartupScreenState).catch(() => {});
   }, []);
@@ -713,6 +717,8 @@ export default function SettingsScreen() {
       if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled);
       if (s.ttsTaskMode !== undefined) { setTtsTaskMode(s.ttsTaskMode); quicClient.setTtsTaskMode(s.ttsTaskMode); }
       if (s.verbosity !== undefined) setVerbosity(s.verbosity);
+      setAutoRenderVibing(s.autoRenderVibing === true);
+      publishAutoRenderVibing(s.autoRenderVibing === true);
       // Speech config is LOCAL ONLY (provider / key / model / voice in
       // SecureStore, never Convex). loadLocalSpeechConfig is the single
       // source of truth — we deliberately ignore s.speechProvider /
@@ -2070,7 +2076,6 @@ export default function SettingsScreen() {
             change reflects on every signed-in surface immediately. */}
         {(() => {
           const eligible = devices;
-          if (eligible.length === 0) return null;
           const primary = eligible.find((d) => d.id === primaryDeviceId) || null;
           const secondary = eligible.find((d) => d.id === secondaryDeviceId) || null;
           // Build the selection sheet — used for both Change Primary
@@ -2116,6 +2121,38 @@ export default function SettingsScreen() {
               <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Default routing</Text>
               <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
                 <View style={styles.aboutRow}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Execution</Text>
+                    <Text style={[styles.aboutValue, { color: codingMode === "local-only" ? c.warn : c.textMuted, fontSize: 12, marginTop: 2 }]}>
+                      {codingMode === "local-only" ? "No remote box · this phone" : "Remote box preferred"}
+                    </Text>
+                    {codingMode === "local-only" ? (
+                      <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 }}>
+                        DeepSeek and Git run on this phone. Builds, shells, tests, previews, and deploys need a box or Cloud Workspace.
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Pressable
+                    onPress={async () => {
+                      try {
+                        await setCodingMode(codingMode === "local-only" ? "remote-preferred" : "local-only");
+                      } catch (e: any) {
+                        Alert.alert("Couldn't Update Execution", e?.message || "The execution choice could not be saved on this phone.");
+                      }
+                    }}
+                    style={({ pressed }) => [
+                      { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: c.accent + "18" },
+                      pressed && { opacity: 0.6 },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={codingMode === "local-only" ? "Use a remote box" : "Use no remote box"}
+                  >
+                    <Text style={{ color: c.accent, fontWeight: "600", fontSize: 13 }}>
+                      {codingMode === "local-only" ? "Use remote" : "No remote box"}
+                    </Text>
+                  </Pressable>
+                </View>
+                <View style={[styles.aboutRow, { borderTopWidth: 1, borderTopColor: c.border }]}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>★ Primary</Text>
                     <Text style={[styles.aboutValue, { color: c.textMuted, fontSize: 12, marginTop: 2 }]}>
@@ -3849,6 +3886,35 @@ export default function SettingsScreen() {
                 </Pressable>
               );
             })}
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Vibing</Text>
+          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+            <View style={styles.aboutRow}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Auto-render Vibing mode</Text>
+                <Text style={[styles.aboutValue, { color: c.textMuted, fontSize: 12, marginTop: 3 }]}>
+                  Off by default. When on, Yaver may render after the agent reports UI-visible changes. Explicit render requests always work.
+                </Text>
+              </View>
+              <Switch
+                value={autoRenderVibing}
+                onValueChange={(next) => {
+                  setAutoRenderVibing(next);
+                  publishAutoRenderVibing(next);
+                  if (!token) return;
+                  void saveUserSettings(token, { autoRenderVibing: next }).catch((error) => {
+                    setAutoRenderVibing(!next);
+                    publishAutoRenderVibing(!next);
+                    Alert.alert("Couldn't update Auto-render", error instanceof Error ? error.message : String(error));
+                  });
+                }}
+                trackColor={{ false: c.border, true: c.accent + "80" }}
+                thumbColor={autoRenderVibing ? c.accent : c.textMuted}
+              />
+            </View>
           </View>
         </View>
 

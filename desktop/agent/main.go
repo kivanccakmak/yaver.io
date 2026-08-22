@@ -3836,26 +3836,14 @@ func runServe(args []string) {
 
 		httpServer.notifyMgr.NotifyTaskCompleted(task.ID, task.Title, string(task.Status), task.CostUSD, dur)
 
-		// Auto hot-reload: if the task completed successfully and a dev server
-		// is running, broadcast a reload command so the app on the device picks
-		// up the agent's file changes without a manual tap.
-		if task.Status == TaskStatusFinished && httpServer.devServerMgr != nil && httpServer.devServerMgr.IsRunning() {
-			if err := httpServer.devServerMgr.Reload(); err != nil {
-				log.Printf("[task %s] auto-reload dev server: %v", task.ID, err)
-			}
-			if httpServer.blackboxMgr != nil {
-				httpServer.blackboxMgr.BroadcastCommand(BlackBoxCommand{
-					Command: "reload",
-					Data:    map[string]interface{}{"reason": "task " + task.ID + " completed"},
-				})
-			}
-		}
-
-		// Auto Hermes-bundle reload: when a vibing-or-feedback-source task
+		// Explicit-intent Hermes reload: when a vibing-or-feedback-source task
 		// finishes successfully, recompile the native bundle and broadcast
 		// `reload_bundle` so the loaded guest app on a paired phone swaps
 		// to the fresh HBC. Closes the shake → AI fix → bundle reloaded
-		// loop without a manual tap. No-op when no preview worker is
+		// loop when the user explicitly asked to render. Ordinary successful
+		// tasks only emit advisory runtime_render_requested events; clients
+		// either offer Render updates (default) or honor their account-level
+		// Auto-render Vibing mode opt-in. No-op when no preview worker is
 		// listening (CLI-driven `yaver vibing` with no phone in the loop).
 		// See feedback_to_vibe.go.
 		httpServer.autoReloadAfterFeedbackVibingTask(task)

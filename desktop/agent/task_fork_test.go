@@ -397,6 +397,23 @@ func TestCreateTaskSeedTurnsDedupesSeamDuplicate(t *testing.T) {
 	}
 }
 
+func TestCreateTaskCanHideProductOwnedKickoffTurn(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	tm.DummyMode = true
+	task, err := tm.CreateTaskWithOptions("Talos", "Ask what the app should do", "", "mobile-code", "claude", "", nil, TaskCreateOptions{
+		InitialUserPromptHidden: true,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(task.Turns) != 1 || !task.Turns[0].Hidden {
+		t.Fatalf("initializer kickoff must persist as a hidden structured turn: %+v", task.Turns)
+	}
+	if task.Turns[0].Content != "Ask what the app should do" {
+		t.Fatalf("runner/display turn content changed: %q", task.Turns[0].Content)
+	}
+}
+
 func TestSeedForkTurnsBoundsTail(t *testing.T) {
 	big := make([]ConversationTurn, maxSeededForkTurns+25)
 	for i := range big {

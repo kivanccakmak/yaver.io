@@ -765,6 +765,23 @@ actor AgentClient {
         )
     }
 
+    /// One project-start operation shared with phone, web, desktop, and
+    /// spatial clients. The kickoff prompt is hidden by the agent, so the
+    /// first visible turn is Developing asking what the app should do.
+    func startProject(
+        name: String,
+        gitProvider: String = "yaver-git",
+        palette: String = "ocean"
+    ) async throws -> ProjectStartEnvelope {
+        let data = try await request(
+            "POST",
+            path: "/project/start",
+            jsonBody: ["name": name, "gitProvider": gitProvider, "palette": palette],
+            failure: "couldn't start the project"
+        )
+        return try JSONDecoder().decode(ProjectStartEnvelope.self, from: data)
+    }
+
     /// Projects the box knows about (GET /projects → {projects:[…]} or a bare
     /// array). For the TV to browse and pick one to preview.
     func listProjects() async throws -> [ProjectSummary] {

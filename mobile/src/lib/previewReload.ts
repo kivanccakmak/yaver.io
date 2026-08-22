@@ -84,6 +84,7 @@ export type PostTaskRenderSkip =
 
 export type PostTaskRenderDecision =
   | { action: "render"; lane: PostTaskRenderLane }
+  | { action: "offer"; lane: PostTaskRenderLane; message: string }
   | { action: "skip"; reason: PostTaskRenderSkip; message: string };
 
 /**
@@ -106,6 +107,9 @@ export function planPostTaskRender(input: {
   webrtcTargetCanRender?: boolean;
   webrtcTargetLabel?: string;
   inFlight?: boolean;
+  /** Account-level opt-in. Undefined is intentionally false. Explicit user
+   * render actions pass true so they use the same safe lane checks. */
+  autoRenderEnabled?: boolean;
 }): PostTaskRenderDecision {
   if (!taskStatusAllowsPostTaskRender(input.taskStatus)) {
     return {
@@ -129,6 +133,13 @@ export function planPostTaskRender(input: {
     };
   }
   if (input.lane === "browser") {
+    if (!input.autoRenderEnabled) {
+      return {
+        action: "offer",
+        lane: "browser",
+        message: "UI updates are ready. Tap Render updates when you want to refresh the preview.",
+      };
+    }
     return { action: "render", lane: "browser" };
   }
   if (!input.hasWebrtcSession) {
@@ -146,6 +157,13 @@ export function planPostTaskRender(input: {
       message:
         `This streamed target${target} can't be re-rendered in place — that command is for ` +
         "simulators and emulators. Use Browser Reload for a web-served preview.",
+    };
+  }
+  if (!input.autoRenderEnabled) {
+    return {
+      action: "offer",
+      lane: "webrtc",
+      message: "UI updates are ready. Tap Render updates when you want to refresh the preview.",
     };
   }
   return { action: "render", lane: "webrtc" };

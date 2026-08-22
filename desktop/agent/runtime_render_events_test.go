@@ -4,12 +4,13 @@ import "testing"
 
 func TestRuntimeRenderReasonFromTaskOutputDetectsPreviewMarkers(t *testing.T) {
 	cases := map[string]string{
-		`⚙ yaver_web_preview_start {"workDir":"/repo/mobile"}`: "web-preview-start",
-		"Web UI bundle rebuilt: 45 files.":                     "web-bundle-ready",
-		"Reload sent to active runtime":                        "hot-reload",
-		"runtime_command run-guest completed":                  "runtime-command",
-		"Edit src/theme/tokens.ts patched":                     "source-change",
-		"ordinary runner text":                                 "",
+		"UI updates are ready. Tap Render updates to see them.": "agent-ui-change",
+		`⚙ yaver_web_preview_start {"workDir":"/repo/mobile"}`:  "web-preview-start",
+		"Web UI bundle rebuilt: 45 files.":                      "web-bundle-ready",
+		"Reload sent to active runtime":                         "hot-reload",
+		"runtime_command run-guest completed":                   "runtime-command",
+		"Edit src/theme/tokens.ts patched":                      "",
+		"ordinary runner text":                                  "",
 	}
 	for text, want := range cases {
 		if got := runtimeRenderReasonFromTaskOutput(text); got != want {

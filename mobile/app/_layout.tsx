@@ -47,6 +47,8 @@ import { registerNativeScreenRecorder } from "../src/lib/screenRecorder";
 import { startFeedbackShakeBridge } from "../src/lib/feedbackTrigger";
 import { loadDogfoodMode, recordDogfoodRoute } from "../src/lib/dogfoodMode";
 import { useAuth } from "../src/context/AuthContext";
+import { recoverInterruptedRemotelessTasks } from "../src/lib/remotelessTaskLifecycle";
+import { markCachedRemotelessTasksForReview } from "../src/lib/storage";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -89,6 +91,18 @@ function InnerLayout() {
   // app the moment the native splash hides, then fades itself out via
   // onDone. One-shot per app launch.
   const [showSplash, setShowSplash] = useState(true);
+  useEffect(() => {
+    // Fresh process = no safe continuation closure. Convert stale RUNNING to
+    // REVIEW so no surface can leave an eternal spinner or falsely say done.
+    void recoverInterruptedRemotelessTasks().then((interrupted) => {
+      const phoneTaskRows = interrupted.filter((record) => record.id.startsWith("phone-local-"));
+      if (!phoneTaskRows.length) return;
+      void markCachedRemotelessTasksForReview(
+        phoneTaskRows.map((record) => record.id),
+        "Background execution ended before completion. Review the working tree, then retry.",
+      );
+    });
+  }, []);
   useEffect(() => {
     void SplashScreen.hideAsync().catch(() => {});
   }, []);

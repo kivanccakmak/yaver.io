@@ -18,7 +18,7 @@ func TestOnCrashDetected_emitsAndTags(t *testing.T) {
 	defer mgr.StopAll()
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestOnCrashDetected_dedupsBurst(t *testing.T) {
 	defer mgr.StopAll()
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestWaitForStability_quietWindowReturnsStable(t *testing.T) {
 	defer mgr.StopAll()
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestWaitForStability_crashShortcuts(t *testing.T) {
 	defer mgr.StopAll()
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}

@@ -19,4 +19,12 @@ RCT_EXTERN_METHOD(setInheritedPrimaryRunner:(NSString *)runner
                   model:(NSString *)model)
 RCT_EXTERN_METHOD(setCarPlayVoiceState:(NSString *)state)
 RCT_EXTERN_METHOD(clearInheritedAuth)
+RCT_EXTERN_METHOD(beginRemotelessTask:(NSString *)taskId
+                  title:(NSString *)title
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(endRemotelessTask:(NSString *)taskId
+                  status:(NSString *)status
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 @end

@@ -584,12 +584,10 @@ func compileFailureGap(framework, detail string, installedRunners []string) *Cap
 		Constraint: "The dev server is running; the project's own source does not compile. " +
 			"Yaver has no command that fixes source code, so this is not something the agent can repair for you.",
 	}
-	// Prefer the first installed runner — with the hosted-model lane moved
-	// to the front when it is usable, because Fix-with-AI prefers the cheap
-	// hosted lane over a subscription binary on the same box. The caller
-	// passes the probed list, so this can never name a runner that is not
-	// on the box.
-	for _, r := range preferRemotelessFirst(installedRunners) {
+	// Preserve the user's installed/configured runner order. The hosted
+	// DeepSeek lane is a fallback, never a reason to bypass a usable primary
+	// runner merely because it is available.
+	for _, r := range appendRemotelessFallback(installedRunners) {
 		if fix := aiFixRoute(r, "Fix the compile error", compileFixPrompt(framework, detail)); fix != nil {
 			gap.AIFix = fix
 			break
@@ -607,26 +605,25 @@ func remotelessAIAvailable() bool {
 	return st.Ready && st.AuthConfigured
 }
 
-// preferRemotelessFirst returns the installed runner list with "remoteless"
-// moved to the front when the hosted-model lane is usable. Fix-with-AI
-// prefers the cheap hosted lane over a subscription binary on the same box;
-// a box with neither still falls through to the caller's probed list.
-func preferRemotelessFirst(installed []string) []string {
-	return preferRemotelessFirstList(remotelessAIAvailable(), installed)
+// appendRemotelessFallback preserves the caller's probed runner preference and
+// appends the hosted lane only when usable. Remoteless is fallback capacity;
+// availability never grants it precedence over a configured device runner.
+func appendRemotelessFallback(installed []string) []string {
+	return appendRemotelessFallbackList(remotelessAIAvailable(), installed)
 }
 
-// preferRemotelessFirstList is the pure decision: put "remoteless" first
-// when the lane is usable, dedup, else return the list untouched. Kept pure
+// appendRemotelessFallbackList is the pure decision: keep the existing order,
+// dedup remoteless, then append it when usable. Kept pure
 // so the precedence is hermetically testable without a binary on PATH.
-func preferRemotelessFirstList(remotelessUsable bool, installed []string) []string {
-	if !remotelessUsable {
-		return installed
-	}
-	out := []string{"remoteless"}
+func appendRemotelessFallbackList(remotelessUsable bool, installed []string) []string {
+	out := make([]string, 0, len(installed)+1)
 	for _, r := range installed {
 		if r != "remoteless" {
 			out = append(out, r)
 		}
+	}
+	if remotelessUsable {
+		out = append(out, "remoteless")
 	}
 	return out
 }

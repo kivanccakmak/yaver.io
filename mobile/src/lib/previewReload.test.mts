@@ -90,16 +90,22 @@ test("failed browser reload is a line, not a reached target", () => {
 // code failed silently. If either ever returns `render` or an empty message,
 // the "task finished and nothing happened, and nothing said why" bug is back.
 
-test("browser lane renders when the turn lands — the case that never worked", () => {
+test("browser lane offers a render by default", () => {
+  const decision = planPostTaskRender({ lane: "browser", taskStatus: "completed" });
+  assert.equal(decision.action, "offer");
+  assert.match(decision.message, /Render updates/);
+});
+
+test("browser lane renders when opted in", () => {
   assert.deepEqual(
-    planPostTaskRender({ lane: "browser", taskStatus: "completed" }),
+    planPostTaskRender({ lane: "browser", taskStatus: "completed", autoRenderEnabled: true }),
     { action: "render", lane: "browser" },
   );
 });
 
 test("browser lane also renders on review, not just completed", () => {
   assert.equal(
-    planPostTaskRender({ lane: "browser", taskStatus: "review" }).action,
+    planPostTaskRender({ lane: "browser", taskStatus: "review", autoRenderEnabled: true }).action,
     "render",
   );
 });
@@ -143,6 +149,7 @@ test("simulator WebRTC target still renders — the path that already worked", (
       taskStatus: "completed",
       hasWebrtcSession: true,
       webrtcTargetCanRender: true,
+      autoRenderEnabled: true,
     }),
     { action: "render", lane: "webrtc" },
   );

@@ -408,9 +408,12 @@ test("the chip shows what is attached and DELETES it when switched off", () => {
   assert.ok(chip.includes("screenContextSummary"), "chip does not name the screen it attached");
   assert.ok(chip.includes("screenContextDetail"), "chip cannot show the literal facts being sent");
   assert.ok(chip.includes("setEnabled"), "chip has no opt-out");
-  const tasks = readFileSync(join(repoRoot, "mobile/app/(tabs)/tasks.tsx"), "utf8");
-  // Both composers: the first message AND the follow-up, because
-  // screen_context_turn.go attaches on EVERY turn.
-  const mounts = tasks.split("<ScreenContextChip").length - 1;
-  assert.ok(mounts >= 2, `chip mounted ${mounts}× in tasks.tsx — the follow-up composer mutates prompts too`);
+  const preview = readFileSync(join(repoRoot, "mobile/src/components/DevPreview.tsx"), "utf8");
+  const mounts = preview.split("<ScreenContextChip").length - 1;
+  assert.equal(mounts, 1, "screen context belongs once in the preview tools, not in both task composers");
+  assert.match(
+    preview,
+    /showPreviewTools\s*\?\s*\([\s\S]*?<ScreenContextChip/,
+    "screen context must remain behind the preview-tools ellipsis",
+  );
 });

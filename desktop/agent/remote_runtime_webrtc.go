@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -328,6 +329,9 @@ func (m *RemoteRuntimeManager) ApplyWebRTCOffer(sessionID string, offer webrtc.S
 	session, err := m.Attach(sessionID)
 	if err != nil {
 		return RemoteRuntimeSession{}, webrtc.SessionDescription{}, err
+	}
+	if reason := remoteRuntimeFrameBlockReason(session); reason != "" {
+		return session, webrtc.SessionDescription{}, errors.New(reason)
 	}
 	if session.TransportMode == "relay-jpeg-poll" {
 		return session, webrtc.SessionDescription{}, fmt.Errorf("session %s uses relay-jpeg-poll, not direct WebRTC", sessionID)
@@ -815,6 +819,15 @@ func (m *RemoteRuntimeManager) CaptureFrame(sessionID string) (RemoteRuntimeSess
 	if err != nil {
 		return RemoteRuntimeSession{}, nil, err
 	}
+	// A JPEG is not proof that the requested app rendered. Headless Chrome can
+	// screenshot about:blank forever, and this path used to overwrite the
+	// manager's truthful waiting-for-dev-server state with "streaming" after the
+	// first white JPEG. Every polling surface then showed a false green. Preserve
+	// the named session failure and make the frame operation fail until the
+	// browser is actually navigated.
+	if reason := remoteRuntimeFrameBlockReason(session); reason != "" {
+		return session, nil, errors.New(reason)
+	}
 	live, ok := m.getLive(sessionID)
 	if !ok {
 		return RemoteRuntimeSession{}, nil, fmt.Errorf("remote runtime state missing")
@@ -862,12 +875,27 @@ func (m *RemoteRuntimeManager) CaptureFrame(sessionID string) (RemoteRuntimeSess
 		return session, nil, err
 	}
 	updated, _ := m.Update(sessionID, func(current *RemoteRuntimeSession) {
-		if current.TransportMode == "relay-jpeg-poll" {
+		if current.TransportMode == "relay-jpeg-poll" && remoteRuntimeFrameBlockReason(*current) == "" {
 			current.Status = "streaming"
 			current.Note = "Relay frame polling active."
 		}
 	})
 	return updated, payload, nil
+}
+
+func remoteRuntimeFrameBlockReason(session RemoteRuntimeSession) string {
+	if session.TargetID != "browser-window" {
+		return ""
+	}
+	switch strings.TrimSpace(session.Status) {
+	case "waiting-for-dev-server", "attach-failed", "navigate-failed", "failed":
+		if note := strings.TrimSpace(session.Note); note != "" {
+			return note
+		}
+		return fmt.Sprintf("browser runtime cannot stream while session status is %s", session.Status)
+	default:
+		return ""
+	}
 }
 
 func (m *RemoteRuntimeManager) ExecuteControl(sessionID string, req remoteRuntimeControlRequest) (RemoteRuntimeSession, error) {

@@ -67,7 +67,7 @@ Android, so Android phones get **two** on-device engines and pick per task:
 | what runs | the REAL claude/codex/opencode | Yaver's Hermes loop, model via `codingBackend` |
 | fidelity | full Claude Code (all its tools, MCP, hooks) | "Claude that edits files + reaches for a machine" |
 | weight | ~400–500 MB rootfs, ptrace overhead | zero extra install, no rootfs |
-| backgrounding | at risk (proot tree, test T5) | survives like any JS work |
+| backgrounding | Android `SandboxService` foreground service + wake lock | Android finite `RemotelessTaskService`; iOS bounded background task + review checkpoint |
 | auth | mirror → cred-bind into rootfs | the one mirrored plan token, in-process |
 
 `codingSession.ts` picks via `prefs.onDeviceEngine`: `auto` runs the real CLI
@@ -76,6 +76,27 @@ lightweight in-app loop even with a rootfs present (dodges the backgrounding
 risk, instant, still $0 on plan); `cli` forces proot. So a low-storage phone, or
 a user who just wants a quick edit, never needs the rootfs at all — Hermes-in-app
 is the universal floor on both platforms, with proot as the Android power tier.
+
+### Lightweight remoteless task lifetime (2026-08-21)
+
+The Hermes loop is not inherently background-safe. Android can suspend an RN
+process, and iOS offers no foreground-service equivalent. The shipped contract
+is deliberately asymmetric:
+
+- Android starts `RemotelessTaskService` for every phone-local agent turn and
+  explicit Git commit/push. It is a finite `dataSync` foreground service with a
+  visible notification, partial wake lock, and a 30-minute native safety
+  deadline. It does not start proot or `libyaver.so`.
+- iOS uses `UIApplication.beginBackgroundTask` for the finite grace period the
+  OS grants. It does not claim indefinite execution. If the process is later
+  recreated without a completion signal, the durable local task ledger moves
+  the task to `review`; it never replays mutations or reports success.
+- `mobile/src/lib/remotelessTaskLifecycle.ts` owns the native bridge and bounded
+  local ledger. `remotelessTaskLifecycleCore.ts` owns the tested state machine.
+  No prompt, source bytes, API key, or Git token is written to that ledger.
+- Rendering remains a separate capability. This lifetime protects source
+  audit/edit and Git operations; it does not make Xcode, Gradle, Docker, a dev
+  server, or a native renderer available on iOS.
 
 ## Android — run the real thing
 
@@ -350,7 +371,9 @@ The cells:
 to an agent, loopback vs remote), so the xterm view is reused verbatim;
 `sessionEndpointDeviceId()` returns `null` for loopback or the box id otherwise.
 `codingBackend.ts` only matters when `engine === "hermes"`; the CLI engines carry
-their own auth and ignore it.
+their own auth and ignore it. Placement still follows explicit target → primary
+→ secondary → remoteless. A phone backend being available never gives it
+precedence over an eligible configured device.
 
 ### Hermes-only remote — the auth-overhead killer
 
@@ -361,9 +384,11 @@ runs claude/codex, so it needs **no runner credentials at all** —
 `boxAuthFree: true`. You mirror the plan token *once to the phone* instead of to
 every box.
 
-This is the **default** for `intent:"project"` whenever the phone has any usable
-Hermes backend — even if the box happens to be authed — because one-token-on-the-
-phone strictly beats N-boxes-each-mirrored. Overrides via `prefs.remoteEngine`:
+This is an **explicit auth-free remote topology**, not the default placement.
+The configured primary/secondary device remains the execution target; Hermes
+may provide the model brain while tools execute on that device. Remoteless
+phone-local execution begins only when eligible configured devices are
+unavailable. Overrides via `prefs.remoteEngine`:
 `"cli"` forces the box's own runner (when you *want* the box authed, e.g. for
 long unattended runs the phone shouldn't babysit); `"hermes"` forces auth-free
 even if available; `"auto"` is the policy above.
@@ -380,8 +405,10 @@ brain. The brain stays on the phone; only the tool target changes.
   real CLI on the phone-local tree; otherwise the Hermes editor. Same preview +
   apply `EditPlan` either way.
 - **Tasks / remote dev** (create-wizard `codingMode`): `intent:"project"`.
-  Reachable box → Hermes-only remote by default (auth-free), `cli-on-box` when
-  forced or when the phone has no backend; no box → on-device CLI (Android) or
+  Reachable configured primary → that device; otherwise reachable configured
+  secondary with a visible degraded banner. The selected device may use
+  Hermes-only remote (auth-free) or its own CLI according to runner policy. No
+  eligible box → on-device CLI (Android) or
   the "edits here, reaches for a machine to build" Hermes loop (iOS).
 - **opencode** is a first-class `RunnerId` everywhere: a rootfs runner
   (`cli-on-device`), a box runner (`cli-on-box`), and `prefs.runner:"opencode"`

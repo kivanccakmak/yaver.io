@@ -1,6 +1,6 @@
 # Remoteless Vibing, Git, and Deployment Audit
 
-**Date:** 2026-08-19
+**Date:** 2026-08-19 (implementation status refreshed 2026-08-21)
 **Scope:** Mobile boxless Vibing through chat/tasks and rendering/deploy intent
 **Out of scope:** New standalone UI surfaces, native rendering implementation, and replacing the remote-box workflow
 
@@ -17,7 +17,22 @@ The phone already contains most of the difficult local primitives:
 - A real RN-web mobile entry path, verified in an iPhone device context.
 - A remote Vibing/task path that remains separate and continues to use a runner/box.
 
-The product is not yet complete for the intended flow:
+The product is not yet complete for the entire deploy flow. The phone-local
+coding slice has advanced since the original audit:
+
+- Normal mobile Tasks can select a phone checkout and invoke the same
+  repo-scoped DeepSeek loop as `/repo-coding`.
+- Every lightweight phone-local coding turn now receives platform-native
+  background protection: a finite Android foreground service, or the bounded
+  iOS background-task allowance.
+- Git commit and push in `SandboxGitPanel` use that same durable lifecycle.
+- Running phone-local work is visible in the global task pill. A cold-process
+  interruption becomes `review` and preserves the working tree; it is never
+  shown as completed and never replayed automatically.
+- A successful remote task-list poll preserves phone-local rows instead of
+  deleting them from the Tasks surface.
+
+The remaining intended flow is:
 
 ```text
 Mobile Tasks/Vibing chat
@@ -31,7 +46,9 @@ Mobile Tasks/Vibing chat
   → streamed result in the same task conversation
 ```
 
-The largest gap is plumbing. The local repo agent is currently exposed by `/repo-coding`, while the normal Tasks/Vibing composer routes to a different local control-plane fallback or to the remote runner. Deployment is also split between agent `/deploy/*` routes, remote publish queues, and build screens.
+The largest remaining gap is deployment plumbing. Phone-local execution is now
+wired into Tasks as well as `/repo-coding`, but deployment is still split
+between agent `/deploy/*` routes, remote publish queues, and build screens.
 
 ## Product contract
 
@@ -82,11 +99,14 @@ The same structured operation must be callable by mobile chat, web chat, CLI, an
 - `mobile/app/repo-coding.tsx` is the current end-to-end phone repo coding screen.
   It stores a DeepSeek key, lists phone projects, runs the agentic loop, and exposes audit/edit modes.
 - `mobile/src/lib/codingAgent/runner.ts` has the OpenAI-compatible DeepSeek transport and `deepseek-v4-flash` model configuration.
-- `mobile/src/lib/codingAgent/codingAgentRun.ts` wraps the coding loop with Git checkpoints.
+- `mobile/src/lib/codingAgent/codingAgentRun.ts` wraps the coding loop with a
+  reversible non-Git working-tree transaction and the remoteless task lifetime.
 - `mobile/src/lib/codingAgent/sandboxBinding.ts` loads the local DeepSeek credential and binds the phone filesystem.
 - `mobile/src/lib/codingAgent/gitTools.ts` exposes Git operations. Push is only included when authenticated network options exist, and force-push is disabled.
 - `mobile/src/lib/codingAgent/secretRedaction.ts` redacts provider keys from progress, tool arguments, results, and errors.
-- `mobile/src/lib/cloneToPhone.ts` clones a GitHub repository into a phone-local project. This is currently GitHub-specific at the entry point even though broader provider primitives exist elsewhere.
+- `mobile/src/lib/cloneToPhone.ts` clones GitHub or GitLab repositories into a
+  phone-local project, refuses to overwrite an existing checkout, and removes
+  the exact newly-created sandbox if clone fails.
 - `mobile/src/lib/phoneSandboxSource.ts` provides path-safe, atomic phone-local source storage.
 - `mobile/src/lib/phoneSandboxLocal.ts` provides native phone project metadata/database storage; the `.web.ts` sibling is a metadata-only preview stub.
 
@@ -96,14 +116,21 @@ The same structured operation must be callable by mobile chat, web chat, CLI, an
 - `mobile/src/lib/gitProviderAuth.ts` and `mobile/src/lib/gitProviderStore.ts` provide multi-provider auth detection and credential lookup, including GitLab and self-hosted hosts.
 - `mobile/app/git-accounts.tsx`, Settings, and phone-project flows contain GitHub/GitLab account and mirror wiring.
 
-These primitives are not yet the single repository-target implementation used by Tasks/Vibing and `/repo-coding`. Maintaining both paths will create provider and safety drift unless they converge behind a shared interface.
+Tasks and Projects now consume the phone-local checkout path for GitHub/GitLab
+discovery and cloning. The older `coding-runtime.ts` workspace model and
+`/repo-coding` remain separate implementations; maintaining both will create
+provider and safety drift unless they converge behind a shared interface.
 
 ### Tasks/Vibing
 
 - `mobile/app/(tabs)/vibing.tsx` has a local mode and correctly says that local execution has no shell, package manager, simulator, Docker, dev server, or live preview.
-- Local Vibing currently routes to Tasks through “Open local coding chat.” It does not select a phone repository or invoke the repo-scoped DeepSeek Git loop.
-- `mobile/app/(tabs)/tasks.tsx` dispatches to a selected remote runner when connected.
-- When no host is connected, Tasks uses `loadYaverAgentLocalConfig` and the local control-plane agent fallback. That is not the full repository-scoped coding loop.
+- Local Vibing routes to Tasks through “Open local coding chat.” Tasks can now
+  select a phone checkout and invoke the repo-scoped DeepSeek Git loop.
+- `mobile/app/(tabs)/tasks.tsx` still dispatches to a selected remote runner when
+  that target is explicit, preserving the remote lane.
+- With a selected phone checkout, Tasks creates a durable `phone-local` row and
+  uses `runAgenticCoding`; the generic no-checkout control-plane fallback remains
+  separate and does not pretend to edit a repository.
 - Remote task output and the live OpenCode console lane already have task-level streaming contracts and must remain untouched for the remote path.
 
 ### Rendering
@@ -458,3 +485,50 @@ The slice is complete when a new mobile user can:
 11. Rendering/deployed-web result integration and full closed-loop matrix.
 
 Do not start with a new deployment screen. The highest-leverage slice is the shared target/deploy controller consumed by the existing Tasks/Vibing chat, because it simultaneously preserves the remote-box path and makes the boxless path real.
+
+## Placement correction — remote is default; remoteless is explicit or fallback (updated 2026-08-22)
+
+Automatic placement keeps this canonical order:
+
+1. explicit eligible target;
+2. configured primary runner/renderer;
+3. configured secondary runner/renderer, with a visible degraded banner;
+4. remoteless, with a visible fallback banner and capability code;
+5. blocked, with an invocable device/cloud route.
+
+The mobile app also exposes an explicit, phone-scoped **No remote box** target
+from Devices, Settings, and the remote-box picker. It is never the default and
+does not delete or replace primary/secondary assignments. While selected it
+suppresses remote auto-connect and pool warming, shows phone checkouts plus
+repositories discoverable through the phone's GitHub/GitLab credentials, and
+routes repository-scoped Tasks to the on-device DeepSeek agent. Selecting a
+real box exits this mode. This preference remains local to the phone so it
+cannot disconnect another signed-in Yaver surface.
+
+The machine must be operation-usable, not merely present in inventory. A
+reachable primary/secondary always outranks the DeepSeek remoteless lane. The
+Go compile-fix path formerly promoted `remoteless` ahead of Claude, Codex, and
+OpenCode; it now preserves configured/probed runner order and appends
+remoteless last.
+
+The versioned client contract is
+`docs/architecture/REMOTELESS_CAPABILITIES.json`; the executable TypeScript
+source is `shared/client-core/src/remoteless.ts` and is mirrored into mobile,
+web, and the RN feedback SDK. Native companion surfaces share or mirror the
+same stable codes:
+
+- full iOS/Android app: explicit phone-local selection or automatic fallback,
+  with bounded editing + explicit Git commit/push;
+- tvOS/visionOS: analysis/chat and already-served pixels only;
+- Android TV: display/control only; no local repository/build runtime;
+- watchOS/Wear OS/car: initiate, observe, approve, and narrate; phone/device/
+  cloud executes;
+- web/Electron: hosted DeepSeek may be selected as fallback, but the browser is
+  never described as the machine that ran a shell/build;
+- CLI/agent: installed/configured runners first, remoteless last.
+
+Example: `remoteless.flutter-render.unavailable` says an iPhone can display an
+already-built Flutter web artifact but cannot provide the Flutter SDK, shell,
+dev server, or simulator. Its route selects/wakes a capable primary/secondary
+renderer or explicitly enters Cloud Workspace; it never spins or reports a
+render that did not happen.

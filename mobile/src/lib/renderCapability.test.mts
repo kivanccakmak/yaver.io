@@ -5,7 +5,16 @@ import { REMOTE_RENDER_REQUIRED, remoteRenderRequiredFailure } from "./renderCap
 
 test("missing runner is a named render capability failure with an actionable route", () => {
   const failure = remoteRenderRequiredFailure("This TV");
-  assert.equal(failure.code, REMOTE_RENDER_REQUIRED);
-  assert.match(failure.message, /connected remote runner/i);
+  assert.equal(failure.legacyCode, REMOTE_RENDER_REQUIRED);
+  assert.equal(failure.code, "remoteless.dev-server.unavailable");
+  assert.match(failure.message, /primary\/secondary device/i);
   assert.equal(failure.action.route, "/devices");
+  assert.equal(failure.alternativeAction?.route, "/cloud-onboarding");
+});
+
+test("Flutter on iPhone names the exact missing remoteless capability", () => {
+  const failure = remoteRenderRequiredFailure("This iPhone", "flutter-render", "ios");
+  assert.equal(failure.code, "remoteless.flutter-render.unavailable");
+  assert.match(failure.message, /Flutter SDK/);
+  assert.match(failure.message, /already-built Flutter web artifact/);
 });

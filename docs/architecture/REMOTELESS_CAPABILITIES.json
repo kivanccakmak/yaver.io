@@ -1,0 +1,52 @@
+{
+  "$comment": "Canonical client contract. Automatic placement is explicit target, primary, secondary, then remoteless. Mobile may explicitly select phone-local execution, but it is never the default and does not replace primary/secondary assignments. Unsupported work is blocked with a named code and route; it is never reported as completed.",
+  "version": 2,
+  "placementOrder": ["explicit-target", "primary", "secondary", "remoteless"],
+  "explicitRemotelessSelection": {
+    "mobile": true,
+    "default": false,
+    "scope": "phone-and-user",
+    "suppressesRemoteAutoConnect": true,
+    "preservesConfiguredRemoteAssignments": true
+  },
+  "failureRoutes": ["/devices", "/cloud-onboarding"],
+  "codes": {
+    "analysis-chat": "remoteless.analysis-chat.supported",
+    "code-edit": "remoteless.code-edit.bounded",
+    "git-commit": "remoteless.git-commit.bounded",
+    "git-push": "remoteless.git-push.bounded",
+    "dev-server": "remoteless.dev-server.unavailable",
+    "flutter-render": "remoteless.flutter-render.unavailable",
+    "native-build": "remoteless.native-build.unavailable",
+    "simulator": "remoteless.simulator.unavailable",
+    "shell": "remoteless.shell.unavailable",
+    "test": "remoteless.test.unavailable",
+    "deploy": "remoteless.deploy.unavailable",
+    "container": "remoteless.container.unavailable"
+  },
+  "surfaces": {
+    "ios-android-main": {
+      "supported": ["analysis-chat", "git-read", "static-preflight", "existing-web-artifact"],
+      "bounded": ["code-edit", "git-commit", "git-push"],
+      "unavailable": ["dev-server", "web-build", "flutter-render", "native-build", "simulator", "shell", "test", "deploy", "container"]
+    },
+    "web": {
+      "supported": ["analysis-chat", "existing-web-artifact"],
+      "note": "Hosted DeepSeek may execute remotely, but the browser itself must never be described as a shell/build host."
+    },
+    "tvos-visionos": {
+      "supported": ["analysis-chat", "existing-web-artifact"],
+      "unavailable": ["code-edit", "git-commit", "git-push", "dev-server", "flutter-render", "native-build", "simulator", "shell", "test", "deploy", "container"]
+    },
+    "watchos-wearos-car": {
+      "mode": "companion",
+      "note": "Initiate, observe, approve, and narrate. The phone/device/cloud target executes and returns the same structured capability verdict."
+    },
+    "tvos-androidtv": {
+      "note": "Rendering means displaying a stream or existing served artifact; these clients do not run Flutter or a dev server locally."
+    },
+    "cli-agent": {
+      "note": "Configured device runners retain order; the DeepSeek remoteless runner is appended last when usable."
+    }
+  }
+}

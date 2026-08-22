@@ -18,12 +18,12 @@ struct BoxlessCodeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Label("Yaver Code · boxless", systemImage: "sparkles")
+                Label("Remoteless fallback · analysis", systemImage: "sparkles")
                     .font(.system(size: 28, weight: .bold))
                 Spacer()
                 Button("Done") { dismiss() }
             }
-            Text("DeepSeek V4 Flash chat and deep audit without a remote box. Approve DeepSeek access from the Yaver iPhone app or use the selected machine's vault. Git edits, shell commands, builds, simulators, rendering, and deploys still require a remote runner.")
+            Text("remoteless.analysis-chat.supported · DeepSeek V4 Flash chat and deep audit without a remote box. Your primary/secondary machine automatically regains precedence when available. Git edits, shell commands, builds, tests, simulators, rendering, and deploys require a capable machine or Cloud Workspace.")
                 .font(.system(size: 17)).foregroundStyle(.secondary)
                 .frame(maxWidth: 900, alignment: .leading)
             Label(

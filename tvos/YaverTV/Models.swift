@@ -246,6 +246,13 @@ struct TaskList: Decodable { let tasks: [TaskSummary] }
 /// because the user retries and gets two.
 struct TaskEnvelope: Decodable { let task: TaskSummary }
 
+struct ProjectStartEnvelope: Decodable {
+    let directory: String
+    let gitProvider: String
+    let palette: String
+    let task: TaskSummary
+}
+
 struct TaskForkResult: Decodable {
     let taskId: String
     let runnerId: String

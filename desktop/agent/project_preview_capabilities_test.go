@@ -202,6 +202,56 @@ func TestRNLeadsWithBrowserReload(t *testing.T) {
 	}
 }
 
+func TestHermesActionsSwitchFromCompileToReloadAfterAUsableBuild(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"dependencies":{"expo":"*"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	before := ApplyHermesBuildState(DetectProjectPreviewCapabilities(dir, "", true), dir, "ios")
+	if before.HermesBuildState != "needs_build" {
+		t.Fatalf("state before build = %q", before.HermesBuildState)
+	}
+	if !hasOption(before, PreviewOptionHermes) || hasOption(before, PreviewOptionOpenNative) {
+		t.Fatalf("before build must offer compile only, got %+v", before.Options)
+	}
+
+	buildDir := filepath.Join(dir, ".yaver-build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(buildDir, "main.jsbundle"), []byte("compiled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after := ApplyHermesBuildState(DetectProjectPreviewCapabilities(dir, "", true), dir, "ios")
+	if after.HermesBuildState != "ready" {
+		t.Fatalf("state after build = %q", after.HermesBuildState)
+	}
+	if hasOption(after, PreviewOptionHermes) || !hasOption(after, PreviewOptionOpenNative) {
+		t.Fatalf("after build must offer reload only, got %+v", after.Options)
+	}
+}
+
+func TestHermesBuildForAnotherPlatformStillOffersCompile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"dependencies":{"expo":"*"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	buildDir := filepath.Join(dir, ".yaver-build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(buildDir, "main.jsbundle"), []byte("android bundle"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeNativeBuildStatus(dir, nativeBuildStatus{State: "ready", Platform: "android", BundlePath: filepath.Join(buildDir, "main.jsbundle")})
+
+	caps := ApplyHermesBuildState(DetectProjectPreviewCapabilities(dir, "", true), dir, "ios")
+	if !hasOption(caps, PreviewOptionHermes) || hasOption(caps, PreviewOptionOpenNative) {
+		t.Fatalf("android build must not unlock iOS reload, got %+v", caps.Options)
+	}
+}
+
 // ── Yaver self-development ─────────────────────────────────────────────────
 
 func TestSelfDevelopmentReplacesHermesWithStreaming(t *testing.T) {

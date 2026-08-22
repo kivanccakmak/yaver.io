@@ -104,7 +104,9 @@ export default function RemoteRuntimeScreen() {
     setVibingProtocolVersion(null);
     setBusyTargetId(target.id);
     setConnectingTargetLabel(target.label);
-    setConnectingSince(Date.now());
+    const connectStartedAt = Date.now();
+    setConnectingSince(connectStartedAt);
+    setConnectNowTick(connectStartedAt);
     setConnectLastOutputAt(null);
     setConnectionLogs([]);
     setConnectionPhase("Preparing connection");
@@ -126,6 +128,12 @@ export default function RemoteRuntimeScreen() {
     // it can never trap the user.
     const usingRelay = !!quicClient.activeRelayBaseUrl;
     try {
+      if (target.id === "browser-window") {
+        setConnectionPhase("Starting project web runtime");
+        pushConnectionLog("Starting and verifying the project web runtime");
+        await quicClient.prepareRemoteRuntimeBrowserLane(path, framework);
+        pushConnectionLog("Project web runtime is serving", "success");
+      }
       setConnectionPhase(usingRelay ? "Connecting via relay" : "Connecting directly");
       pushConnectionLog(usingRelay ? "Connecting via relay" : "Connecting directly");
 
@@ -310,9 +318,9 @@ export default function RemoteRuntimeScreen() {
                         if (payload?.type === "stream-failed") {
                           setConnectionPhase("Connection failed");
                           pushConnectionLog(
-                            payload.reason === "ice-failed"
+                            payload.message || (payload.reason === "ice-failed"
                               ? "Direct WebRTC blocked on this network — a relay is required"
-                              : String(payload.reason || "stream failed"),
+                              : String(payload.reason || "stream failed")),
                             "error",
                           );
                           finishConnectionOverlay();
@@ -598,6 +606,8 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
       const rootEl = document.getElementById("root");
       let objectUrl = null;
       let imagePending = false;
+      let blankSince = 0;
+      let blankFailureReported = false;
 
       // The live render surface. RTP paints into <video> (intrinsic size is
       // videoWidth/videoHeight); JPEG paints into <img> (naturalWidth/Height).
@@ -645,6 +655,35 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
           imagePending = false;
           objectUrl = nextUrl;
           if (previousUrl) URL.revokeObjectURL(previousUrl);
+          try {
+            const sample = document.createElement("canvas");
+            sample.width = 12;
+            sample.height = 12;
+            const ctx = sample.getContext("2d", { willReadFrequently: true });
+            ctx.drawImage(frameEl, 0, 0, 12, 12);
+            const pixels = ctx.getImageData(0, 0, 12, 12).data;
+            let min = 255, max = 0, sum = 0, count = 0;
+            for (let i = 0; i < pixels.length; i += 4) {
+              const y = Math.round(pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114);
+              min = Math.min(min, y); max = Math.max(max, y); sum += y; count++;
+            }
+            const avg = count ? sum / count : 0;
+            const blank = max - min <= 6 && (avg <= 12 || avg >= 243);
+            if (blank) {
+              if (!blankSince) blankSince = Date.now();
+              setStatus("Connected, waiting for usable app pixels…");
+              if (!blankFailureReported && Date.now() - blankSince >= 8000) {
+                blankFailureReported = true;
+                post({ type: "stream-failed", reason: "blank-frames", message: "The box is sending blank frames. The project web runtime did not render usable pixels." });
+              }
+              return;
+            }
+            blankSince = 0;
+          } catch (_) {
+            // Blob-backed images in WKWebView are same-origin. If a platform
+            // still refuses canvas reads, keep rendering instead of creating
+            // a false failure from the diagnostic itself.
+          }
           if (how === "relay-jpeg") setStatus("Relay frame polling active (still frames, ~1 fps).");
           reportFirstFrame(how);
         };
@@ -789,7 +828,39 @@ function buildRemoteRuntimeViewerHtml(baseUrl: string, headers: Record<string, s
           videoEl.play().catch(() => {});
           setStatus("H.264 stream active.");
           // Wait for real pixels: loadeddata is the first decoded frame.
-          video.addEventListener("loadeddata", function () { reportFirstFrame("video"); }, { once: true });
+          const verifyVideoPixels = function () {
+            // A decoded frame is necessary but not sufficient: H.264 can
+            // faithfully decode a black/white about:blank stream. Sample the
+            // same pixels as the JPEG path before declaring first paint.
+            try {
+              const sample = document.createElement("canvas");
+              sample.width = 12; sample.height = 12;
+              const ctx = sample.getContext("2d", { willReadFrequently: true });
+              ctx.drawImage(videoEl, 0, 0, 12, 12);
+              const pixels = ctx.getImageData(0, 0, 12, 12).data;
+              let min = 255, max = 0, sum = 0;
+              for (let i = 0; i < pixels.length; i += 4) {
+                const y = Math.round(pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114);
+                min = Math.min(min, y); max = Math.max(max, y); sum += y;
+              }
+              const avg = sum / (pixels.length / 4);
+              if (max - min <= 6 && (avg <= 12 || avg >= 243)) {
+                if (!blankSince) blankSince = Date.now();
+                setStatus("Connected, waiting for usable app pixels…");
+                if (!blankFailureReported && Date.now() - blankSince >= 8000) {
+                  blankFailureReported = true;
+                  post({ type: "stream-failed", reason: "blank-frames", message: "The box is sending blank H.264 frames. The project runtime did not render usable pixels." });
+                }
+                return;
+              }
+            } catch (_) {}
+            blankSince = 0;
+            videoEl.removeEventListener("loadeddata", verifyVideoPixels);
+            videoEl.removeEventListener("timeupdate", verifyVideoPixels);
+            reportFirstFrame("video");
+          };
+          videoEl.addEventListener("loadeddata", verifyVideoPixels);
+          videoEl.addEventListener("timeupdate", verifyVideoPixels);
         };
         pc.onconnectionstatechange = function () {
           // "Peer state: failed" is an implementation detail leaking into the

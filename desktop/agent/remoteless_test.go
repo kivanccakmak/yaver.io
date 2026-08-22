@@ -118,22 +118,22 @@ func TestRemotelessCredentialSourceNone(t *testing.T) {
 	}
 }
 
-func TestPreferRemotelessFirstList(t *testing.T) {
+func TestAppendRemotelessFallbackList(t *testing.T) {
 	base := []string{"claude", "codex", "opencode"}
 
-	if got := preferRemotelessFirstList(false, base); !reflect.DeepEqual(got, base) {
+	if got := appendRemotelessFallbackList(false, base); !reflect.DeepEqual(got, base) {
 		t.Fatalf("lane unusable → list must be untouched, got %v", got)
 	}
 
-	got := preferRemotelessFirstList(true, base)
-	want := []string{"remoteless", "claude", "codex", "opencode"}
+	got := appendRemotelessFallbackList(true, base)
+	want := []string{"claude", "codex", "opencode", "remoteless"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("lane usable → remoteless must be first, got %v want %v", got, want)
+		t.Fatalf("lane usable → remoteless must remain last, got %v want %v", got, want)
 	}
 
 	// Dedup when the caller already listed remoteless.
-	dup := preferRemotelessFirstList(true, []string{"remoteless", "opencode", "remoteless"})
-	if want := []string{"remoteless", "opencode"}; !reflect.DeepEqual(dup, want) {
+	dup := appendRemotelessFallbackList(true, []string{"remoteless", "opencode", "remoteless"})
+	if want := []string{"opencode", "remoteless"}; !reflect.DeepEqual(dup, want) {
 		t.Fatalf("dedup failed: got %v want %v", dup, want)
 	}
 }

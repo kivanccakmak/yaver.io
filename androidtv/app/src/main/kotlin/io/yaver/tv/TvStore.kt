@@ -220,7 +220,10 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
         _autoConnecting.value = true
         scope.launch(Dispatchers.IO) {
             val boxes = _boxes.value
-            for (box in boxes) {
+            val preferredIds = listOfNotNull(_settings.value?.primaryDeviceId, _settings.value?.secondaryDeviceId)
+            val ordered = (preferredIds.mapNotNull { id -> boxes.firstOrNull { it.id == id } } + boxes)
+                .distinctBy { it.id }
+            for (box in ordered) {
                 _autoConnectTarget.value = box.name
                 val probe = runCatching { clientFor(box).info() }.getOrNull()
                 if (probe != null) {

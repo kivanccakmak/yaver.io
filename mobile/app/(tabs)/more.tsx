@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -16,6 +17,8 @@ import * as Clipboard from "expo-clipboard";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter, useLocalSearchParams } from "expo-router";
 import { AppScreenHeader } from "../../src/components/AppScreenHeader";
+import PairQrScanner from "../../src/components/PairQrScanner";
+import SegmentedCodeInput from "../../src/components/SegmentedCodeInput";
 import { useColors } from "../../src/context/ThemeContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
@@ -1994,6 +1997,10 @@ export default function MoreScreen() {
   const [pairBusy, setPairBusy] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
   const [pairSuccess, setPairSuccess] = useState<string | null>(null);
+  const [pairScannerOpen, setPairScannerOpen] = useState(false);
+  const [pairManualOpen, setPairManualOpen] = useState(false);
+  const [pairHost, setPairHost] = useState("");
+  const [pairExpired, setPairExpired] = useState(false);
   const [bootstrapDevices, setBootstrapDevices] = useState<DiscoveredDevice[]>([]);
 
   // Expandable section state
@@ -2056,6 +2063,10 @@ export default function MoreScreen() {
     setPairCode("");
     setPairError(null);
     setPairSuccess(null);
+    setPairScannerOpen(false);
+    setPairManualOpen(false);
+    setPairHost("");
+    setPairExpired(false);
     // Pre-fill with the currently active device's URL so that
     // re-pairing a known machine is one-tap. For a brand-new
     // headless box this will be empty — user types it in.
@@ -2084,6 +2095,8 @@ export default function MoreScreen() {
   const pickBootstrapDevice = useCallback((dev: DiscoveredDevice) => {
     setPairError(null);
     setPairSuccess(null);
+    setPairExpired(false);
+    setPairHost(dev.name || dev.deviceId);
     setPairUrl(`http://${dev.ip}:${dev.port}`);
     if (dev.bootstrapPasskey) {
       setPairCode(dev.bootstrapPasskey);
@@ -2099,26 +2112,52 @@ export default function MoreScreen() {
   const applyPairUrl = useCallback((raw: string): boolean => {
     const payload = parsePairUrl(raw);
     if (!payload) return false;
-    if (payload.code) {
-      setPairCode(payload.code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6));
-    } else if (payload.sid && payload.sid.length <= 6) {
+    const expired = payload.exp != null && payload.exp * 1000 <= Date.now();
+    const target = payload.target?.trim() ?? "";
+    setPairExpired(expired);
+    setPairHost(payload.host ?? "");
+    if (payload.code || (payload.sid && payload.sid.length <= 6)) {
       // sid==code in Slice A; keep the field correct in case the
       // URL omitted the explicit code= parameter.
-      setPairCode(payload.sid.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6));
+      setPairCode((payload.code || payload.sid).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6));
+    } else {
+      setPairCode("");
     }
-    if (payload.target) setPairUrl(payload.target);
-    setPairError(null);
+    // Never retain a previous machine's URL when this QR omits one.
+    // A stale target plus a fresh passkey is precisely the kind of mixed
+    // state that can send a credential to the wrong listener.
+    setPairUrl(target);
+    setPairError(
+      expired
+        ? "This pairing QR has expired. Run `yaver auth pair` again to print a fresh one."
+        : !target
+          ? "This pairing link has no reachable machine address. Enter the machine URL below."
+          : null,
+    );
     setPairSuccess(null);
     return true;
   }, []);
+
+  const handlePairQrScanned = useCallback((raw: string) => {
+    const payload = parsePairUrl(raw);
+    if (!payload || !applyPairUrl(raw)) {
+      setPairError("That QR is not a Yaver pairing link.");
+      return;
+    }
+    setPairScannerOpen(false);
+    setPairManualOpen(!payload.target);
+  }, [applyPairUrl]);
 
   // When the global Linking handler routes a pair URL into this tab
   // via ?pair=, open the pair modal and apply the URL once. The
   // router.setParams clear avoids re-opening on re-render.
   useEffect(() => {
     if (!pairParam) return;
-    if (applyPairUrl(pairParam)) {
+    const payload = parsePairUrl(pairParam);
+    if (payload && applyPairUrl(pairParam)) {
       setShowPair(true);
+      setPairScannerOpen(false);
+      setPairManualOpen(!payload.target);
       // Clear the param so navigating away + back doesn't re-trigger.
       router.setParams({ pair: undefined });
     }
@@ -2156,6 +2195,8 @@ export default function MoreScreen() {
       setPairBusy(false);
     }
   }, [pairCode, pairUrl, token, user]);
+
+  const pairReady = pairCode.length === 6 && !!pairUrl.trim() && !pairExpired;
 
   const toggleSection = useCallback((section: string) => {
     setExpandedSection((prev) => (prev === section ? null : section));
@@ -2201,8 +2242,8 @@ export default function MoreScreen() {
             onPress={openPair}
           >
             <Text style={[s.quickIcon, { color: c.textMuted }]}>{"\u2194"}</Text>
-            <Text style={[s.quickLabel, { color: c.textPrimary }]}>Pair Device</Text>
-            <Text style={[s.quickDesc, { color: c.textMuted }]} numberOfLines={2}>Connect a machine</Text>
+            <Text style={[s.quickLabel, { color: c.textPrimary }]}>Pair Machine</Text>
+            <Text style={[s.quickDesc, { color: c.textMuted }]} numberOfLines={2}>Scan QR or enter code</Text>
           </Pressable>
 
           <Pressable
@@ -2279,8 +2320,8 @@ export default function MoreScreen() {
             fold (2026-07-20). Pairing is one action; it gets one card, in the
             same shape as every other card here.
 
-            The "Start in Mobile Sandbox" link is gone: new app development is
-            remote-box-first, so offering the phone sandbox as a co-equal first
+            The old phone-local project link is gone: new app development is
+            remote-box-first, so offering local execution as a co-equal first
             move contradicts the product path. The route still exists for
             anything already using it. */}
         {!connected ? (
@@ -2959,114 +3000,179 @@ export default function MoreScreen() {
       </ScrollView>
 
       {/* Pair device modal */}
-      <Modal visible={showPair} animationType="slide" transparent>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" }}>
-          <View style={{ backgroundColor: c.bg, padding: 20, borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingBottom: insets.bottom + 24 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>Pair a device</Text>
-              <Pressable onPress={() => setShowPair(false)} hitSlop={8}>
-                <Text style={{ color: c.accent, fontSize: 15, fontWeight: "600" }}>Close</Text>
-              </Pressable>
-            </View>
-            <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 16 }}>
-              Run `yaver auth pair` — or just `yaver serve` on a fresh box — on the headless machine. It prints a 6-character passkey. On the same Wi-Fi, the box will also show up below for one-tap pairing.
-            </Text>
+      <Modal
+        visible={showPair}
+        animationType="slide"
+        transparent={!pairScannerOpen}
+        onRequestClose={() => pairScannerOpen ? setPairScannerOpen(false) : setShowPair(false)}
+      >
+        {pairScannerOpen ? (
+          <PairQrScanner onScanned={handlePairQrScanned} onClose={() => setPairScannerOpen(false)} />
+        ) : (
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+          >
+            <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.62)", justifyContent: "flex-end" }}>
+              <View style={{ backgroundColor: c.bg, borderTopLeftRadius: 22, borderTopRightRadius: 22, maxHeight: "90%", overflow: "hidden" }}>
+                <ScrollView
+                  testID="pair-device-sheet"
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="interactive"
+                  automaticallyAdjustKeyboardInsets
+                  contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 24 }}
+                >
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+                    <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: "700" }}>Pair a machine</Text>
+                    <Pressable onPress={() => setShowPair(false)} hitSlop={8} accessibilityRole="button" accessibilityLabel="Close pairing">
+                      <Text style={{ color: c.accent, fontSize: 15, fontWeight: "600" }}>Close</Text>
+                    </Pressable>
+                  </View>
 
-            {bootstrapDevices.length > 0 && (
-              <View style={{ marginBottom: 16 }}>
-                <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 6 }}>
-                  Found on this network ({bootstrapDevices.length})
-                </Text>
-                {bootstrapDevices.map((d) => (
-                  <Pressable
-                    key={d.deviceId}
-                    onPress={() => pickBootstrapDevice(d)}
-                    style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border, marginBottom: 6 }]}
-                  >
-                    <Text style={[s.icon, { color: c.accent }]}>{"\u25CF"}</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[s.label, { color: c.textPrimary }]}>{d.name || d.deviceId}</Text>
-                      <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>
-                        {d.ip}:{d.port} — needs auth
-                        {d.bootstrapPasskey ? ` · passkey ${d.bootstrapPasskey}` : ""}
-                      </Text>
+                  <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: "700", letterSpacing: 0.7, textTransform: "uppercase" }}>On the machine</Text>
+                  <View style={[s.pairCommand, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text selectable style={{ color: c.textPrimary, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 16, fontWeight: "700" }}>yaver auth pair</Text>
+                      <Text style={{ color: c.textMuted, fontSize: 12 }}>Prints a short-lived QR and 6-character code</Text>
                     </View>
-                    <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203A"}</Text>
+                    <Pressable
+                      onPress={() => void Clipboard.setStringAsync("yaver auth pair")}
+                      style={[s.pairCopyBtn, { borderColor: c.border }]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Copy yaver auth pair command"
+                    >
+                      <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>Copy</Text>
+                    </Pressable>
+                  </View>
+
+                  <Pressable
+                    testID="pair-scan-qr"
+                    onPress={() => setPairScannerOpen(true)}
+                    style={({ pressed }) => [s.pairPrimaryBtn, { backgroundColor: c.accent }, pressed && { opacity: 0.85 }]}
+                    accessibilityRole="button"
+                  >
+                    <Text style={s.pairPrimaryIcon}>▣</Text>
+                    <Text style={s.pairPrimaryText}>Scan QR</Text>
                   </Pressable>
-                ))}
+                  <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 17, textAlign: "center", marginTop: 8 }}>
+                    Scan it here, review the machine, then confirm pairing.
+                  </Text>
+
+                  {pairReady && !pairManualOpen && (
+                    <View style={[s.pairReadyCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+                      <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.6 }}>Ready to pair</Text>
+                      <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: "700", marginTop: 4 }}>{pairHost || "Yaver machine"}</Text>
+                      <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 2 }} numberOfLines={1}>{pairUrl}</Text>
+                      <Pressable
+                        testID="pair-confirm"
+                        onPress={handlePairSubmit}
+                        disabled={pairBusy}
+                        style={[s.pairConfirmBtn, { backgroundColor: c.accent, opacity: pairBusy ? 0.6 : 1 }]}
+                      >
+                        {pairBusy ? <ActivityIndicator color="#fff" /> : <Text style={s.pairPrimaryText}>Pair with this machine</Text>}
+                      </Pressable>
+                    </View>
+                  )}
+
+                  {bootstrapDevices.length > 0 && (
+                    <View style={{ marginTop: 20 }}>
+                      <Text style={{ color: c.textMuted, fontSize: 12, fontWeight: "700", marginBottom: 8 }}>
+                        Nearby machines ({bootstrapDevices.length})
+                      </Text>
+                      {bootstrapDevices.map((d) => (
+                        <Pressable
+                          key={d.deviceId}
+                          onPress={() => pickBootstrapDevice(d)}
+                          style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border, marginBottom: 6 }]}
+                        >
+                          <Text style={[s.icon, { color: c.accent }]}>{"\u25CF"}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[s.label, { color: c.textPrimary }]}>{d.name || d.deviceId}</Text>
+                            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>{d.ip}:{d.port} · ready to pair</Text>
+                          </View>
+                          <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203A"}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+
+                  <Pressable
+                    testID="pair-manual-toggle"
+                    onPress={() => setPairManualOpen((open) => !open)}
+                    style={[s.pairSecondaryBtn, { borderColor: c.border, backgroundColor: c.bgCard }]}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: pairManualOpen }}
+                  >
+                    <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "600" }}>Enter code or link instead</Text>
+                    <Text style={{ color: c.textMuted, fontSize: 18 }}>{pairManualOpen ? "⌃" : "⌄"}</Text>
+                  </Pressable>
+
+                  {pairManualOpen && (
+                    <View testID="pair-manual-fields" style={{ marginTop: 12 }}>
+                      <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 6 }}>6-character pairing code</Text>
+                      <SegmentedCodeInput
+                        testID="pair-segmented-code"
+                        value={pairCode}
+                        onChangeText={(t) => {
+                          setPairCode(t);
+                          setPairExpired(false);
+                          setPairHost("");
+                          setPairError(null);
+                          setPairSuccess(null);
+                        }}
+                        length={6}
+                        groupEvery={3}
+                        accessibilityLabel="Six-character machine pairing code"
+                      />
+
+                      <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 6, marginTop: 14 }}>Machine URL or full yaver.io/pair link</Text>
+                      <TextInput
+                        value={pairUrl}
+                        onChangeText={(t) => {
+                          if (applyPairUrl(t)) return;
+                          setPairUrl(t);
+                          setPairExpired(false);
+                          setPairHost("");
+                          setPairError(null);
+                          setPairSuccess(null);
+                        }}
+                        placeholder="http://192.168.1.20:18080"
+                        placeholderTextColor={c.textMuted}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        spellCheck={false}
+                        keyboardType="url"
+                        returnKeyType="done"
+                        style={[s.textInput, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgCard }]}
+                      />
+                      <Pressable
+                        testID="pair-manual-confirm"
+                        onPress={handlePairSubmit}
+                        disabled={pairBusy || !pairReady}
+                        style={[s.pairConfirmBtn, { backgroundColor: pairReady ? c.accent : c.bgCard, opacity: pairBusy ? 0.6 : 1 }]}
+                      >
+                        {pairBusy ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : (
+                          <Text style={[s.pairPrimaryText, { color: pairReady ? "#fff" : c.textMuted }]}>Pair with this machine</Text>
+                        )}
+                      </Pressable>
+                    </View>
+                  )}
+
+                  {pairError && <Text accessibilityRole="alert" style={{ color: "#ef4444", fontSize: 13, lineHeight: 18, marginTop: 12 }}>{pairError}</Text>}
+                  {pairSuccess && <Text accessibilityRole="alert" style={{ color: "#22c55e", fontSize: 13, lineHeight: 18, marginTop: 12 }}>{pairSuccess}</Text>}
+
+                  {pairManualOpen && !pairReady && (
+                    <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 10 }}>
+                      The URL is only needed for manual entry. A scanned QR already includes the best reachable address.
+                    </Text>
+                  )}
+                </ScrollView>
               </View>
-            )}
-
-            <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 6 }}>Passkey (or paste a yaver.io/pair URL)</Text>
-            <TextInput
-              value={pairCode}
-              onChangeText={(t) => {
-                // Detect a pasted canonical pair URL and split it
-                // into both fields. Falls through to normal passkey
-                // entry for plain 6-char input.
-                if (applyPairUrl(t)) return;
-                setPairCode(t.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6));
-                setPairError(null);
-                setPairSuccess(null);
-              }}
-              placeholder="ABC123"
-              placeholderTextColor={c.textMuted}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              spellCheck={false}
-              maxLength={6}
-              style={[s.textInput, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgCard, letterSpacing: 6, fontFamily: "Menlo", textAlign: "center", fontSize: 20, fontWeight: "700" }]}
-            />
-
-            <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 6, marginTop: 14 }}>Target URL (or paste a yaver.io/pair URL)</Text>
-            <TextInput
-              value={pairUrl}
-              onChangeText={(t) => {
-                // A pasted canonical pair URL fills both fields; a
-                // plain reachable URL just updates this one.
-                if (applyPairUrl(t)) return;
-                setPairUrl(t);
-                setPairError(null);
-                setPairSuccess(null);
-              }}
-              placeholder="http://192.168.1.20:18080"
-              placeholderTextColor={c.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              spellCheck={false}
-              keyboardType="url"
-              style={[s.textInput, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgCard }]}
-            />
-
-            {pairError && (
-              <Text style={{ color: "#ef4444", fontSize: 13, marginTop: 12 }}>{pairError}</Text>
-            )}
-            {pairSuccess && (
-              <Text style={{ color: "#22c55e", fontSize: 13, marginTop: 12 }}>{pairSuccess}</Text>
-            )}
-
-            <Pressable
-              onPress={handlePairSubmit}
-              disabled={pairBusy || pairCode.length !== 6 || !pairUrl.trim()}
-              style={[
-                s.actionBtn,
-                {
-                  marginTop: 18,
-                  backgroundColor: pairBusy || pairCode.length !== 6 || !pairUrl.trim() ? c.bgCard : c.accent,
-                  paddingVertical: 14,
-                },
-              ]}
-            >
-              {pairBusy ? (
-                <ActivityIndicator color={c.textPrimary} />
-              ) : (
-                <Text style={[s.actionBtnText, { color: pairCode.length === 6 && pairUrl.trim() ? "#fff" : c.textMuted }]}>
-                  Send token
-                </Text>
-              )}
-            </Pressable>
-          </View>
-        </View>
+            </View>
+          </KeyboardAvoidingView>
+        )}
       </Modal>
 
       {/* Tutorials list + WebView were here as Modals; moved to a
@@ -3255,6 +3361,55 @@ const s = StyleSheet.create({
     borderRadius: 6,
     padding: 8,
     marginVertical: 4,
+  },
+  pairCommand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 8,
+  },
+  pairCopyBtn: {
+    borderWidth: 1,
+    borderRadius: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  pairPrimaryBtn: {
+    minHeight: 54,
+    borderRadius: 14,
+    marginTop: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  pairPrimaryIcon: { color: "#fff", fontSize: 19, fontWeight: "700" },
+  pairPrimaryText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  pairReadyCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 18,
+  },
+  pairConfirmBtn: {
+    minHeight: 48,
+    borderRadius: 12,
+    marginTop: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pairSecondaryBtn: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 12,
+    marginTop: 18,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   textInput: {
     borderWidth: 1,

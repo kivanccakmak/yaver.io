@@ -73,12 +73,15 @@ changing those.
   **No surprise re-render while the user is watching or typing.** Preview
   refreshes are disruptive: they steal focus, reset scroll/state, and can make
   the whole app feel frozen. Runner/MCP events such as
-  `runtime_render_requested`, output lines that mention "reload", and a user
-  prompt that asks to reload/re-render are only render *intents* while the task
-  is `queued`/`running`. Queue the intent, keep the last good iframe/native
-  surface visible, show only a quiet status line, and refresh exactly once when
-  the task reaches a renderable terminal state (`completed`/`review`) or when
-  the user explicitly taps Fast/Full Reload. First open may show a loading
+  `runtime_render_requested` are render *recommendations*, not permission.
+  **Auto-render Vibing mode defaults off**: after a visible UI change, show a
+  compact `Render updates` action beside the response and leave the last good
+  surface alone. When the account setting is on, Yaver may act on one
+  structured agent recommendation after `completed`/`review`; mere completion
+  never renders. A whole-message `reload`/`re-render`/`refresh the preview`
+  command or an explicit Fast/Full Reload tap always queues one user-requested
+  render and executes once no task is coding. Keep queued coding prompts in
+  order. First open may show a loading
   surface; reloads must not replace a working preview with a branded
   placeholder. Render/reload is atomic: if one reload is in flight, every other
   trigger is ignored or coalesced until it finishes, and a new coding turn must

@@ -225,7 +225,7 @@ export const runtimeSurfaceClient = {
    */
   projectPreviewOptions: (
     target: OpsTarget,
-    args: { workDir?: string; projectName?: string; framework?: string; hasPairedDevice?: boolean },
+    args: { workDir?: string; projectName?: string; framework?: string; platform?: string; hasPairedDevice?: boolean },
   ) =>
     callSurfaceOps<unknown>(
       target,

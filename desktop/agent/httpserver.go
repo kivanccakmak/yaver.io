@@ -447,6 +447,10 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/runner-auth/setup", s.authSDK(s.handleRunnerAuthSetup))
 	mux.HandleFunc("/runner/opencode/config", s.auth(s.handleOpenCodeConfig))
 	mux.HandleFunc("/mobile-workspace/status", s.auth(s.handleMobileWorkspaceStatus))
+	// Universal project-start aliases. Keep the legacy Mobile Workspace route
+	// for old clients; new phone/web/desktop/TV/spatial surfaces share these.
+	mux.HandleFunc("/project/start/status", s.auth(s.handleMobileWorkspaceStatus))
+	mux.HandleFunc("/project/start", s.auth(s.handleProjectStart))
 	// Browser/device-auth sub-family is also reachable by SDK tokens that
 	// carry the "runner-auth" scope — lets the embedded Feedback SDK on
 	// carrotbytes.xyz / an RN host trigger `codex login --device-auth`
@@ -1921,6 +1925,11 @@ func companionSessionAllowed(method, path, scope string) bool {
 		case method == http.MethodGet && strings.HasPrefix(path, "/tasks/"):
 			return true
 		case method == http.MethodPost && (path == "/ops" || path == "/runner/session/turn"):
+			return true
+		// Start Project is a bounded, product-owned operation used by the
+		// shipped TV/vision/spatial clients. It creates only inside an approved
+		// project root; raw exec and arbitrary filesystem access remain denied.
+		case method == http.MethodPost && path == "/project/start":
 			return true
 		case method == http.MethodGet && strings.HasPrefix(path, "/remote-runtime/sessions"):
 			return true
@@ -4062,9 +4071,12 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 		UserPrompt  string `json:"userPrompt,omitempty"`
-		Model       string `json:"model"`
-		Runner      string `json:"runner"`         // runner ID: "claude", "codex", "opencode" — empty uses default
-		Mode        string `json:"mode,omitempty"` // runner-specific subcommand: opencode "build" / "plan" / custom agent
+		// HideInitialPrompt is reserved for product-owned bootstrap turns. The
+		// runner receives the prompt, but transcript consumers omit its user bubble.
+		HideInitialPrompt bool   `json:"hideInitialPrompt,omitempty"`
+		Model             string `json:"model"`
+		Runner            string `json:"runner"`         // runner ID: "claude", "codex", "opencode" — empty uses default
+		Mode              string `json:"mode,omitempty"` // runner-specific subcommand: opencode "build" / "plan" / custom agent
 		// Goal arms Yaver goal-mode (opencode goal plugin): a persistent
 		// objective the runner keeps working toward across turns instead of
 		// a one-shot task. Sent to opencode as a create_goal instruction.
@@ -4234,8 +4246,9 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// What the user typed. Feedback / shake clients send no userPrompt,
 		// so the fallback to the (now clean) title is what keeps their own
 		// sentence in their own bubble.
-		InitialUserPrompt: body.UserPrompt,
-		SliceContract:     body.SliceContract,
+		InitialUserPrompt:       body.UserPrompt,
+		InitialUserPromptHidden: body.HideInitialPrompt,
+		SliceContract:           body.SliceContract,
 		// The runner's briefing + the user's ask, in that order. Empty when
 		// nothing briefed this task, in which case startProcess falls back to
 		// Title (+ Description) exactly as it always has.

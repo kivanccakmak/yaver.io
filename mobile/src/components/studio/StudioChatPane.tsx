@@ -33,6 +33,8 @@ interface StudioChatPaneProps {
   projectPath?: string;
   projectName?: string;
   onRequestProject?: () => void;
+  previewLogs?: readonly string[];
+  previewLogsLive?: boolean;
 }
 
 type ChatRow =
@@ -40,7 +42,13 @@ type ChatRow =
   | { kind: "assistant"; text: string }
   | { kind: "system"; text: string };
 
-export function StudioChatPane({ projectPath, projectName, onRequestProject }: StudioChatPaneProps) {
+export function StudioChatPane({
+  projectPath,
+  projectName,
+  onRequestProject,
+  previewLogs = [],
+  previewLogsLive = false,
+}: StudioChatPaneProps) {
   const c = useColors();
   const { activeDevice, connectionStatus } = useDevice();
   const connected = connectionStatus === "connected" && !!activeDevice;
@@ -55,6 +63,7 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
   const [rawText, setRawText] = useState("");
   const [rawLive, setRawLive] = useState(false);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
+  const [previewLogsExpanded, setPreviewLogsExpanded] = useState(false);
   const [lastRawVersion, setLastRawVersion] = useState(0);
   const [loadingTasks, setLoadingTasks] = useState(false);
 
@@ -188,7 +197,7 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
 
   const isRunning = activeTask?.status === "running" || activeTask?.status === "queued";
   const isRenderable = activeTask?.status === "completed" || activeTask?.status === "review";
-  const consoleStatus = activeTask?.status === "failed" || activeTask?.status === "cancelled"
+  const consoleStatus = activeTask?.status === "failed" || activeTask?.status === "stopped"
     ? `○ ${activeTask.status}`
     : isRenderable
       ? "○ done"
@@ -297,6 +306,45 @@ export function StudioChatPane({ projectPath, projectName, onRequestProject }: S
         contentContainerStyle={styles.conversationContent}
         onContentSizeChange={() => listScrollRef.current?.scrollToEnd({ animated: true })}
       >
+        {/* Dev-server output belongs beside the preview, not hidden behind its
+            loading layer. Keep it folded by default like web UI sections; the
+            latest line remains readable without covering the app. */}
+        {previewLogsLive || previewLogs.length > 0 ? (
+          <View style={[styles.consoleWrap, { borderColor: c.border }]}>
+            <Pressable
+              onPress={() => setPreviewLogsExpanded((value) => !value)}
+              style={({ pressed }) => [styles.consoleToggle, { backgroundColor: c.surface }, pressed && { opacity: 0.7 }]}
+              accessibilityRole="button"
+              accessibilityLabel={previewLogsExpanded ? "Hide preview logs" : "Show preview logs"}
+              accessibilityState={{ expanded: previewLogsExpanded }}
+            >
+              <Text style={[styles.consoleCaret, { color: c.textMuted }]}>{previewLogsExpanded ? "▼" : "▶"}</Text>
+              <Text style={[styles.consoleTitle, { color: c.textSecondary }]}>Logs</Text>
+              {!previewLogsExpanded && previewLogs.length > 0 ? (
+                <Text style={[styles.previewLogLatest, { color: c.textTertiary }]} numberOfLines={1}>
+                  {previewLogs[previewLogs.length - 1]}
+                </Text>
+              ) : null}
+              <Text style={[styles.consoleDot, { color: previewLogsLive ? "#4ade80" : c.textTertiary }]}>
+                {previewLogsLive ? "● live" : "○ idle"}
+              </Text>
+            </Pressable>
+            {previewLogsExpanded ? (
+              <ScrollView
+                style={[styles.previewLogBody, { backgroundColor: c.bgCard, borderTopColor: c.border }]}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+              >
+                {previewLogs.length > 0 ? (
+                  <AnsiConsoleText text={previewLogs.join("\n")} fontSize={11} />
+                ) : (
+                  <Text style={{ color: c.textTertiary, fontSize: 12 }}>Waiting for dev-server output…</Text>
+                )}
+              </ScrollView>
+            ) : null}
+          </View>
+        ) : null}
+
         {conversationRows.length === 0 && !rawText.trim() ? (
           <Text style={[styles.emptyHint, { color: c.textTertiary }]}>
             {connected
@@ -443,9 +491,11 @@ const styles = StyleSheet.create({
   },
   consoleCaret: { fontSize: 10 },
   consoleTitle: { fontSize: 13, fontWeight: "700" },
+  previewLogLatest: { flex: 1, minWidth: 0, fontSize: 11, fontFamily: "monospace" },
   consoleDot: { fontSize: 11, fontWeight: "700", marginLeft: "auto" },
   consoleCount: { fontSize: 11 },
   consoleBody: { maxHeight: 280, padding: 10 },
+  previewLogBody: { maxHeight: 220, padding: 10, borderTopWidth: StyleSheet.hairlineWidth },
   sendingRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6 },
   composer: {
     flexDirection: "row",

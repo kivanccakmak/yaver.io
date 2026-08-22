@@ -27,6 +27,7 @@ import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError
 import { validateOpenCodeModel } from "@/lib/opencodeModel";
 import type { Device } from "@/lib/use-devices";
 import { useAuth } from "@/lib/use-auth";
+import { isExplicitRenderPrompt, useAutoRenderVibing } from "@/lib/autoRenderVibing";
 import { collapseTopLevelProjects, mergeConvexCatalogIntoProjects } from "@/lib/projectTopLevel";
 import { CONVEX_URL } from "@/lib/constants";
 import { detectAskBreadth, detectAskIntent } from "@/lib/ask-intent";
@@ -493,6 +494,9 @@ export default function VibeCodingView({
   onQueueTunnelReset?: () => Promise<unknown>;
 }) {
   const { token, user } = useAuth();
+  const autoRenderVibing = useAutoRenderVibing();
+  const [renderReady, setRenderReady] = useState(false);
+  const [explicitRenderQueued, setExplicitRenderQueued] = useState(false);
   const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice } = usePrimaryRunnerByDevice(token);
   const [projects, setProjects] = useState<Project[]>([]);
   const [runners, setRunners] = useState<Runner[]>([]);
@@ -531,6 +535,14 @@ export default function VibeCodingView({
     })(),
   );
   const [selectedRunner, setSelectedRunner] = useState("");
+  // Remoteless is fallback capacity. If a real device runner becomes ready
+  // while the hosted lane is selected, resume the first probed device runner
+  // instead of silently continuing to consume the fallback.
+  useEffect(() => {
+    if (selectedRunner !== "remoteless") return;
+    const preferred = runners.find((runner) => runner.ready && runner.id !== "remoteless");
+    if (preferred) setSelectedRunner(preferred.id);
+  }, [runners, selectedRunner]);
   const [selectedModel, setSelectedModel] = useState("");
   // OpenCode-specific: which agent (build / plan / custom) drives the
   // task. Maps to `--agent <mode>` on `opencode run`. Empty = the
@@ -1271,6 +1283,19 @@ export default function VibeCodingView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStreamTaskId, streamReattachNonce]);
 
+  useEffect(() => {
+    if (!explicitRenderQueued) return;
+    if (activeTask && (
+      activeTask.status === "queued" ||
+      activeTask.status === "running" ||
+      (activeTask.pendingFollowUps?.length ?? 0) > 0
+    )) return;
+    setExplicitRenderQueued(false);
+    void agentClient.reloadDevServer({
+      mode: (devStatus?.framework || "").match(/^(expo|react-native)$/i) ? "bundle" : "dev",
+    });
+  }, [activeTask, devStatus?.framework, explicitRenderQueued]);
+
   // Cross-Surface render contract: when the runner emits
   // runtime_render_requested AND the active task reached a renderable
   // terminal state (completed/review), reload the preview exactly once per
@@ -1284,19 +1309,25 @@ export default function VibeCodingView({
     const structuredRequest = agentRenderRequest?.id?.startsWith(`${activeTask.id}:`)
       ? agentRenderRequest
       : null;
+    if (!structuredRequest) return;
+    if (!autoRenderVibing.enabled) {
+      setRenderReady(true);
+      return;
+    }
     const key = [
       activeTask.id,
       status,
       String(activeTask.output?.length ?? 0),
       (activeTask.output?.[activeTask.output.length - 1] ?? "").slice(-80),
-      structuredRequest ? `mcp:${structuredRequest.id}` : "task-finished",
+      `mcp:${structuredRequest.id}`,
     ].join(":");
     if (autoRenderRef.current === key) return;
     autoRenderRef.current = key;
     void agentClient.reloadDevServer({
       mode: (devStatus?.framework || "").match(/^(expo|react-native)$/i) ? "bundle" : "dev",
     });
-  }, [activeTask, agentRenderRequest, devStatus?.framework]);
+    setRenderReady(false);
+  }, [activeTask, agentRenderRequest, autoRenderVibing.enabled, devStatus?.framework]);
 
   useEffect(() => {
     if (!token || !activeTask?.placementId) return;
@@ -1473,6 +1504,12 @@ export default function VibeCodingView({
   async function startChatTask() {
     if (!composer.trim()) {
       setBusy("Enter a prompt.");
+      return;
+    }
+    if (isExplicitRenderPrompt(composer)) {
+      setComposer("");
+      setRenderReady(false);
+      setExplicitRenderQueued(true);
       return;
     }
     const modelVeto = opencodeModelVeto();
@@ -1750,6 +1787,12 @@ export default function VibeCodingView({
 
   async function continueChatTask() {
     if (!activeTask || !composer.trim()) return;
+    if (isExplicitRenderPrompt(composer)) {
+      setComposer("");
+      setRenderReady(false);
+      setExplicitRenderQueued(true);
+      return;
+    }
     if (selectedRunnerRow && selectedRunnerRow.ready === false) {
       setBusy(selectedRunnerRow.error || selectedRunnerRow.warning || `${selectedRunnerRow.name} is installed but not ready on this machine.`);
       return;
@@ -2477,6 +2520,18 @@ export default function VibeCodingView({
               ) : null}
             </div>
           </div>
+          {selectedRunner === "remoteless" ? (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+              <span>
+                Remoteless fallback in use · hosted DeepSeek coding is handling this turn. Configured device runners remain preferred.
+              </span>
+              {runners.some((runner) => runner.ready && runner.id !== "remoteless") ? (
+                <button onClick={() => setSelectedRunner(runners.find((runner) => runner.ready && runner.id !== "remoteless")!.id)} className="shrink-0 rounded-lg border border-amber-400/30 px-2 py-1 font-semibold">
+                  Use device runner
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <div className="mt-3 flex flex-wrap gap-2">
             {visibleDevices.map((device) => (
               <button
@@ -3525,6 +3580,21 @@ export default function VibeCodingView({
                       turn={turn}
                     />
                   ))}
+                  {renderReady ? (
+                    <div className="max-w-[92%] rounded-2xl border border-sky-500/25 bg-sky-500/10 px-4 py-3 text-sm text-surface-200">
+                      <div>UI updates are ready. Your current preview was left in place.</div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRenderReady(false);
+                          void agentClient.reloadDevServer({ mode: (devStatus?.framework || "").match(/^(expo|react-native)$/i) ? "bundle" : "dev" });
+                        }}
+                        className="mt-2 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white"
+                      >
+                        Render updates
+                      </button>
+                    </div>
+                  ) : null}
                   {showLiveOutput ? (() => {
                     // A runner's INTERNAL transport chatter is not the task's
                     // verdict. Codex logs MCP-sidecar and websocket retries

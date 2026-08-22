@@ -1,4 +1,4 @@
-// app/sandbox-ai.tsx — choose the AI backend the Mobile Sandbox uses to code.
+// app/sandbox-ai.tsx — compatibility route for Mobile Workspace runner settings.
 // Every option is optional and user-controlled: on-device model, or a BYO-key
 // cloud model (Claude / OpenAI / GLM), or "Auto" which picks on-device first
 // then the strongest available key. Keys are stored in the device keychain
@@ -37,10 +37,13 @@ import {
 import { LOCAL_KEYS, getLocalSecret, saveLocalSecret, deleteLocalSecret } from "../src/lib/auth";
 import { engineAvailable } from "../src/lib/localAgent/engine";
 
-const KEY_SLOT: Record<"anthropic" | "openai" | "glm", string> = {
+type ByoKeyBackend = "anthropic" | "openai" | "glm" | "deepseek";
+
+const KEY_SLOT: Record<ByoKeyBackend, string> = {
   anthropic: LOCAL_KEYS.anthropicApiKey,
   openai: LOCAL_KEYS.openAiApiKey,
   glm: LOCAL_KEYS.glmApiKey,
+  deepseek: LOCAL_KEYS.deepseekApiKey,
 };
 
 export default function SandboxAiScreen() {
@@ -73,7 +76,7 @@ export default function SandboxAiScreen() {
   }, []);
 
   const saveKey = useCallback(
-    async (id: "anthropic" | "openai" | "glm") => {
+    async (id: ByoKeyBackend) => {
       const draft = (keyDrafts[id] ?? "").trim();
       setSavingKey(id);
       try {
@@ -131,7 +134,7 @@ export default function SandboxAiScreen() {
           <View style={{ marginLeft: 8 }}>
             <Text style={[styles.h1, { color: c.textPrimary }]}>Sandbox AI</Text>
             <Text style={{ color: c.textMuted, fontSize: 12 }}>
-              How the Mobile Sandbox writes code
+              How Mobile Workspace writes code
             </Text>
           </View>
         </View>
@@ -185,9 +188,12 @@ export default function SandboxAiScreen() {
           <Text style={[styles.section, { color: c.textSecondary, marginTop: 18 }]}>
             BRING-YOUR-OWN KEYS
           </Text>
-          {(["anthropic", "openai", "glm"] as const).map((id) => {
+          {(["deepseek", "anthropic", "openai", "glm"] as const).map((id) => {
             const has =
-              id === "anthropic" ? av.anthropicKey : id === "openai" ? av.openaiKey : av.glmKey;
+              id === "deepseek" ? av.deepseekKey
+                : id === "anthropic" ? av.anthropicKey
+                  : id === "openai" ? av.openaiKey
+                    : av.glmKey;
             const meta = CODING_BACKENDS.find((b) => b.id === id)!;
             return (
               <View
@@ -226,11 +232,11 @@ export default function SandboxAiScreen() {
             );
           })}
 
-          {/* Git accounts — push/pull sandbox repos to GitHub/GitLab from the phone */}
+          {/* Git accounts — push/pull workspace repos to GitHub/GitLab from the phone */}
           <Text style={[styles.section, { color: c.textSecondary, marginTop: 18 }]}>SOURCE CONTROL</Text>
           <View style={[styles.card, { borderColor: c.border, backgroundColor: c.bgCard }]}>
             <Text style={{ color: c.textPrimary, fontSize: 13 }}>
-              Connect GitHub, GitLab, or a self-hosted repo to push & pull your sandbox projects
+              Connect GitHub, GitLab, or a self-hosted repo to push and pull your workspace projects
               directly from this phone — no dev box.
             </Text>
             <Pressable

@@ -25,6 +25,7 @@ import {
   type FileEdit,
 } from "@yaver/mobile-lib/llmClient";
 import { createAnthropicProvider } from "@yaver/mobile-lib/llmAnthropic";
+import { createOpenAiProvider } from "@yaver/mobile-lib/llmOpenAI";
 
 // ---- applyEditPlan --------------------------------------------------
 
@@ -386,6 +387,46 @@ describe("createAnthropicProvider", () => {
     });
     await provider.editFiles({ prompt: "x", files: [] });
     expect(mock.calls[0].url).toBe("http://127.0.0.1:9000/proxy/messages");
+  });
+});
+
+// ---- createOpenAiProvider / DeepSeek compatibility -----------------
+
+describe("createOpenAiProvider", () => {
+  it("disables DeepSeek V4 thinking before forcing apply_edits", async () => {
+    const mock = newMockFetch(() =>
+      jsonRes(200, {
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [{ function: { name: "apply_edits", arguments: '{"rationale":"ok","edits":[]}' } }],
+          },
+        }],
+      }),
+    );
+    const provider = createOpenAiProvider({
+      flavor: "deepseek",
+      apiKey: "sk-deepseek-test-only",
+      fetchImpl: mock.fetch,
+    });
+
+    await provider.editFiles({ prompt: "x", files: [] });
+
+    const body = JSON.parse(String(mock.calls[0].init?.body));
+    expect(mock.calls[0].url).toBe("https://api.deepseek.com/chat/completions");
+    expect(body.model).toBe("deepseek-v4-flash");
+    expect(body.thinking).toEqual({ type: "disabled" });
+    expect(body.tool_choice).toEqual({ type: "function", function: { name: "apply_edits" } });
+  });
+
+  it("does not send DeepSeek-only thinking controls to other providers", async () => {
+    const mock = newMockFetch(() => jsonRes(200, { choices: [{ message: { content: '{"rationale":"ok","edits":[]}' } }] }));
+    const provider = createOpenAiProvider({ flavor: "openai", apiKey: "sk-openai-test-only", fetchImpl: mock.fetch });
+
+    await provider.editFiles({ prompt: "x", files: [] });
+
+    const body = JSON.parse(String(mock.calls[0].init?.body));
+    expect(body.thinking).toBeUndefined();
   });
 });
 

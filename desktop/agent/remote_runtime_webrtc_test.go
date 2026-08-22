@@ -60,6 +60,40 @@ func newPrimedManager(t *testing.T, targetID string) (*RemoteRuntimeManager, str
 	return mgr, id
 }
 
+func TestRemoteRuntimeFrameBlockReasonPreservesBrowserFailure(t *testing.T) {
+	session := RemoteRuntimeSession{
+		TargetID: "browser-window",
+		Status:   "waiting-for-dev-server",
+		Note:     "Browser window will open blank: no dev server is running",
+	}
+	if got := remoteRuntimeFrameBlockReason(session); got != session.Note {
+		t.Fatalf("block reason = %q, want named session note %q", got, session.Note)
+	}
+	session.TargetID = "ios-simulator"
+	if got := remoteRuntimeFrameBlockReason(session); got != "" {
+		t.Fatalf("non-browser target was blocked: %q", got)
+	}
+}
+
+func TestApplyWebRTCOfferRefusesUnpreparedBrowserSession(t *testing.T) {
+	mgr, sessionID := newPrimedManager(t, "browser-window")
+	mgr.mu.Lock()
+	session := mgr.sessions[sessionID]
+	session.Status = "waiting-for-dev-server"
+	session.Note = "Browser window will open blank: no dev server is running"
+	mgr.sessions[sessionID] = session
+	mgr.mu.Unlock()
+
+	_, _, err := mgr.ApplyWebRTCOffer(sessionID, webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: "v=0\r\n"})
+	if err == nil || !strings.Contains(err.Error(), "Browser window is open but blank") {
+		t.Fatalf("ApplyWebRTCOffer error = %v, want named browser preparation failure", err)
+	}
+	got, _ := mgr.Get(sessionID)
+	if got.Status != "waiting-for-dev-server" {
+		t.Fatalf("offer overwrote truthful status with %q", got.Status)
+	}
+}
+
 func TestApplyWebRTCOffer_AnswerHasBothDataChannels(t *testing.T) {
 	// The most load-bearing test in this file: prove that the agent
 	// can take a Pion-generated offer and produce a valid answer with

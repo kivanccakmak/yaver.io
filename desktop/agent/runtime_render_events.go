@@ -7,6 +7,8 @@ const RuntimeRenderEventSchema = 1
 func runtimeRenderReasonFromTaskOutput(text string) string {
 	lower := strings.ToLower(text)
 	switch {
+	case strings.Contains(lower, "ui updates are ready"):
+		return "agent-ui-change"
 	case strings.Contains(lower, "yaver_web_preview_start"):
 		return "web-preview-start"
 	case strings.Contains(lower, "yaver_vibe_preview_start"):
@@ -26,12 +28,6 @@ func runtimeRenderReasonFromTaskOutput(text string) string {
 	case strings.Contains(lower, "run-guest"),
 		strings.Contains(lower, "launch-app"):
 		return "runtime-command"
-	case strings.Contains(lower, "files changed"),
-		strings.Contains(lower, "file changed"),
-		strings.Contains(lower, "saved"),
-		strings.Contains(lower, "patched"),
-		strings.Contains(lower, "updated"):
-		return "source-change"
 	default:
 		return ""
 	}

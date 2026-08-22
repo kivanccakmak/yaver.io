@@ -297,7 +297,7 @@ const LOCAL_PHONE_TEMPLATES: PhoneTemplate[] = [
   { id: "notes", label: "Notes", description: "users + notes with a starter entry." },
 ];
 
-function slugify(value: string): string {
+export function slugifyPhoneProject(value: string): string {
   return value
     .trim()
     .toLowerCase()
@@ -917,7 +917,7 @@ export async function createPhoneProject(
 export async function createLocalPhoneProject(spec: PhoneCreateSpec): Promise<PhoneProject> {
   const name = spec.name.trim();
   if (!name) throw new Error("project name is required");
-  const slug = slugify(spec.slug || name);
+  const slug = slugifyPhoneProject(spec.slug || name);
   if (!slug) throw new Error("project name is required");
   const template = spec.template || "crud";
   const now = new Date().toISOString();

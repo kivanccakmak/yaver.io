@@ -1,3 +1,5 @@
+import { remotelessCapability, type RemotelessCapability } from "../_core/remoteless";
+
 // renderCapability.ts — the client-side failure contract for preview surfaces.
 //
 // A missing runner is a capability constraint, not a transient loading state.
@@ -7,17 +9,30 @@
 export const REMOTE_RENDER_REQUIRED = "surface.remote_render_required";
 
 export type RenderCapabilityFailure = {
-  code: typeof REMOTE_RENDER_REQUIRED;
+  code: string;
+  legacyCode: typeof REMOTE_RENDER_REQUIRED;
+  capability: RemotelessCapability;
   title: string;
   message: string;
-  action: { label: string; route: "/devices" };
+  action: { label: string; route: "/devices" | "/cloud-onboarding" };
+  alternativeAction?: { label: string; route: "/devices" | "/cloud-onboarding" };
 };
 
-export function remoteRenderRequiredFailure(surface: string): RenderCapabilityFailure {
+export function remoteRenderRequiredFailure(
+  surface: string,
+  capability: Extract<RemotelessCapability, "dev-server" | "web-build" | "flutter-render" | "native-build" | "simulator"> = "dev-server",
+  platform: "ios" | "android" | "web" | "companion" = "companion",
+): RenderCapabilityFailure {
+  const gap = remotelessCapability(capability, platform);
   return {
-    code: REMOTE_RENDER_REQUIRED,
-    title: "Remote runtime required",
-    message: `${surface} can edit or audit locally, but rendering, builds, simulators, and dev servers require a connected remote runner. Select or activate one before choosing a preview target.`,
-    action: { label: "Select a runner", route: "/devices" },
+    code: gap.code,
+    legacyCode: REMOTE_RENDER_REQUIRED,
+    capability,
+    title: gap.summary,
+    message: `${surface}: ${gap.detail}`,
+    action: { label: gap.route.label, route: gap.route.path },
+    alternativeAction: gap.alternateRoute
+      ? { label: gap.alternateRoute.label, route: gap.alternateRoute.path }
+      : undefined,
   };
 }

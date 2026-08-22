@@ -49,18 +49,18 @@ async function main() {
   // ── 1. authorized → the token comes back ──────────────────────────────────
   stubFetch([{ status: "pending" }, { status: "pending" }, { status: "authorized", token: "tok_abc" }]);
   eq(
-    await waitForDeviceCodeToken("dc", { sleep: noSleep }),
+    await waitForDeviceCodeToken("dc", { sleep: noSleep, baseUrl: "https://example.invalid" }),
     { kind: "token", token: "tok_abc" },
     "authorized poll yields the token",
   );
 
   // ── 2. expired is terminal, not an infinite wait ──────────────────────────
   stubFetch([{ status: "expired" }]);
-  eq(await waitForDeviceCodeToken("dc", { sleep: noSleep }), { kind: "expired" }, "expired ends the wait");
+  eq(await waitForDeviceCodeToken("dc", { sleep: noSleep, baseUrl: "https://example.invalid" }), { kind: "expired" }, "expired ends the wait");
 
   // ── 3. IT ENDS. A server that says "pending" forever must still terminate. ─
   stubFetch([{ status: "pending" }]);
-  const t = await waitForDeviceCodeToken("dc", { timeoutMs: 50, sleep: noSleep });
+  const t = await waitForDeviceCodeToken("dc", { timeoutMs: 50, sleep: noSleep, baseUrl: "https://example.invalid" });
   eq((t as { kind: string }).kind, "timeout", "a permanently-pending code times out instead of hanging forever");
 
   // ── 4. a transport failure is REPORTED, not disguised as "waiting" ────────
@@ -69,6 +69,7 @@ async function main() {
   const unreachable = await waitForDeviceCodeToken("dc", {
     timeoutMs: 50,
     sleep: noSleep,
+    baseUrl: "https://example.invalid",
     onTick: (s) => ticks.push(s.unreachableReason),
   });
   eq((unreachable as { kind: string }).kind, "timeout", "unreachable server still terminates");
@@ -84,6 +85,7 @@ async function main() {
   const res = await waitForDeviceCodeToken("dc", {
     timeoutMs: 60_000,
     sleep: noSleep,
+    baseUrl: "https://example.invalid",
     isCancelled: () => cancelled,
     onTick: () => {
       cancelled = true;
@@ -98,7 +100,7 @@ async function main() {
     { status: "authorized", token: "tok_claimed" },
   ]);
   eq(
-    await waitForDeviceCodeToken("dc", { sleep: noSleep }),
+    await waitForDeviceCodeToken("dc", { sleep: noSleep, baseUrl: "https://example.invalid" }),
     { kind: "token", token: "tok_claimed" },
     "claimRequired is followed through to the claim call",
   );

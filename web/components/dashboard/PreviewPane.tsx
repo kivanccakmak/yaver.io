@@ -6,6 +6,7 @@ import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError
 import { detectCompileFailure } from "@/lib/compileFailure";
 import { previewPhaseTitle } from "@/lib/previewPhase";
 import { classifyRelayLimit } from "@/lib/relayDeny";
+import { isExplicitRenderPrompt, useAutoRenderVibing } from "@/lib/autoRenderVibing";
 import {
   capabilityGapFromDevEvent,
   capabilityGapFromError,
@@ -175,6 +176,9 @@ export default function PreviewPane({
    *  hardcoded default. Falls back to "claude" when unset. */
   primaryRunner?: string | null;
 }) {
+  const autoRenderVibing = useAutoRenderVibing();
+  const [renderReady, setRenderReady] = useState(false);
+  const [explicitRenderQueued, setExplicitRenderQueued] = useState(false);
   const taskStreamStopRef = useRef<(() => void) | null>(null);
   const taskPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [devStatus, setDevStatus] = useState<{
@@ -1072,6 +1076,12 @@ export default function PreviewPane({
   const handleSendPrompt = useCallback(async () => {
     const prompt = composer.trim();
     if (!prompt || sending) return;
+    if (isExplicitRenderPrompt(prompt)) {
+      setComposer("");
+      setRenderReady(false);
+      setExplicitRenderQueued(true);
+      return;
+    }
     setSending(true);
     setSendStatus(null);
     try {
@@ -1203,6 +1213,13 @@ export default function PreviewPane({
     await agentClient.reloadDevServer({ mode: kind === "full" ? "bundle" : "fast" });
   }, [devStatus?.framework]);
 
+  useEffect(() => {
+    if (!explicitRenderQueued) return;
+    if (activeTaskStream && (activeTaskStream.status === "queued" || activeTaskStream.status === "running")) return;
+    setExplicitRenderQueued(false);
+    void handleReload("fast");
+  }, [activeTaskStream?.status, explicitRenderQueued, handleReload]);
+
   // Cross-Surface render contract: when the runner emits
   // runtime_render_requested AND the task has reached a renderable terminal
   // state (completed/review), reload the preview exactly once per turn.
@@ -1214,17 +1231,23 @@ export default function PreviewPane({
     if (!activeTaskStream) return;
     if (!taskStatusAllowsRender(activeTaskStream.status)) return;
     const structuredRequest = agentRenderRequest?.id?.startsWith(`${activeTaskStream.id}:`) ? agentRenderRequest : null;
+    if (!structuredRequest) return;
+    if (!autoRenderVibing.enabled) {
+      setRenderReady(true);
+      return;
+    }
     const key = [
       activeTaskStream.id,
       activeTaskStream.status,
       String(activeTaskStream.lines?.length ?? 0),
       (activeTaskStream.lines?.[activeTaskStream.lines.length - 1] ?? "").slice(-80),
-      structuredRequest ? `mcp:${structuredRequest.id}` : "task-finished",
+      `mcp:${structuredRequest.id}`,
     ].join(":");
     if (autoRenderRef.current === key) return;
     autoRenderRef.current = key;
     void handleReload("fast");
-  }, [activeTaskStream, agentRenderRequest, handleReload]);
+    setRenderReady(false);
+  }, [activeTaskStream, agentRenderRequest, autoRenderVibing.enabled, handleReload]);
 
 
   const handleStop = useCallback(async () => {
@@ -1906,6 +1929,18 @@ export default function PreviewPane({
                       activeTaskStream.lines.slice(-120).join("\n")
                     )}
                   </pre>
+                  {renderReady ? (
+                    <div className="flex items-center justify-between gap-3 rounded border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-[11px] text-surface-300">
+                      <span>UI updates are ready. The preview was left in place.</span>
+                      <button
+                        type="button"
+                        onClick={() => { setRenderReady(false); void handleReload("fast"); }}
+                        className="shrink-0 rounded bg-sky-600 px-2.5 py-1 font-semibold text-white"
+                      >
+                        Render updates
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="rounded border border-dashed border-surface-800 bg-surface-950 px-3 py-4 text-[11px] leading-5 text-surface-600">

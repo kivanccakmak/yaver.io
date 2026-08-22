@@ -100,6 +100,59 @@ test("applyPreviewCapabilities keeps Hermes for react-native", () => {
   assert.ok(out.some((a) => a.type === "compile-hermes"), "hermes stripped from an RN project");
 });
 
+test("Hermes shows only Compile before a bundle exists", () => {
+  const out = applyPreviewCapabilities(
+    [
+      { label: "Hermes Reload", target: ".", type: "open-native", framework: "expo" },
+      { label: "Compile Hermes bundle", target: ".", type: "compile-hermes", framework: "expo" },
+    ],
+    {
+      framework: "expo",
+      hermesBuildState: "needs_build",
+      options: [
+        { id: "open-native", supported: false },
+        { id: "compile-hermes", supported: true },
+      ],
+    },
+  );
+  assert.deepEqual(out.map((action) => action.type), ["compile-hermes"]);
+});
+
+test("Hermes shows only Reload after a usable bundle exists", () => {
+  const out = applyPreviewCapabilities(
+    [
+      { label: "Hermes Reload", target: ".", type: "open-native", framework: "expo" },
+      { label: "Compile Hermes bundle", target: ".", type: "compile-hermes", framework: "expo" },
+    ],
+    {
+      framework: "expo",
+      hermesBuildState: "ready",
+      options: [
+        { id: "open-native", supported: true },
+        { id: "compile-hermes", supported: true },
+      ],
+    },
+  );
+  assert.deepEqual(out.map((action) => action.type), ["open-native"]);
+});
+
+test("an old agent that returns both Hermes actions defaults safely to Compile", () => {
+  const out = applyPreviewCapabilities(
+    [
+      { label: "Hermes Reload", target: ".", type: "open-native", framework: "expo" },
+      { label: "Compile Hermes bundle", target: ".", type: "compile-hermes", framework: "expo" },
+    ],
+    {
+      framework: "expo",
+      options: [
+        { id: "open-native", supported: true },
+        { id: "compile-hermes", supported: true },
+      ],
+    },
+  );
+  assert.deepEqual(out.map((action) => action.type), ["compile-hermes"]);
+});
+
 test("applyPreviewCapabilities keeps Browser Reload first for react-native when the agent says so", () => {
   const out = applyPreviewCapabilities(
     [

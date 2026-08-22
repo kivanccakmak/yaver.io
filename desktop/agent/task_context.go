@@ -203,6 +203,9 @@ Web / WebView preview rules:
 - When the preview starts, surface the returned iframeUrl or webUrl explicitly to the user. Do not just say "server is running" — tell them the webview/browser preview URL.
 - Use web_preview_reload or the web-preview reload action when the user asks for a refresh.
 - Use web_preview_stop or POST /dev/web-preview/stop to shut the preview down.
+- Finishing code is not permission to replace the user's current preview. Do not reload merely because files changed.
+- When your changes affect visible UI, say "UI updates are ready" in the response. Yaver turns that into a Render updates button by default, or may render automatically when the user enabled Auto-render Vibing mode.
+- If the user explicitly asks to reload, re-render, or refresh, execute that request once it is safe.
 
 Remote visual feedback:
 - If the user wants visual confirmation of what is rendering, use vibe_preview_start, vibe_preview_status, vibe_preview_snapshot, or related Yaver preview tools instead of asking them to guess.

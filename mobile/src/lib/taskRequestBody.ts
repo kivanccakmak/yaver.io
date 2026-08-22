@@ -31,6 +31,9 @@ export type SendTaskRequestBodyArgs = {
   /** Whether the runner sees Yaver's own `yaver mcp` doorway. New tasks
    *  default false; send true only after an explicit user opt-in. */
   includeYaverMcp?: boolean;
+  /** Product-owned kickoff text can drive the runner without appearing as a
+   *  user-authored chat bubble. Ordinary composer sends must leave this off. */
+  hideInitialPrompt?: boolean;
 };
 
 export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<string, unknown> {
@@ -54,5 +57,6 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     ...(args.goal ? { goal: args.goal } : {}),
     ...(args.askMode ? { askMode: true } : {}),
     ...(typeof args.includeYaverMcp === "boolean" ? { includeYaverMcp: args.includeYaverMcp } : {}),
+    ...(args.hideInitialPrompt ? { hideInitialPrompt: true } : {}),
   };
 }

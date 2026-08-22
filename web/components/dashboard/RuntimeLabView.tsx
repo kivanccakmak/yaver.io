@@ -5,6 +5,7 @@ import {
   agentClient,
   type ConversationTurn,
   type McpServer,
+  type ProjectStartGitProvider,
   type RemoteRuntimeCapabilities,
   type RemoteRuntimeSession,
   type RemoteRuntimeTarget,
@@ -44,6 +45,7 @@ import { describeRunnerTurn } from "@/lib/runnerTurnHeartbeat";
 import { assembleTrace } from "@/lib/_core/trace";
 import { CONVEX_URL } from "@/lib/constants";
 import { useAuth } from "@/lib/use-auth";
+import { isExplicitRenderPrompt, useAutoRenderVibing } from "@/lib/autoRenderVibing";
 import type { Device } from "@/lib/use-devices";
 import { machineRolesSplitActive, type MachineRolesRow } from "@/lib/useMachineRoles";
 import { probeFailureAllowsBoxAlive } from "@/lib/connection-error";
@@ -704,6 +706,7 @@ function taskConversationTurns(task: Pick<Task, "title" | "description" | "turns
     ? task.turns
         .filter((turn): turn is ConversationTurn =>
           (turn?.role === "user" || turn?.role === "assistant") &&
+          turn.hidden !== true &&
           typeof turn.content === "string" &&
           turn.content.trim().length > 0)
         .slice(-50)
@@ -753,7 +756,7 @@ function runtimeChatMessages(stream: { title: string; status: TaskStatus; lines:
   const messages = (stream.turns?.length
     ? stream.turns
     : [{ role: "user", content: stream.title, timestamp: "" } as ConversationTurn]
-  ).filter((turn) => String(turn.content || "").trim());
+  ).filter((turn) => turn.hidden !== true && String(turn.content || "").trim());
   const liveOutput = stream.lines.join("\n").trim();
   if (liveOutput && (stream.status === "queued" || stream.status === "running" || !messages.some((turn) => turn.role === "assistant"))) {
     const last = messages[messages.length - 1];
@@ -1003,9 +1006,15 @@ export default function RuntimeLabView({
   desktopSurface?: DesktopSurfaceInfo;
 }) {
   const { token } = useAuth();
+  const autoRenderVibing = useAutoRenderVibing();
   const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice, setPrimaryRunner, setOpenCodeConfigSnapshot } = usePrimaryRunnerByDevice(token);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
+  const [projectStartOpen, setProjectStartOpen] = useState(false);
+  const [projectStartName, setProjectStartName] = useState("");
+  const [projectStartGit, setProjectStartGit] = useState<ProjectStartGitProvider>("yaver-git");
+  const [projectStartBusy, setProjectStartBusy] = useState(false);
+  const [projectStartError, setProjectStartError] = useState<string | null>(null);
   const [runners, setRunners] = useState<Runner[]>([]);
   const [selectedRunner, setSelectedRunner] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
@@ -1181,6 +1190,8 @@ export default function RuntimeLabView({
     reason: string;
     workDir?: string;
   } | null>(null);
+  const [renderReady, setRenderReady] = useState(false);
+  const [explicitRenderRequest, setExplicitRenderRequest] = useState<"fast" | null>(null);
   const [sttAvailable] = useState(
     () => typeof window !== "undefined" && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition),
   );
@@ -2349,6 +2360,32 @@ export default function RuntimeLabView({
     }, 2000);
   }, [stopActiveTaskStream]);
 
+  const startProject = useCallback(async () => {
+    const name = projectStartName.trim();
+    if (!name || projectStartBusy) return;
+    setProjectStartBusy(true);
+    setProjectStartError(null);
+    try {
+      const started = await agentClient.startProject({ name, gitProvider: projectStartGit, palette: "ocean" });
+      userSelectedProjectRef.current = true;
+      setProjects((current) => [
+        { name, path: started.directory, framework: "expo-rn", surfaces: ["mobile", "backend"] },
+        ...current.filter((project) => project.path !== started.directory),
+      ]);
+      setSelectedPath(started.directory);
+      setCaps(null);
+      setSession(null);
+      attachTaskSession(started.task);
+      setProjectStartOpen(false);
+      setProjectStartName("");
+      appendLog(`started ${name} on the AI machine · ${started.gitProvider} · Ocean`);
+    } catch (err) {
+      setProjectStartError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProjectStartBusy(false);
+    }
+  }, [appendLog, attachTaskSession, projectStartBusy, projectStartGit, projectStartName]);
+
   // stopRunnerTurn asks the BOX to end the turn — POST /tasks/{id}/stop, which
   // has existed the whole time. Distinct from closeChatSession and from
   // stopActiveTaskStream, both of which only stop this browser from WATCHING:
@@ -2519,6 +2556,12 @@ export default function RuntimeLabView({
     // bubble. Trim only for the blank-message gate.
     const prompt = composer;
     if (!prompt.trim() || sending) return;
+    if (isExplicitRenderPrompt(prompt)) {
+      setComposer("");
+      setRenderReady(false);
+      setExplicitRenderRequest("fast");
+      return;
+    }
     // A send is NEVER refused while the runner or a reload is busy: the agent
     // queues mid-run follow-ups (PendingFollowUps) and drains them when the
     // current response finishes, Claude-Desktop style. The old silent
@@ -3131,13 +3174,49 @@ export default function RuntimeLabView({
     setWebPreviewNonce((n) => n + 1);
   }, [activeTaskStream?.id, activeTaskStream?.status, appendLog, selectedProject, webPreviewBusy]);
 
+  const renderCurrentSurface = useCallback(async (source: string) => {
+    let dispatched = false;
+    if (webPreviewPanelOpen || !session?.id) {
+      await reloadWebPreview("fast");
+      dispatched = true;
+    }
+    if (session?.id && canRunGuestOnRemoteTarget(session.targetId)) {
+      dispatched = true;
+      try {
+        const result = await agentClient.sendRemoteRuntimeCommand(
+          session.id,
+          "run-guest",
+          source,
+          selectedProject?.path,
+        );
+        if ((result as any)?.session) setSession((result as any).session as RemoteRuntimeSession);
+      } catch (err) {
+        appendLog(`render failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (!dispatched) setWebPreviewNote("Open a preview before rendering updates.");
+  }, [appendLog, reloadWebPreview, selectedProject?.path, session?.id, session?.targetId, webPreviewPanelOpen]);
+
+  // A bare chat command such as "re-render" is an explicit user action, not a
+  // coding turn. The same reload function queues it while coding and drains it
+  // once the current turn is safe, preserving queued prompt order.
+  useEffect(() => {
+    if (!explicitRenderRequest) return;
+    if (taskStatusMeansRunnerIsCoding(activeTaskStream?.status) || (activeTaskStream?.pendingUserTurns?.length ?? 0) > 0) {
+      setWebPreviewNote("Render queued until the coding queue finishes.");
+      return;
+    }
+    setExplicitRenderRequest(null);
+    void renderCurrentSurface("explicit-chat-render");
+  }, [activeTaskStream?.pendingUserTurns?.length, activeTaskStream?.status, explicitRenderRequest, renderCurrentSurface]);
+
   useEffect(() => {
     const queuedKind = queuedWebPreviewReloadRef.current;
-    if (!queuedKind || !selectedProject || webPreviewBusy || taskStatusMeansRunnerIsCoding(activeTaskStream?.status)) return;
+    if (!queuedKind || !selectedProject || webPreviewBusy || taskStatusMeansRunnerIsCoding(activeTaskStream?.status) || (activeTaskStream?.pendingUserTurns?.length ?? 0) > 0) return;
     queuedWebPreviewReloadRef.current = null;
     appendLog(`${queuedKind} reload queue draining`);
     void reloadWebPreview(queuedKind);
-  }, [activeTaskStream?.status, appendLog, reloadWebPreview, selectedProject, webPreviewBusy]);
+  }, [activeTaskStream?.pendingUserTurns?.length, activeTaskStream?.status, appendLog, reloadWebPreview, selectedProject, webPreviewBusy]);
 
   const closeWebPreview = useCallback(() => {
     setWebPreviewPanelOpen(false);
@@ -3184,6 +3263,11 @@ export default function RuntimeLabView({
     if (!activeTaskStream || !selectedProject) return;
     const structuredRequest = agentRenderRequest?.taskId === activeTaskStream.id ? agentRenderRequest : null;
     if (!taskStatusAllowsRender(activeTaskStream.status)) return;
+    if (!structuredRequest) return;
+    if (!autoRenderVibing.enabled) {
+      setRenderReady(true);
+      return;
+    }
     const key = [
       activeTaskStream.id,
       activeTaskStream.status,
@@ -3196,7 +3280,7 @@ export default function RuntimeLabView({
       // line buffer is capped (identical count, different content).
       String(activeTaskStream.lines?.length ?? 0),
       (activeTaskStream.lines?.[activeTaskStream.lines.length - 1] ?? "").slice(-80),
-      structuredRequest ? `mcp:${structuredRequest.id}` : "task-finished",
+      `mcp:${structuredRequest.id}`,
       webPreviewPanelOpen ? "web" : "",
       session?.id || "",
       session?.targetId || "",
@@ -3213,21 +3297,25 @@ export default function RuntimeLabView({
       appendLog(structuredRequest
         ? `task finished: refreshing ${session.targetLabel || session.targetId} stream (${structuredRequest.reason})`
         : `task finished: refreshing ${session.targetLabel || session.targetId} stream`);
-      void agentClient.sendRemoteRuntimeCommand(session.id, "run-guest", "task-finished-render", structuredRequest?.workDir || selectedProject.path)
+      void agentClient.sendRemoteRuntimeCommand(session.id, "run-guest", "agent-requested-render", structuredRequest.workDir || selectedProject.path)
         .then((result) => {
           if ((result as any)?.session) setSession((result as any).session as RemoteRuntimeSession);
         })
-        .catch((err) => appendLog(`task-finished render failed: ${err instanceof Error ? err.message : String(err)}`));
+        .catch((err) => appendLog(`agent-requested render failed: ${err instanceof Error ? err.message : String(err)}`));
       dispatched = true;
     }
     // Only burn the dedupe key once a render actually went out. If the iframe
     // lane was skipped because a prior reload was still busy (and there is no
     // session lane), leave the key unset so the effect retries when
     // webPreviewBusy clears — otherwise this turn's render is lost for good.
-    if (dispatched) autoRenderRef.current = key;
+    if (dispatched) {
+      autoRenderRef.current = key;
+      setRenderReady(false);
+    }
   }, [
     activeTaskStream,
     agentRenderRequest,
+    autoRenderVibing.enabled,
     appendLog,
     reloadWebPreview,
     selectedProject,
@@ -3367,6 +3455,13 @@ export default function RuntimeLabView({
               ))}
             </select>
           </label>
+          <button
+            type="button"
+            onClick={() => { setProjectStartError(null); setProjectStartOpen(true); }}
+            className="inline-flex h-10 shrink-0 items-center rounded-md bg-[#075985] px-3 text-xs font-semibold text-white hover:bg-[#0c6f9f]"
+          >
+            Start a project
+          </button>
           {/* h-10 matches the select's height exactly; shrink-0 keeps the
               button from compressing below it when the row wraps tight. */}
           <button
@@ -4588,6 +4683,18 @@ export default function RuntimeLabView({
                       </div>
                     </div>
                   ))}
+                  {renderReady ? (
+                    <div className="flex items-center justify-between gap-3 rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-xs text-[#344054] dark:text-[#d7dce3]">
+                      <span>UI updates are ready. The current preview stays visible until you choose.</span>
+                      <button
+                        type="button"
+                        onClick={() => { setRenderReady(false); void renderCurrentSurface("response-render-action"); }}
+                        className="shrink-0 rounded-md bg-sky-600 px-3 py-1.5 font-semibold text-white"
+                      >
+                        Render updates
+                      </button>
+                    </div>
+                  ) : null}
                       </>
                     );
                   })()}
@@ -5232,6 +5339,54 @@ export default function RuntimeLabView({
           ) : null}
         </div>
       </aside>
+      {projectStartOpen ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="project-start-title">
+          <div className="w-full max-w-md rounded-2xl border border-[#67E8F9]/60 bg-[#F0F9FF] p-5 text-[#075985] shadow-2xl dark:bg-[#0b1f2a] dark:text-[#e6f8ff]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="project-start-title" className="text-lg font-bold">Start a project</h2>
+                <p className="mt-1 text-sm opacity-75">Ocean is the initial visual direction. Developing will ask what the app should do.</p>
+              </div>
+              <button type="button" onClick={() => setProjectStartOpen(false)} aria-label="Close" className="text-xl opacity-70">×</button>
+            </div>
+            <label className="mt-5 block text-xs font-semibold uppercase tracking-wide">
+              Project name
+              <input
+                autoFocus
+                value={projectStartName}
+                onChange={(event) => setProjectStartName(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") void startProject(); }}
+                placeholder="My new app"
+                className="mt-2 h-11 w-full rounded-lg border border-[#67E8F9] bg-white px-3 text-sm text-[#0c4a6e] outline-none focus:ring-2 focus:ring-[#0EA5E9] dark:bg-[#101820] dark:text-white"
+              />
+            </label>
+            <fieldset className="mt-4">
+              <legend className="text-xs font-semibold uppercase tracking-wide">Git home</legend>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {(["yaver-git", "github", "gitlab"] as const).map((provider) => (
+                  <button
+                    key={provider}
+                    type="button"
+                    onClick={() => setProjectStartGit(provider)}
+                    className={`rounded-lg border px-2 py-3 text-xs font-semibold ${projectStartGit === provider ? "border-[#075985] bg-[#0EA5E9] text-white" : "border-[#67E8F9] bg-white/80 text-[#075985] dark:bg-[#101820] dark:text-[#dff7ff]"}`}
+                  >
+                    {provider === "yaver-git" ? "Yaver Git" : provider === "github" ? "GitHub" : "GitLab"}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            {projectStartError ? <p className="mt-3 text-sm text-rose-600 dark:text-rose-300">{projectStartError}</p> : null}
+            <button
+              type="button"
+              disabled={!projectStartName.trim() || projectStartBusy}
+              onClick={() => void startProject()}
+              className="mt-5 h-11 w-full rounded-lg bg-[#075985] text-sm font-bold text-white disabled:opacity-45"
+            >
+              {projectStartBusy ? "Initializing…" : "Initialize and develop"}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

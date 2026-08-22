@@ -42,7 +42,6 @@ import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT, PREVIEW_RESOURCE_ERROR_SCRIP
 import { downloadArtifact } from "../../src/lib/builds";
 import { describeConnectionStatus } from "../../src/lib/connection";
 import { buildFailureHint, buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../../src/lib/nativeBuild";
-import { previewWaitLine } from "../../src/lib/previewWait";
 import { isActiveDevServerStatus } from "../../src/lib/devServerState";
 import { connectionManager } from "../../src/lib/connectionManager";
 import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
@@ -74,6 +73,11 @@ import { runtimeSurfaceClient } from "../../src/lib/runtimeSurfaceClient";
 import { lightCardShadow, spacing, typography } from "../../src/theme/tokens";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
+import type { PhoneProject } from "../../src/lib/phoneProjects";
+import { listLocalPhoneProjectsMeta } from "../../src/lib/phoneSandboxLocal";
+import { discoverConnectedProviderProjects, type ProviderProject } from "../../src/lib/gitProviderProjects";
+import { cloneGitRepoToPhone } from "../../src/lib/cloneToPhone";
+import { reconcilePreviewDevStatus, usablePreviewDevStatus } from "../../src/lib/previewDevStatus";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -529,8 +533,15 @@ export default function AppsScreen() {
   const insets = useSafeAreaInsets();
   const layout = useResponsiveLayout();
   const tabletContent = useTabletContentStyle("wide");
-  const { activeDevice, connectionStatus, devices, connectedDeviceIds, refreshDevices, retryConnection } = useDevice();
+  const { activeDevice, connectionStatus, devices, connectedDeviceIds, refreshDevices, retryConnection, codingMode } = useDevice();
   const isConnected = connectionStatus === "connected" && !!activeDevice;
+  // Use the selected box's pooled client for the whole preview lifecycle.
+  // Mixing this with the focus-bound singleton produced a green status card
+  // from the pool followed by `Failed to fetch` (and an empty WebView URL)
+  // from a singleton that was still reconnecting.
+  const previewClient = activeDevice?.id
+    ? connectionManager.clientFor(activeDevice.id)
+    : quicClient;
   // Effective state — focused box OR any pool client live. See
   // lib/connectionState; aligns this tab with Devices/Tasks/Reload so
   // we no longer disagree about "connected" when the focused box is
@@ -541,6 +552,47 @@ export default function AppsScreen() {
   const selectedTarget = mobileWorkers.find((d) => d.id === selectedTargetId) || null;
   const isDirectConnection = quicClient.connectionMode === "direct";
   const router = useRouter();
+  const [remotelessPhoneProjects, setRemotelessPhoneProjects] = useState<PhoneProject[]>([]);
+  const [remotelessProviderProjects, setRemotelessProviderProjects] = useState<ProviderProject[]>([]);
+  const [remotelessLoading, setRemotelessLoading] = useState(false);
+  const [remotelessError, setRemotelessError] = useState<string | null>(null);
+  const [remotelessCloningID, setRemotelessCloningID] = useState<string | null>(null);
+
+  const loadRemotelessProjects = useCallback(async () => {
+    if (codingMode !== "local-only") return;
+    setRemotelessLoading(true);
+    setRemotelessError(null);
+    try {
+      const [local, discovery] = await Promise.all([
+        listLocalPhoneProjectsMeta().catch(() => [] as PhoneProject[]),
+        discoverConnectedProviderProjects(),
+      ]);
+      setRemotelessPhoneProjects(local);
+      setRemotelessProviderProjects(discovery.projects);
+      setRemotelessError(discovery.errors.join("\n") || null);
+    } catch (error) {
+      setRemotelessError(error instanceof Error ? error.message : "Could not list projects on this phone.");
+    } finally {
+      setRemotelessLoading(false);
+    }
+  }, [codingMode]);
+
+  useEffect(() => {
+    void loadRemotelessProjects();
+  }, [loadRemotelessProjects]);
+
+  const cloneRemotelessProject = useCallback(async (project: ProviderProject) => {
+    setRemotelessCloningID(project.id);
+    try {
+      const cloned = await cloneGitRepoToPhone(project.cloneUrl, { ref: project.defaultBranch });
+      await loadRemotelessProjects();
+      router.push({ pathname: "/(tabs)/tasks", params: { openNew: "1", phoneCheckout: cloned.slug } } as any);
+    } catch (error) {
+      Alert.alert("Clone failed", error instanceof Error ? error.message : "Could not clone this repository to the phone.");
+    } finally {
+      setRemotelessCloningID(null);
+    }
+  }, [loadRemotelessProjects, router]);
 
   // Build + task status hoisted to the top of the component so the shared
   // helpers below (sendTaskOrWarn / offerAgentFix) can surface status from
@@ -708,17 +760,11 @@ export default function AppsScreen() {
   }, [refreshDevices]);
   const [startingProject, setStartingProject] = useState<string | null>(null);
   const [showWebView, setShowWebView] = useState(false);
+  const showWebViewRef = useRef(false);
+  showWebViewRef.current = showWebView;
   const [webViewKey, setWebViewKey] = useState(0);
   const [webViewLoading, setWebViewLoading] = useState(false);
 
-  // ── NARRATING THE WAIT ────────────────────────────────────────────────────
-  // sfmg sat black for two minutes on build 500 while the box was healthy and
-  // talkative. These three are what turn that rectangle into a sentence; the
-  // wording itself lives in src/lib/previewWait.ts so it is testable and so
-  // other surfaces render the same words instead of inventing their own.
-  const [previewStartedAt, setPreviewStartedAt] = useState<number | null>(null);
-  const [previewLastOutputAt, setPreviewLastOutputAt] = useState<number | null>(null);
-  const [previewNow, setPreviewNow] = useState(() => Date.now());
   const [search, setSearch] = useState("");
   // Default to the mobile view: Yaver is overwhelmingly used for mobile app
   // development, and a repo tree usually holds far more non-mobile projects
@@ -803,10 +849,6 @@ export default function AppsScreen() {
     const id = setTimeout(() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true }), 30);
     return () => clearTimeout(id);
   }, [showWebView, webPreviewLogs.length]);
-  useEffect(() => {
-    if (!showWebView) return;
-    setWebRuntimeLogOpen(!webPreviewContentLoaded);
-  }, [showWebView, webPreviewContentLoaded]);
   // Elapsed + last-output heartbeat.
   //
   // A spinner that never changes reads as HUNG, and a first web compile can
@@ -978,10 +1020,14 @@ export default function AppsScreen() {
           client.getDevServerStatus(),
           client.getMobileWorkerPreviewSession(),
         ]);
-        if (mounted) setDevStatus(status && (isActiveDevServerStatus(status) || Boolean((status as DevServerStatus).error)) ? status : null);
+        if (mounted) {
+          setDevStatus((previous) => reconcilePreviewDevStatus(previous, status, showWebViewRef.current));
+        }
         if (mounted) setWorkerSession(session);
       } catch {
-        if (mounted) setDevStatus(null);
+        if (mounted) {
+          setDevStatus((previous) => reconcilePreviewDevStatus(previous, null, showWebViewRef.current));
+        }
         if (mounted) setWorkerSession(null);
       }
     };
@@ -1069,29 +1115,13 @@ export default function AppsScreen() {
     // stream itself is the better signal: its first frame proves the box is
     // talking.
     if (!showWebView) return;
-    const baseUrl = (quicClient as any).baseUrl;
-    if (!baseUrl) return;
 
-    // XHR, not fetch().body.getReader().
-    //
-    // RN's fetch has NO streaming body — `res.body` is undefined, so the old code
-    // hit `if (!reader) return;` and never read a byte. Recorded on video
-    // 2026-07-25: "waiting for the first output from the box" for 50s straight
-    // while the agent was emitting log/phase/snapshot/ready frames every second.
-    // src/lib/sseClient.ts is now the only SSE implementation in the app.
-    const sub = subscribeSse({
-      url: `${baseUrl}/dev/events`,
-      headers: (quicClient as any).authHeaders,
-      onOpen: () => {
-        // Proof of contact, immediately — before any dev-server output exists.
-        setWebPreviewLastLogAt((prev) => prev ?? Date.now());
-      },
-      onError: (reason) => {
-        // A stream that cannot open is a fact the user needs; silence here is
-        // what made this bug invisible for a whole session.
-        setWebPreviewLogs((p) => appendPreviewLogLine(p, `[preview] log stream unavailable: ${reason}`));
-      },
-      onEvent: (event: any) => {
+    // Use the client's shared reconnecting SSE lane. A direct one-shot XHR
+    // made a relay hiccup look like the whole preview had failed, even though
+    // /dev/status and the browser route were healthy. Status polling remains
+    // authoritative; logs are useful narration, never a prerequisite to paint.
+    const unsubscribe = previewClient.subscribeDevEvents((event: any) => {
+                setWebPreviewLastLogAt((prev) => prev ?? Date.now());
                 if (event.type === "reload" || event.type === "ready") {
                   setWebViewKey(k => k + 1);
                   setWebViewLoading(true);
@@ -1168,29 +1198,44 @@ export default function AppsScreen() {
                   const gap = capabilityGapFromDevEvent(event);
                   if (gap) setPreviewGap(gap);
                 }
-      },
+      }, {
+        onStreamHealth: (health) => {
+          if (!health) {
+            setWebPreviewLastLogAt(Date.now());
+            return;
+          }
+          if (health.kind === "lost") {
+            setWebPreviewLogs((p) => appendPreviewLogLine(
+              p,
+              "[logs] Live output is unavailable; preview startup continues via status checks.",
+            ));
+          }
+        },
     });
-    return () => sub.close();
-    // Deliberately depends ONLY on `showWebView`: re-subscribing on every
-    // devStatus change tore the stream down and up repeatedly (each poll), which
-    // is its own way to lose the frames we came for.
-  }, [showWebView]);
+    return unsubscribe;
+    // Re-subscribe only when the preview opens or its selected box changes.
+    // Depending on devStatus would still tear this stream down every poll.
+  }, [showWebView, previewClient]);
 
   async function openRunningPreview() {
-    const fresh = await quicClient.getDevServerStatus();
-    if (fresh) setDevStatus(fresh);
+    const fresh = await previewClient.getDevServerStatus();
+    const usable = usablePreviewDevStatus(fresh, devStatus);
+    if (usable) setDevStatus(usable);
     // The tablet studio is also the loading surface. Navigate immediately so
     // the device frame and vibe console remain visible while the box starts
     // or recovers its browser lane.
     if (layout.isTablet) {
       router.push({
         pathname: "/vibe-studio",
-        params: { project: runningProject || fresh?.workDir || "" },
+        // The Studio resolves projects from their real box-side identity. A
+        // display label such as "sfmg / mobile" is not a path and previously
+        // produced a false "project isn't on the connected box" dead end.
+        params: { project: usable?.workDir || currentProject?.path || runningProject || "" },
       });
       return;
     }
-    if (!fresh || !isActiveDevServerStatus(fresh)) {
-      const known = fresh as DevServerStatus | null;
+    if (!usable || !isActiveDevServerStatus(usable)) {
+      const known = usable as DevServerStatus | null;
       Alert.alert(
         "Preview needs attention",
         known?.error ||
@@ -1199,9 +1244,9 @@ export default function AppsScreen() {
       );
       return;
     }
-    if (isHermesMobileFramework(fresh.framework)
-        && !isWebServedStatus({ platform: fresh.platform, devMode: fresh.devMode })) {
-      handleOpenNative(fresh.workDir!, fresh.framework);
+    if (isHermesMobileFramework(usable.framework)
+        && !isWebServedStatus({ platform: usable.platform, devMode: usable.devMode })) {
+      handleOpenNative(usable.workDir!, usable.framework);
       return;
     }
     resetWebPreview();
@@ -1289,7 +1334,7 @@ export default function AppsScreen() {
       try {
         const caps: any = await runtimeSurfaceClient.projectPreviewOptions(
           activeDevice?.id,
-          { workDir: result.path || projectPath, projectName, hasPairedDevice: true },
+          { workDir: result.path || projectPath, projectName, platform: Platform.OS, hasPairedDevice: true },
         );
         composed = applyPreviewCapabilities(composed, caps);
       } catch {
@@ -2186,7 +2231,7 @@ export default function AppsScreen() {
       setWebViewLoading(true);
     }
     const mode = nativeHermes ? (kind === "full" ? "bundle" : "fast") : kind;
-    const result = await quicClient.reloadDevServerDetailed({
+    const result = await previewClient.reloadDevServerDetailed({
       mode,
       allowBundleFallback: nativeHermes,
     });
@@ -2200,26 +2245,26 @@ export default function AppsScreen() {
     if (!nativeHermes) {
       setWebViewKey(k => k + 1);
     }
-  }, [devStatus?.framework]);
+  }, [devStatus?.framework, previewClient]);
 
   const handleRequestScreenshot = useCallback(async () => {
-    await quicClient.sendMobileWorkerPreviewCommand("capture_screenshot", {
+    await previewClient.sendMobileWorkerPreviewCommand("capture_screenshot", {
       reason: "apps-control-plane",
     });
-  }, []);
+  }, [previewClient]);
 
   const handleStop = useCallback(() => {
     Alert.alert("Stop Dev Server", "Stop the running dev server?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Stop", style: "destructive", onPress: async () => {
-          await quicClient.stopDevServer();
+          await previewClient.stopDevServer();
           setShowWebView(false);
           setDevStatus(null);
         }
       },
     ]);
-  }, []);
+  }, [previewClient]);
 
   const openVibingFromPreview = useCallback(async () => {
     const project = (
@@ -2254,17 +2299,17 @@ export default function AppsScreen() {
     // a mic tap means "I want to say something", not "show me every action".
     //
     // The right shape is an OVERLAY INSIDE the preview modal — the same place
-    // the Preview logs sheet already lives, which is the proof it works. The
+    // the Logs sheet already lives, which is the proof it works. The
     // app stays on screen behind it, so you can watch it change while you talk
     // to it, which is the entire point of vibing on a preview.
     setVibingOverPreview(true);
     try {
-      const state = await quicClient.getVibingState(project);
+      const state = await previewClient.getVibingState(project);
       setVibingState(state || { project, path, suggestions: [], quickActions: [], history: [] });
     } catch {
       setVibingState({ project, path, suggestions: [], quickActions: [], history: [] });
     }
-  }, [devStatus?.framework, devStatus?.workDir, projects, layout.isTablet, router]);
+  }, [devStatus?.framework, devStatus?.workDir, projects, layout.isTablet, previewClient, router]);
 
   // WHICH url the preview loads — previewBundlePath (shared with
   // DevPreview.tsx) applies the agent-is-authority rule, the single legacy
@@ -2272,39 +2317,11 @@ export default function AppsScreen() {
   const reportedBundlePath = previewBundlePath(devStatus as any);
   const bundleUrl =
     devStatus && reportedBundlePath
-      ? quicClient.getDevServerBundleUrl(reportedBundlePath)
+      ? previewClient.getDevServerBundleUrl(reportedBundlePath)
       : "";
   const webPreviewServerLooksReady =
     (devStatus ? isWebServedStatus(devStatus) : false) ||
     webPreviewLogs.some((line) => /\b(listening|serving on|compiled|ready|running)\b/i.test(line));
-
-  // Stamp when this preview started, and clear it when the preview closes so a
-  // second open cannot inherit the first one's elapsed time (a counter that
-  // reads "4:12 elapsed" on a preview opened four seconds ago is worse than no
-  // counter — it is a confident lie).
-  useEffect(() => {
-    if (showWebView && bundleUrl) {
-      setPreviewStartedAt((prev) => prev ?? Date.now());
-    } else {
-      setPreviewStartedAt(null);
-      setPreviewLastOutputAt(null);
-    }
-  }, [showWebView, bundleUrl]);
-
-  // Every new log line is progress. Stamping the COUNT rather than the content
-  // means a bundler that reprints the same percentage still reads as alive.
-  useEffect(() => {
-    if (webPreviewLogs.length > 0) setPreviewLastOutputAt(Date.now());
-  }, [webPreviewLogs.length]);
-
-  // Tick ONLY while something is actually being waited on. A timer that keeps
-  // running behind a loaded app is a battery cost for a number nobody reads.
-  useEffect(() => {
-    if (!showWebView || webPreviewContentLoaded || !previewStartedAt) return;
-    setPreviewNow(Date.now());
-    const id = setInterval(() => setPreviewNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [showWebView, webPreviewContentLoaded, previewStartedAt]);
 
   const runBrowserLaneDoctor = useCallback((reason: string) => {
     if (!showWebView || !bundleUrl || webPreviewContentLoaded) return;
@@ -2312,9 +2329,8 @@ export default function AppsScreen() {
     if (browserLaneDoctorRunningRef.current || browserLaneDoctorRanForKeyRef.current === key) return;
     browserLaneDoctorRunningRef.current = true;
     browserLaneDoctorRanForKeyRef.current = key;
-    setWebRuntimeLogOpen(true);
     setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `[doctor] probing browser lane after ${reason}…`));
-    void doctorBrowserLane(quicClient, 45).then((probe) => {
+    void doctorBrowserLane(previewClient, 45).then((probe) => {
       if (!probe) {
         setWebPreviewLogs((prev) => appendPreviewLogLine(prev, "[doctor] browser lane probe unavailable"));
         return;
@@ -2331,7 +2347,7 @@ export default function AppsScreen() {
     }).finally(() => {
       browserLaneDoctorRunningRef.current = false;
     });
-  }, [bundleUrl, showWebView, webPreviewContentLoaded]);
+  }, [bundleUrl, previewClient, showWebView, webPreviewContentLoaded]);
 
   // A later phone probe is stronger than an earlier box-local doctor result.
   // This also closes the race where the doctor completes just before the
@@ -2454,6 +2470,79 @@ export default function AppsScreen() {
       ].filter(Boolean).join(" · ")
     : "";
 
+  if (codingMode === "local-only") {
+    const localSlugs = new Set(remotelessPhoneProjects.map((project) => project.slug.toLowerCase()));
+    const providerProjects = remotelessProviderProjects.filter((project) => !localSlugs.has(project.name.toLowerCase()));
+    return (
+      <SafeAreaView style={[s.safe, { backgroundColor: c.bg }]} edges={["bottom"]}>
+        <RemoteBoxBanner />
+        <ScrollView
+          contentContainerStyle={[tabletContent, { padding: 24, paddingBottom: 100 }]}
+          refreshControl={<RefreshControl refreshing={remotelessLoading} onRefresh={loadRemotelessProjects} tintColor={c.accent} />}
+        >
+          <Text style={{ color: c.textSecondary, fontSize: 15, marginBottom: 20 }}>
+            No remote box · checkouts and connected Git providers on this phone
+          </Text>
+          <View style={{ backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 18 }}>
+            <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>Phone-local workspace</Text>
+            <Text style={{ color: c.textSecondary, fontSize: 13, marginTop: 8 }}>
+              DeepSeek can audit and edit cloned repositories. Git status, diff, commit, and push stay available; builds, tests, shells, previews, and deploys require a remote box.
+            </Text>
+          </View>
+
+          <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: "700", marginTop: 8, marginBottom: 12 }}>On this phone</Text>
+          {remotelessPhoneProjects.length === 0 ? (
+            <Text style={{ color: c.textMuted, fontSize: 14 }}>No checkout yet. Clone one from GitHub or GitLab below.</Text>
+          ) : remotelessPhoneProjects.map((project) => (
+            <Pressable
+              key={`phone:${project.slug}`}
+              accessibilityRole="button"
+              accessibilityLabel={`Open phone checkout ${project.name}`}
+              onPress={() => router.push({ pathname: "/(tabs)/tasks", params: { openNew: "1", phoneCheckout: project.slug } } as any)}
+              style={{ flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 12 }}
+            >
+              <Text style={{ fontSize: 24 }}>📱</Text>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }} numberOfLines={1}>{project.name}</Text>
+                <Text style={{ color: c.textSecondary, fontSize: 12, marginTop: 4 }}>{project.slug}</Text>
+              </View>
+              <Text style={{ color: c.accent, fontSize: 13, fontWeight: "700" }}>Vibe</Text>
+            </Pressable>
+          ))}
+
+          <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: "700", marginTop: 24, marginBottom: 12 }}>GitHub &amp; GitLab</Text>
+          {remotelessLoading && providerProjects.length === 0 ? (
+            <ActivityIndicator style={{ marginTop: 20 }} color={c.accent} />
+          ) : providerProjects.length === 0 ? (
+            <View>
+              <Text style={{ color: c.textMuted, fontSize: 14 }}>No connected provider projects found.</Text>
+              <Pressable onPress={() => router.push("/(tabs)/settings" as any)} style={{ paddingVertical: 12 }} accessibilityRole="button">
+                <Text style={{ color: c.accent, fontWeight: "700" }}>Connect GitHub or GitLab in Settings →</Text>
+              </Pressable>
+            </View>
+          ) : providerProjects.map((project) => (
+            <Pressable
+              key={project.id}
+              disabled={remotelessCloningID !== null}
+              onPress={() => { void cloneRemotelessProject(project); }}
+              accessibilityRole="button"
+              accessibilityLabel={`Clone ${project.fullName} from ${project.provider}`}
+              style={{ flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 12, opacity: remotelessCloningID && remotelessCloningID !== project.id ? 0.55 : 1 }}
+            >
+              <Text style={{ fontSize: 24 }}>{project.provider === "github" ? "◉" : "◆"}</Text>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }} numberOfLines={1}>{project.fullName}</Text>
+                <Text style={{ color: c.textSecondary, fontSize: 12, marginTop: 4 }}>{project.provider === "github" ? "GitHub" : "GitLab"} · {project.defaultBranch} · {project.isPrivate ? "private" : "public"}</Text>
+              </View>
+              {remotelessCloningID === project.id ? <ActivityIndicator color={c.accent} /> : <Text style={{ color: c.accent, fontWeight: "700" }}>Clone</Text>}
+            </Pressable>
+          ))}
+          {remotelessError ? <Text style={{ color: c.error, fontSize: 13, marginTop: 14 }}>{remotelessError}</Text> : null}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   if (!effectivelyConnected) {
     // Banner first (always actionable) so the user can tap Switch ›
     // and pick a device — even from the empty state. Below, the same
@@ -2531,13 +2620,13 @@ export default function AppsScreen() {
                 )}
               </View>
             </View>
-            {/* Vibing = SEE the app. Exactly two actions: "Open in Yaver" opens
+            {/* Vibing = SEE the app. Exactly two actions: "Open" opens
                 the browser preview (works for every stack — RN, Flutter, web —
                 it serves the web target, not a LAN flush), and "Stop". Flush /
                 Reload / Screenshots / Ship It were removed on purpose. */}
             <View style={s.cardActions}>
               <Pressable
-                style={[s.actionBtn, s.openBtn, layout.isTablet ? { minWidth: 168, maxWidth: 210 } : { minWidth: 190, maxWidth: 220 }, devServerBusy && { opacity: 0.5 }]}
+                style={[s.actionBtn, s.openBtn, devServerBusy && { opacity: 0.5 }]}
                 onPress={() => { openRunningPreview().catch((e) => Alert.alert("Open in Yaver failed", e instanceof Error ? e.message : String(e))); }}
                 disabled={devServerBusy}
                 accessibilityRole="button"
@@ -2552,7 +2641,7 @@ export default function AppsScreen() {
                     </Text>
                   </>
                 ) : (
-                  <Text style={s.openBtnText}>Open in Yaver</Text>
+                  <Text style={s.openBtnText}>Open</Text>
                 )}
               </Pressable>
               <Pressable style={[s.actionBtn, s.stopBtn]} onPress={handleStop}>
@@ -3411,52 +3500,6 @@ export default function AppsScreen() {
             <View style={[s.loadingBar, { backgroundColor: c.accent }]} />
           )}
 
-          {/* ── THE WAIT, NARRATED ────────────────────────────────────────────
-              A 3px progress bar was the ENTIRE affordance here. On build 500
-              that meant sfmg showed a solid black rectangle for two minutes
-              while the box was healthy and printing progress the whole time —
-              "the user wont feel that its going well at some stages".
-
-              Everything below is already known to the app; none of it required
-              a new request. It was simply never rendered on the surface the
-              user was looking at, only into a panel behind a tap.
-
-              previewWaitLine returns null the moment content paints, so this
-              can never cover a working app. */}
-          {(() => {
-            const wait = previewWaitLine({
-              contentLoaded: webPreviewContentLoaded,
-              startedAt: previewStartedAt,
-              lastOutputAt: previewLastOutputAt,
-              now: previewNow,
-              logs: webPreviewLogs,
-              workDir: devStatus?.workDir,
-            });
-            if (!wait || !showWebView) return null;
-            return (
-              <View pointerEvents="box-none" style={s.previewWaitWrap}>
-                <View style={s.previewWaitCard}>
-                  <ActivityIndicator size="small" color={c.accent} />
-                  <Text style={s.previewWaitTitle} numberOfLines={2}>{wait.title}</Text>
-                  <Text style={s.previewWaitDetail}>{wait.detail}</Text>
-                  {wait.stalled ? (
-                    <Text style={s.previewWaitStalled}>
-                      Quiet for a while — open Logs to see what the box is doing.
-                    </Text>
-                  ) : null}
-                  <Pressable
-                    onPress={() => setWebRuntimeLogOpen(true)}
-                    accessibilityRole="button"
-                    accessibilityLabel="Show preview logs"
-                    style={s.previewWaitBtn}
-                  >
-                    <Ionicons name="terminal-outline" size={15} color={c.accent} />
-                    <Text style={[s.previewWaitBtnText, { color: c.accent }]}>Show logs</Text>
-                  </Pressable>
-                </View>
-              </View>
-            );
-          })()}
           {previewFullScreen && (
             <View style={[s.previewEscapeBar, { top: insets.top + 8 }]}>
               <Pressable
@@ -3647,7 +3690,6 @@ export default function AppsScreen() {
                     const line = `[web:error] resource failed ${tag}${url ? ` ${url}` : ""}`.slice(0, 1400);
                     setWebPreviewLogs((prev) => appendPreviewLogLine(prev, line));
                     setWebRuntimeIssueCount((count) => Math.min(99, count + 1));
-                    setWebRuntimeLogOpen(true);
                     // Cold Expo/Metro can return index.html before the entry
                     // bundle is ready. The document stays 200, so WebView's
                     // main-frame callbacks never retry it after compilation.
@@ -3709,10 +3751,9 @@ export default function AppsScreen() {
                       // Console evidence is client-only — the agent cannot see
                       // inside the WebView, so a page crash may escalate even
                       // when agent health says the SERVER is healthy.
-                      if (previewCanOfferProjectFix(devStatus, [...webPreviewLogs, line]) ||
-                          clientRuntimeLogsNeedProjectFix([...webPreviewLogs, line])) {
-                        setWebRuntimeLogOpen(true);
-                      }
+                      // Keep failures visible as a compact issue count. Logs
+                      // open only when the user asks; an error must not cover
+                      // the app with a second, automatic diagnostics surface.
                     }
                   }
                 } catch { /* not ours */ }
@@ -3842,7 +3883,7 @@ export default function AppsScreen() {
                           size={18}
                           color={webRuntimeIssueCount > 0 ? c.error : c.accent}
                         />
-                        <Text style={s.previewRuntimeLogTitle}>Preview logs</Text>
+                        <Text style={s.previewRuntimeLogTitle}>Logs</Text>
                       </View>
                       <Pressable
                         onPress={() => setWebRuntimeLogOpen(false)}
@@ -3954,23 +3995,6 @@ export default function AppsScreen() {
                     ) : (
                       <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
                     )}
-                    {!webRuntimeLogOpen ? (
-                      <Text style={[s.previewSubtle, { color: c.textMuted }]}>
-                        {compileCard ? "Full output:" : healthyLogs ? "Recent healthy output:" : `The ${devStatus?.framework || "web"} server never served content. Recent output:`}
-                      </Text>
-                    ) : null}
-                    {!webRuntimeLogOpen ? (
-                      <ScrollView
-                        ref={webPreviewLogScrollRef}
-                        style={s.previewLogBox}
-                        contentContainerStyle={{ padding: 10 }}
-                        onContentSizeChange={() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true })}
-                      >
-                        {(webPreviewLogs.length ? webPreviewLogs : ["No output captured — the server may have exited immediately, or was never started."]).slice(-40).map((ln, i) => (
-                          <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
-                        ))}
-                      </ScrollView>
-                    ) : null}
                     <View style={s.previewFailBtns}>
                       <Pressable onPress={() => { resetWebPreview(); setWebViewLoading(true); setWebViewKey((k) => k + 1); }} style={[s.previewBtn, { backgroundColor: "#1a2e1a" }]}>
                         <Text style={[s.previewBtnText, { color: "#22c55e" }]}>Retry</Text>
@@ -4020,18 +4044,6 @@ export default function AppsScreen() {
                       warnColor={c.warn}
                       stallHint="Stop and retry if this persists"
                     />
-                    {webPreviewLogs.length > 0 && !webRuntimeLogOpen ? (
-                      <ScrollView
-                        ref={webPreviewLogScrollRef}
-                        style={s.previewLogBox}
-                        contentContainerStyle={{ padding: 10 }}
-                        onContentSizeChange={() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true })}
-                      >
-                        {webPreviewLogs.slice(-24).map((ln, i) => (
-                          <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
-                        ))}
-                      </ScrollView>
-                    ) : null}
                   </>
                 )}
               </View>
@@ -4143,19 +4155,6 @@ const s = StyleSheet.create({
   },
   previewRuntimeLogTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   previewRuntimeLogTitle: { color: "#fff", fontSize: 14, fontWeight: "800" },
-  // Centred, compact, and pointerEvents="box-none" on the wrapper so it never
-  // eats a tap meant for the app rendering behind it.
-  // The iframe/WebView is rendered later in the tree. Without an explicit
-  // stacking order RN-web paints that frame over this card, turning a fully
-  // narrated wait into the same solid-black rectangle the card was built to
-  // prevent. Native happened to composite it above the WebView; web did not.
-  previewWaitWrap: { ...StyleSheet.absoluteFillObject, zIndex: 30, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
-  previewWaitCard: { alignItems: "center", gap: 8, maxWidth: 340, paddingVertical: 20, paddingHorizontal: 22, borderRadius: 16, backgroundColor: "rgba(14,14,18,0.92)", borderWidth: 1, borderColor: "#26262f" },
-  previewWaitTitle: { color: "#fff", fontSize: 14, fontWeight: "700", textAlign: "center" },
-  previewWaitDetail: { color: "#9a9aa8", fontSize: 12, textAlign: "center" },
-  previewWaitStalled: { color: "#eab308", fontSize: 12, textAlign: "center", marginTop: 2 },
-  previewWaitBtn: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: "#2e2e3a" },
-  previewWaitBtnText: { fontSize: 13, fontWeight: "700" },
   // The vibing overlay sits ON the live preview — see the JSX for why it is an
   // overlay and not a page. Backdrop is deliberately light: the app behind it
   // is the thing the user is looking at, and dimming it to unreadable would
@@ -4344,8 +4343,8 @@ const s = StyleSheet.create({
   frameworkIcon: {},
 
   cardActions: { flexDirection: "row", gap: 8, marginTop: 12, justifyContent: "flex-start" },
-  actionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
-  openBtn: { backgroundColor: "#22c55e", flex: 0, alignItems: "center", flexDirection: "row" as const, justifyContent: "center", gap: 4 },
+  actionBtn: { minHeight: 36, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  openBtn: { backgroundColor: "#22c55e", flex: 0, minWidth: 72, flexDirection: "row" as const, gap: 4 },
   openBtnText: { color: "#000", fontSize: 13, fontWeight: "700" },
   reloadBtn: { backgroundColor: "#22c55e22", flex: 1, alignItems: "center" },
   reloadBtnText: { color: "#22c55e", fontSize: 13, fontWeight: "600" },

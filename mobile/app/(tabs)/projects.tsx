@@ -8,12 +8,16 @@ import { useColors } from "../../src/context/ThemeContext";
 import { quicClient, type RemoteProject } from "../../src/lib/quic";
 import { setPendingVibingProject } from "../../src/lib/vibingStore";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
+import type { PhoneProject } from "../../src/lib/phoneProjects";
+import { listLocalPhoneProjectsMeta } from "../../src/lib/phoneSandboxLocal";
+import { discoverConnectedProviderProjects, type ProviderProject } from "../../src/lib/gitProviderProjects";
+import { cloneGitRepoToPhone } from "../../src/lib/cloneToPhone";
 
 const IS_TV = Boolean((Platform as typeof Platform & { isTV?: boolean }).isTV);
 
 export default function ProjectsScreen() {
   const c = useColors();
-  const { activeDevice, connectionStatus } = useDevice();
+  const { activeDevice, connectionStatus, codingMode } = useDevice();
   const cloud = useCloudStudio();
   const layout = useResponsiveLayout();
   const legacyTvRunner = IS_TV
@@ -24,6 +28,30 @@ export default function ProjectsScreen() {
   const [creatingRepositoryId, setCreatingRepositoryId] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [validationSummary, setValidationSummary] = useState<string | null>(null);
+  const [phoneProjects, setPhoneProjects] = useState<PhoneProject[]>([]);
+  const [providerProjects, setProviderProjects] = useState<ProviderProject[]>([]);
+  const [phoneLoading, setPhoneLoading] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [cloningProjectId, setCloningProjectId] = useState<string | null>(null);
+
+  const loadPhoneProjects = useCallback(async () => {
+    if (codingMode !== "local-only") return;
+    setPhoneLoading(true);
+    setPhoneError(null);
+    try {
+      const [local, discovery] = await Promise.all([
+        listLocalPhoneProjectsMeta().catch(() => [] as PhoneProject[]),
+        discoverConnectedProviderProjects(),
+      ]);
+      setPhoneProjects(local);
+      setProviderProjects(discovery.projects);
+      setPhoneError(discovery.errors.join("\n") || null);
+    } catch (error) {
+      setPhoneError(error instanceof Error ? error.message : "Could not list projects stored on this phone.");
+    } finally {
+      setPhoneLoading(false);
+    }
+  }, [codingMode]);
 
   const loadLocal = useCallback(async () => {
     if ((IS_TV && !legacyTvRunner) || !activeDevice || connectionStatus !== "connected") {
@@ -41,6 +69,23 @@ export default function ProjectsScreen() {
   useEffect(() => {
     loadLocal().catch(() => {});
   }, [loadLocal]);
+
+  useEffect(() => {
+    loadPhoneProjects().catch(() => {});
+  }, [loadPhoneProjects]);
+
+  const cloneProviderProject = async (project: ProviderProject) => {
+    setCloningProjectId(project.id);
+    try {
+      const cloned = await cloneGitRepoToPhone(project.cloneUrl, { ref: project.defaultBranch });
+      await loadPhoneProjects();
+      router.push({ pathname: "/(tabs)/tasks", params: { openNew: "1", phoneCheckout: cloned.slug } } as any);
+    } catch (error) {
+      Alert.alert("Clone failed", error instanceof Error ? error.message : "Could not clone this repository to the phone.");
+    } finally {
+      setCloningProjectId(null);
+    }
+  };
 
   const createSession = async (repositoryId: string, baseRef?: string) => {
     setCreatingRepositoryId(repositoryId);
@@ -169,6 +214,74 @@ export default function ProjectsScreen() {
             </>
           )}
           {cloud.error ? <Text style={[styles.error, { color: c.error }]}>{cloud.error}</Text> : null}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (!IS_TV && codingMode === "local-only") {
+    const localSlugs = new Set(phoneProjects.map((project) => project.slug.toLowerCase()));
+    const unclonedProviderProjects = providerProjects.filter((project) => !localSlugs.has(project.name.toLowerCase()));
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: c.bg }]} edges={["bottom"]}>
+        <ScrollView
+          contentContainerStyle={[styles.container, { padding: 24 }]}
+          refreshControl={<RefreshControl refreshing={phoneLoading} onRefresh={loadPhoneProjects} tintColor={c.accent} />}
+        >
+          <Text style={[styles.title, { color: c.textPrimary, fontSize: 32 }]}>Projects</Text>
+          <Text style={[styles.subtitle, { color: c.textSecondary, fontSize: 15, marginBottom: 20 }]}>No remote box · checkouts and connected Git providers on this phone</Text>
+
+          <View style={[styles.notice, { backgroundColor: c.bgCard, borderColor: c.border, padding: 16, marginBottom: 18 }]}>
+            <Text style={[styles.noticeTitle, { color: c.textPrimary, fontSize: 17 }]}>Phone-local workspace</Text>
+            <Text style={[styles.noticeText, { color: c.textSecondary, fontSize: 13 }]}>DeepSeek can audit and edit cloned repositories. Git status, diff, commit, and push are available; builds, tests, shells, previews, and deploys require another execution target.</Text>
+          </View>
+
+          <Text style={[styles.sectionTitle, { color: c.textPrimary, fontSize: 20 }]}>On this phone</Text>
+          {phoneProjects.length === 0 ? (
+            <Text style={[styles.empty, { color: c.textMuted, fontSize: 14 }]}>No checkout yet. Clone one from GitHub or GitLab below.</Text>
+          ) : phoneProjects.map((project) => (
+            <Pressable
+              key={`phone:${project.slug}`}
+              style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, padding: 16 }]}
+              onPress={() => router.push({ pathname: "/(tabs)/tasks", params: { openNew: "1", phoneCheckout: project.slug } } as any)}
+            >
+              <Text style={[styles.cardIcon, { fontSize: 24 }]}>📱</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.cardName, { color: c.textPrimary, fontSize: 17 }]}>{project.name}</Text>
+                <Text style={[styles.cardPath, { color: c.textSecondary, fontSize: 12 }]}>{project.slug}</Text>
+              </View>
+              <Text style={[styles.cardBranch, { color: c.accent, fontSize: 13 }]}>Vibe</Text>
+            </Pressable>
+          ))}
+
+          <Text style={[styles.sectionTitle, { color: c.textPrimary, fontSize: 20 }]}>GitHub & GitLab</Text>
+          {phoneLoading && providerProjects.length === 0 ? (
+            <ActivityIndicator style={{ marginTop: 20 }} color={c.accent} />
+          ) : providerProjects.length === 0 ? (
+            <View>
+              <Text style={[styles.empty, { color: c.textMuted, fontSize: 14 }]}>No connected provider projects found.</Text>
+              <Pressable onPress={() => router.push("/(tabs)/settings" as any)} style={{ paddingVertical: 12 }}>
+                <Text style={{ color: c.accent, fontWeight: "700" }}>Connect GitHub or GitLab in Settings →</Text>
+              </Pressable>
+            </View>
+          ) : unclonedProviderProjects.length === 0 ? (
+            <Text style={[styles.empty, { color: c.textMuted, fontSize: 14 }]}>All discovered projects are already on this phone.</Text>
+          ) : unclonedProviderProjects.map((project) => (
+            <Pressable
+              key={project.id}
+              disabled={cloningProjectId !== null}
+              style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, padding: 16, opacity: cloningProjectId && cloningProjectId !== project.id ? 0.55 : 1 }]}
+              onPress={() => { void cloneProviderProject(project); }}
+            >
+              <Text style={[styles.cardIcon, { fontSize: 24 }]}>{project.provider === "github" ? "◉" : "◆"}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.cardName, { color: c.textPrimary, fontSize: 17 }]} numberOfLines={1}>{project.fullName}</Text>
+                <Text style={[styles.cardPath, { color: c.textSecondary, fontSize: 12 }]}>{project.provider === "github" ? "GitHub" : "GitLab"} · {project.defaultBranch} · {project.isPrivate ? "private" : "public"}</Text>
+              </View>
+              {cloningProjectId === project.id ? <ActivityIndicator color={c.accent} /> : <Text style={[styles.cardBranch, { color: c.accent, fontSize: 13 }]}>Clone</Text>}
+            </Pressable>
+          ))}
+          {phoneError ? <Text style={[styles.error, { color: c.error, fontSize: 13 }]}>{phoneError}</Text> : null}
         </ScrollView>
       </SafeAreaView>
     );

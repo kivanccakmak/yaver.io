@@ -3,6 +3,7 @@ package io.yaver.mobile.sandbox
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -10,6 +11,8 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -297,5 +300,149 @@ class SandboxService : Service() {
       .setOngoing(true)
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .build()
+  }
+}
+
+/**
+ * Foreground lease for the lightweight RN/DeepSeek repo agent and explicit Git
+ * commit/push. This service intentionally does not launch libyaver or proot.
+ * Its finite dataSync lifetime keeps the app process + CPU available while the
+ * user-started operation runs, then stops. A 30-minute native deadline prevents
+ * a JS crash from leaving a wake lock or foreground notification behind.
+ */
+class RemotelessTaskService : Service() {
+  companion object {
+    private const val CHANNEL_ID = "yaver_remoteless_tasks"
+    private const val COMPLETION_CHANNEL_ID = "yaver_remoteless_results"
+    private const val NOTIFICATION_ID = 9347
+    private const val MAX_RUNTIME_MS = 30L * 60L * 1000L
+    const val ACTION_START = "io.yaver.mobile.remoteless.START"
+    const val ACTION_UPDATE = "io.yaver.mobile.remoteless.UPDATE"
+    const val ACTION_FINISH = "io.yaver.mobile.remoteless.FINISH"
+    const val EXTRA_ID = "task_id"
+    const val EXTRA_TITLE = "task_title"
+    const val EXTRA_PHASE = "task_phase"
+    const val EXTRA_STATUS = "task_status"
+  }
+
+  private val handler = Handler(Looper.getMainLooper())
+  private var wakeLock: PowerManager.WakeLock? = null
+  private var taskId = ""
+  private var title = "Coding on this device"
+  private var phase = "starting"
+  private val deadline = Runnable { finish("review", "Background time limit reached — open Yaver to review and continue") }
+
+  override fun onBind(intent: Intent?): IBinder? = null
+
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    when (intent?.action) {
+      ACTION_FINISH -> {
+        if (taskId.isEmpty()) stopSelf(startId)
+        else if (matches(intent)) finish(intent.getStringExtra(EXTRA_STATUS) ?: "completed", null)
+        return START_NOT_STICKY
+      }
+      ACTION_UPDATE -> {
+        if (taskId.isEmpty()) stopSelf(startId)
+        else if (matches(intent)) {
+          phase = intent.getStringExtra(EXTRA_PHASE)?.take(80) ?: phase
+          notifyForeground()
+        }
+        return START_NOT_STICKY
+      }
+      else -> {
+        taskId = intent?.getStringExtra(EXTRA_ID).orEmpty()
+        title = intent?.getStringExtra(EXTRA_TITLE)?.take(100).orEmpty().ifEmpty { "Coding on this device" }
+        phase = intent?.getStringExtra(EXTRA_PHASE)?.take(80).orEmpty().ifEmpty { "starting" }
+        createChannels()
+        startForeground(NOTIFICATION_ID, buildNotification(title, phase, true))
+        acquireWakeLock()
+        handler.removeCallbacks(deadline)
+        handler.postDelayed(deadline, MAX_RUNTIME_MS)
+        return START_NOT_STICKY
+      }
+    }
+  }
+
+  private fun matches(intent: Intent): Boolean {
+    val incoming = intent.getStringExtra(EXTRA_ID).orEmpty()
+    return incoming.isEmpty() || incoming == taskId
+  }
+
+  private fun finish(status: String, overrideText: String?) {
+    handler.removeCallbacks(deadline)
+    val ok = status == "completed"
+    val heading = if (ok) "Task finished" else if (status == "failed") "Task failed" else "Task needs review"
+    val body = overrideText ?: title
+    val notification = NotificationCompat.Builder(this, COMPLETION_CHANNEL_ID)
+      .setContentTitle(heading)
+      .setContentText(body)
+      .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+      .setSmallIcon(applicationInfo.icon)
+      .setAutoCancel(true)
+      .setContentIntent(openAppIntent())
+      .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+      .build()
+    getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID + 1, notification)
+    releaseWakeLock()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } else {
+      @Suppress("DEPRECATION") stopForeground(true)
+    }
+    stopSelf()
+  }
+
+  override fun onDestroy() {
+    handler.removeCallbacks(deadline)
+    releaseWakeLock()
+    super.onDestroy()
+  }
+
+  private fun acquireWakeLock() {
+    if (wakeLock?.isHeld == true) return
+    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "yaver:remoteless-task").apply {
+      setReferenceCounted(false)
+      acquire(MAX_RUNTIME_MS + 60_000L)
+    }
+  }
+
+  private fun releaseWakeLock() {
+    wakeLock?.let { if (it.isHeld) it.release() }
+    wakeLock = null
+  }
+
+  private fun createChannels() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val manager = getSystemService(NotificationManager::class.java)
+    if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+      manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "On-device tasks", NotificationManager.IMPORTANCE_LOW).apply {
+        description = "Finite coding and Git tasks running on this device"
+        setShowBadge(false)
+      })
+    }
+    if (manager.getNotificationChannel(COMPLETION_CHANNEL_ID) == null) {
+      manager.createNotificationChannel(NotificationChannel(COMPLETION_CHANNEL_ID, "On-device task results", NotificationManager.IMPORTANCE_DEFAULT))
+    }
+  }
+
+  private fun notifyForeground() {
+    getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(title, phase, true))
+  }
+
+  private fun buildNotification(heading: String, detail: String, ongoing: Boolean): Notification =
+    NotificationCompat.Builder(this, CHANNEL_ID)
+      .setContentTitle(heading)
+      .setContentText(detail)
+      .setSmallIcon(applicationInfo.icon)
+      .setOngoing(ongoing)
+      .setContentIntent(openAppIntent())
+      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .build()
+
+  private fun openAppIntent(): PendingIntent? {
+    val launch = packageManager.getLaunchIntentForPackage(packageName) ?: return null
+    launch.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    return PendingIntent.getActivity(this, 0, launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
   }
 }

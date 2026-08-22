@@ -10,9 +10,11 @@ import { useCloudStudio } from "../../src/context/CloudStudioContext";
 import { quicClient } from "../../src/lib/quic";
 import { getUserSettings } from "../../src/lib/auth";
 import { takePendingVibingProject } from "../../src/lib/vibingStore";
-import { getCodingMode, listLocalWorkspaces, validateLocalWorkspace, type CodingMode, type LocalWorkspace, type StaticValidationReport } from "../../src/lib/coding-runtime";
+import { listLocalWorkspaces, validateLocalWorkspace, type LocalWorkspace, type StaticValidationReport } from "../../src/lib/coding-runtime";
 import { remoteRenderRequiredFailure } from "../../src/lib/renderCapability";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
+import { connectionManager } from "../../src/lib/connectionManager";
+import { resolveRemotelessPlacement, type ExecutionCandidate } from "../../src/_core/remoteless";
 
 type Project = { name: string; path: string; framework?: string };
 type DevStatus = {
@@ -61,12 +63,11 @@ export default function VibingScreen() {
   const c = useColors();
   const layout = useResponsiveLayout();
   const { token } = useAuth();
-  const { activeDevice, connectionStatus, disconnect } = useDevice();
+  const { activeDevice, disconnect, devices, connectedDeviceIds, primaryDeviceId, secondaryDeviceId, machineRoles, codingMode } = useDevice();
   const { activeProjectSession } = useCloudStudio();
   const legacyTvRunner = isTV
     && activeDevice?.name.trim().toLowerCase().replace(/\.local$/, "") === "ubuntu-4gb-hel1-1"
     && !activeDevice.cloudWorkspaceId;
-  const [codingMode, setCodingMode] = useState<CodingMode>("remote-preferred");
   const [localWorkspace, setLocalWorkspace] = useState<LocalWorkspace | null>(null);
   const [validation, setValidation] = useState<StaticValidationReport | null>(null);
   const [validating, setValidating] = useState(false);
@@ -88,28 +89,64 @@ export default function VibingScreen() {
   const [transport, setTransport] = useState<"auto" | "sse" | "webrtc">("auto");
   const [relayTier, setRelayTier] = useState<"free" | "pro">("free");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const selectedProject = useMemo(() => projects.find((p) => p.path === selected), [projects, selected]);
 
-  const base = activeDevice && token ? deviceBaseUrl(activeDevice, token) : null;
-  const isLocalVibing = !isTV && (codingMode === "local-only" || (codingMode === "auto-fallback" && connectionStatus !== "connected"));
+  const renderCandidates = useMemo(() => {
+    const rows: ExecutionCandidate[] = [];
+    const seen = new Set<string>();
+    const add = (id: string | null | undefined, role: ExecutionCandidate["role"]) => {
+      if (!id || seen.has(id)) return;
+      const device = devices.find((row) => row.id === id);
+      if (!device) return;
+      seen.add(id);
+      rows.push({ id, name: device.name || id.slice(0, 8), role, connected: connectedDeviceIds.includes(id) });
+    };
+    add(machineRoles?.renderDeviceId || machineRoles?.runnerDeviceId, "primary");
+    add(machineRoles?.secondaryRenderDeviceId || machineRoles?.secondaryRunnerDeviceId, "secondary");
+    add(primaryDeviceId, "primary");
+    add(secondaryDeviceId, "secondary");
+    add(activeDevice?.id, "focused");
+    return rows;
+  }, [activeDevice?.id, connectedDeviceIds, devices, machineRoles, primaryDeviceId, secondaryDeviceId]);
+  const renderPlacement = useMemo(
+    () => resolveRemotelessPlacement({
+      capability: selectedProject?.framework?.toLowerCase() === "flutter" ? "flutter-render" : "dev-server",
+      surface: Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : "web",
+      candidates: renderCandidates,
+      forceLocal: codingMode === "local-only",
+    }),
+    [codingMode, renderCandidates, selectedProject?.framework],
+  );
+  const renderDevice = renderPlacement.lane === "remote"
+    ? devices.find((device) => device.id === renderPlacement.target.id) || activeDevice
+    : activeDevice;
+  const runtimeClient = renderPlacement.lane === "remote"
+    ? connectionManager.clientFor(renderPlacement.target.id)
+    : quicClient;
+  const base = renderDevice && token && renderPlacement.lane === "remote" ? deviceBaseUrl(renderDevice, token) : null;
+  const isLocalVibing = !isTV && (codingMode === "local-only" || (codingMode === "auto-fallback" && renderPlacement.lane !== "remote"));
   const localDeviceName = (Platform as any).isTV ? "this Apple TV" : "this device";
   const appendStreamLog = useCallback((level: StreamLog["level"], message: string) => {
     setStreamLogs((current) => [...current, { id: Date.now() + Math.random(), at: new Date().toLocaleTimeString(), level, message }].slice(-16));
   }, []);
-  const selectedProject = useMemo(() => projects.find((p) => p.path === selected), [projects, selected]);
   const previewOptions = useMemo(
     () => previewOptionsFor(selectedProject?.framework, capabilities),
     [selectedProject?.framework, capabilities],
   );
   const selectedPreview = previewOptions.find((option) => option.id === previewTarget) || previewOptions[0];
-  const renderFailure = remoteRenderRequiredFailure(isTV ? "This TV" : "This device");
+  const renderFailure = remoteRenderRequiredFailure(
+    isTV ? "This TV" : Platform.OS === "ios" ? "This iPhone/iPad" : "This Android device",
+    selectedProject?.framework?.toLowerCase() === "flutter" ? "flutter-render" : "dev-server",
+    isTV ? "companion" : Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : "web",
+  );
 
   useEffect(() => {
     if (!base || !token) return;
-    quicClient.requestAgent("/vibing/capabilities")
+    runtimeClient.requestAgent("/vibing/capabilities")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data?.capabilities) setCapabilities(data.capabilities); })
       .catch(() => {});
-  }, [base, token]);
+  }, [base, token, runtimeClient]);
 
   useEffect(() => {
     if (previewOptions.length && !previewOptions.some((option) => option.id === previewTarget)) {
@@ -127,17 +164,11 @@ export default function VibingScreen() {
 
   useEffect(() => {
     if (isTV) {
-      setCodingMode("remote-preferred");
       setLocalWorkspace(null);
     } else {
-      getCodingMode().then(setCodingMode).catch(() => {});
       listLocalWorkspaces().then((workspaces) => setLocalWorkspace(workspaces[0] ?? null)).catch(() => {});
     }
-    if (!token) return;
-    getUserSettings(token).then((settings) => {
-      if (!isTV && settings.codingMode) setCodingMode(settings.codingMode);
-    }).catch(() => {});
-  }, [token]);
+  }, []);
 
   const runStaticValidation = async () => {
     if (!localWorkspace) return;
@@ -169,7 +200,7 @@ export default function VibingScreen() {
       return;
     }
     if (!base || !token) return;
-    quicClient.listProjects(true)
+    runtimeClient.listProjects(true)
       .then((list) => {
         setProjects(list);
         const pending = takePendingVibingProject();
@@ -182,14 +213,14 @@ export default function VibingScreen() {
         }
       })
       .catch(() => {});
-  }, [base, token, activeProjectSession?.projectSessionId, legacyTvRunner]);
+  }, [base, token, activeProjectSession?.projectSessionId, legacyTvRunner, runtimeClient]);
 
   const refreshStatus = useCallback(async () => {
     if (!base || !token) return;
     try {
       if (isTV && !legacyTvRunner) {
         if (!activeProjectSession) return;
-        const next = await quicClient.getProjectSessionPreviewStatus(activeProjectSession.projectSessionId);
+        const next = await runtimeClient.getProjectSessionPreviewStatus(activeProjectSession.projectSessionId);
         setStatus((previous) => {
           if (next.serving && !previous?.serving) appendStreamLog("success", `Serving ${next.framework || "preview"} on port ${next.port || "?"}`);
           if (!next.serving && previous?.serving) appendStreamLog("warn", "Preview stopped on the Cloud Runner");
@@ -197,7 +228,7 @@ export default function VibingScreen() {
         });
         return;
       }
-      const r = await quicClient.requestAgent("/dev/status");
+      const r = await runtimeClient.requestAgent("/dev/status");
       if (r.ok) {
         const next = await r.json() as DevStatus;
         setStatus((previous) => {
@@ -207,7 +238,7 @@ export default function VibingScreen() {
         });
       }
     } catch {}
-  }, [base, token, appendStreamLog, activeProjectSession?.projectSessionId, legacyTvRunner]);
+  }, [base, token, appendStreamLog, activeProjectSession?.projectSessionId, legacyTvRunner, runtimeClient]);
 
   useEffect(() => {
     refreshStatus();
@@ -228,14 +259,14 @@ export default function VibingScreen() {
     try {
       if (isTV && !legacyTvRunner) {
         if (!activeProjectSession) throw new Error("Select a Project Session first");
-        const started = await quicClient.startProjectSessionPreview(activeProjectSession.projectSessionId, previewTarget);
+        const started = await runtimeClient.startProjectSessionPreview(activeProjectSession.projectSessionId, previewTarget);
         setStatus(started);
         appendStreamLog("info", `Cloud Runner accepted launch · ${started.framework || "detecting framework"}${started.port ? ` · port ${started.port}` : ""}`);
         await refreshStatus();
         setWorking(false);
         return;
       }
-      const r = await quicClient.requestAgent("/dev/start", {
+      const r = await runtimeClient.requestAgent("/dev/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workDir, previewTarget }),
@@ -259,9 +290,9 @@ export default function VibingScreen() {
     setWorking(true);
     try {
       if (isTV && !legacyTvRunner) {
-        if (activeProjectSession) await quicClient.stopProjectSessionPreview(activeProjectSession.projectSessionId);
+        if (activeProjectSession) await runtimeClient.stopProjectSessionPreview(activeProjectSession.projectSessionId);
       } else {
-        await quicClient.requestAgent("/dev/stop", { method: "POST" });
+        await runtimeClient.requestAgent("/dev/stop", { method: "POST" });
       }
       setStatus(null);
       setLaneHtml("");
@@ -276,12 +307,12 @@ export default function VibingScreen() {
     try {
       if (isTV && !legacyTvRunner) {
         if (!activeProjectSession) return;
-        const html = await quicClient.fetchProjectSessionPreview(activeProjectSession.projectSessionId);
+        const html = await runtimeClient.fetchProjectSessionPreview(activeProjectSession.projectSessionId);
         setLaneHtml(html.slice(0, 400));
         appendStreamLog("success", `Live browser lane verified · ${html.length} bytes received`);
         return;
       }
-      const r = await quicClient.requestAgent("/dev/stream");
+      const r = await runtimeClient.requestAgent("/dev/stream");
       if (r.ok) {
         const html = await r.text();
         setLaneHtml(html.slice(0, 400));
@@ -301,7 +332,7 @@ export default function VibingScreen() {
       const override = frameOverride.replace(/\/$/, "");
       const r = override
         ? await fetch(`${override}/frame?url=${encodeURIComponent(`${override}/sample`)}`, { headers: { Authorization: `Bearer ${token}` } })
-        : await quicClient.requestAgent(`/vibing/frame?url=${encodeURIComponent(`http://localhost:${status.port}/`)}`);
+        : await runtimeClient.requestAgent(`/vibing/frame?url=${encodeURIComponent(`http://localhost:${status.port}/`)}`);
       if (r.status === 404) {
         setFrameError(override ? "Local frame server not found" : "Frame endpoint not available on this box");
         setFramePollingEnabled(false);
@@ -328,7 +359,7 @@ export default function VibingScreen() {
       setFrameError("Frame capture stopped after a connection error");
       appendStreamLog("warn", "Frame capture disabled after a connection error");
     }
-  }, [base, token, status, frameOverride, appendStreamLog]);
+  }, [base, token, status, frameOverride, appendStreamLog, runtimeClient]);
 
   useEffect(() => {
     if (!status?.serving) {
@@ -353,7 +384,7 @@ export default function VibingScreen() {
     return <Redirect href="/vibe-studio" />;
   }
 
-  if (!isLocalVibing && (!activeDevice || connectionStatus !== "connected")) {
+  if (!isLocalVibing && renderPlacement.lane !== "remote") {
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: c.bg }]} edges={["bottom"]}>
         <ScrollView contentContainerStyle={styles.container}>
@@ -376,6 +407,14 @@ export default function VibingScreen() {
             >
               <Text style={styles.btnPrimaryText}>{renderFailure.action.label}</Text>
             </Pressable>
+            {renderFailure.alternativeAction ? (
+              <Pressable
+                onPress={() => router.push(renderFailure.alternativeAction!.route)}
+                style={({ focused }) => [styles.changeProject, { borderColor: c.border, backgroundColor: c.bgCard, marginTop: 10 }, focused && styles.focused]}
+              >
+                <Text style={{ color: c.textSecondary, fontSize: 15 }}>{renderFailure.alternativeAction.label}</Text>
+              </Pressable>
+            ) : null}
           </View>
           {!isTV && (
             <Pressable
@@ -397,15 +436,18 @@ export default function VibingScreen() {
           <View style={styles.headerRow}>
             <View style={styles.titleBlock}>
               <Text style={[styles.title, { color: c.textPrimary }]}>Vibing</Text>
-              <Text style={[styles.subtitle, { color: c.textSecondary }]}>Running on {localDeviceName}</Text>
+              <Text style={[styles.subtitle, { color: c.textSecondary }]}>{renderPlacement.banner}</Text>
             </View>
-            <View style={[styles.badge, { backgroundColor: c.success + "22" }]}><Text style={[styles.badgeText, { color: c.success }]}>Local</Text></View>
+            <View style={[styles.badge, { backgroundColor: c.warn + "22" }]}><Text style={[styles.badgeText, { color: c.warn }]}>{codingMode === "local-only" ? "Phone only" : "Fallback"}</Text></View>
           </View>
 
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <Text style={[styles.cardLabel, { color: c.textPrimary }]}>Device-local coding</Text>
             <Text style={[styles.hint, { color: c.textSecondary }]}>Chat, file edits, Git status/diff, explicit commits, and review-branch pushes run on {localDeviceName}. Your model API key and Git token stay in this device's secure storage.</Text>
-            <Text style={[styles.hint, { color: c.warn, marginTop: 12 }]}>Live preview is unavailable locally: this runtime has no shell, package manager, simulator, Docker, or dev server. It will never claim a preview, build, or test ran.</Text>
+            <Text style={[styles.hint, { color: c.warn, marginTop: 12 }]}>{renderFailure.code} · {renderFailure.message}</Text>
+            <Pressable onPress={() => router.push(renderFailure.action.route)} style={({ focused }) => [styles.btnGhost, { borderColor: c.border, marginTop: 14 }, focused && styles.focused]}>
+              <Text style={[styles.btnGhostText, { color: c.accent }]}>{renderFailure.action.label}</Text>
+            </Pressable>
           </View>
 
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -439,7 +481,7 @@ export default function VibingScreen() {
           <View style={styles.titleBlock}>
             <Text style={[styles.title, { color: c.textPrimary }]}>Vibing</Text>
             <Text style={[styles.subtitle, { color: c.textSecondary }]}>
-              {activeDevice ? `Live preview · ${activeDevice.name}` : isTV ? "Connect to the assigned Cloud Runner" : "Connect or select a machine first"}
+              {renderDevice ? `Live preview · ${renderDevice.name}` : isTV ? "Connect to the assigned Cloud Runner" : "Connect or select a machine first"}
             </Text>
           </View>
           <View style={[styles.badge, { backgroundColor: serving ? c.success + "22" : c.textMuted + "22" }]}>
@@ -448,6 +490,11 @@ export default function VibingScreen() {
             </Text>
           </View>
         </View>
+        {renderPlacement.lane === "remote" && renderPlacement.banner ? (
+          <View style={[styles.card, { backgroundColor: c.warn + "12", borderColor: c.warn + "55" }]}>
+            <Text style={[styles.hint, { color: c.warn }]}>{renderPlacement.banner}</Text>
+          </View>
+        ) : null}
         {activeDevice && (
           <View style={styles.remoteActions}>
             <Pressable onPress={() => router.push("/devices")} style={({ focused }) => [styles.headerAction, { borderColor: c.border }, focused && styles.focused]}><Text style={{ color: c.textSecondary }}>Switch</Text></Pressable>

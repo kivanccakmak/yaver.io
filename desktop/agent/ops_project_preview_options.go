@@ -23,6 +23,7 @@ func init() {
 				"projectName":     map[string]interface{}{"type": "string"},
 				"projectPath":     map[string]interface{}{"type": "string"},
 				"framework":       map[string]interface{}{"type": "string"},
+				"platform":        map[string]interface{}{"type": "string"},
 				"hasPairedDevice": map[string]interface{}{"type": "boolean"},
 			},
 			"additionalProperties": false,
@@ -39,6 +40,7 @@ func opsProjectPreviewOptionsHandler(c OpsContext, payload json.RawMessage) OpsR
 		ProjectName     string `json:"projectName"`
 		ProjectPath     string `json:"projectPath"`
 		Framework       string `json:"framework"`
+		Platform        string `json:"platform"`
 		HasPairedDevice bool   `json:"hasPairedDevice"`
 	}
 	if len(payload) > 0 {
@@ -61,5 +63,6 @@ func opsProjectPreviewOptionsHandler(c OpsContext, payload json.RawMessage) OpsR
 	}
 
 	caps := DetectProjectPreviewCapabilities(workDir, req.Framework, req.HasPairedDevice)
+	caps = ApplyHermesBuildState(caps, workDir, req.Platform)
 	return OpsResult{OK: true, Initial: caps}
 }

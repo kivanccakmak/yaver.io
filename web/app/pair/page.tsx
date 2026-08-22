@@ -308,7 +308,7 @@ export default function PairPage() {
             Sign in to continue
           </Link>
           <p className="mt-3 text-xs text-surface-500">
-            Prefer the mobile app? Open the Yaver app and paste this URL into More → Pair a device.
+            Prefer the mobile app? Open Yaver → More → Pair Machine, then scan the QR or paste this link under manual entry.
           </p>
         </section>
       ) : (

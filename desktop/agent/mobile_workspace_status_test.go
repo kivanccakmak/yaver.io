@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +55,31 @@ func TestMobileWorkspaceStatusDoesNotTreatInstalledOpenCodeAsConfigured(t *testi
 	}
 	if got := status.OpenCode.Code; got != "mobile_workspace.opencode.provider_required" {
 		t.Fatalf("code = %q", got)
+	}
+}
+
+func TestMobileWorkspaceGitReadinessUsesOperationsNotInventory(t *testing.T) {
+	status := buildMobileWorkspaceStatus(nil, machineOnboardingStatus{Providers: []machineOnboardingProviderStatus{
+		{ID: "github", Name: "GitHub", Configured: true, Ready: true},
+		{ID: "gitlab", Name: "GitLab", Configured: true, Ready: true},
+	}}, OpenCodeConfigSummary{})
+	applyGitProviderOperationalProbeResults(&status, map[string]gitProviderOperationalProbe{
+		"github": {ID: "github", Ready: true, User: "octocat", Detail: "Verified with `gh api user` as octocat"},
+		"gitlab": {ID: "gitlab", Ready: false, Detail: "glab could not complete a read-only provider query"},
+	})
+	var github, gitlab mobileWorkspaceGate
+	for _, gate := range status.GitProviders {
+		switch gate.ID {
+		case "github":
+			github = gate
+		case "gitlab":
+			gitlab = gate
+		}
+	}
+	if !github.Ready || !strings.Contains(github.Detail, "gh api user") {
+		t.Fatalf("GitHub operation did not produce verified readiness: %+v", github)
+	}
+	if gitlab.Ready || gitlab.Code != "mobile_workspace.git.operation_failed" || gitlab.Action == nil {
+		t.Fatalf("failed glab operation left a false green or no repair route: %+v", gitlab)
 	}
 }

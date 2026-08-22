@@ -53,8 +53,10 @@ import {
   type CapabilityGap,
 } from "../lib/capabilityGap";
 import { formatFixElapsed, runCapabilityGapFix } from "../lib/capabilityGapFix";
+import { useDevice } from "../context/DeviceContext";
+import { connectionManager } from "../lib/connectionManager";
+import { reconcilePreviewDevStatus } from "../lib/previewDevStatus";
 import { setActivePreviewLane, subscribeBrowserRender, subscribeBrowserShake } from "../lib/feedbackTrigger";
-import { subscribeSse } from "../lib/sseClient";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
 import { monoFamily } from "../theme/tokens";
 import { DomInspectChip } from "./DomInspectChip";
@@ -178,9 +180,18 @@ type PreviewProbeState = {
 export function DevPreview({
   hostedInModal = false,
   paneMode = false,
-}: { hostedInModal?: boolean; paneMode?: boolean } = {}) {
+  onLogStateChange,
+}: {
+  hostedInModal?: boolean;
+  paneMode?: boolean;
+  onLogStateChange?: (state: { lines: string[]; live: boolean }) => void;
+} = {}) {
   const c = useColors();
   const layout = useResponsiveLayout();
+  const { activeDevice } = useDevice();
+  const previewClient = activeDevice?.id
+    ? connectionManager.clientFor(activeDevice.id)
+    : quicClient;
   const [status, setStatus] = useState<DevServerStatus | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [showPreviewTools, setShowPreviewTools] = useState(false);
@@ -256,7 +267,7 @@ export function DevPreview({
   const webViewRef = useRef<WebView>(null);
   const previewLogScrollRef = useRef<ScrollView>(null);
   const reportedBundlePath = previewBundlePath(status as any);
-  const bundleUrl = reportedBundlePath ? quicClient.getDevServerBundleUrl(reportedBundlePath) : "";
+  const bundleUrl = reportedBundlePath ? previewClient.getDevServerBundleUrl(reportedBundlePath) : "";
 
   useEffect(() => {
     if (showPreview && bundleUrl) {
@@ -303,7 +314,7 @@ export function DevPreview({
     browserLaneDoctorRunningRef.current = true;
     browserLaneDoctorRanForKeyRef.current = key;
     pushLog(`[doctor] probing browser lane after ${reason}…`);
-    void doctorBrowserLane(quicClient, 45).then((probe) => {
+    void doctorBrowserLane(previewClient, 45).then((probe) => {
       if (!probe) {
         pushLog("[doctor] browser lane probe unavailable");
         return;
@@ -317,7 +328,7 @@ export function DevPreview({
     }).finally(() => {
       browserLaneDoctorRunningRef.current = false;
     });
-  }, [bundleUrl, pushLog, showPreview, webContentLoaded]);
+  }, [bundleUrl, previewClient, pushLog, showPreview, webContentLoaded]);
 
   useEffect(() => {
     previewProbeRef.current = previewProbe;
@@ -412,8 +423,15 @@ export function DevPreview({
   useEffect(() => {
     let mounted = true;
     const poll = async () => {
-      const s = await quicClient.getDevServerStatus();
+      const s = await previewClient.getDevServerStatus();
       if (!mounted) return;
+      if (s?.error && showPreview) {
+        // A transient relay miss is not evidence that the already-open route
+        // disappeared. Keep its WebView mounted so the bundle and paint probe
+        // can finish; the preview owns its own HTTP retry/error reporting.
+        setStatus((previous) => reconcilePreviewDevStatus(previous, s, true));
+        return;
+      }
       const isActive = isActiveDevServerStatus(s);
       if (isActive) {
         inactivePolls.current = 0;
@@ -437,26 +455,17 @@ export function DevPreview({
     poll();
     const interval = setInterval(poll, 3000);
     return () => { mounted = false; clearInterval(interval); };
-  }, [showPreview, webContentLoaded]);
+  }, [previewClient, showPreview, webContentLoaded]);
 
   // Subscribe to SSE events for auto-reload + log streaming
   useEffect(() => {
     if (!status?.running && !status?.building) return;
 
-    const baseUrl = (quicClient as any).baseUrl;
-    if (!baseUrl) return;
-
-    // XHR-based SSE (src/lib/sseClient.ts). RN's fetch exposes no streaming
-    // body, so `res.body?.getReader()` was undefined here too and this stream
-    // never delivered a single frame — the same defect that left the other
-    // preview screen showing "waiting for the first output from the box" while
-    // the agent streamed happily. One implementation for the whole app now.
-    const sub = subscribeSse({
-      url: `${baseUrl}/dev/events`,
-      headers: (quicClient as any).authHeaders,
-      onOpen: () => setLastByteAt(Date.now()),
-      onError: (reason) => pushLog(`[preview] log stream unavailable: ${reason}`),
-      onEvent: (event: any) => {
+    // Share QuicClient's bounded reconnect lane. The dev stream is narration,
+    // not preview readiness: a dropped relay stream must never imply that the
+    // dev server or its browser route stopped.
+    const unsubscribe = previewClient.subscribeDevEvents((event: any) => {
+              setLastByteAt(Date.now());
               {
                 // Yaver Protocol v1: structured progress + snapshots
                 // for Hermes/Metro/Expo Web. The mobile DevPreview
@@ -582,16 +591,37 @@ export function DevPreview({
                   if (gap) setPreviewGap(gap);
                 }
               }
-      },
+      }, {
+        onStreamHealth: (health) => {
+          if (!health) {
+            setLastByteAt(Date.now());
+            return;
+          }
+          if (health.kind === "lost") {
+            pushLog("[logs] Live output is unavailable; preview startup continues via status checks.");
+          }
+        },
     });
 
-    return () => sub.close();
-  }, [status?.running, status?.building, status?.framework, status?.devMode]);
+    return unsubscribe;
+  }, [previewClient, status?.running, status?.building, status?.framework, status?.devMode]);
 
   const [nativeLoading, setNativeLoading] = useState(false);
   const [reloadLoading, setReloadLoading] = useState(false);
   const [bundleMounted, setBundleMounted] = useState(false);
   const [lastLogLine, setLastLogLine] = useState<string>("");
+
+  // Tablet Vibe Studio keeps the preview on the left and its diagnostics on
+  // the right. Publish the same bounded log tail this component already owns
+  // so the Studio does not open a second /dev/events stream or invent another
+  // parser. The callback is optional; every existing preview stays unchanged.
+  useEffect(() => {
+    if (!onLogStateChange) return;
+    onLogStateChange({
+      lines: logLines.length > 0 ? logLines : (lastLogLine ? [lastLogLine] : []),
+      live: Boolean(status?.building || (status?.running && !webContentLoaded)),
+    });
+  }, [lastLogLine, logLines, onLogStateChange, status?.building, status?.running, webContentLoaded]);
 
   // Yaver Protocol v1: per-topic structured progress + transport
   // liveness. The DevPreview banner reads progressState to render
@@ -815,7 +845,7 @@ export function DevPreview({
       const mode = mustUseNativePreview
         ? (kind === "full" ? "bundle" : "fast")
         : kind;
-      const result = await quicClient.reloadDevServerDetailed({
+      const result = await previewClient.reloadDevServerDetailed({
         mode,
         allowBundleFallback: mustUseNativePreview,
       });
@@ -834,7 +864,7 @@ export function DevPreview({
     } finally {
       setReloadLoading(false);
     }
-  }, [bundleMounted, handleRunInYaver, mustUseNativePreview, nativeLoading, reloadLoading, showPreview, status?.running]);
+  }, [bundleMounted, handleRunInYaver, mustUseNativePreview, nativeLoading, previewClient, reloadLoading, showPreview, status?.running]);
 
   // Post-task render for the BROWSER lane (2026-08-02).
   //
@@ -862,13 +892,13 @@ export function DevPreview({
       { text: "Cancel", style: "cancel" },
       {
         text: "Stop Serving", style: "destructive", onPress: async () => {
-          await quicClient.stopDevServer();
+          await previewClient.stopDevServer();
           setShowPreview(false);
           setStatus(null);
         }
       },
     ]);
-  }, []);
+  }, [previewClient]);
 
   // WHICH url the preview loads — previewBundlePath (shared with apps.tsx;
   // the app's two browser-preview implementations, a fix in one is not a
@@ -1644,11 +1674,11 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 16, fontWeight: "700", color: "#fff" },
   cardMeta: { fontSize: 11, color: "#666", marginTop: 2 },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
-  cardActions: { flexDirection: "row", gap: 8, marginTop: 12 },
+  cardActions: { flexDirection: "row", gap: 8, marginTop: 12, justifyContent: "flex-start" },
   actionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
   openBtn: {
     backgroundColor: "#22c55e",
-    flex: 1,
+    flex: 0,
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "center",

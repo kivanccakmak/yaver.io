@@ -367,6 +367,7 @@ export interface ConversationTurn {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
+  hidden?: boolean;
 }
 
 export interface PendingFollowUp {
@@ -526,6 +527,7 @@ export interface Task {
    *  show the wrong model label in its history card. */
   model?: string;
   source?: string;        // Task origin: "mobile", "mcp", "cli", "vibing", "vibing-cache", "todolist"
+  workDir?: string;       // Per-task working directory reported by the agent.
   /** Phone-local checkout slug for boxless coding tasks. Never an absolute path. */
   localCheckoutId?: string;
   turns?: ConversationTurn[];  // Full conversation history (detail only)
@@ -2392,7 +2394,7 @@ export class QuicClient {
    * HTTP, the runner pool, and the same Task type. The toggle only
    * changes which prompt-prefix the agent injects.
    */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean, askMode?: boolean): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean, askMode?: boolean, hideInitialPrompt?: boolean): Promise<Task> {
     this.assertConnected();
     // Hard 30s timeout — without it, a stale relay tunnel (e.g. after a
     // failed device-switch attempt) makes this POST hang forever and
@@ -2416,7 +2418,7 @@ export class QuicClient {
     // timed out.)
     let res: Response;
     try {
-      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers, goal, includeYaverMcp, askMode);
+      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers, goal, includeYaverMcp, askMode, hideInitialPrompt);
     } catch (e) {
       if (e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message))) {
         throw new Error(
@@ -2475,6 +2477,7 @@ export class QuicClient {
     goal: string | undefined,
     includeYaverMcp: boolean | undefined,
     askMode: boolean | undefined,
+    hideInitialPrompt: boolean | undefined,
   ): Promise<Response> {
     return this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -2497,6 +2500,7 @@ export class QuicClient {
         goal,
         includeYaverMcp,
         askMode,
+        hideInitialPrompt,
       })),
     }, 30000);
   }
@@ -4295,15 +4299,63 @@ export class QuicClient {
     return res.json();
   }
 
+  async prepareRemoteRuntimeBrowserLane(workDir: string, framework: string): Promise<void> {
+    const browserSiblingRequired = ["expo", "react-native"].includes(framework.trim().toLowerCase());
+    const ready = (status: DevServerStatus | null): boolean => {
+      if (!status?.running || status.error) return false;
+      if (status.workDir && workDir && status.workDir !== workDir) return false;
+      return browserSiblingRequired
+        ? Number(status.webPreviewPort || status.webPort || 0) > 0
+        : Number(status.port || 0) > 0;
+    };
+    let status = await this.getDevServerStatus();
+    if (!ready(status)) {
+      await this.startDevServer({ framework, workDir, web: true });
+    }
+    const deadline = Date.now() + 150_000;
+    let siblingStartAttempted = false;
+    while (Date.now() < deadline) {
+      status = await this.getDevServerStatus();
+      if (ready(status)) return;
+      if (browserSiblingRequired && status?.running && !siblingStartAttempted) {
+        siblingStartAttempted = true;
+        await this.startRemoteRuntimeWebPreview();
+      }
+      if (status?.error && !status.building) {
+        throw new Error(`Browser runtime could not start: ${status.error}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    }
+    throw new Error("Browser runtime did not expose a usable web port within 150 seconds.");
+  }
+
+  async startRemoteRuntimeWebPreview(): Promise<void> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/web-preview/start`, {
+      method: "POST",
+      headers: this.authHeaders,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Failed to start browser preview: ${res.status}`);
+  }
+
   async startRemoteRuntimeSession(workDir: string, framework: string, targetId: string, transportMode?: string): Promise<RemoteRuntimeSession> {
     this.assertConnected();
+    if (targetId === "browser-window") {
+      await this.prepareRemoteRuntimeBrowserLane(workDir, framework);
+    }
+    const { getRemoteRuntimeClientId } = await import("./remoteRuntimeIdentity");
+    const clientId = await getRemoteRuntimeClientId();
     const res = await this.fetchWithTimeout(`${this.baseUrl}/remote-runtime/sessions`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ workDir, framework, targetId, transportMode }),
+      body: JSON.stringify({ workDir, framework, targetId, transportMode, clientId, surface: "mobile" }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Failed to start remote runtime session: ${res.status}`);
+    if (targetId === "browser-window" && ["waiting-for-dev-server", "attach-failed", "navigate-failed", "failed"].includes(String(data?.status))) {
+      throw new Error(data?.note || `Browser runtime session failed with status ${data?.status}.`);
+    }
     return data as RemoteRuntimeSession;
   }
 
@@ -12061,6 +12113,9 @@ export interface DevServerStatus {
   stopActionLabel?: string;
   building?: boolean;
   port: number;
+  /** Expo/RN browser sibling. Agents have shipped both wire names. */
+  webPreviewPort?: number;
+  webPort?: number;
   bundleUrl: string;
   deepLink?: string;
   devMode?: string;

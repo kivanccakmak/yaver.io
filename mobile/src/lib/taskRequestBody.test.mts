@@ -70,3 +70,15 @@ test("mobile task request body carries askMode only when enabled (deep-audit fra
   });
   assert.equal(audit.askMode, true);
 });
+
+test("only an initializer-owned kickoff can request a hidden first turn", () => {
+  const ordinary = buildSendTaskRequestBody({ title: "Add search", description: "Add search" });
+  assert.equal(Object.prototype.hasOwnProperty.call(ordinary, "hideInitialPrompt"), false);
+
+  const kickoff = buildSendTaskRequestBody({
+    title: "Talos",
+    description: "Ask what the app should do",
+    hideInitialPrompt: true,
+  });
+  assert.equal(kickoff.hideInitialPrompt, true);
+});

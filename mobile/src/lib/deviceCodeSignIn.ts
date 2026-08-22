@@ -38,8 +38,6 @@
 // exists to forbid. The poll loop carries a wall-clock deadline of its own, so
 // "waiting for approval" can never become permanent.
 
-import { getConvexSiteUrlSync } from "./backendConfig";
-
 /** One network call's budget. Generous enough for a cold Convex function, far
  *  short of "forever". */
 const CALL_TIMEOUT_MS = 15_000;
@@ -87,8 +85,12 @@ export type DeviceCodePoll =
   | { status: "expired" }
   | { status: "authorized"; token?: string; claimRequired?: boolean; claimHandle?: string };
 
-function siteUrl(path: string): string {
-  const base = getConvexSiteUrlSync().replace(/\/+$/, "");
+function siteUrl(path: string, explicitBaseUrl?: string): string {
+  // Keep the polling state machine importable by the headless guard. Loading
+  // backendConfig at module scope pulls React Native's Flow entrypoint into a
+  // plain Node test, so resolve it only on the real app path. Metro still sees
+  // this literal require and bundles the module normally.
+  const base = (explicitBaseUrl || require("./backendConfig").getConvexSiteUrlSync()).replace(/\/+$/, "");
   return `${base}${path}`;
 }
 
@@ -145,10 +147,10 @@ export async function startDeviceCodeSignIn(opts?: {
  * the same "Waiting for approval…" as a device waiting on a human, for as long
  * as the human cares to stare at it.
  */
-export async function pollDeviceCode(deviceCode: string): Promise<DeviceCodePoll> {
+export async function pollDeviceCode(deviceCode: string, baseUrl?: string): Promise<DeviceCodePoll> {
   try {
     const res = await boundedFetch(
-      siteUrl(`/auth/device-code/poll?device_code=${encodeURIComponent(deviceCode)}`),
+      siteUrl(`/auth/device-code/poll?device_code=${encodeURIComponent(deviceCode)}`, baseUrl),
       undefined,
       "device-code poll",
     );
@@ -175,10 +177,10 @@ export async function pollDeviceCode(deviceCode: string): Promise<DeviceCodePoll
  * call and NOT handling it would strand that flow on a screen that says
  * "authorized" and never proceeds.
  */
-export async function claimDeviceCode(deviceCode: string, claimHandle?: string): Promise<DeviceCodePoll> {
+export async function claimDeviceCode(deviceCode: string, claimHandle?: string, baseUrl?: string): Promise<DeviceCodePoll> {
   try {
     const res = await boundedFetch(
-      siteUrl("/auth/device-code/claim"),
+      siteUrl("/auth/device-code/claim", baseUrl),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -219,6 +221,8 @@ export async function waitForDeviceCodeToken(
     isCancelled?: () => boolean;
     /** Injected in tests so the loop does not actually sleep. */
     sleep?: (ms: number) => Promise<void>;
+    /** Headless-test seam; production resolves the live hosted config. */
+    baseUrl?: string;
   },
 ): Promise<DeviceCodeWaitResult> {
   const timeoutMs = opts?.timeoutMs ?? 10 * 60_000;
@@ -229,9 +233,9 @@ export async function waitForDeviceCodeToken(
   while (Date.now() - started < timeoutMs) {
     if (opts?.isCancelled?.()) return { kind: "cancelled" };
 
-    let result = await pollDeviceCode(deviceCode);
+    let result = await pollDeviceCode(deviceCode, opts?.baseUrl);
     if (result.status === "authorized" && !result.token && result.claimRequired) {
-      result = await claimDeviceCode(deviceCode, result.claimHandle);
+      result = await claimDeviceCode(deviceCode, result.claimHandle, opts?.baseUrl);
     }
 
     if (result.status === "authorized" && result.token) {

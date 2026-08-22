@@ -185,6 +185,7 @@ export default function PhoneProjectsScreen() {
   const { token, user } = useAuth();
   const {
     connectionStatus,
+    connectedDeviceIds,
     devices,
     activeDevice,
     primaryDeviceId,
@@ -387,6 +388,7 @@ export default function PhoneProjectsScreen() {
     [runnersForDevice, selectedDevMachine],
   );
   const selectedRunnerDevice = startMode === "dev-hw" ? selectedDevMachine : activeRunnerDevice;
+  const selectedRunnerConnected = !!selectedRunnerDevice && connectedDeviceIds.includes(selectedRunnerDevice.id);
   const selectedRunnerList = startMode === "dev-hw" ? devMachineRunners : availableRunners;
   const runnerChoiceEnabled = !!activeRunnerDevice;
   useEffect(() => {
@@ -464,7 +466,11 @@ export default function PhoneProjectsScreen() {
     } finally {
       setWorkspaceStatusLoading(false);
     }
-  }, [activeDevice?.id, selectedRunnerDevice]);
+  // A selected device can hydrate before its browser/native transport has
+  // finished connecting. Recreate the probe when that transport transitions
+  // so an early honest "unreachable" verdict self-clears instead of sticking
+  // until the user manually taps Retry.
+  }, [activeDevice?.id, connected, selectedRunnerConnected, selectedRunnerDevice]);
 
   useEffect(() => () => {
     workspaceAgentUpdateStreamRef.current?.();

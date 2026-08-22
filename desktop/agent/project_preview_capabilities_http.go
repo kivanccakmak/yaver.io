@@ -39,8 +39,10 @@ func (s *HTTPServer) handleProjectPreviewCapabilities(w http.ResponseWriter, r *
 	}
 
 	framework := strings.TrimSpace(r.URL.Query().Get("framework"))
+	platform := strings.TrimSpace(r.URL.Query().Get("platform"))
 	hasPaired := r.URL.Query().Get("hasPairedDevice") == "true"
 	caps := DetectProjectPreviewCapabilities(workDir, framework, hasPaired)
+	caps = ApplyHermesBuildState(caps, workDir, platform)
 
 	// ?surface= removes options this CLIENT cannot host, whatever the project
 	// supports. An Expo project genuinely offers Hermes; visionOS, tvOS,

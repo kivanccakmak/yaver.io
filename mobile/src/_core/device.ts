@@ -22,7 +22,7 @@
  *   - Web / Desktop: same.
  *
  * The mobile app may have extra view-model fields it wants to keep on
- * its own Device interface (edgeProfile, connectivity state, etc.) — those
+ * its own Device interface (edgeProfile, sessionBinding, etc.) — those
  * stay as local extensions; the core operates only on the fields
  * declared here.
  */

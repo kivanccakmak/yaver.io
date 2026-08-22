@@ -44,7 +44,8 @@
  * desktop browser, and RN-web renders a different component tree for it. A
  * green result there would say nothing about the app the user holds.
  */
-import { test, expect, devices } from "@playwright/test";
+import { test, expect, devices, type Response } from "@playwright/test";
+import { profileFor, viewportMatchesSurface } from "../../web/lib/surfaceViewports";
 // Shared with the browser coordinator: do not bypass system-Chromium fallback
 // by calling Playwright's managed headless shell directly.
 import { launchChromium } from "../browser-automation/chromium-executable.mjs";
@@ -55,17 +56,21 @@ const TOKEN = process.env.YAVER_TEST_TOKEN || "";
 const PROJECT = process.env.VIBE_PROJECT_NAME || "sfmg";
 
 test.describe("sfmg preview narrates its wait", () => {
+  test.describe.configure({ mode: "serial" });
   test.skip(!MOBILE_WEB_URL, "set MOBILE_WEB_URL (cd mobile && npx expo start --web --port 8099)");
   test.skip(!BOX, "set VIBE_BOX_HOST (e.g. http://<your-box>:18080)");
   test.skip(!TOKEN, "set YAVER_TEST_TOKEN (a session token for the box's owner)");
 
-  test("a blank preview says what is running, for how long, and when it last moved", async () => {
+  for (const surface of ["mobile", "tablet"] as const) {
+  test(`${surface}: a blank preview says what is running, for how long, and when it last moved`, async () => {
     const browser = await launchChromium();
     // The device descriptor, whole. Not a viewport.
-    const ctx = await browser.newContext({ ...devices["iPhone 15 Pro"] });
+    const profile = profileFor(surface);
+    const descriptorName = surface === "mobile" ? "iPhone 15 Pro" : profile.playwrightDevice!;
+    const ctx = await browser.newContext({ ...devices[descriptorName] });
     const page = await ctx.newPage();
     let browserLaneAssetFailure = "";
-    page.on("response", (response) => {
+    page.on("response", (response: Response) => {
       const url = response.url();
       if (!url.includes("/dev-web/") || !/entry\.bundle(?:\?|$)/.test(url)) return;
       const contentType = String(response.headers()["content-type"] || "").toLowerCase();
@@ -98,12 +103,20 @@ test.describe("sfmg preview narrates its wait", () => {
       // meaningful once a page that declares a viewport has loaded.
       const shape = await page.evaluate(() => ({
         w: window.innerWidth,
+        h: window.innerHeight,
         screenW: window.screen.width,
+        screenH: window.screen.height,
         touch: "ontouchstart" in window || navigator.maxTouchPoints > 0,
+        mobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent),
         dpr: window.devicePixelRatio,
       }));
-      expect(shape.screenW, "phone-width SCREEN — a context property, not a layout one")
-        .toBeLessThanOrEqual(430);
+      const viewportMatch = viewportMatchesSurface(surface, {
+        width: shape.w,
+        height: shape.h,
+        hasTouch: shape.touch,
+        isMobile: shape.mobile,
+      });
+      expect(viewportMatch.ok, viewportMatch.reason).toBe(true);
       expect(shape.touch, "hasTouch — a context property setViewportSize cannot fake").toBe(true);
       expect(shape.dpr, "deviceScaleFactor").toBeGreaterThan(1);
       // innerWidth is NOT asserted, on purpose.
@@ -118,7 +131,7 @@ test.describe("sfmg preview narrates its wait", () => {
       // Pinning innerWidth would fail honest runs whenever the web template's
       // meta tag changes, which is a false red for a harness detail.
       void shape.w;
-      await page.evaluate((t) => {
+      await page.evaluate((t: string) => {
         // THE INSTALL FLAG MUST GO IN WITH THE TOKEN.
         //
         // auth.ts::clearKeychainIfFreshInstall exists because iOS Keychain data
@@ -275,4 +288,5 @@ test.describe("sfmg preview narrates its wait", () => {
       await browser.close();
     }
   });
+  }
 });

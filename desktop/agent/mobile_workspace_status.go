@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
+	"os/exec"
 	"strings"
+	"time"
 )
 
 // mobileWorkspaceAction is an invocable route, not advisory prose. Mobile
@@ -167,6 +171,110 @@ func applyMobileWorkspaceOpenCodeConfigFailure(status *mobileWorkspaceStatus, er
 	status.OpenCode.Action = &mobileWorkspaceAction{Label: "Repair OpenCode", Method: http.MethodPatch, Path: "/runner/opencode/config"}
 }
 
+type gitProviderOperationalProbe struct {
+	ID     string
+	User   string
+	Detail string
+	Ready  bool
+	Absent bool
+}
+
+// probeGitProviderOperation attempts the same read-only provider operation the
+// project wizard depends on before it later asks gh/glab to create a repo.
+// `auth status` and token inventory are proxies; `api user` proves the CLI can
+// actually reach the provider with its current credential on this box.
+func probeGitProviderOperation(id string) gitProviderOperationalProbe {
+	cli := "gh"
+	args := []string{"api", "user", "--jq", ".login"}
+	if id == "gitlab" {
+		cli = "glab"
+		args = []string{"api", "user"}
+	}
+	if _, err := exec.LookPath(cli); err != nil {
+		return gitProviderOperationalProbe{ID: id, Absent: true, Detail: cli + " CLI is not installed on this box"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, cli, args...).Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return gitProviderOperationalProbe{ID: id, Detail: cli + " provider query timed out"}
+		}
+		return gitProviderOperationalProbe{ID: id, Detail: cli + " could not complete a read-only provider query; reconnect it on this box"}
+	}
+	user := strings.TrimSpace(string(out))
+	if id == "gitlab" {
+		var payload struct {
+			Username string `json:"username"`
+		}
+		if json.Unmarshal(out, &payload) == nil {
+			user = strings.TrimSpace(payload.Username)
+		}
+	}
+	detail := "Verified with `" + cli + " api user`"
+	if user != "" {
+		detail += " as " + user
+	}
+	return gitProviderOperationalProbe{ID: id, User: user, Detail: detail, Ready: true}
+}
+
+func applyGitProviderOperationalProbes(status *mobileWorkspaceStatus) {
+	if status == nil {
+		return
+	}
+	results := make(chan gitProviderOperationalProbe, 2)
+	for _, id := range []string{"github", "gitlab"} {
+		go func(provider string) { results <- probeGitProviderOperation(provider) }(id)
+	}
+	byID := map[string]gitProviderOperationalProbe{}
+	for range 2 {
+		result := <-results
+		byID[result.ID] = result
+	}
+	applyGitProviderOperationalProbeResults(status, byID)
+}
+
+func applyGitProviderOperationalProbeResults(status *mobileWorkspaceStatus, byID map[string]gitProviderOperationalProbe) {
+	if status == nil {
+		return
+	}
+	for i := range status.GitProviders {
+		gate := &status.GitProviders[i]
+		if gate.ID == "yaver-git" {
+			if _, err := exec.LookPath("git"); err != nil {
+				gate.Ready = false
+				gate.Configured = false
+				gate.Code = "mobile_workspace.git.not_installed"
+				gate.Detail = "Git is not installed on this box"
+			} else {
+				gate.Detail = "Built in · Git executable verified on this box"
+			}
+			continue
+		}
+		result, ok := byID[gate.ID]
+		if !ok {
+			continue
+		}
+		gate.Ready = result.Ready
+		gate.Configured = gate.Configured || result.Ready
+		gate.Detail = result.Detail
+		if result.Ready {
+			gate.Code = "mobile_workspace.git.ready"
+			gate.Action = nil
+		} else if result.Absent {
+			gate.Code = "mobile_workspace.git.cli_not_installed"
+			cli := "gh"
+			if gate.ID == "gitlab" {
+				cli = "glab"
+			}
+			gate.Action = &mobileWorkspaceAction{Label: "Install " + cli, Method: http.MethodPost, Path: "/install/" + cli, Stream: installStreamPathForEndpoint("/install/" + cli)}
+		} else {
+			gate.Code = "mobile_workspace.git.operation_failed"
+			gate.Action = &mobileWorkspaceAction{Label: "Connect " + gate.Label, Method: http.MethodPost, Path: "/git/provider/oauth/start"}
+		}
+	}
+}
+
 func (s *HTTPServer) handleMobileWorkspaceStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "use GET")
@@ -180,5 +288,6 @@ func (s *HTTPServer) handleMobileWorkspaceStatus(w http.ResponseWriter, r *http.
 	openCode, err := loadOpenCodeConfigSummary()
 	status := buildMobileWorkspaceStatus(runners, collectMachineOnboardingStatus(), openCode)
 	applyMobileWorkspaceOpenCodeConfigFailure(&status, err)
+	applyGitProviderOperationalProbes(&status)
 	jsonReply(w, http.StatusOK, status)
 }

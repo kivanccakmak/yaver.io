@@ -21,6 +21,8 @@ struct VibingView: View {
     @State private var loadingOptions = false
     @State private var error: String?
     @State private var rememberedProjectId: String?
+    @State private var showingProjectStart = false
+    @State private var startedTask: TaskSummary?
     @FocusState private var focusedProjectId: String?
 
     var body: some View {
@@ -36,6 +38,16 @@ struct VibingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .task { if projects.isEmpty { await loadProjects() } }
+        .sheet(isPresented: $showingProjectStart) {
+            ProjectStartView { task in
+                showingProjectStart = false
+                startedTask = task
+            }
+            .environmentObject(store)
+        }
+        .fullScreenCover(item: $startedTask) { task in
+            TaskDetailView(task: task).environmentObject(store)
+        }
     }
 
     private var projectPicker: some View {
@@ -52,6 +64,7 @@ struct VibingView: View {
                         .font(.system(size: 16)).foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button("Start a project") { showingProjectStart = true }
                 Button { Task { await loadProjects() } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(loading)
             }
@@ -68,7 +81,12 @@ struct VibingView: View {
                         }
                     }
                 } else if projects.isEmpty {
-                    center { Text("No projects were discovered on this machine.").foregroundStyle(.secondary) }
+                    center {
+                        VStack(spacing: 18) {
+                            Text("No projects were discovered on this machine.").foregroundStyle(.secondary)
+                            Button("Start a project") { showingProjectStart = true }
+                        }
+                    }
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 20) {

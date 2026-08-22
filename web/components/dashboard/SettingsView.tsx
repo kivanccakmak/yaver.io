@@ -13,6 +13,7 @@ import OpenCodeSettingsView from "./OpenCodeSettingsView";
 import { ManagedCloudPanel } from "./ManagedCloudPanel";
 import { agentClient } from "@/lib/agent-client";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
+import { useAutoRenderVibing } from "@/lib/autoRenderVibing";
 import {
   resolveRuntimeProjectPreference,
   runtimeProjectCatalogMap,
@@ -354,6 +355,9 @@ function RuntimeProjectDefaultsCard({ token, devices }: { token: string | null; 
 }
 
 export default function SettingsView({ user, onLogout, onOpenTwoFactor }: SettingsViewProps) {
+  const autoRenderVibing = useAutoRenderVibing();
+  const [autoRenderError, setAutoRenderError] = useState<string | null>(null);
+  const [autoRenderSaving, setAutoRenderSaving] = useState(false);
   const [identities, setIdentities] = useState<Array<{ provider: string; email: string | null; isPrimary: boolean }>>([]);
   const [emailPasswordEnabled, setEmailPasswordEnabled] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -787,6 +791,36 @@ export default function SettingsView({ user, onLogout, onOpenTwoFactor }: Settin
             </div>
           );
         })()}
+      </div>
+
+      <div className="card mb-6 flex items-center justify-between gap-4">
+        <div>
+          <h3 className="text-sm font-medium text-surface-100">Auto-render Vibing mode</h3>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-surface-500">
+            Off by default. When enabled, Yaver may refresh after the coding agent reports UI-visible changes. Explicit “render again” requests always work.
+          </p>
+          {autoRenderError ? <p className="mt-2 text-xs text-red-400">{autoRenderError}</p> : null}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={autoRenderVibing.enabled}
+          disabled={!autoRenderVibing.loaded || autoRenderSaving}
+          onClick={() => {
+            const next = !autoRenderVibing.enabled;
+            setAutoRenderSaving(true);
+            setAutoRenderError(null);
+            void autoRenderVibing.save(next)
+              .catch((error) => setAutoRenderError(error instanceof Error ? error.message : String(error)))
+              .finally(() => setAutoRenderSaving(false));
+          }}
+          className={`relative h-7 w-12 shrink-0 rounded-full border transition-colors disabled:opacity-40 ${
+            autoRenderVibing.enabled ? "border-emerald-400/50 bg-emerald-500/30" : "border-surface-700 bg-surface-900"
+          }`}
+        >
+          <span className={`absolute top-1 h-5 w-5 rounded-full bg-surface-100 transition-transform ${autoRenderVibing.enabled ? "translate-x-5" : "translate-x-1"}`} />
+          <span className="sr-only">{autoRenderVibing.enabled ? "Disable" : "Enable"} automatic Vibing renders</span>
+        </button>
       </div>
 
       <GitSettingsCard devices={ownedDevices} />

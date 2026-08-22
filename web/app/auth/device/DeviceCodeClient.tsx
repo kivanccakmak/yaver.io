@@ -678,18 +678,33 @@ export default function DeviceCodeClient({
         )}
 
         <form onSubmit={handleSubmit}>
-          <input
-            ref={inputRef}
-            type="text"
-            value={code}
-            onChange={(e) => handleCodeChange(e.target.value)}
-            placeholder="ABCD-1234"
-            maxLength={9}
-            autoFocus
-            autoComplete="off"
-            spellCheck={false}
-            className="w-full rounded-lg border border-surface-700 bg-surface-900 px-4 py-4 text-center text-2xl font-mono font-bold tracking-[0.3em] text-surface-100 placeholder-surface-600 outline-none transition-colors focus:border-surface-500"
-          />
+          <label className="group relative block cursor-text" aria-label="Eight-character device authorization code">
+            <div className="flex items-center justify-center gap-1" aria-hidden="true">
+              {Array.from({ length: 8 }, (_, index) => {
+                const characters = code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+                return (
+                  <span key={index} className="contents">
+                    {index === 4 ? <span className="mx-1 font-mono text-lg text-surface-600">–</span> : null}
+                    <span className="flex h-12 w-8 items-center justify-center rounded-lg border border-surface-700 bg-surface-900 font-mono text-xl font-bold text-surface-100 transition-colors group-focus-within:border-indigo-400 sm:w-10">
+                      {characters[index] || ""}
+                    </span>
+                  </span>
+                );
+              })}
+            </div>
+            <input
+              ref={inputRef}
+              type="text"
+              value={code}
+              onChange={(e) => handleCodeChange(e.target.value)}
+              maxLength={9}
+              autoFocus
+              autoComplete="one-time-code"
+              spellCheck={false}
+              aria-label="Eight-character device authorization code"
+              className="absolute inset-0 h-full w-full cursor-text opacity-[0.01] outline-none"
+            />
+          </label>
 
           <button
             type="submit"

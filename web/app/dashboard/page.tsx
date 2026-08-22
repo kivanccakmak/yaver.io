@@ -3057,7 +3057,7 @@ export default function DashboardPage() {
     // [initial prompt, flattened output] when the agent didn't expose turns.
     const msgsFromTask = (task: Task): ChatMsg[] => {
       if (task.turns && task.turns.length > 0) {
-        return task.turns.map(tn => ({ role: tn.role, text: tn.content }));
+        return task.turns.filter(tn => tn.hidden !== true).map(tn => ({ role: tn.role, text: tn.content }));
       }
       const msgs: ChatMsg[] = [];
       const userText = displayTaskTitle(task.title || "");

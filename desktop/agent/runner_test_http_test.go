@@ -45,6 +45,28 @@ func TestRunRunnerProbeOpenCodeUsesMobileWorkspaceLauncher(t *testing.T) {
 	}
 }
 
+func TestSuccessfulRunnerTestUpdatesWorkspaceVerification(t *testing.T) {
+	ClearRunnerAuthProven("opencode")
+	ClearRunnerAuthInvalid("opencode")
+	t.Cleanup(func() { ClearRunnerAuthProven("opencode"); ClearRunnerAuthInvalid("opencode") })
+
+	observeRunnerProbeOutcome("opencode", "Hello from the remote mobile workspace", nil)
+	if !runnerAuthProofRecent("opencode") {
+		t.Fatal("successful /agent/runners/test did not update the readiness proof ledger")
+	}
+}
+
+func TestRejectedRunnerTestInvalidatesWorkspaceVerification(t *testing.T) {
+	ClearRunnerAuthProven("opencode")
+	ClearRunnerAuthInvalid("opencode")
+	t.Cleanup(func() { ClearRunnerAuthProven("opencode"); ClearRunnerAuthInvalid("opencode") })
+
+	observeRunnerProbeOutcome("opencode", "401 unauthorized: invalid api key", context.DeadlineExceeded)
+	if _, rejected := runnerAuthFailureRecent("opencode"); !rejected {
+		t.Fatal("provider rejection from /agent/runners/test was not recorded")
+	}
+}
+
 func TestLiveMobileWorkspaceOpenCodeDeepSeek(t *testing.T) {
 	if os.Getenv("YAVER_LIVE_OPENCODE_DEEPSEEK") != "1" {
 		t.Skip("set YAVER_LIVE_OPENCODE_DEEPSEEK=1 on a configured remote box")

@@ -11,7 +11,7 @@ import { useFocusEffect } from "expo-router";
 import http from "isomorphic-git/http/web";
 
 import { useColors } from "../context/ThemeContext";
-import { gitForSlug } from "../lib/codingAgent/sandboxBinding";
+import { gitForSlug, gitNetForSlug } from "../lib/codingAgent/sandboxBinding";
 import { ensureRepo, log, type CommitEntry, type SandboxGitOptions } from "../lib/codingAgent/sandboxGit";
 import {
   currentBranch,
@@ -31,13 +31,16 @@ import {
   type FileDiff,
 } from "../lib/codingAgent/sandboxGitOps";
 import { groupChanges, statusSummary, suggestCommitMessage, pushability } from "../lib/gitPanelModel";
-import { hasGitHubToken, saveGitHubToken, gitHubNetFromStore } from "../lib/githubAuthStore";
-import { normalizeRepoUrl, looksLikeGitHubToken } from "../lib/githubAuth";
+import { saveGitHubToken } from "../lib/githubAuthStore";
+import { looksLikeGitHubToken } from "../lib/githubAuth";
+import { withRemotelessTask } from "../lib/remotelessTaskLifecycle";
 
 interface Props {
   slug: string;
   /** Called after any tree-changing op so the editor can refresh its buffers. */
   onChanged?: () => void;
+  /** Disable the nested vertical scroller when rendered inside Tasks' FlatList. */
+  embedded?: boolean;
 }
 
 interface MergeState {
@@ -47,7 +50,7 @@ interface MergeState {
   conflicts: string[];
 }
 
-export default function SandboxGitPanel({ slug, onChanged }: Props) {
+export default function SandboxGitPanel({ slug, onChanged, embedded = false }: Props) {
   const c = useColors();
   const [git] = useState<SandboxGitOptions>(() => gitForSlug(slug));
 
@@ -75,7 +78,7 @@ export default function SandboxGitPanel({ slug, onChanged }: Props) {
       log(git, 20),
       listConflicts(git),
       listRemotes(git),
-      hasGitHubToken(),
+      gitNetForSlug(slug).then(Boolean),
     ]);
     setBranch(br);
     setBranches(brs);
@@ -113,10 +116,17 @@ export default function SandboxGitPanel({ slug, onChanged }: Props) {
 
   const doCommit = () =>
     runOp(async () => {
-      const { commitAll } = await import("../lib/codingAgent/sandboxGit");
-      const oid = await commitAll(git, message.trim() || "update");
-      if (!oid) Alert.alert("Git", "Nothing to commit.");
-      setMessage("");
+      await withRemotelessTask({
+        id: `git-commit-${slug}-${Date.now()}`,
+        title: `Git commit · ${slug}`,
+        projectSlug: slug,
+        kind: "git-commit",
+      }, async () => {
+        const { commitAll } = await import("../lib/codingAgent/sandboxGit");
+        const oid = await commitAll(git, message.trim() || "update");
+        if (!oid) Alert.alert("Git", "Nothing to commit.");
+        setMessage("");
+      });
     });
 
   const doCreateBranch = () =>
@@ -173,23 +183,30 @@ export default function SandboxGitPanel({ slug, onChanged }: Props) {
   const doPush = async () => {
     setPushing(true);
     try {
-      // Multi-provider (GitHub / GitLab / Bitbucket / self-hosted): set the
-      // remote first so the host can be detected, then resolve a token for that
-      // host from the stored git credentials (Git Accounts settings). GitHub
-      // continues to work via the same token slot the inline field writes.
-      if (repo.trim()) {
-        const { normalizeGitUrl } = await import("../lib/gitProviderAuth");
-        await addRemote(git, "origin", normalizeGitUrl(repo.trim()));
-      }
-      const { gitNetForSlug } = await import("../lib/codingAgent/sandboxBinding");
-      const net = await gitNetForSlug(slug);
-      if (!net) {
-        Alert.alert("Git", "No token for this repo's host. Add one in Git Accounts (Sandbox AI → Source control).");
-        return;
-      }
-      const res = await push(git, net, {});
-      Alert.alert("Push", res.ok ? "Pushed." : `Push failed: ${res.error}`);
-      await reload();
+      await withRemotelessTask({
+        id: `git-push-${slug}-${Date.now()}`,
+        title: `Git push · ${slug}`,
+        projectSlug: slug,
+        kind: "git-push",
+      }, async () => {
+        // Multi-provider (GitHub / GitLab / Bitbucket / self-hosted): set the
+        // remote first so the host can be detected, then resolve a token for that
+        // host from the stored git credentials (Git Accounts settings). GitHub
+        // continues to work via the same token slot the inline field writes.
+        if (repo.trim()) {
+          const { normalizeGitUrl } = await import("../lib/gitProviderAuth");
+          await addRemote(git, "origin", normalizeGitUrl(repo.trim()));
+        }
+        const { gitNetForSlug } = await import("../lib/codingAgent/sandboxBinding");
+        const net = await gitNetForSlug(slug);
+        if (!net) {
+          throw new Error("No token for this repo's host. Add one in Git Accounts (Sandbox AI → Source control).");
+        }
+        const res = await push(git, net, {});
+        if (!res.ok) throw new Error(res.error || "Git push failed");
+        await reload();
+        Alert.alert("Push", "Pushed.");
+      });
     } catch (e: any) {
       Alert.alert("Push", e?.message ?? String(e));
     } finally {
@@ -201,7 +218,11 @@ export default function SandboxGitPanel({ slug, onChanged }: Props) {
   const pushGate = pushability({ hasToken, hasRemote: hasRemote || !!repo.trim(), busy: pushing });
 
   return (
-    <ScrollView style={[styles.panel, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+    <ScrollView
+      scrollEnabled={!embedded}
+      nestedScrollEnabled={!embedded}
+      style={[styles.panel, embedded && styles.embeddedPanel, { backgroundColor: c.bgCard, borderColor: c.border }]}
+    >
       <View style={styles.headerRow}>
         <Text style={{ color: c.textPrimary, fontWeight: "700" }}>⎇ Git</Text>
         <Text style={{ color: c.textMuted, fontSize: 12 }}>{statusSummary(branch, changes)}</Text>
@@ -358,6 +379,7 @@ export default function SandboxGitPanel({ slug, onChanged }: Props) {
 
 const styles = StyleSheet.create({
   panel: { borderWidth: 1, borderRadius: 14, padding: 12, maxHeight: 520 },
+  embeddedPanel: { maxHeight: undefined },
   headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 },
   section: { marginTop: 10, gap: 6 },
   label: { fontSize: 11, fontWeight: "700", letterSpacing: 0.5 },

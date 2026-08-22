@@ -168,14 +168,20 @@ web, mobile, tablet, tvOS, watchOS, Wear OS, car, AR/VR, and companion CLI.
 - **Runner coding state is explicit.** A task in `queued` or `running` means the
   runner is coding. Do not infer reload permission from output text, spinner
   state, or a dev server saying "ready".
-- **Render/reload intent is not render/reload execution.** MCP events such as
-  `runtime_render_requested`, agent output that mentions reload, and user
-  prompts like "reload", "re-render", "show it", or "refresh" are queued intents
-  while the runner is coding.
-- **Do not reload while coding.** Let the runner finish. Then render exactly
-  once when the task reaches a renderable terminal state (`completed` or
-  `review`), unless the user explicitly taps Fast/Full Reload when no task is
-  coding.
+- **Render/reload intent is not render/reload execution.** A
+  `runtime_render_requested` event is the agent's structured judgement that UI
+  changes are ready. With **Auto-render Vibing mode off (the default)**, it
+  becomes a `Render updates` action beside the response and does not execute.
+- **Auto-render is opt-in and selective.** When the account setting is on,
+  Yaver may execute one render after a structured agent request reaches
+  `completed`/`review`; mere task completion never renders. The agent should
+  say `UI updates are ready` when a visible change warrants that signal.
+- **Explicit user intent always works.** A whole-message command such as
+  `reload`, `re-render`, or `refresh the preview`, or a Fast/Full Reload tap,
+  queues one render while coding and executes once safe. Mentions such as
+  `fix the reload bug` are ordinary coding prompts.
+- **Do not reload while coding.** Keep queued coding prompts in order and wait
+  until no turn is coding before draining a queued render.
 - **Reload is atomic.** If a render/reload is already in flight, coalesce or
   ignore new triggers until it finishes. Do not start another coding turn on the
   same surface mid-reload.

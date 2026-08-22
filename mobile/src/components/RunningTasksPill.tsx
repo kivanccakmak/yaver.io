@@ -19,6 +19,7 @@ import { quicClient, Task } from "../lib/quic";
 import { useColors } from "../context/ThemeContext";
 import { useDevice } from "../context/DeviceContext";
 import { openTaskBus } from "../lib/runningTasksBus";
+import { listRemotelessTasks } from "../lib/remotelessTaskLifecycle";
 
 const TAB_BAR_HEIGHT = 68;
 
@@ -34,17 +35,37 @@ export function RunningTasksPill() {
   // even though the original task keeps streaming on the previous
   // (now-pooled) connection.
   const isConnected = (connectionStatus === "connected" && !!activeDevice) || connectedDeviceIds.length > 0;
-  const [running, setRunning] = useState<Task[]>([]);
+  const [running, setRunning] = useState<Array<Task & { localProjectSlug?: string; localKind?: string }>>([]);
   const dot = React.useRef(new Animated.Value(0.35)).current;
 
   useEffect(() => {
-    if (!isConnected) { setRunning([]); return; }
     let mounted = true;
     const poll = async () => {
       try {
-        const list = await quicClient.listTasks();
-        const open = list.filter((t) => t.status === "running" || t.status === "queued");
-        if (mounted) setRunning(open);
+        const [remote, local] = await Promise.all([
+          isConnected ? quicClient.listTasks().catch(() => [] as Task[]) : Promise.resolve([] as Task[]),
+          listRemotelessTasks().catch(() => []),
+        ]);
+        const open = remote.filter((t) => t.status === "running" || t.status === "queued");
+        const localOpen = local
+          .filter((record) => record.state === "running")
+          .map((record) => ({
+            id: record.id,
+            title: record.title,
+            description: record.title,
+            status: "running" as const,
+            output: [record.phase],
+            runnerId: "yaver-phone",
+            source: "phone-local",
+            localCheckoutId: record.projectSlug,
+            localProjectSlug: record.projectSlug,
+            localKind: record.kind,
+            deviceName: "This device",
+            createdAt: record.startedAt,
+            updatedAt: record.updatedAt,
+          }));
+        const deduped = [...localOpen, ...open.filter((task) => !localOpen.some((localTask) => localTask.id === task.id))];
+        if (mounted) setRunning(deduped);
       } catch {
         if (mounted) setRunning([]);
       }
@@ -95,6 +116,17 @@ export function RunningTasksPill() {
     >
       <Pressable
         onPress={() => {
+          const isStandaloneLocalTask =
+            first.source === "phone-local" &&
+            (first.localKind === "git-commit" ||
+              first.localKind === "git-push" ||
+              !first.id.startsWith("phone-local-"));
+          if (isStandaloneLocalTask) {
+            try {
+              router.push({ pathname: "/repo-coding", params: { slug: first.localProjectSlug || first.localCheckoutId || "" } } as any);
+            } catch {}
+            return;
+          }
           openTaskBus.publish(first.id);
           try { router.push("/(tabs)/tasks" as any); } catch {}
         }}

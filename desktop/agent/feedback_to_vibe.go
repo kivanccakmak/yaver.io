@@ -1,8 +1,7 @@
 package main
 
-// feedback_to_vibe.go — auto-route feedback-source tasks through the
-// /vibing/execute pipeline and fire a Hermes-bundle reload after they
-// commit.
+// feedback_to_vibe.go — route feedback-source tasks through the
+// /vibing/execute pipeline and honor explicit render requests after commit.
 //
 // Without this glue, a `POST /tasks {source: "feedback-console"}` from
 // the mobile FeedbackOverlay (after a shake-while-guest-is-loaded) was
@@ -55,38 +54,16 @@ func isFeedbackOrVibingSource(source string) bool {
 // prompt explicitly asked the runner to push the change to the running
 // guest bundle. The keyword set is intentionally tight — a casual
 // mention of "reload" inside a code reference shouldn't trigger a
-// rebuild. Matched substrings are evaluated against the task title
-// and description (lower-cased + trimmed); first hit wins.
-//
-// The AI agent on the remote can ALSO call /dev/reload directly via
-// the MCP runner when its judgement says so — that path is preferred
-// because the AI sees the diff. This helper is just the cheap fast
-// path so explicit user intent is honoured without a round-trip.
+// rebuild. A whole-message command and an explicit "and/then reload" suffix
+// count; a mention such as "fix the reload bug" does not. The account's
+// Auto-render setting is enforced by clients for agent-initiated suggestions;
+// this helper exists only for direct user intent.
 func feedbackPromptRequestsReload(task *Task) bool {
 	if task == nil {
 		return false
 	}
-	combined := strings.ToLower(strings.TrimSpace(task.Title + "\n" + task.Description))
-	if combined == "" {
-		return false
-	}
-	for _, marker := range []string{
-		"reload",
-		"hot reload",
-		"rebuild",
-		"refresh the app",
-		"refresh app",
-		"push to phone",
-		"push it",
-		"test it",
-		"try it",
-		"see it",
-		"show me",
-		"apply it",
-		"update the app",
-		"update app",
-	} {
-		if strings.Contains(combined, marker) {
+	for _, candidate := range []string{task.Title, task.Description} {
+		if isExplicitRenderInstruction(candidate) {
 			return true
 		}
 	}
@@ -261,10 +238,9 @@ func (s *HTTPServer) vibingifyFeedbackTaskBody(
 // to review the diff before the bundle reloads on their device — the
 // running guest still works against the old bytecode and the user can
 // pull the change manually when ready. If the prompt explicitly says
-// "and reload" / "test it" / similar, the AI's response will land on
-// the new commit and we kick the reload as a courtesy. The AI on the
-// remote can also call /dev/reload itself via the MCP runner, which
-// is the authoritative path when the AI judges a reload is required.
+// "and reload", the AI's response will land on the new commit and we kick the
+// reload once. Agent initiative without direct user intent travels as
+// runtime_render_requested and is governed by Auto-render Vibing mode.
 func (s *HTTPServer) autoReloadAfterFeedbackVibingTask(task *Task) {
 	if task == nil || task.Status != TaskStatusFinished {
 		return

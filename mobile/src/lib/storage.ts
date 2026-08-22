@@ -103,6 +103,30 @@ export async function getCachedTaskList(): Promise<Task[]> {
   }
 }
 
+/** Replace a stale phone-local RUNNING row after the OS ended its finite
+ * background window. The repo bytes remain untouched; REVIEW is the route to
+ * inspect Git and retry, never a fabricated success or destructive replay. */
+export async function markCachedRemotelessTasksForReview(
+  taskIds: string[],
+  detail: string,
+): Promise<void> {
+  if (taskIds.length === 0) return;
+  try {
+    const tasks = await getCachedTaskList();
+    const ids = new Set(taskIds);
+    let changed = false;
+    const next = tasks.map((task) => {
+      if (!ids.has(task.id) || task.status !== "running" || task.source !== "phone-local") return task;
+      changed = true;
+      const output = [...(task.output ?? []), detail];
+      return { ...task, status: "review" as const, resultText: detail, output, updatedAt: Date.now() };
+    });
+    if (changed) await cacheTaskList(next);
+  } catch {
+    // Best effort. The lifecycle ledger remains authoritative on next open.
+  }
+}
+
 /** Append output lines for a single task to local storage. */
 export async function cacheTaskOutput(
   taskId: string,

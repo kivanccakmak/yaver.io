@@ -3,10 +3,10 @@
 // Why this screen exists: prod data (2026-05) showed every net-new organic
 // signup completed mobile sign-in + the survey and then never paired a
 // device — the activation step. The survey used to drop the user straight
-// onto the Tasks tab, where pairing was buried under "Open Mobile Sandbox".
+// onto the Tasks tab, where pairing was buried under "Open Mobile Workspace".
 // This screen makes pairing the default next action while staying a SOFT
 // nudge: a prominent "Skip for now" always escapes to the phone-only
-// sandbox so we never block someone who genuinely wants mobile-only.
+// workspace so remote development never silently falls back to phone-local execution.
 //
 // It reuses the exact discovery + adopt machinery the Devices tab uses:
 //   - beaconListener (LAN UDP 19837) surfaces a fresh `yaver serve` box
@@ -146,7 +146,7 @@ export default function OnboardingPairScreen() {
         if (res.needsManualPasskey) {
           Alert.alert(
             "Type the passkey",
-            "This box hid its passkey. Open More → Pair a device and enter the 6-character code shown on the machine.",
+            "This box hid its passkey. Open More → Pair Machine, then scan its QR or enter the 6-character code.",
           );
           return;
         }
@@ -264,6 +264,15 @@ export default function OnboardingPairScreen() {
           </Text>
         </View>
 
+        <Pressable
+          testID="onboarding-scan-machine-qr"
+          style={({ pressed }) => [styles.scanQrBtn, { backgroundColor: c.accent }, pressed && { opacity: 0.8 }]}
+          onPress={() => router.push({ pathname: "/approve-device", params: { scan: "1" } })}
+        >
+          <Text style={styles.scanQrBtnText}>Scan the QR from your computer</Text>
+        </Pressable>
+        <Text style={[styles.scanQrHelper, { color: c.textMuted }]}>Or wait here and Yaver will find it automatically on the same Wi-Fi.</Text>
+
         {/* On a Mac? AirDrop a double-click setup file instead of typing.
             Falls back to copy when AirDrop isn't available. Once it runs,
             this phone pairs the machine automatically over the beacon. */}
@@ -324,7 +333,7 @@ export default function OnboardingPairScreen() {
           <Text style={[styles.skipText, { color: c.textSecondary }]}>Skip for now</Text>
         </Pressable>
         <Text style={[styles.skipHelper, { color: c.textMuted }]}>
-          You can build from this phone with the Mobile Sandbox and pair a computer anytime.
+          Connect a development device to start a Mobile Workspace for vibing and rendering.
         </Text>
       </View>
     </SafeAreaView>
@@ -343,6 +352,9 @@ const styles = StyleSheet.create({
   copyBtn: { borderWidth: 1, borderRadius: 10, paddingVertical: 11, alignItems: "center" },
   copyBtnText: { fontSize: 14, fontWeight: "600" },
   cmdHelper: { fontSize: 12, lineHeight: 17, marginTop: 14 },
+  scanQrBtn: { minHeight: 52, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  scanQrBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  scanQrHelper: { fontSize: 12, lineHeight: 17, textAlign: "center", marginBottom: 20 },
   discoverBlock: { marginBottom: 8 },
   sectionLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 1, marginBottom: 10 },
   deviceRow: {

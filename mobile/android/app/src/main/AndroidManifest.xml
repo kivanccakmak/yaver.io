@@ -28,6 +28,7 @@
   <!-- On-device coding agent (SandboxService): keep libyaver.so serve + its
        proot tree alive while the app is backgrounded. -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
   <!-- Android 13+: required for the SandboxService foreground notification to display. -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -86,6 +87,12 @@
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
           android:value="on_device_coding_agent"/>
     </service>
+    <!-- Finite DeepSeek/Hermes edits and explicit Git commit/push. Unlike the
+         proot sandbox daemon above, this is a user-started data-sync lease and
+         stops at the end of the operation (or its native safety deadline). -->
+    <service android:name="io.yaver.mobile.sandbox.RemotelessTaskService"
+        android:exported="false"
+        android:foregroundServiceType="dataSync"/>
     <receiver android:name="io.yaver.mobile.car.YaverCarReplyReceiver" android:exported="false"/>
     <service android:name="io.yaver.mobile.wear.YaverWearListenerService" android:exported="true">
       <intent-filter>

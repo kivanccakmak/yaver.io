@@ -20,9 +20,13 @@ test("every TV account screen exposes the same two choices", () => {
   }
 });
 
-test("tvOS cannot silently re-expose dormant native provider implementations", () => {
-  assert.equal(existsSync(join(here, "../../../tvos/YaverTV/AppleSignIn.swift")), false);
-  assert.equal(existsSync(join(here, "../../../tvos/YaverTV/OAuthSignIn.swift")), false);
+test("tvOS cannot silently re-expose headset-only native provider implementations", () => {
+  for (const file of ["AppleSignIn.swift", "OAuthSignIn.swift"]) {
+    const implementation = source(`../../../tvos/YaverTV/${file}`);
+    assert.match(implementation, /#if\s+!os\(tvOS\)/, `${file} is not compile-time excluded from tvOS`);
+  }
+  const signIn = source("../../../tvos/YaverTV/Views/SignInView.swift");
+  assert.doesNotMatch(signIn, /AppleNativeAuth|OAuthSignIn|OAuthProvider/);
 });
 
 test("TV sign-in stays pinned above the scrollable Settings sections", () => {
@@ -57,7 +61,7 @@ test("Settings keeps dense utility rows concise and separates Docker status card
 
 test("native and generated iOS camera disclosures name TV QR sign-in", () => {
   const expected =
-    "Yaver uses your camera to scan TV sign-in QR codes, take photos for tasks, and provide camera access to apps you run for testing.";
+    "Yaver uses your camera to scan machine pairing, TV sign-in, and encrypted secure-handoff QR codes, take photos for tasks, and provide camera access to apps you run for testing.";
   const appJson = JSON.parse(source("../../app.json"));
   assert.equal(appJson.expo.ios.infoPlist.NSCameraUsageDescription, expected);
 

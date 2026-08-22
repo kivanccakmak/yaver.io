@@ -21,7 +21,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -33,6 +32,7 @@ import {
   stashPendingDeviceCode,
 } from "../src/lib/pendingDeviceApproval";
 import DeviceCodeScanner from "../src/components/DeviceCodeScanner";
+import SegmentedCodeInput from "../src/components/SegmentedCodeInput";
 import {
   approveDeviceCode,
   extractUserCode,
@@ -332,7 +332,8 @@ export default function ApproveDeviceScreen() {
         {!initialCode || unknownCode ? (
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             <Text style={[styles.cardLabel, { color: c.textMuted }]}>CODE FROM YOUR MACHINE</Text>
-            <TextInput
+            <SegmentedCodeInput
+              testID="device-approval-segmented-code"
               value={code}
               onChangeText={(next) => {
                 // A verdict belongs to one exact code. Clear it in the same
@@ -343,11 +344,9 @@ export default function ApproveDeviceScreen() {
                 setUnknownCode(false);
                 setLookupError(null);
               }}
-              placeholder="ABCD-1234"
-              placeholderTextColor={c.textMuted}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              style={[styles.input, { color: c.textPrimary, borderColor: c.border }]}
+              length={8}
+              groupEvery={4}
+              accessibilityLabel="Eight-character device approval code"
             />
             <Pressable
               onPress={() => setScanning(true)}
@@ -404,7 +403,6 @@ const styles = StyleSheet.create({
   confirmCode: { fontSize: 28, fontWeight: "800", letterSpacing: 3, marginTop: 12, fontFamily: "Courier" },
   retryLookupBtn: { alignSelf: "flex-start", paddingTop: 12, paddingVertical: 6 },
   cardLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 1, marginBottom: 10 },
-  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12, fontSize: 16, fontFamily: "Courier" },
   scanBtn: { marginTop: 12, borderWidth: 1, borderRadius: 10, paddingVertical: 11, alignItems: "center" },
   scanBtnText: { fontSize: 14, fontWeight: "600" },
   infoRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 14 },

@@ -29,6 +29,14 @@ test("Mobile Workspace consumes the agent readiness contract and exposes fixes",
   assert.ok(wizard.includes("Test on remote box"));
 });
 
+test("Mobile Workspace retries readiness when the selected transport connects", () => {
+  assert.match(
+    wizard,
+    /\}, \[activeDevice\?\.id, connected, selectedRunnerConnected, selectedRunnerDevice\]\);/,
+    "readiness callback must be recreated when connection state changes",
+  );
+});
+
 test("runner and model are persisted as separate remote-box choices", () => {
   assert.ok(wizard.includes("const [runner, setRunner]"));
   assert.ok(wizard.includes("const [model, setModel]"));

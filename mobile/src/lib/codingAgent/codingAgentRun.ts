@@ -26,6 +26,11 @@ import {
   type CodingAgentProgress,
   type CodingAgentResult,
 } from "./runner";
+import {
+  beginRemotelessTask,
+  endRemotelessTask,
+  updateRemotelessTask,
+} from "../remotelessTaskLifecycle";
 
 /** The git context (fs + virtual dir) for a phone-local project slug. */
 export function gitContextForSlug(slug: string): SandboxGitOptions {
@@ -54,6 +59,9 @@ export interface AgenticRunOptions {
    * just src/. Either way it stays rooted at the same dir git operates on.
    */
   sandbox?: CodingSandbox;
+  /** Stable UI task id when this run belongs to the Tasks surface. */
+  lifecycleTaskId?: string;
+  lifecycleTitle?: string;
 }
 
 export interface AgenticCodingRun {
@@ -78,7 +86,13 @@ export async function runAgenticCoding(opts: AgenticRunOptions): Promise<Agentic
   const transaction = createTurnTransaction(sandbox);
   const advertised: CodingTool[] = [...CODING_TOOLS, ...makeGitTools(git, opts.net)];
   const tools = toolsForRun(advertised, mode);
-
+  const lifecycleId = opts.lifecycleTaskId || `phone-code-${opts.slug}-${Date.now()}`;
+  await beginRemotelessTask({
+    id: lifecycleId,
+    title: opts.lifecycleTitle || `Coding · ${opts.slug}`,
+    projectSlug: opts.slug,
+    kind: "coding",
+  }).catch(() => undefined);
   try {
     const result = await runCodingAgent({
       prompt: opts.prompt,
@@ -86,16 +100,29 @@ export async function runAgenticCoding(opts: AgenticRunOptions): Promise<Agentic
       config: opts.config,
       tools,
       confirmMutation: opts.confirmMutation,
-      onProgress: opts.onProgress,
+      onProgress: (event) => {
+        opts.onProgress?.(event);
+        if (event.kind === "tool_call") {
+          void updateRemotelessTask(lifecycleId, `editing · ${event.call.name}`).catch(() => undefined);
+        } else if (event.kind === "step_complete") {
+          void updateRemotelessTask(lifecycleId, `coding · step ${event.step + 1}`).catch(() => undefined);
+        }
+      },
       signal: opts.signal,
       maxSteps: opts.maxSteps,
     });
     const snapshot = transaction.snapshot();
     const changed = await changedFilesForTurn(sandbox, snapshot);
+    await endRemotelessTask(lifecycleId, changed.length > 0 ? "review" : "completed").catch(() => undefined);
     return { result, snapshot, changed, before: null, after: null };
   } catch (error) {
     // An interrupted/failed model turn must not strand invisible partial edits.
     await transaction.rollback();
+    await endRemotelessTask(
+      lifecycleId,
+      error instanceof Error && error.name === "AbortError" ? "stopped" : "failed",
+      error instanceof Error ? error.message : String(error),
+    ).catch(() => undefined);
     throw error;
   }
 }

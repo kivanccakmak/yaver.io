@@ -522,6 +522,9 @@ type ConversationTurn struct {
 	Role      string    `json:"role"` // "user" or "assistant"
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
+	// Hidden keeps product-owned bootstrap context available to the runner
+	// without pretending the user typed it in the visible conversation.
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 // maxSeededForkTurns bounds how much parent history a fork copies into a child
@@ -972,6 +975,10 @@ type TaskCreateOptions struct {
 	// then Title, and any producer that put scaffolding in those fields has
 	// just written Yaver's own briefing into the user's bubble.
 	InitialUserPrompt string
+	// InitialUserPromptHidden is for product-owned kickoff turns (for example,
+	// the mobile app builder handoff). The runner still receives the prompt,
+	// while every transcript can start with the assistant's first response.
+	InitialUserPromptHidden bool
 
 	// PromptText is the TRANSPORT prompt — the scaffolded text the runner
 	// reads. Empty means "the runner reads Title (+ Description)", which is
@@ -2036,7 +2043,9 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 			initialTurns = initialTurns[:n-1]
 		}
 	}
-	initialTurns = append(initialTurns, ConversationTurn{Role: "user", Content: initialTurnContent, Timestamp: now})
+	initialTurns = append(initialTurns, ConversationTurn{
+		Role: "user", Content: initialTurnContent, Timestamp: now, Hidden: opts.InitialUserPromptHidden,
+	})
 	rawRunnerCommand := opts.RawRunnerCommand ||
 		isRawRunnerCommand(initialTurnContent) ||
 		isRawRunnerCommand(description) ||

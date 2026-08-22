@@ -970,6 +970,9 @@ export default defineSchema({
     // so it follows the user across devices. Not a secret and not derivable
     // from anything else, so it belongs in Convex rather than on the box.
     startupScreen: v.optional(v.string()),
+    // Vibing render consent. Undefined is deliberately OFF: a coding turn may
+    // suggest a render, but only this opt-in may execute it automatically.
+    autoRenderVibing: v.optional(v.boolean()),
     forceRelay: v.optional(v.boolean()),
     runnerId: v.optional(v.string()),
     customRunnerCommand: v.optional(v.string()),

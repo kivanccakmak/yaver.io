@@ -271,6 +271,16 @@
         <!-- Projects page -->
         <div class="page" id="page-projects">
           <div class="page-title">Projects</div>
+          <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+            <input class="input no-drag" id="project-start-name" placeholder="New project name" style="flex:1;min-width:220px">
+            <select class="input no-drag" id="project-start-git" style="width:auto">
+              <option value="yaver-git">Yaver Git</option>
+              <option value="github">GitHub</option>
+              <option value="gitlab">GitLab</option>
+            </select>
+            <button class="btn btn-accent btn-sm no-drag" onclick="startProject()">Start a project</button>
+          </div>
+          <div id="project-start-note" style="font-size:11px;color:var(--text-muted);margin:-8px 0 14px">Ocean palette · Yaver Serverless · Developing starts automatically</div>
           <div id="projects-list"></div>
         </div>
 
@@ -869,6 +879,32 @@ async function loadProjects() {
       </div>`;
     }).join('') : '<div style="font-size:12px;color:var(--text-muted)">No projects on remote machine</div>';
   } catch(e) { c.innerHTML = '<div style="color:var(--red);font-size:12px">'+esc(e.message)+'</div>'; }
+}
+
+async function startProject() {
+  const nameInput = document.getElementById('project-start-name');
+  const gitInput = document.getElementById('project-start-git');
+  const note = document.getElementById('project-start-note');
+  const name = nameInput.value.trim();
+  if (!name) { nameInput.focus(); return; }
+  note.textContent = 'Initializing on the selected AI machine…';
+  try {
+    const result = await window.yaver.startProject({ name, gitProvider: gitInput.value, palette: 'ocean' });
+    nameInput.value = '';
+    note.textContent = `Started ${name} · ${gitInput.options[gitInput.selectedIndex].text} · Ocean`;
+    await loadProjects();
+    navTo('chat');
+    const task = result.task || {};
+    if (task.id) {
+      currentTask = { ...task, status: task.status || 'running', rendered: 1 };
+      document.getElementById('stop-btn').style.display = 'flex';
+      loadTaskList();
+      startTaskStream(task.id);
+    }
+  } catch (error) {
+    note.textContent = error?.message || 'Could not start the project.';
+    note.style.color = 'var(--red)';
+  }
 }
 
 function projectAction(name, path) {

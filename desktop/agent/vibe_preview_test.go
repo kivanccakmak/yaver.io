@@ -161,7 +161,7 @@ func TestProfileFor_explicitOverridesNetMode(t *testing.T) {
 
 func TestStart_requiresProjectAndTarget(t *testing.T) {
 	mgr := NewVibePreviewManager(newFakeBrowser())
-	if _, err := mgr.Start(VibePreviewStartOpts{TargetURL: "http://x"}); err == nil {
+	if _, err := mgr.Start(VibePreviewStartOpts{TargetURL: stubTarget(t)}); err == nil {
 		t.Fatal("expected error for missing project")
 	}
 	if _, err := mgr.Start(VibePreviewStartOpts{Project: "p"}); err == nil {
@@ -171,7 +171,7 @@ func TestStart_requiresProjectAndTarget(t *testing.T) {
 
 func TestStart_nilBrowserManager(t *testing.T) {
 	mgr := NewVibePreviewManager(nil)
-	_, err := mgr.Start(VibePreviewStartOpts{Project: "p", TargetURL: "http://x"})
+	_, err := mgr.Start(VibePreviewStartOpts{Project: "p", TargetURL: stubTarget(t)})
 	if err == nil || !strings.Contains(err.Error(), "browser automation unavailable") {
 		t.Fatalf("expected browser-unavailable error, got %v", err)
 	}
@@ -184,14 +184,14 @@ func TestStart_doubleStart_rejected(t *testing.T) {
 	// summary-only mode prevents the live capture loop from spinning up;
 	// initial capture still fires (covered by snapshot tests below).
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "alpha", TargetURL: "http://x", Mode: VibePreviewModeSummaryOnly,
+		Project: "alpha", TargetURL: stubTarget(t), Mode: VibePreviewModeSummaryOnly,
 	}); err != nil {
 		t.Fatalf("first start: %v", err)
 	}
 	defer mgr.StopAll()
 
 	_, err := mgr.Start(VibePreviewStartOpts{
-		Project: "alpha", TargetURL: "http://x", Mode: VibePreviewModeSummaryOnly,
+		Project: "alpha", TargetURL: stubTarget(t), Mode: VibePreviewModeSummaryOnly,
 	})
 	if err == nil || !strings.Contains(err.Error(), "already active") {
 		t.Fatalf("expected already-active error, got %v", err)
@@ -204,7 +204,7 @@ func TestStart_initialCaptureFires(t *testing.T) {
 	defer mgr.StopAll()
 
 	sess, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -235,7 +235,7 @@ func TestStop_closesBrowserSession(t *testing.T) {
 	mgr := NewVibePreviewManager(fb)
 
 	_, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -263,7 +263,7 @@ func TestRingbuffer_evictsAtCap(t *testing.T) {
 
 	// change-only avoids the periodic loop fighting our snapshot calls.
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestStableFrameCollapse(t *testing.T) {
 	defer mgr.StopAll()
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestFrameByHash(t *testing.T) {
 	defer mgr.StopAll()
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestStopAll_concurrent(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		_, err := mgr.Start(VibePreviewStartOpts{
 			Project:   fmt.Sprintf("p%d", i),
-			TargetURL: "http://x",
+			TargetURL: stubTarget(t),
 			Mode:      VibePreviewModeChangeOnly,
 		})
 		if err != nil {
@@ -391,7 +391,7 @@ func TestLiveLoop_capturesFramesOverTime(t *testing.T) {
 	// Force the live-direct profile (8 FPS = ~125 ms interval) and live mode.
 	if _, err := mgr.Start(VibePreviewStartOpts{
 		Project:   "p",
-		TargetURL: "http://x",
+		TargetURL: stubTarget(t),
 		Mode:      VibePreviewModeLive,
 		Profile:   "live-direct",
 	}); err != nil {

@@ -690,6 +690,8 @@ export async function getSurveyStatus(
 export type KeyStorage = "local" | "cloud";
 
 export interface UserSettings {
+  /** Account-level consent for agent-initiated Vibing renders. Unset = off. */
+  autoRenderVibing?: boolean;
   forceRelay?: boolean;
   codingMode?: "remote-preferred" | "local-only" | "auto-fallback";
   localProvider?: "deepseek" | "openai-compatible" | "ollama";

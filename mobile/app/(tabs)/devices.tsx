@@ -991,6 +991,9 @@ export default function DevicesScreen() {
     setPrimaryDevice,
     secondaryDeviceId,
     setSecondaryDevice,
+    codingMode,
+    codingModeReady,
+    setCodingMode,
     primaryRunnerByDevice,
     pendingClaims,
     refreshPendingClaims,
@@ -1152,7 +1155,7 @@ export default function DevicesScreen() {
       if (!dev.bootstrapPasskey) {
         Alert.alert(
           "Passkey hidden",
-          "This box has hidden its passkey from the beacon. Open More → Pair a device and type the 6-character passkey shown on the machine."
+          "This box has hidden its passkey from the beacon. Open More → Pair Machine, then scan its QR or enter the 6-character passkey."
         );
         return;
       }
@@ -1345,8 +1348,46 @@ export default function DevicesScreen() {
           contentContainerStyle={[styles.listContent, useMasterDetail ? null : tabletContent]}
           refreshing={isLoadingDevices}
           onRefresh={refreshDevices}
-          ListHeaderComponent={
-            hiddenDeviceCount > 0 ? (
+          ListHeaderComponent={(
+            <>
+              <Pressable
+                disabled={!codingModeReady}
+                onPress={() => {
+                  void setCodingMode("local-only").catch((e: any) =>
+                    Alert.alert("Couldn't Select No Remote Box", e?.message || "The choice could not be saved on this phone."),
+                  );
+                }}
+                style={({ pressed }) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 12,
+                  borderWidth: codingMode === "local-only" ? 1.5 : 1,
+                  borderColor: codingMode === "local-only" ? c.accent : c.border,
+                  backgroundColor: c.bgCard,
+                  borderRadius: 10,
+                  padding: 14,
+                  marginBottom: 12,
+                  opacity: !codingModeReady ? 0.55 : pressed ? 0.8 : 1,
+                })}
+                accessibilityRole="button"
+                accessibilityLabel="Use no remote box"
+                accessibilityState={{ selected: codingMode === "local-only", disabled: !codingModeReady }}
+              >
+                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: codingMode === "local-only" ? c.warn : c.textMuted }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>No remote box</Text>
+                  <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
+                    DeepSeek + GitHub/GitLab projects on this phone
+                  </Text>
+                  <Text style={{ color: c.warn, fontSize: 11, marginTop: 3 }}>
+                    No builds, shell, tests, previews, or deploy runtime
+                  </Text>
+                </View>
+                <Text style={{ color: codingMode === "local-only" ? c.accent : c.textMuted, fontSize: 12, fontWeight: "700" }}>
+                  {codingMode === "local-only" ? "SELECTED" : "LOCAL"}
+                </Text>
+              </Pressable>
+              {hiddenDeviceCount > 0 ? (
               <View
                 style={{
                   flexDirection: "row",
@@ -1375,8 +1416,9 @@ export default function DevicesScreen() {
                   <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>Show all</Text>
                 </Pressable>
               </View>
-            ) : null
-          }
+              ) : null}
+            </>
+          )}
           ListEmptyComponent={isLoadingDevices ? (
             <View style={styles.center}>
               <ActivityIndicator size="large" color={c.accent} />

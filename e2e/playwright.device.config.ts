@@ -27,8 +27,9 @@ import { defineConfig } from "@playwright/test";
 // existing executable explicitly instead of failing before they touch a box.
 // CI keeps Playwright's managed browser by leaving this unset.
 const browserExecutable = process.env.YAVER_CHROMIUM_PATH || undefined;
-const recordVideo = process.env.YAVER_DISABLE_PLAYWRIGHT_VIDEO === "1" ? "off" : "retain-on-failure";
-const recordTrace = process.env.YAVER_DISABLE_PLAYWRIGHT_TRACE === "1" ? "off" : "retain-on-failure";
+const recordAll = process.env.E2E_RECORD_ALL === "1";
+const recordVideo = process.env.YAVER_DISABLE_PLAYWRIGHT_VIDEO === "1" ? "off" : recordAll ? "on" : "retain-on-failure";
+const recordTrace = process.env.YAVER_DISABLE_PLAYWRIGHT_TRACE === "1" ? "off" : recordAll ? "on" : "retain-on-failure";
 
 export default defineConfig({
   testDir: "./tests",
@@ -42,7 +43,7 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   use: {
     trace: recordTrace,
-    screenshot: "only-on-failure",
+    screenshot: recordAll ? "on" : "only-on-failure",
     video: recordVideo,
     launchOptions: browserExecutable ? { executablePath: browserExecutable } : undefined,
   },

@@ -203,8 +203,8 @@ export async function makeProvider(
       return key ? createOpenAiProvider({ flavor: "deepseek", apiKey: key }) : null;
     }
     case "remote": {
-      // No phone-side key — the box runs the GLM runner with its own z.ai
-      // credential. Requires a live connection; null if the box dropped.
+      // No phone-side key — the box runs its saved primary OpenCode model with
+      // credentials that remain on the box. Requires a live connection.
       if (!quicClient.isConnected) return null;
       return createRemoteProvider({
         dispatch: (body) => quicClient.sandboxRun(body),

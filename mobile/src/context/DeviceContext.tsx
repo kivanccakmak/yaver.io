@@ -34,6 +34,11 @@ import { probeDeviceWithRepair } from "../lib/probeWithRepair";
 import { resolveSweepOutcome } from "../lib/autoConnectStatus";
 import { aliasCollisionOutcome, agentInstanceRelation } from "../lib/aliasShadowing";
 import { resolveIdentityMerge, type IdentityCandidate } from "../lib/deviceIdentityMerge";
+import {
+  allowsRemoteAutoConnect,
+  normalizeMobileExecutionMode,
+  type MobileExecutionMode,
+} from "../lib/executionMode";
 
 // Auto-connect probe budget. Matches the manual switch modal (4000ms) — the
 // automatic path used to run at 3000ms, so the path the user lands on by
@@ -82,6 +87,7 @@ function resolvedRelaysCacheKey(userId?: string): string { return userKey(userId
 function relayOnboardingKey(userId?: string): string { return userKey(userId, "relay_onboarding_done"); }
 function relaySyncKey(userId?: string): string { return userKey(userId, "relay_sync_enabled"); }
 function debugLogsKey(): string { return "@yaver/debug_logs_enabled"; } // global, not per-user
+function executionModeKey(userId?: string): string { return userKey(userId, "execution_mode"); }
 
 // Build the tunnel-server list passed to quicClient.connect for a given
 // device. Merges two sources: (a) `device.tunnelUrl` — the host-wide
@@ -849,7 +855,7 @@ export interface DeviceState {
   pendingClaims: PendingDeviceClaim[];
   refreshPendingClaims: () => Promise<void>;
   claimPendingDevice: (deviceId: string, name?: string) => Promise<{ ok: boolean; error?: string }>;
-  selectDevice: (device: Device) => Promise<void>;
+  selectDevice: (device: Device, automatic?: boolean) => Promise<void>;
   disconnect: () => void;
   refreshDevices: () => Promise<void>;
   detachDevice: (device: Device) => Promise<void>;
@@ -904,6 +910,14 @@ export interface DeviceState {
   /** Persist the secondary device. Pass null to clear. Same sync
    *  semantics as setPrimaryDevice. */
   setSecondaryDevice: (deviceId: string | null) => Promise<void>;
+  /** Phone-scoped execution choice. Remote remains the default; local-only is
+   *  entered only through the explicit “No remote box” action. */
+  codingMode: MobileExecutionMode;
+  /** The phone-scoped choice has finished hydrating. Selection controls must
+   *  stay disabled until this is true or a fast tap can be overwritten by the
+   *  still-pending persisted value. */
+  codingModeReady: boolean;
+  setCodingMode: (mode: MobileExecutionMode) => Promise<void>;
   /** True while an auto-connect sweep is in flight (probing/connecting to
    *  primary, then secondary). Surfaces render "Primary (Mac mini) is online —
    *  connecting…" instead of the alarming "No machine selected". */
@@ -1109,6 +1123,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // persisted through saveUserSettings on change.
   const [multiTargetMode, setMultiTargetModeState] = useState(false);
   const [settingsReady, setSettingsReady] = useState(false);
+  const [codingMode, setCodingModeState] = useState<MobileExecutionMode>("remote-preferred");
+  const codingModeRef = useRef<MobileExecutionMode>("remote-preferred");
+  const [codingModeReady, setCodingModeReady] = useState(false);
   const hasLoadedOnce = useRef(false);
   // Tracks the device the user most recently picked via the picker /
   // selectDevice. The split-brain auto-fallback below treats this as
@@ -1143,6 +1160,81 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // showed one static sentence for its whole multi-second sweep, so a stall was
   // indistinguishable from a hang.
   const [autoConnectStage, setAutoConnectStage] = useState<string | null>(null);
+
+  // Execution target is intentionally phone-scoped rather than account-wide:
+  // choosing “No remote box” here must not disconnect another phone, TV,
+  // browser, or CLI. A new user/install always starts remote-preferred.
+  useEffect(() => {
+    let cancelled = false;
+    setCodingModeReady(false);
+    if (!user?.id) {
+      codingModeRef.current = "remote-preferred";
+      setCodingModeState("remote-preferred");
+      setUserDisconnected(false);
+      setCodingModeReady(true);
+      return () => { cancelled = true; };
+    }
+    void AsyncStorage.getItem(executionModeKey(user.id))
+      .then((value) => {
+        if (cancelled) return;
+        const next = normalizeMobileExecutionMode(value);
+        codingModeRef.current = next;
+        setCodingModeState(next);
+        if (!allowsRemoteAutoConnect(next)) {
+          connectionManager.disconnectAll();
+          userSelectedDeviceIdRef.current = null;
+          setActiveDevice(null);
+          setConnectionStatus("disconnected");
+          setUserDisconnected(true);
+        } else {
+          setUserDisconnected(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          codingModeRef.current = "remote-preferred";
+          setCodingModeState("remote-preferred");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCodingModeReady(true);
+      });
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  const setCodingMode = useCallback(async (mode: MobileExecutionMode) => {
+    const normalized = normalizeMobileExecutionMode(mode);
+    const previous = codingModeRef.current;
+    codingModeRef.current = normalized;
+    // Commit the phone-scoped choice before painting SELECTED. Otherwise a
+    // fast tab change can tear down this screen after React updates but before
+    // the async persistence call runs, and the next route silently restores
+    // remote-preferred.
+    try {
+      if (user?.id) await AsyncStorage.setItem(executionModeKey(user.id), normalized);
+    } catch (error) {
+      codingModeRef.current = previous;
+      throw error;
+    }
+    setCodingModeState(normalized);
+    if (allowsRemoteAutoConnect(normalized)) {
+      setUserDisconnected(false);
+      setAutoConnectNonce((nonce) => nonce + 1);
+      return;
+    }
+    // This is an execution choice, not a decorative filter: release every
+    // remote transport and suppress focused/background reconnects.
+    autoConnectCancelRef.current = true;
+    connectionManager.disconnectAll();
+    userSelectedDeviceIdRef.current = null;
+    setActiveDevice(null);
+    setConnectionStatus("disconnected");
+    setUserDisconnected(true);
+    setAutoConnecting(false);
+    setAutoConnectTarget(null);
+    setAutoConnectStage(null);
+    setAgentAuthExpired(false);
+  }, [user?.id]);
 
   const setMultiTargetMode = useCallback(async (enabled: boolean) => {
     setMultiTargetModeState(enabled);
@@ -1452,8 +1544,22 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   }, [token, user?.email, user?.id, notifyAuthFailure]);
 
   const selectDevice = useCallback(
-    async (device: Device) => {
+    async (device: Device, automatic = false) => {
       if (!token) return;
+
+      // Background recovery/auto-connect may finish after the user has chosen
+      // No remote box. Such a late automatic selection must never undo that
+      // explicit choice. User taps still intentionally exit local-only mode.
+      if (automatic && !allowsRemoteAutoConnect(codingModeRef.current)) return;
+
+      // A real machine selection exits phone-only mode. Flip synchronously so
+      // the connection cannot be suppressed by the previous local-only choice;
+      // persistence is local and best-effort for this explicit action.
+      codingModeRef.current = "remote-preferred";
+      setCodingModeState("remote-preferred");
+      if (user?.id) {
+        void AsyncStorage.setItem(executionModeKey(user.id), "remote-preferred").catch(() => {});
+      }
 
       // Clear user-disconnect flag when user (or auto-connect) selects a device
       setUserDisconnected(false);
@@ -1497,6 +1603,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       // A 1.5s /health probe is cheap and eliminates the UI lie.
       if (client.isConnected) {
         const stillUp = await client.verifyStillConnected(1500);
+        if (!allowsRemoteAutoConnect(codingModeRef.current)) {
+          connectionManager.disconnect(device.id);
+          return;
+        }
         if (stillUp) {
           sendTelemetry(token, "connect-resume", `Already connected to ${device.name}`, JSON.stringify({
             device: device.name, deviceId: device.id.slice(0, 8),
@@ -1549,6 +1659,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           await fetchRelayServersRef.current?.();
           await connectOnce(12000);
         }
+        if (!allowsRemoteAutoConnect(codingModeRef.current)) {
+          connectionManager.disconnect(device.id);
+          return;
+        }
         sendTelemetry(token, "connect-success", `Connected via ${client.connectionMode}`, JSON.stringify({
           device: device.name, path: client.connectionPath, network: client.networkType, mode: client.connectionMode,
         }));
@@ -1568,6 +1682,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           // Best-effort — hwid fetch failure is not fatal
         }
       } catch (e) {
+        if (!allowsRemoteAutoConnect(codingModeRef.current)) {
+          connectionManager.disconnect(device.id);
+          return;
+        }
         const errMsg = e instanceof Error ? e.message : String(e);
         sendTelemetry(token, "connect-fail", `Connection failed: ${errMsg}`, JSON.stringify({
           host: device.host, port: device.port, deviceId: device.id.slice(0, 8),
@@ -1589,7 +1707,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         markDeviceUnreachable(device.id);
       }
     },
-    [RELAY_CACHE_KEY, token]
+    [RELAY_CACHE_KEY, token, user?.id]
   );
 
   const pendingDeepLinkDeviceHintRef = useRef<string | null>(null);
@@ -3425,7 +3543,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
     if (!activeDevice || activeDevice.id !== device.id) {
       try {
-        await selectDevice(device);
+        await selectDevice(device, true);
       } catch (err) {
         appLog("warn", `Initial connect before auth recovery failed for ${device.name}: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -3740,7 +3858,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   //   2. The nonce is marked attempted on COMPLETION, not on entry, so a sweep
   //      that IS legitimately cancelled re-arms instead of wedging.
   useEffect(() => {
-    if (!settingsReady || !token || !relaysReady || userDisconnected) return;
+    if (!settingsReady || !codingModeReady || !allowsRemoteAutoConnect(codingMode) || !token || !relaysReady || userDisconnected) return;
     const devicesNow = devicesRef.current;
     const connectedNow = connectedDeviceIdsRef.current;
     const activeNow = activeDeviceRef.current;
@@ -3807,7 +3925,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             appLog("info", `[auto-connect] ${role} ${device.name} reachable via ${probe.path} — connecting`);
             sendTelemetry(token, "auto-connect", `${role}: ${device.name}`, "{}");
             setAutoConnectStage(`Reachable via ${probe.path === "relay" ? "relay" : "direct"} — connecting…`);
-            await selectDeviceRef.current(device);
+            await selectDeviceRef.current(device, true);
             return; // connected — done
           }
 
@@ -3837,7 +3955,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             setAutoConnectTarget({ id: device.id, name: device.name, role });
             setAutoConnectStage(`No ping response — trying a direct connect to ${device.name}…`);
             try {
-              await selectDeviceRef.current(device);
+              await selectDeviceRef.current(device, true);
               if (connectionManager.clientFor(device.id).isConnected) return; // connected — done
             } catch (e) {
               appLog("warn", `[auto-connect] last-resort connect to ${device.name} failed: ${e}`);
@@ -3877,7 +3995,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         }
         setAutoConnectTarget({ id: target.id, name: target.name, role: "primary" });
         console.log("[DeviceContext] Auto-connecting (best-reachable) to", target.name);
-        await selectDeviceRef.current(target);
+        await selectDeviceRef.current(target, true);
         if (primaryDeviceId === null) {
           setPrimaryDeviceRef.current(target.id).catch((e) => {
             appLog("warn", `[DeviceContext] Auto-set primaryDevice failed: ${e}`);
@@ -3922,7 +4040,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     // Intentionally NOT depending on devices/connectedDeviceIds/activeDevice —
     // see the dependency-discipline note above. Those are read via refs; the
     // nonce is the re-sweep signal.
-  }, [autoConnectNonce, token, relaysReady, settingsReady, userDisconnected]);
+  }, [autoConnectNonce, token, relaysReady, settingsReady, codingModeReady, codingMode, userDisconnected]);
 
   // Background "warm the pool" pass. After the focused auto-connect
   // above settles, this effect quietly opens additional connections
@@ -3938,7 +4056,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // the focused connection down with it. We don't change focus; the
   // existing focused-auto-connect logic owns that.
   useEffect(() => {
-    if (!token || !relaysReady || userDisconnected) return;
+    if (!token || !relaysReady || !codingModeReady || !allowsRemoteAutoConnect(codingMode) || userDisconnected) return;
     // Membership and ORDER come from the shared plan (connectionFanout.ts), the
     // same one the web dashboard uses, so the two surfaces cannot disagree about
     // which machine should serve. It orders by the account's seeded roles —
@@ -4009,7 +4127,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, machineRoles?.runnerDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.renderDeviceId, machineRoles?.secondaryRenderDeviceId, token, relaysReady, userDisconnected, connectedDeviceIds, unreachableSet]);
+  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, machineRoles?.runnerDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.renderDeviceId, machineRoles?.secondaryRenderDeviceId, token, relaysReady, codingModeReady, codingMode, userDisconnected, connectedDeviceIds, unreachableSet]);
 
   // Trigger immediate reconnection on network change (WiFi↔cellular roaming,
   // Wi-Fi → Wi-Fi roam between APs (same SSID, new IP), VPN/Tailscale toggle).
@@ -4071,7 +4189,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         connectionManager.triggerReconnectFocused();
         return;
       }
-      selectDevice(activeDevice).catch(() => {});
+      selectDevice(activeDevice, true).catch(() => {});
     });
     return () => sub.remove();
   }, [activeDevice, connectionStatus, selectDevice, userDisconnected]);
@@ -4135,6 +4253,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       setPrimaryDevice,
       secondaryDeviceId,
       setSecondaryDevice,
+      codingMode,
+      codingModeReady,
+      setCodingMode,
       autoConnecting,
       autoConnectTarget,
       autoConnectStage,
@@ -4153,7 +4274,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       connectedDeviceIds,
       disconnectDevice,
     }),
-    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, machineRoles, setMachineRolesFavorite, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
+    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, codingMode, codingModeReady, setCodingMode, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, machineRoles, setMachineRolesFavorite, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
   );
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;

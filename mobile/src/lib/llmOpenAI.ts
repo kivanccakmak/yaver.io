@@ -125,6 +125,12 @@ export function createOpenAiProvider(opts: OpenAiProviderOptions): LlmProvider {
             model,
             max_tokens: maxTokens,
             temperature: 0.2,
+            // DeepSeek V4 defaults to thinking mode, where its OpenAI API
+            // rejects a forced named tool_choice. This phone-side editor needs
+            // exactly one structured apply_edits result, so use the supported
+            // non-thinking mode instead of silently weakening tool forcing.
+            // Measured against the real API on 2026-08-21.
+            ...(opts.flavor === "deepseek" ? { thinking: { type: "disabled" } } : {}),
             tools: [APPLY_EDITS_TOOL],
             tool_choice: { type: "function", function: { name: "apply_edits" } },
             messages: [

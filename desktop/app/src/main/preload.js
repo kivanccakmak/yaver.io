@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('yaver', {
 
   // ── Projects ────────────────────────────────────────
   listProjects: () => ipcRenderer.invoke('agent-request', 'GET', '/projects'),
+  startProject: (data) => ipcRenderer.invoke('agent-request', 'POST', '/project/start', data),
   getProjectActions: (q) => ipcRenderer.invoke('agent-request', 'GET', `/projects/actions?query=${encodeURIComponent(q)}`),
 
   // ── Dev server ──────────────────────────────────────

@@ -16,7 +16,8 @@ import { gitContextForSlug } from "./codingAgent/codingAgentRun";
 import { isRepo } from "./codingAgent/sandboxGit";
 import { detectGitProvider, normalizeGitUrl, repoLabelFromUrl } from "./gitProviderAuth";
 import { gitNetFromStore } from "./gitProviderStore";
-import { createLocalPhoneProject, type PhoneProject } from "./phoneProjects";
+import { createLocalPhoneProject, slugifyPhoneProject, type PhoneProject } from "./phoneProjects";
+import { deleteLocalPhoneProject, listLocalPhoneProjectsMeta } from "./phoneSandboxLocal";
 
 export interface CloneToPhoneResult {
   slug: string;
@@ -45,19 +46,19 @@ export async function cloneGitRepoToPhone(
   }
   const label = repoLabelFromUrl(url);
   const repoName = label.split("/").filter(Boolean).pop() || "repo";
+  const requestedSlug = slugifyPhoneProject(repoName);
+  const git = gitContextForSlug(requestedSlug);
+
+  const existing = await listLocalPhoneProjectsMeta();
+  if (existing.some((project) => project.slug === requestedSlug) || await isRepo(git)) {
+    throw new Error(`A project named "${repoName}" already exists on this phone. Open it from Projects instead.`);
+  }
 
   // Register a blank phone project so the repo appears in the project list with a
   // stable slug; the clone fills its tree. (Blank template writes no src/ files,
   // so it won't collide with the cloned tree.)
   const project = await createLocalPhoneProject({ name: repoName, slug: repoName, template: "blank" });
   const slug = project.slug;
-  const git = gitContextForSlug(slug);
-
-  // Refuse to clone over an existing repo — re-cloning into a populated .git is a
-  // git error and would clobber local work. Caller surfaces a friendly message.
-  if (await isRepo(git)) {
-    throw new Error(`A project named "${slug}" already has a git repo. Delete it first, or pick another.`);
-  }
 
   // Ensure the project root exists before clone (isomorphic-git writes .git into it).
   await ensureGitDir(git);
@@ -68,7 +69,15 @@ export async function cloneGitRepoToPhone(
   const anonymous = !net.onAuth;
 
   const depth = opts.depth === 0 ? undefined : opts.depth ?? 1;
-  await cloneRepo(git, net, { url, ref: opts.ref, depth });
+  try {
+    await cloneRepo(git, net, { url, ref: opts.ref, depth });
+  } catch (error) {
+    // The metadata row and exact sandbox were created solely for this clone.
+    // Remove them on failure so a network/auth error cannot leave a phantom
+    // project that blocks the next attempt.
+    await deleteLocalPhoneProject(slug).catch(() => undefined);
+    throw error;
+  }
 
   return { slug, project, url, provider, anonymous };
 }

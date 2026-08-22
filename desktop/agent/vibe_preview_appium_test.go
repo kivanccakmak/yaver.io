@@ -113,7 +113,7 @@ func TestAppiumBugHunter_emitsCrashOnRedBox(t *testing.T) {
 	defer mgr.StopAll()
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestAppiumBugHunter_dedupsRepeatedCrashes(t *testing.T) {
 	defer mgr.StopAll()
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}

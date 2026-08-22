@@ -48,7 +48,7 @@ func TestQueueSummary_skipsWhenLessThanTwoFrames(t *testing.T) {
 	mgr.SetDiskRoot(t.TempDir())
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestQueueSummary_shortCircuitsOnIdenticalHashes(t *testing.T) {
 	mgr.SetDiskRoot(t.TempDir())
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestQueueSummary_callsSummarizerOnDistinctFrames(t *testing.T) {
 	mgr.SetDiskRoot(t.TempDir())
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestQueueSummary_summarizerErrorEmitsEvent(t *testing.T) {
 	mgr.SetDiskRoot(t.TempDir())
 
 	if _, err := mgr.Start(VibePreviewStartOpts{
-		Project: "p", TargetURL: "http://x", Mode: VibePreviewModeChangeOnly,
+		Project: "p", TargetURL: stubTarget(t), Mode: VibePreviewModeChangeOnly,
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}

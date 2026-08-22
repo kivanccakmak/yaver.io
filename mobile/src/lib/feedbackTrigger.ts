@@ -152,6 +152,7 @@ export async function rerenderActivePreviewSurface(opts: {
   source?: string;
   workDir?: string;
   taskStatus?: string | null;
+  autoRenderEnabled?: boolean;
 }): Promise<PostTaskRenderDecision> {
   const source = opts.source || "mobile-auto-render";
   const session = activeRemoteRuntimeSession;
@@ -162,12 +163,15 @@ export async function rerenderActivePreviewSurface(opts: {
     webrtcTargetCanRender: !session?.targetId || canRunGuestOnRemoteTarget(session.targetId),
     webrtcTargetLabel: session?.targetLabel || session?.targetId,
     inFlight: remoteRuntimeRenderInFlight,
+    autoRenderEnabled: opts.autoRenderEnabled,
   });
 
-  if (decision.action === "skip") {
+  if (decision.action !== "render") {
     // Never silent. The old code's bare `return false` is exactly what made
     // this unfalsifiable from the user's side.
-    appLog("info", `post-task render skipped (${decision.reason}) for ${source}: ${decision.message}`);
+    appLog("info", decision.action === "offer"
+      ? `post-task render awaiting consent for ${source}: ${decision.message}`
+      : `post-task render skipped (${decision.reason}) for ${source}: ${decision.message}`);
     return decision;
   }
 

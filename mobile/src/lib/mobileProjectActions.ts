@@ -27,6 +27,7 @@ export type ProjectPreviewCapabilities = {
   framework?: string;
   selfDevelopment?: boolean;
   hasPairedDevice?: boolean;
+  hermesBuildState?: "needs_build" | "ready" | string;
   reason?: string;
   options?: Array<{
     id: string;
@@ -83,7 +84,23 @@ export function applyPreviewCapabilities(
   }
   const byType = new Map(actions.map((a) => [a.type, a]));
 
-  const composed = caps.options.map((o): MobileProjectAction => {
+  // The agent should already return one Hermes action, but keep the consumer
+  // honest too: a mixed-version box may include both while also reporting the
+  // structured state. Never show Reload before there is a bundle, and never
+  // leave Compile beside Reload once one exists.
+  // Old agents advertised both actions and had no build-state field. Treat
+  // that ambiguity as needs_build: Compile is safe and deterministic; Reload
+  // without a confirmed artifact is the dead end this guard removes. Once the
+  // agent reports ready it replaces Compile with Reload.
+  const hermesBuildState = caps.hermesBuildState ||
+    (caps.options.some((option) => option.id === "compile-hermes") ? "needs_build" : "");
+  const options = caps.options.filter((option) => {
+    if (hermesBuildState === "needs_build" && option.id === "open-native") return false;
+    if (hermesBuildState === "ready" && option.id === "compile-hermes") return false;
+    return true;
+  });
+
+  const composed = options.map((o): MobileProjectAction => {
     const tmpl = byType.get(o.id);
     if (tmpl) {
       // Local template exists: merge the agent's verdict onto it. The local
@@ -140,7 +157,7 @@ export function applyPreviewCapabilities(
     .map((x) => x.a);
 
   // Lead with whatever the agent marked primary (stable otherwise).
-  const primaryID = caps.options.find((o) => o.primary)?.id;
+  const primaryID = options.find((o) => o.primary)?.id;
   if (!primaryID) return ordered;
   const idx = ordered.findIndex((a) => a.type === primaryID);
   if (idx <= 0) return ordered;

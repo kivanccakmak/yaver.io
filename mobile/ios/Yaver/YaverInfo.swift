@@ -1,8 +1,11 @@
 import Foundation
 import React
+import UIKit
 
 @objc(YaverInfo)
 final class YaverInfo: NSObject {
+
+  private var remotelessBackgroundTasks: [String: UIBackgroundTaskIdentifier] = [:]
 
   @objc static func requiresMainQueueSetup() -> Bool { false }
 
@@ -219,6 +222,55 @@ final class YaverInfo: NSObject {
     defaults.removeObject(forKey: "yaverInheritedAuthToken")
     defaults.removeObject(forKey: "yaverInheritedDeviceId")
     defaults.removeObject(forKey: "yaverInheritedRelayPassword")
+  }
+
+  // iOS deliberately has no Android-style foreground service. This requests
+  // the bounded grace period Apple provides for a finite, user-started edit or
+  // Git operation. On expiration we end the assertion and leave a durable flag;
+  // JS turns the stale RUNNING record into REVIEW on next launch rather than
+  // replaying mutations or claiming that the operation finished.
+  @objc func beginRemotelessTask(
+    _ taskId: String,
+    title: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { resolve(["active": false]); return }
+      if let existing = self.remotelessBackgroundTasks.removeValue(forKey: taskId) {
+        UIApplication.shared.endBackgroundTask(existing)
+      }
+      var identifier: UIBackgroundTaskIdentifier = .invalid
+      identifier = UIApplication.shared.beginBackgroundTask(withName: "Yaver remoteless \(taskId)") { [weak self] in
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "yaverRemotelessExpiredAt.\(taskId)")
+        if identifier != .invalid { UIApplication.shared.endBackgroundTask(identifier) }
+        self?.remotelessBackgroundTasks.removeValue(forKey: taskId)
+        identifier = .invalid
+      }
+      if identifier != .invalid { self.remotelessBackgroundTasks[taskId] = identifier }
+      let rawRemaining = UIApplication.shared.backgroundTimeRemaining
+      let remaining = rawRemaining.isFinite && rawRemaining < 1_000_000 ? rawRemaining : -1
+      resolve([
+        "active": identifier != .invalid,
+        "bounded": true,
+        "remainingSeconds": remaining,
+      ])
+    }
+  }
+
+  @objc func endRemotelessTask(
+    _ taskId: String,
+    status: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.main.async { [weak self] in
+      if let identifier = self?.remotelessBackgroundTasks.removeValue(forKey: taskId), identifier != .invalid {
+        UIApplication.shared.endBackgroundTask(identifier)
+      }
+      UserDefaults.standard.removeObject(forKey: "yaverRemotelessExpiredAt.\(taskId)")
+      resolve(true)
+    }
   }
 }
 
