@@ -59,6 +59,15 @@ test("TV approval inherits the phone session identity, not an OAuth provider", (
   assert.doesNotMatch(block, /github|gitlab|google|microsoft|apple/i);
 });
 
+test("Cloud Studio status has an authenticated CORS-capable HTTP route", () => {
+  const block = httpRouteBlock("/cloud/status", "GET");
+  assert.match(block, /Authorization/);
+  assert.match(block, /sha256Hex/);
+  assert.match(block, /api\.cloudStudio\.getStatusByToken/);
+  assert.match(block, /jsonResponse\(status\)/);
+  assert.match(httpSource, /"\/cloud\/status",\s*\n\s*"\/cloud\/wake-runs\/recent"/);
+});
+
 test("customer auto-park validation requires a machine id", () => {
   assert.deepEqual(validateCustomerAutoParkRequest({ enabled: true }), {
     ok: false,

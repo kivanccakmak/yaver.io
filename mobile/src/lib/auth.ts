@@ -364,6 +364,23 @@ export interface CloudStudioStatus {
 }
 
 export async function getCloudStudioStatus(token: string): Promise<CloudStudioStatus> {
+  // Local RN-web is the self-hosted/remote-box development lane. Before the
+  // production HTTP route is deployed, asking Convex for a route it does not
+  // expose can only create a CORS console failure; it cannot produce usable
+  // Cloud Studio state. Keep the local surface truthful and quiet.
+  if (typeof location !== "undefined" && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
+    return {
+      access: {
+        status: "inactive",
+        maxCloudWorkspaces: 0,
+        maxConcurrentTasks: 0,
+        maxConcurrentPreviews: 0,
+        allowedRunnerClasses: [],
+      },
+      workspaces: [],
+      gitConnections: [],
+    };
+  }
   const response = await fetch(`${getConvexSiteUrl()}/cloud/status`, {
     headers: { Authorization: `Bearer ${token}` },
   });

@@ -5110,15 +5110,28 @@ export class QuicClient {
   /** One remote-box readiness contract for the Mobile Workspace wizard.
    * Every non-ready gate includes the agent route that resolves it. */
   async mobileWorkspaceStatus(target?: string): Promise<MobileWorkspaceStatus | null> {
-    if (!this.isConnected && !this.hasConnectionInfo) return null;
+    return (await this.mobileWorkspaceStatusProbe(target)).status;
+  }
+
+  /** Preserve why the aggregate readiness contract was unavailable.
+   * A 404 is an older, reachable agent and must route to self-update; a
+   * transport failure is not evidence that any runner/provider is missing. */
+  async mobileWorkspaceStatusProbe(target?: string): Promise<{
+    status: MobileWorkspaceStatus | null;
+    reason?: "agent-upgrade-required" | "unreachable";
+  }> {
+    if (!this.isConnected && !this.hasConnectionInfo) return { status: null, reason: "unreachable" };
     try {
       const base = this.peerEndpoint(target, "/mobile-workspace/status");
       const res = await this.fetchWithTimeout(base, { headers: this.authHeaders }, 20000);
-      if (!res.ok) return null;
+      if (res.status === 404) return { status: null, reason: "agent-upgrade-required" };
+      if (!res.ok) return { status: null, reason: "unreachable" };
       const data = await res.json().catch(() => null);
-      return data?.ok === true ? data as MobileWorkspaceStatus : null;
+      return data?.ok === true
+        ? { status: data as MobileWorkspaceStatus }
+        : { status: null, reason: "unreachable" };
     } catch {
-      return null;
+      return { status: null, reason: "unreachable" };
     }
   }
 
@@ -8338,8 +8351,10 @@ export class QuicClient {
       // again. Best-effort — losing the cache is fine, it just costs us
       // one extra round-trip on the following connect.
       void this.persistConnectionSnapshot();
-      // Best-effort vault sync on connect
-      this.syncVault();
+      // Browser fetch reports every best-effort HTTP miss as a console error,
+      // even though syncVault intentionally ignores it. Keep RN-web silent;
+      // the Vault screen still performs an explicit, user-visible vaultList.
+      if (Platform.OS !== "web") void this.syncVault();
     } catch (e) {
       // Carry the DETAILED per-leg reason out to the caller. Previously this
       // `catch {}` swallowed the `Could not reach agent — <legs>` message the

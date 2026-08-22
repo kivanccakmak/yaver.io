@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Platform } from "react-native";
 import {
   CONVEX_SITE_URL as DEFAULT_CONVEX_SITE_URL,
   WEB_BASE_URL as DEFAULT_WEB_BASE_URL,
@@ -97,6 +98,15 @@ export async function hydrateBackendConfigFromCache(): Promise<void> {
 export async function refreshHostedBackendConfig(force: boolean = false): Promise<void> {
   const now = Date.now();
   if (!force && now - lastRefreshAt < REFRESH_TTL_MS) return;
+
+  // Metro's localhost origin cannot consume the production discovery route
+  // until that deployment advertises CORS. Defaults + explicit local
+  // overrides already cover development, so avoid a guaranteed browser error
+  // instead of emitting a false network incident on every RN-web launch.
+  if (Platform.OS === "web" && typeof location !== "undefined" && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
+    lastRefreshAt = now;
+    return;
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);

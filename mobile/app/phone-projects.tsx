@@ -54,6 +54,7 @@ type MobileAiProvider = "openai" | "glm";
 type GitProvider = "github" | "gitlab";
 type RepoVisibility = "private" | "public";
 type GitIntegrationState = "checking" | "connected" | "clone-only" | "not-connected" | "unavailable";
+type WorkspaceStatusFailure = "agent-upgrade-required" | "unreachable";
 
 // Survey is the optional Step 3. Questions are intentionally short
 // + multiple-choice so the user can finish in 30 s on a phone, and
@@ -245,8 +246,13 @@ export default function PhoneProjectsScreen() {
     gitlab: "checking",
   });
   const [workspaceStatus, setWorkspaceStatus] = useState<MobileWorkspaceStatus | null>(null);
+  const [workspaceStatusFailure, setWorkspaceStatusFailure] = useState<WorkspaceStatusFailure | null>(null);
   const [discoveredRunners, setDiscoveredRunners] = useState<DiscoveredRunnerInfo[]>([]);
   const [workspaceStatusLoading, setWorkspaceStatusLoading] = useState(false);
+  const [workspaceAgentUpdate, setWorkspaceAgentUpdate] = useState<
+    { kind: "idle" } | { kind: "updating"; detail: string } | { kind: "failed"; detail: string }
+  >({ kind: "idle" });
+  const workspaceAgentUpdateStreamRef = useRef<(() => void) | null>(null);
   const [runnerInstall, setRunnerInstall] = useState<{ runner: string; line: string } | null>(null);
   const [runnerAuthModalRunner, setRunnerAuthModalRunner] = useState<string | null>(null);
   const [openCodeConfigVisible, setOpenCodeConfigVisible] = useState(false);
@@ -417,32 +423,100 @@ export default function PhoneProjectsScreen() {
   const loadWorkspaceReadiness = useCallback(async () => {
     if (!selectedRunnerDevice) {
       setWorkspaceStatus(null);
+      setWorkspaceStatusFailure(null);
       setDiscoveredRunners([]);
       return;
     }
     const target = selectedRunnerDevice.id === activeDevice?.id ? undefined : selectedRunnerDevice.id;
     setWorkspaceStatusLoading(true);
     setGitIntegrations({ github: "checking", gitlab: "checking" });
-    const [status, runnerInventory] = await Promise.all([
-      quicClient.mobileWorkspaceStatus(target),
-      quicClient.getRunnersForTarget(target),
-    ]);
-    setWorkspaceStatus(status);
-    setDiscoveredRunners(runnerInventory ?? []);
-    if (status) {
-      const providerState = (provider: GitProvider): GitIntegrationState => {
-        const gate = status.gitProviders.find((item) => item.id === provider);
-        if (!gate) return "not-connected";
-        return gate.ready ? "connected" : gate.configured ? "clone-only" : "not-connected";
-      };
-      setGitIntegrations({ github: providerState("github"), gitlab: providerState("gitlab") });
-    } else {
-      // Older agents do not expose the aggregate route. Preserve an honest
-      // unavailable state instead of turning a transport miss into "not configured".
+    try {
+      const [probe, runnerInventory, legacyRunnerStatus] = await Promise.all([
+        quicClient.mobileWorkspaceStatusProbe(target),
+        quicClient.getRunnersForTarget(target),
+        quicClient.runnerAuthStatusOrNull(target),
+      ]);
+      const status = probe.status;
+      // Some older relay/peer coordinators flatten a target's 404 into a 502.
+      // Prove the legacy runner operation on the same target: if it answers but
+      // the aggregate route does not, the box is reachable and needs an update.
+      const failure = !status && legacyRunnerStatus !== null
+        ? "agent-upgrade-required"
+        : probe.reason ?? null;
+      setWorkspaceStatus(status);
+      setWorkspaceStatusFailure(failure);
+      setDiscoveredRunners(runnerInventory ?? []);
+      if (status) {
+        const providerState = (provider: GitProvider): GitIntegrationState => {
+          const gate = status.gitProviders.find((item) => item.id === provider);
+          if (!gate) return "not-connected";
+          return gate.ready ? "connected" : gate.configured ? "clone-only" : "not-connected";
+        };
+        setGitIntegrations({ github: providerState("github"), gitlab: providerState("gitlab") });
+      } else {
+        setGitIntegrations({ github: "unavailable", gitlab: "unavailable" });
+      }
+    } catch {
+      setWorkspaceStatus(null);
+      setWorkspaceStatusFailure("unreachable");
+      setDiscoveredRunners([]);
       setGitIntegrations({ github: "unavailable", gitlab: "unavailable" });
+    } finally {
+      setWorkspaceStatusLoading(false);
     }
-    setWorkspaceStatusLoading(false);
   }, [activeDevice?.id, selectedRunnerDevice]);
+
+  useEffect(() => () => {
+    workspaceAgentUpdateStreamRef.current?.();
+    workspaceAgentUpdateStreamRef.current = null;
+  }, []);
+
+  const updateWorkspaceAgent = useCallback(async () => {
+    if (!selectedRunnerDevice || workspaceAgentUpdate.kind === "updating") return;
+    const target = selectedRunnerDevice.id === activeDevice?.id ? undefined : selectedRunnerDevice.id;
+    workspaceAgentUpdateStreamRef.current?.();
+    workspaceAgentUpdateStreamRef.current = null;
+    setWorkspaceAgentUpdate({ kind: "updating", detail: "Preparing agent update…" });
+    try {
+      const result = await quicClient.triggerAgentUpdate(target);
+      if (!result.ok) throw new Error(result.error || "The remote box refused the update.");
+      if (result.started === false) {
+        setWorkspaceAgentUpdate({
+          kind: "failed",
+          detail: result.message || "This box reports that it is current, but its Mobile Workspace route is still missing.",
+        });
+        return;
+      }
+      if (!target) {
+        workspaceAgentUpdateStreamRef.current = quicClient.streamAgentUpdate((event) => {
+          if (event.type !== "progress") return;
+          const detail = String(event.text || event.phase || "Updating Yaver agent…").trim();
+          if (detail) setWorkspaceAgentUpdate({ kind: "updating", detail });
+        });
+      }
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        const probe = await quicClient.mobileWorkspaceStatusProbe(target);
+        if (probe.status) {
+          workspaceAgentUpdateStreamRef.current?.();
+          workspaceAgentUpdateStreamRef.current = null;
+          setWorkspaceAgentUpdate({ kind: "idle" });
+          await loadWorkspaceReadiness();
+          return;
+        }
+      }
+      throw new Error("The agent did not come back with Mobile Workspace support within 90 seconds.");
+    } catch (error) {
+      setWorkspaceAgentUpdate({
+        kind: "failed",
+        detail: error instanceof Error ? error.message : "Agent update failed. Try again.",
+      });
+    } finally {
+      workspaceAgentUpdateStreamRef.current?.();
+      workspaceAgentUpdateStreamRef.current = null;
+    }
+  }, [activeDevice?.id, loadWorkspaceReadiness, selectedRunnerDevice, workspaceAgentUpdate.kind]);
 
   useEffect(() => {
     if (!showForm || (step !== 1 && step !== 2) || !selectedRunnerDevice) return;
@@ -1489,7 +1563,57 @@ export default function PhoneProjectsScreen() {
                     ) : (
                       <>
                         {workspaceStatusLoading ? <ActivityIndicator color={c.textMuted} style={{ marginTop: 10 }} /> : null}
-                        {(["opencode", "claude", "codex"] as const).map((runnerId) => {
+                        {!workspaceStatusLoading && !workspaceStatus ? (
+                          <View
+                            accessibilityRole="alert"
+                            style={[styles.reviewCard, { backgroundColor: c.bg, borderColor: c.border, marginTop: 8 }]}
+                          >
+                            <Text style={[styles.reviewTitle, { color: c.textPrimary }]}>
+                              {workspaceStatusFailure === "agent-upgrade-required"
+                                ? "Agent update required"
+                                : "Couldn't audit this remote box"}
+                            </Text>
+                            <Text style={[styles.muted, { color: c.textMuted, marginTop: 4 }]}>
+                              {workspaceStatusFailure === "agent-upgrade-required"
+                                ? "This box is reachable, but its Yaver agent predates Mobile Workspace readiness checks. Update it here, then setup resumes automatically."
+                                : "The box did not answer the readiness probe. Its runner and provider state has not been changed."}
+                            </Text>
+                            {workspaceAgentUpdate.kind !== "idle" ? (
+                              <Text
+                                accessibilityLiveRegion="polite"
+                                style={{
+                                  color: workspaceAgentUpdate.kind === "failed" ? "#ef4444" : c.textMuted,
+                                  fontSize: 11,
+                                  marginTop: 8,
+                                }}
+                              >
+                                {workspaceAgentUpdate.detail}
+                              </Text>
+                            ) : null}
+                            <Pressable
+                              onPress={() => workspaceStatusFailure === "agent-upgrade-required"
+                                ? void updateWorkspaceAgent()
+                                : void loadWorkspaceReadiness()}
+                              disabled={workspaceAgentUpdate.kind === "updating"}
+                              style={[
+                                styles.btnSecondary,
+                                {
+                                  borderColor: c.border,
+                                  marginTop: 10,
+                                  opacity: workspaceAgentUpdate.kind === "updating" ? 0.55 : 1,
+                                },
+                              ]}
+                            >
+                              <Text style={[styles.btnText, { color: c.textPrimary }]}>
+                                {workspaceAgentUpdate.kind === "updating"
+                                  ? "Updating agent…"
+                                  : workspaceStatusFailure === "agent-upgrade-required"
+                                    ? workspaceAgentUpdate.kind === "failed" ? "Retry agent update →" : "Update Yaver agent →"
+                                    : "Retry readiness check →"}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        ) : workspaceStatus ? (["opencode", "claude", "codex"] as const).map((runnerId) => {
                           const gate = workspaceStatus?.runners.find((item) => item.id === runnerId);
                           const inventory = discoveredRunners.find((item) => item.id === runnerId);
                           const active = runner === runnerId || (runner === "claude-code" && runnerId === "claude");
@@ -1545,8 +1669,8 @@ export default function PhoneProjectsScreen() {
                               ) : null}
                             </Pressable>
                           );
-                        })}
-                        {runner ? (() => {
+                        }) : null}
+                        {workspaceStatus && runner ? (() => {
                           const normalizedRunner = runner === "claude-code" ? "claude" : runner;
                           const inventory = discoveredRunners.find((item) => item.id === normalizedRunner);
                           if (!inventory?.models?.length) return null;
@@ -2024,7 +2148,11 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
       startingGitOAuth,
       setupSteps,
       testWorkspaceRunner,
+      loadWorkspaceReadiness,
+      updateWorkspaceAgent,
+      workspaceAgentUpdate,
       workspaceStatus,
+      workspaceStatusFailure,
       workspaceStatusLoading,
       primaryHex,
       secondaryHex,
@@ -2058,6 +2186,10 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
           : !canAdvance && step === 1
             ? !selectedRunnerDevice
               ? "Connect machine"
+              : workspaceStatusFailure === "agent-upgrade-required"
+                ? "Update agent above"
+                : !workspaceStatus
+                  ? "Retry check above"
               : !runner
                 ? "Choose a runner"
                 : !selectedRunnerReady
@@ -2176,6 +2308,8 @@ Example: "Browser-based checkers with a tiny lobby. Two friends paste a 4-letter
     startMode,
     step,
     workspaceStatus,
+    workspaceStatusFailure,
+    workspaceStatusLoading,
   ]);
 
   return (

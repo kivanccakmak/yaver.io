@@ -998,6 +998,7 @@ for (const path of [
   "/tasks/relay-source-intents/claim", "/tasks/relay-source-intents/github-app-token",
   "/tasks/relay-source-intents/gitlab-token",
   "/tasks/project-profile",
+  "/cloud/status",
   "/cloud/wake-runs/recent",
 ]) {
   http.route({
@@ -3889,6 +3890,29 @@ http.route({
       since: since ? parseInt(since) : undefined,
     });
     return jsonResponse(usage);
+  }),
+});
+
+/** GET /cloud/status — Neutral managed-workspace availability for clients.
+ * The mobile provider has consumed this route since Cloud Studio landed; the
+ * missing HTTP registration previously produced a CORS-shaped 404 on every
+ * RN-web launch even though the backing query already existed. */
+http.route({
+  path: "/cloud/status",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    try {
+      const status = await ctx.runQuery(api.cloudStudio.getStatusByToken, { tokenHash });
+      return jsonResponse(status);
+    } catch (error: any) {
+      if (String(error?.message || error).includes("Unauthorized")) {
+        return errorResponse("Unauthorized", 401);
+      }
+      return errorResponse("Cloud Studio status is unavailable", 500);
+    }
   }),
 });
 

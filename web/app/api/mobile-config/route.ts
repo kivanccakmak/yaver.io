@@ -29,6 +29,17 @@ function optionalOrigin(value: string | undefined): string {
   }
 }
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Accept, Content-Type",
+  "Access-Control-Max-Age": "86400",
+};
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
+
 export async function GET() {
   const convexSiteUrl = normalizeOrigin(
     process.env.CONVEX_SITE_URL,
@@ -43,10 +54,13 @@ export async function GET() {
   // off (empty → no override). The mobile client also honours a device-local
   // LOCAL_KEYS.gatewayUrl override for pre-rollout testing.
   const gatewayUrl = optionalOrigin(process.env.YAVER_GATEWAY_URL);
-  return NextResponse.json({
-    convexSiteUrl,
-    webBaseUrl,
-    gatewayUrl,
-    generatedAt: new Date().toISOString(),
-  });
+  return NextResponse.json(
+    {
+      convexSiteUrl,
+      webBaseUrl,
+      gatewayUrl,
+      generatedAt: new Date().toISOString(),
+    },
+    { headers: corsHeaders },
+  );
 }
