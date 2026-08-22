@@ -3664,14 +3664,9 @@ export default function AppsScreen() {
                     })) runBrowserLaneDoctor("resource-error");
                     return;
                   }
-                  // THE PROBE CANNOT RUN — stop waiting for it. Same fix as
-                  // DevPreview.tsx: on RN-web the preview is a cross-origin
-                  // <iframe>, so the browser forbids injecting the ready-probe
-                  // and the old copy waited forever on "has not confirmed the
-                  // first rendered frame" while the app rendered fine. Landing
-                  // this in only ONE of the two browser-preview implementations
-                  // is the drift that shipped a broken heartbeat, dropped SSE
-                  // frames and a dead shake gesture before.
+                  // The probe cannot run in a cross-origin RN-web iframe. That
+                  // is a limitation, not evidence of paint: sfmg produced a
+                  // green box doctor while this phone surface stayed black.
                   if (m && m.type === WEBVIEW_PROBE_UNSUPPORTED) {
                     setProbeUnavailable(String(m.detail || m.reason || "the ready-probe cannot run on this frame"));
                     return;
@@ -3899,12 +3894,10 @@ export default function AppsScreen() {
                 ) : null}
               </>
             ) : null}
-            {/* Same fix as DevPreview.tsx: webPreviewContentLoaded is set by the
-                 injected ready-probe, which CANNOT fire on a cross-origin frame,
-                 so this overlay hid a rendering app forever while its own text
-                 said "the preview is rendering". Both browser-preview
-                 implementations or neither — the drift rule. */}
-              {bundleUrl && !webPreviewContentLoaded && !probeUnavailable && (
+            {/* A box-local doctor or an unavailable cross-origin probe cannot
+                 satisfy phone paint. Keep the first-open status visible until
+                 this client receives a real rendered-frame signal. */}
+              {bundleUrl && !webPreviewContentLoaded && (
               <View style={s.previewOverlay}>
                 {webPreviewFailed ? (
                   (() => {
@@ -3956,7 +3949,7 @@ export default function AppsScreen() {
                       <Text style={s.previewStepCmd}>{`Yaver ${describeConnectionStatus(connectionStatus)}. Reconnect, then reload the preview.`}</Text>
                     ) : healthyLogs ? (
                       <Text style={s.previewStepCmd}>{probeUnavailable
-                        ? `The dev server is ready and the preview is rendering. Readiness cannot be confirmed automatically here — ${probeUnavailable}`
+                        ? `The dev server is ready, but this phone frame has not confirmed paint — ${probeUnavailable}`
                         : "The dev server reported ready. The WebView has not confirmed the first rendered frame yet."}</Text>
                     ) : (
                       <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
@@ -4152,7 +4145,11 @@ const s = StyleSheet.create({
   previewRuntimeLogTitle: { color: "#fff", fontSize: 14, fontWeight: "800" },
   // Centred, compact, and pointerEvents="box-none" on the wrapper so it never
   // eats a tap meant for the app rendering behind it.
-  previewWaitWrap: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
+  // The iframe/WebView is rendered later in the tree. Without an explicit
+  // stacking order RN-web paints that frame over this card, turning a fully
+  // narrated wait into the same solid-black rectangle the card was built to
+  // prevent. Native happened to composite it above the WebView; web did not.
+  previewWaitWrap: { ...StyleSheet.absoluteFillObject, zIndex: 30, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   previewWaitCard: { alignItems: "center", gap: 8, maxWidth: 340, paddingVertical: 20, paddingHorizontal: 22, borderRadius: 16, backgroundColor: "rgba(14,14,18,0.92)", borderWidth: 1, borderColor: "#26262f" },
   previewWaitTitle: { color: "#fff", fontSize: 14, fontWeight: "700", textAlign: "center" },
   previewWaitDetail: { color: "#9a9aa8", fontSize: 12, textAlign: "center" },

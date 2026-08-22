@@ -138,6 +138,25 @@ func TestScreenProbeJS_ContractsThatMustHold(t *testing.T) {
 	if strings.Contains(js, "location.search") {
 		t.Error("probe includes location.search — the preview URL carries an auth token")
 	}
+	if strings.Contains(js, "location.href") {
+		t.Error("probe includes location.href — the preview URL carries an auth token")
+	}
+}
+
+func TestScreenProbeJS_PostsClientPaintWithoutAcceptingEmptyExpoRoot(t *testing.T) {
+	js := stripJSLineComments(screenContextProbeJS)
+	for _, required := range []string{
+		`t: "yaver-rendered"`,
+		`mount ? mount.children.length > 0`,
+		`window.parent.postMessage(msg, "*")`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("cross-origin client-paint bridge missing %q", required)
+		}
+	}
+	if strings.Contains(js, `mount ? true`) {
+		t.Fatal("an empty Expo #root must not count as rendered")
+	}
 }
 
 func TestScreenProbeTag_IsWellFormed(t *testing.T) {

@@ -1,9 +1,10 @@
-import { constants, promises as fs } from "node:fs";
+import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium, devices } from "@playwright/test";
+import { resolveChromiumExecutable } from "./chromium-executable.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const queueRoot = path.join(root, "test-cases");
@@ -17,44 +18,6 @@ const date = new Intl.DateTimeFormat("en-CA", {
 const profile = process.env.E2E_PROFILE || path.join(os.homedir(), `.yaver-e2e-profile-browser-automation-${date}`);
 const lockPath = path.join(os.homedir(), ".yaver-browser-automation-session.lock");
 const iphone = devices["iPhone 15 Pro"];
-
-async function executable(pathname) {
-  if (!pathname) return false;
-  try {
-    await fs.access(pathname, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveChromiumExecutable() {
-  if (process.env.YAVER_CHROMIUM_PATH) {
-    if (!await executable(process.env.YAVER_CHROMIUM_PATH)) {
-      throw new Error("YAVER_CHROMIUM_PATH does not point to an available executable");
-    }
-    return process.env.YAVER_CHROMIUM_PATH;
-  }
-
-  const candidates = [
-    chromium.executablePath(),
-    ...(process.platform === "darwin" ? [
-      "/Applications/Chromium.app/Contents/MacOS/Chromium",
-      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    ] : []),
-    ...(process.platform === "linux" ? [
-      "/usr/bin/chromium",
-      "/usr/bin/chromium-browser",
-      "/usr/bin/google-chrome",
-      "/usr/bin/google-chrome-stable",
-    ] : []),
-  ];
-  for (const candidate of candidates) {
-    if (await executable(candidate)) return candidate;
-  }
-  throw new Error("no Chromium executable is available; install Playwright Chromium or set YAVER_CHROMIUM_PATH");
-}
 
 function redact(value) {
   return String(value)

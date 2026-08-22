@@ -29,8 +29,9 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 export const WEBVIEW_SUPPORTED = true;
 
 /** Message `type` emitted when the ready-probe cannot run (cross-origin frame).
- *  A caller MUST treat this as "stop waiting for the probe", not as an error:
- *  the frame is fine, only the confirmation channel is unavailable. */
+ *  This names a missing confirmation channel. It is neither an error nor proof
+ *  of paint; the agent-injected in-frame probe supplies the eventual
+ *  `yaver-rendered` message. */
 export const WEBVIEW_PROBE_UNSUPPORTED = "yaver.webview.probe_unsupported";
 export const WEBVIEW_UNSUPPORTED_REASON = "";
 
@@ -93,9 +94,9 @@ export const WebView = forwardRef<any, WebViewProps>(function WebView(props, ref
         `window.ReactNativeWebView = window.ReactNativeWebView || { postMessage: function (m) { parent.postMessage(m, "*"); } };\n${injectedJavaScript}`,
       );
       if (!ran) {
-        // Report the impossibility on the SAME channel the probe would have
-        // used, so a caller that is waiting for a probe result gets an answer
-        // instead of silence. It must stop gating on a signal that cannot come.
+        // Report the limitation on the SAME channel the probe would have used.
+        // Do not manufacture success: a loaded document can still contain an
+        // empty #root or a broken entry script.
         onMessage?.({
           nativeEvent: {
             data: JSON.stringify({
@@ -103,7 +104,7 @@ export const WebView = forwardRef<any, WebViewProps>(function WebView(props, ref
               reason: "cross-origin",
               detail:
                 "the preview is served from a different origin than the app, so the browser forbids " +
-                "injecting the ready-probe. The frame is rendering; readiness simply cannot be confirmed this way.",
+                "injecting the host ready-probe. Waiting for the agent-injected in-frame paint signal.",
             }),
           },
         });
@@ -142,12 +143,9 @@ function runInFrame(frame: HTMLIFrameElement | null, js: string): boolean {
   } catch {
     // SWALLOWING THIS WAS THE BUG. The old comment argued that a silent skip
     // "beats a fabricated ready" — true, and a false dichotomy. The third option
-    // is to SAY SO, which is what the caller needs: with the probe unable to
-    // fire, DevPreview waited forever on "The dev server reported ready. The
-    // WebView has not confirmed the first rendered frame yet." while the iframe
-    // was displaying the app perfectly. Measured 2026-08-05 driving sfmg on the
-    // RN-web browser lane, where the app is served from :8099 and the bundle
-    // from the box — cross-origin by construction, so the wait could NEVER end.
+    // is to SAY SO, then wait for the agent-injected in-frame paint signal.
+    // Treating this exception as success produced a false green on sfmg:
+    // box-local Chrome rendered while the phone iframe remained black.
     return false;
   }
 }

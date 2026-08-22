@@ -208,9 +208,47 @@
 
   var lastJSON = "";
   var lastPostAt = 0;
+  var renderedPosted = false;
+
+  // The RN-web host cannot inspect a cross-origin iframe, but this probe is
+  // injected by the agent inside that iframe. Report paint from the operation
+  // that actually matters — the phone's guest document — rather than asking a
+  // second box-local browser and assuming its pixels match. Keep the predicate
+  // aligned with the native ready probe: an SPA mount must have a committed
+  // child; a bare Expo shell with an empty #root is not rendered.
+  function maybePostRendered() {
+    if (renderedPosted) return;
+    try {
+      var body = document.body;
+      if (!body) return;
+      var text = (body.innerText || "").trim();
+      if (text.indexOf('"status":"starting"') >= 0 || text.indexOf("did not become ready") >= 0) return;
+      var mount = document.getElementById("root") || document.getElementById("app");
+      var flutter = document.querySelector("flutter-view,flt-glass-pane,flt-scene-host");
+      var ready = flutter || (mount ? mount.children.length > 0 : (body.children.length > 1 || text.length > 0));
+      if (!ready) return;
+      renderedPosted = true;
+      var state = {
+        // The scoped preview query carries authentication. The host needs the
+        // route for diagnostics, never the credential-bearing query string.
+        href: String((document.location && (document.location.pathname + document.location.hash)) || ""),
+        reason: flutter ? "flutter_engine_attached" : (mount ? "mount_has_visible_content" : "plain_body_content"),
+        mountId: mount ? (mount.id || "") : "",
+        mountChildren: mount ? mount.children.length : -1,
+        bodyChildren: body.children.length,
+        bodyTextLen: text.length
+      };
+      var msg = { source: "yaver-preview", t: "yaver-rendered", state: state, ts: Date.now() };
+      if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+      }
+      if (window.parent && window.parent !== window) window.parent.postMessage(msg, "*");
+    } catch (e) {}
+  }
 
   function send() {
     try {
+      maybePostRendered();
       var ctx = collect();
       if (!ctx.route && !ctx.title && !ctx.heading && (!ctx.controls || !ctx.controls.length)) return;
       var json = JSON.stringify(ctx);

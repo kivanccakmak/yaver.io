@@ -20,5 +20,7 @@ assert.match(src, /openBtn:\s*\{[^\n]*flex:\s*0/,
   "Open in Yaver must remain a compact action rather than fill the card");
 assert.match(src, /filterRow:\s*\{\s*height:\s*38/,
   "the chip ScrollView must be taller than its 34pt selected chips");
+assert.match(src, /previewWaitWrap:\s*\{[^\n]*zIndex:\s*30/,
+  "the narrated wait must stack above the later iframe/WebView");
 
 console.log("Projects preview layout contract ok");

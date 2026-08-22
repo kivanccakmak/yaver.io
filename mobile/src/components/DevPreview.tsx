@@ -35,6 +35,7 @@ import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
 import { browserLaneProbeLine, doctorBrowserLane, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
+import { previewWaitLine } from "../lib/previewWait";
 import { handlePreviewScreenMessage } from "../lib/screenContextBridge";
 import { handlePreviewDomMessage, subscribeDomInspectMode } from "../lib/domInspectBridge";
 import {
@@ -202,6 +203,8 @@ export function DevPreview({
   const [probeUnavailable, setProbeUnavailable] = useState<string | null>(null);
   // Rolling tail of dev-server log lines, for the starting + failure panels.
   const [logLines, setLogLines] = useState<string[]>([]);
+  const [previewStartedAt, setPreviewStartedAt] = useState<number | null>(null);
+  const [previewNow, setPreviewNow] = useState(Date.now());
   const [previewProbe, setPreviewProbe] = useState<PreviewProbeState | null>(null);
   const previewProbeRef = useRef<PreviewProbeState | null>(null);
   const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
@@ -254,6 +257,21 @@ export function DevPreview({
   const previewLogScrollRef = useRef<ScrollView>(null);
   const reportedBundlePath = previewBundlePath(status as any);
   const bundleUrl = reportedBundlePath ? quicClient.getDevServerBundleUrl(reportedBundlePath) : "";
+
+  useEffect(() => {
+    if (showPreview && bundleUrl) {
+      setPreviewStartedAt((previous) => previous ?? Date.now());
+    } else {
+      setPreviewStartedAt(null);
+    }
+  }, [bundleUrl, showPreview]);
+
+  useEffect(() => {
+    if (!showPreview || webContentLoaded || !previewStartedAt) return;
+    setPreviewNow(Date.now());
+    const id = setInterval(() => setPreviewNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [previewStartedAt, showPreview, webContentLoaded]);
 
   // DOM mode: when the user flips Inspect on (in the Tasks-tab chip), inject
   // the enable command into THIS WebView — the probe is loaded from the
@@ -858,6 +876,14 @@ export function DevPreview({
   // "/dev/"+webPort override, and the empty-url guard.
   if (!status) return null;
 
+  const narratedPreviewWait = previewWaitLine({
+    contentLoaded: webContentLoaded,
+    startedAt: previewStartedAt,
+    lastOutputAt: lastByteAt,
+    now: previewNow,
+    logs: logLines.length > 0 ? logLines : (lastLogLine ? [lastLogLine] : []),
+    workDir: status.workDir,
+  });
   const projectLabel = projectLabelFromStatus(status);
   const frameworkLabel = status.framework || "app";
   const portLabel = status.port ? `port ${status.port}` : null;
@@ -1259,7 +1285,11 @@ export function DevPreview({
                       }
                       return;
                     }
-                    // THE PROBE CANNOT RUN — stop waiting for it.
+                    // THE PROBE CANNOT RUN — record that limitation, but do not
+                    // turn it into success. The box-local doctor and a loaded
+                    // iframe document cannot prove that this phone frame
+                    // painted the guest app; the user may still be staring at
+                    // black pixels (the sfmg incident, 2026-08-22).
                     //
                     // On RN-web the preview is an <iframe>, and the app and the
                     // bundle are different origins, so the browser forbids
@@ -1298,16 +1328,11 @@ export function DevPreview({
                 originWhitelist={["*"]}
               />
               )}
-              {/* THE OVERLAY MUST NOT OUTLIVE ITS OWN PROBE.
-                   webContentLoaded is set by the injected ready-probe, and on a
-                   cross-origin frame that probe can NEVER fire — so this overlay
-                   covered an app that was rendering perfectly, forever. Measured
-                   2026-08-05 on sfmg: the card underneath even said "the preview
-                   is rendering", and it was drawn ON TOP of the rendering
-                   preview. Explaining why you cannot confirm something, while
-                   hiding the thing you are describing, is worse than silence.
-                   When the probe is impossible we show the frame. */}
-              {!webContentLoaded && !probeUnavailable && (
+              {/* Keep the first-open status visible until THIS client confirms
+                  paint. Cross-origin probe unavailability is not render
+                  confirmation: the 2026-08-22 sfmg incident had a green
+                  box-local doctor and a completely black phone frame. */}
+              {!webContentLoaded && (
                 <View style={styles.previewOverlay}>
                   {previewFailed ? (
                     (() => {
@@ -1460,7 +1485,7 @@ export function DevPreview({
 	                        </Text>
 	                      ) : healthyLogs ? (
 	                        <Text style={styles.previewStepCmd}>{probeUnavailable
-	                          ? `The dev server is ready and the preview is rendering. Readiness cannot be confirmed automatically here — ${probeUnavailable}`
+	                          ? `The dev server is ready, but this phone frame has not confirmed paint — ${probeUnavailable}`
 	                          : "The dev server reported ready. The WebView has not confirmed the first rendered frame yet."}</Text>
 	                      ) : (
 	                        <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
@@ -1514,7 +1539,7 @@ export function DevPreview({
                           apps.tsx): a server that is already serving while
                           Flutter's engine boots must not read "Starting…". */}
                       <Text style={styles.previewStartTitle}>
-                        {previewPhaseTitle(status, previewProbe)}
+                        {narratedPreviewWait?.title || previewPhaseTitle(status, previewProbe)}
                       </Text>
                       <Text style={styles.previewStepCmd}>{devServerSteps(frameworkLabel)}</Text>
                       {progressState && progressState.pct > 0 ? (
@@ -1523,11 +1548,11 @@ export function DevPreview({
                         </View>
                       ) : null}
                       <Text style={styles.previewSubtle}>
-                        {progressState
+                        {narratedPreviewWait?.detail || (progressState
                           ? `${progressState.phase || "compiling"}${progressState.pct ? ` · ${Math.round(progressState.pct)}%` : ""}${progressState.currentFile ? ` · ${progressState.currentFile}` : ""}`
                           : webStarting
                             ? "First web compile can take up to a minute — retrying…"
-                            : `Serving over ${(quicClient as any)._connectionMode === "relay" ? "relay" : "direct"} connection`}
+                            : `Serving over ${(quicClient as any)._connectionMode === "relay" ? "relay" : "direct"} connection`)}
                       </Text>
                       {previewProbe ? (
                         <Text style={styles.previewSubtle} numberOfLines={2}>

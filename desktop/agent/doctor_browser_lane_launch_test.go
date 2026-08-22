@@ -54,8 +54,8 @@ func TestSnapChromeFailureIsABrowserStageNotNavigate(t *testing.T) {
 // which is how this shipped.
 func TestBrowserLaneDoctorPinsTheBinary(t *testing.T) {
 	src := readAgentSource(t, "doctor_browser_lane.go")
-	if !strings.Contains(src, "chromedp.ExecPath(cp)") {
-		t.Error("the browser-lane doctor must pin the probed binary: without ExecPath, chromedp searches on its own and finds the snap redirector on any box that has one")
+	if !strings.Contains(src, "newPinnedChromeAllocator(ctx, allocOpts...)") {
+		t.Error("the browser-lane doctor must use the shared pinned allocator: without it, chromedp searches on its own and finds the snap redirector on any box that has one")
 	}
 	if !strings.Contains(src, "browserWindowLaunchErrorReason(err)") {
 		t.Error("the doctor must share the launch-failure vocabulary rather than re-deriving it, or the two lanes disagree about the same failure")

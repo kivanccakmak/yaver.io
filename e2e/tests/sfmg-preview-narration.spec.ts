@@ -44,7 +44,10 @@
  * desktop browser, and RN-web renders a different component tree for it. A
  * green result there would say nothing about the app the user holds.
  */
-import { test, expect, devices, chromium } from "@playwright/test";
+import { test, expect, devices } from "@playwright/test";
+// Shared with the browser coordinator: do not bypass system-Chromium fallback
+// by calling Playwright's managed headless shell directly.
+import { launchChromium } from "../browser-automation/chromium-executable.mjs";
 
 const MOBILE_WEB_URL = process.env.MOBILE_WEB_URL || "";
 const BOX = process.env.VIBE_BOX_HOST || "";
@@ -57,10 +60,22 @@ test.describe("sfmg preview narrates its wait", () => {
   test.skip(!TOKEN, "set YAVER_TEST_TOKEN (a session token for the box's owner)");
 
   test("a blank preview says what is running, for how long, and when it last moved", async () => {
-    const browser = await chromium.launch();
+    const browser = await launchChromium();
     // The device descriptor, whole. Not a viewport.
     const ctx = await browser.newContext({ ...devices["iPhone 15 Pro"] });
     const page = await ctx.newPage();
+    let browserLaneAssetFailure = "";
+    page.on("response", (response) => {
+      const url = response.url();
+      if (!url.includes("/dev-web/") || !/entry\.bundle(?:\?|$)/.test(url)) return;
+      const contentType = String(response.headers()["content-type"] || "").toLowerCase();
+      if (response.status() >= 400) {
+        browserLaneAssetFailure = `browser entry bundle returned HTTP ${response.status()}`;
+      } else if (contentType.includes("text/html")) {
+        // Never include the URL: the scoped lane may carry an auth query.
+        browserLaneAssetFailure = "browser entry bundle returned HTML instead of JavaScript";
+      }
+    });
 
     try {
       // Seed the session the way the app itself stores it. The RN app writes
@@ -220,21 +235,41 @@ test.describe("sfmg preview narrates its wait", () => {
       ).toBe(true);
       expect(sawElapsed, "the narration includes elapsed time, not just a spinner").toBe(true);
 
+      // Fail on the named transport operation immediately. Waiting two minutes
+      // for an empty #root after Metro's script request already returned HTML
+      // only hides the cause and makes the loop needlessly expensive.
+      await page.waitForTimeout(1_000);
+      expect(browserLaneAssetFailure, "the scoped browser lane must serve its entry bundle as JavaScript").toBe("");
+
       // ── AND IT MUST GET OUT OF THE WAY ────────────────────────────────
       // Once content paints, the panel is gone. A status card over a working
       // app is the same defect as a placeholder replacing a good preview.
-      const painted = await page
-        .getByText(/dil seçimi|devam et/i)
-        .first()
-        .isVisible({ timeout: 120_000 })
-        .catch(() => false);
-      if (painted) {
-        const after = (await page.locator("body").innerText().catch(() => "")) || "";
-        expect(
-          /\d+(:\d\d)?s? elapsed/i.test(after),
-          "the wait panel is still covering a preview that has already painted",
-        ).toBe(false);
-      }
+      await expect.poll(async () => {
+        // Playwright can inspect the cross-origin frame through CDP even though
+        // the RN-web parent cannot inject its ready probe. This is the actual
+        // operation: real guest DOM in the frame, not the box-side doctor's
+        // separate browser saying it rendered somewhere else.
+        const iframe = page.locator('iframe[title="preview"]').first();
+        const handle = await iframe.elementHandle().catch(() => null);
+        const frame = await handle?.contentFrame();
+        if (!frame) return false;
+        // sfmg is an Expo SPA: a response body, title, or error document is not
+        // paint. The exact incident served HTML where JavaScript was expected,
+        // so accepting arbitrary body text made this assertion green while the
+        // visible frame remained black.
+        return (await frame.locator("#root > *").count().catch(() => 0)) > 0;
+      }, {
+        timeout: 120_000,
+        message:
+          "Open in Yaver never painted guest content in the phone frame. " +
+          "A box-side doctor=rendered verdict cannot satisfy this assertion.",
+      }).toBe(true);
+
+      const after = (await page.locator("body").innerText().catch(() => "")) || "";
+      expect(
+        /\d+(:\d\d)?s? elapsed/i.test(after),
+        "the wait panel is still covering a preview that has already painted",
+      ).toBe(false);
     } finally {
       await ctx.close();
       await browser.close();
