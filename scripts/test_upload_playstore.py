@@ -28,5 +28,10 @@ class UploadPlayStoreTest(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_form_factor_track_detection(self):
+        self.assertTrue(MODULE.is_form_factor_track("wear:internal"))
+        self.assertTrue(MODULE.is_form_factor_track("tv:production"))
+        self.assertFalse(MODULE.is_form_factor_track("internal"))
+
 if __name__ == "__main__":
     unittest.main()

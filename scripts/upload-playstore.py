@@ -96,6 +96,10 @@ def read_gradle_version_code(gradle_path: str):
         return None
 
 
+def is_form_factor_track(track: str):
+    return ":" in track
+
+
 def main():
     print(f"Uploading {len(AAB_PATHS)} AAB(s) to Google Play ({PACKAGE}) - {TRACK} track...", flush=True)
 
@@ -106,6 +110,27 @@ def main():
     edit = service.edits().insert(body={}, packageName=PACKAGE).execute()
     edit_id = edit["id"]
     print(f"Created edit: {edit_id}", flush=True)
+
+    # Dedicated Wear/TV/XR/Automotive tracks must first be enabled for the app
+    # in Play Console. Probe that real operation before uploading bytes into an
+    # edit that can never be committed.
+    if is_form_factor_track(TRACK):
+        try:
+            service.edits().tracks().get(
+                packageName=PACKAGE, editId=edit_id, track=TRACK
+            ).execute()
+        except HttpError as exc:
+            if getattr(getattr(exc, "resp", None), "status", None) == 404:
+                print(
+                    f"PLAY FORM-FACTOR TRACK REQUIRED: {TRACK} is not enabled "
+                    f"for {PACKAGE}. In Play Console, open the app, add the "
+                    "matching form-factor release track, configure its internal "
+                    "testers, then rerun this deploy. No bundle was uploaded. "
+                    "Console: https://play.google.com/console/developers",
+                    flush=True,
+                )
+                raise SystemExit(2)
+            raise
 
     # Pre-flight versionCode collision check (2026-08-11, Wear 298 / TV 300 /
     # XR 301 on the SAME io.yaver.mobile package). Tracks are incomplete: an

@@ -101,11 +101,12 @@ echo "  package: $PACKAGE"
 echo "  versionCode: $VERSION_CODE"
 echo "  versionName: $VERSION_NAME"
 
-# Google Play requires dedicated form-factor tracks. Its current internal alias
-# is qa, so Wear internal testing is wear:qa (not the phone track).
+# Google Play requires dedicated form-factor tracks. Although current generic
+# API docs call the internal alias "qa", the live Yaver app reports its
+# operation-backed track as wear:internal (measured 2026-08-22).
 if [ "$UPLOAD" = "1" ]; then
   PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
   AAB_PATH="$AAB" \
-  PLAY_TRACK="${PLAY_TRACK:-wear:qa}" \
+  PLAY_TRACK="${PLAY_TRACK:-wear:internal}" \
     "$ROOT/scripts/run-playstore-upload.sh"
 fi
