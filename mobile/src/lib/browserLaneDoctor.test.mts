@@ -5,7 +5,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { browserLaneProbeLine, shouldRunBrowserLaneDoctor } from "./browserLaneDoctor.ts";
+import {
+  browserLaneProbeLine,
+  reconcileBrowserLaneProbe,
+  shouldRetryBrowserResourceFailure,
+  shouldRunBrowserLaneDoctor,
+} from "./browserLaneDoctor.ts";
 
 test("script subresource failure before first render triggers browser-lane doctor", () => {
   assert.equal(
@@ -71,4 +76,33 @@ test("probe line names stage, status, detail, and remedy", () => {
   assert.match(line, /http=200/);
   assert.match(line, /#root children 0/);
   assert.match(line, /remedy: check the browser console/);
+});
+
+test("the phone's empty mount overrides an agent-side rendered verdict", () => {
+  const result = reconcileBrowserLaneProbe(
+    { ok: true, stage: "rendered", detail: "the project painted real content in the browser lane" },
+    { reason: "empty_mount", mountId: "root", mountChildren: 0 },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.stage, "client-render");
+  assert.match(result.detail || "", /empty_mount/);
+  assert.match(result.detail || "", /#root children 0/);
+});
+
+test("a rendered phone probe preserves the agent verdict", () => {
+  const probe = { ok: true, stage: "rendered" } as const;
+  assert.equal(
+    reconcileBrowserLaneProbe(probe, { reason: "mount_has_visible_content", mountId: "root", mountChildren: 1 }),
+    probe,
+  );
+  assert.equal(
+    reconcileBrowserLaneProbe(probe, { reason: "mount_without_visible_content", mountId: "root", mountChildren: 1 }),
+    probe,
+  );
+});
+
+test("only a pre-paint script failure auto-retries", () => {
+  assert.equal(shouldRetryBrowserResourceFailure({ tag: "SCRIPT", contentLoaded: false }), true);
+  assert.equal(shouldRetryBrowserResourceFailure({ tag: "SCRIPT", contentLoaded: true }), false);
+  assert.equal(shouldRetryBrowserResourceFailure({ tag: "IMG", contentLoaded: false }), false);
 });

@@ -163,6 +163,32 @@ export const PREVIEW_PROBE_STATE_FUNCTION = `function yaverPreviewProbeState(doc
  */
 export const PREVIEW_LANE_SCRIPT = `(function(){try{window.__yaverLane='browser';}catch(e){}})(); true;`;
 
+/** Report failed browser sub-resources before the guest boots. A main-document
+ *  200 does not fire WebView.onHttpError when Metro's entry bundle fails, so
+ *  the old first open stayed on an empty #root even after compilation finished.
+ *  Both preview implementations consume this exact structured event and can
+ *  retry the document once the bundle becomes available. Credentials are
+ *  stripped before the URL crosses the WebView bridge. */
+export const PREVIEW_RESOURCE_ERROR_SCRIPT = `(function(){try{
+  if(window.__yaverPreviewResourceWatchInstalled)return true;
+  window.__yaverPreviewResourceWatchInstalled=true;
+  function clean(u){try{
+    var x=new URL(String(u||''),location.href);
+    ['token','__rp','access_token','password','secret','key'].forEach(function(k){if(x.searchParams.has(k))x.searchParams.set(k,'[redacted]');});
+    return x.toString();
+  }catch(e){return String(u||'').replace(/([?&](?:token|__rp|access_token|password|secret|key)=)[^\\s&]+/gi,'$1[redacted]');}}
+  window.addEventListener('error',function(event){try{
+    var target=event&&event.target;
+    if(!target||target===window||!(target.src||target.href))return;
+    window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify({
+      t:'yaver-preview-resource-error',
+      tag:String(target.tagName||'node').toUpperCase(),
+      url:clean(target.src||target.href),
+      ts:Date.now()
+    }));
+  }catch(e){}},true);
+}catch(e){}return true;})(); true;`;
+
 /**
  * How long to keep asking. The old probe gave up after 120 ticks × 500 ms =
  * 60 s and then could never report readiness at all, which for a 7 MB RN web

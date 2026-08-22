@@ -29,11 +29,11 @@ import { isBundleLoaded, loadAppIfChanged, onBundleEvent } from "../lib/bundleLo
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../lib/nativeBuild";
 import { isActiveDevServerStatus } from "../lib/devServerState";
 import { mustUseNativePreview as mustUseNativePreviewLane } from "../lib/devLane";
-import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT } from "../lib/previewReadyScript";
+import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT, PREVIEW_RESOURCE_ERROR_SCRIPT } from "../lib/previewReadyScript";
 import { WEBVIEW_PROBE_UNSUPPORTED } from "./WebViewCompat";
 import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
-import { browserLaneProbeLine, doctorBrowserLane, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
+import { browserLaneProbeLine, doctorBrowserLane, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
 import { handlePreviewScreenMessage } from "../lib/screenContextBridge";
 import { handlePreviewDomMessage, subscribeDomInspectMode } from "../lib/domInspectBridge";
@@ -203,6 +203,7 @@ export function DevPreview({
   // Rolling tail of dev-server log lines, for the starting + failure panels.
   const [logLines, setLogLines] = useState<string[]>([]);
   const [previewProbe, setPreviewProbe] = useState<PreviewProbeState | null>(null);
+  const previewProbeRef = useRef<PreviewProbeState | null>(null);
   const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
   const browserLaneDoctorRunningRef = useRef(false);
   const browserLaneDoctorRanForKeyRef = useRef("");
@@ -289,15 +290,26 @@ export function DevPreview({
         pushLog("[doctor] browser lane probe unavailable");
         return;
       }
-      setBrowserLaneProbe(probe);
-      pushLog(browserLaneProbeLine(probe));
-      if (!probe.ok) setPreviewFailed(true);
+      const verifiedProbe = reconcileBrowserLaneProbe(probe, previewProbeRef.current);
+      setBrowserLaneProbe(verifiedProbe);
+      pushLog(browserLaneProbeLine(verifiedProbe));
+      if (!verifiedProbe.ok) setPreviewFailed(true);
     }).catch((err) => {
       pushLog(`[doctor] browser lane probe failed: ${err instanceof Error ? err.message : String(err)}`);
     }).finally(() => {
       browserLaneDoctorRunningRef.current = false;
     });
   }, [bundleUrl, pushLog, showPreview, webContentLoaded]);
+
+  useEffect(() => {
+    previewProbeRef.current = previewProbe;
+    if (!browserLaneProbe || !previewProbe) return;
+    const verifiedProbe = reconcileBrowserLaneProbe(browserLaneProbe, previewProbe);
+    if (verifiedProbe === browserLaneProbe) return;
+    setBrowserLaneProbe(verifiedProbe);
+    setPreviewFailed(true);
+    pushLog(browserLaneProbeLine(verifiedProbe));
+  }, [browserLaneProbe, previewProbe, pushLog]);
 
   // Auto-retry the WebView while the framework's web server is still compiling
   // (agent returns 503 {status:"starting"} or refuses the connection). Up to
@@ -327,6 +339,7 @@ export function DevPreview({
     setWebStarting(false);
     setLogLines([]);
     setPreviewProbe(null);
+    previewProbeRef.current = null;
     setBrowserLaneProbe(null);
     browserLaneDoctorRunningRef.current = false;
     browserLaneDoctorRanForKeyRef.current = "";
@@ -1221,7 +1234,7 @@ export function DevPreview({
                 // flutter-view) before we hide the progress overlay — a bare 200
                 // on Flutter's index.html renders black while CanvasKit boots or
                 // if assets 404 through the proxy. Poll for up to 60s.
-                injectedJavaScriptBeforeContentLoaded={PREVIEW_LANE_SCRIPT}
+                injectedJavaScriptBeforeContentLoaded={`${PREVIEW_LANE_SCRIPT}\n${PREVIEW_RESOURCE_ERROR_SCRIPT}`}
                 injectedJavaScript={PREVIEW_READY_SCRIPT}
                 onMessage={(e) => {
                   try {
@@ -1237,6 +1250,15 @@ export function DevPreview({
                     // interactive-items inventory) from the dom probe, over the
                     // same authed channel.
                     if (handlePreviewDomMessage(m, status?.workDir)) return;
+                    if (m && m.t === "yaver-preview-resource-error") {
+                      const tag = String(m.tag || "resource").toUpperCase();
+                      const url = String(m.url || "");
+                      pushLog(`[web:error] resource failed ${tag}${url ? ` ${url}` : ""}`.slice(0, 1400));
+                      if (shouldRetryBrowserResourceFailure({ tag, contentLoaded: webContentLoaded })) {
+                        scheduleWebRetry();
+                      }
+                      return;
+                    }
                     // THE PROBE CANNOT RUN — stop waiting for it.
                     //
                     // On RN-web the preview is an <iframe>, and the app and the

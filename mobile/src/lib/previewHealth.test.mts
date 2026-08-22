@@ -45,6 +45,12 @@ test("client console crashes escalate; startup noise does not", () => {
     "Uncaught ReferenceError: foo is not defined",
   ]), true);
   assert.equal(clientRuntimeLogsNeedProjectFix([
+    "[web:error] resource failed SCRIPT https://relay.example/d/device/dev-web/entry.bundle?token=[redacted]",
+  ]), true);
+  assert.equal(clientRuntimeLogsNeedProjectFix([
+    "[web:error] SyntaxError: Unexpected token '<' @ https://relay.example/?token=[redacted]",
+  ]), true);
+  assert.equal(clientRuntimeLogsNeedProjectFix([
     "queued",
     "$ npm run web",
     "Bundled 4814ms",

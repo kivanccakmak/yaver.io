@@ -21,6 +21,56 @@ export interface BrowserLaneProbeResult {
   bodyPreview?: string;
 }
 
+export interface BrowserClientProbe {
+  reason?: string;
+  mountId?: string;
+  mountChildren?: number;
+  bodyChildren?: number;
+}
+
+const clientRenderedReasons = new Set([
+  "flutter_engine_attached",
+  "mount_has_visible_content",
+  "mount_without_visible_content",
+  "plain_body_content",
+]);
+
+/** The agent doctor runs beside the app on the box; the WebView probe measures
+ *  the operation on the phone, including the relay and every sub-resource.
+ *  A local rendered verdict can therefore never overrule a phone that still
+ *  has an empty mount. This is the inventory-vs-operation seam from the
+ *  2026-08-22 first-load failure. */
+export function reconcileBrowserLaneProbe(
+  agentProbe: BrowserLaneProbeResult,
+  clientProbe: BrowserClientProbe | null | undefined,
+): BrowserLaneProbeResult {
+  const reason = String(clientProbe?.reason || "").trim();
+  if (!agentProbe.ok || !reason || clientRenderedReasons.has(reason)) return agentProbe;
+
+  const clientDetail = clientProbe?.mountId
+    ? `#${clientProbe.mountId} children ${clientProbe.mountChildren ?? 0}`
+    : `body children ${clientProbe?.bodyChildren ?? 0}`;
+  return {
+    ...agentProbe,
+    ok: false,
+    stage: "client-render",
+    detail: `The box rendered locally, but this device reports ${reason} (${clientDetail}).`,
+    remedy: "The phone did not receive or execute the complete browser bundle. Retry the preview; if a script keeps failing, use Fix in Yaver from Preview logs.",
+  };
+}
+
+/** A failed entry script before first paint is usually the cold-compile race:
+ *  index.html arrived, its bundle did not, then Metro finished without the
+ *  document requesting that script again. Reloading the document is the
+ *  deterministic repair; never do it after paint because that would discard
+ *  the user's live app state. */
+export function shouldRetryBrowserResourceFailure(input: {
+  tag?: string;
+  contentLoaded: boolean;
+}): boolean {
+  return !input.contentLoaded && String(input.tag || "").toUpperCase() === "SCRIPT";
+}
+
 export async function doctorBrowserLane(
   client: Pick<QuicClient, "baseUrl" | "getAuthHeaders">,
   waitSeconds = 60,

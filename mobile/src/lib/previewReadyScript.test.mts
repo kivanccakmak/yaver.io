@@ -6,6 +6,9 @@
 //   are diagnostics, not a hard gate that can break working apps.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   PREVIEW_PROBE_STATE_FUNCTION,
   PREVIEW_READY_PREDICATE,
@@ -103,4 +106,45 @@ console.log("previewReadyScript contract ok");
   assert.doesNotThrow(() => new Function("window", PREVIEW_LANE_SCRIPT)(hostileWindow),
     "lane script swallows a hostile window rather than crashing the guest");
   console.log("✓ PREVIEW_LANE_SCRIPT stamps browser lane, crash-safe");
+}
+
+// A failed entry bundle is invisible to WebView.onHttpError because the main
+// document itself returned 200. The shared early watcher must surface it to
+// both preview implementations, without carrying auth material across bridge.
+{
+  const mod = await import("./previewReadyScript");
+  const script = (mod as any).PREVIEW_RESOURCE_ERROR_SCRIPT as string;
+  let errorHandler: ((event: any) => void) | null = null;
+  const messages: string[] = [];
+  const fakeWindow: any = {
+    ReactNativeWebView: { postMessage: (value: string) => messages.push(value) },
+    addEventListener: (name: string, fn: (event: any) => void) => {
+      if (name === "error") errorHandler = fn;
+    },
+  };
+  new Function("window", "location", "URL", script)(fakeWindow, { href: "https://relay.example/d/device/dev-web/" }, URL);
+  assert.ok(errorHandler, "resource watcher installs before guest scripts");
+  errorHandler!({
+    target: {
+      tagName: "SCRIPT",
+      src: "https://relay.example/d/device/dev-web/entry.bundle?token=secret&__rp=relay-secret",
+    },
+  });
+  const message = JSON.parse(messages[0]);
+  assert.equal(message.t, "yaver-preview-resource-error");
+  assert.equal(message.tag, "SCRIPT");
+  assert.doesNotMatch(message.url, /secret/);
+  assert.match(message.url, /%5Bredacted%5D/);
+  console.log("✓ resource failures cross the bridge with credentials redacted");
+}
+
+{
+  const mobileRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  for (const rel of ["app/(tabs)/apps.tsx", "src/components/DevPreview.tsx"]) {
+    const src = readFileSync(join(mobileRoot, rel), "utf8");
+    assert.match(src, /PREVIEW_RESOURCE_ERROR_SCRIPT/, `${rel} must consume the shared early resource watcher`);
+    assert.match(src, /shouldRetryBrowserResourceFailure/, `${rel} must retry a failed pre-paint entry script`);
+    assert.match(src, /reconcileBrowserLaneProbe/, `${rel} must let the device probe override box-local success`);
+  }
+  console.log("✓ both browser-preview implementations consume the render guards");
 }

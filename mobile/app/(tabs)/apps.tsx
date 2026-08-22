@@ -38,7 +38,7 @@ import { getAvailableModules, isBundleLoaderAvailable, loadApp } from "../../src
 import { openAppBus } from "../../src/lib/openAppBus";
 import { setActivePreviewLane, subscribeBrowserShake } from "../../src/lib/feedbackTrigger";
 import LaneStartupStatus from "../../src/components/LaneStartupStatus";
-import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT } from "../../src/lib/previewReadyScript";
+import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT, PREVIEW_RESOURCE_ERROR_SCRIPT } from "../../src/lib/previewReadyScript";
 import { downloadArtifact } from "../../src/lib/builds";
 import { describeConnectionStatus } from "../../src/lib/connection";
 import { buildFailureHint, buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../../src/lib/nativeBuild";
@@ -48,7 +48,7 @@ import { connectionManager } from "../../src/lib/connectionManager";
 import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
 import { detectCompileFailure } from "../../src/lib/compileFailure";
 import { previewBundlePath } from "../../src/lib/previewBundlePath";
-import { browserLaneProbeLine, doctorBrowserLane, shouldRunBrowserLaneDoctor, type BrowserLaneProbeResult } from "../../src/lib/browserLaneDoctor";
+import { browserLaneProbeLine, doctorBrowserLane, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, shouldRunBrowserLaneDoctor, type BrowserLaneProbeResult } from "../../src/lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
 import { handlePreviewScreenMessage } from "../../src/lib/screenContextBridge";
 import { handlePreviewDomMessage, subscribeDomInspectMode } from "../../src/lib/domInspectBridge";
@@ -67,7 +67,6 @@ import {
   type CapabilityGap,
 } from "../../src/lib/capabilityGap";
 import { formatFixElapsed, runCapabilityGapFix } from "../../src/lib/capabilityGapFix";
-import { describePort, describeResources } from "../../src/lib/machineResources";
 import { subscribeSse, type SseSubscription } from "../../src/lib/sseClient";
 import { isWebServedStatus } from "../../src/lib/devLane";
 import { applyPreviewCapabilities, guardYaverSelfDevelopmentActions, isHermesMobileFramework, workspaceAppLanes } from "../../src/lib/mobileProjectActions";
@@ -190,7 +189,8 @@ const WEBVIEW_DIAGNOSTICS_SCRIPT = `(function(){
   window.addEventListener('error', function(event) {
     var target = event && event.target;
     if (target && target !== window && (target.src || target.href)) {
-      post('error', ['resource failed', target.tagName || 'node', target.src || target.href]);
+      // PREVIEW_RESOURCE_ERROR_SCRIPT owns this structured signal for BOTH
+      // preview implementations. Posting it here too produced duplicate logs.
       return;
     }
     post('error', [
@@ -206,10 +206,10 @@ const WEBVIEW_DIAGNOSTICS_SCRIPT = `(function(){
   return true;
 })(); true;`;
 
-const WEBVIEW_INJECTED_SCRIPT = `${WEBVIEW_DIAGNOSTICS_SCRIPT}\n${PREVIEW_READY_SCRIPT}`;
+const WEBVIEW_INJECTED_SCRIPT = `${PREVIEW_RESOURCE_ERROR_SCRIPT}\n${WEBVIEW_DIAGNOSTICS_SCRIPT}\n${PREVIEW_READY_SCRIPT}`;
 // Runs BEFORE the guest's scripts: stamp the lane so a lane-aware
 // yaver-feedback SDK self-hosts its draggable icon (feedback-sdk-lanes audit).
-const WEBVIEW_BEFORE_CONTENT_SCRIPT = `${PREVIEW_LANE_SCRIPT}\n${WEBVIEW_DIAGNOSTICS_SCRIPT}`;
+const WEBVIEW_BEFORE_CONTENT_SCRIPT = `${PREVIEW_LANE_SCRIPT}\n${PREVIEW_RESOURCE_ERROR_SCRIPT}\n${WEBVIEW_DIAGNOSTICS_SCRIPT}`;
 
 function pathLeaf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
@@ -792,6 +792,7 @@ export default function AppsScreen() {
   const [webRuntimeLogOpen, setWebRuntimeLogOpen] = useState(false);
   const [webRuntimeIssueCount, setWebRuntimeIssueCount] = useState(0);
   const [webPreviewProbe, setWebPreviewProbe] = useState<PreviewProbeState | null>(null);
+  const webPreviewProbeRef = useRef<PreviewProbeState | null>(null);
   const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
   const browserLaneDoctorRunningRef = useRef(false);
   const browserLaneDoctorRanForKeyRef = useRef("");
@@ -842,6 +843,7 @@ export default function AppsScreen() {
     setWebRuntimeLogOpen(false);
     setWebRuntimeIssueCount(0);
     setWebPreviewProbe(null);
+    webPreviewProbeRef.current = null;
     setBrowserLaneProbe(null);
     browserLaneDoctorRunningRef.current = false;
     browserLaneDoctorRanForKeyRef.current = "";
@@ -2317,9 +2319,10 @@ export default function AppsScreen() {
         setWebPreviewLogs((prev) => appendPreviewLogLine(prev, "[doctor] browser lane probe unavailable"));
         return;
       }
-      setBrowserLaneProbe(probe);
-      setWebPreviewLogs((prev) => appendPreviewLogLine(prev, browserLaneProbeLine(probe)));
-      if (!probe.ok) {
+      const verifiedProbe = reconcileBrowserLaneProbe(probe, webPreviewProbeRef.current);
+      setBrowserLaneProbe(verifiedProbe);
+      setWebPreviewLogs((prev) => appendPreviewLogLine(prev, browserLaneProbeLine(verifiedProbe)));
+      if (!verifiedProbe.ok) {
         setWebPreviewFailed(true);
         setWebRuntimeIssueCount((count) => Math.max(count, 1));
       }
@@ -2329,6 +2332,20 @@ export default function AppsScreen() {
       browserLaneDoctorRunningRef.current = false;
     });
   }, [bundleUrl, showWebView, webPreviewContentLoaded]);
+
+  // A later phone probe is stronger than an earlier box-local doctor result.
+  // This also closes the race where the doctor completes just before the
+  // WebView reports its still-empty #root.
+  useEffect(() => {
+    webPreviewProbeRef.current = webPreviewProbe;
+    if (!browserLaneProbe || !webPreviewProbe) return;
+    const verifiedProbe = reconcileBrowserLaneProbe(browserLaneProbe, webPreviewProbe);
+    if (verifiedProbe === browserLaneProbe) return;
+    setBrowserLaneProbe(verifiedProbe);
+    setWebPreviewFailed(true);
+    setWebRuntimeIssueCount((count) => Math.max(count, 1));
+    setWebPreviewLogs((prev) => appendPreviewLogLine(prev, browserLaneProbeLine(verifiedProbe)));
+  }, [browserLaneProbe, webPreviewProbe]);
 
   // ── Capability gap card ────────────────────────────────────────────────
   // The gap can reach us on three carriers and we take whichever we have: the
@@ -2520,7 +2537,7 @@ export default function AppsScreen() {
                 Reload / Screenshots / Ship It were removed on purpose. */}
             <View style={s.cardActions}>
               <Pressable
-                style={[s.actionBtn, s.openBtn, layout.isTablet ? { flex: 0, minWidth: 168, maxWidth: 210 } : { flex: 1 }, devServerBusy && { opacity: 0.5 }]}
+                style={[s.actionBtn, s.openBtn, layout.isTablet ? { minWidth: 168, maxWidth: 210 } : { minWidth: 190, maxWidth: 220 }, devServerBusy && { opacity: 0.5 }]}
                 onPress={() => { openRunningPreview().catch((e) => Alert.alert("Open in Yaver failed", e instanceof Error ? e.message : String(e))); }}
                 disabled={devServerBusy}
                 accessibilityRole="button"
@@ -2932,6 +2949,14 @@ export default function AppsScreen() {
                   Tests (and build/deploy) are driven by vibing text to the agent. */}
               {actionSheet?.actions.map((action, i) => {
                 const disabled = action.supported === false;
+                const isHermes = action.type === "open-native" || action.label.toLowerCase().includes("hermes");
+                const meta = isHermes
+                  ? (disabled && action.reason
+                      ? `Hermes builds a full native bundle and takes longer. ${action.reason}`
+                      : "Full native bundle build — slower than Browser or WebRTC Reload.")
+                  : (disabled && action.reason
+                      ? action.reason
+                      : `${action.target}${action.framework ? ` · ${action.framework}` : ""}${action.platform ? ` → ${action.platform}` : ""}`);
                 return (
                   <Pressable
                     key={`${action.label}-${i}`}
@@ -2941,10 +2966,10 @@ export default function AppsScreen() {
                     <Text style={s.actionSheetIcon}>{action.icon || "▶"}</Text>
                     <View style={{ flex: 1 }}>
                       <Text style={[s.actionSheetLabel, { color: disabled ? c.textMuted : c.textPrimary }]}>
-                        {action.label}{disabled ? " (coming soon)" : ""}
+                        {action.label}
                       </Text>
                       <Text style={[s.actionSheetMeta, { color: c.textMuted }]}>
-                        {disabled && action.reason ? action.reason : `${action.target}${action.framework ? ` · ${action.framework}` : ""}${action.platform ? ` → ${action.platform}` : ""}`}
+                        {meta}
                       </Text>
                     </View>
                   </Pressable>
@@ -3616,6 +3641,29 @@ export default function AppsScreen() {
                   // interactive-items inventory) from the dom probe, over the
                   // same authed channel.
                   if (handlePreviewDomMessage(m, devStatus?.workDir)) return;
+                  if (m && m.t === "yaver-preview-resource-error") {
+                    const tag = String(m.tag || "resource").toUpperCase();
+                    const url = String(m.url || "");
+                    const line = `[web:error] resource failed ${tag}${url ? ` ${url}` : ""}`.slice(0, 1400);
+                    setWebPreviewLogs((prev) => appendPreviewLogLine(prev, line));
+                    setWebRuntimeIssueCount((count) => Math.min(99, count + 1));
+                    setWebRuntimeLogOpen(true);
+                    // Cold Expo/Metro can return index.html before the entry
+                    // bundle is ready. The document stays 200, so WebView's
+                    // main-frame callbacks never retry it after compilation.
+                    if (shouldRetryBrowserResourceFailure({ tag, contentLoaded: webPreviewContentLoaded })) {
+                      scheduleWebPreviewRetry();
+                    }
+                    if (shouldRunBrowserLaneDoctor({
+                      showWebView,
+                      bundleUrl,
+                      contentLoaded: webPreviewContentLoaded,
+                      failed: webPreviewFailed,
+                      serverLooksReady: webPreviewServerLooksReady,
+                      logLine: line,
+                    })) runBrowserLaneDoctor("resource-error");
+                    return;
+                  }
                   // THE PROBE CANNOT RUN — stop waiting for it. Same fix as
                   // DevPreview.tsx: on RN-web the preview is a cross-origin
                   // <iframe>, so the browser forbids injecting the ready-probe
@@ -3643,6 +3691,7 @@ export default function AppsScreen() {
                     setWebPreviewProbe((m.state || null) as PreviewProbeState | null);
                     setWebPreviewContentLoaded(true);
                     setWebPreviewFailed(false);
+                    setWebRuntimeLogOpen(false);
                     webPreviewRetryRef.current = 0;
                   } else if (m && m.t === "yaver-preview-log") {
                     const level = String(m.level || "log").toLowerCase();
@@ -3765,30 +3814,32 @@ export default function AppsScreen() {
             ) : null}
             {showWebView && !previewFullScreen && webPreviewLogs.length > 0 ? (
               <>
-                <Pressable
-                  onPress={() => setWebRuntimeLogOpen((v) => !v)}
-                  accessibilityRole="button"
-                  accessibilityLabel={webRuntimeLogOpen ? "Hide preview logs" : "Show preview logs"}
-                  style={[
-                    s.previewRuntimeLogFab,
-                    {
-                      bottom: Math.max(18, insets.bottom + 14),
-                      backgroundColor: webRuntimeIssueCount > 0 ? "#321313" : "#10101a",
-                      borderColor: webRuntimeIssueCount > 0 ? "#ef444466" : "#818cf855",
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name={webRuntimeIssueCount > 0 ? "alert-circle-outline" : "terminal-outline"}
-                    size={18}
-                    color={webRuntimeIssueCount > 0 ? c.error : c.accent}
-                  />
-                  <Text style={[s.previewRuntimeLogFabText, { color: webRuntimeIssueCount > 0 ? c.error : c.accent }]}>
-                    {webRuntimeIssueCount > 0 ? `${webRuntimeIssueCount} issue${webRuntimeIssueCount === 1 ? "" : "s"}` : "Logs"}
-                  </Text>
-                </Pressable>
+                {!webRuntimeLogOpen ? (
+                  <Pressable
+                    onPress={() => setWebRuntimeLogOpen(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Show preview logs"
+                    style={[
+                      s.previewRuntimeLogFab,
+                      {
+                        bottom: Math.max(18, insets.bottom + 14),
+                        backgroundColor: webRuntimeIssueCount > 0 ? "#321313" : "#10101a",
+                        borderColor: webRuntimeIssueCount > 0 ? "#ef444466" : "#818cf855",
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={webRuntimeIssueCount > 0 ? "alert-circle-outline" : "terminal-outline"}
+                      size={18}
+                      color={webRuntimeIssueCount > 0 ? c.error : c.accent}
+                    />
+                    <Text style={[s.previewRuntimeLogFabText, { color: webRuntimeIssueCount > 0 ? c.error : c.accent }]}>
+                      {webRuntimeIssueCount > 0 ? `${webRuntimeIssueCount} issue${webRuntimeIssueCount === 1 ? "" : "s"}` : "Logs"}
+                    </Text>
+                  </Pressable>
+                ) : null}
                 {webRuntimeLogOpen ? (
-                  <View style={[s.previewRuntimeLogPanel, { bottom: Math.max(74, insets.bottom + 70) }]}>
+                  <View style={[s.previewRuntimeLogPanel, { bottom: Math.max(18, insets.bottom + 14) }]}>
                     <View style={s.previewRuntimeLogHeader}>
                       <View style={s.previewRuntimeLogTitleRow}>
                         <Ionicons
@@ -3833,7 +3884,7 @@ export default function AppsScreen() {
                             const logs = webPreviewLogs.slice(-60).join("\n");
                             void quicClient.sendTask(
                               `Fix ${proj} browser preview runtime`,
-                              `The browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) rendered, but the app then logged runtime errors or got stuck. Diagnose the root cause from the runtime output below and fix it in the project, preserving the browser lane.\n\n--- browser/runtime output ---\n${logs}`,
+                              `The browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) ${webPreviewContentLoaded ? "rendered, but then logged runtime errors or got stuck" : "did not paint because its browser bundle or runtime failed"}. Diagnose the root cause from the runtime output below and fix it in the project, preserving the browser lane.\n\n--- browser/runtime output ---\n${logs}`,
                             ).then(() => { setShowWebView(false); router.navigate("/(tabs)/tasks" as any); }).catch(() => {});
                           }}
                           style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#2e1f3a" }]}
@@ -3910,19 +3961,23 @@ export default function AppsScreen() {
                     ) : (
                       <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
                     )}
-                    <Text style={[s.previewSubtle, { color: c.textMuted }]}>
-                      {compileCard ? "Full output:" : healthyLogs ? "Recent healthy output:" : `The ${devStatus?.framework || "web"} server never served content. Recent output:`}
-                    </Text>
-                    <ScrollView
-                      ref={webPreviewLogScrollRef}
-                      style={s.previewLogBox}
-                      contentContainerStyle={{ padding: 10 }}
-                      onContentSizeChange={() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true })}
-                    >
-                      {(webPreviewLogs.length ? webPreviewLogs : ["No output captured — the server may have exited immediately, or was never started."]).slice(-40).map((ln, i) => (
-                        <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
-                      ))}
-                    </ScrollView>
+                    {!webRuntimeLogOpen ? (
+                      <Text style={[s.previewSubtle, { color: c.textMuted }]}>
+                        {compileCard ? "Full output:" : healthyLogs ? "Recent healthy output:" : `The ${devStatus?.framework || "web"} server never served content. Recent output:`}
+                      </Text>
+                    ) : null}
+                    {!webRuntimeLogOpen ? (
+                      <ScrollView
+                        ref={webPreviewLogScrollRef}
+                        style={s.previewLogBox}
+                        contentContainerStyle={{ padding: 10 }}
+                        onContentSizeChange={() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true })}
+                      >
+                        {(webPreviewLogs.length ? webPreviewLogs : ["No output captured — the server may have exited immediately, or was never started."]).slice(-40).map((ln, i) => (
+                          <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
+                        ))}
+                      </ScrollView>
+                    ) : null}
                     <View style={s.previewFailBtns}>
                       <Pressable onPress={() => { resetWebPreview(); setWebViewLoading(true); setWebViewKey((k) => k + 1); }} style={[s.previewBtn, { backgroundColor: "#1a2e1a" }]}>
                         <Text style={[s.previewBtnText, { color: "#22c55e" }]}>Retry</Text>
@@ -3968,14 +4023,11 @@ export default function AppsScreen() {
                       startedAt={webPreviewStartedAt}
                       lastOutputAt={webPreviewLastLogAt}
                       now={previewNowTick}
-                      lines={webPreviewLogs}
-                      maxLines={2}
                       mutedColor={c.textMuted}
                       warnColor={c.warn}
-                      lineColorFor={(line) => previewLogColor(line, c)}
                       stallHint="Stop and retry if this persists"
                     />
-                    {webPreviewLogs.length > 0 ? (
+                    {webPreviewLogs.length > 0 && !webRuntimeLogOpen ? (
                       <ScrollView
                         ref={webPreviewLogScrollRef}
                         style={s.previewLogBox}
@@ -3986,32 +4038,6 @@ export default function AppsScreen() {
                           <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
                         ))}
                       </ScrollView>
-                    ) : null}
-                    {/* WHERE it is being served, from the agent's own answer —
-                        never inferred from the framework default. The agent
-                        brokers ports (Metro's 8081 is routinely taken; on one box
-                        by a four-day-old freeswitch), so a client that assumes
-                        the canonical port is wrong exactly when it matters. Also
-                        names the simulator/emulator this session claimed, so two
-                        people on one machine can see they are NOT sharing a
-                        device. Same formatter the web dashboard uses. */}
-                    {devStatus ? (() => {
-                      const portLine = describePort(devStatus as any);
-                      const held = describeResources((devStatus as any)?.resources);
-                      const line = [portLine, held].filter(Boolean).join(" · ");
-                      return line ? (
-                        <Text style={[s.previewSubtle, { color: c.textMuted, marginTop: 6 }]} numberOfLines={2}>
-                          {line}
-                        </Text>
-                      ) : null;
-                    })() : null}
-                    {webPreviewProbe ? (
-                      <Text style={[s.previewSubtle, { color: c.textMuted, marginTop: 6 }]} numberOfLines={2}>
-                        probe {webPreviewProbe.reason || "waiting"} · {webPreviewProbe.mountId ? `#${webPreviewProbe.mountId} children ${webPreviewProbe.mountChildren ?? 0}` : `body children ${webPreviewProbe.bodyChildren ?? 0}`} · {(() => { try { return new URL(webPreviewProbe.href || bundleUrl).pathname; } catch { return webPreviewProbe.href || ""; } })()}
-                      </Text>
-                    ) : null}
-                    {webPreviewLogs.length === 0 && bundlerLine ? (
-                      <Text style={[s.previewSubtle, { color: c.textMuted }]} numberOfLines={1}>{bundlerLine}</Text>
                     ) : null}
                   </>
                 )}
@@ -4201,9 +4227,11 @@ const s = StyleSheet.create({
 
   // Filter chips
   filterWrap: { marginHorizontal: 16, marginBottom: 8, position: "relative" },
-  filterRow: { height: 30, flexGrow: 0 },
+  // ScrollView clips to its own bounds on iOS and RN-web. This used to be
+  // 30px around 34px chips, shaving the selected outline off both edges.
+  filterRow: { height: 38, flexGrow: 0 },
   filterFade: { position: "absolute", right: 0, top: 0, bottom: 0, width: 24, opacity: 0.9 },
-  filterRowContent: { gap: 8, alignItems: "center" as const, paddingRight: 8 },
+  filterRowContent: { gap: 8, alignItems: "center" as const, paddingVertical: 2, paddingRight: 8 },
   filterChip: {
     minHeight: 34,
     paddingHorizontal: 14,
@@ -4318,9 +4346,9 @@ const s = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   frameworkIcon: {},
 
-  cardActions: { flexDirection: "row", gap: 8, marginTop: 12 },
+  cardActions: { flexDirection: "row", gap: 8, marginTop: 12, justifyContent: "flex-start" },
   actionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
-  openBtn: { backgroundColor: "#22c55e", flex: 1, alignItems: "center", flexDirection: "row" as const, justifyContent: "center", gap: 4 },
+  openBtn: { backgroundColor: "#22c55e", flex: 0, alignItems: "center", flexDirection: "row" as const, justifyContent: "center", gap: 4 },
   openBtnText: { color: "#000", fontSize: 13, fontWeight: "700" },
   reloadBtn: { backgroundColor: "#22c55e22", flex: 1, alignItems: "center" },
   reloadBtnText: { color: "#22c55e", fontSize: 13, fontWeight: "600" },

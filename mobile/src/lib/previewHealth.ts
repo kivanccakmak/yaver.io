@@ -38,10 +38,11 @@ export function previewHealthCanOfferProjectFix(
 }
 
 /** Runtime errors the AGENT cannot see: they happen inside the WebView page
- *  and surface only on the client's console channel. Matches crash shapes
- *  only — never build/startup noise, which the agent already classifies. */
+ *  and surface only on the client's console channel. A failed script resource
+ *  and an HTML response parsed as JS are operation failures too: the box-side
+ *  doctor can stay green while the phone's #root remains empty. */
 export function clientRuntimeLogsNeedProjectFix(lines: readonly string[]): boolean {
   if (!lines.length) return false;
   const text = lines.slice(-40).join("\n").toLowerCase();
-  return /uncaught|unhandled (promise )?rejection|is not a function|cannot read propert|referenceerror:|typeerror:/.test(text);
+  return /uncaught|unhandled (promise )?rejection|is not a function|cannot read propert|referenceerror:|typeerror:|syntaxerror:\s*unexpected token ['"]?<['"]?|\[web:error\]\s+resource failed script\b/.test(text);
 }
