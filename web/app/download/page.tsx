@@ -2,415 +2,169 @@ import Image from "next/image";
 import Link from "next/link";
 import { GUI_DOWNLOADS, GUI_VERSION } from "@/lib/versions";
 
-function DownloadButton({
+const card = "rounded-2xl border border-surface-800 bg-surface-900 p-6";
+const secondaryButton =
+  "inline-flex items-center justify-center rounded-xl border border-surface-700 px-4 py-2.5 text-sm font-semibold text-surface-200 transition hover:border-surface-500 hover:text-surface-50";
+const primaryButton =
+  "inline-flex items-center justify-center rounded-xl bg-surface-50 px-4 py-2.5 text-sm font-semibold text-surface-950 transition hover:bg-white";
+
+function PlatformCard({
+  icon,
+  title,
+  detail,
   href,
-  primary,
+  action = "Download",
   children,
 }: {
+  icon: string;
+  title: string;
+  detail: string;
   href: string;
-  primary?: boolean;
-  children: React.ReactNode;
+  action?: string;
+  children?: React.ReactNode;
 }) {
-  const className = primary
-    ? "inline-flex items-center justify-center rounded-xl bg-surface-50 px-4 py-2.5 text-sm font-semibold text-surface-950 transition hover:bg-surface-100"
-    : "inline-flex items-center justify-center rounded-xl border border-surface-700 px-4 py-2.5 text-sm font-semibold text-surface-200 transition hover:border-surface-500 hover:text-surface-50";
-
   return (
-    <a href={href} className={className}>
-      {children}
-    </a>
+    <article className={`${card} flex min-h-64 flex-col`}>
+      <div className="text-3xl" aria-hidden="true">{icon}</div>
+      <h3 className="mt-5 text-xl font-semibold text-surface-50">{title}</h3>
+      <p className="mt-2 text-sm leading-6 text-surface-400">{detail}</p>
+      <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2 text-xs text-surface-400">{children}</div>
+      <a href={href} className={`${primaryButton} mt-auto pt-2`}>
+        {action} →
+      </a>
+    </article>
   );
 }
 
-function CommandCard({ label, commands }: { label: string; commands: string[] }) {
+function CommandBlock({ commands }: { commands: string[] }) {
   return (
-    <div className="rounded-2xl border border-surface-800 bg-surface-900/70 p-5">
-      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">
-        {label}
-      </p>
-      <div className="rounded-xl bg-surface-950 p-4 font-mono text-[13px] text-surface-300">
-        {commands.map((command) => (
-          <div key={command} className="mb-2 last:mb-0">
-            <span className="text-surface-500">$</span>{" "}
-            <span className="select-all">{command}</span>
-          </div>
-        ))}
-      </div>
+    <div className="rounded-xl border border-surface-800 bg-surface-950 p-4 font-mono text-[13px] leading-7 text-surface-300">
+      {commands.map((command) => (
+        <div key={command}>
+          <span className="text-surface-600">$</span>{" "}
+          <span className="select-all">{command}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
 export default function DownloadPage() {
   return (
-    <div className="px-6 py-16 md:py-20">
-      <div className="mx-auto max-w-4xl">
-        <section className="relative overflow-hidden rounded-[2rem] border border-surface-800 bg-surface-900 px-6 py-10 md:px-10 md:py-12">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.10),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(255,255,255,0.06),transparent_28%)]" />
-          <div className="relative">
-            <div className="mb-4 inline-flex items-center gap-3 rounded-full border border-surface-700 bg-surface-950/70 px-4 py-2">
-              <Image
-                src="/icon-192.png"
-                alt="Yaver logo"
-                width={28}
-                height={28}
-                className="rounded-md"
-              />
-              <span className="text-xs font-semibold uppercase tracking-[0.24em] text-surface-400">
-                Install Yaver
-              </span>
+    <main className="px-5 py-12 md:px-6 md:py-20">
+      <div className="mx-auto max-w-5xl">
+        <header className="relative overflow-hidden rounded-[2rem] border border-surface-800 bg-surface-900 px-6 py-10 md:px-10 md:py-14">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(124,92,255,0.22),transparent_38%),radial-gradient(circle_at_bottom_left,rgba(52,211,153,0.10),transparent_34%)]" />
+          <div className="relative max-w-3xl">
+            <div className="mb-5 inline-flex items-center gap-3 rounded-full border border-surface-700 bg-surface-950/70 px-4 py-2">
+              <Image src="/icon-192.png" alt="Yaver" width={28} height={28} className="rounded-md" />
+              <span className="text-xs font-semibold uppercase tracking-[0.22em] text-surface-400">Downloads</span>
             </div>
-            <h1 className="max-w-3xl text-4xl font-bold tracking-tight text-surface-50 md:text-5xl">
-              One install path. npm.
+            <h1 className="text-4xl font-bold tracking-tight text-surface-50 md:text-6xl">
+              Your development machine, in your pocket.
             </h1>
-            <p className="mt-4 max-w-2xl text-sm leading-6 text-surface-400 md:text-base">
-              Yaver ships exclusively through <code>npm install -g yaver-cli</code> on every supported
-              platform: macOS (Apple Silicon and Intel), Linux (x64 and arm64 — Raspberry Pi, AWS Graviton,
-              ARM VPSes, etc.), and Windows via WSL2. The npm package detects your platform and
-              downloads the matching, signed and notarized agent binary into <code>~/.yaver/bin/</code>.
-            </p>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-surface-500">
-              The agent is one install path; the client side is multi-surface. Start with iOS or Android,
-              then add watch, TV, car, or AR/VR surfaces when those are the right preview or control targets.
-            </p>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-surface-500">
-              Why one path: a single <code>yaver</code> command, owned by the user who runs it (no
-              system-user split, no <code>/root/.yaver</code> vs <code>/home/yaver/.yaver</code> drift),
-              auto-updates with <code>npm install -g yaver-cli@latest</code>, and avoids multiple
-              competing install channels on the same machine. Legacy packaging paths are removed.
-            </p>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-surface-500">
-              Install Node.js 18+ however you normally manage Node. That does not change Yaver
-              distribution: <code>yaver-cli</code> is npm-only, and upgrades must also happen through
-              npm so one machine does not accumulate multiple competing <code>yaver</code> binaries.
+            <p className="mt-5 max-w-2xl text-base leading-7 text-surface-400 md:text-lg">
+              Install Yaver on your computer, add the phone app, and continue using the coding agent and model you already have.
             </p>
           </div>
-        </section>
+        </header>
 
-        <section className="mt-10 rounded-2xl border border-surface-800 bg-surface-900 p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">
-            One-shot install
-          </p>
-          <h2 className="mt-2 text-2xl font-semibold text-surface-50">
-            Install with npm
-          </h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-surface-400">
-            Requires Node.js 18+. The <code>npm install -g</code> step installs a tiny shim into your
-            global npm <code>bin/</code> dir; first run downloads the matching agent binary from
-            GitHub Releases into <code>~/.yaver/bin/&lt;version&gt;/</code> and verifies its signature.
-          </p>
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
-            <CommandCard
-              label="Install"
-              commands={[
-                "npm install -g yaver-cli",
-                "yaver auth",
-                "yaver serve",
-              ]}
-            />
-            <CommandCard
-              label="Update"
-              commands={[
-                "npm install -g yaver-cli@latest",
-                "yaver --version",
-              ]}
-            />
+        <section className="mt-12" aria-labelledby="desktop-downloads">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-violet-400">1 · Desktop</p>
+          <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 id="desktop-downloads" className="text-3xl font-semibold text-surface-50">Get Yaver Desktop</h2>
+              <p className="mt-2 text-sm text-surface-400">The signed GUI includes the Yaver Go agent. Version {GUI_VERSION}.</p>
+            </div>
+            <a href="https://github.com/yaver-io/yaver.io/releases" className="text-sm text-surface-400 underline hover:text-surface-50">
+              All desktop releases
+            </a>
           </div>
-        </section>
 
-        <section className="mt-10 rounded-2xl border border-surface-800 bg-surface-900 p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">
-            Desktop app (GUI)
-          </p>
-          <h2 className="mt-2 text-2xl font-semibold text-surface-50">
-            Yaver for macOS, Windows &amp; Linux
-          </h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-surface-400">
-            A native desktop shell around the Yaver dashboard — sign in (OAuth or email) and vibe
-            tasks straight from your computer. It embeds the same Go agent, so the machine you install
-            it on is itself a Yaver node: vibe it directly from the desktop app, or from your phone,
-            TV, watch, or any other device. Includes native tray, task notifications, and deep links.
-          </p>
           <div className="mt-6 grid gap-4 md:grid-cols-3">
-            <a
-              href={GUI_DOWNLOADS.macArm64}
-              className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
-            >
-              <div className="text-sm font-semibold text-surface-50">macOS</div>
-              <div className="mt-1 text-xs text-surface-500">Signed + notarized DMG · Apple Silicon</div>
-              <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
-            </a>
-            <a
-              href={GUI_DOWNLOADS.winX64}
-              className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
-            >
-              <div className="text-sm font-semibold text-surface-50">Windows</div>
-              <div className="mt-1 text-xs text-surface-500">NSIS installer · x64</div>
-              <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
-            </a>
-            <a
-              href={GUI_DOWNLOADS.linuxX64}
-              className="rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-surface-500"
-            >
-              <div className="text-sm font-semibold text-surface-50">Linux</div>
-              <div className="mt-1 text-xs text-surface-500">AppImage · x64</div>
-              <div className="mt-3 text-xs font-medium text-emerald-400">Download →</div>
-            </a>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-3 text-xs">
-            <a href={GUI_DOWNLOADS.macX64} className="text-surface-300 underline hover:text-surface-50">macOS Intel DMG</a>
-            <a href={GUI_DOWNLOADS.linuxArm64} className="text-surface-300 underline hover:text-surface-50">Linux arm64 AppImage</a>
-            <a href={GUI_DOWNLOADS.debX64} className="text-surface-300 underline hover:text-surface-50">Ubuntu/Debian x64 package</a>
-            <a href={GUI_DOWNLOADS.debArm64} className="text-surface-300 underline hover:text-surface-50">Ubuntu/Debian arm64 package</a>
-          </div>
-          <p className="mt-4 text-xs text-surface-500">
-            Prefer the terminal? <code>npm install -g yaver-cli</code> provides both the console and
-            the verified <code>yaver desktop install</code> companion command. The GUI remains optional
-            and adopts an existing daemon instead of creating a second agent. All releases:{" "}
-            <a
-              href="https://github.com/yaver-io/yaver.io/releases"
-              className="text-surface-300 underline hover:text-surface-50"
-            >
-              GitHub Releases
-            </a>
-            .
-          </p>
-        </section>
-
-
-        <section className="mt-10 grid gap-5 md:grid-cols-2">
-          <div className="rounded-2xl border border-surface-800 bg-surface-900 p-6">
-            <h2 className="text-lg font-semibold text-surface-50">macOS</h2>
-            <p className="mt-3 text-sm leading-6 text-surface-400">
-              Apple Silicon and Intel. Binary is Developer ID signed and notarized — no Gatekeeper
-              prompts. Once Node.js 18+ is present, install Yaver with npm.
-            </p>
-            <div className="mt-5 rounded-xl bg-surface-950 p-4 font-mono text-[13px] text-surface-300">
-              <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli</span></div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-surface-800 bg-surface-900 p-6">
-            <h2 className="text-lg font-semibold text-surface-50">Linux (x64 and arm64)</h2>
-            <p className="mt-3 text-sm leading-6 text-surface-400">
-              Ubuntu, Debian, Raspberry Pi 4/5, AWS Graviton, Oracle Cloud ARM, ARM VPSes, etc.
-              Once Node.js 18+ is present, install and update Yaver only with npm.
-            </p>
-            <div className="mt-5 rounded-xl bg-surface-950 p-4 font-mono text-[13px] text-surface-300">
-              <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli</span></div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-surface-800 bg-surface-900 p-6">
-            <h2 className="text-lg font-semibold text-surface-50">Raspberry Pi image</h2>
-            <p className="mt-3 text-sm leading-6 text-surface-400">
-              The Pi image is just a convenience base image for a headless dev node. It does not change
-              distribution. After boot, install <code>yaver-cli</code> with npm on the Pi itself, and
-              update it later with <code>npm install -g yaver-cli@latest</code> only.
-            </p>
-            <div className="mt-5 rounded-xl bg-surface-950 p-4 font-mono text-[13px] text-surface-300">
-              <div className="mb-2 text-surface-500"># on the Pi after first boot:</div>
-              <div className="mb-2"><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli</span></div>
-              <div className="mb-2"><span className="text-surface-500">$</span> <span className="select-all">yaver auth --headless</span></div>
-              <div className="mb-2"><span className="text-surface-500">$</span> <span className="select-all">yaver serve --install-systemd</span></div>
-              <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli@latest</span></div>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <DownloadButton href="/manuals/raspberry-pi" primary>
-                Raspberry Pi manual
-              </DownloadButton>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-surface-800 bg-surface-900 p-6">
-            <h2 className="text-lg font-semibold text-surface-50">Windows (via WSL2)</h2>
-            <p className="mt-3 text-sm leading-6 text-surface-400">
-              Native Windows is not supported. Run Yaver inside WSL2; <code>yaver auth</code> hands
-              browser sign-in off to Windows automatically. Once Node.js 18+ is present in WSL2,
-              install Yaver with npm.
-            </p>
-            <div className="mt-5 rounded-xl bg-surface-950 p-4 font-mono text-[13px] text-surface-300">
-              <div className="mb-2 text-surface-500"># inside WSL2:</div>
-              <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli</span></div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-surface-800 bg-surface-900 p-6">
-            <h2 className="text-lg font-semibold text-surface-50">Headless / SSH-only</h2>
-            <p className="mt-3 text-sm leading-6 text-surface-400">
-              Pi, VPS, remote Linux box: install via npm, then sign in via short code. No browser on the
-              target machine required. Upgrades are still npm-only here too.
-            </p>
-            <div className="mt-5 rounded-xl bg-surface-950 p-4 font-mono text-[12px] text-surface-300">
-              <div className="mb-2"><span className="text-surface-500">$</span> <span className="select-all">sudo npm install -g yaver-cli</span></div>
-              <div className="mb-2"><span className="text-surface-500">$</span> <span className="select-all">yaver auth --headless</span></div>
-              <div className="mb-1 text-surface-500">Go to https://yaver.io/auth/device?code=XXXX-YYYY</div>
-              <div><span className="text-surface-500">$</span> <span className="select-all">yaver serve --install-systemd  # survives reboots</span></div>
-            </div>
+            <PlatformCard icon="" title="macOS" detail="Signed and notarized DMG for Apple Silicon." href={GUI_DOWNLOADS.macArm64}>
+              <a href={GUI_DOWNLOADS.macX64} className="underline hover:text-surface-50">Intel DMG</a>
+            </PlatformCard>
+            <PlatformCard icon="⊞" title="Windows" detail="Signed, standard-user installer for Windows x64." href={GUI_DOWNLOADS.winX64} />
+            <PlatformCard icon="🐧" title="Linux" detail="Ubuntu/Debian x64 package. Installs with apt and appears in your app launcher." href={GUI_DOWNLOADS.debX64} action="Download .deb">
+              <a href={GUI_DOWNLOADS.linuxX64} className="underline hover:text-surface-50">x64 AppImage</a>
+              <a href={GUI_DOWNLOADS.debArm64} className="underline hover:text-surface-50">arm64 .deb</a>
+              <a href={GUI_DOWNLOADS.linuxArm64} className="underline hover:text-surface-50">arm64 AppImage</a>
+              <a href={GUI_DOWNLOADS.rpmX64} className="underline hover:text-surface-50">x64 RPM</a>
+              <a href={GUI_DOWNLOADS.rpmArm64} className="underline hover:text-surface-50">arm64 RPM</a>
+            </PlatformCard>
           </div>
         </section>
 
-        <section className="mt-10 grid gap-5 md:grid-cols-2">
-          <div className="rounded-2xl border border-surface-800 bg-surface-900 p-6">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold text-surface-50">Android app</h2>
-              <span className="rounded-full border border-surface-700 bg-surface-950 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-surface-400">
-                APK &middot; QR install
-              </span>
+        <section className="mt-12" aria-labelledby="mobile-downloads">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-400">2 · Mobile</p>
+          <h2 id="mobile-downloads" className="mt-2 text-3xl font-semibold text-surface-50">Add your phone or tablet</h2>
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <article className={card}>
+              <div className="text-3xl" aria-hidden="true">🤖</div>
+              <h3 className="mt-4 text-xl font-semibold text-surface-50">Android</h3>
+              <p className="mt-2 text-sm leading-6 text-surface-400">Install the latest signed APK directly, scan a QR, or use Google Play.</p>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <a href="https://download.yaver.io/latest.apk" className={primaryButton}>Download APK</a>
+                <a href="https://download.yaver.io" className={secondaryButton}>Show QR</a>
+                <a href="https://play.google.com/store/apps/details?id=io.yaver.mobile" className={secondaryButton}>Google Play</a>
+              </div>
+            </article>
+            <article className={card}>
+              <div className="text-3xl" aria-hidden="true">📱</div>
+              <h3 className="mt-4 text-xl font-semibold text-surface-50">iPhone &amp; iPad</h3>
+              <p className="mt-2 text-sm leading-6 text-surface-400">Install from the App Store, then sign in with the same Yaver account.</p>
+              <a href="https://apps.apple.com/us/app/yaver-io/id6760467669" className={`${primaryButton} mt-5`}>Open App Store</a>
+            </article>
+          </div>
+        </section>
+
+        <section className={`${card} mt-12`} aria-labelledby="cli-install">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-surface-500">3 · CLI or remote box</p>
+          <div className="mt-2 grid gap-7 md:grid-cols-[1fr_1.05fr] md:items-center">
+            <div>
+              <h2 id="cli-install" className="text-2xl font-semibold text-surface-50">One command for the agent</h2>
+              <p className="mt-3 text-sm leading-6 text-surface-400">
+                Requires Node.js 18+. This installs the verified Go agent and, on a graphical desktop, the desktop GUI. Headless Linux stays CLI-only.
+              </p>
+              <p className="mt-3 text-sm leading-6 text-emerald-300">
+                Already use OpenCode with DeepSeek? Yaver keeps your provider and model settings, adds only its MCP connection, and uses that existing runner.
+              </p>
             </div>
-            <p className="mt-3 text-sm leading-6 text-surface-400">
-              Scan the QR from your phone or tap through to download the latest signed APK. No Node,
-              no CLI &mdash; the Android app is one native surface that runs your projects and drives
-              your agents. Also on Google Play.
-            </p>
-            <div className="mt-5 flex flex-wrap gap-3">
-              <DownloadButton href="https://download.yaver.io" primary>
-                Open QR install page
-              </DownloadButton>
-              <a
-                href="https://download.yaver.io/latest.apk"
-                className="inline-flex items-center justify-center rounded-xl border border-surface-700 px-4 py-2.5 text-sm font-semibold text-surface-200 transition hover:border-surface-500 hover:text-surface-50"
-              >
-                Download APK directly
-              </a>
-              <a
-                href="https://play.google.com/store/apps/details?id=io.yaver.mobile"
-                className="inline-flex items-center justify-center rounded-xl border border-surface-700 px-4 py-2.5 text-sm font-semibold text-surface-200 transition hover:border-surface-500 hover:text-surface-50"
-              >
-                Google Play
-              </a>
+            <CommandBlock commands={["npm install -g yaver-cli", "yaver auth", "yaver serve"]} />
+          </div>
+        </section>
+
+        <section className="mt-6 grid gap-4 md:grid-cols-2">
+          <article className={card}>
+            <h2 className="text-xl font-semibold text-surface-50">SSH-only Linux / VPS</h2>
+            <p className="mt-2 text-sm leading-6 text-surface-400">Pair without opening a browser on the server, then keep Yaver running after reboot.</p>
+            <div className="mt-5">
+              <CommandBlock commands={["npm install -g yaver-cli", "yaver auth --headless", "yaver serve --install-systemd"]} />
             </div>
-          </div>
-
-          <div className="rounded-2xl border border-surface-800 bg-surface-900 p-6">
-            <h2 className="text-lg font-semibold text-surface-50">iOS app</h2>
-            <p className="mt-3 text-sm leading-6 text-surface-400">
-              iPhone and iPad ship through the App Store &mdash; Apple does not allow public APK-style
-              sideloading. Install from the store, then sign in with the same account as your desktop
-              agent.
-            </p>
-            <div className="mt-5 flex flex-wrap gap-3">
-              <DownloadButton href="https://apps.apple.com/us/app/yaver-io/id6760467669" primary>
-                App Store
-              </DownloadButton>
+          </article>
+          <article className={card}>
+            <h2 className="text-xl font-semibold text-surface-50">Runner integration</h2>
+            <p className="mt-2 text-sm leading-6 text-surface-400">Yaver detects installed Claude Code, Codex, or OpenCode. To refresh one connection manually:</p>
+            <div className="mt-5">
+              <CommandBlock commands={["yaver mcp setup opencode"]} />
             </div>
-          </div>
+            <Link href="/docs/mcp" className="mt-4 inline-block text-sm text-surface-300 underline hover:text-surface-50">MCP guide</Link>
+          </article>
         </section>
 
-        <section className="mt-10 rounded-2xl border border-surface-800 bg-surface-900 p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">
-            Additional surfaces
-          </p>
-          <h2 className="mt-2 text-lg font-semibold text-surface-50">
-            Watch, TV, car, and AR/VR
-          </h2>
-          <p className="mt-3 text-sm leading-6 text-surface-400">
-            Yaver is not limited to the phone. Mobile is the first pairing and deepest debug surface,
-            while watch, TV, car, and AR/VR clients extend the same agent loop for approvals,
-            dashboards, voice summaries, and spatial previews. Availability depends on the target
-            platform and release channel.
-          </p>
-        </section>
-
-        <section className="mt-10 rounded-2xl border border-surface-800 bg-surface-900 p-6">
-          <h2 className="text-lg font-semibold text-surface-50">Sign-in providers</h2>
-          <p className="mt-3 text-sm leading-6 text-surface-400">
-            <code>yaver auth</code> opens the browser to sign in with any of the providers below. Linking
-            multiple identities to the same account is supported on web and mobile.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {[
-              { name: "Google (Gmail)", emoji: "\u{1F4E7}" },
-              { name: "Apple", emoji: "" },
-              { name: "Microsoft / O365", emoji: "\u{1F5C2}" },
-              { name: "GitHub", emoji: "\u{1F431}" },
-              { name: "GitLab", emoji: "\u{1F98A}" },
-              { name: "Discord", emoji: "\u{1F3AE}" },
-              { name: "Slack", emoji: "\u{1F4AC}" },
-              { name: "Email / password", emoji: "✉" },
-            ].map((p) => (
-              <span
-                key={p.name}
-                className="inline-flex items-center gap-1.5 rounded-full border border-surface-700 bg-surface-950 px-3 py-1 text-[12px] text-surface-300"
-              >
-                <span>{p.emoji}</span>
-                {p.name}
-              </span>
-            ))}
-          </div>
-          <p className="mt-4 text-xs text-surface-500">
-            See{" "}
-            <Link href="/manuals/account-linking" className="underline hover:text-surface-300">
-              account linking
-            </Link>{" "}
-            for merging accounts you made by accident.
-          </p>
-        </section>
-
-        <section className="mt-10 rounded-2xl border border-surface-800 bg-surface-900 p-6">
-          <h2 className="text-lg font-semibold text-surface-50">
-            Use from Claude Code, Codex, or opencode (MCP)
-          </h2>
-          <p className="mt-3 text-sm leading-6 text-surface-400">
-            Install the CLI directly, or use the MCP server from Claude Code, Codex, or opencode.
-            MCP needs no global install &mdash; <code>npx</code> pulls it on first run.
-          </p>
-          <div className="mt-5 space-y-2 rounded-xl bg-surface-950 p-4 font-mono text-[12px] text-surface-300">
-            <div className="text-surface-500"># direct CLI</div>
-            <div><span className="text-surface-500">$</span> <span className="select-all">npm install -g yaver-cli</span></div>
-            <div><span className="text-surface-500">$</span> <span className="select-all">yaver auth</span></div>
-            <div className="mt-2 text-surface-500"># or as MCP</div>
-            <div className="text-surface-500"># Claude Code</div>
-            <div><span className="text-surface-500">$</span> <span className="select-all">claude mcp add --scope user yaver -- npx -y yaver-cli yaver-mcp</span></div>
-            <div className="mt-2 text-surface-500"># Codex</div>
-            <div><span className="text-surface-500">$</span> <span className="select-all">codex mcp add yaver -- npx -y yaver-cli yaver-mcp</span></div>
-            <div className="mt-2 text-surface-500"># opencode</div>
-            <div><span className="text-surface-500">$</span> <span className="select-all">npx -y -p yaver-cli yaver mcp setup opencode</span></div>
-          </div>
-          <p className="mt-4 text-xs text-surface-500">
-            Already installed globally? <code>yaver mcp setup claude-code</code> writes the same entry,
-            and <code>yaver auth</code> auto-registers every installed runner on first sign-in.
-            Published to the official MCP registry as <code>io.github.yaver-io/yaver</code>. Full
-            tool list and HTTP/remote setup:{" "}
-            <Link href="/docs/mcp" className="underline hover:text-surface-300">
-              MCP guide
-            </Link>
-            .
-          </p>
-        </section>
-
-        <section className="mt-10 rounded-2xl border border-surface-800 bg-surface-900 p-6">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-surface-500">
-            Notes
-          </p>
-          <div className="mt-4 space-y-3 text-sm leading-6 text-surface-400">
-            <p>
-              The npm package downloads the agent binary from GitHub Releases on first run and caches
-              it under <code>~/.yaver/bin/&lt;version&gt;/</code>. <code>npm install -g yaver-cli@latest</code>
-              ships the new shim; the next <code>yaver</code> invocation downloads the matching binary.
-            </p>
-            <p>
-              Older install channels are unsupported. They will not receive future updates and should
-              not be used.
-            </p>
-            <p>
-              The rule is simple: install Node however you want, but install and upgrade
-              <code> yaver-cli </code>
-              only with npm. That keeps one active Yaver binary path per machine.
-            </p>
-          </div>
-          <div className="mt-5 flex flex-wrap gap-3">
-            <DownloadButton href="/manuals/cli-setup" primary>
-              CLI setup
-            </DownloadButton>
-            <Link
-              href="/manuals/relay-setup"
-              className="inline-flex items-center justify-center rounded-xl border border-surface-700 px-4 py-2.5 text-sm font-semibold text-surface-200 transition hover:border-surface-500 hover:text-surface-50"
-            >
-              Relay setup
-            </Link>
+        <section className={`${card} mt-12`} aria-labelledby="raspberry-pi">
+          <div className="grid gap-7 md:grid-cols-[1fr_1.05fr] md:items-center">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-surface-500">Raspberry Pi</p>
+              <h2 id="raspberry-pi" className="mt-2 text-2xl font-semibold text-surface-50">Turn a Pi into a Yaver node</h2>
+              <p className="mt-3 text-sm leading-6 text-surface-400">Use Raspberry Pi OS 64-bit on Pi 4/5, install Node.js 18+, then run the same headless setup.</p>
+              <Link href="/manuals/raspberry-pi" className={`${secondaryButton} mt-5`}>Raspberry Pi guide</Link>
+            </div>
+            <CommandBlock commands={["npm install -g yaver-cli", "yaver auth --headless", "yaver serve --install-systemd"]} />
           </div>
         </section>
       </div>
-    </div>
+    </main>
   );
 }

@@ -13,6 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { desktop, installedDesktopCandidates } = require("./commands/desktop");
+const { codingRunnerBootstrapPlan } = require("./runner-bootstrap-policy");
 
 const CODING_RUNNER_BOOTSTRAP = [
   { command: "claude", pkg: "@anthropic-ai/claude-code", label: "Claude Code" },
@@ -81,14 +82,15 @@ function addNpmGlobalBinToProcessPath() {
 }
 
 function installMissingCodingRunners() {
-  const missing = CODING_RUNNER_BOOTSTRAP.filter((entry) => !commandExists(entry.command));
-  if (missing.length === 0) {
-    log("Claude Code, Codex, and OpenCode already exist on PATH.");
+  const plan = codingRunnerBootstrapPlan(CODING_RUNNER_BOOTSTRAP, commandExists);
+  if (plan.installed.length > 0) {
+    const labels = plan.installed.map((entry) => entry.label).join(", ");
+    log(`Using existing coding runner${plan.installed.length === 1 ? "" : "s"}: ${labels}. Other runners were not installed.`);
     return;
   }
 
-  const packages = missing.map((entry) => entry.pkg);
-  const labels = missing.map((entry) => entry.label).join(", ");
+  const packages = plan.toInstall.map((entry) => entry.pkg);
+  const labels = plan.toInstall.map((entry) => entry.label).join(", ");
   try {
     installGlobalNpmPackages(packages);
     addNpmGlobalBinToProcessPath();

@@ -65,6 +65,51 @@ ensure_mobile_dependencies() {
 
 ensure_mobile_dependencies
 
+# A checkout intentionally carries only the hand-maintained iOS overlays. The
+# Podfile, workspace, launch storyboard, assets, and Expo support files are
+# generated state. The canonical deploy used to assume some earlier local run
+# had produced them, then failed inside restore-ios-splash-storyboard.js with
+# "run Expo's iOS prebuild first" — a diagnosis with no route to its fix.
+#
+# Generate the missing project here, while snapshotting every tracked iOS
+# overlay from the CURRENT working tree. This preserves uncommitted native
+# work as well as committed files, and lets Expo own only its generated state.
+IOS_OVERLAY_SNAPSHOT=""
+restore_ios_overlay_snapshot() {
+  if [ -n "$IOS_OVERLAY_SNAPSHOT" ] && [ -f "$IOS_OVERLAY_SNAPSHOT" ]; then
+    tar -xf "$IOS_OVERLAY_SNAPSHOT" -C "$ROOT"
+    rm -f "$IOS_OVERLAY_SNAPSHOT"
+    IOS_OVERLAY_SNAPSHOT=""
+  fi
+}
+ensure_generated_ios_project() {
+  if [ -f "$ROOT/mobile/ios/Podfile" ] && \
+     [ -f "$ROOT/mobile/ios/Yaver/SplashScreen.storyboard" ] && \
+     [ -f "$ROOT/mobile/ios/Yaver.xcworkspace/contents.xcworkspacedata" ]; then
+    return 0
+  fi
+
+  echo "Generated iOS project is incomplete — running Expo prebuild and preserving Yaver's tracked native overlays."
+  IOS_OVERLAY_SNAPSHOT="$(mktemp /tmp/yaver-ios-overlays.XXXXXX.tar)"
+  git -C "$ROOT" ls-files -z mobile/ios \
+    | tar --null -T - -cf "$IOS_OVERLAY_SNAPSHOT" -C "$ROOT"
+  trap restore_ios_overlay_snapshot EXIT HUP INT TERM
+
+  prebuild_rc=0
+  # Deploys are non-interactive. We already snapshot and restore every tracked
+  # native overlay above, so bypass Expo's dirty-tree confirmation explicitly.
+  (cd "$ROOT/mobile" && EXPO_NO_GIT_STATUS=1 npx expo prebuild --platform ios --clean --no-install) || prebuild_rc=$?
+  restore_ios_overlay_snapshot
+  trap - EXIT HUP INT TERM
+  if [ "$prebuild_rc" -ne 0 ]; then
+    echo "ERROR: Expo could not regenerate the missing iOS project (exit $prebuild_rc)." >&2
+    echo "       Yaver's tracked native overlays were restored; fix the prebuild error and rerun the deploy." >&2
+    exit "$prebuild_rc"
+  fi
+}
+
+ensure_generated_ios_project
+
 # Keep the Apple Watch companion target present in the committed iOS project.
 # The phone bridge is injected by Expo prebuild; this target is what makes the
 # real paired watch app install alongside the iPhone app.
@@ -106,10 +151,14 @@ APP_MARKETING_VERSION="$(printf '%s\n' "$MARKETING_VERSIONS" | head -1)"
 # longer be written.
 DERIVED="${YAVER_IOS_DERIVED_DATA:-$HOME/.yaver/build/ios}"
 CACHE_STATE="warm"
-MIN_FREE_GIB="${YAVER_IOS_MIN_FREE_GIB_WARM:-3}"
+# A partially-populated DerivedData directory is not proof that the next
+# archive is incremental. 2026-08-22: a failed 4.7 GB tree selected the old
+# 3 GiB warm threshold; Xcode rebuilt the app target and filled APFS to zero.
+# Keep the warm floor high enough for another full app link + archive/export.
+MIN_FREE_GIB="${YAVER_IOS_MIN_FREE_GIB_WARM:-10}"
 if [ ! -d "$DERIVED/Build" ]; then
   CACHE_STATE="COLD (first archive here — expect the slow one)"
-  MIN_FREE_GIB="${YAVER_IOS_MIN_FREE_GIB_COLD:-8}"
+  MIN_FREE_GIB="${YAVER_IOS_MIN_FREE_GIB_COLD:-10}"
 fi
 AVAILABLE_KB="$(df -Pk "$ROOT" | awk 'END { print $4 }')"
 REQUIRED_KB=$((MIN_FREE_GIB * 1024 * 1024))
