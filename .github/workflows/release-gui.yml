@@ -189,11 +189,15 @@ jobs:
         run: |
           mkdir -p dist/update-metadata
           if [[ "${{ matrix.platform }}" == "mac" ]]; then
-            test -f dist/latest-mac.yml
-            cp dist/latest-mac.yml "dist/update-metadata/latest-${{ matrix.arch }}-mac.yml"
+            metadata=$(find dist -maxdepth 1 -type f -name 'latest-mac*.yml' -print -quit)
+            test -n "$metadata"
+            cp "$metadata" "dist/update-metadata/latest-${{ matrix.arch }}-mac.yml"
           else
-            test -f dist/latest-linux.yml
-            cp dist/latest-linux.yml "dist/update-metadata/latest-${{ matrix.arch }}-linux.yml"
+            # electron-builder uses latest-linux.yml on x64 and
+            # latest-linux-arm64.yml on arm64.
+            metadata=$(find dist -maxdepth 1 -type f -name 'latest-linux*.yml' -print -quit)
+            test -n "$metadata"
+            cp "$metadata" "dist/update-metadata/latest-${{ matrix.arch }}-linux.yml"
           fi
       - name: Stage Windows architecture update metadata
         if: matrix.platform == 'win'
