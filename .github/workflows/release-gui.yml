@@ -246,7 +246,15 @@ jobs:
         shell: bash
         run: |
           cd dist-artifacts
-          sha256sum * > checksums.txt
+          # Architecture jobs stage updater manifests under a directory so
+          # upload-artifact can collect them. Releases are flat assets.
+          if [[ -d update-metadata ]]; then
+            find update-metadata -maxdepth 1 -type f -exec mv {} . \;
+            rmdir update-metadata
+          fi
+          find . -maxdepth 1 -type f ! -name checksums.txt -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > checksums.txt
           cat checksums.txt
       - name: Attest desktop release provenance
         uses: actions/attest@v4
