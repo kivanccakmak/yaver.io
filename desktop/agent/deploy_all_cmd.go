@@ -439,7 +439,11 @@ func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, swe
 		return fmt.Errorf("git commit: %w", err)
 	}
 
-	if err := ctx.runCmd(repoRoot, "git", "push", "github", "main"); err != nil {
+	releaseRemote, err := yaverReleaseRemote(repoRoot)
+	if err != nil {
+		return err
+	}
+	if err := ctx.runCmd(repoRoot, "git", "push", releaseRemote, "main"); err != nil {
 		return fmt.Errorf("push main: %w", err)
 	}
 
@@ -458,15 +462,11 @@ func releaseCLIWorkflowArgs() []string {
 }
 
 func requireCleanRepoForRelease(repoRoot string) error {
-	// Must be a git repo with a `github` remote.
-	remotes := exec.Command("git", "remote")
-	remotes.Dir = repoRoot
-	out, err := remotes.Output()
-	if err != nil {
-		return fmt.Errorf("not a git repo: %w", err)
-	}
-	if !strings.Contains(string(out), "github") {
-		return fmt.Errorf("no `github` remote configured — release-cli.yml is wired to the github remote")
+	// Prove that a remote targets the canonical repository. Many normal clones
+	// call it origin; requiring the literal name "github" made the documented
+	// release path fail on an otherwise correct checkout.
+	if _, err := yaverReleaseRemote(repoRoot); err != nil {
+		return err
 	}
 
 	// Must be on main.
@@ -495,6 +495,24 @@ func requireCleanRepoForRelease(repoRoot string) error {
 	}
 
 	return nil
+}
+
+func yaverReleaseRemote(repoRoot string) (string, error) {
+	for _, name := range []string{"github", "origin"} {
+		cmd := exec.Command("git", "remote", "get-url", name)
+		cmd.Dir = repoRoot
+		out, err := cmd.Output()
+		if err != nil {
+			continue
+		}
+		url := strings.TrimSpace(string(out))
+		lowerURL := strings.ToLower(url)
+		if strings.Contains(lowerURL, "github.com/yaver-io/yaver.io") ||
+			strings.Contains(lowerURL, "github.com:yaver-io/yaver.io") {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("no git remote named github or origin targets github.com/yaver-io/yaver.io")
 }
 
 func readCliVersion(repoRoot string) (string, error) {

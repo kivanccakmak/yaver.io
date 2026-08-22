@@ -217,11 +217,20 @@ case "$target" in
     ;;
   npm|cli)
     require_deploy_boundary
-    if ! command -v yaver >/dev/null 2>&1; then
-      echo "ERROR: yaver CLI is required for deploy target '$target'." >&2
+    if ! command -v go >/dev/null 2>&1; then
+      echo "ERROR: Go is required to run the repository's CLI release controller." >&2
       exit 2
     fi
-    run yaver deploy npm ${pass_args[@]+"${pass_args[@]}"}
+    # Release from the checked-out controller source. The globally installed
+    # npm wrapper can legitimately be one release behind and its generic
+    # project detector may interpret this monorepo as web-headless, publishing
+    # the wrong package. The canonical repo lane must execute the code it is
+    # about to release.
+    if [ "$dry_run" -eq 1 ]; then
+      (cd "$ROOT/desktop/agent" && go run . deploy npm --dry-run)
+    else
+      (cd "$ROOT/desktop/agent" && go run . deploy npm)
+    fi
     ;;
   desktop|gui)
     require_deploy_boundary
