@@ -43,6 +43,8 @@ func TestWedgeProfileKeepsTheWedge(t *testing.T) {
 		"list_runners",              // which runners exist
 		"runner_auth_browser_start", // REMOTE OAUTH — dead on the user's box today
 		"runner_auth_status",
+		"tmux_list_sessions", "tmux_adopt_session", // adopt an existing runner session
+		"tmux_detach_session", "tmux_send_input",
 		"web_preview_start",    // browser lane
 		"vibe_preview_start",   // vibing
 		"mobile_hermes_reload", // Hermes render path

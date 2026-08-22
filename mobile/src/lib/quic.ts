@@ -5713,16 +5713,23 @@ export class QuicClient {
 
   /** List all tmux sessions on the connected machine. */
   async listTmuxSessions(): Promise<TmuxSession[]> {
-    if (!this.isConnected && !this.hasConnectionInfo) return [];
+    if (!this.isConnected && !this.hasConnectionInfo) {
+      throw new Error("Connect to a machine before scanning its terminal sessions.");
+    }
     try {
       const res = await this.fetchWithTimeout(`${this.baseUrl}/tmux/sessions`, {
         headers: this.authHeaders,
-      });
-      if (!res.ok) return [];
+      }, 8_000);
+      if (!res.ok) {
+        throw new Error(await responseErrorMessage(res, `Session scan failed (${res.status})`));
+      }
       const data = await res.json();
       return data.sessions || [];
-    } catch {
-      return [];
+    } catch (error) {
+      if (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message))) {
+        throw new Error("Session scan timed out after 8s. The machine is connected, but /tmux/sessions did not answer.");
+      }
+      throw error;
     }
   }
 

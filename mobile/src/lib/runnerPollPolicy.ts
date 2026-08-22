@@ -82,10 +82,62 @@ export interface ComparableRunner {
   installed?: boolean;
   ready?: boolean;
   authConfigured?: boolean;
+  authSource?: string;
   error?: string;
   warning?: string;
   isDefault?: boolean;
   models?: { id?: string; name?: string; isDefault?: boolean }[];
+}
+
+/** Canonical auth fields returned by `/runner-auth/status`. Kept structural so
+ * this policy module remains independent of the transport implementation. */
+export interface ComparableRunnerAuthStatus {
+  id?: string;
+  installed?: boolean;
+  ready?: boolean;
+  authConfigured?: boolean;
+  authSource?: string;
+  warning?: string;
+  error?: string;
+}
+
+/**
+ * Reconcile the model-rich `/agent/runners` inventory with the dedicated auth
+ * status operation. The latter is what Settings and the box audit use; Tasks
+ * previously trusted only the inventory row, so a stale negative rendered
+ * "needs sign-in" even while `codex login status` was authenticated.
+ *
+ * IDs absent from the auth response are left untouched. This makes the merge
+ * additive for old agents and prevents a partial audit from erasing a runner.
+ */
+export function reconcileRunnerAuthStatus<T extends ComparableRunner>(
+  runners: T[],
+  authRows: ComparableRunnerAuthStatus[] | null,
+): T[] {
+  if (!authRows) return runners;
+  const authByID = new Map(
+    authRows
+      .filter((row) => String(row.id ?? "").trim() !== "")
+      .map((row) => [String(row.id).trim().toLowerCase(), row]),
+  );
+  let changed = false;
+  const next = runners.map((runner) => {
+    const auth = authByID.get(String(runner.id ?? "").trim().toLowerCase());
+    if (!auth) return runner;
+    const merged = {
+      ...runner,
+      installed: auth.installed ?? runner.installed,
+      ready: auth.ready ?? runner.ready,
+      authConfigured: auth.authConfigured ?? runner.authConfigured,
+      authSource: auth.authSource ?? (runner as T & { authSource?: string }).authSource,
+      warning: auth.warning ?? "",
+      error: auth.error ?? "",
+    } as T;
+    if (sameRunnerList([runner], [merged])) return runner;
+    changed = true;
+    return merged;
+  });
+  return changed ? next : runners;
 }
 
 function sameModels(a: ComparableRunner["models"], b: ComparableRunner["models"]): boolean {
@@ -127,6 +179,7 @@ export function sameRunnerList(a: ComparableRunner[], b: ComparableRunner[]): bo
       p.installed !== q.installed ||
       p.ready !== q.ready ||
       p.authConfigured !== q.authConfigured ||
+      (p.authSource ?? "") !== (q.authSource ?? "") ||
       (p.error ?? "") !== (q.error ?? "") ||
       (p.warning ?? "") !== (q.warning ?? "") ||
       !!p.isDefault !== !!q.isDefault

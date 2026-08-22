@@ -482,9 +482,28 @@ func (m *TmuxManager) AdoptTarget(sessionName, paneID string) (*Task, error) {
 	m.mu.Lock()
 	if existing, already := m.adopted[key]; already {
 		m.mu.Unlock()
-		// Report the task id rather than a bare refusal: from the user's side
-		// re-adopting is "open it", and a duplicate error reads as a failure.
-		return nil, fmt.Errorf("already adopted as task %s", existing)
+		// Adoption is an idempotent open operation. A mobile retry can arrive
+		// after the first POST succeeded but its response was lost; returning a
+		// duplicate error leaves the user with an "Adopt Failed" alert even
+		// though the pane is already healthy and managed.
+		m.taskMgr.mu.RLock()
+		existingTask := m.taskMgr.tasks[existing]
+		m.taskMgr.mu.RUnlock()
+		if existingTask != nil {
+			return existingTask, nil
+		}
+
+		// A registration without its persisted task cannot be opened or driven.
+		// Heal that stale in-memory entry and let this call create the task the
+		// map claimed existed.
+		m.mu.Lock()
+		if m.adopted[key] == existing {
+			delete(m.adopted, key)
+			if cancel := m.pollStop[key]; cancel != nil {
+				cancel()
+				delete(m.pollStop, key)
+			}
+		}
 	}
 	m.mu.Unlock()
 
@@ -861,11 +880,10 @@ func (m *TmuxManager) SendTmuxInputWithIntent(taskID, input string, allowShell b
 		return fmt.Errorf("task %s is not an adopted tmux session", taskID)
 	}
 
-	if !tmuxSessionExists(sessionName) {
-		return fmt.Errorf("tmux session %q no longer exists", sessionName)
-	}
-
 	target := m.taskTmuxTarget(taskID, sessionName)
+	if !tmuxTargetExists(target) {
+		return fmt.Errorf("tmux target %q no longer exists", target)
+	}
 
 	if isTmuxChoiceAnswer(input) {
 		// A menu digit selects AND confirms on its own. Appending Enter here is

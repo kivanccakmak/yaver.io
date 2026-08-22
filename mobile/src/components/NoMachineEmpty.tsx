@@ -43,6 +43,7 @@ export default function NoMachineEmpty({ noun, onDeviceChange }: NoMachineEmptyP
     autoConnectStage,
     cancelAutoConnect,
     selectDevice,
+    setMachineRolesFavorite,
   } = useDevice();
   const [pickerVisible, setPickerVisible] = useState(false);
 
@@ -52,9 +53,16 @@ export default function NoMachineEmpty({ noun, onDeviceChange }: NoMachineEmptyP
   const noDevicesYet =
     devices.length === 0 && !activeDevice && !everHadDevices && !isLoadingDevices;
 
-  const pick = (deviceId: string) => {
+  const pick = async (deviceId: string) => {
     const device = devices.find((d) => (d.id || (d as any).deviceId) === deviceId);
-    if (device) void selectDevice(device);
+    if (device) {
+      await selectDevice(device);
+      // The inline picker is the same explicit execution choice as the full
+      // Remote Box sheet. It used to update focus only, leaving a hidden
+      // runner role behind; Tasks then showed this box while dispatching to
+      // another one. Keep runner and render aligned at this entry point too.
+      await setMachineRolesFavorite({ runnerDeviceId: deviceId, renderDeviceId: deviceId });
+    }
     onDeviceChange?.(deviceId);
   };
 
@@ -137,7 +145,7 @@ export default function NoMachineEmpty({ noun, onDeviceChange }: NoMachineEmptyP
           return (
             <Pressable
               key={id}
-              onPress={() => pick(id)}
+              onPress={() => { void pick(id); }}
               style={{
                 flexDirection: "row",
                 alignItems: "center",
@@ -184,7 +192,7 @@ export default function NoMachineEmpty({ noun, onDeviceChange }: NoMachineEmptyP
         visible={pickerVisible}
         onClose={() => setPickerVisible(false)}
         onSelected={(picked) => {
-          if (picked?.id) pick(picked.id);
+          if (picked?.id) void pick(picked.id);
         }}
       />
     </>

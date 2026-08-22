@@ -68,7 +68,7 @@ var wedgeToolFamilies = map[string]bool{
 
 	// ── Tasks: dispatch, follow, steer.
 	"create": true, "stop": true, "continue": true, "fork": true, "schedule": true,
-	"cancel": true, "chat": true, "standup": true, "commit": true,
+	"cancel": true, "chat": true, "standup": true, "commit": true, "tmux": true,
 
 	// ── Projects + workspaces + files. Needed to do any work at all.
 	"project": true, "phone": true, "workspace": true, "set": true,

@@ -1245,11 +1245,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   const setMachineRolesFavorite = useCallback(async (row: MachineRolesRow | null) => {
     if (!token) throw new Error("Sign in first to change machine roles.");
-    await saveUserSettings(token, {
-      machineRolesForProject: row
-        ? { ...row, renderDeviceId: row.renderDeviceId || row.runnerDeviceId, updatedAt: Date.now() }
-        : { runnerDeviceId: null },
-    });
+    // Apply the execution choice before roaming persistence. The settings POST
+    // is advisory to this operation and can stall behind a transient Convex or
+    // browser-network issue; it must never hold the Remote Box sheet on
+    // “Switching” after the target client is already live.
     setMachineRolesState(row);
     connectionManager.setMachineRoles(row ? {
       runnerDeviceId: row.runnerDeviceId,
@@ -1257,6 +1256,17 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       renderDeviceId: row.renderDeviceId,
       secondaryRenderDeviceId: row.secondaryRenderDeviceId,
     } : null);
+    const persistence = saveUserSettings(token, {
+      machineRolesForProject: row
+        ? { ...row, renderDeviceId: row.renderDeviceId || row.runnerDeviceId, updatedAt: Date.now() }
+        : { runnerDeviceId: null },
+    });
+    await Promise.race([
+      persistence,
+      new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+    ]).catch((error) => {
+      appLog("warn", `[settings] machineRoles roaming save failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     appLog("info", `[settings] machineRoles ${row ? `saved: run=${row.runnerDeviceId.slice(0, 8)} render=${(row.renderDeviceId || row.runnerDeviceId).slice(0, 8)}` : "cleared (single-box)"}`);
   }, [token]);
 

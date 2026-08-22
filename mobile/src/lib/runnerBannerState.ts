@@ -87,6 +87,10 @@ export function deriveRunnerBannerState(
       return make("notInstalled", `${label} not installed`);
     }
     if (selectedRow.authConfigured === false) {
+      // OpenCode has no runner OAuth/sign-in flow. Its authentication lives in
+      // provider configuration (API key/base URL/model), so route it to the
+      // in-app Configure sheet instead of rendering a dead "Sign in" action.
+      if (wantId === "opencode") return make("needsConfig", `${label} needs setup`, selectedRow.id);
       return make("authNeeded", `${label} needs sign-in`, selectedRow.id);
     }
     if (selectedRow.error) {

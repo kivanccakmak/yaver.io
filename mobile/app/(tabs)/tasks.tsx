@@ -96,6 +96,7 @@ import {
   tmuxRunnerSessionLabel,
   type TmuxRunnerSessionRecord,
 } from "../../src/lib/tmuxRunnerSessions";
+import { tmuxDiscoveryView } from "../../src/lib/tmuxDiscoveryState";
 import { timeAgo } from "../../src/lib/parkedMachines";
 import {
   listPendingCloudDispatches,
@@ -173,11 +174,12 @@ import { ErrorMessage, detectSmartRetry } from "../../src/components/ErrorMessag
 import { AgentContextPanel, type AgentContextRow } from "../../src/components/AgentContextPanel";
 import SandboxGitPanel from "../../src/components/SandboxGitPanel";
 import { deriveRunnerBannerState, type RunnerFetchState } from "../../src/lib/runnerBannerState";
-import { runnerPollCadenceMs, sameAgentStatus, sameRunnerList } from "../../src/lib/runnerPollPolicy";
+import { reconcileRunnerAuthStatus, runnerPollCadenceMs, sameAgentStatus, sameRunnerList } from "../../src/lib/runnerPollPolicy";
 import { resolveRemotelessPlacement, type ExecutionCandidate } from "../../src/_core/remoteless";
 import { isPhoneLocalTask, phoneLocalTurnStatus } from "../../src/lib/phoneLocalTaskRoutingCore";
 import { TaskHeader } from "../../src/components/TaskHeader";
 import {
+  adoptedRunnerControlCommand,
   displayRunnerLabel,
   isModelCompatibleWithRunnerId,
   isTransportDeviceLabel,
@@ -185,8 +187,10 @@ import {
   normalizeTaskRunnerId,
   preferredDefaultModelForRunner,
   preferredDefaultRunnerForDevice,
+  runnerDispatchMismatch,
   resolveModelForRemoteSend,
   resolveRunnerForRemoteSend,
+  resolveRunnerSelectionDeviceId,
 } from "../../src/lib/remoteCodingSelection";
 
 // Cap streaming output retained per task. A vibing session can produce
@@ -2550,6 +2554,26 @@ export default function TasksScreen() {
   // the compose modal opens with the runner + model locked to pendingTarget.
   const [showTargetWizard, setShowTargetWizard] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<TaskTarget | null>(null);
+  // Runner choices belong to the machine that will execute the task. Keep
+  // this one id aligned with the machine chip so probes, defaults, picker
+  // persistence, and dispatch cannot quietly talk about different boxes.
+  const runnerSelectionDeviceId = resolveRunnerSelectionDeviceId({
+    taskTargetDeviceId: pendingTarget?.deviceId,
+    runnerRoleDeviceId: machineRoles?.runnerDeviceId,
+    activeDeviceId: activeDevice?.id,
+  });
+  const runnerSelectionDevice = devices.find((device) => device.id === runnerSelectionDeviceId)
+    || activeDevice;
+  // Tmux inventory and actions must share the exact machine named by the
+  // Tasks runner chip. The roaming role row can briefly lag a just-tapped
+  // machine while settings persist; using it here showed one box's sessions
+  // and then attempted their adoption on another box.
+  const tmuxRunnerClient = useCallback(
+    () => runnerSelectionDeviceId
+      ? connectionManager.clientFor(runnerSelectionDeviceId)
+      : connectionManager.runnerClient(),
+    [runnerSelectionDeviceId],
+  );
   const [newTaskText, setNewTaskText] = useState("");
   const newTaskTextRef = useRef("");
   newTaskTextRef.current = newTaskText;
@@ -2562,6 +2586,11 @@ export default function TasksScreen() {
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
   const [followUpExpanded, setFollowUpExpanded] = useState(false);
   const [showFollowUpOptions, setShowFollowUpOptions] = useState(false);
+  // A task detail is allowed to choose a different runner for its NEXT turn.
+  // Keep that choice task-scoped: selectedRunner also drives the New Task
+  // composer, so using it directly made an unrelated global picker value
+  // switch (or block) an ordinary follow-up.
+  const [followUpRunnerOverride, setFollowUpRunnerOverride] = useState<string | null>(null);
   // Pending agent_question pulled from the SSE stream. When non-null
   // the question sheet is open; the user types/picks an answer, the
   // sheet POSTs to /tasks/{id}/answer (via answerTaskQuestion), and
@@ -2616,11 +2645,24 @@ export default function TasksScreen() {
   const [availableRunners, setAvailableRunners] = useState<RunnerInfo[]>([]);
   const [runnersFetchState, setRunnersFetchState] = useState<RunnerFetchState>("idle");
   const [selectedRunner, setSelectedRunner] = useState<string>(""); // "" = default
+  // Browser RN-web cannot present Alert.alert action choices reliably: the
+  // title appears, but its native button array is discarded by window.alert.
+  // Keep the chooser in the React tree so the exact same tappable chips work
+  // on iPhone, iPad, and the browser automation lane.
+  const [showComposerRunnerChoices, setShowComposerRunnerChoices] = useState(false);
+  // Tasks overview reuses its existing runner-status text as the switch
+  // affordance. The choices stay collapsed so the banner gains capability,
+  // not another permanent status row.
+  const [showBannerRunnerChoices, setShowBannerRunnerChoices] = useState(false);
   useEffect(() => {
     if (normalizeTaskRunnerId(selectedRunner) !== "remoteless") return;
     const preferred = availableRunners.find((runner) => runner.ready && normalizeTaskRunnerId(runner.id) !== "remoteless");
     if (preferred) setSelectedRunner(preferred.id);
   }, [availableRunners, selectedRunner]);
+
+  useEffect(() => {
+    setFollowUpRunnerOverride(null);
+  }, [selectedTask?.id]);
   // OpenCode-only: which agent (build / plan / custom) drives the
   // task. Forwarded as `mode` on the task POST and turned into
   // `--agent <mode>` on `opencode run`. Empty = use the user's
@@ -2656,7 +2698,9 @@ export default function TasksScreen() {
   useEffect(() => {
     userPickedRunnerRef.current = false;
     userPickedModelRef.current = false;
-  }, [activeDevice?.id]);
+    setShowComposerRunnerChoices(false);
+    setShowBannerRunnerChoices(false);
+  }, [runnerSelectionDeviceId]);
 
   useEffect(() => {
     if (routeProjectDir) {
@@ -2734,10 +2778,10 @@ export default function TasksScreen() {
             style: "destructive",
             onPress: async () => {
               try {
-                await quicClient.closeTmuxSessions(target);
+                await tmuxRunnerClient().closeTmuxSessions(target);
                 // Refresh so the killed session disappears rather than
                 // lingering as a card whose buttons all fail.
-                const sessions = await quicClient.listTmuxSessions();
+                const sessions = await tmuxRunnerClient().listTmuxSessions();
                 setTmuxSessions(sessions);
               } catch (e) {
                 Alert.alert("Could not kill session", e instanceof Error ? e.message : String(e));
@@ -2747,10 +2791,11 @@ export default function TasksScreen() {
         ],
       );
     },
-    [quicClient],
+    [tmuxRunnerClient],
   );
   const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
   const [isLoadingTmux, setIsLoadingTmux] = useState(false);
+  const [tmuxLoadError, setTmuxLoadError] = useState<string | null>(null);
   const [isAdopting, setIsAdopting] = useState<string | null>(null); // session name being adopted
 
   const chatScrollRef = useRef<FlatList>(null);
@@ -2814,25 +2859,29 @@ export default function TasksScreen() {
   // closed, even before connecting — the "always keep vibing" inventory.
   const [convexTmuxSessions, setConvexTmuxSessions] = useState<TmuxRunnerSessionRecord[]>([]);
   const [isLoadingConvexTmux, setIsLoadingConvexTmux] = useState(false);
+  const [convexTmuxError, setConvexTmuxError] = useState<string | null>(null);
   const refreshConvexTmuxSessions = useCallback(async () => {
     if (!token) {
       setConvexTmuxSessions([]);
+      setConvexTmuxError("Sign in to load runner seats from your other machines.");
       return;
     }
+    setIsLoadingConvexTmux(true);
     try {
       const rows = await listTmuxRunnerSessions();
       setConvexTmuxSessions(rows);
-    } catch {
-      // Offline / backend not yet deployed — the ledger degrades to hidden
-      // rather than blocking the modal.
+      setConvexTmuxError(null);
+    } catch (error) {
+      setConvexTmuxError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsLoadingConvexTmux(false);
     }
   }, [token]);
   // Refresh while the modal is open (~30s cadence) so a /exit on any machine
   // flips its seat to closed without closing/reopening the sheet.
   useEffect(() => {
     if (!showTmuxSessions) return;
-    refreshConvexTmuxSessions();
-    const t = setInterval(refreshConvexTmuxSessions, 30000);
+    const t = setInterval(() => { void refreshConvexTmuxSessions(); }, 30000);
     return () => clearInterval(t);
   }, [showTmuxSessions, refreshConvexTmuxSessions]);
   const [isRecording, setIsRecording] = useState(false);
@@ -2973,7 +3022,10 @@ export default function TasksScreen() {
       return;
     }
     let cancelled = false;
-    quicClient.getOpenCodeConfig().then((cfg) => {
+    const client = runnerSelectionDeviceId
+      ? connectionManager.clientFor(runnerSelectionDeviceId)
+      : quicClient;
+    client.getOpenCodeConfig().then((cfg) => {
       if (cancelled) return;
       const names = (cfg?.agents || []).map((a) => a.name).filter((n): n is string => typeof n === "string" && n.length > 0);
       setOpencodeAgents(names);
@@ -2981,12 +3033,12 @@ export default function TasksScreen() {
       if (!cancelled) setOpencodeAgents([]);
     });
     return () => { cancelled = true; };
-  }, [connectionStatus, selectedRunner, activeDevice?.id]);
+  }, [connectionStatus, selectedRunner, runnerSelectionDeviceId]);
 
   useEffect(() => {
     if (selectedRunner !== "opencode") return;
     if (userPickedRunnerRef.current) return;
-    const preferredMode = activeDevice ? primaryModeByDevice[activeDevice.id] : "";
+    const preferredMode = runnerSelectionDeviceId ? primaryModeByDevice[runnerSelectionDeviceId] : "";
     if (preferredMode && selectedOpenCodeMode !== preferredMode) {
       setSelectedOpenCodeMode(preferredMode);
       return;
@@ -2994,7 +3046,7 @@ export default function TasksScreen() {
     if (!preferredMode && selectedOpenCodeMode !== "") {
       setSelectedOpenCodeMode("");
     }
-  }, [selectedRunner, activeDevice?.id, primaryModeByDevice, selectedOpenCodeMode]);
+  }, [selectedRunner, runnerSelectionDeviceId, primaryModeByDevice, selectedOpenCodeMode]);
 
   // Seed selectedRunner when runners load or the active device / pin
   // changes. Uses a functional setState callback so we can read the
@@ -3008,7 +3060,7 @@ export default function TasksScreen() {
     const installed = availableRunners.filter((runner) => runner.installed && RUNNER_WL.has(runner.id));
     if (installed.length === 0) return;
     const ready = installed.filter((runner) => runner.ready !== false);
-    const explicitRunner = activeDevice ? primaryRunnerByDevice[activeDevice.id] : "";
+    const explicitRunner = runnerSelectionDeviceId ? primaryRunnerByDevice[runnerSelectionDeviceId] : "";
     setSelectedRunner((current) => {
       // Convex per-device primary is authoritative until the user picks
       // a chip in this session. Without this branch, the heuristic
@@ -3030,8 +3082,8 @@ export default function TasksScreen() {
       if (current && (RUNNER_WL.has(current) || current === "custom")) return current;
       if (current && installed.some((r) => r.id === current)) return current;
       if (explicitRunner && (RUNNER_WL.has(explicitRunner) || installed.some((r) => r.id === explicitRunner))) return explicitRunner;
-      const seededRunner = activeDevice
-        ? preferredDefaultRunnerForDevice(activeDevice, user?.email, ready.map((r) => r.id).concat(installed.map((r) => r.id)))
+      const seededRunner = runnerSelectionDevice
+        ? preferredDefaultRunnerForDevice(runnerSelectionDevice, user?.email, ready.map((r) => r.id).concat(installed.map((r) => r.id)))
         : null;
       const preferred =
         ready.find((r) => r.id === seededRunner) ||
@@ -3044,7 +3096,7 @@ export default function TasksScreen() {
         installed[0];
       return preferred ? preferred.id : current;
     });
-  }, [availableRunners, activeDevice, primaryRunnerByDevice, user?.email]);
+  }, [availableRunners, primaryRunnerByDevice, runnerSelectionDevice, runnerSelectionDeviceId, user?.email]);
 
   // Update models when runner selection changes. Uses functional
   // setState so it doesn't need selectedModel as a dep — same fight-the-
@@ -3058,7 +3110,7 @@ export default function TasksScreen() {
       return;
     }
     setAvailableModels(runner.models);
-    const explicitModel = activeDevice ? primaryModelByDevice[activeDevice.id] : "";
+    const explicitModel = runnerSelectionDeviceId ? primaryModelByDevice[runnerSelectionDeviceId] : "";
     setSelectedModel((current) => {
       // Convex per-device primary model wins until the user explicitly
       // picks a chip in this session — same reasoning as the runner
@@ -3090,8 +3142,8 @@ export default function TasksScreen() {
         return current;
       }
       if (explicitModel && runner.models!.some((m) => m.id === explicitModel)) return explicitModel;
-      const seededModel = activeDevice
-        ? preferredDefaultModelForRunner(runner.id, activeDevice, user?.email)
+      const seededModel = runnerSelectionDevice
+        ? preferredDefaultModelForRunner(runner.id, runnerSelectionDevice, user?.email)
         : null;
       const preferredModel =
         (seededModel && runner.models!.find((m) => m.id === seededModel)?.id) ||
@@ -3099,7 +3151,7 @@ export default function TasksScreen() {
         runner.models![0].id;
       return preferredModel || current;
     });
-  }, [availableRunners, activeDevice, primaryModelByDevice, selectedRunner, user?.email]);
+  }, [availableRunners, primaryModelByDevice, runnerSelectionDevice, runnerSelectionDeviceId, selectedRunner, user?.email]);
 
   const selectedRunnerRow = useMemo(
     () => availableRunners.find((runner) => normalizeTaskRunnerId(runner.id) === normalizeTaskRunnerId(selectedRunner)) || null,
@@ -3110,23 +3162,23 @@ export default function TasksScreen() {
     [selectedRunnerRow],
   );
 
-  const resolveRunnerForSend = useCallback((fallbackRunner?: string | null): string | undefined => {
+  const resolveRunnerForSend = useCallback((fallbackRunner?: string | null, dispatchDeviceId?: string | null): string | undefined => {
     return resolveRunnerForRemoteSend({
-      activeDeviceId: activeDevice?.id,
+      activeDeviceId: runnerSelectionDeviceId,
       // Runner/render split: defaults key off the box the task RUNS on.
-      dispatchDeviceId: connectionManager.roleDeviceId("runner"),
+      dispatchDeviceId: dispatchDeviceId || runnerSelectionDeviceId,
       primaryRunnerByDevice,
       selectedRunner,
       fallbackRunner,
       userPickedRunner: userPickedRunnerRef.current,
     });
-  }, [activeDevice?.id, primaryRunnerByDevice, selectedRunner]);
+  }, [primaryRunnerByDevice, runnerSelectionDeviceId, selectedRunner]);
 
-  const resolveModelForSend = useCallback((runnerId: string | undefined, fallbackModel?: string | null): string | undefined => {
+  const resolveModelForSend = useCallback((runnerId: string | undefined, fallbackModel?: string | null, dispatchDeviceId?: string | null): string | undefined => {
     return resolveModelForRemoteSend({
       runnerId,
-      activeDevice,
-      dispatchDeviceId: connectionManager.roleDeviceId("runner"),
+      activeDevice: runnerSelectionDevice,
+      dispatchDeviceId: dispatchDeviceId || runnerSelectionDeviceId,
       primaryModelByDevice,
       selectedModel,
       fallbackModel,
@@ -3134,7 +3186,7 @@ export default function TasksScreen() {
       signedInEmail: user?.email,
       userPickedModel: userPickedModelRef.current,
     });
-  }, [activeDevice, availableRunners, primaryModelByDevice, selectedModel, user?.email]);
+  }, [availableRunners, primaryModelByDevice, runnerSelectionDevice, runnerSelectionDeviceId, selectedModel, user?.email]);
 
   // Live mirror of the fetch state for the poller below. The poller must READ
   // this, never DEPEND on it — see the storm described above the effect.
@@ -3145,23 +3197,32 @@ export default function TasksScreen() {
     if (connectionStatus !== "connected") return;
     setRunnersFetchState((prev) => (prev === "ok" ? prev : "loading"));
     try {
-      const [probe, status] = await Promise.all([
-        quicClient.getRunnersProbe(),
-        quicClient.getAgentStatus(),
+      const client = runnerSelectionDeviceId
+        ? connectionManager.clientFor(runnerSelectionDeviceId)
+        : quicClient;
+      if (!client.isConnected) throw new Error("Runner machine is not connected");
+      const [probe, status, authRows] = await Promise.all([
+        client.getRunnersProbe(),
+        client.getAgentStatus(),
+        // `/runner-auth/status` is the canonical machine-local auth audit.
+        // Reconcile it with `/agent/runners` so Tasks cannot retain a stale
+        // "needs sign-in" after the selected box's runner is authenticated.
+        client.runnerAuthStatusOrNull(),
       ]);
+      const runners = reconcileRunnerAuthStatus(probe.runners, authRows);
       // Hold the PREVIOUS objects when the box's answer is materially
       // unchanged. The probe parses fresh JSON every poll, so identity is
       // always new; handing that straight to setState re-ran every runner /
       // model useMemo and re-derived the banner text on a metronome even when
       // nothing about the box had moved. `sameRunnerList` / `sameAgentStatus`
       // compare exactly what the banner renders (see runnerPollPolicy.ts).
-      setAvailableRunners((prev) => (sameRunnerList(prev, probe.runners) ? prev : probe.runners));
+      setAvailableRunners((prev) => (sameRunnerList(prev, runners) ? prev : runners));
       setRunnersFetchState(probe.state);
       if (status) setAgentStatus((prev) => (sameAgentStatus(prev, status) ? prev : status));
     } catch {
       setRunnersFetchState("network-error");
     }
-  }, [connectionStatus]);
+  }, [connectionStatus, runnerSelectionDeviceId]);
 
   // Refresh runner + agent state on connect and keep retrying quickly until
   // the runner fetch is healthy. Once healthy, slow back down to background
@@ -3209,7 +3270,7 @@ export default function TasksScreen() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [activeDevice?.id, connectionStatus, refreshRunnerState, selectedTask?.runnerId]);
+  }, [connectionStatus, refreshRunnerState, runnerSelectionDeviceId, selectedTask?.runnerId]);
 
   const openRunnerAuthModal = useCallback((runnerId: string, targetDeviceId?: string | null) => {
     const normalized = String(runnerId || "").trim().toLowerCase();
@@ -3562,16 +3623,17 @@ export default function TasksScreen() {
   useEffect(() => {
     let alive = true;
     const discover = async () => {
-      if (!quicClient.isConnected) return;
+      const runnerClient = tmuxRunnerClient();
+      if (!runnerClient.isConnected) return;
       try {
-        const sessions = await quicClient.listTmuxSessions();
+        const sessions = await runnerClient.listTmuxSessions();
         if (alive) setTmuxSessions(sessions);
       } catch { /* not reachable — banner stays hidden */ }
     };
     discover();
     const interval = setInterval(discover, 15000);
     return () => { alive = false; clearInterval(interval); };
-  }, []);
+  }, [activeDevice?.id, machineRoles?.runnerDeviceId, tmuxRunnerClient]);
 
   // Live runner sessions worth surfacing: a real coding agent (not a bare shell)
   // that Yaver hasn't already adopted into a task. These are what the banner
@@ -3587,13 +3649,13 @@ export default function TasksScreen() {
   const p2pNames = new Set(tmuxSessions.map((sn) => sn.name));
   const convexTmuxRows = useMemo(() => {
     const rows = convexTmuxSessions.filter(
-      (r) => !(r.deviceId === activeDevice?.id && p2pNames.has(r.sessionName)),
+      (r) => !(r.deviceId === runnerSelectionDeviceId && p2pNames.has(r.sessionName)),
     );
     const rank = (r: TmuxRunnerSessionRecord) =>
       (r.status === "open" && isRunnerSeat(r) ? 0 :
        r.status === "open" ? 1 : 2);
     return [...rows].sort((a, b) => rank(a) - rank(b) || b.lastSeenAt - a.lastSeenAt);
-  }, [convexTmuxSessions, activeDevice?.id, p2pNames]);
+  }, [convexTmuxSessions, p2pNames, runnerSelectionDeviceId]);
 
   // Listen for streaming output — buffer updates to avoid UI freezing
   const outputBufferRef = useRef<Record<string, string[]>>({});
@@ -4845,7 +4907,7 @@ export default function TasksScreen() {
         selectedRunnerRow.warning ||
         `${selectedRunnerRow.name} is installed but not ready on this machine.`;
       if (selectedRunnerAuthIssue && selectedRunnerRow.supportsBrowserAuth) {
-        openRunnerAuthModal(selectedRunnerRow.id);
+        openRunnerAuthModal(selectedRunnerRow.id, runnerSelectionDeviceId || null);
       } else {
         Alert.alert("Agent not ready", detail);
       }
@@ -4872,9 +4934,18 @@ export default function TasksScreen() {
       // single submission. The wizard already switched the QUIC client
       // to pendingTarget.deviceId via selectDevice, so quicClient
       // baseUrl is correct without any per-call routing here.
+      // Resolve both the catalog choice and the POST against the same box.
+      // The placement decision can name a live secondary even when focus is
+      // elsewhere, so derive it before runner/model defaults.
+      const runnerRoleId = pendingTarget?.deviceId
+        ? null
+        : taskExecutionPlacement.lane === "remote"
+          ? taskExecutionPlacement.target.id
+          : null;
+      const executionDeviceId = pendingTarget?.deviceId || runnerRoleId || runnerSelectionDeviceId;
       const effectiveRunner = pendingTarget?.runner
         ? normalizeTaskRunnerId(pendingTarget.runner)
-        : resolveRunnerForSend();
+        : resolveRunnerForSend(undefined, executionDeviceId);
       // Yaver goal-mode: `/goal <objective>` in the composer arms a
       // persistent goal on the opencode runner. The objective travels as
       // the structured `goal` field (NOT a raw runner command) so the
@@ -4884,7 +4955,7 @@ export default function TasksScreen() {
       const goalText = goalIntent?.goal ?? "";
       const effectiveModel = pendingTarget?.model && isModelCompatibleWithRunnerId(pendingTarget.model, effectiveRunner)
         ? pendingTarget.model
-        : resolveModelForSend(effectiveRunner);
+        : resolveModelForSend(effectiveRunner, undefined, executionDeviceId);
       // OpenCode mode comes from the wizard's remote opencode.json
       // probe when present; fall back to the in-modal selectedOpenCodeMode.
       const effectiveOpencodeMode = pendingTarget?.opencodeMode ?? selectedOpenCodeMode;
@@ -4901,17 +4972,11 @@ export default function TasksScreen() {
       // target selected by the shared placement decision (assigned runner,
       // primary, secondary, then focused). This must not fall back to the
       // focused proxy: the placement banner may be naming a live secondary.
-      const runnerRoleId = pendingTarget?.deviceId
-        ? null
-        : taskExecutionPlacement.lane === "remote"
-          ? taskExecutionPlacement.target.id
-          : null;
       const sendClient = pendingTarget?.deviceId
         ? connectionManager.clientFor(pendingTarget.deviceId)
         : runnerRoleId
           ? connectionManager.clientFor(runnerRoleId)
           : quicClient;
-      const executionDeviceId = pendingTarget?.deviceId || runnerRoleId || activeDevice?.id || "";
       // Make sure focus follows so any post-send streams (logs, output)
       // arrive on the same client the new task ran on.
       if (pendingTarget?.deviceId) {
@@ -5027,6 +5092,16 @@ export default function TasksScreen() {
         taskParams.askMode,
         options?.hideInitialPrompt === true,
       );
+      // A response that names a different runner is proof the requested
+      // operation did not happen. Never open a success-shaped OpenCode chat
+      // after the user selected Codex: stop the unintended task immediately
+      // and surface the exact contract breach.
+      if (runnerDispatchMismatch(effectiveRunner, rawTask.runnerId)) {
+        await sendClient.stopTask(rawTask.id).catch(() => {});
+        throw new Error(
+          `Agent mismatch: you selected ${displayRunnerLabel(effectiveRunner)}, but ${displayRunnerLabel(rawTask.runnerId)} started. The unintended task was stopped; refresh runner settings and retry.`,
+        );
+      }
       if (taskParams.projectName && keepLastProject) {
         const runnerDeviceId = executionDeviceId || "default";
         // Write BOTH stores: AsyncStorage (offline fallback) + Convex
@@ -5285,6 +5360,62 @@ export default function TasksScreen() {
       setSelectedTask(next);
     }).catch((err) => {
       Alert.alert("Retry failed", err instanceof Error ? err.message : String(err));
+    });
+  };
+
+  const openFollowUpRunnerPicker = () => {
+    if (!selectedTask) return;
+    const parentRunner = normalizeTaskRunnerId(selectedTask.runnerId) || "claude";
+    const byId = new Map(
+      availableRunners.map((runner) => [normalizeTaskRunnerId(runner.id), runner]),
+    );
+    const choices = ["claude", "codex", "opencode"].map((id) => ({
+      id,
+      row: byId.get(id),
+    }));
+    Alert.alert(
+      "Coding agent for next turn",
+      `This task keeps running on ${displayRunnerLabel(parentRunner)}. Your next message can continue there or start a child chat on another agent.`,
+      [
+        ...choices.map(({ id, row }) => ({
+          text:
+            displayRunnerLabel(id) +
+            ((followUpRunnerOverride || parentRunner) === id ? "  ✓" : "") +
+            (row?.installed === false ? "  (not installed)" : ""),
+          onPress: () => {
+            setFollowUpRunnerOverride(id);
+            // Mirror into the shared picker so model resolution and the next
+            // New Task composer agree with the explicit choice.
+            setSelectedRunner(id);
+            userPickedRunnerRef.current = true;
+            userPickedModelRef.current = false;
+            const targetDeviceId = deviceForTask(selectedTask)?.id || selectedTask.deviceId || activeDevice?.id;
+            if (targetDeviceId) {
+              void setPrimaryRunnerForDevice(targetDeviceId, id, null).catch((error) => {
+                Alert.alert("Couldn't save agent", error instanceof Error ? error.message : String(error));
+              });
+            }
+          },
+        })),
+        { text: "Cancel", style: "cancel" as const },
+      ],
+    );
+  };
+
+  const openAdoptedRunnerControl = () => {
+    if (!selectedTask?.isAdopted) return;
+    const command = adoptedRunnerControlCommand(selectedTask.runnerId);
+    if (!command) return;
+    const taskDevice = deviceForTask(selectedTask);
+    const client = taskDevice?.id
+      ? connectionManager.clientFor(taskDevice.id)
+      : quicClient;
+    if (!client.isConnected) {
+      Alert.alert("Machine not connected", `Reconnect ${taskDevice?.name || "the task machine"}, then try again.`);
+      return;
+    }
+    void client.sendTmuxInput(selectedTask.id, command).catch((error) => {
+      Alert.alert("Couldn't open Codex models", error instanceof Error ? error.message : String(error));
     });
   };
 
@@ -5569,8 +5700,15 @@ export default function TasksScreen() {
 
     try {
       if (selectedTask.isAdopted) {
-        // For adopted tmux sessions, send input directly via tmux send-keys
-        await quicClient.sendTmuxInput(selectedTask.id, optimisticText);
+        // For adopted tmux sessions, send input to the task's own box. The
+        // focused client may point at Ubuntu while this task is a Codex pane on
+        // the MacBook; using the global proxy would send the task id to the
+        // wrong agent and make ordinary input — including `/model` — fail.
+        const taskDevice = deviceForTask(selectedTask);
+        const taskClient = taskDevice?.id
+          ? connectionManager.clientFor(taskDevice.id)
+          : quicClient;
+        await taskClient.sendTmuxInput(selectedTask.id, optimisticText);
       } else {
         // Decide between continue (resume in place) vs. fork (spawn a
         // child task). We fork when:
@@ -5581,10 +5719,11 @@ export default function TasksScreen() {
         //     matches Codex/Claude Code "continue into a new session"
         //     semantics. See task_fork.go on the agent side.
         const parentRunner = (selectedTask.runnerId || "").trim();
-        // A task detail follow-up is a chat reply, not a runner-picker action.
-        // Keep it on the task's recorded runner so stale global picker state
-        // cannot pop "Switch to Claude?" and break the WhatsApp-like thread.
-        const desiredRunner = parentRunner || (selectedRunner || "").trim();
+        // Ordinary replies stay on the task's recorded runner. Only the
+        // task-scoped picker above may override it; the global New Task picker
+        // is deliberately ignored here so unrelated composer state cannot
+        // switch a conversation by accident.
+        const desiredRunner = (followUpRunnerOverride || parentRunner || selectedRunner || "").trim();
         // planFollowUp owns this decision so it can be tested without React
         // Native — see mobile/src/lib/followUpPlan.test.ts. It is the reason
         // follow-ups appeared to "create a new task": a finished parent always
@@ -5753,9 +5892,9 @@ export default function TasksScreen() {
       if (err instanceof CloudWorkspaceRequiredError && selectedTask) {
         try {
           const forkTask = await saveDeferredCloudWorkspaceTask(err, {
-            title: `Continue "${normalizeTaskTitle(selectedTask.title)}" on ${(selectedRunner || selectedTask.runnerId || "claude").trim()}`,
+            title: `Continue "${normalizeTaskTitle(selectedTask.title)}" on ${(followUpRunnerOverride || selectedTask.runnerId || "claude").trim()}`,
             description: optimisticText,
-            runner: (selectedRunner || selectedTask.runnerId || "claude").trim(),
+            runner: (followUpRunnerOverride || selectedTask.runnerId || "claude").trim(),
             workDir: projectDir || undefined,
             projectName: projectNameFromPath(projectDir),
           });
@@ -5785,7 +5924,7 @@ export default function TasksScreen() {
       // continue-task failures don't have analytics yet; if we add
       // them later, gate this on an explicit "was a switch" flag.
       try {
-        const desiredRunner = (selectedRunner || "").trim();
+        const desiredRunner = (followUpRunnerOverride || "").trim();
         if (desiredRunner && selectedTask?.runnerId && desiredRunner !== selectedTask.runnerId) {
           console.log("[yaver-analytics]", JSON.stringify({
             event: "agent_switch_failed",
@@ -5825,7 +5964,7 @@ export default function TasksScreen() {
     }
     try {
       if (task?.isAdopted && task.tmuxSession) {
-        await quicClient.closeTmuxTask(taskId).catch((e) => {
+        await connectionManager.runnerClient().closeTmuxTask(taskId).catch((e) => {
           console.warn("[Tasks] Tmux close before delete failed:", e);
         });
       }
@@ -5901,7 +6040,7 @@ export default function TasksScreen() {
             try {
               await Promise.all(active.map(async (task) => {
                 if (task.isAdopted && task.tmuxSession) {
-                  await quicClient.closeTmuxTask(task.id).catch(() => {});
+                  await connectionManager.runnerClient().closeTmuxTask(task.id).catch(() => {});
                 } else {
                   await quicClient.stopTask(task.id).catch(() => {});
                 }
@@ -5923,7 +6062,7 @@ export default function TasksScreen() {
     await Promise.all(deletable.map((t) => markTaskDeleted(t.id)));
     try {
       await Promise.all(deletable.map((task) => (
-        task.isAdopted && task.tmuxSession ? quicClient.closeTmuxTask(task.id).catch(() => {}) : Promise.resolve()
+        task.isAdopted && task.tmuxSession ? connectionManager.runnerClient().closeTmuxTask(task.id).catch(() => {}) : Promise.resolve()
       )));
       await quicClient.deleteAllTasks();
       await fetchTasks();
@@ -5946,20 +6085,23 @@ export default function TasksScreen() {
   const handleOpenTmuxSessions = async () => {
     setShowTmuxSessions(true);
     setIsLoadingTmux(true);
-    setIsLoadingConvexTmux(true);
-    try {
-      const sessions = await quicClient.listTmuxSessions();
-      setTmuxSessions(sessions);
-    } catch {
-      setTmuxSessions([]);
-    } finally {
-      setIsLoadingTmux(false);
-    }
-    try {
-      await refreshConvexTmuxSessions();
-    } finally {
-      setIsLoadingConvexTmux(false);
-    }
+    setTmuxLoadError(null);
+    // These are independent sources. Running them sequentially made the
+    // cross-machine roster wait behind a slow/dead P2P tmux route, while both
+    // sections displayed spinners and neither named the failed operation.
+    await Promise.all([
+      tmuxRunnerClient().listTmuxSessions()
+        .then((sessions) => {
+          setTmuxSessions(sessions);
+          setTmuxLoadError(null);
+        })
+        .catch((error) => {
+          setTmuxSessions([]);
+          setTmuxLoadError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => setIsLoadingTmux(false)),
+      refreshConvexTmuxSessions(),
+    ]);
   };
 
   // paneId picks WHICH agent when a session is split across panes; without it
@@ -5968,15 +6110,16 @@ export default function TasksScreen() {
   const handleAdoptTmuxSession = async (sessionName: string, paneId?: string) => {
     setIsAdopting(paneId ? `${sessionName}#${paneId}` : sessionName);
     try {
-      const result = await quicClient.adoptTmuxSession(sessionName, paneId);
+      const runnerClient = tmuxRunnerClient();
+      const result = await runnerClient.adoptTmuxSession(sessionName, paneId);
       // Refresh both lists
-      const [sessions] = await Promise.all([quicClient.listTmuxSessions(), fetchTasks()]);
+      const [sessions] = await Promise.all([runnerClient.listTmuxSessions(), fetchTasks()]);
       setTmuxSessions(sessions);
       void refreshConvexTmuxSessions();
       // Resolve the task BEFORE closing, then hand the chat-detail
       // Modal off to the tmux Modal's dismiss — opening it in the same
       // tick makes it present invisibly behind the sheet on iOS.
-      const updatedTasks = await connectionManager.runnerClient().listTasks();
+      const updatedTasks = await runnerClient.listTasks();
       const newTask = updatedTasks.find(t => t.id === result.taskId);
       handoffModal(
         () => setShowTmuxSessions(false),
@@ -5984,6 +6127,23 @@ export default function TasksScreen() {
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      // Agents before pane-granular idempotence could complete the adoption
+      // and still answer a retry with "already adopted as task <id>". Treat
+      // that legacy response as the successful state it names, so the phone
+      // opens the task instead of claiming a failed no-op. Current agents
+      // return the existing task as HTTP 200 and never enter this branch.
+      const legacyAdoptedTaskId = /already adopted as task\s+([a-z0-9_-]+)/i.exec(msg)?.[1];
+      if (legacyAdoptedTaskId) {
+        const existingTask = (await tmuxRunnerClient().listTasks().catch(() => []))
+          .find((task) => task.id === legacyAdoptedTaskId);
+        if (existingTask) {
+          handoffModal(
+            () => setShowTmuxSessions(false),
+            () => setSelectedTask(existingTask),
+          );
+          return;
+        }
+      }
       Alert.alert("Adopt Failed", msg);
     } finally {
       setIsAdopting(null);
@@ -5992,10 +6152,11 @@ export default function TasksScreen() {
 
   const handleDetachTmuxSession = async (taskId: string) => {
     try {
-      await quicClient.detachTmuxSession(taskId);
+      const runnerClient = tmuxRunnerClient();
+      await runnerClient.detachTmuxSession(taskId);
       await markTaskDeleted(taskId);
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
-      setTmuxSessions(await quicClient.listTmuxSessions());
+      setTmuxSessions(await runnerClient.listTmuxSessions());
       void refreshConvexTmuxSessions();
       // If we're viewing this task, close the detail modal
       if (selectedTask?.id === taskId) setSelectedTask(null);
@@ -6007,10 +6168,11 @@ export default function TasksScreen() {
 
   const handleCloseTmuxTask = async (taskId: string) => {
     try {
-      await quicClient.closeTmuxTask(taskId);
+      const runnerClient = tmuxRunnerClient();
+      await runnerClient.closeTmuxTask(taskId);
       await markTaskDeleted(taskId);
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
-      setTmuxSessions(await quicClient.listTmuxSessions());
+      setTmuxSessions(await runnerClient.listTmuxSessions());
       void refreshConvexTmuxSessions();
       if (selectedTask?.id === taskId) setSelectedTask(null);
     } catch (e) {
@@ -6046,13 +6208,19 @@ export default function TasksScreen() {
       seen.add(id);
       rows.push({ id, name: device.name || id.slice(0, 8), role, connected: connectedDeviceIds.includes(id) });
     };
+    // The Tasks banner's visible Remote Box is an explicit execution choice.
+    // Keep placement aligned with the runner picker: a legacy account-wide
+    // runner role must not make the header say Ubuntu while POST /tasks goes
+    // to a Mac. Advanced split roles remain fallbacks when no visible box is
+    // selected (for example before initial connection hydration).
+    add(runnerSelectionDeviceId, "explicit");
     add(machineRoles?.runnerDeviceId, "primary");
     add(machineRoles?.secondaryRunnerDeviceId, "secondary");
     add(primaryDeviceId, "primary");
     add(secondaryDeviceId, "secondary");
     add(activeDevice?.id, "focused");
     return rows;
-  }, [activeDevice?.id, connectedDeviceIds, devices, machineRoles, primaryDeviceId, secondaryDeviceId]);
+  }, [activeDevice?.id, connectedDeviceIds, devices, machineRoles, primaryDeviceId, runnerSelectionDeviceId, secondaryDeviceId]);
   const taskExecutionPlacement = useMemo(
     () => resolveRemotelessPlacement({
       capability: "code-edit",
@@ -6358,17 +6526,28 @@ export default function TasksScreen() {
   const bannerRunnerId = useMemo(
     () =>
       resolveRunnerForRemoteSend({
-        activeDeviceId: activeDevice?.id,
+        activeDeviceId: runnerSelectionDeviceId,
+        dispatchDeviceId: runnerSelectionDeviceId,
         primaryRunnerByDevice,
         selectedRunner,
         userPickedRunner: userPickedRunnerRef.current,
       }),
-    [activeDevice?.id, primaryRunnerByDevice, selectedRunner],
+    [primaryRunnerByDevice, runnerSelectionDeviceId, selectedRunner],
   );
   const runnerBannerState = useMemo(
     () => deriveRunnerBannerState(availableRunners, agentStatus, bannerRunnerId, runnersFetchState),
     [availableRunners, agentStatus, bannerRunnerId, runnersFetchState]
   );
+  const localTmuxDiscoveryView = tmuxDiscoveryView({
+    loading: isLoadingTmux,
+    error: tmuxLoadError,
+    count: tmuxSessions.length,
+  });
+  const runnerSeatDiscoveryView = tmuxDiscoveryView({
+    loading: isLoadingConvexTmux,
+    error: convexTmuxError,
+    count: convexTmuxSessions.filter(isRunnerSeat).length,
+  });
 
   return (
     <SafeAreaView style={[s.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
@@ -6508,9 +6687,21 @@ export default function TasksScreen() {
                       {connMode === "direct" ? "Direct" : connMode === "tunnel" ? "Tunnel" : "Relay"}
                     </Text>
                     {runnerBannerState ? (
-                      <Text style={[s.bannerStatusCopy, { color: c.textSecondary, flexShrink: 1 }]} numberOfLines={1}>
-                        · {runnerBannerState.text}
-                      </Text>
+                      <Pressable
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          setShowBannerRunnerChoices((shown) => !shown);
+                        }}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Change coding agent on ${runnerSelectionDevice?.name || "selected machine"}`}
+                        accessibilityState={{ expanded: showBannerRunnerChoices }}
+                        style={{ minWidth: 0, flexShrink: 1 }}
+                      >
+                        <Text style={[s.bannerStatusCopy, { color: c.textSecondary }]} numberOfLines={1}>
+                          · {runnerBannerState.text} ▾
+                        </Text>
+                      </Pressable>
                     ) : null}
                   </View>
                   <View style={s.bannerStatusRow}>
@@ -6594,6 +6785,53 @@ export default function TasksScreen() {
                       </Pressable>
                     ) : null}
                   </View>
+                </View>
+              ) : null}
+              {showBannerRunnerChoices && runnerSelectionDeviceId ? (
+                <View
+                  style={s.bannerActionRow}
+                  accessibilityLabel="Tasks banner coding agent choices"
+                >
+                  {(["claude", "codex", "opencode"] as const).map((runnerId) => {
+                    const selected = normalizeTaskRunnerId(bannerRunnerId) === runnerId;
+                    const row = availableRunners.find(
+                      (runner) => normalizeTaskRunnerId(runner.id) === runnerId,
+                    );
+                    return (
+                      <Pressable
+                        key={runnerId}
+                        onPress={async (event) => {
+                          event.stopPropagation();
+                          const previousRunner = selectedRunner;
+                          setSelectedRunner(runnerId);
+                          userPickedRunnerRef.current = true;
+                          userPickedModelRef.current = false;
+                          setShowBannerRunnerChoices(false);
+                          try {
+                            await setPrimaryRunnerForDevice(runnerSelectionDeviceId, runnerId, null);
+                          } catch (error) {
+                            setSelectedRunner(previousRunner);
+                            userPickedRunnerRef.current = false;
+                            Alert.alert("Couldn't save coding agent", error instanceof Error ? error.message : String(error));
+                          }
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Use ${displayRunnerLabel(runnerId)} on ${runnerSelectionDevice?.name || "selected machine"}`}
+                        style={[
+                          s.bannerInlineBtn,
+                          {
+                            backgroundColor: selected ? c.accentSoft : c.surfaceMuted,
+                            borderWidth: 1,
+                            borderColor: selected ? c.accent : c.borderSubtle,
+                          },
+                        ]}
+                      >
+                        <Text style={[s.bannerInlineBtnText, { color: selected ? c.accent : c.textSecondary }]}>
+                          {displayRunnerLabel(runnerId)}{row?.installed === false ? " · install" : ""}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
               ) : null}
             </>
@@ -7390,45 +7628,7 @@ export default function TasksScreen() {
                         { backgroundColor: c.bgCardElevated, borderColor: c.border, flexShrink: 1, marginLeft: 8 },
                         pressed && { opacity: 0.55 },
                       ]}
-                      onPress={() => {
-                        // Prefer the agents actually installed on this box, but
-                        // never leave the user stuck: if the runner list hasn't
-                        // (re)loaded — e.g. right after a task failed — fall back
-                        // to any known runner so they can always switch away from
-                        // a failed agent. Un-installed picks are marked so the
-                        // choice stays honest.
-                        const installed = availableRunners.filter((r) => r.installed);
-                        // The fallback list used to synthesise `installed: false` for any
-                        // runner it had no row for, turning MISSING DATA into a stated
-                        // fact: with availableRunners empty, every agent rendered
-                        // "(not installed)" — including ones the box reports installed
-                        // AND ready. Seen against a mini whose /runner-auth/status said
-                        // codex/opencode/glm were installed=true ready=true while the
-                        // picker declared all three absent and put a checkmark on one:
-                        // selected and non-existent in the same row.
-                        const fallback = ["claude", "codex", "opencode"].map(
-                          (id) => availableRunners.find((r) => normalizeTaskRunnerId(r.id) === id) || ({ id } as RunnerInfo),
-                        );
-                        const haveRunnerData = availableRunners.length > 0;
-                        const choices = installed.length > 0 ? installed : fallback;
-                        Alert.alert(
-                          "Coding agent",
-                          haveRunnerData ? undefined : runnerFetchAlertMessage(runnersFetchState),
-                          [
-                            ...choices.map((r) => ({
-                              text:
-                                displayRunnerLabel(r.id) +
-                                (normalizeTaskRunnerId(r.id) === normalizeTaskRunnerId(selectedRunner) ? "  ✓" : "") +
-                                (r.installed === false ? "  (not installed)" : ""),
-                              onPress: () => {
-                                setSelectedRunner(normalizeTaskRunnerId(r.id));
-                                userPickedRunnerRef.current = true;
-                              },
-                            })),
-                            { text: "Cancel", style: "cancel" as const },
-                          ],
-                        );
-                      }}
+                      onPress={() => setShowComposerRunnerChoices((shown) => !shown)}
                       accessibilityRole="button"
                       accessibilityLabel="Choose coding agent"
                     >
@@ -7439,6 +7639,59 @@ export default function TasksScreen() {
                     </Pressable>
                   )}
                 </View>
+                {showComposerRunnerChoices && !pendingTarget ? (
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      marginTop: 8,
+                    }}
+                    accessibilityLabel="Coding agent choices"
+                  >
+                    {["claude", "codex", "opencode"].map((runnerId) => {
+                      const row = availableRunners.find(
+                        (runner) => normalizeTaskRunnerId(runner.id) === runnerId,
+                      );
+                      const selected = normalizeTaskRunnerId(selectedRunner) === runnerId;
+                      return (
+                        <Pressable
+                          key={runnerId}
+                          onPress={() => {
+                            setSelectedRunner(runnerId);
+                            setShowComposerRunnerChoices(false);
+                            userPickedRunnerRef.current = true;
+                            userPickedModelRef.current = false;
+                            if (runnerSelectionDeviceId) {
+                              void setPrimaryRunnerForDevice(runnerSelectionDeviceId, runnerId, null).catch(() => {});
+                            }
+                          }}
+                          style={({ pressed }) => [
+                            s.agentBadge,
+                            {
+                              backgroundColor: selected ? c.accentSoft : c.bgCardElevated,
+                              borderColor: selected ? c.accent : c.border,
+                              opacity: pressed ? 0.65 : 1,
+                            },
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Use ${displayRunnerLabel(runnerId)} on ${runnerSelectionDevice?.name || "selected machine"}`}
+                        >
+                          <Text style={[s.agentBadgeText, { color: selected ? c.accent : c.textSecondary }]}>
+                            {displayRunnerLabel(runnerId)}
+                            {row?.installed === false ? " · install" : ""}
+                          </Text>
+                          {selected ? <Text style={{ color: c.accent, marginLeft: 5 }}>✓</Text> : null}
+                        </Pressable>
+                      );
+                    })}
+                    {availableRunners.length === 0 ? (
+                      <Text style={{ color: c.textMuted, fontSize: 11, alignSelf: "center" }}>
+                        {runnerFetchAlertMessage(runnersFetchState)}
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
                 {/* Machine-role split disclosure: two silent sources are two
                     unfalsifiable states — when a split is active, name which
                     box runs the AI and which box renders, right where the
@@ -7537,9 +7790,9 @@ export default function TasksScreen() {
                             onPress={() => {
                               taskHaptics.send();
                               setSelectedOpenCodeMode(mode);
-                              if (activeDevice?.id) {
+                              if (runnerSelectionDeviceId) {
                                 void setPrimaryRunnerForDevice(
-                                  activeDevice.id,
+                                  runnerSelectionDeviceId,
                                   "opencode",
                                   selectedModel || null,
                                   mode,
@@ -7802,17 +8055,17 @@ export default function TasksScreen() {
                           // from the previously-selected runner — the
                           // model-seeding effect will pick a sensible
                           // default for the new runner on the next render.
-                          if (activeDevice?.id) {
-                            void setPrimaryRunnerForDevice(activeDevice.id, r.id, null).catch(() => {});
+                          if (runnerSelectionDeviceId) {
+                            void setPrimaryRunnerForDevice(runnerSelectionDeviceId, r.id, null).catch(() => {});
                           }
                           if (r.id === "opencode" && runnerAuthIssue(r)) {
-                            setOpenCodeConfigTarget(activeDevice?.id || null);
+                            setOpenCodeConfigTarget(runnerSelectionDeviceId || null);
                             setOpenCodeConfigStartInAdd(true);
                             setShowOpenCodeConfig(true);
                             return;
                           }
                           if (runnerAuthIssue(r) && r.supportsBrowserAuth) {
-                            openRunnerAuthModal(r.id);
+                            openRunnerAuthModal(r.id, runnerSelectionDeviceId || null);
                           }
                         }}
                       >
@@ -7849,7 +8102,7 @@ export default function TasksScreen() {
                       {selectedRunnerAuthIssue && selectedRunnerRow.id === "opencode" ? (
                         <Pressable
                           onPress={() => {
-                            setOpenCodeConfigTarget(activeDevice?.id || null);
+                            setOpenCodeConfigTarget(runnerSelectionDeviceId || null);
                             setOpenCodeConfigStartInAdd(true);
                             setShowOpenCodeConfig(true);
                           }}
@@ -7870,7 +8123,7 @@ export default function TasksScreen() {
                         </Pressable>
                       ) : selectedRunnerAuthIssue && selectedRunnerRow.supportsBrowserAuth ? (
                         <Pressable
-                          onPress={() => openRunnerAuthModal(selectedRunnerRow.id)}
+                          onPress={() => openRunnerAuthModal(selectedRunnerRow.id, runnerSelectionDeviceId || null)}
                           style={{
                             alignSelf: "flex-start",
                             marginTop: 10,
@@ -7910,8 +8163,8 @@ export default function TasksScreen() {
                         // Persist alongside the runner so the seeding effect
                         // on re-render reads the user's pick instead of
                         // overwriting it from primaryModelByDevice.
-                        if (activeDevice?.id && selectedRunner) {
-                          void setPrimaryRunnerForDevice(activeDevice.id, selectedRunner, m.id).catch(() => {});
+                        if (runnerSelectionDeviceId && selectedRunner) {
+                          void setPrimaryRunnerForDevice(runnerSelectionDeviceId, selectedRunner, m.id).catch(() => {});
                         }
                       }}
                     >
@@ -7959,9 +8212,9 @@ export default function TasksScreen() {
                         ]}
                         onPress={() => {
                           setSelectedOpenCodeMode(m.id);
-                          if (activeDevice?.id && selectedRunner === "opencode") {
+                          if (runnerSelectionDeviceId && selectedRunner === "opencode") {
                             void setPrimaryRunnerForDevice(
-                              activeDevice.id,
+                              runnerSelectionDeviceId,
                               "opencode",
                               selectedModel || null,
                               m.id || null,
@@ -7983,11 +8236,11 @@ export default function TasksScreen() {
         <RunnerAuthModal
           visible={!!runnerAuthModalRunner}
           runner={runnerAuthModalRunner || "claude"}
-          deviceName={devices.find((d) => d.id === (runnerAuthModalTarget || activeDevice?.id))?.name || activeDevice?.name || "this machine"}
+          deviceName={devices.find((d) => d.id === (runnerAuthModalTarget || runnerSelectionDeviceId))?.name || runnerSelectionDevice?.name || "this machine"}
           // Routes /runner-auth/browser/* via /peer/<id> when set, so
           // OAuth runs against the remote box where the runner actually
           // lives — not the device the phone happens to be focused on.
-          target={runnerAuthModalTarget || activeDevice?.id || undefined}
+          target={runnerAuthModalTarget || runnerSelectionDeviceId || undefined}
           onClose={() => {
             setRunnerAuthModalRunner(null);
             setRunnerAuthModalTarget(null);
@@ -8162,6 +8415,14 @@ export default function TasksScreen() {
                   // somewhere else.
                   deviceName={selectedTask.deviceName || activeDevice?.name}
                   runnerLabel={selectedTask.runnerId ? displayRunnerLabel(selectedTask.runnerId) : undefined}
+                  onRunnerPress={selectedTask.isAdopted
+                    ? adoptedRunnerControlCommand(selectedTask.runnerId)
+                      ? openAdoptedRunnerControl
+                      : undefined
+                    : openFollowUpRunnerPicker}
+                  runnerActionLabel={selectedTask.isAdopted && adoptedRunnerControlCommand(selectedTask.runnerId)
+                    ? "Open Codex model chooser"
+                    : undefined}
                   tmuxSession={selectedTask.tmuxSession}
                   tmuxSessionId={selectedTask.tmuxSessionId}
                   modelLabel={(() => {
@@ -8724,11 +8985,10 @@ export default function TasksScreen() {
                       >
                         <Ionicons name="ellipsis-horizontal" size={23} color={c.textSecondary} />
                       </Pressable>
-                      {/* Runtime agent switch — tap to open the same picker
-                          that's on the New Task screen, but here a different
-                          selection forks the chat to a child task with the
-                          new runner instead of continuing in place. See
-                          handleFollowUp's `switching` branch + task_fork.go. */}
+                      {/* Runtime agent switch. Use an action sheet here rather
+                          than mounting the New Task native Modal on top of the
+                          task-detail native Modal: iOS mounts the second modal
+                          invisibly, making the control look dead. */}
                       {showFollowUpOptions ? <Pressable
                         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                         style={({ pressed }) => [
@@ -8736,9 +8996,9 @@ export default function TasksScreen() {
                           { backgroundColor: c.bgCardElevated, borderColor: c.border, marginLeft: "auto", marginRight: 10 },
                           pressed && { opacity: 0.55 },
                         ]}
-                        onPress={() => setShowAgentPicker(true)}
+                        onPress={openFollowUpRunnerPicker}
                         accessibilityRole="button"
-                        accessibilityLabel="Change coding agent and model for this chat"
+                        accessibilityLabel="Change coding agent for the next turn"
                       >
                         <Text style={[s.agentBadgeText, { color: c.textSecondary }]}>
                           {(() => {
@@ -8747,11 +9007,11 @@ export default function TasksScreen() {
                             // already tapped a different chip — handleFollowUp
                             // forks when these differ from selectedTask.runnerId.
                             const parentRunner = selectedTask?.runnerId || "";
-                            const desiredRunner = (selectedRunner || parentRunner).trim();
-                            const runner = availableRunners.find(r => r.id === desiredRunner);
-                            const model = availableModels.find(m => m.id === selectedModel);
-                            const runnerLabel = runner?.name || (desiredRunner ? desiredRunner : "Claude");
-                            const modelLabel = model?.name || selectedModel || "";
+                            const desiredRunner = (followUpRunnerOverride || parentRunner).trim();
+                            const runner = availableRunners.find(r => normalizeTaskRunnerId(r.id) === normalizeTaskRunnerId(desiredRunner));
+                            const model = availableModels.find(m => m.id === selectedModel && isModelCompatibleWithRunnerId(m.id, desiredRunner));
+                            const runnerLabel = runner?.name || displayRunnerLabel(desiredRunner);
+                            const modelLabel = model?.name || "";
                             const labelText = modelLabel ? `${runnerLabel} · ${modelLabel}` : runnerLabel;
                             // Hint when the picker is set to a different runner
                             // than the parent task's — the next Send forks.
@@ -9146,7 +9406,7 @@ export default function TasksScreen() {
                       {isLoadingConvexTmux ? <ActivityIndicator size="small" color={c.accent} /> : null}
                     </View>
                     <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 8, lineHeight: 16 }}>
-                      {quicClient.isConnected
+                      {connectionManager.runnerClient().isConnected
                         ? "Runner seats on every box. Connect to a device to adopt its sessions."
                         : "Every box's runner seats, open or closed. Connect to a device (Devices tab) to adopt and vibe."}
                     </Text>
@@ -9184,17 +9444,24 @@ export default function TasksScreen() {
                       );
                     })}
                   </View>
-                ) : isLoadingConvexTmux && tmuxSessions.length === 0 ? (
-                  <View style={{ alignItems: "center", paddingTop: 20 }}>
-                    <ActivityIndicator size="small" color={c.accent} />
-                  </View>
                 ) : null}
-                {isLoadingTmux ? (
+                {localTmuxDiscoveryView === "loading" ? (
                   <View style={{ alignItems: "center", paddingTop: 40 }}>
                     <ActivityIndicator size="large" color={c.accent} />
                     <Text style={{ color: c.textMuted, marginTop: 12, fontSize: 14 }}>Scanning sessions...</Text>
                   </View>
-                ) : tmuxSessions.length === 0 ? (
+                ) : localTmuxDiscoveryView === "error" ? (
+                  <View style={[s.tmuxCard, { backgroundColor: c.errorBg, borderColor: c.errorBorder, marginTop: 16 }]}>
+                    <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }}>Couldn't scan this machine</Text>
+                    <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 6 }}>{tmuxLoadError}</Text>
+                    <Pressable
+                      onPress={() => { void handleOpenTmuxSessions(); }}
+                      style={[s.tmuxActionBtn, { backgroundColor: c.accentSoft, marginTop: 10, alignSelf: "flex-start" }]}
+                    >
+                      <Text style={[s.tmuxActionText, { color: c.accent }]}>Retry scan</Text>
+                    </Pressable>
+                  </View>
+                ) : localTmuxDiscoveryView === "empty" ? (
                   <View style={{ alignItems: "center", paddingTop: 40 }}>
                     <Text style={{ color: c.textMuted, fontSize: 16, marginBottom: 8 }}>No tmux sessions</Text>
                     <Text style={{ color: c.textMuted, fontSize: 13, textAlign: "center", lineHeight: 20, paddingHorizontal: 20 }}>
@@ -9431,15 +9698,25 @@ export default function TasksScreen() {
                     );
                   })
                 )}
-                {(isLoadingConvexTmux || convexTmuxSessions.some(isRunnerSeat)) ? (
+                {runnerSeatDiscoveryView !== "empty" ? (
                   <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.borderSubtle }}>
                     <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "700", textTransform: "uppercase", marginBottom: 8 }}>
                       Runner seats
                     </Text>
-                    {isLoadingConvexTmux && convexTmuxSessions.length === 0 ? (
+                    {runnerSeatDiscoveryView === "loading" ? (
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6 }}>
                         <ActivityIndicator size="small" color={c.accent} />
                         <Text style={{ color: c.textMuted, fontSize: 12 }}>Checking machines...</Text>
+                      </View>
+                    ) : runnerSeatDiscoveryView === "error" ? (
+                      <View style={{ gap: 8, paddingVertical: 4 }}>
+                        <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18 }}>{convexTmuxError}</Text>
+                        <Pressable
+                          onPress={() => { void refreshConvexTmuxSessions(); }}
+                          style={[s.tmuxActionBtn, { backgroundColor: c.accentSoft, alignSelf: "flex-start" }]}
+                        >
+                          <Text style={[s.tmuxActionText, { color: c.accent }]}>Retry runner seats</Text>
+                        </Pressable>
                       </View>
                     ) : (
                       convexTmuxSessions.filter(isRunnerSeat).slice(0, 8).map((session) => (

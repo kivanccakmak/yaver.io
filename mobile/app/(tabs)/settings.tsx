@@ -183,6 +183,8 @@ export default function SettingsScreen() {
     setSecondaryDevice,
     codingMode,
     setCodingMode,
+    primaryRunnerByDevice,
+    setPrimaryRunnerForDevice,
   } = useDevice();
   const { isDark, toggleTheme } = useTheme();
   const c = useColors();
@@ -3853,17 +3855,48 @@ export default function SettingsScreen() {
 
         {/* AI Runner */}
         <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>AI Runner</Text>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]} numberOfLines={1}>
+            AI Runner{activeDevice ? ` · ${activeDevice.name.replace(/\.local$/, "")}` : ""}
+          </Text>
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
             {RUNNER_OPTIONS.map((runner) => {
-              const selected = selectedRunner === runner.runnerId;
+              // Tasks resolve a per-machine primary before the account-wide
+              // fallback. Settings used to edit only the fallback, so it could
+              // show Codex selected while every task on this machine still ran
+              // its saved OpenCode primary. Render and write the same setting
+              // the task dispatcher consumes.
+              const machineRunner = activeDevice?.id ? primaryRunnerByDevice[activeDevice.id] : "";
+              const effectiveRunner = machineRunner === "claude" ? "claude-code" : (machineRunner || selectedRunner);
+              const selected = effectiveRunner === runner.runnerId;
               return (
                 <Pressable
                   key={runner.runnerId}
                   style={[styles.runnerOption, { borderBottomColor: c.borderSubtle }]}
-                  onPress={() => {
-                    setSelectedRunner(runner.runnerId);
-                    if (token) void saveUserSettings(token, { runnerId: runner.runnerId });
+                  onPress={async () => {
+                    const previous = selectedRunner;
+                    try {
+                      if (activeDevice?.id) {
+                        const canonical = runner.runnerId === "claude-code" ? "claude" : runner.runnerId;
+                        await setPrimaryRunnerForDevice(activeDevice.id, canonical, null);
+                      }
+                      setSelectedRunner(runner.runnerId);
+                      if (token) {
+                        if (activeDevice?.id) {
+                          // The machine-scoped choice is already authoritative;
+                          // keep the account fallback in sync without turning a
+                          // secondary preference write into a false failed tap.
+                          void saveUserSettings(token, { runnerId: runner.runnerId }).catch((error) => {
+                            console.warn("[settings] runner fallback save failed", error);
+                          });
+                        } else {
+                          await saveUserSettings(token, { runnerId: runner.runnerId });
+                        }
+                      }
+                    } catch (error) {
+                      setSelectedRunner(previous);
+                      Alert.alert("Couldn't switch coding agent", error instanceof Error ? error.message : String(error));
+                      return;
+                    }
                     if (runner.runnerId !== "opencode") return;
                     if (!activeDevice || connectionStatus !== "connected") {
                       Alert.alert(

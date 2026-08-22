@@ -56,6 +56,14 @@ check(
   deriveRunnerBannerState([{ ...claudeReady, authConfigured: false, ready: false }], baseStatus, "claude", "ok")?.text === "Claude Code needs sign-in",
 );
 
+const openCodeNeedsConfig = deriveRunnerBannerState([
+  { ...claudeReady, id: "opencode", name: "OpenCode", authConfigured: false, ready: false },
+], baseStatus, "opencode", "ok");
+check(
+  "OpenCode provider auth routes to setup instead of runner sign-in",
+  openCodeNeedsConfig?.kind === "needsConfig" && openCodeNeedsConfig.text === "OpenCode needs setup",
+);
+
 check(
   "loaded empty list says no agents available",
   deriveRunnerBannerState([], { ...baseStatus, runner: undefined as any }, "", "ok")?.text === "No agents available",

@@ -944,7 +944,7 @@ export function DevPreview({
     ? "Compiling…"
     : nativeLoading
       ? "Building…"
-      : "Open in Yaver";
+      : "Open";
 
   return (
     <>
@@ -995,7 +995,7 @@ export function DevPreview({
                 <Text style={[styles.openBtnText, { marginLeft: 6 }]}>{openLabel}</Text>
               </>
             ) : (
-              <Text style={styles.openBtnText}>{bundleMounted ? "Reopen in Yaver" : openLabel}</Text>
+              <Text style={styles.openBtnText}>{openLabel}</Text>
             )}
           </Pressable>
           {/* Reload only makes sense after the bundle is actually
@@ -1674,11 +1674,12 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 16, fontWeight: "700", color: "#fff" },
   cardMeta: { fontSize: 11, color: "#666", marginTop: 2 },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
-  cardActions: { flexDirection: "row", gap: 8, marginTop: 12, justifyContent: "flex-start" },
-  actionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
+  cardActions: { flexDirection: "row", gap: 8, marginTop: 12, alignItems: "center", justifyContent: "flex-start" },
+  actionBtn: { minHeight: 36, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   openBtn: {
     backgroundColor: "#22c55e",
     flex: 0,
+    minWidth: 72,
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "center",
@@ -1697,7 +1698,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   fullReloadBtnText: { color: "#818cf8", fontSize: 13, fontWeight: "600" },
-  stopBtn: { backgroundColor: "#ef444422", paddingHorizontal: 16, alignItems: "center" },
+  stopBtn: { backgroundColor: "#ef444422", minWidth: 72, paddingHorizontal: 16, alignItems: "center" },
   stopBtnText: { color: "#ef4444", fontSize: 13, fontWeight: "600" },
 
   banner: {

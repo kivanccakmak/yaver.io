@@ -2282,6 +2282,27 @@ export default function MoreScreen() {
           <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203a"}</Text>
         </Pressable>
 
+        {/* Core phone workflow: keep one compact entry on the lean surface.
+            The older Vibe card is nested under !LEAN_MORE_SURFACE and then
+            guarded by LEAN_MORE_SURFACE, so with the production constant true
+            it can never render. One row restores the route without reviving
+            the historical wall of optional tools. */}
+        {LEAN_MORE_SURFACE ? (
+          <Pressable
+            style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
+            onPress={() => router.navigate("/vibing" as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Open Vibing"
+          >
+            <Text style={[s.icon, { color: c.textMuted }]}>🎤</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.label, { color: c.textPrimary }]}>Vibing</Text>
+              <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Talk or type while watching the project</Text>
+            </View>
+            <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203a"}</Text>
+          </Pressable>
+        ) : null}
+
         {!LEAN_MORE_SURFACE ? (
           <>
         <Pressable

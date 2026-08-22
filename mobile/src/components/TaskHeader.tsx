@@ -26,6 +26,13 @@ export interface TaskHeaderProps {
   /** Model display name (e.g. "GPT-5.4"). Paired with runnerLabel in
    *  the same chip. Renders only when runnerLabel is also present. */
   modelLabel?: string;
+  /** Change the coding agent for the next turn. The chip still names the
+   *  runner executing this task; switching creates a child turn rather than
+   *  pretending an in-flight process changed underneath itself. */
+  onRunnerPress?: () => void;
+  /** Override the runner chip's accessibility action for interactive adopted
+   * sessions (for example Codex `/model`). */
+  runnerActionLabel?: string;
   /** Tmux session name/id for troubleshooting a live task from mobile. */
   tmuxSession?: string;
   tmuxSessionId?: string;
@@ -46,6 +53,8 @@ export function TaskHeader({
   deviceName,
   runnerLabel,
   modelLabel,
+  onRunnerPress,
+  runnerActionLabel,
   tmuxSession,
   tmuxSessionId,
   onOpenLogs,
@@ -215,7 +224,7 @@ export function TaskHeader({
           that used to render the same info inside the chat. */}
       {runnerLabel ? (
         <View style={styles.chipRow}>
-          <View
+          <Pressable
             style={[
               styles.runnerChip,
               {
@@ -223,6 +232,12 @@ export function TaskHeader({
                 borderColor: c.border,
               },
             ]}
+            onPress={onRunnerPress}
+            disabled={!onRunnerPress}
+            accessibilityRole={onRunnerPress ? "button" : undefined}
+            accessibilityLabel={onRunnerPress
+              ? runnerActionLabel || `Change coding agent for the next turn. Current agent: ${runnerLabel}`
+              : undefined}
           >
             <View style={[styles.runnerChipDot, { backgroundColor: palette.dot }]} />
             <Text
@@ -237,7 +252,8 @@ export function TaskHeader({
                 </Text>
               ) : null}
             </Text>
-          </View>
+            {onRunnerPress ? <Text style={{ color: c.textTertiary, fontSize: 10 }}>▾</Text> : null}
+          </Pressable>
         </View>
       ) : null}
     </View>

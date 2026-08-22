@@ -21,10 +21,23 @@ const ctx = await chromium.launchPersistentContext(PROFILE, {
   deviceScaleFactor: iphone.deviceScaleFactor,
   isMobile: iphone.isMobile,
   hasTouch: true,
-  args: ['--window-size=430,932'],
+  // Manual verification should stay cheap: one mobile surface does not need
+  // Chrome's default renderer pool, sync, extensions, or background apps.
+  args: [
+    '--window-size=430,932',
+    '--renderer-process-limit=2',
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--disable-extensions',
+    '--disable-sync',
+  ],
 });
 
-const page = ctx.pages()[0] || (await ctx.newPage());
+const existingPages = ctx.pages();
+const page = existingPages[0] || (await ctx.newPage());
+// A persistent profile can restore old tabs. They are test-profile tabs, not
+// the user's regular browser, and keeping them silently multiplies RAM.
+await Promise.all(existingPages.slice(1).map((extra) => extra.close()));
 page.on('console', (m) => { if (m.type() === 'error') console.log('  [app error]', m.text().slice(0, 160)); });
 page.on('pageerror', (e) => console.log('  [pageerror]', String(e.message).slice(0, 200)));
 

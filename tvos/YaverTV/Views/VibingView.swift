@@ -39,7 +39,11 @@ struct VibingView: View {
         .background(Color.black)
         .task { if projects.isEmpty { await loadProjects() } }
         .sheet(isPresented: $showingProjectStart) {
-            ProjectStartView { task in
+            // ProjectStartView was removed when New Vibe became the native
+            // keyboard-only TaskComposerView. Keeping the old symbol here
+            // made the standalone tvOS archive fail even though Tasks and
+            // Projects already used the replacement surface.
+            TaskComposerView { task in
                 showingProjectStart = false
                 startedTask = task
             }

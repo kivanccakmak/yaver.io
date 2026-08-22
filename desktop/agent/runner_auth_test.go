@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDetectRunnerRuntimeStatusCodexAuthFile(t *testing.T) {
@@ -42,6 +43,31 @@ func TestDetectRunnerRuntimeStatusCodexAuthFile(t *testing.T) {
 	}
 	if status.AuthVerified {
 		t.Fatal("a local `codex login status` must never claim AuthVerified — it never asked the provider")
+	}
+}
+
+func TestApplyLiveRunnerAuthProbeRefreshesCodex(t *testing.T) {
+	stubCodexLinuxSandboxPrereq(t, "")
+	ClearRunnerAuthInvalid("codex")
+	ClearRunnerAuthProven("codex")
+	t.Cleanup(func() {
+		ClearRunnerAuthInvalid("codex")
+		ClearRunnerAuthProven("codex")
+	})
+	seedCodexHome(t, time.Now().Add(48*time.Hour), nil)
+
+	rows := applyLiveRunnerAuthProbe([]runnerAuthStatusRow{{
+		ID:             "codex",
+		Installed:      true,
+		Ready:          false,
+		AuthConfigured: false,
+		Error:          "stale sign-in required",
+	}}, "codex")
+	if len(rows) != 1 || !rows[0].Ready || !rows[0].AuthConfigured {
+		t.Fatalf("live Codex probe did not repair stale auth row: %#v", rows)
+	}
+	if rows[0].Error != "" {
+		t.Fatalf("live Codex probe retained stale error: %q", rows[0].Error)
 	}
 }
 

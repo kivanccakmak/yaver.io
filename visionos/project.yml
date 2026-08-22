@@ -57,6 +57,10 @@ targets:
       - path: ../tvos/YaverTV/SessionClient.swift
       # Boxless provider-direct Yaver Code is available on visionOS for chat
       # and deep audits. It never claims shell, Git, build, or render support.
+      # Its API-key lane is backed by the same this-device-only Keychain vault
+      # as tvOS. Keep the store shared too; including the client without its
+      # credential dependency made the archive fail at compile time.
+      - path: ../tvos/YaverTV/CredentialStore.swift
       - path: ../tvos/YaverTV/BoxlessDeepSeekClient.swift
       - path: ../tvos/YaverTV/Views/BoxlessCodeView.swift
       # Pure follow-up/session policy shared by the vision-native session and

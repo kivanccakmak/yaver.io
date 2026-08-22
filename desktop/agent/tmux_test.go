@@ -298,10 +298,14 @@ func TestTmuxAdoptAndDetach(t *testing.T) {
 		}
 	}
 
-	// Double adopt should fail
-	_, err = mgr.AdoptSession("yaver-test-adopt")
-	if err == nil {
-		t.Error("expected error on double adopt")
+	// A retry must reopen the existing task. POST responses can be lost while
+	// the first adoption still succeeded on the machine.
+	reopened, err := mgr.AdoptSession("yaver-test-adopt")
+	if err != nil {
+		t.Fatalf("repeat AdoptSession: %v", err)
+	}
+	if reopened.ID != task.ID {
+		t.Fatalf("repeat adoption created task %s, want existing %s", reopened.ID, task.ID)
 	}
 
 	// Detach
@@ -478,6 +482,14 @@ func TestTmuxSendInput(t *testing.T) {
 		t.Fatalf("SendTmuxInputWithIntent: %v", err)
 	}
 
+	// Slash commands are runner keyboard input, not Yaver commands. Preserve
+	// them byte-for-byte so an adopted Codex seat can open its live model
+	// chooser with `/model` (and then accept the numbered menu choice).
+	err = mgr.SendTmuxInputWithIntent(task.ID, "/model", true)
+	if err != nil {
+		t.Fatalf("SendTmuxInputWithIntent(/model): %v", err)
+	}
+
 	// Wait for the command to execute and polling to capture
 	time.Sleep(2 * time.Second)
 
@@ -493,8 +505,8 @@ func TestTmuxSendInput(t *testing.T) {
 	// Check that a turn was recorded
 	if len(turns) == 0 {
 		t.Error("expected at least one conversation turn")
-	} else if turns[len(turns)-1].Content != "echo from-mobile" {
-		t.Errorf("expected last turn content='echo from-mobile', got %q", turns[len(turns)-1].Content)
+	} else if turns[len(turns)-1].Content != "/model" {
+		t.Errorf("expected slash command to be preserved as '/model', got %q", turns[len(turns)-1].Content)
 	}
 
 	mgr.Shutdown()
@@ -622,6 +634,17 @@ func TestTmuxHTTPEndpoints(t *testing.T) {
 	taskID, _ := body["taskId"].(string)
 	if taskID == "" {
 		t.Fatal("expected non-empty taskId")
+	}
+
+	// Lost mobile responses are retried. The second request must reopen the
+	// task created by the first request, not report a misleading adoption
+	// failure or create a duplicate polling task.
+	status, body = doRequest(t, "POST", baseURL+"/tmux/adopt", token, `{"session":"yaver-test-http"}`)
+	if status != 200 {
+		t.Fatalf("repeat POST /tmux/adopt: expected 200, got %d: %v", status, body)
+	}
+	if repeatedID, _ := body["taskId"].(string); repeatedID != taskID {
+		t.Fatalf("repeat POST /tmux/adopt taskId=%q, want %q", repeatedID, taskID)
 	}
 
 	// POST /tmux/input

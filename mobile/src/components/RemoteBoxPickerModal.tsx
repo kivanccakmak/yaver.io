@@ -426,6 +426,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
     secondaryDeviceId,
     codingMode,
     setCodingMode,
+    setMachineRolesFavorite,
     latestCliVersion,
     lastError,
   } = deviceCtx;
@@ -635,6 +636,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
       setProbeStage("Switching to phone-only coding…");
       try {
         await setCodingMode("local-only");
+        await setMachineRolesFavorite(null);
         setSwitchSuccess("No remote box · this phone");
         setTimeout(() => {
           onSelected?.(null);
@@ -714,6 +716,15 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
       if (!connectionManager.clientFor(target.id).isConnected) {
         await waitForClientConnected(target.id);
       }
+      // "Use selected machine" is an execution choice, not merely a focus
+      // change. Keep runner + render on the selected box unless the user later
+      // opens the advanced split-role controls. Previously an old favorite
+      // (often ubuntu-4gb) survived this picker, so the UI highlighted the
+      // MacBook while new tasks still ran OpenCode on Ubuntu.
+      await setMachineRolesFavorite({
+        runnerDeviceId: target.id,
+        renderDeviceId: target.id,
+      });
       if (!connectionManager.clientFor(target.id).isConnected) {
         const detail = (lastError || "").trim();
         throw new Error(
@@ -736,7 +747,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
       // list, which made failures look identical to successes.
       setSwitchError(switchErrorMessage(target.name, err));
     }
-  }, [pickedDevice, pickedRemoteless, selectDevice, activeDevice?.id, lastError, onSelected, onClose, deviceCtx, setCodingMode]);
+  }, [pickedDevice, pickedRemoteless, selectDevice, activeDevice?.id, lastError, onSelected, onClose, deviceCtx, setCodingMode, setMachineRolesFavorite]);
 
   const pickedDeviceIsCurrent = !!pickedDevice && activeDevice?.id === pickedDevice.id;
   const pickedDeviceIsConnected = !!pickedDevice && connectedSet.has(pickedDevice.id);

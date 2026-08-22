@@ -217,9 +217,10 @@ var builtinRunners = map[string]RunnerConfig{
 		Args: []string{"exec", "--sandbox", "workspace-write", "{prompt}"},
 		// Keep this aligned with the backend model catalogue used by
 		// /agent/runners. Older "gpt-5.3-codex" ChatGPT-account runs now
-		// fail with "model is not supported"; the current default exposed
-		// by Codex is gpt-5.4.
-		Model:      "gpt-5.4",
+		// fail with "model is not supported". gpt-5.6-terra was probed
+		// successfully with the subscription login and matches the fallback
+		// catalogue returned by /agent/runners.
+		Model:      "gpt-5.6-terra",
 		OutputMode: "raw",
 	},
 	"opencode": {

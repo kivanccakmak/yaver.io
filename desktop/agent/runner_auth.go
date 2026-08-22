@@ -1914,19 +1914,27 @@ func uniqStrings(in []string) []string {
 // commits to an expensive, hard-to-undo action (opening a remote TUI) where a
 // 60-second-stale "signed in" would strand the user on a login screen.
 //
-// It costs a `claude auth status` fork and zero API tokens. It deliberately
-// does NOT send a probe prompt through the model: `claude --print` is headless
-// mode, which this project does not run.
+// It costs one runner-owned, read-only auth-status probe and zero API tokens.
+// It deliberately does NOT send a probe prompt through the model: a status
+// surface must not spend a turn merely to repair stale local inventory.
 func applyLiveRunnerAuthProbe(rows []runnerAuthStatusRow, runner string) []runnerAuthStatusRow {
-	if normalizeRunnerID(runner) == "" {
-		runner = "claude"
+	id := normalizeRunnerID(runner)
+	if id == "" {
+		id = "claude"
 	}
-	if normalizeRunnerID(runner) != "claude" {
-		return rows // only Claude Code exposes a free, authoritative auth probe
+	switch id {
+	case "claude":
+		invalidateClaudeAuthStatusCache()
+	case "codex":
+		// `codex login status` is the Codex equivalent of Claude's read-only
+		// auth probe. A completed login must be visible immediately instead of
+		// waiting for the 60-second negative cache to expire.
+		invalidateCodexLoginStatusCache()
+	default:
+		return rows
 	}
-	invalidateClaudeAuthStatusCache()
 	for i := range rows {
-		if normalizeRunnerID(rows[i].ID) != "claude" || !rows[i].Installed {
+		if normalizeRunnerID(rows[i].ID) != id || !rows[i].Installed {
 			continue
 		}
 		// DetectRunnerRuntimeStatus, NOT detectClaudeStatus.
@@ -1943,7 +1951,7 @@ func applyLiveRunnerAuthProbe(rows []runnerAuthStatusRow, runner string) []runne
 		// A local store cannot see a server-side revocation, so it may never
 		// vote against one. Going through DetectRunnerRuntimeStatus keeps the
 		// rejection override applied; only a real sign-in clears it.
-		fresh := DetectRunnerRuntimeStatus(GetRunnerConfig("claude"), "")
+		fresh := DetectRunnerRuntimeStatus(GetRunnerConfig(id), "")
 		rows[i].Ready = fresh.Ready
 		rows[i].AuthConfigured = fresh.AuthConfigured
 		rows[i].AuthPresent = fresh.AuthPresent

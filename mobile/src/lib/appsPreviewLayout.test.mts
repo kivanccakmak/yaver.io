@@ -33,6 +33,10 @@ assert.match(src, /actionBtn:\s*\{[^\n]*minHeight:\s*36[^\n]*alignItems:\s*"cent
   "the Projects preview actions must stay short and center their labels");
 assert.match(src, /openBtn:\s*\{[^\n]*minWidth:\s*72/,
   "the Open action must be wide enough to remain readable without filling the card");
+assert.match(src, /cardActions:\s*\{[^\n]*alignItems:\s*"center"[^\n]*justifyContent:\s*"flex-start"/,
+  "Open and Stop must stay left aligned as one compact action group");
+assert.match(src, /stopBtn:\s*\{[^\n]*minWidth:\s*72/,
+  "Open and Stop must have matching compact widths");
 assert.match(src, /filterRow:\s*\{\s*height:\s*38/,
   "the chip ScrollView must be taller than its 34pt selected chips");
 assert.doesNotMatch(src, /previewWaitLine|previewWaitWrap|previewWaitCard/,
@@ -47,6 +51,10 @@ assert.match(sharedPreviewSrc, /reconcilePreviewDevStatus\(previous, s, true\)/,
   "the second preview implementation must preserve its WebView on a transient poll failure");
 assert.match(sharedPreviewSrc, /openBtn:\s*\{[\s\S]{0,120}flex:\s*0/,
   "the shared Open in Yaver action must stay compact like Stop on every client width");
+assert.match(sharedPreviewSrc, /const openLabel =[\s\S]{0,160}: "Open";/,
+  "the shared preview must use the concise Open label");
+assert.match(sharedPreviewSrc, /cardActions:\s*\{[^\n]*alignItems:\s*"center"[^\n]*justifyContent:\s*"flex-start"/,
+  "the shared preview actions must stay left aligned");
 assert.doesNotMatch(src, /\[preview\] log stream unavailable/,
   "an optional log-stream failure must not be presented as a preview failure");
 assert.match(src, /previewClient\.subscribeDevEvents/,

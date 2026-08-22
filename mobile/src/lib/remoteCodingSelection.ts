@@ -67,6 +67,39 @@ export function displayRunnerLabel(runnerId?: string | null): string {
   return normalized || "Selected agent";
 }
 
+/** Native command exposed by an adopted runner's interactive tmux seat.
+ * This opens the catalogue reported by the signed-in Codex installation, so
+ * a mobile build does not have to guess which subscription models exist. */
+export function adoptedRunnerControlCommand(runnerId?: string | null): string | null {
+  return normalizeTaskRunnerId(runnerId) === "codex" ? "/model" : null;
+}
+
+/** The one machine whose runner catalog/defaults the composer must use. */
+export function resolveRunnerSelectionDeviceId(input: {
+  taskTargetDeviceId?: string | null;
+  runnerRoleDeviceId?: string | null;
+  activeDeviceId?: string | null;
+}): string {
+  // The Tasks banner controls the visibly selected Remote Box. Older installs
+  // can retain a split runner-role preference after focus changes; preferring
+  // that hidden role made the header say Ubuntu while its runner button edited
+  // a Mac. An explicit wizard target still wins, then the visible box, with
+  // the legacy role only as a fallback when no box is selected.
+  return input.taskTargetDeviceId || input.activeDeviceId || input.runnerRoleDeviceId || "";
+}
+
+/** True when a task-create response proves the machine launched a different
+ * runner than the one the composer sent. Empty legacy response values remain
+ * unknown rather than being guessed. */
+export function runnerDispatchMismatch(
+  requestedRunnerId?: string | null,
+  actualRunnerId?: string | null,
+): boolean {
+  const requested = normalizeTaskRunnerId(requestedRunnerId);
+  const actual = normalizeTaskRunnerId(actualRunnerId);
+  return !!requested && !!actual && requested !== actual;
+}
+
 export function isModelCompatibleWithRunnerId(
   modelId: string | null | undefined,
   runnerId: string | null | undefined,
@@ -112,10 +145,10 @@ export function preferredDefaultModelForRunner(
   if (isKivancAccount(signedInEmail)) {
     if (normalized === "claude" && isKivancMacBook(device)) return "claude-opus-4-7";
     if (normalized === "opencode" && !isKivancMacBook(device)) return HETZNER_OPENCODE_MODEL;
-    if (normalized === "codex" && !isKivancMacBook(device)) return "gpt-5.4";
+    if (normalized === "codex" && !isKivancMacBook(device)) return "gpt-5.6-terra";
   }
   if (normalized === "claude") return "claude-opus-4-7";
-  if (normalized === "codex") return "gpt-5.4";
+  if (normalized === "codex") return "gpt-5.6-terra";
   if (normalized === "opencode") return HETZNER_OPENCODE_MODEL;
   return null;
 }
@@ -138,9 +171,17 @@ export function resolveRunnerForRemoteSend(args: {
     : "";
   const picked = normalizeTaskRunnerId(args.selectedRunner);
   const fallback = normalizeTaskRunnerId(args.fallbackRunner);
-  const resolved = !args.userPickedRunner && explicitPrimary
-    ? explicitPrimary
-    : picked || explicitPrimary || fallback;
+  // The picker value is visible user-facing state, so it must be the wire
+  // truth whenever it is non-empty. `userPickedRunner` used to make the same
+  // visible "Codex" value mean two different things: a device-focus change
+  // reset the hidden flag, then dispatch silently replaced Codex with that
+  // machine's stored OpenCode primary. The task header was the first place the
+  // user could learn the switch had been ignored.
+  //
+  // Per-device primary remains the default when the picker is genuinely
+  // blank. Seeding the picker from that primary is a UI concern; dispatch must
+  // never contradict what the composer currently displays.
+  const resolved = picked || explicitPrimary || fallback;
   return resolved || undefined;
 }
 

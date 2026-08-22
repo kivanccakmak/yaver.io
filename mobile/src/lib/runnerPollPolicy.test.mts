@@ -13,6 +13,7 @@ import {
   RUNNER_POLL_MIN_GAP_MS,
   RUNNER_POLL_RETRY_MS,
   runnerPollCadenceMs,
+  reconcileRunnerAuthStatus,
   sameAgentStatus,
   sameRunnerList,
   type ComparableRunner,
@@ -87,6 +88,27 @@ test("an identical probe is not a change (this is what stops the churn)", () => 
   assert.ok(sameRunnerList([], []));
 });
 
+test("dedicated auth status repairs a stale negative without dropping models", () => {
+  const stale = runner({ id: "codex", ready: false, authConfigured: false, error: "sign in" });
+  const merged = reconcileRunnerAuthStatus([stale], [{
+    id: "codex",
+    installed: true,
+    ready: true,
+    authConfigured: true,
+    authSource: "codex login status",
+  }]);
+  assert.equal(merged[0]?.ready, true);
+  assert.equal(merged[0]?.authConfigured, true);
+  assert.equal(merged[0]?.error, "");
+  assert.deepEqual(merged[0]?.models, stale.models);
+});
+
+test("partial or unreachable auth audit cannot erase runner inventory", () => {
+  const original = [runner({ id: "codex" })];
+  assert.equal(reconcileRunnerAuthStatus(original, null), original);
+  assert.equal(reconcileRunnerAuthStatus(original, [{ id: "claude", authConfigured: false }]), original);
+});
+
 test("every field the banner branches on forces a change", () => {
   // Each of these drives a different runnerBannerState kind: notInstalled,
   // authNeeded, blocked/needsConfig, blocked. Missing one here means the banner
@@ -97,6 +119,7 @@ test("every field the banner branches on forces a change", () => {
     { installed: false },
     { ready: false },
     { authConfigured: false },
+    { authSource: "codex login status" },
     { error: "needs setup" },
     { warning: "stale config" },
     { isDefault: false },

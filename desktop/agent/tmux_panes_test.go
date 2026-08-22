@@ -190,10 +190,14 @@ func TestAdoptTargetAllowsEachPaneOfOneSession(t *testing.T) {
 		t.Errorf("tasks did not record their own panes: %s=%s, %s=%s",
 			first.ID, first.TmuxPaneID, second.ID, second.TmuxPaneID)
 	}
-	// Re-adopting the same pane is a duplicate and must be refused by pane, not
-	// by session — otherwise the check either blocks pane 2 or blocks nothing.
-	if _, err := mgr.AdoptTarget("yaver-test-vibe-two", ids[0]); err == nil {
-		t.Error("re-adopting the same pane should be refused")
+	// Re-adopting the same pane is an idempotent open of its task; it must not
+	// create a third task or resolve to the neighbouring pane.
+	reopened, err := mgr.AdoptTarget("yaver-test-vibe-two", ids[0])
+	if err != nil {
+		t.Fatalf("re-adopt pane %s: %v", ids[0], err)
+	}
+	if reopened.ID != first.ID {
+		t.Fatalf("re-adopted pane resolved task %s, want %s", reopened.ID, first.ID)
 	}
 }
 

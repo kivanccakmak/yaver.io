@@ -33,15 +33,15 @@ func TestSoftRunnerFailureStillAllowsRunnerEOFAfterSubstantialOutput(t *testing.
 }
 
 func TestCodexBuiltinDefaultModelMatchesCatalogue(t *testing.T) {
-	if got := GetRunnerConfig("codex").Model; got != "gpt-5.4" {
-		t.Fatalf("codex default model = %q, want gpt-5.4", got)
+	if got := GetRunnerConfig("codex").Model; got != "gpt-5.6-terra" {
+		t.Fatalf("codex default model = %q, want gpt-5.6-terra", got)
 	}
 	models := fallbackRunnerModels("codex")
 	if len(models) == 0 {
 		t.Fatal("codex fallback catalogue is empty")
 	}
-	if got := models[0].ID; got != "gpt-5.4" {
-		t.Fatalf("codex fallback catalogue default = %q, want gpt-5.4", got)
+	if got := models[0].ID; got != "gpt-5.6-terra" {
+		t.Fatalf("codex fallback catalogue default = %q, want gpt-5.6-terra", got)
 	}
 	for _, model := range models {
 		if model.ID == "gpt-5.3-codex" {
