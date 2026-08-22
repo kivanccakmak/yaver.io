@@ -36,8 +36,10 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-MANIFEST="$ROOT/mobile/android/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
 AAB="$ROOT/mobile/android/app/build/outputs/bundle/release/app-release.aab"
+
+# shellcheck source=scripts/lib/android-sdk.sh
+source "$ROOT/scripts/lib/android-sdk.sh"
 
 if [ "$SKIP_BUILD" != "1" ]; then
   "$ROOT/scripts/deploy-playstore.sh"
@@ -49,8 +51,8 @@ if [ ! -f "$AAB" ]; then
 fi
 
 echo "Android XR AAB ready: $AAB"
-if [ ! -f "$MANIFEST" ]; then
-  echo "ERROR: release manifest not found for XR declaration analysis: $MANIFEST" >&2
+if ! MANIFEST="$(yaver_release_manifest_path "$ROOT/mobile/android")"; then
+  echo "ERROR: release manifest not found for XR declaration analysis under mobile/android/app/build/intermediates." >&2
   echo "Run without --skip-build to generate it." >&2
   exit 1
 fi

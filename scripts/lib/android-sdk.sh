@@ -35,3 +35,22 @@ yaver_resolve_android_sdk() {
   export ANDROID_SDK_ROOT="$resolved"
   echo "Using Android SDK: $resolved"
 }
+
+# AGP has moved the merged release manifest between singular/plural and
+# task-nested directories across supported versions. Return the first real
+# output instead of treating one historical path as the operation.
+yaver_release_manifest_path() {
+  local project_root="$1"
+  local candidate
+  for candidate in \
+    "$project_root/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml" \
+    "$project_root/app/build/intermediates/merged_manifests/release/AndroidManifest.xml" \
+    "$project_root/app/build/intermediates/merged_manifest/release/AndroidManifest.xml" \
+    "$project_root/app/build/intermediates/bundle_manifest/release/AndroidManifest.xml"; do
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}

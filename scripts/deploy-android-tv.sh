@@ -28,7 +28,6 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-MANIFEST="$ROOT/androidtv/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
 AAB="$ROOT/androidtv/app/build/outputs/bundle/release/app-release.aab"
 BANNER="$ROOT/androidtv/app/src/main/res/drawable-xhdpi/tv_banner.png"
 
@@ -56,8 +55,8 @@ if [ "$SKIP_BUILD" != "1" ]; then
     --no-daemon --max-workers=2
 fi
 
-if [ ! -f "$MANIFEST" ]; then
-  echo "ERROR: release manifest not found: $MANIFEST" >&2
+if ! MANIFEST="$(yaver_release_manifest_path "$ROOT/androidtv")"; then
+  echo "ERROR: Android TV release manifest not found under androidtv/app/build/intermediates." >&2
   echo "Run without --skip-build to generate it." >&2
   exit 1
 fi

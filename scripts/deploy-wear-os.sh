@@ -42,7 +42,6 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-MANIFEST="$ROOT/wear/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
 AAB="$ROOT/wear/app/build/outputs/bundle/release/app-release.aab"
 
 # shellcheck source=scripts/lib/android-sdk.sh
@@ -70,8 +69,8 @@ fi
 "$ROOT/scripts/check-no-native-payment-sdks.sh" android "$PAYMENT_DEP_REPORT"
 rm -f "$PAYMENT_DEP_REPORT"
 
-if [ ! -f "$MANIFEST" ]; then
-  echo "ERROR: Wear release manifest not found: $MANIFEST" >&2
+if ! MANIFEST="$(yaver_release_manifest_path "$ROOT/wear")"; then
+  echo "ERROR: Wear release manifest not found under wear/app/build/intermediates." >&2
   exit 1
 fi
 
