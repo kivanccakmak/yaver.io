@@ -237,17 +237,18 @@ func rewriteDevIndexBaseHref(resp *http.Response) error {
 	// style). Off until the surface posts a mode command, so it adds no
 	// behaviour on its own. See dom_inspect_inject.go.
 	rewritten = injectDomInspectProbe(rewritten)
-	// Carry the page's auth query onto its sub-resources. Over the public relay
-	// every proxied request is authenticated, and a browser cannot add ?token/
-	// &__rp to the requests the HTML parser or a dynamic loader issues — so the
-	// document loaded and every script/asset 401'd. applyPreviewRelayAuth existed
-	// for exactly this and was never wired into the proxy (measured live
-	// 2026-07-26: entry.bundle 401 through /d/<id>/dev-web/ while the page
-	// rendered its empty #root). No auth query on the request → no-op, so LAN
-	// direct traffic is untouched.
+	// Keep dynamic requests inside the scoped /dev[-web]/ lane even after the
+	// visible path is rewritten to "/" for the guest router. The shim also
+	// carries the page's auth query onto sub-resources when one exists. Measured
+	// 2026-08-22 against sfmg: Metro returned a valid JavaScript bundle locally,
+	// while the phone requested the relay root and parsed its HTML response as
+	// JavaScript (SyntaxError: Unexpected token '<'). The transport half is
+	// required on unauthenticated LAN paths too, so inject it unconditionally.
+	rawQuery := ""
 	if req := resp.Request; req != nil && req.URL != nil {
-		rewritten = applyPreviewRelayAuth(rewritten, req.URL.RawQuery)
+		rawQuery = req.URL.RawQuery
 	}
+	rewritten = applyPreviewRelayAuth(rewritten, rawQuery)
 	if rewritten == string(body) {
 		// Nothing changed — hand back the exact original bytes (still
 		// compressed if it was), so we never re-encode needlessly.

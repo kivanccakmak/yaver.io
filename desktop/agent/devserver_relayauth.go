@@ -22,7 +22,9 @@ package main
 //
 // ── What this does ───────────────────────────────────────────────────────────
 //
-// When the proxied page was itself loaded with an auth query, the agent:
+// For every proxied page, the agent installs a route shim before the guest
+// router can replace the visible path. When the page was itself loaded with an
+// auth query, the agent additionally:
 //
 //  1. rewrites STATIC relative src/href in the HTML to carry that same query.
 //     The HTML parser creates those elements directly, so no runtime hook can
@@ -42,7 +44,7 @@ package main
 //
 // The relay cookie remains the better answer precisely because HttpOnly removes
 // that pre-existing exposure. When it ships, the query can drop out of the URL
-// entirely and this becomes a no-op (no auth query -> nothing injected).
+// entirely and only the scoped route pin remains active.
 
 import (
 	"net/url"
@@ -126,22 +128,34 @@ func isRelativeAssetRef(v string) bool {
 	return true
 }
 
-// previewAuthShimJS propagates the page's own auth query onto same-origin
-// dynamic requests. It reads location.search at runtime, so no credential is
-// ever written into the HTML the agent serves.
+// previewAuthShimJS keeps same-origin dynamic requests inside the browser
+// preview's scoped proxy lane and propagates the page's own auth query when
+// present. The lane is captured before devRouterBasePathScript replaces the
+// visible pathname for Expo Router, otherwise later relative loads resolve at
+// the relay root and receive HTML instead of JavaScript. It reads
+// location.search at runtime, so no credential is ever written into the HTML
+// the agent serves.
 const previewAuthShimJS = `<script>(function(){try{
-var raw=location.search;if(!raw||raw.length<2)return;
+var p=location.pathname;
+var lane=p.match(/^(.*\/dev(?:-web)?)(?:\/.*)?$/),base=lane?lane[1]+"/":"";
+var raw=location.search;
 var src=new URLSearchParams(raw),keep=new URLSearchParams();
 ["__rp","token"].forEach(function(k){var v=src.get(k);if(v)keep.set(k,v);});
-var q=keep.toString();if(!q)return;
+var q=keep.toString();
 function A(u){try{
  if(u==null)return u;
  var s=String(u);
  if(/^(data:|blob:|about:|javascript:|#)/i.test(s))return u;
- var url=new URL(s,location.href);
+ var url;
+ if(base&&s.charAt(0)==="/"&&s.charAt(1)!=="/"){
+  url=new URL(base+s.slice(1),location.origin);
+ }else{
+  url=new URL(s,base?new URL(base,location.origin):location.href);
+ }
  if(url.origin!==location.origin)return u;
- if(url.searchParams.has("__rp")||url.searchParams.has("token"))return u;
- keep.forEach(function(v,k){url.searchParams.set(k,v);});
+ if(q&&!url.searchParams.has("__rp")&&!url.searchParams.has("token")){
+  keep.forEach(function(v,k){url.searchParams.set(k,v);});
+ }
  return url.toString();
 }catch(e){return u;}}
 var of=window.fetch;
@@ -159,10 +173,11 @@ document.createElement=function(t){var el=ce(t);try{
 }catch(e){}return el;};
 }catch(e){}})();</script>`
 
-// injectPreviewAuthShim places the shim as early as possible — right after
-// <head> — so it is installed before any dynamic loader runs.
-func injectPreviewAuthShim(html, authQuery string) string {
-	if authQuery == "" || strings.Contains(html, "yaver-preview-auth-shim") {
+// injectPreviewAuthShim places the combined transport/auth shim as early as
+// possible — right after <head> — so it captures the scoped path and is
+// installed before the router bootstrap or any dynamic loader runs.
+func injectPreviewAuthShim(html string) string {
+	if strings.Contains(html, "yaver-preview-auth-shim") {
 		return html
 	}
 	marked := strings.Replace(previewAuthShimJS, "<script>", `<script data-yaver="yaver-preview-auth-shim">`, 1)
@@ -183,8 +198,5 @@ func injectPreviewAuthShim(html, authQuery string) string {
 // applyPreviewRelayAuth is the whole transform: static rewrite + runtime shim.
 func applyPreviewRelayAuth(html, rawQuery string) string {
 	authQuery := extractPreviewAuthQuery(rawQuery)
-	if authQuery == "" {
-		return html
-	}
-	return injectPreviewAuthShim(appendAuthToStaticAssets(html, authQuery), authQuery)
+	return injectPreviewAuthShim(appendAuthToStaticAssets(html, authQuery))
 }

@@ -193,8 +193,9 @@ func TestModifyResponsePropagatesAuthQueryOntoAssets(t *testing.T) {
 }
 
 // No auth query on the page request → no auth material may appear in the
-// output (the router base-path script still injects; that part is unrelated).
-// LAN direct traffic is header-authenticated and must never gain query creds.
+// output. The transport shim still has to pin dynamic requests to /dev/ after
+// the guest router sees "/". LAN direct traffic is header-authenticated and
+// must never gain query creds.
 func TestModifyResponseLeavesUnauthedPagesWithoutAuth(t *testing.T) {
 	html := `<html><head></head><body><script src="app.js"></script></body></html>`
 	req, _ := http.NewRequest("GET", "http://127.0.0.1:18080/dev/", nil)
@@ -208,10 +209,35 @@ func TestModifyResponseLeavesUnauthedPagesWithoutAuth(t *testing.T) {
 	}
 	got, _ := io.ReadAll(resp.Body)
 	s := string(got)
-	if strings.Contains(s, "yaver-preview-auth-shim") {
-		t.Fatalf("auth shim injected on a page with no auth query:\n%s", s)
+	if !strings.Contains(s, "yaver-preview-auth-shim") {
+		t.Fatalf("transport shim missing on a page with no auth query:\n%s", s)
+	}
+	if strings.Contains(s, "tok123") || strings.Contains(s, "pw456") {
+		t.Fatalf("auth material injected on a page with no auth query:\n%s", s)
 	}
 	if !strings.Contains(s, `src="app.js"`) {
 		t.Fatalf("asset src was altered without an auth query to carry:\n%s", s)
+	}
+}
+
+// Expo Router must see "/" or it renders its own Unmatched Route screen, so
+// the preview bootstrap replaces /d/<device>/dev-web/ with "/" before the
+// guest bundle starts. That visible-route rewrite must not also retarget
+// Metro's later fetch/XHR/script requests to the relay root. On 2026-08-22 the
+// phone therefore fetched https://public.yaver.io/node_modules/... and parsed
+// the relay's HTML response as JavaScript (SyntaxError: Unexpected token '<').
+//
+// Pin both halves of the transport shim: it captures the scoped lane before
+// history.replaceState changes location, then resolves root-relative AND
+// ordinary relative dynamic resources against that captured lane.
+func TestPreviewTransportShimKeepsDynamicRequestsInsideScopedLane(t *testing.T) {
+	for _, want := range []string{
+		`var lane=p.match(/^(.*\/dev(?:-web)?)(?:\/.*)?$/),base=lane?lane[1]+"/":"";`,
+		`url=new URL(base+s.slice(1),location.origin);`,
+		`url=new URL(s,base?new URL(base,location.origin):location.href);`,
+	} {
+		if !strings.Contains(previewAuthShimJS, want) {
+			t.Fatalf("preview transport shim does not pin dynamic resources to the scoped lane; missing %q", want)
+		}
 	}
 }

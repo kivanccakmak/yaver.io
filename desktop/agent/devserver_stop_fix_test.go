@@ -261,6 +261,18 @@ func TestDevStopHTTPResponseShape(t *testing.T) {
 	}
 }
 
+// The JSON decoder returns booleans as bool, not the string "true". The real
+// sfmg stop operation succeeded on 2026-08-22 but `yaver dev stop` exited 1
+// because the CLI compared the decoded value to a string.
+func TestLocalAgentResponseOKAcceptsJSONBoolean(t *testing.T) {
+	if !localAgentResponseOK(map[string]any{"ok": true}) {
+		t.Fatal("decoded JSON boolean true must be treated as success")
+	}
+	if localAgentResponseOK(map[string]any{"ok": false}) {
+		t.Fatal("decoded JSON boolean false must not be treated as success")
+	}
+}
+
 // TestStopServingPreviewResultCancelsBuild proves /dev/stop also kills
 // any registered in-flight build context.
 func TestStopServingPreviewResultCancelsBuild(t *testing.T) {

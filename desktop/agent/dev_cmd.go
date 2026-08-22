@@ -119,12 +119,23 @@ func runDevStop() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	if resp["ok"] == "true" {
+	if localAgentResponseOK(resp) {
 		fmt.Println("Dev server stopped.")
 	} else {
 		fmt.Fprintf(os.Stderr, "Failed: %v\n", resp["error"])
 		os.Exit(1)
 	}
+}
+
+// localAgentResponseOK accepts the JSON-native boolean returned by agent
+// handlers while retaining compatibility with an older string-valued shape.
+// localAgentRequest decodes into map[string]interface{}, so comparing the value
+// directly with "true" reports a successful operation as failed.
+func localAgentResponseOK(resp map[string]interface{}) bool {
+	if ok, typed := resp["ok"].(bool); typed {
+		return ok
+	}
+	return fmt.Sprint(resp["ok"]) == "true"
 }
 
 func runDevStatus() {
@@ -143,7 +154,7 @@ func runDevReload() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	if resp["ok"] == "true" {
+	if localAgentResponseOK(resp) {
 		fmt.Println("Hot reload triggered.")
 	} else {
 		fmt.Fprintf(os.Stderr, "Failed: %v\n", resp["error"])
