@@ -155,8 +155,12 @@ test.describe("DOM mode closed loop (live)", () => {
     });
 
     // ── flip Inspect ON ────────────────────────────────────────────────
-    // The chip lives beside the composer in RuntimeLabView. Role, not prose:
-    // "Inspect" as a word appears in many places on this screen.
+    // Preview/project/MCP chrome lives behind the composer ellipsis so the
+    // agent discussion keeps the height. Open it by its named affordance;
+    // role, not prose, because "Inspect" appears in several places.
+    const composerMore = page.getByRole("button", { name: /More task options/i });
+    await expect(composerMore, "the Runtime composer has no progressive-disclosure ellipsis").toBeVisible({ timeout: 30_000 });
+    await composerMore.click();
     const inspectRadio = page.getByRole("radio", { name: /Inspect/i }).first();
     await expect(inspectRadio, "no Browse|Inspect radio on the dashboard").toBeVisible({ timeout: 30_000 });
     await inspectRadio.click();

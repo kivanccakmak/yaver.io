@@ -1073,6 +1073,11 @@ export default function RuntimeLabView({
     }).catch(() => {});
   }, [connectedDevice?.id, includeYaverMcp, selectedMcpServers, token]);
   const [chatRunnerControlsOpen, setChatRunnerControlsOpen] = useState(false);
+  // Project, MCP and preview-inspection controls are useful but secondary to
+  // the conversation. Keep them mounted (the context chips own live preview
+  // listeners) while hiding their chrome behind the composer's ellipsis.
+  // This also reaches the desktop GUI, which renders this dashboard verbatim.
+  const [chatScopeControlsOpen, setChatScopeControlsOpen] = useState(false);
   // Machine-roles (runner/render split) route editor in the chat header.
   const [machinesEditOpen, setMachinesEditOpen] = useState(false);
   const [machinesDraftRunner, setMachinesDraftRunner] = useState("");
@@ -1524,11 +1529,18 @@ export default function RuntimeLabView({
         const detail = err instanceof Error ? err.message : String(err);
         appendLog(`default project catalog sync skipped: ${detail || "settings unavailable"}`);
       });
-      if (useLatestProject && !selectedPath && rows[0]?.path) {
+      // A usable remote project inventory should produce a usable composer
+      // without asking the user to repeat the machine's answer in a select.
+      // Keep an in-session choice when it still exists; otherwise prefer the
+      // remembered cross-surface project and finally the first project the
+      // render machine actually returned. The picker remains available under
+      // the composer ellipsis for explicit retargeting.
+      if (!rows.some((row) => row.path === selectedPath)) {
         const saved = connectedDevice?.id
           ? (settings?.defaultRuntimeProjectByDevice || []).find((row: RuntimeProjectPreference) => row.deviceId === connectedDevice.id)
           : undefined;
-        setSelectedPath(resolveRuntimeProjectPreference(rows, saved)?.path || "");
+        const next = (useLatestProject ? resolveRuntimeProjectPreference(rows, saved) : null) || rows[0] || null;
+        setSelectedPath(next?.path || "");
       }
       appendLog(`projects loaded: ${rows.length}`);
     } catch (err) {
@@ -4597,7 +4609,12 @@ export default function RuntimeLabView({
                 </div>
               )}
               </div>
-            <div className="border-t border-[#e4e7ec] bg-white p-3 dark:border-[#242b35] dark:bg-[#141820]">
+            <div className="relative border-t border-[#e4e7ec] bg-white p-3 dark:border-[#242b35] dark:bg-[#141820]">
+              <div
+                id="runtime-composer-options"
+                data-testid="runtime-composer-options"
+                className={`${chatScopeControlsOpen ? "absolute" : "hidden"} bottom-full left-3 right-3 z-30 mb-1 max-h-[min(58vh,420px)] overflow-y-auto rounded-lg border border-[#d7dce3] bg-white p-3 shadow-2xl dark:border-[#2a3039] dark:bg-[#141820]`}
+              >
               {/* What the runner is told about the screen you're looking at.
                   Shown, not implied: a prompt this surface silently enriches
                   is a prompt the user cannot reason about — and the toggle
@@ -4649,7 +4666,6 @@ export default function RuntimeLabView({
                       const next = event.target.checked;
                       setUseLatestProject(next);
                       setUseLatestProjectEnabled(next);
-                      if (!next) setSelectedPath("");
                     }}
                   />
                   latest project
@@ -4715,6 +4731,7 @@ export default function RuntimeLabView({
                     );
                   })}
                 </div>
+              </div>
               <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2 rounded-md border border-[#d7dce3] bg-[#f8fafc] p-2 focus-within:border-[#98a2b3] dark:border-[#2a3039] dark:bg-[#101318]">
                 <textarea
                   value={composer}
@@ -4757,6 +4774,22 @@ export default function RuntimeLabView({
                   className="max-h-40 min-h-[76px] resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 text-[#1f2933] outline-none placeholder:text-[#98a2b3] dark:text-[#e6e8ec] dark:placeholder:text-[#667085]"
                 />
                 <div className="flex shrink-0 items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setChatScopeControlsOpen((open) => !open)}
+                    title="Project, MCP and preview inspection options"
+                    aria-label="More task options"
+                    aria-expanded={chatScopeControlsOpen}
+                    aria-controls="runtime-composer-options"
+                    data-testid="runtime-composer-more"
+                    className={`flex h-9 w-9 items-center justify-center rounded-md border text-base font-semibold tracking-widest ${
+                      chatScopeControlsOpen
+                        ? "border-[#7c5cff]/50 bg-[#7c5cff]/10 text-[#5b3ee4] dark:text-[#c9bfff]"
+                        : "border-[#d7dce3] bg-white text-[#475467] hover:text-[#1f2933] dark:border-[#2a3039] dark:bg-[#101318] dark:text-[#d7dce3]"
+                    }`}
+                  >
+                    <span aria-hidden="true">•••</span>
+                  </button>
                   <button
                     type="button"
                     onClick={toggleSpeakSession}
