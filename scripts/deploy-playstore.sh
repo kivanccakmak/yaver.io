@@ -3,35 +3,10 @@ set -e
 
 cd "$(dirname "$0")/../mobile/android"
 
-# A configured path is only inventory; Gradle needs a real SDK operation. The
-# Yaver runtime bootstrap may leave ANDROID_HOME pointing at a directory that
-# was later cleaned while Android Studio's standard SDK remains healthy. Probe
-# the required SDK structure and fall back to standard per-user locations.
-is_usable_android_sdk() {
-  [ -n "${1:-}" ] && [ -d "$1/platforms" ] && [ -d "$1/build-tools" ]
-}
-
-if ! is_usable_android_sdk "${ANDROID_SDK_ROOT:-}" && ! is_usable_android_sdk "${ANDROID_HOME:-}"; then
-  RESOLVED_ANDROID_SDK=""
-  for candidate in "$HOME/Library/Android/sdk" "$HOME/Android/Sdk"; do
-    if is_usable_android_sdk "$candidate"; then
-      RESOLVED_ANDROID_SDK="$candidate"
-      break
-    fi
-  done
-  if [ -z "$RESOLVED_ANDROID_SDK" ]; then
-    echo "ERROR: Android SDK is unavailable: ANDROID_SDK_ROOT/ANDROID_HOME do not contain platforms and build-tools, and no standard user SDK was found." >&2
-    echo "Install Android SDK Platform 36 + Build Tools 36 from Android Studio, then retry ./deploy/deploy.sh android." >&2
-    exit 1
-  fi
-  export ANDROID_HOME="$RESOLVED_ANDROID_SDK"
-  export ANDROID_SDK_ROOT="$RESOLVED_ANDROID_SDK"
-  echo "Using discovered Android SDK: $RESOLVED_ANDROID_SDK"
-elif is_usable_android_sdk "${ANDROID_SDK_ROOT:-}"; then
-  export ANDROID_HOME="$ANDROID_SDK_ROOT"
-else
-  export ANDROID_SDK_ROOT="$ANDROID_HOME"
-fi
+REPO_ROOT="$(cd ../.. && pwd)"
+# shellcheck source=scripts/lib/android-sdk.sh
+source "$REPO_ROOT/scripts/lib/android-sdk.sh"
+yaver_resolve_android_sdk
 
 # `expo prebuild --clean` regenerates gradle.properties from Expo's
 # template, wiping any heap bump we made by hand. Without an 8g heap
@@ -62,7 +37,6 @@ if [ -f "$HOME/.androidplay/yaver.env" ]; then
   set -a; source "$HOME/.androidplay/yaver.env"; set +a
 fi
 
-REPO_ROOT="$(cd ../.. && pwd)"
 "$REPO_ROOT/scripts/check-no-native-payment-sdks.sh" source
 if [ ! -f "keystore.properties" ] || [ ! -f "$REPO_ROOT/keys/yaver-upload.keystore" ]; then
   echo "Android release signing material missing; running scripts/bootstrap-android-signing.sh..."

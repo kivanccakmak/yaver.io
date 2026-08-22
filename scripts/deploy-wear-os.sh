@@ -45,6 +45,10 @@ done
 MANIFEST="$ROOT/wear/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
 AAB="$ROOT/wear/app/build/outputs/bundle/release/app-release.aab"
 
+# shellcheck source=scripts/lib/android-sdk.sh
+source "$ROOT/scripts/lib/android-sdk.sh"
+yaver_resolve_android_sdk
+
 "$ROOT/scripts/check-no-native-payment-sdks.sh" source
 
 if [ "$SKIP_BUILD" != "1" ]; then

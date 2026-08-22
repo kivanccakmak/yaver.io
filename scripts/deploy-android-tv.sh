@@ -32,6 +32,10 @@ MANIFEST="$ROOT/androidtv/app/build/intermediates/merged_manifests/release/proce
 AAB="$ROOT/androidtv/app/build/outputs/bundle/release/app-release.aab"
 BANNER="$ROOT/androidtv/app/src/main/res/drawable-xhdpi/tv_banner.png"
 
+# shellcheck source=scripts/lib/android-sdk.sh
+source "$ROOT/scripts/lib/android-sdk.sh"
+yaver_resolve_android_sdk
+
 if pgrep -f '[x]codebuild' >/dev/null 2>&1; then
   echo "ERROR: refusing Android TV compilation while an Xcode build is active." >&2
   echo "Wait for the mobile build to finish, then retry deploy/deploy.sh android-tv." >&2
@@ -48,11 +52,8 @@ if [ "$SKIP_BUILD" != "1" ]; then
     echo "Run ./scripts/bootstrap-android-signing.sh with the configured Yaver vault, then retry." >&2
     exit 2
   fi
-  if ! command -v gradle >/dev/null 2>&1; then
-    echo "ERROR: Gradle is required to build androidtv/." >&2
-    exit 2
-  fi
-  gradle -p "$ROOT/androidtv" bundleRelease --no-daemon
+  "$ROOT/mobile/android/gradlew" -p "$ROOT/androidtv" bundleRelease \
+    --no-daemon --max-workers=2
 fi
 
 if [ ! -f "$MANIFEST" ]; then
