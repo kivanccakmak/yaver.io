@@ -19,3 +19,10 @@ test("download page exposes the friend path without the old installation wall", 
   assert.doesNotMatch(source, /One install path\. npm\./);
   assert.doesNotMatch(source, /Why one path:/);
 });
+
+test("download page uses a compact, non-redundant heading", () => {
+  assert.match(source, />Downloads<\/h1>/);
+  assert.match(source, /Choose your platform\./);
+  assert.doesNotMatch(source, /Your development machine, in your pocket/);
+  assert.doesNotMatch(source, /Install Yaver on your computer, add the phone app/);
+});

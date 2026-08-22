@@ -53,19 +53,15 @@ export default function DownloadPage() {
   return (
     <main className="px-5 py-12 md:px-6 md:py-20">
       <div className="mx-auto max-w-5xl">
-        <header className="relative overflow-hidden rounded-[2rem] border border-surface-800 bg-surface-900 px-6 py-10 md:px-10 md:py-14">
+        <header className="relative overflow-hidden rounded-2xl border border-surface-800 bg-surface-900 px-6 py-7 md:px-8">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(124,92,255,0.22),transparent_38%),radial-gradient(circle_at_bottom_left,rgba(52,211,153,0.10),transparent_34%)]" />
-          <div className="relative max-w-3xl">
-            <div className="mb-5 inline-flex items-center gap-3 rounded-full border border-surface-700 bg-surface-950/70 px-4 py-2">
-              <Image src="/icon-192.png" alt="Yaver" width={28} height={28} className="rounded-md" />
-              <span className="text-xs font-semibold uppercase tracking-[0.22em] text-surface-400">Downloads</span>
+          <div className="relative flex items-center gap-4">
+            <Image src="/icon-192.png" alt="Yaver" width={44} height={44} className="rounded-xl" />
+            <div>
+              <p className="text-sm font-medium text-violet-300">Yaver</p>
+              <h1 className="text-3xl font-semibold tracking-tight text-surface-50">Downloads</h1>
+              <p className="mt-1 text-sm text-surface-400">Choose your platform.</p>
             </div>
-            <h1 className="text-4xl font-bold tracking-tight text-surface-50 md:text-6xl">
-              Your development machine, in your pocket.
-            </h1>
-            <p className="mt-5 max-w-2xl text-base leading-7 text-surface-400 md:text-lg">
-              Install Yaver on your computer, add the phone app, and continue using the coding agent and model you already have.
-            </p>
           </div>
         </header>
 
