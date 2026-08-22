@@ -67,11 +67,11 @@ jobs:
 
   build:
     needs: [validate, test]
-    # Signing/notarization credentials live in the protected production
-    # environment. Windows remains pinned to the last published GUI release on
+    # Signing/notarization credentials are repository-scoped because tag refs
+    # are intentionally excluded by the production environment's branch rule.
+    # Windows remains pinned to the last published GUI release on
     # yaver.io/download until an Authenticode identity is provisioned; never
     # replace it with an unsigned installer.
-    environment: production
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
