@@ -101,6 +101,15 @@ if [ ! -f "$APK_PATH" ]; then
   exit 1
 fi
 
+# Optional durable handoff for the canonical Android packaging lane. The R2
+# publisher otherwise owns a temporary universal APK and removes it on exit,
+# leaving nothing for the matching GitHub Release upload.
+if [ -n "${ANDROID_APK_OUTPUT:-}" ]; then
+  mkdir -p "$(dirname "$ANDROID_APK_OUTPUT")"
+  cp "$APK_PATH" "$ANDROID_APK_OUTPUT"
+  APK_PATH="$ANDROID_APK_OUTPUT"
+fi
+
 APK_SIZE="$(wc -c < "$APK_PATH" | tr -d ' ')"
 APK_KEY="yaver-${VERSION_CODE}.apk"
 

@@ -110,5 +110,5 @@ if [ "$UPLOAD" = "1" ]; then
   PLAY_PACKAGE_NAME="io.yaver.tv" \
     AAB_PATH="$AAB" \
     PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
-    python3 "$ROOT/scripts/upload-playstore.py"
+    "$ROOT/scripts/run-playstore-upload.sh"
 fi

@@ -85,7 +85,7 @@ if [ "$UPLOAD" = "1" ]; then
   PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
     "$ROOT/scripts/deploy-playstore.sh"
   PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
-    python3 "$ROOT/scripts/upload-playstore.py"
+    "$ROOT/scripts/run-playstore-upload.sh"
 elif [ "$BUILD" = "1" ]; then
   PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
     "$ROOT/scripts/deploy-playstore.sh"

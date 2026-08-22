@@ -21,6 +21,7 @@ socket.setdefaulttimeout(int(os.environ.get("PLAY_UPLOAD_SOCKET_TIMEOUT", "1800"
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 # Package + track are env-overridable for multi-tenant customer deploys;
@@ -30,6 +31,9 @@ KEY_FILE = os.environ.get("PLAY_STORE_KEY_FILE", "")
 AAB_PATH = os.path.join(os.path.dirname(__file__), "..", "mobile", "android", "app", "build", "outputs", "bundle", "release", "app-release.aab")
 AAB_PATH = os.environ.get("AAB_PATH", AAB_PATH)
 AAB_PATHS = [p.strip() for p in os.environ.get("AAB_PATHS", AAB_PATH).split(",") if p.strip()]
+DEFAULT_GRADLE_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "mobile", "android", "app", "build.gradle"
+))
 # internal | alpha | beta | production (Google Play track names).
 TRACK = os.environ.get("PLAY_TRACK", "internal")
 # Internal testing (≤100 testers) is the SAFE automated lane: a release must be
@@ -104,18 +108,25 @@ def main():
     print(f"Created edit: {edit_id}", flush=True)
 
     # Pre-flight versionCode collision check (2026-08-11, Wear 298 / TV 300 /
-    # XR 301 on the SAME io.yaver.mobile package). Play rejects a versionCode
-    # already used on ANY track with a bare 403 "Version code N has already
-    # been used" — after a 300MB upload. Asking the API upfront turns that
-    # into a named, actionable message before a single byte goes up.
+    # XR 301 on the SAME io.yaver.mobile package). Tracks are incomplete: an
+    # uploaded bundle can reserve a versionCode even when no current release
+    # references it. edits.bundles.list is the operation-backed inventory of
+    # all current bundles for this app/edit, so ask it before uploading bytes.
+    highest = 0
     try:
-        app_edit = service.edits().get(
+        bundles = service.edits().bundles().list(
             packageName=PACKAGE, editId=edit_id
-        ).execute()
-    except Exception:
-        app_edit = None
-    if app_edit:
-        highest = 0
+        ).execute().get("bundles", [])
+        for bundle in bundles:
+            code = bundle.get("versionCode")
+            if isinstance(code, int) and code > highest:
+                highest = code
+    except Exception as exc:
+        print(
+            f"note: Play bundle inventory unavailable ({exc}); "
+            "falling back to track inventory.",
+            flush=True,
+        )
         try:
             tracks = service.edits().tracks().list(
                 packageName=PACKAGE, editId=edit_id
@@ -127,15 +138,14 @@ def main():
                             highest = code
         except Exception:
             highest = 0
+
+    if highest:
         for aab_path in AAB_PATHS:
             code = extract_aab_version_code(aab_path)
             if code is None:
                 # Binary manifests defeat the zip reader; the AAB was built
                 # from mobile/android/app/build.gradle, so read that.
-                gradle_path = os.path.join(
-                    os.path.dirname(aab_path), "..", "..", "..", "..",
-                    "mobile", "android", "app", "build.gradle")
-                code = read_gradle_version_code(gradle_path)
+                code = read_gradle_version_code(DEFAULT_GRADLE_PATH)
             if code is None:
                 print(
                     f"note: could not read versionCode from {aab_path} "
@@ -147,19 +157,19 @@ def main():
             if 0 < highest and code <= highest:
                 print(
                     f"VERSION CODE COLLISION: {aab_path} carries versionCode {code}, "
-                    f"but {highest} is already used on the {TRACK} track of {PACKAGE}. "
+                    f"but {highest} already exists for {PACKAGE}. "
                     f"Play refuses re-uploaded codes. Bump the app's versionCode "
                     f"above {highest} (e.g. to {highest + 1}) and rebuild before "
                     f"uploading — this script never rewrites your build.",
                     flush=True,
                 )
                 raise SystemExit(2)
-            if highest == 0:
-                print(
-                    f"note: no prior versionCodes found on {TRACK} — first upload "
-                    f"(or read-only access); proceeding with {code}.",
-                    flush=True,
-                )
+    else:
+        print(
+            f"note: no prior app bundles found for {PACKAGE} — first upload "
+            "(or read-only access); proceeding.",
+            flush=True,
+        )
 
     version_codes = []
     for aab_path in AAB_PATHS:
@@ -212,7 +222,22 @@ def main():
     print(f"Assigned versionCodes={','.join(version_codes)} to {TRACK} track with status={RELEASE_STATUS}", flush=True)
 
     # Commit the edit
-    service.edits().commit(packageName=PACKAGE, editId=edit_id).execute()
+    try:
+        service.edits().commit(packageName=PACKAGE, editId=edit_id).execute()
+    except HttpError as exc:
+        detail = str(exc)
+        if "Foreground Service permissions" in detail:
+            print(
+                "PLAY POLICY DECLARATION REQUIRED: Google accepted the bundle "
+                "upload but refused to publish the edit because this app has not "
+                "declared its foreground-service usage. In Play Console, open "
+                f"{PACKAGE} > App content > Foreground service permissions, "
+                "declare every service type present in the release manifest, "
+                "submit the declaration, then rerun android-upload with the same "
+                "signed AAB. Console: https://play.google.com/console/developers",
+                flush=True,
+            )
+        raise
     print(f"Edit committed! Builds {','.join(version_codes)} are on {TRACK} track.", flush=True)
 
     # Best-effort local-Mac cache bookkeeping. This script lives only in

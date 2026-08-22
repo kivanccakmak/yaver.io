@@ -76,6 +76,10 @@ Targets:
   testflight   Alias for ios
   android      Play internal deploy + upload
   playstore    Alias for android
+  android-package
+               Build signed AAB/APK, publish APK to R2 + GitHub; do not upload Play
+  android-upload
+               Upload the already-built AAB to Play Internal; do not rebuild
   tvos         Apple TV standalone archive/upload (App Store Connect)
   android-tv   Android TV Play AAB + leanback manifest verification
   tv           Alias for android-tv + tvos
@@ -185,7 +189,31 @@ case "$target" in
     ;;
   android|playstore)
     require_deploy_boundary
-    run_shell 'JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/deploy-playstore.sh && PLAY_STORE_KEY_FILE=keys/google-play-service-account.json python3 scripts/upload-playstore.py'
+    run_shell 'JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/deploy-playstore.sh && PLAY_STORE_KEY_FILE=keys/google-play-service-account.json ./scripts/run-playstore-upload.sh'
+    ;;
+  android-package|apk)
+    require_deploy_boundary
+    run_shell '
+      set -euo pipefail
+      JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/deploy-playstore.sh
+      mobile_version=$(node -e "console.log(require(\"./versions.json\").mobile)")
+      version_code=$(sed -n "s/.*versionCode \([0-9][0-9]*\).*/\1/p" mobile/android/app/build.gradle | head -1)
+      apk_dir="$ROOT/mobile/android/app/build/outputs/apk/release"
+      apk_path="$apk_dir/yaver-${mobile_version}-${version_code}.apk"
+      ANDROID_APK_OUTPUT="$apk_path" ./scripts/publish-android-r2.sh
+      command -v gh >/dev/null 2>&1 || { echo "ERROR: gh is required for the Android GitHub release." >&2; exit 2; }
+      tag="android/v${mobile_version}"
+      if gh release view "$tag" >/dev/null 2>&1; then
+        gh release upload "$tag" "$apk_path" --clobber
+      else
+        gh release create "$tag" "$apk_path" --title "Yaver Android ${mobile_version}" --notes "Signed universal APK for direct installation. Google Play uses the matching AAB build ${version_code}."
+      fi
+      echo "Android APK published: https://github.com/yaver-io/yaver.io/releases/tag/$tag"
+    '
+    ;;
+  android-upload|playstore-upload)
+    require_deploy_boundary
+    run_shell 'test -f mobile/android/app/build/outputs/bundle/release/app-release.aab || { echo "ERROR: build the signed AAB first with ./deploy/deploy.sh android-package." >&2; exit 2; }; PLAY_STORE_KEY_FILE=keys/google-play-service-account.json ./scripts/run-playstore-upload.sh'
     ;;
   npm|cli)
     require_deploy_boundary
