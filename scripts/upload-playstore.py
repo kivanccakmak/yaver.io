@@ -46,6 +46,12 @@ TRACK = os.environ.get("PLAY_TRACK", "internal")
 # explicit promote. An explicit PLAY_RELEASE_STATUS always wins.
 _DEFAULT_RELEASE_STATUS = "completed" if TRACK == "internal" else "draft"
 RELEASE_STATUS = os.environ.get("PLAY_RELEASE_STATUS", _DEFAULT_RELEASE_STATUS)
+# Shared-package companion bundles (Wear OS) must keep the current phone code
+# in the release. Replacing the track with a watch-only artifact gives existing
+# phone users no upgrade path and Play rejects the edit.
+RETAIN_TRACK_VERSION_CODES = os.environ.get(
+    "PLAY_RETAIN_TRACK_VERSION_CODES", ""
+).lower() in {"1", "true", "yes"}
 
 SCOPES = ["https://www.googleapis.com/auth/androidpublisher"]
 
@@ -94,6 +100,11 @@ def read_gradle_version_code(gradle_path: str):
             return int(m.group(1)) if m else None
     except Exception:
         return None
+
+
+def merge_version_codes(retained, uploaded):
+    """Stable, de-duplicated Play version-code strings."""
+    return list(dict.fromkeys([str(code) for code in [*retained, *uploaded]]))
 
 
 def main():
@@ -171,7 +182,28 @@ def main():
             flush=True,
         )
 
-    version_codes = []
+    retained_version_codes = []
+    if RETAIN_TRACK_VERSION_CODES:
+        try:
+            current_track = service.edits().tracks().get(
+                packageName=PACKAGE, editId=edit_id, track=TRACK
+            ).execute()
+            for release in current_track.get("releases", []):
+                retained_version_codes.extend(release.get("versionCodes", []))
+            retained_version_codes = merge_version_codes(
+                retained_version_codes, []
+            )
+            if retained_version_codes:
+                print(
+                    "Retaining current track versionCodes="
+                    + ",".join(retained_version_codes),
+                    flush=True,
+                )
+        except HttpError as exc:
+            if getattr(getattr(exc, "resp", None), "status", None) != 404:
+                raise
+
+    uploaded_version_codes = []
     for aab_path in AAB_PATHS:
         # Upload AAB in 5 MB chunks so we can report progress and tolerate transient stalls.
         size = os.path.getsize(aab_path)
@@ -196,8 +228,12 @@ def main():
                 print(f"  upload progress: {pct:3d}% ({status.resumable_progress} / {size} bytes)", flush=True)
         bundle = response
         version_code = str(bundle["versionCode"])
-        version_codes.append(version_code)
+        uploaded_version_codes.append(version_code)
         print(f"Uploaded bundle: versionCode={version_code}", flush=True)
+
+    version_codes = merge_version_codes(
+        retained_version_codes, uploaded_version_codes
+    )
 
     # Assign to internal track
     release_body = {

@@ -28,6 +28,12 @@ class UploadPlayStoreTest(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_merge_version_codes_retains_phone_and_adds_wear(self):
+        self.assertEqual(
+            MODULE.merge_version_codes(["306", "306"], ["308"]),
+            ["306", "308"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

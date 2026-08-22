@@ -104,6 +104,7 @@ echo "  versionName: $VERSION_NAME"
 if [ "$UPLOAD" = "1" ]; then
   PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
   AAB_PATH="$AAB" \
+  PLAY_RETAIN_TRACK_VERSION_CODES=1 \
   PLAY_TRACK="${PLAY_TRACK:-internal}" \
     "$ROOT/scripts/run-playstore-upload.sh"
 fi
