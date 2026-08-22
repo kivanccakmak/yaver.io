@@ -101,10 +101,11 @@ echo "  package: $PACKAGE"
 echo "  versionCode: $VERSION_CODE"
 echo "  versionName: $VERSION_NAME"
 
+# Google Play requires dedicated form-factor tracks. Its current internal alias
+# is qa, so Wear internal testing is wear:qa (not the phone track).
 if [ "$UPLOAD" = "1" ]; then
   PLAY_STORE_KEY_FILE="${PLAY_STORE_KEY_FILE:-$ROOT/keys/google-play-service-account.json}" \
   AAB_PATH="$AAB" \
-  PLAY_RETAIN_TRACK_VERSION_CODES=1 \
-  PLAY_TRACK="${PLAY_TRACK:-internal}" \
+  PLAY_TRACK="${PLAY_TRACK:-wear:qa}" \
     "$ROOT/scripts/run-playstore-upload.sh"
 fi
