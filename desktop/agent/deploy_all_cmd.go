@@ -346,9 +346,9 @@ func streamLines(r io.Reader, prefix string, dst io.Writer) {
 	}
 }
 
-// runNpmCliRelease bumps the cli version, commits the bump, tags
-// `cli/vX.Y.Z`, and pushes the tag. The actual publish happens in
-// release-cli.yml on GitHub Actions because the cross-platform binary
+// runNpmCliRelease bumps the cli version, commits the bump, pushes main, and
+// dispatches release-cli.yml. The actual publish happens in GitHub Actions
+// because the cross-platform binary
 // build matrix needs CI runners (macOS notarization, Linux ARM cross-
 // compile, Windows).
 //
@@ -357,7 +357,10 @@ func streamLines(r io.Reader, prefix string, dst io.Writer) {
 //   - not on main branch           → abort (releases must come from main)
 //   - origin/main ahead of HEAD    → abort (would race the tag)
 //   - no `github` remote           → abort (CI is wired to that remote)
-//   - tag already exists locally   → abort (would re-publish same version)
+//
+// The workflow dispatch is deliberate. Protected `cli/v*` refs reject direct
+// tag creation even for a signed owner commit, while release-cli.yml already
+// creates the public `v<version>` release tag using its scoped Actions token.
 //
 // sweepAll selects how the release commit is staged:
 //   - false (standalone `yaver deploy npm`): require a clean tree and stage
@@ -385,22 +388,11 @@ func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, swe
 		return err
 	}
 
-	tag := "cli/v" + nextVersion
-	fmt.Printf("  %s bumping cli version: %s → %s (tag %s)\n", ctx.prefix, currentVersion, nextVersion, tag)
-
-	// Check the tag doesn't already exist — git will reject it on
-	// push, but failing earlier is friendlier and avoids a half-state
-	// (commit landed, tag rejected).
-	checkTag := exec.Command("git", "tag", "--list", tag)
-	checkTag.Dir = repoRoot
-	out, _ := checkTag.Output()
-	if strings.TrimSpace(string(out)) == tag {
-		return fmt.Errorf("tag %s already exists locally — bump version manually or delete the tag", tag)
-	}
+	fmt.Printf("  %s bumping cli version: %s → %s\n", ctx.prefix, currentVersion, nextVersion)
 
 	if dryRun {
 		fmt.Printf("  %s [dry-run] would write %s to versions.json + cli/package.json + cli/package-lock.json + cli/sdk-manifest.json\n", ctx.prefix, nextVersion)
-		fmt.Printf("  %s [dry-run] would commit, tag %s, and push to github\n", ctx.prefix, tag)
+		fmt.Printf("  %s [dry-run] would commit, push main, and dispatch release-cli.yml with publish_npm=true\n", ctx.prefix)
 		return nil
 	}
 
@@ -447,21 +439,22 @@ func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, swe
 		return fmt.Errorf("git commit: %w", err)
 	}
 
-	if err := ctx.runCmd(repoRoot, "git", "tag", tag); err != nil {
-		return fmt.Errorf("git tag: %w", err)
-	}
-
 	if err := ctx.runCmd(repoRoot, "git", "push", "github", "main"); err != nil {
 		return fmt.Errorf("push main: %w", err)
 	}
 
-	if err := ctx.runCmd(repoRoot, "git", "push", "github", tag); err != nil {
-		return fmt.Errorf("push tag: %w", err)
+	workflowArgs := releaseCLIWorkflowArgs()
+	if err := ctx.runCmd(repoRoot, workflowArgs[0], workflowArgs[1:]...); err != nil {
+		return fmt.Errorf("dispatch release-cli.yml: %w (the signed release commit is on main; rerun `gh workflow run release-cli.yml --ref main -f publish_npm=true`)", err)
 	}
 
-	fmt.Printf("  %s tag pushed — release-cli.yml is now building binaries + publishing the npm wrapper\n", ctx.prefix)
+	fmt.Printf("  %s release-cli.yml dispatched — CI is building binaries + publishing the npm wrapper\n", ctx.prefix)
 	fmt.Printf("  %s monitor: gh run list -w release-cli.yml -L 1\n", ctx.prefix)
 	return nil
+}
+
+func releaseCLIWorkflowArgs() []string {
+	return []string{"gh", "workflow", "run", "release-cli.yml", "--ref", "main", "-f", "publish_npm=true"}
 }
 
 func requireCleanRepoForRelease(repoRoot string) error {

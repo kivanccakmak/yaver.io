@@ -1,9 +1,9 @@
 package main
 
 // deploy_npm_cmd.go — `yaver deploy npm` ships *just* the CLI npm release:
-// bump cli/package.json (+ versions.json + lock + manifest), commit, tag
-// `cli/vX.Y.Z`, and push. release-cli.yml on CI builds the cross-platform
-// binaries and runs `npm publish`. This is the npm-only slice of
+// bump cli/package.json (+ versions.json + lock + manifest), commit, push,
+// and dispatch release-cli.yml. CI builds the cross-platform binaries and
+// runs `npm publish`. This is the npm-only slice of
 // `yaver deploy all` for when the mobile/Convex/Cloudflare stages aren't
 // needed (e.g. a CLI-only fix like the build-status output changes).
 
