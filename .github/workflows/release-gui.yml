@@ -67,6 +67,9 @@ jobs:
 
   build:
     needs: [validate, test]
+    # Signing/notarization credentials live in the protected production
+    # environment. Keep every platform in the same guarded release matrix.
+    environment: production
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
