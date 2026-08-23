@@ -1007,6 +1007,9 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 	if _, err := exec.LookPath("xcodebuild"); err != nil {
 		return fmt.Errorf("xcodebuild not found — install Xcode")
 	}
+	if err := ensureIOSPodsForWirePush(ctx, root); err != nil {
+		return err
+	}
 	cfg := opts.config
 	// Build for the device, then install + (optionally) launch.
 	derived := filepath.Join(os.TempDir(), "yaver-wire-derived-"+filepath.Base(root))
@@ -1070,6 +1073,58 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 		return nil
 	}
 	return launchAppOnDevice(ctx, dev.UDID, bid)
+}
+
+// ensureIOSPodsForWirePush makes the native dependency operation truthful
+// before xcodebuild starts. A generated ios/ directory and .xcworkspace are
+// only inventory: CocoaPods can be absent or partially cleaned while both
+// remain, leaving the workspace pointed at missing Pods-*.xcconfig files.
+// Running xcodebuild in that state spends time and then fails with exit 65.
+//
+// pod install is incremental and lockfile-respecting. Run it only when the
+// operation-level artifacts are absent or stale, stream its output, and check
+// the same capability again before claiming the project is ready.
+func ensureIOSPodsForWirePush(ctx context.Context, iosDir string) error {
+	reason := iosPodsInstallReason(iosDir)
+	if reason == "" {
+		return nil
+	}
+	if _, err := exec.LookPath("pod"); err != nil {
+		return fmt.Errorf("iOS dependencies are not ready (%s) and CocoaPods is missing — install CocoaPods, then retry `yaver wireless push`", reason)
+	}
+
+	fmt.Printf("→ iOS dependencies are not ready (%s) — running pod install...\n", reason)
+	env := append(os.Environ(), "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8")
+	if err := runStreaming(ctx, iosDir, "pod", []string{"install"}, env); err != nil {
+		return fmt.Errorf("pod install failed while preparing wireless push: %w", err)
+	}
+	if remaining := iosPodsInstallReason(iosDir); remaining != "" {
+		return fmt.Errorf("pod install completed but iOS dependencies are still incomplete: %s", remaining)
+	}
+	return nil
+}
+
+func iosPodsInstallReason(iosDir string) string {
+	if !wireExists(filepath.Join(iosDir, "Podfile")) {
+		return ""
+	}
+	podsDir := filepath.Join(iosDir, "Pods")
+	if !wireExists(filepath.Join(podsDir, "Pods.xcodeproj", "project.pbxproj")) {
+		return "Pods.xcodeproj is missing"
+	}
+	manifestPath := filepath.Join(podsDir, "Manifest.lock")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "Pods/Manifest.lock is missing"
+	}
+	if lock, lockErr := os.ReadFile(filepath.Join(iosDir, "Podfile.lock")); lockErr == nil && string(lock) != string(manifest) {
+		return "Podfile.lock does not match Pods/Manifest.lock"
+	}
+	configs, _ := filepath.Glob(filepath.Join(podsDir, "Target Support Files", "*", "*.xcconfig"))
+	if len(configs) == 0 {
+		return "CocoaPods target support xcconfig files are missing"
+	}
+	return ""
 }
 
 func wirePushNativeAndroid(ctx context.Context, root string, dev wireDevice, opts wirePushOpts) error {
