@@ -61,7 +61,10 @@ kalmadan. ACP bunu standardize eder.
 
 ### 2.3 Yaver'ın runner'ları nasıl çalıştırdığı
 
-- **opencode:** PTY/TUI üzerinden (`yaver opencode ...`). ACP **kullanılmıyor**.
+- **opencode:** Uygun yeni task'larda native ACP (`opencode acp --pure`);
+  model/mode pin'i, attachment, raw command, resume veya tmux varsa mevcut
+  CLI/PTY compatibility lane. ACP initialize/session başlangıcı prompt'tan önce
+  bozulursa aynı task otomatik olarak CLI/PTY'ye düşer.
 - **claude/glm:** PTY + scoped `CLAUDE_CONFIG_DIR` (MCP için).
 - **codex:** PTY + `--ignore-user-config` + `-c mcp_servers...`.
 - MCP kapsamı: `runner_mcp_scope.go` — her task için yaver mcp + seçili
@@ -139,12 +142,21 @@ Mobile / WebUI / tvOS / car / watch
 - [x] `auth-methods.md` (Terminal Authentication) RFD'sini oku → terminal-type methods + `acpTerminalLoginCommand`
 - [x] `get-auth-state.md` RFD'sini oku → opencode does NOT implement `auth/status` yet; probe fallback retained
 
-### Faz B — opencode ACP köprüsü (CORE DONE: client/runner/probe; task-turns over ACP NOT started)
+### Faz B — opencode ACP köprüsü (FIRST TASK SLICE DONE)
 - [x] `desktop/agent/acp_client.go` — ACP JSON-RPC istemcisi (initialize, session/new, auth-state, prompt text+image, session/list, session/close, Authenticate, Logout, MCP descriptors, strict-MarshalJSON, auth.terminal capability)
 - [x] Runner ACP launch path (`acp_runner.go` — `acpRunnerSpecFor`, cached `probeACPAuthState` 60s TTL / 20s timeout, `invalidateACPProbeCache`, `acpTerminalLoginCommand`)
 - [x] `/runner-auth/status` ACP ile besle (probe fallback korunur) — `enrichRowWithACPAuthState` + `acpAuthStateForRunner` (shared with `/agent/runners`)
-- [ ] Task prompt'larını ACP `prompt` turn'ü ile gönderme (PTY yerine) — **deliberately NOT started** (biggest change; touches streaming/capture; guard with break-it test when done)
+- [x] Uygun yeni OpenCode task prompt'larını ACP `session/prompt` ile gönder;
+  `agent_message_chunk` → mevcut output/raw-console kanalları, usage → task
+  token alanları, cancel → mevcut StopTask. Başlangıç fallback'i prompt öncesi
+  transactionaldır; double execution yok (`task_acp.go`, break-it testleri).
+- [ ] ACP config-option/image/resume parity tamamlanınca model/mode pin'i,
+  attachment ve follow-up turn'lerini native lane'e geçir. O zamana kadar bu
+  semantikler açıkça CLI/PTY'de kalır.
 - [x] yaver mcp enjeksiyonunu ACP modunda koru → `acpMCPServersForTask` + `session/new` mcpServers seam (screenshot Read tool)
+- [x] Desktop/CLI Yaver Doctor'da gerçek OpenCode ACP capability probe'u:
+  `initialize` + `session/new`; bozuk lane için `/install/opencode` streamed
+  repair route'u ve task'ların CLI/PTY fallback kullanacağı açık detay.
 
 ### Faz C — Claude Code + Codex subscription (PARTIAL: adapters wired + probe/enrichment live-verified; browser-login flows for claude/codex opencode pending Faz D surfaces)
 - [x] Claude Code ACP adapter bağla (auth-state + terminal-login command live-verified; org-block documented)
@@ -156,7 +168,8 @@ Mobile / WebUI / tvOS / car / watch
 - [x] `/runner-auth/status` çıktısına `authMethod: "acp" | "probe" | "apikey"` ekle → done, wire-verified (also on `/agent/runners` + `supportsBrowserAuth` for opencode)
 - [ ] Mobile/webui/tvOS runner kartları: subscription durumunu net göster ("claude.ai · max · via ACP") — grep `mobile/app/(tabs)/`, `web/components/dashboard/`
 - [ ] Güvenlik testi: ACP bağlantısı kesilirse probe'a düş, yanlış "signed in" yok
-- [ ] Kır-geri-yükle testleri (probe → ACP geçişi, ACP çökerse fallback)
+- [x] Kır-geri-yükle testleri: ACP startup failure task state'ini çalışır hale
+  getirmeden döner; task dispatch aynı prompt'u CLI/PTY lane'inde başlatabilir.
 
 ### Faz E — Kapanış (NOT STARTED)
 - [ ] CLAUDE.md / AGENTS.md güncelle (ACP katmanı, güvenlik sınırı)

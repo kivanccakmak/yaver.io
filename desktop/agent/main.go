@@ -6895,6 +6895,14 @@ func runDoctor() {
 			}
 		}
 	}
+	check("OpenCode native ACP")
+	workDir, _ := os.Getwd()
+	acpCheck := probeOpenCodeACPTransport(context.Background(), workDir)
+	if acpCheck.Status == "pass" {
+		pass(acpCheck.Detail)
+	} else {
+		warning(acpCheck.Detail)
+	}
 
 	fmt.Println("\n── Machine Onboarding ──")
 	for _, provider := range collectMachineOnboardingStatus().Providers {

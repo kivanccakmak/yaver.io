@@ -3916,6 +3916,7 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		Description: task.Description,
 		Status:      task.Status,
 		RunnerID:    task.RunnerID,
+		Transport:   task.Transport,
 		Goal:        task.Goal,
 		// Echo the model + deviceName so mobile UIs can render the
 		// task's authoritative target instead of inferring from the

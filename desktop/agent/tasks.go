@@ -1159,6 +1159,10 @@ type Task struct {
 	Source     string `json:"source,omitempty"` // "mobile", "mcp", "cli"
 	Model      string `json:"model,omitempty"`
 	RunnerID   string `json:"runnerId,omitempty"` // which runner is executing this task
+	// Transport records the protocol that actually executed the task. It lets
+	// surfaces and doctor distinguish native ACP from the compatibility CLI
+	// lane without guessing from runner output.
+	Transport string `json:"transport,omitempty"`
 	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
 	// one-shot task. Set = persistent goal the runner keeps working toward.
 	Goal             string `json:"goal,omitempty"`
@@ -1462,6 +1466,7 @@ type TaskInfo struct {
 	Description string     `json:"description"`
 	Status      TaskStatus `json:"status"`
 	RunnerID    string     `json:"runnerId,omitempty"`
+	Transport   string     `json:"transport,omitempty"`
 	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
 	// one-shot task; set = persistent goal. Surfaced so every surface can
 	// render a Goal chip + drive /goal status|resume|clear.
@@ -2152,7 +2157,11 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		}()
 		return task, fmt.Errorf("start process: %w", err)
 	}
-	log.Printf("[task %s] %s process started (PID %d)", id, taskRunner.Name, task.cmd.Process.Pid)
+	if task.cmd != nil && task.cmd.Process != nil {
+		log.Printf("[task %s] %s process started (PID %d, transport=%s)", id, taskRunner.Name, task.cmd.Process.Pid, firstNonEmpty(task.Transport, taskTransportCLI))
+	} else {
+		log.Printf("[task %s] %s task started (transport=%s)", id, taskRunner.Name, firstNonEmpty(task.Transport, taskTransportCLI))
+	}
 
 	return task, nil
 }
@@ -3022,6 +3031,30 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	if !task.IncludeYaverMcp {
 		includeYaverMcp = "0"
 	}
+	if err := CheckRunnerReady(runner, taskDir); err != nil {
+		cancel()
+		return fmt.Errorf("runner not ready: %w", err)
+	}
+
+	// OpenCode ships ACP itself. Startup remains transactional until
+	// session/new succeeds, so failure here can safely use the established CLI
+	// lane without running the prompt twice.
+	if use, reason := shouldUseOpenCodeACP(task, runner, effectiveModel, rawRunnerCommand); use {
+		started, acpErr := tm.tryStartOpenCodeACP(ctx, task, prompt, taskDir)
+		if started {
+			return nil
+		}
+		log.Printf("[task %s] OpenCode ACP unavailable before prompt (%v) — using CLI/PTY", task.ID, acpErr)
+		emitTaskEvent(task, map[string]interface{}{
+			"type": "runner_transport", "schema": 1,
+			"runner": "opencode", "transport": taskTransportCLI,
+			"fallbackFrom": taskTransportOpenCodeACP, "reason": acpErr.Error(),
+		})
+	} else if normalizeRunnerID(runner.RunnerID) == "opencode" {
+		log.Printf("[task %s] OpenCode ACP not selected (%s) — using CLI/PTY", task.ID, reason)
+	}
+	task.Transport = taskTransportCLI
+
 	mcpScope := prepareRunnerMCPScope(runner.RunnerID, taskDir, task.MCPServers, []string{includeYaverMcp})
 	switch normalizeRunnerID(runner.RunnerID) {
 	case "codex":
@@ -3030,10 +3063,6 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		args = append(args, mcpScope.Args...)
 	case "opencode":
 		args = append(args, mcpScope.Args...)
-	}
-	if err := CheckRunnerReady(runner, taskDir); err != nil {
-		cancel()
-		return fmt.Errorf("runner not ready: %w", err)
 	}
 
 	// ── Container execution (optional) ──────────────────────────────
@@ -4371,6 +4400,10 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	if runner.Command == "" {
 		runner = tm.runner
 	}
+	// Follow-ups remain on the established resume-capable CLI lane in this
+	// first ACP slice. Record the actual transport instead of leaving the
+	// first turn's ACP value attached to a different execution path.
+	task.Transport = taskTransportCLI
 
 	// The one decision. Not "is this the first message" (the UI cannot know
 	// what the runner process holds) but "will the process we are about to
@@ -4641,6 +4674,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			Description:      t.Description,
 			Status:           t.Status,
 			RunnerID:         t.RunnerID,
+			Transport:        t.Transport,
 			SessionID:        t.SessionID,
 			ProjectSessionID: t.ProjectSessionID,
 			Output:           output,

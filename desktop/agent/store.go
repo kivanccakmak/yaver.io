@@ -17,6 +17,7 @@ type persistedTask struct {
 	Description     string                `json:"description"`
 	Status          TaskStatus            `json:"status"`
 	Source          string                `json:"source,omitempty"`
+	Transport       string                `json:"transport,omitempty"`
 	SessionID       string                `json:"session_id,omitempty"`
 	TmuxSession     string                `json:"tmux_session,omitempty"`
 	TmuxSessionID   string                `json:"tmux_session_id,omitempty"`
@@ -80,6 +81,7 @@ func snapshotPersistedTasks(tasks map[string]*Task) []persistedTask {
 			Description:     t.Description,
 			Status:          t.Status,
 			Source:          t.Source,
+			Transport:       t.Transport,
 			SessionID:       t.SessionID,
 			TmuxSession:     t.TmuxSession,
 			TmuxSessionID:   t.TmuxSessionID,
@@ -178,6 +180,7 @@ func (s *TaskStore) Load() map[string]*Task {
 			Description:     r.Description,
 			Status:          status,
 			Source:          r.Source,
+			Transport:       r.Transport,
 			SessionID:       r.SessionID,
 			TmuxSession:     r.TmuxSession,
 			TmuxSessionID:   r.TmuxSessionID,

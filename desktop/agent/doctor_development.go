@@ -44,6 +44,8 @@ type developmentAuthProbe struct {
 	args                   []string
 }
 
+var openCodeACPInstalled = func() bool { return acpRunnerInstalled("opencode") }
+
 func developmentToolProbes() []developmentToolProbe {
 	return developmentToolProbesFor(runtime.GOOS)
 }
@@ -282,6 +284,7 @@ func (s *HTTPServer) buildDevelopmentDoctorChecks(ctx context.Context) []DoctorC
 		}
 		checks = append(checks, check)
 	}
+	checks = append(checks, probeOpenCodeACPTransport(ctx, s.taskMgr.workDir))
 	checks = append(checks, buildDevelopmentToolChecks(ctx)...)
 	checks = append(checks, buildDevelopmentAuthChecks(ctx)...)
 	for _, provider := range collectMachineOnboardingStatus().Providers {
@@ -293,6 +296,55 @@ func (s *HTTPServer) buildDevelopmentDoctorChecks(ctx context.Context) []DoctorC
 		checks = append(checks, check)
 	}
 	return checks
+}
+
+// probeOpenCodeACPTransport proves the operation the native task lane needs:
+// initialize plus session/new. A version string is only inventory; OpenCode
+// can exist on PATH while its ACP subprocess or wire contract is unusable.
+func probeOpenCodeACPTransport(parent context.Context, workDir string) DoctorCheckResult {
+	check := DoctorCheckResult{
+		ID: "opencode-acp", Name: "OpenCode native ACP", Section: "runners",
+	}
+	check.Fix = &DoctorFix{Kind: "install", Label: "Repair OpenCode", Method: "POST", Path: "/install/opencode", Stream: "install:opencode"}
+	if !openCodeACPInstalled() {
+		check.Status = "warn"
+		check.Detail = "OpenCode is not installed; tasks will use another selected runner"
+		return check
+	}
+	if strings.TrimSpace(workDir) == "" {
+		workDir = "."
+	}
+	ctx, cancel := context.WithTimeout(parent, 12*time.Second)
+	defer cancel()
+	client, err := newACPTaskClient("opencode", workDir, acpClientOptions{})
+	if err != nil {
+		check.Status = "warn"
+		check.Detail = "native ACP could not start; OpenCode tasks will fall back to CLI/PTY: " + err.Error()
+		return check
+	}
+	defer client.Close()
+	initialized, err := client.Initialize(ctx)
+	if err != nil {
+		check.Status = "warn"
+		check.Detail = "native ACP initialize failed; OpenCode tasks will fall back to CLI/PTY: " + err.Error()
+		return check
+	}
+	sessionID, _, err := client.NewSession(ctx, workDir, []acpMCPServer{})
+	if err != nil {
+		check.Status = "warn"
+		check.Detail = "native ACP session/new failed; OpenCode tasks will fall back to CLI/PTY: " + err.Error()
+		return check
+	}
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	_ = client.CloseSession(closeCtx, sessionID)
+	closeCancel()
+	check.Status = "pass"
+	check.Detail = "initialize + session/new passed"
+	if initialized != nil && initialized.AgentInfo.Version != "" {
+		check.Detail += " · " + initialized.AgentInfo.Version
+	}
+	check.Fix = nil
+	return check
 }
 
 func buildDevelopmentToolChecks(ctx context.Context) []DoctorCheckResult {

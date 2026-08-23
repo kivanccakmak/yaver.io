@@ -94,7 +94,13 @@ Fallback that ALWAYS works today: the user has opencode API keys (GLM/DeepSeek) 
    - Correct Faz B checkbox names: `session/prompt` (not `prompt`), `mcpServers` required, `auth/status` absent.
    - Add the `clientCapabilities.auth.terminal` requirement and the `env:[]` strictness finding.
    - Mark Faz B done for the client/probe layer; Faz C partially (adapters wired, login flows pending §4).
-5. **Faz B remaining**: task turns over ACP instead of PTY (`runner_session_turn.go` / tasks dispatch) — deliberately NOT started; it is the biggest change and touches streaming/capture. When done, guard with a break-it test.
+5. **Faz B update (2026-08-23)**: the first production task slice is now in
+   `task_acp.go`. Eligible fresh OpenCode tasks use native ACP; streamed agent
+   chunks feed the existing task and raw-console lanes, selected MCP servers
+   enter `session/new`, cancellation and usage are preserved, and startup
+   failure falls back before prompt execution. Pinned model/mode, attachment,
+   resume/raw/tmux cases intentionally remain on CLI/PTY until their ACP parity
+   tests land.
 6. **Faz E**: CLAUDE.md/AGENTS.md note, release 1.99.412+, E2E screenshot-task → remote box ACP runner → yaver mcp Read tool.
 
 ---

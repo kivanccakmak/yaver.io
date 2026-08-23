@@ -116,6 +116,12 @@ func TestFakeACPServerChild(t *testing.T) {
 				},
 			}))
 		case "session/prompt":
+			if os.Getenv("FAKE_ACP_PROMPT_BLOCK") == "1" {
+				// Cancellation contract: the parent drops the pending request and
+				// closes/kills this ACP process; no response is intentionally sent.
+				time.Sleep(30 * time.Second)
+				continue
+			}
 			var params struct {
 				SessionID string            `json:"sessionId"`
 				Prompt    []acpContentBlock `json:"prompt"`
@@ -179,6 +185,10 @@ func mustJSONString(v any) string {
 
 // fakeACPClient spawns the fake server with a canned handler set.
 func fakeACPClient(t *testing.T) *acpClient {
+	return fakeACPClientWithNotify(t, nil)
+}
+
+func fakeACPClientWithNotify(t *testing.T, onNotify acpNotifyHandler) *acpClient {
 	t.Helper()
 	// The child is driven by FAKE_ACP_CHILD=1 through the test binary itself.
 	exe, err := os.Executable()
@@ -200,11 +210,12 @@ func fakeACPClient(t *testing.T) *acpClient {
 		t.Fatal(err)
 	}
 	c := &acpClient{
-		cmd:     cmd,
-		stdin:   stdin,
-		done:    make(chan struct{}),
-		cancel:  func() {},
-		pending: make(map[int64]chan acpRPCResponse),
+		cmd:      cmd,
+		stdin:    stdin,
+		done:     make(chan struct{}),
+		cancel:   func() {},
+		pending:  make(map[int64]chan acpRPCResponse),
+		onNotify: onNotify,
 	}
 	go c.readLoop(stdout)
 	go func() {

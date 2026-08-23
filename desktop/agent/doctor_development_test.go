@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
 
 func probeIDs(probes []developmentToolProbe) map[string]bool {
 	out := make(map[string]bool, len(probes))
@@ -57,5 +62,41 @@ func TestDevelopmentDoctorRejectsUnsupportedDesktopOS(t *testing.T) {
 	}
 	if got := platformDoctorChecksFor("plan9", "amd64")[0].Status; got != "fail" {
 		t.Fatalf("unsupported OS status = %q, want fail", got)
+	}
+}
+
+func TestDevelopmentDoctorProbesOpenCodeACPOperation(t *testing.T) {
+	originalInstalled := openCodeACPInstalled
+	originalClient := newACPTaskClient
+	t.Cleanup(func() {
+		openCodeACPInstalled = originalInstalled
+		newACPTaskClient = originalClient
+	})
+	openCodeACPInstalled = func() bool { return true }
+	newACPTaskClient = func(_ string, _ string, opts acpClientOptions) (*acpClient, error) {
+		return fakeACPClientWithNotify(t, opts.OnNotify), nil
+	}
+
+	check := probeOpenCodeACPTransport(context.Background(), t.TempDir())
+	if check.Status != "pass" || !strings.Contains(check.Detail, "session/new passed") || check.Fix != nil {
+		t.Fatalf("ACP doctor check = %+v", check)
+	}
+}
+
+func TestDevelopmentDoctorRoutesBrokenACPToRepair(t *testing.T) {
+	originalInstalled := openCodeACPInstalled
+	originalClient := newACPTaskClient
+	t.Cleanup(func() {
+		openCodeACPInstalled = originalInstalled
+		newACPTaskClient = originalClient
+	})
+	openCodeACPInstalled = func() bool { return true }
+	newACPTaskClient = func(string, string, acpClientOptions) (*acpClient, error) {
+		return nil, errors.New("broken ACP executable")
+	}
+
+	check := probeOpenCodeACPTransport(context.Background(), t.TempDir())
+	if check.Status != "warn" || check.Fix == nil || check.Fix.Path != "/install/opencode" {
+		t.Fatalf("broken ACP doctor check lacks repair route: %+v", check)
 	}
 }
