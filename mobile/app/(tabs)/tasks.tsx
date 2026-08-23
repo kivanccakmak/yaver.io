@@ -544,6 +544,41 @@ function dedupeCodexEchoes(s: string): string {
   return s;
 }
 
+// Some runner/relay combinations deliver the completed assistant payload twice
+// inside ONE turn: once as the final streamed frame and once as the terminal
+// result. Adjacent-line dedupe cannot see that shape because the repeated unit
+// is a whole multi-line response. Collapse only an exact normalized repeat
+// whose second copy begins with the same first meaningful line; this preserves
+// intentional repeated lines inside an otherwise different answer.
+function dedupeRepeatedAssistantResponse(s: string): string {
+  let out = s.trim();
+  for (let pass = 0; pass < 2; pass++) {
+    const lines = out.replace(/\r/g, "").split("\n");
+    const firstIndex = lines.findIndex((line) => stripAnsi(line).trim().length > 0);
+    if (firstIndex < 0) return out;
+    const firstLine = stripAnsi(lines[firstIndex]).trim();
+    let collapsed = false;
+    let candidates = 0;
+    for (let i = firstIndex + 1; i < lines.length && candidates < 8; i++) {
+      if (stripAnsi(lines[i]).trim() !== firstLine) continue;
+      candidates += 1;
+      const left = lines.slice(firstIndex, i).join("\n").trim();
+      const right = lines.slice(i).join("\n").trim();
+      const normalize = (value: string) => stripAnsi(value)
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+      if (left.length >= 24 && normalize(left) === normalize(right)) {
+        out = left;
+        collapsed = true;
+        break;
+      }
+    }
+    if (!collapsed) break;
+  }
+  return out;
+}
+
 // stripPromptEcho removes the noisy preamble that wraps a runner's
 // actual answer when streaming. Three layers:
 //   1. Our own injected system-context blocks (Codex echoes them) —
@@ -589,6 +624,7 @@ function stripPromptEcho(content: string): string {
 
   out = dedupeCodexEchoes(out);
   out = dedupeOpencodeEchoes(out);
+  out = dedupeRepeatedAssistantResponse(out);
 
   return out.trim();
 }
@@ -3793,7 +3829,13 @@ export default function TasksScreen() {
       sseAbortRef.current();
       sseAbortRef.current = null;
     }
-    if (!selectedTask || !taskStatusMeansRunnerIsCoding(selectedTask.status)) return;
+    if (!selectedTask || !taskStatusMeansRunnerIsCoding(selectedTask.status)) {
+      // The stream-health banner describes a live coding stream. Keeping it
+      // after the task reaches review/completed is a false signal: the task is
+      // no longer running and there is nothing left to reattach to.
+      setStreamHealth(null);
+      return;
+    }
     if (!quicClient.isConnected) {
       // An unreachable box is a legitimate reason to have no live stream —
       // but it must not read as "the task went quiet". DeviceContext owns the
@@ -3808,6 +3850,7 @@ export default function TasksScreen() {
     let received = 0;
     let attempt = 0;
     let disposed = false;
+    let taskFinished = false;
     let reattachTimer: ReturnType<typeof setTimeout> | undefined;
     setStreamHealth(null);
 
@@ -3841,6 +3884,8 @@ export default function TasksScreen() {
       },
       (status) => {
         if (status === "completed" || status === "review" || status === "failed" || status === "stopped") {
+          taskFinished = true;
+          setStreamHealth(null);
           setTasks((prev) => prev.map((t) => t.id === selectedTask.id ? { ...t, status: status as TaskStatus } : t));
           setSelectedTask((prev) => prev?.id === selectedTask.id ? { ...prev, status: status as TaskStatus } : prev);
         }
@@ -3924,7 +3969,7 @@ export default function TasksScreen() {
           setStreamHealth(null);
         },
         onEnd: (info) => {
-          if (disposed) return;
+          if (disposed || taskFinished) return;
           // The transport used to end here in silence (`xhr.onerror` was an
           // empty handler), so a relay bounce or a dropped tunnel simply
           // stopped the transcript and the screen sat on its last frame.
@@ -8728,7 +8773,7 @@ export default function TasksScreen() {
                     sentence deliberately states that the TASK is still
                     running — the thing a frozen transcript makes people
                     assume is dead. */}
-                {streamHealth ? (
+                {streamHealth && isRunning ? (
                   <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
                     <View
                       style={{
@@ -10311,15 +10356,17 @@ const s = StyleSheet.create({
   // in a terminal", sans for UI chrome.
   userBubbleText: { color: "#fff", fontSize: 14, lineHeight: 20, fontFamily: monoFamily },
 
-  assistantRow: { flexDirection: "row", justifyContent: "flex-start", marginBottom: 12 },
+  assistantRow: { width: "100%", flexDirection: "row", justifyContent: "flex-start", marginBottom: 12 },
   // assistantFrame is the assistant's chat bubble — WhatsApp/Claude-mobile
   // shaped: a subtle fill, rounded with a bottom-LEFT tail (mirror of the
-  // user bubble's bottom-right tail), snug to its content rather than
-  // full-width. maxWidth 90% (a touch wider than the user's 80% because
-  // agent replies carry code/markdown that needs room); backgroundColor is
+  // user bubble's bottom-right tail). Give it an explicit readable width:
+  // maxWidth alone lets React Native shrink the Pressable to the intrinsic
+  // width of a markdown child, which produced the ~100pt column seen on a
+  // real iPhone. Agent replies carry code/markdown, so they get 90% of the
+  // row while the shorter user bubble remains content-sized. backgroundColor is
   // applied inline from the theme. Fenced code blocks keep their own inner
   // border so they still stand out against the bubble fill.
-  assistantFrame: { maxWidth: "90%", borderRadius: 20, borderBottomLeftRadius: 6, paddingHorizontal: 14, paddingVertical: 10 },
+  assistantFrame: { width: "90%", maxWidth: 760, borderRadius: 20, borderBottomLeftRadius: 6, paddingHorizontal: 14, paddingVertical: 10 },
   assistantTokens: { fontSize: 12, marginBottom: 6, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
   assistantToggle: { fontSize: 12, fontWeight: "600" },
 

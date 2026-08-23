@@ -1007,6 +1007,9 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 	if _, err := exec.LookPath("xcodebuild"); err != nil {
 		return fmt.Errorf("xcodebuild not found — install Xcode")
 	}
+	if err := ensureWireIOSBuildHeadroom(root); err != nil {
+		return err
+	}
 	if err := ensureIOSPodsForWirePush(ctx, root); err != nil {
 		return err
 	}
@@ -1073,6 +1076,27 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 		return nil
 	}
 	return launchAppOnDevice(ctx, dev.UDID, bid)
+}
+
+// A cold device build plus CocoaPods and DerivedData has repeatedly consumed
+// several GiB. Starting with a nearly-full APFS volume makes pod install fail
+// halfway through a checkout and leaves Pods looking present but unusable; if
+// it gets farther, xcodebuild dies much later with an unrelated-looking error.
+// Match the measured TestFlight floor and fail before mutating dependencies.
+const wireIOSMinFreeBytes = int64(10) << 30 // 10 GiB
+
+func ensureWireIOSBuildHeadroom(root string) error {
+	headroom := probeMachineHeadroom(root)
+	if !headroom.Measured {
+		return fmt.Errorf("could not measure free disk space for the iOS wireless build at %s — check `df -h %q`, then retry", root, root)
+	}
+	if headroom.FreeBytes >= wireIOSMinFreeBytes {
+		return nil
+	}
+	return fmt.Errorf(
+		"iOS wireless build needs at least %s free; only %s is available on the volume holding %s — inspect reclaimable build caches with `yaver ops disk_manage --payload='{\"action\":\"scan\"}'`, reclaim only reviewed generated artifacts, then retry",
+		humanBytes(wireIOSMinFreeBytes), humanBytes(headroom.FreeBytes), root,
+	)
 }
 
 // ensureIOSPodsForWirePush makes the native dependency operation truthful
