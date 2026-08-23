@@ -96,6 +96,20 @@ func TestNormalizeDevReloadMode(t *testing.T) {
 	}
 }
 
+func TestNormalizeDevReloadPlatform(t *testing.T) {
+	for input, want := range map[string]string{
+		"android":   "android",
+		" Android ": "android",
+		"ios":       "ios",
+		"":          "ios",
+		"web":       "ios",
+	} {
+		if got := normalizeDevReloadPlatform(input); got != want {
+			t.Fatalf("normalizeDevReloadPlatform(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 // TestFlutterReloadWithMode pins the fast/full → stdin mapping: fast
 // writes "r" (hot reload, state preserved), full writes "R" (hot
 // restart). This is the whole Flutter half of the Fast/Full Reload

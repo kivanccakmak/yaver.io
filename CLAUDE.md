@@ -89,6 +89,12 @@ changing those.
   preference: web, mobile, tablet, tvOS, watchOS, Wear OS, car, AR/VR, and CLI
   companion surfaces must all follow the same queue → quiet status → one final
   render pattern.
+  A named command such as `reload sfmg` pins `projectName` through
+  `/dev/reload-app` into `/dev/build-native`; it must not refresh an unrelated
+  active browser preview merely because that is the box's current dev lane.
+  In RN-web the same command pins the project into a `web-js-bundle` build and
+  refreshes the browser surface; native and browser lanes share the intent but
+  execute the artifact their surface can actually consume.
 - **LESS IS MORE — every UI/UX surface earns its pixels or it's cut.** Yaver
   shows a lot: devices, runners, transports, previews, statuses, incidents. The
   default failure mode of a control surface is *accretion* — one more chip, one

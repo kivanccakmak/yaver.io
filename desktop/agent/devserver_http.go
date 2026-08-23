@@ -2104,6 +2104,13 @@ func normalizeDevReloadMode(mode string) string {
 	return "fast"
 }
 
+func normalizeDevReloadPlatform(platform string) string {
+	if strings.ToLower(strings.TrimSpace(platform)) == "android" {
+		return "android"
+	}
+	return "ios"
+}
+
 // POST /dev/reload  { "mode": "fast" | "full" }   (default: fast)
 //
 // fast — the framework's cheapest refresh: Metro/Expo built-in reload +
@@ -2412,6 +2419,7 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		ProjectName string `json:"projectName"`
 		ProjectPath string `json:"projectPath"`
 		BundleID    string `json:"bundleId"`
+		Platform    string `json:"platform"`
 	}
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req)
@@ -2511,8 +2519,9 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		// pinned. Without this, callers that relied on the old
 		// "use the active dev server" behaviour would 400 with
 		// PROJECT_REQUIRED after the stateless cut-over in 1.99.187.
+		platform := normalizeDevReloadPlatform(req.Platform)
 		buildBody, _ := json.Marshal(map[string]string{
-			"platform":    "ios",
+			"platform":    platform,
 			"projectName": req.ProjectName,
 			"projectPath": projectPath,
 			"bundleId":    req.BundleID,

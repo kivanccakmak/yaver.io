@@ -64,6 +64,7 @@ import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { rerenderActivePreviewSurface } from "../../src/lib/feedbackTrigger";
 import { publishAutoRenderVibing, subscribeAutoRenderVibing } from "../../src/lib/autoRenderVibing";
 import { mustUseNativePreview } from "../../src/lib/devLane";
+import { parseReloadIntent } from "../../src/lib/reloadIntent";
 import {
   AgentStatus,
   CloudWorkspaceRequiredError,
@@ -773,12 +774,6 @@ function normalizeTaskTitle(title: string): string {
 // path-safe token (no spaces), so a genuine task phrased as a sentence —
 // "reload the user list after delete" — falls through to a normal task
 // because "the user list…" contains spaces and fails the `\s*$` anchor.
-const RELOAD_INTENT =
-  /^\s*(please\s+)?(fast\s+)?(hot\s*reload|reload|re-?render|refresh|hermes(\s+reload)?|rebuild(\s+bundle)?|push\s+bundle)(\s+(it|again|the\s+(app|preview|ui)|[a-z0-9._-]{1,40}))?\s*[.!?]?\s*$/i;
-function isReloadIntent(text: string): boolean {
-  return RELOAD_INTENT.test(text.trim());
-}
-
 function taskStatusAllowsRuntimeRender(status?: TaskStatus | null): boolean {
   return status === "completed" || status === "review";
 }
@@ -3762,7 +3757,8 @@ export default function TasksScreen() {
   // Listen for streaming output — buffer updates to avoid UI freezing
   const outputBufferRef = useRef<Record<string, string[]>>({});
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string; explicit?: boolean } | null>(null);
+  const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string; projectName?: string; explicit?: boolean } | null>(null);
+  const namedReloadExecutorRef = useRef<((projectName: string) => Promise<void>) | null>(null);
 
   // ── raw-lane (live console) ─────────────────────────────────────────
   // Every runner (opencode, codex, claude, …) streams its RAW runner
@@ -4098,6 +4094,10 @@ export default function TasksScreen() {
     if (!pending || pending.taskId !== selectedTask.id) return;
     pendingRuntimeRenderRef.current = null;
     void (async () => {
+      if (pending.projectName) {
+        await namedReloadExecutorRef.current?.(pending.projectName);
+        return;
+      }
       const decision = await rerenderActivePreviewSurface({
         source: pending.source,
         workDir: pending.workDir,
@@ -4660,8 +4660,8 @@ export default function TasksScreen() {
   // box the user actually selected. Needs the native YaverBundleLoader
   // (iOS + Android); degrade visibly if this build lacks it rather than
   // firing a reload this phone can't consume.
-  const triggerHermesReload = async () => {
-    if (!isBundleLoaderAvailable()) {
+  const triggerHermesReload = async (explicitProjectName?: string) => {
+    if (Platform.OS !== "web" && !isBundleLoaderAvailable()) {
       Alert.alert(
         "Reload unavailable",
         "This build of Yaver can't mount project bundles. Update Yaver to the latest version, or use the Reload tab's dev-server controls.",
@@ -4684,14 +4684,53 @@ export default function TasksScreen() {
     setIsSubmitting(true);
     setReloadFlash(`Reloading on ${targetName}…`);
     try {
+      if (Platform.OS === "web" && explicitProjectName) {
+        const matchingSelectedProject = selectedComposerProject?.name.toLowerCase() === explicitProjectName.toLowerCase();
+        const built = await client.buildWebJSBundle({
+          projectName: explicitProjectName,
+          projectPath: matchingSelectedProject ? projectDir || undefined : undefined,
+          mode: "full",
+        });
+        if (!built.ok) {
+          setReloadFlash(null);
+          Alert.alert("Browser reload failed", built.error || "The selected project web bundle could not be built.");
+          return;
+        }
+        const decision = await rerenderActivePreviewSurface({
+          source: "mobile-web-named-project-render",
+          taskStatus: "completed",
+          autoRenderEnabled: true,
+        });
+        const message = decision.action === "render"
+          ? `${explicitProjectName}: browser bundle rebuilt and preview refreshed.`
+          : `${explicitProjectName}: browser bundle rebuilt. Open its preview to render it.`;
+        setNewTaskText("");
+        setInputFromSpeech(false);
+        setReloadFlash(message);
+        setTimeout(() => setReloadFlash((cur) => (cur === message ? null : cur)), 4500);
+        return;
+      }
       // Lane-aware: an RN project actively served on the BROWSER lane must get
       // a browser reload, never a Hermes bundle rebuild — this was the last
       // unconditional bundle caller of the leak class cb72c3e42 fixed. No
       // status (older agent, nothing running) keeps the old bundle behavior.
       const targetStatus = await client.getDevServerStatus().catch(() => null);
-      const nativeLane = !targetStatus || mustUseNativePreview(targetStatus);
+      // A named command is an explicit request to rebuild THAT phone project.
+      // Never let an unrelated/older browser preview on the box redirect it
+      // into /dev/reload. That was the live sfmg + ubuntu-4gb failure: the
+      // agent truthfully refreshed its web bundle while the phone saw nothing.
+      const nativeLane = !!explicitProjectName || !targetStatus || mustUseNativePreview(targetStatus);
       const result = await client.reloadDevServerDetailed(
-        nativeLane ? { mode: "bundle" } : { mode: "full", allowBundleFallback: false },
+        nativeLane
+          ? {
+              mode: "bundle",
+              projectName: explicitProjectName || selectedComposerProject?.name || projectNameFromPath(projectDir),
+              projectPath: !explicitProjectName || selectedComposerProject?.name.toLowerCase() === explicitProjectName.toLowerCase()
+                ? projectDir || undefined
+                : undefined,
+              platform: Platform.OS === "android" ? "android" : "ios",
+            }
+          : { mode: "full", allowBundleFallback: false },
       );
       if (devReloadReachedTarget(result)) {
         taskHaptics.send();
@@ -4713,6 +4752,9 @@ export default function TasksScreen() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+  namedReloadExecutorRef.current = async (explicitProjectName: string) => {
+    await triggerHermesReload(explicitProjectName);
   };
 
   const runPhoneLocalTask = useCallback(async (promptOverride?: string) => {
@@ -4847,18 +4889,27 @@ export default function TasksScreen() {
     // command — typed or dictated into the composer — shouldn't spin up a
     // full agent task. Push a fresh bundle to this phone directly. Skipped
     // when images are attached (clearly a real task) or with no live host.
-    if (attachedImages.length === 0 && isEffectivelyConnected && isReloadIntent(submittedText)) {
+    const reloadIntent = attachedImages.length === 0 ? parseReloadIntent(submittedText) : null;
+    if (isEffectivelyConnected && reloadIntent) {
       if (isRecording && promptOverride === undefined) { try { await stopRecordingAndTranscribe(); } catch {} }
       if (selectedTask && taskStatusMeansRunnerIsCoding(selectedTask.status)) {
         pendingRuntimeRenderRef.current = {
           taskId: selectedTask.id,
           source: "mobile-user-reload-after-task",
+          projectName: reloadIntent.projectName,
           explicit: true,
         };
         setNewTaskText("");
         setInputFromSpeech(false);
         setReloadFlash("Reload queued until the current task finishes.");
         setTimeout(() => setReloadFlash((cur) => (cur === "Reload queued until the current task finishes." ? null : cur)), 3500);
+        return;
+      }
+      // A named project is not an instruction to refresh whichever preview
+      // happens to be active. It must traverse the stateless Hermes build path
+      // with projectName pinned all the way to /dev/build-native.
+      if (reloadIntent.projectName) {
+        await triggerHermesReload(reloadIntent.projectName);
         return;
       }
       const decision = await rerenderActivePreviewSurface({

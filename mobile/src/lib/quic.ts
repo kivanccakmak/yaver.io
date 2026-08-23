@@ -314,6 +314,16 @@ export interface DevReloadResult {
   error?: string;
 }
 
+export interface WebBundleBuildResult {
+  ok: boolean;
+  bundleUrl?: string;
+  size?: number;
+  fileCount?: number;
+  reused?: boolean;
+  error?: string;
+  output?: string;
+}
+
 export function describeDevReloadResult(result: DevReloadResult | null | undefined): string {
   if (!result) return "Reload status unavailable.";
   if (result.message) return result.message;
@@ -9765,6 +9775,10 @@ export class QuicClient {
   async reloadDevServerDetailed(opts?: {
     mode?: "dev" | "bundle" | "fast" | "full";
     allowBundleFallback?: boolean;
+    projectName?: string;
+    projectPath?: string;
+    bundleId?: string;
+    platform?: "ios" | "android";
   }): Promise<DevReloadResult> {
     const mode = opts?.mode ?? "bundle";
     const allowBundleFallback = opts?.allowBundleFallback !== false;
@@ -9793,7 +9807,13 @@ export class QuicClient {
       const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/reload-app`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "bundle" }),
+        body: JSON.stringify({
+          mode: "bundle",
+          ...(opts?.projectName ? { projectName: opts.projectName } : {}),
+          ...(opts?.projectPath ? { projectPath: opts.projectPath } : {}),
+          ...(opts?.bundleId ? { bundleId: opts.bundleId } : {}),
+          ...(opts?.platform ? { platform: opts.platform } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -9804,6 +9824,35 @@ export class QuicClient {
       return { ok: data.ok !== false, mode: "bundle", ...data };
     } catch (e) {
       return { ok: false, mode, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /** Build a project-pinned browser bundle. RN-web uses this for named chat
+   * reloads so `reload sfmg` cannot refresh an unrelated active preview. */
+  async buildWebJSBundle(opts: {
+    projectName?: string;
+    projectPath?: string;
+    mode?: "fast" | "full";
+  }): Promise<WebBundleBuildResult> {
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/build-native`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target: "web-js-bundle",
+          mode: opts.mode || "full",
+          ...(opts.projectName ? { projectName: opts.projectName } : {}),
+          ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
+          caller: "mobile-web",
+        }),
+      }, 240_000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status !== "ok") {
+        return { ok: false, ...data, error: data.error || data.message || `HTTP ${res.status}` };
+      }
+      return { ok: true, ...data };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
 
