@@ -21,7 +21,7 @@ import "../src/lib/polyfills";
 import { installRuntimeDebugHandlers } from "../src/lib/runtimeDebug";
 installRuntimeDebugHandlers();
 
-import { Stack, usePathname, useRouter } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import * as ScreenOrientation from "expo-screen-orientation";
@@ -34,7 +34,6 @@ import { CloudStudioProvider } from "../src/context/CloudStudioContext";
 import { ThemeProvider, useTheme } from "../src/context/ThemeContext";
 import { FeedbackOverlay } from "../src/components/FeedbackOverlay";
 import { ShareComposeModal } from "../src/components/ShareComposeModal";
-import { DogfoodCaptureHost } from "../src/components/DogfoodCaptureHost";
 import { RunningTasksPill } from "../src/components/RunningTasksPill";
 import { WatchBridgeHost } from "../src/components/WatchBridgeHost";
 import { RuntimeTurnAnnouncerHost } from "../src/components/RuntimeTurnAnnouncerHost";
@@ -45,7 +44,6 @@ import { PendingDeviceApprovalHost } from "../src/lib/pendingDeviceApproval";
 import { ShareIntentReceiver } from "../src/lib/shareReceiver";
 import { registerNativeScreenRecorder } from "../src/lib/screenRecorder";
 import { startFeedbackShakeBridge } from "../src/lib/feedbackTrigger";
-import { loadDogfoodMode, recordDogfoodRoute } from "../src/lib/dogfoodMode";
 import { useAuth } from "../src/context/AuthContext";
 import { recoverInterruptedRemotelessTasks } from "../src/lib/remotelessTaskLifecycle";
 import { markCachedRemotelessTasksForReview } from "../src/lib/storage";
@@ -86,7 +84,6 @@ function InnerLayout() {
   const { isDark, colors } = useTheme();
   const { user } = useAuth();
   const router = useRouter();
-  const pathname = usePathname();
   // Branded cold-start overlay ("Remote AI Runtime"). Shows on top of the
   // app the moment the native splash hides, then fades itself out via
   // onDone. One-shot per app launch.
@@ -138,16 +135,6 @@ function InnerLayout() {
       sub.remove();
     };
   }, [router]);
-  // Dogfood mode: re-arm the sticky toggle on sign-in (per-user flag). When on,
-  // this starts the native screenshot auto-catch + breadcrumb recorder.
-  useEffect(() => {
-    void loadDogfoodMode(user?.id);
-  }, [user?.id]);
-  // Feed the active route into dogfood breadcrumbs + the native capture payload
-  // so a caught screenshot knows which screen it's on. No-op when dogfood is off.
-  useEffect(() => {
-    recordDogfoodRoute(pathname);
-  }, [pathname]);
   // Orientation policy: phones stay portrait (system rotation lock
   // is unreliable across Android OEMs, so enforce in-app); tablets
   // run free so split-pane layouts can use landscape. Decision is
@@ -186,7 +173,6 @@ function InnerLayout() {
       <PendingDeviceApprovalHost />
       <ShareIntentReceiver />
       <ShareComposeModal />
-      <DogfoodCaptureHost />
       <WatchBridgeHost />
       <RuntimeTurnAnnouncerHost />
       <AuthPushHost />

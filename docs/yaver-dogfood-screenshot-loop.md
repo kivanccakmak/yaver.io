@@ -7,6 +7,13 @@ add a prompt, and it dispatches to a coding agent on your remote dev box that
 edits Yaver itself — then Hermes-reloads Yaver so you see the fix in the same
 thread. "Use Yaver to improve Yaver," screenshot-first.
 
+> Retired 2026-08-24: the shipped More → Dogfood mode no longer means this
+> screenshot-thread design. It now renders Yaver's own `mobile/` Expo/RN-web
+> target from the server-verified owner account's primary device. Coding turns
+> cross the WebView boundary to refresh that surface, while native Production
+> chrome remains outside it as the permanent escape. This document is retained
+> only as historical design context.
+
 > Source-of-truth caveat (per CLAUDE.md): every file path below was grepped on
 > 2026-06-07. Re-verify before building — other threads move constants.
 

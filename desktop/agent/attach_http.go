@@ -33,9 +33,21 @@ type attachStartResponse struct {
 	Remedy string `json:"remedy,omitempty"`
 }
 
+// Kept as a seam so the HTTP boundary can be negative-control tested without
+// reaching Convex. Production always resolves the server-computed owner claim.
+var attachOwnerAllowed = currentUserIsOwner
+
 func (s *HTTPServer) handleAttachStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if !attachOwnerAllowed() {
+		writeJSON(w, http.StatusForbidden, attachStartResponse{
+			Code:   "DOGFOOD_OWNER_ONLY",
+			Error:  "Dogfood mode is available only to the Yaver owner account.",
+			Remedy: "Switch back to the owner account to develop Yaver itself.",
+		})
 		return
 	}
 	var req attachStartRequest
@@ -52,7 +64,7 @@ func (s *HTTPServer) handleAttachStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, attachStartResponse{
 			Code:  "ATTACH_NOT_YAVER_CHECKOUT",
 			Error: err.Error(),
-			Remedy: "Point Attach Mode at the yaver.io checkout on this box — the directory whose " +
+			Remedy: "Point Dogfood mode at the yaver.io checkout on this box — the directory whose " +
 				"mobile/package.json is named \"yaver-mobile\".",
 		})
 		return

@@ -31,7 +31,6 @@ import { CodingAgentsSection } from "../../src/components/DeviceDetailsModal";
 import { YaverAgentSettings } from "../../src/components/YaverAgentSettings";
 import VisionSettingsSection from "../../src/components/VisionSettingsSection";
 import BoxInitSection from "../../src/components/BoxInitSection";
-import AttachModeSection from "../../src/components/AttachModeSection";
 import CloudProvidersSection from "../../src/components/CloudProvidersSection";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi, updateProfile, changePassword as changePasswordApi, getUserSettings, saveUserSettings, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary, type SpeechProvider, type TtsProvider, type KeyStorage, LOCAL_KEYS, getLocalSecret, saveLocalSecret, deleteLocalSecret, getKeyStoragePreference, saveKeyStoragePreference, loadLocalSpeechConfig, saveLocalSpeechConfig, getAuthConfig, setAccountPassword as setAccountPasswordApi, listAuthIdentities, startLinkIntent, unlinkProvider as unlinkProviderApi, startMergeIntent, cancelMergeIntent, type AuthIdentity, type OAuthProvider, type MergeIntent } from "../../src/lib/auth";
@@ -4955,15 +4954,6 @@ export default function SettingsScreen() {
               <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
 
               <BoxInitSection c={c} token={token} />
-
-              <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
-
-              {/* Attach Mode — Yaver rendering Yaver. Sits directly under the
-                  box checklist because its gate READS that readiness: box →
-                  runner → checkout, in that order. Deliberately NOT behind
-                  LEAN_SETTINGS_SURFACE; the old "Dogfood Yaver" panel was, and
-                  a hardcoded `true` meant it never rendered at all. */}
-              <AttachModeSection c={c} />
 
               <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
 

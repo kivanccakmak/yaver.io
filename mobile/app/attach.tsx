@@ -47,6 +47,7 @@ import {
   subscribeBrowserRender,
 } from "../src/lib/feedbackTrigger";
 import { appLog } from "../src/lib/logger";
+import { parseDogfoodRenderMessage } from "../src/lib/dogfoodRenderBridge";
 
 function elapsedLabel(sinceMs: number): string {
   const secs = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
@@ -76,6 +77,17 @@ export default function AttachScreen() {
   const [fatal, setFatal] = useState<{ message: string; remedy?: string } | null>(null);
   const reloadInFlight = useRef(false);
 
+  const reloadDogfoodSurface = useCallback((source: string) => {
+    if (reloadInFlight.current) return;
+    reloadInFlight.current = true;
+    appLog("info", `dogfood: refreshing attached surface (${source})`);
+    setLastEvent({ label: "refreshed after a coding turn", at: Date.now() });
+    setWebViewKey((k) => k + 1);
+    setTimeout(() => {
+      reloadInFlight.current = false;
+    }, 1500);
+  }, []);
+
   const deviceId = params.deviceId || activeDevice?.id || "";
   const deviceName = params.deviceName || activeDevice?.name || "the box";
   const sessionId = params.sessionId || "";
@@ -102,7 +114,7 @@ export default function AttachScreen() {
         // mysteriously failing to load anything.
         setFatal({
           message: res.error || "The attach session expired.",
-          remedy: res.remedy || "Detach and turn Attach Mode on again.",
+          remedy: res.remedy || "Switch to Production, then open Dogfood mode again.",
         });
       }
     };
@@ -117,24 +129,12 @@ export default function AttachScreen() {
   // for the post-task render the Tasks tab queues.
   useEffect(() => {
     setActivePreviewLane("browser");
-    const unsub = subscribeBrowserRender((source) => {
-      // Atomic: one reload at a time. A second trigger while one is in flight
-      // is dropped, never queued into a double refresh that would yank the
-      // surface out from under the user twice.
-      if (reloadInFlight.current) return;
-      reloadInFlight.current = true;
-      appLog("info", `attach: refreshing attached surface (${source})`);
-      setLastEvent({ label: "refreshed after a coding turn", at: Date.now() });
-      setWebViewKey((k) => k + 1);
-      setTimeout(() => {
-        reloadInFlight.current = false;
-      }, 1500);
-    });
+    const unsub = subscribeBrowserRender(reloadDogfoodSurface);
     return () => {
       unsub();
       setActivePreviewLane(null);
     };
-  }, []);
+  }, [reloadDogfoodSurface]);
 
   // REVERT — back to the app you actually installed.
   //
@@ -175,12 +175,12 @@ export default function AttachScreen() {
 
   const confirmDetach = useCallback(() => {
     Alert.alert(
-      "Back to the installed app",
+      "Switch to Production mode",
       "Stop rendering the development build and return to the Yaver you installed. " +
         "Your work on the box is untouched — only this preview ends.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Revert", style: "destructive", onPress: () => void detach() },
+        { text: "Production", style: "destructive", onPress: () => void detach() },
       ],
     );
   }, [detach]);
@@ -208,15 +208,15 @@ export default function AttachScreen() {
       <View style={[styles.chrome, { borderBottomColor: c.border, backgroundColor: c.bgCard }]}>
         <Pressable
           onPress={confirmDetach}
-          accessibilityLabel="Detach"
+          accessibilityLabel="Switch to Production mode"
           style={({ pressed }) => [styles.chromeBtn, pressed && { opacity: 0.6 }]}
         >
-          <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "600" }}>Detach</Text>
+          <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "600" }}>Production</Text>
         </Pressable>
 
         <View style={styles.chromeCenter}>
           <Text numberOfLines={1} style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>
-            Attached to Yaver
+            Dogfood mode
           </Text>
           <Text numberOfLines={1} style={{ color: c.textMuted, fontSize: 11 }}>
             {statusLine}
@@ -263,6 +263,10 @@ export default function AttachScreen() {
               setLoading(false);
               reloadInFlight.current = false;
             }}
+            onMessage={(event) => {
+              const message = parseDogfoodRenderMessage(event.nativeEvent.data);
+              if (message) reloadDogfoodSurface(message.source);
+            }}
             onError={(e) => {
               setLoading(false);
               reloadInFlight.current = false;
@@ -278,7 +282,7 @@ export default function AttachScreen() {
         ) : (
           <View style={styles.center}>
             <Text style={{ color: c.textMuted, fontSize: 13, textAlign: "center", paddingHorizontal: 24 }}>
-              No attached URL was passed to this screen. Turn Attach Mode on from Settings.
+              No Dogfood URL was passed to this screen. Return to More and open Dogfood mode again.
             </Text>
           </View>
         )}

@@ -4,6 +4,13 @@ Date: 2026-08-02 · Branch: `vibing-false-green-fixes` · Static audit (code rea
 not run). Every claim below is `file:line`-anchored; nothing is taken from a
 `.md`.
 
+> 2026-08-24 source update: the product entry is now owner-only More → Dogfood
+> mode, targets the account's primary device, serves `mobile/` through Expo's
+> browser lane, and labels the native escape Production. The inner RN-web Tasks
+> context posts a bounded render message to the outer native host; a module-local
+> event emitter could not cross that WebView boundary. `/attach/start` now also
+> enforces the backend-computed owner verdict instead of relying on hidden UI.
+
 ## 0. What was asked for
 
 A **Settings toggle that attaches the Yaver mobile app to Yaver's own code

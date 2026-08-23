@@ -4,6 +4,7 @@ import { AppState, type AppStateStatus, NativeEventEmitter, NativeModules, Platf
 import { quicClient, type RemoteRuntimeSession } from "./quic";
 import { appLog } from "./logger";
 import { planPostTaskRender, type PostTaskRenderDecision } from "./previewReload";
+import { isAttachedDogfoodWebRuntime, makeDogfoodRenderMessage } from "./dogfoodRenderBridge";
 
 type FeedbackLaunchSource = "shake" | "native-guest-shake" | "remote-runtime";
 
@@ -156,14 +157,18 @@ export async function rerenderActivePreviewSurface(opts: {
 }): Promise<PostTaskRenderDecision> {
   const source = opts.source || "mobile-auto-render";
   const session = activeRemoteRuntimeSession;
+  const dogfoodBridge = Platform.OS === "web" && isAttachedDogfoodWebRuntime();
   const decision = planPostTaskRender({
-    lane: activePreviewLane,
+    lane: dogfoodBridge ? "browser" : activePreviewLane,
     taskStatus: opts.taskStatus,
     hasWebrtcSession: !!session?.id,
     webrtcTargetCanRender: !session?.targetId || canRunGuestOnRemoteTarget(session.targetId),
     webrtcTargetLabel: session?.targetLabel || session?.targetId,
     inFlight: remoteRuntimeRenderInFlight,
-    autoRenderEnabled: opts.autoRenderEnabled,
+    // Entering owner-only Dogfood mode is the explicit consent to keep
+    // refreshing Yaver after completed UI turns; production remains outside
+    // this WebView and is always reachable from native chrome.
+    autoRenderEnabled: dogfoodBridge || opts.autoRenderEnabled,
   });
 
   if (decision.action !== "render") {
@@ -177,6 +182,10 @@ export async function rerenderActivePreviewSurface(opts: {
 
   if (decision.lane === "browser") {
     appLog("info", `post-task render: refreshing browser-lane preview for ${source}`);
+    if (dogfoodBridge) {
+      (globalThis as any).ReactNativeWebView.postMessage(makeDogfoodRenderMessage(source));
+      return decision;
+    }
     for (const cb of browserRenderListeners) {
       try {
         cb(source);

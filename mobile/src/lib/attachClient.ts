@@ -25,7 +25,7 @@ const NOT_CONNECTED: AttachSessionResult = {
   ok: false,
   code: "ATTACH_BOX_OFFLINE",
   error: "That box isn't connected right now.",
-  remedy: "Reconnect to the box, then turn Attach Mode on again.",
+  remedy: "Reconnect the primary device, then open Dogfood mode again.",
 };
 
 /**
@@ -60,10 +60,32 @@ export async function startAttachSession(deviceId: string, workDir: string): Pro
     return {
       ok: false,
       code: "ATTACH_START_FAILED",
-      error: err?.message || "Could not start Attach Mode.",
+      error: err?.message || "Could not start Dogfood mode.",
       remedy: "Check the box is reachable, then try again.",
     };
   }
+}
+
+/** Start Yaver's own Expo target on the selected box's browser lane.
+ * Uses the per-device client so capability minting and serving cannot land on
+ * different boxes when the focused machine is not the primary. */
+export async function startYaverBrowserLane(deviceId: string, checkoutDir: string) {
+  const client = clientFor(deviceId);
+  if (!client) throw new Error(NOT_CONNECTED.error);
+  return client.startDevServer({
+    workDir: checkoutDir.replace(/\/+$/, "") + "/mobile",
+    framework: "expo",
+    web: true,
+  });
+}
+
+/** Resolve the checkout from the box's real repo inventory. Empty means the
+ * source is not present; callers then keep the explicit path route visible. */
+export async function discoverYaverCheckout(deviceId: string): Promise<string> {
+  const client = clientFor(deviceId);
+  if (!client) return "";
+  const status = await client.dogfoodYaverSourceStatus();
+  return status.ok ? String(status.path || "") : "";
 }
 
 export async function refreshAttachSession(deviceId: string, sessionId: string): Promise<AttachSessionResult> {
@@ -72,7 +94,7 @@ export async function refreshAttachSession(deviceId: string, sessionId: string):
   try {
     return await client.refreshAttachSession(sessionId);
   } catch (err: any) {
-    return { ok: false, code: "ATTACH_REFRESH_FAILED", error: err?.message || "Could not refresh Attach Mode." };
+    return { ok: false, code: "ATTACH_REFRESH_FAILED", error: err?.message || "Could not refresh Dogfood mode." };
   }
 }
 

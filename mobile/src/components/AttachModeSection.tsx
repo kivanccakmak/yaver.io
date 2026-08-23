@@ -1,4 +1,4 @@
-// AttachModeSection.tsx — the Settings entry point for Attach Mode.
+// AttachModeSection.tsx — the owner-only More → Dogfood mode runtime gate.
 //
 // Yaver rendering Yaver: the phone shows Yaver's own app, served as RN-web from
 // a box over the browser lane, and refreshes when a coding turn lands.
@@ -23,8 +23,8 @@ import type { ThemeColors } from "../constants/colors";
 import { useDevice } from "../context/DeviceContext";
 import { computeAttachGate, computeNestingVerdict, ATTACH_SENTINEL_KEY, type AttachStep } from "../lib/attachMode";
 import type { BoxReadiness } from "../lib/boxInit";
-import { startAttachSession, verifyYaverCheckout } from "../lib/attachClient";
-import { quicClient } from "../lib/quic";
+import { loadBoxReadiness } from "../lib/boxInitStore";
+import { discoverYaverCheckout, startAttachSession, startYaverBrowserLane, verifyYaverCheckout } from "../lib/attachClient";
 import { appLog } from "../lib/logger";
 
 const CHECKOUT_KEY = "@yaver/attach_checkout_dir";
@@ -33,17 +33,25 @@ const RUNNER_KEY = "@yaver/attach_runner";
 export default function AttachModeSection({
   c,
   readiness,
+  primaryOnly = false,
 }: {
   c: ThemeColors;
   readiness?: BoxReadiness | null;
+  primaryOnly?: boolean;
 }) {
-  const { activeDevice, connectionStatus } = useDevice();
+  const { devices, activeDevice, connectionStatus, primaryDeviceId, selectDevice } = useDevice();
+  const primaryDevice = primaryDeviceId ? devices.find((d) => d.id === primaryDeviceId) ?? null : null;
+  const targetDevice = primaryOnly ? primaryDevice : activeDevice;
+  const targetConnected = !!targetDevice && connectionStatus === "connected" && activeDevice?.id === targetDevice.id;
   const [checkoutDir, setCheckoutDir] = useState("");
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [runner, setRunner] = useState("claude-code");
   const [verified, setVerified] = useState<boolean | undefined>(undefined);
   const [verifying, setVerifying] = useState(false);
   const [starting, setStarting] = useState(false);
   const [failure, setFailure] = useState<{ error: string; remedy?: string } | null>(null);
+  const [measuredReadiness, setMeasuredReadiness] = useState<BoxReadiness | null>(readiness ?? null);
+  const [connectingPrimary, setConnectingPrimary] = useState(false);
   const [mayOffer, setMayOffer] = useState(true);
   const [nestingReason, setNestingReason] = useState<string | undefined>();
 
@@ -78,26 +86,41 @@ export default function AttachModeSection({
         if (r) setRunner(r);
       } catch {
         // best-effort
+      } finally {
+        setConfigLoaded(true);
       }
     })();
   }, []);
+
+  // Primary-device dogfood should be one action in the normal case. Ask the
+  // box for its actual repo inventory instead of guessing a username/path.
+  useEffect(() => {
+    if (!primaryOnly || !configLoaded || !targetConnected || !targetDevice?.id || checkoutDir.trim()) return;
+    let cancelled = false;
+    void discoverYaverCheckout(targetDevice.id).then((dir) => {
+      if (cancelled || !dir) return;
+      setCheckoutDir(dir);
+      AsyncStorage.setItem(CHECKOUT_KEY, dir).catch(() => {});
+    });
+    return () => { cancelled = true; };
+  }, [checkoutDir, configLoaded, primaryOnly, targetConnected, targetDevice?.id]);
 
   // Verification is the AGENT's answer, never a path guess here. Re-runs when
   // the directory or the box changes, and resets to "unknown" first so a stale
   // green can never stand in for the new answer.
   const verify = useCallback(
     async (dir: string) => {
-      if (!activeDevice?.id || !dir.trim()) {
+      if (!targetDevice?.id || !targetConnected || !dir.trim()) {
         setVerified(undefined);
         return;
       }
       setVerifying(true);
       setVerified(undefined);
-      const ok = await verifyYaverCheckout(activeDevice.id, dir.trim());
+      const ok = await verifyYaverCheckout(targetDevice.id, dir.trim());
       setVerified(ok);
       setVerifying(false);
     },
-    [activeDevice?.id],
+    [targetConnected, targetDevice?.id],
   );
 
   useEffect(() => {
@@ -109,27 +132,53 @@ export default function AttachModeSection({
     return () => clearTimeout(t);
   }, [checkoutDir, verify]);
 
+  // Readiness is an operational probe, not an optional decoration. The old
+  // call site supplied no value, leaving the gate at "checking…" forever.
+  useEffect(() => {
+    let cancelled = false;
+    if (!targetDevice?.id || !targetConnected) {
+      setMeasuredReadiness(null);
+      return;
+    }
+    void loadBoxReadiness(targetDevice.id)
+      .then((next) => { if (!cancelled) setMeasuredReadiness(next); })
+      .catch((err) => {
+        if (!cancelled) {
+          setMeasuredReadiness(null);
+          setFailure({
+            error: err instanceof Error ? err.message : String(err),
+            remedy: "Reconnect the primary device, then try Dogfood mode again.",
+          });
+        }
+      });
+    return () => { cancelled = true; };
+  }, [targetConnected, targetDevice?.id]);
+
+  useEffect(() => {
+    if (readiness !== undefined) setMeasuredReadiness(readiness ?? null);
+  }, [readiness]);
+
   const gate = computeAttachGate({
-    deviceId: connectionStatus === "connected" ? activeDevice?.id : null,
-    deviceName: activeDevice?.name,
-    readiness,
+    deviceId: targetConnected ? targetDevice?.id : null,
+    deviceName: targetDevice?.name,
+    readiness: measuredReadiness,
     runner,
     checkoutDir: checkoutDir.trim() || null,
     checkoutVerified: verifying ? undefined : verified,
   });
 
   const attach = useCallback(async () => {
-    if (!activeDevice?.id || !gate.canAttach) return;
+    if (!targetDevice?.id || !gate.canAttach) return;
     setStarting(true);
     setFailure(null);
     try {
       const dir = checkoutDir.trim();
       // 1. Mint the capability. This REFUSES a non-Yaver checkout server-side,
       //    so the client-side gate is a courtesy, not the guarantee.
-      const session = await startAttachSession(activeDevice.id, dir);
+      const session = await startAttachSession(targetDevice.id, dir);
       if (!session.ok || !session.sessionId) {
         setFailure({
-          error: session.error || "Could not start Attach Mode.",
+          error: session.error || "Could not start Dogfood mode.",
           remedy: session.remedy,
         });
         return;
@@ -138,15 +187,7 @@ export default function AttachModeSection({
       // 2. Serve Yaver's own mobile app on the BROWSER lane. Hermes is refused
       //    for self-development (409 YAVER_SELF_DEVELOPMENT_RECURSION); the web
       //    target is the route that refusal names.
-      const mobileDir = dir.replace(/\/+$/, "") + "/mobile";
-      // web:true IS the browser lane (caller "web-ui" + platform "web" under
-      // the hood). Hermes must never be used here — it is refused for
-      // self-development, and asking for it would 409.
-      const status = await quicClient.startDevServer({
-        workDir: mobileDir,
-        framework: "expo",
-        web: true,
-      });
+      const status = await startYaverBrowserLane(targetDevice.id, dir);
 
       const url = (status as any)?.previewUrl || (status as any)?.bundleUrl || "";
       if (!url) {
@@ -165,25 +206,25 @@ export default function AttachModeSection({
           url,
           workDir: dir,
           runner,
-          deviceId: activeDevice.id,
-          deviceName: activeDevice.name,
+          deviceId: targetDevice.id,
+          deviceName: targetDevice.name,
         },
       } as any);
     } catch (err: any) {
       appLog("warn", `attach: start failed: ${err?.message || String(err)}`);
       setFailure({
-        error: err?.message || "Could not start Attach Mode.",
+        error: err?.message || "Could not start Dogfood mode.",
         remedy: "Check the box is reachable and try again.",
       });
     } finally {
       setStarting(false);
     }
-  }, [activeDevice?.id, activeDevice?.name, checkoutDir, gate.canAttach, runner]);
+  }, [checkoutDir, gate.canAttach, runner, targetDevice?.id, targetDevice?.name]);
 
   if (!mayOffer) {
     return (
       <View>
-        <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Attach to Yaver</Text>
+        <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Dogfood mode</Text>
         <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 6, lineHeight: 17 }}>
           {nestingReason}
         </Text>
@@ -193,11 +234,37 @@ export default function AttachModeSection({
 
   return (
     <View>
-      <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Attach to Yaver</Text>
+      <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Dogfood Yaver in the browser</Text>
       <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 4, lineHeight: 17 }}>
-        Render Yaver's own app from a box, full-screen, and refresh it when a coding turn lands. Vibe
-        from Tasks and watch the change appear in the app you're holding.
+        Serve mobile/ with Expo on your primary device, render it full-screen, and refresh it when a
+        coding turn lands. Production mode always remains one tap away in native chrome.
       </Text>
+
+      {primaryOnly && !primaryDevice ? (
+        <Text style={{ color: c.warn, fontSize: 12, marginTop: 10 }}>
+          Pick a primary device in Settings before starting Dogfood mode.
+        </Text>
+      ) : null}
+
+      {primaryOnly && primaryDevice && !targetConnected ? (
+        <Pressable
+          disabled={connectingPrimary}
+          onPress={() => {
+            setConnectingPrimary(true);
+            void selectDevice(primaryDevice)
+              .catch((err) => setFailure({
+                error: err instanceof Error ? err.message : String(err),
+                remedy: "Wake or repair the primary device, then retry.",
+              }))
+              .finally(() => setConnectingPrimary(false));
+          }}
+          style={{ marginTop: 12, alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: c.accentSoft }}
+        >
+          <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>
+            {connectingPrimary ? "Connecting…" : `Connect ${primaryDevice.name}`}
+          </Text>
+        </Pressable>
+      ) : null}
 
       {/* The gate. One line per step, each with its fix. */}
       <View style={{ marginTop: 12, gap: 8 }}>
@@ -311,7 +378,7 @@ export default function AttachModeSection({
             fontSize: 14,
           }}
         >
-          {starting ? "Attaching…" : "Attach"}
+          {starting ? "Starting Dogfood…" : "Enter Dogfood mode"}
         </Text>
       </Pressable>
     </View>
