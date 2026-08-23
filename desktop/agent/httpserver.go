@@ -11703,9 +11703,10 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		var a struct {
 			DeviceID string `json:"device_id"`
 			Runner   string `json:"runner"`
+			Confirm  bool   `json:"confirm"`
 		}
 		json.Unmarshal(call.Arguments, &a)
-		return mcpToolJSON(mcpRunnerBrowserAuthStart(a.DeviceID, a.Runner))
+		return mcpToolJSON(mcpRunnerBrowserAuthStart(a.DeviceID, a.Runner, a.Confirm))
 	case "runner_auth_browser_status":
 		var a struct {
 			DeviceID  string `json:"device_id"`
@@ -14445,10 +14446,11 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 	// --- Primary device sugar (resolve "primary" → deviceId, then act) ---
 	case "primary_auth":
 		var a struct {
-			Runner string `json:"runner"`
+			Runner  string `json:"runner"`
+			Confirm bool   `json:"confirm"`
 		}
 		json.Unmarshal(call.Arguments, &a)
-		return mcpToolJSON(mcpPrimaryAuth(a.Runner))
+		return mcpToolJSON(mcpPrimaryAuth(a.Runner, a.Confirm))
 
 	case "primary_status":
 		return mcpToolJSON(mcpPrimaryStatus())

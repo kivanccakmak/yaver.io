@@ -280,7 +280,7 @@ func resolvePrimaryDeviceIDForMCP() (string, error) {
 // runner=="claude" or "codex", this kicks off the runner's browser /
 // device-code login flow on the primary box; the response carries the
 // URL/code the user (or another agent) opens to finish.
-func mcpPrimaryAuth(runner string) map[string]interface{} {
+func mcpPrimaryAuth(runner string, confirm bool) map[string]interface{} {
 	deviceID, err := resolvePrimaryDeviceIDForMCP()
 	if err != nil {
 		return map[string]interface{}{"ok": false, "error": err.Error()}
@@ -302,7 +302,7 @@ func mcpPrimaryAuth(runner string) map[string]interface{} {
 			"primaryDeviceId": deviceID,
 		}
 	}
-	out := mcpRunnerBrowserAuthStart(deviceID, runner)
+	out := mcpRunnerBrowserAuthStart(deviceID, runner, confirm)
 	if out == nil {
 		out = map[string]interface{}{}
 	}

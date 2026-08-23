@@ -99,7 +99,7 @@ func opsRunnerAuthHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 		if strings.TrimSpace(p.Runner) == "" {
 			return OpsResult{OK: false, Code: "bad_payload", Error: "runner required"}
 		}
-		return wrapMCPResult(mcpRunnerBrowserAuthStart(p.DeviceID, p.Runner))
+		return wrapMCPResult(mcpRunnerBrowserAuthStart(p.DeviceID, p.Runner, false))
 	case "browser_status":
 		if strings.TrimSpace(p.SessionID) == "" {
 			return OpsResult{OK: false, Code: "bad_payload", Error: "sessionId required"}

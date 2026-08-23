@@ -752,15 +752,20 @@ func mcpDeviceReauthWait(deviceHint, recoveryID, waitToken string, timeoutSecond
 	}
 }
 
-func mcpRunnerBrowserAuthStart(deviceID, runner string) map[string]interface{} {
+func mcpRunnerBrowserAuthStart(deviceID, runner string, confirm bool) map[string]interface{} {
+	body := map[string]interface{}{"runner": runner}
+	if confirm {
+		body["confirm"] = true
+		body["trigger"] = "confirmed"
+	}
 	if strings.TrimSpace(deviceID) != "" {
-		out, err := proxyToDeviceJSON(context.Background(), "runner_auth_browser_start", strings.TrimSpace(deviceID), http.MethodPost, "/runner-auth/browser/start", map[string]string{"runner": runner})
+		out, err := proxyToDeviceJSON(context.Background(), "runner_auth_browser_start", strings.TrimSpace(deviceID), http.MethodPost, "/runner-auth/browser/start", body)
 		if err != nil {
 			return map[string]interface{}{"ok": false, "error": err.Error()}
 		}
 		return out
 	}
-	out, err := localAgentRequest(http.MethodPost, "/runner-auth/browser/start", map[string]interface{}{"runner": runner})
+	out, err := localAgentRequest(http.MethodPost, "/runner-auth/browser/start", body)
 	if err != nil {
 		return map[string]interface{}{"ok": false, "error": err.Error()}
 	}
