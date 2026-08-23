@@ -39,7 +39,7 @@ func shouldUseOpenCodeACP(task *Task, runner RunnerConfig, effectiveModel string
 	if task.ResumeLast || task.SessionID != "" {
 		return false, "resume remains on the CLI lane"
 	}
-	if task.IsAdopted || task.TmuxSession != "" || tmuxRunnerReady() != "" {
+	if task.IsAdopted || task.TmuxSession != "" || taskTmuxEnabled(runner.RunnerID) || tmuxRunnerReady() != "" {
 		return false, "tmux execution requires the CLI lane"
 	}
 	if strings.TrimSpace(effectiveModel) != "" || strings.TrimSpace(runner.Mode) != "" {

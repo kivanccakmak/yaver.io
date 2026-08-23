@@ -28,7 +28,10 @@ Go agent:
 - `desktop/agent/httpserver.go` exposes `/tmux/sessions`, `/tmux/adopt`,
   `/tmux/input`, and `/tmux/detach`.
 - `desktop/agent/tasks.go` exposes `TaskInfo` through `/tasks` and
-  `/tasks/{id}`.
+  `/tasks/{id}`. Ordinary Claude, Codex, and OpenCode task turns run in an
+  isolated `yaver-task-<task-id>-<runner>` tmux session by default; set
+  `YAVER_TASK_TMUX=0` only for a constrained host that must use direct exec.
+  `YAVER_TMUX_RUNNER=<session>` remains the explicit shared-session override.
 
 Mobile:
 
@@ -96,6 +99,8 @@ autorun exists while the machine is asleep or waking, store only
 
 - Task cards show a `tmux` pill with session name or session id.
 - Tmux session modal shows session id plus active window/pane id.
+- A Yaver-created session maps back to its existing task and opens that task;
+  it is never offered for duplicate adoption.
 - Opening a task preserves `tmuxSession`, `tmuxSessionId`, `tmuxPaneId`, and
   `isAdopted`; detail fetches must not drop fields present in list fetches.
 - Follow-up on adopted tasks bypasses runner fork/resume and uses `/tmux/input`.
@@ -115,6 +120,9 @@ autorun exists while the machine is asleep or waking, store only
   Claude/Codex menus.
 - Re-adopt running tmux-backed tasks on agent restart if the session still
   exists.
+- Initial turns and follow-ups use the same per-task tmux identity while they
+  execute, so switching runners or tasks never falls through to an unlisted
+  direct child process.
 
 ## Cloud Workspace Fit
 

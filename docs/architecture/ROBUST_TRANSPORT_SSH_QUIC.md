@@ -326,7 +326,8 @@ bounded attempts escalates to the user, it does not spin.
   it isn't, it rides relay/direct. Same secure control plane, transport-agnostic.
 
 ### Task model it plugs into (existing)
-A task runs in its own **tmux** session (`yaver-<task>`); a **yaver session**
+A task runs in its own **tmux** session
+(`yaver-task-<task-id>-<runner>`); a **yaver session**
 wraps the remote **runner** (claude/codex/opencode). The SSH channel's `run-task`/
 `attach-tmux`/`stop-task` verbs drive exactly these — SSH is another way to reach
 the *same* tmux/runner, not a parallel task system. So "tasks over SSH" = the

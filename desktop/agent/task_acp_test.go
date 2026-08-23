@@ -10,6 +10,7 @@ import (
 
 func TestOpenCodeACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 	t.Setenv("YAVER_TMUX_RUNNER", "")
+	t.Setenv("YAVER_TASK_TMUX", "0")
 	t.Setenv("YAVER_OPENCODE_ACP", "")
 	runner := RunnerConfig{RunnerID: "opencode", Command: "opencode"}
 
@@ -39,6 +40,18 @@ func TestOpenCodeACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 				t.Fatalf("selection=(%v, %q), want false reason containing %q", ok, reason, tc.wantText)
 			}
 		})
+	}
+}
+
+func TestOpenCodeACPDefaultsToAttachableTmuxCLILane(t *testing.T) {
+	if !tmuxAvailable() {
+		t.Skip("tmux is not installed")
+	}
+	t.Setenv("YAVER_TMUX_RUNNER", "")
+	t.Setenv("YAVER_TASK_TMUX", "")
+	ok, reason := shouldUseOpenCodeACP(&Task{}, RunnerConfig{RunnerID: "opencode", Command: "opencode"}, "", false)
+	if ok || !strings.Contains(reason, "tmux") {
+		t.Fatalf("OpenCode ACP selection=(%v, %q), want attachable tmux CLI lane", ok, reason)
 	}
 }
 

@@ -9855,6 +9855,17 @@ export default function TasksScreen() {
                               <Text style={[s.tmuxActionText, { color: "#f97316" }]}>Close</Text>
                             </Pressable>
                           </View>
+                        ) : session.relationship === "forked-by-yaver" && session.taskId ? (
+                          <Pressable
+                            style={[s.tmuxActionBtn, { backgroundColor: c.accent + "18", marginTop: 10 }]}
+                            onPress={() => {
+                              setShowTmuxSessions(false);
+                              const task = tasks.find(t => t.id === session.taskId);
+                              if (task) setSelectedTask(task);
+                            }}
+                          >
+                            <Text style={[s.tmuxActionText, { color: c.accent }]}>View Task</Text>
+                          </Pressable>
                         ) : session.relationship !== "forked-by-yaver" ? (
                           <Pressable
                             style={[s.tmuxActionBtn, { backgroundColor: "#8b5cf618", marginTop: 10 }, isBeingAdopted && s.submitButtonDisabled]}

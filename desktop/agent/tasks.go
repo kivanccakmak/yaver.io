@@ -3201,26 +3201,32 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	} else {
 		// ── Direct execution (default) ──────────────────────────────────
 
-		// Optional tmux-attach mode: route eligible runners through an
-		// existing user-owned tmux session so they inherit that session's
-		// auth context (notably macOS Keychain unlocking for Claude Code,
-		// which we can't get from a launchd/ssh-launched daemon).
-		// Opt-in via YAVER_TMUX_RUNNER=<session-name>; falls through to
-		// direct exec when off, tmux missing, or session absent.
+		// Tmux-backed task mode: every first-class runner task gets one exact,
+		// attachable session by default. YAVER_TMUX_RUNNER preserves the legacy
+		// shared-session override; YAVER_TASK_TMUX=0 is the explicit opt-out.
+		// Missing tmux still falls through to direct exec so coding remains
+		// available on constrained hosts.
 		var cmd *exec.Cmd
 		var err error
 		var tmuxEnvAdditions []string
-		if session := tmuxRunnerReady(); session != "" && tmuxRunnerEligible(runner.RunnerID) {
+		tmuxTarget := tmuxRunnerTargetForTask(task.ID, runner.RunnerID)
+		if tmuxTarget.Session != "" {
 			log.Printf("[task %s] tmux mode: dispatching %s into session %q",
-				task.ID, runner.Command, session)
-			if task.TmuxSession == "" {
-				task.TmuxSession = session
-			}
-			if task.TmuxSessionID == "" {
-				task.TmuxSessionID = getActivePaneIdentity(session).SessionID
-			}
-			cmd, tmuxEnvAdditions = buildTmuxRunnerCommand(ctx, session, task.ID, runner.Command, args, mcpScope.Env)
+				task.ID, runner.Command, tmuxTarget.Session)
+			task.TmuxSession = tmuxTarget.Session
+			task.TmuxSessionID = ""
+			task.TmuxWindowIndex = ""
+			task.TmuxWindowName = ""
+			task.TmuxPaneIndex = ""
+			task.TmuxPaneID = ""
+			cmd, tmuxEnvAdditions = buildTmuxRunnerCommand(ctx, tmuxTarget, task.ID, runner.RunnerID, taskDir, runner.Command, args, mcpScope.Env)
 		} else {
+			task.TmuxSession = ""
+			task.TmuxSessionID = ""
+			task.TmuxWindowIndex = ""
+			task.TmuxWindowName = ""
+			task.TmuxPaneIndex = ""
+			task.TmuxPaneID = ""
 			if normalizeRunnerID(runner.RunnerID) == "claude" {
 				if err := preflightClaudeMacKeychainForHeadlessLaunch(); err != nil {
 					cancel()
@@ -3289,6 +3295,20 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			go SendDevLog(tm.ConvexURL, tm.AuthToken, tm.OwnerEmail, "task-start-fail",
 				fmt.Sprintf("Failed to start process for task %s: %v", task.ID, err), nil)
 			return fmt.Errorf("start process: %w", err)
+		}
+
+		if task.TmuxSession != "" {
+			pane := waitForTmuxTaskPane(task.TmuxSession, task.ID, 500*time.Millisecond)
+			if pane.PaneID != "" {
+				tm.mu.Lock()
+				task.TmuxSessionID = pane.SessionID
+				task.TmuxWindowIndex = pane.WindowIndex
+				task.TmuxWindowName = pane.WindowName
+				task.TmuxPaneIndex = pane.PaneIndex
+				task.TmuxPaneID = pane.PaneID
+				tm.persistAsync()
+				tm.mu.Unlock()
+			}
 		}
 
 		now := time.Now()
@@ -4516,11 +4536,38 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 		args = append(args, "--session-id", uuid.New().String())
 	}
 
-	cmd := exec.CommandContext(ctx, runner.Command, args...)
+	var cmd *exec.Cmd
+	var tmuxEnvAdditions []string
+	tmuxTarget := tmuxRunnerTargetForTask(task.ID, runner.RunnerID)
+	if tmuxTarget.Session != "" {
+		log.Printf("[task %s] tmux mode: dispatching %s follow-up into session %q",
+			task.ID, runner.Command, tmuxTarget.Session)
+		task.TmuxSession = tmuxTarget.Session
+		task.TmuxSessionID = ""
+		task.TmuxWindowIndex = ""
+		task.TmuxWindowName = ""
+		task.TmuxPaneIndex = ""
+		task.TmuxPaneID = ""
+		cmd, tmuxEnvAdditions = buildTmuxRunnerCommand(ctx, tmuxTarget, task.ID, runner.RunnerID, resumeWorkDir, runner.Command, args, nil)
+	} else {
+		task.TmuxSession = ""
+		task.TmuxSessionID = ""
+		task.TmuxWindowIndex = ""
+		task.TmuxWindowName = ""
+		task.TmuxPaneIndex = ""
+		task.TmuxPaneID = ""
+		cmd = exec.CommandContext(ctx, runner.Command, args...)
+	}
 	cmd.Dir = resumeWorkDir
+	cmd.Env = taskEnv(task)
+	if len(tmuxEnvAdditions) > 0 {
+		cmd.Env = append(cmd.Env, tmuxEnvAdditions...)
+	}
 
 	// On Android, run the forked runner inside the proot rootfs (no-op elsewhere).
-	cmd = sandboxWrapCmd(cmd)
+	if len(tmuxEnvAdditions) == 0 {
+		cmd = sandboxWrapCmd(cmd)
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -4546,6 +4593,20 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return fmt.Errorf("start process: %w", err)
+	}
+
+	if task.TmuxSession != "" {
+		pane := waitForTmuxTaskPane(task.TmuxSession, task.ID, 500*time.Millisecond)
+		if pane.PaneID != "" {
+			tm.mu.Lock()
+			task.TmuxSessionID = pane.SessionID
+			task.TmuxWindowIndex = pane.WindowIndex
+			task.TmuxWindowName = pane.WindowName
+			task.TmuxPaneIndex = pane.PaneIndex
+			task.TmuxPaneID = pane.PaneID
+			tm.persistAsync()
+			tm.mu.Unlock()
+		}
 	}
 
 	now := time.Now()

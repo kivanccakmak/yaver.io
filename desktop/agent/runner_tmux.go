@@ -1,6 +1,6 @@
 package main
 
-// Tmux-attach mode for runner spawn.
+// Tmux-backed runner spawn.
 //
 // Why: when the yaver daemon is started outside the user's GUI login session
 // (launchd, ssh, headless), Claude Code can't read the user's macOS Keychain
@@ -10,10 +10,11 @@ package main
 // `claude` running in a tmux pane *is* authenticated. Routing tasks into
 // that tmux server's environment lets them inherit that auth.
 //
-// Activation is strictly opt-in via the YAVER_TMUX_RUNNER env var on the
-// daemon (e.g. `YAVER_TMUX_RUNNER=yaver-claude yaver serve`). When set, and
-// the session exists, and the runner is eligible (claude only, for now),
-// startProcess wraps the spawn in a shell orchestration that:
+// Ordinary Claude, Codex and OpenCode tasks get an isolated session by
+// default. YAVER_TASK_TMUX=0 is the explicit escape hatch, while
+// YAVER_TMUX_RUNNER=<session> preserves the legacy operator-owned shared
+// session override. startProcess and startResume both wrap eligible spawns in
+// a shell orchestration that:
 //
 //   1. opens a fresh window in the configured tmux session,
 //   2. runs the runner inside that window,
@@ -23,8 +24,9 @@ package main
 //   5. blocks via `tmux wait-for` until the inner runner exits,
 //   6. recovers the inner exit code from a marker line and propagates it.
 //
-// On task kill / ctx cancel, the wrapper sh's EXIT trap calls
-// `tmux kill-window` so we don't leak panes.
+// On task kill / ctx cancel, the wrapper sh's EXIT trap closes the window (for
+// a shared override) or the whole per-task session and removes its private
+// capture file.
 //
 // Limitation: stdout and stderr merge inside the pane. For claude
 // stream-json output mode this means JSON lines and human stderr text
@@ -36,10 +38,18 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const tmuxRunnerEnvVar = "YAVER_TMUX_RUNNER"
+const taskTmuxEnvVar = "YAVER_TASK_TMUX"
+
+type tmuxRunnerTarget struct {
+	Session       string
+	CreateSession bool
+}
 
 // tmuxRunnerSession returns the opt-in session name from the daemon's env
 // (empty string = feature off).
@@ -83,6 +93,55 @@ func tmuxRunnerReady() string {
 		return ""
 	}
 	return session
+}
+
+// taskTmuxEnabled is the product default for first-class coding runners.
+//
+// Before 2026-08-23, ordinary phone/web tasks bypassed tmux unless the daemon
+// happened to be started with YAVER_TMUX_RUNNER. The interactive `yaver codex`
+// lane was attachable, while the much more common Tasks lane was not. That was
+// an inventory/operation split: the clients advertised tmux attach, but the
+// runner the user was watching did not live in any session.
+//
+// Keep an explicit escape hatch for constrained embeddings and tests. Missing
+// tmux is handled by the existing startup installer and then degrades to the
+// direct CLI lane; it must never make coding itself unavailable.
+func taskTmuxEnabled(runnerID string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(taskTmuxEnvVar))) {
+	case "0", "false", "off", "no":
+		return false
+	}
+	return tmuxRunnerEligible(runnerID) && tmuxAvailable()
+}
+
+// automaticTaskTmuxSessionName gives every task one exact attach target. A
+// shared yaver-codex session with one window per task made an attach land on
+// whichever window happened to be active; a per-task session makes the task,
+// the pane and the mobile terminal refer to the same operation by construction.
+func automaticTaskTmuxSessionName(taskID, runnerID string) string {
+	runner := normalizeRunnerID(runnerID)
+	if runner == "" {
+		runner = "runner"
+	}
+	return "yaver-task-" + shortTaskKey(taskID) + "-" + runner
+}
+
+func tmuxRunnerTargetForTask(taskID, runnerID string) tmuxRunnerTarget {
+	if !tmuxRunnerEligible(runnerID) {
+		return tmuxRunnerTarget{}
+	}
+	// Preserve the legacy operator override: an explicitly configured session
+	// keeps the old shared-session/window behaviour.
+	if session := tmuxRunnerReady(); session != "" {
+		return tmuxRunnerTarget{Session: session}
+	}
+	if !taskTmuxEnabled(runnerID) {
+		return tmuxRunnerTarget{}
+	}
+	return tmuxRunnerTarget{
+		Session:       automaticTaskTmuxSessionName(taskID, runnerID),
+		CreateSession: true,
+	}
 }
 
 // shellQuoteStrict single-quotes a value safely for sh, escaping any embedded
@@ -131,28 +190,53 @@ func shortTaskKey(taskID string) string {
 // passed pre-shell-quoted in $YAVER_TMUX_INNER and we let tmux's own
 // `sh -c` evaluate it. Anything dangerous is single-quoted by shellJoin
 // at the Go layer, so $HOME and friends won't be expanded.
-const tmuxRunnerScript = `set -u
+const tmuxRunnerScript = `set -eu
 SESSION=$YAVER_TMUX_SESSION
 WIN=$YAVER_TMUX_WIN
 SIG=$YAVER_TMUX_SIG
 LOG=$YAVER_TMUX_LOG
+CREATE_SESSION=$YAVER_TMUX_CREATE_SESSION
+RUNNER=$YAVER_TMUX_RUNNER_ID
+CWD=$YAVER_TMUX_CWD
+TARGET=
 
 cleanup() {
   if [ -n "${TAIL_PID:-}" ]; then kill "$TAIL_PID" 2>/dev/null || true; fi
-  tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+  if [ "$CREATE_SESSION" = "1" ]; then
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+  else
+    tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+  fi
+  rm -f -- "$LOG"
 }
 trap cleanup TERM INT HUP EXIT
 
 : > "$LOG"
-tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+if [ "$CREATE_SESSION" = "1" ]; then
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux new-session -d -s "$SESSION" -n "$WIN" -c "$CWD"
+  TARGET="$SESSION:$WIN.0"
+else
+  tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
+  tmux new-window -d -t "$SESSION" -n "$WIN" -c "$CWD"
+  TARGET="$SESSION:$WIN"
+fi
 
-tmux new-window -d -t "$SESSION" -n "$WIN"
-tmux set-option -q -t "$SESSION:$WIN" remain-on-exit on 2>/dev/null || true
-tmux set-window-option -q -t "$SESSION:$WIN" alternate-screen off 2>/dev/null || true
-tmux send-keys -t "$SESSION:$WIN" \
+# These are hints for inventory/display only. Prompt delivery still requires
+# process observation (agentConfirmed); a stale option can never authorize
+# typing into a shell.
+tmux set-option -q -t "$SESSION" @yaver-runner "$RUNNER" 2>/dev/null || true
+tmux set-option -q -t "$SESSION" @yaver-task-id "$YAVER_TMUX_TASK_ID" 2>/dev/null || true
+tmux set-window-option -q -t "$TARGET" automatic-rename off 2>/dev/null || true
+tmux set-window-option -q -t "$TARGET" remain-on-exit on 2>/dev/null || true
+tmux set-window-option -q -t "$TARGET" alternate-screen off 2>/dev/null || true
+
+# Install capture BEFORE launching the runner. The previous order sent the
+# command first and could lose a fast runner's entire answer before pipe-pane
+# attached — especially the exact hello-world probe used to verify OAuth.
+tmux pipe-pane -o -t "$TARGET" "cat >> '$LOG'"
+tmux send-keys -t "$TARGET" \
   "$YAVER_TMUX_INNER; rc=\$?; printf '\n__YAVER_EXIT__:%d\n' \"\$rc\"; tmux wait-for -S \"$SIG\"" Enter
-
-tmux pipe-pane -o -t "$SESSION:$WIN" "cat >> '$LOG'"
 
 tail -n +1 -F "$LOG" 2>/dev/null &
 TAIL_PID=$!
@@ -164,7 +248,6 @@ kill "$TAIL_PID" 2>/dev/null || true
 TAIL_PID=
 
 EXIT=$(grep -E '^__YAVER_EXIT__:[0-9]+$' "$LOG" 2>/dev/null | tail -1 | sed -e 's/.*://')
-tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
 exit "${EXIT:-1}"
 `
 
@@ -183,8 +266,10 @@ exit "${EXIT:-1}"
 // else.
 func buildTmuxRunnerCommand(
 	ctx context.Context,
-	session string,
+	target tmuxRunnerTarget,
 	taskID string,
+	runnerID string,
+	workDir string,
 	runnerCmd string,
 	runnerArgs []string,
 	runnerEnv []string,
@@ -202,12 +287,53 @@ func buildTmuxRunnerCommand(
 	inner := shellJoin(innerCmd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", tmuxRunnerScript)
+	createSession := "0"
+	if target.CreateSession {
+		createSession = "1"
+	}
 	envAdditions := []string{
-		"YAVER_TMUX_SESSION=" + session,
+		"YAVER_TMUX_SESSION=" + target.Session,
 		"YAVER_TMUX_WIN=" + win,
 		"YAVER_TMUX_SIG=" + sig,
 		"YAVER_TMUX_LOG=" + logPath,
 		"YAVER_TMUX_INNER=" + inner,
+		"YAVER_TMUX_CREATE_SESSION=" + createSession,
+		"YAVER_TMUX_RUNNER_ID=" + normalizeRunnerID(runnerID),
+		"YAVER_TMUX_TASK_ID=" + taskID,
+		"YAVER_TMUX_CWD=" + workDir,
 	}
 	return cmd, envAdditions
+}
+
+// waitForTmuxTaskPane resolves the exact session/window/pane created by the
+// wrapper. It is deliberately bounded: tmux identity is useful attachment
+// metadata, never permission to block POST /tasks.
+func waitForTmuxTaskPane(session, taskID string, timeout time.Duration) tmuxPaneIdentity {
+	deadline := time.Now().Add(timeout)
+	wantWindow := "yaver-task-" + shortTaskKey(taskID)
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		if remaining > 100*time.Millisecond {
+			remaining = 100 * time.Millisecond
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), remaining)
+		out, err := exec.CommandContext(ctx, tmuxCmdName(), "list-panes", "-t", session+":"+wantWindow, "-F",
+			"#{session_id}|#{window_index}|#{window_name}|#{pane_index}|#{pane_id}|#{pane_pid}").CombinedOutput()
+		cancel()
+		if err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				parts := strings.SplitN(line, "|", 6)
+				if len(parts) != 6 {
+					continue
+				}
+				pid, _ := strconv.Atoi(parts[5])
+				return tmuxPaneIdentity{
+					SessionID: parts[0], WindowIndex: parts[1], WindowName: parts[2],
+					PaneIndex: parts[3], PaneID: parts[4], PanePID: pid,
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return tmuxPaneIdentity{}
 }

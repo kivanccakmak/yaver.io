@@ -66,11 +66,28 @@ func TestShortTaskKeyClampAndSanitize(t *testing.T) {
 	}
 }
 
-func TestTmuxRunnerReadyOffByDefault(t *testing.T) {
-	// Ensure no env leakage promotes the feature on by default.
+func TestTmuxRunnerLegacyOverrideOffByDefault(t *testing.T) {
+	// Empty means there is no shared-session override. Automatic per-task tmux
+	// selection is tested separately and intentionally defaults on.
 	t.Setenv(tmuxRunnerEnvVar, "")
 	if got := tmuxRunnerReady(); got != "" {
 		t.Fatalf("tmuxRunnerReady() with empty env: want empty, got %q", got)
+	}
+}
+
+func TestAutomaticTaskTmuxSessionNamesRunner(t *testing.T) {
+	if got, want := automaticTaskTmuxSessionName("fe2ebda2", "codex"), "yaver-task-fe2ebda2-codex"; got != want {
+		t.Fatalf("automaticTaskTmuxSessionName = %q, want %q", got, want)
+	}
+	if got := automaticTaskTmuxSessionName("abc/def", "claude-code"); got != "yaver-task-abc-def-claude" {
+		t.Fatalf("automaticTaskTmuxSessionName canonicalization = %q", got)
+	}
+}
+
+func TestTaskTmuxExplicitOptOut(t *testing.T) {
+	t.Setenv(taskTmuxEnvVar, "0")
+	if taskTmuxEnabled("codex") {
+		t.Fatal("YAVER_TASK_TMUX=0 must disable automatic task tmux")
 	}
 }
 
@@ -100,8 +117,10 @@ func TestTmuxRunnerEligibleClaudeOnly(t *testing.T) {
 func TestBuildTmuxRunnerCommandShape(t *testing.T) {
 	cmd, env := buildTmuxRunnerCommand(
 		context.Background(),
-		"yaver-claude",
+		tmuxRunnerTarget{Session: "yaver-claude"},
 		"task-abc-def-ghi-jkl",
+		"claude",
+		"/tmp/project",
 		"claude",
 		[]string{"-p", "say hi"},
 		[]string{"CLAUDE_CONFIG_DIR=/tmp/yaver-claude"},
@@ -124,6 +143,9 @@ func TestBuildTmuxRunnerCommandShape(t *testing.T) {
 	if !strings.Contains(cmd.Args[2], "trap cleanup") {
 		t.Fatal("script body missing cleanup trap (would leak panes on cancel)")
 	}
+	if strings.Index(cmd.Args[2], "tmux pipe-pane") > strings.Index(cmd.Args[2], "tmux send-keys") {
+		t.Fatal("pipe-pane must be installed before runner launch or fast output can be lost")
+	}
 	wantInner := "'env' 'CLAUDE_CONFIG_DIR=/tmp/yaver-claude' 'claude' '-p' 'say hi'"
 	var sawInner, sawSession bool
 	for _, kv := range env {
@@ -139,5 +161,33 @@ func TestBuildTmuxRunnerCommandShape(t *testing.T) {
 	}
 	if !sawInner {
 		t.Errorf("env missing properly-quoted YAVER_TMUX_INNER (want contains %q): %v", wantInner, env)
+	}
+}
+
+func TestBuildAutomaticTmuxRunnerCreatesExactTaskSession(t *testing.T) {
+	cmd, env := buildTmuxRunnerCommand(
+		context.Background(),
+		tmuxRunnerTarget{Session: "yaver-task-fe2ebda2-codex", CreateSession: true},
+		"fe2ebda2", "codex", "/tmp/project", "codex", []string{"exec", "hello"}, nil,
+	)
+	if !strings.Contains(cmd.Args[2], "tmux new-session") || !strings.Contains(cmd.Args[2], "tmux kill-session") {
+		t.Fatalf("automatic wrapper must own an exact session: %s", cmd.Args[2])
+	}
+	want := map[string]bool{
+		"YAVER_TMUX_SESSION=yaver-task-fe2ebda2-codex": false,
+		"YAVER_TMUX_CREATE_SESSION=1":                  false,
+		"YAVER_TMUX_RUNNER_ID=codex":                   false,
+		"YAVER_TMUX_TASK_ID=fe2ebda2":                  false,
+		"YAVER_TMUX_CWD=/tmp/project":                  false,
+	}
+	for _, kv := range env {
+		if _, ok := want[kv]; ok {
+			want[kv] = true
+		}
+	}
+	for kv, seen := range want {
+		if !seen {
+			t.Errorf("automatic wrapper env missing %q: %v", kv, env)
+		}
 	}
 }

@@ -410,6 +410,9 @@ func (m *TmuxManager) ListTmuxSessions() ([]TmuxSession, error) {
 		} else if taskID := m.anyAdoptedPaneTask(panesBySession[s.Name]); taskID != "" {
 			s.Relationship = "adopted"
 			s.TaskID = taskID
+		} else if taskID := tmuxSessionTaskID(m.taskMgr, s.Name); taskID != "" {
+			s.Relationship = "forked-by-yaver"
+			s.TaskID = taskID
 		} else if m.isForkedByYaver(s.Name) {
 			s.Relationship = "forked-by-yaver"
 		} else {

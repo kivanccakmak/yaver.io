@@ -515,7 +515,7 @@ func paneIdentityByID(sessionName, paneID string) (tmuxPaneIdentity, bool) {
 	return tmuxPaneIdentity{}, false
 }
 
-// paneTaskID finds the Yaver Task adopted for a given pane, if any.
+// paneTaskID finds the Yaver Task driving or adopted from a given pane, if any.
 //
 // Keyed on PANE id, not session name: on a split window several tasks share one
 // session, and a session-keyed lookup would hand every pane the same task.
@@ -528,7 +528,25 @@ func paneTaskID(taskMgr *TaskManager, paneID string) string {
 	taskMgr.mu.RLock()
 	defer taskMgr.mu.RUnlock()
 	for id, t := range taskMgr.tasks {
-		if t != nil && t.TmuxPaneID == paneID && t.IsAdopted {
+		if t != nil && t.TmuxPaneID == paneID {
+			return id
+		}
+	}
+	return ""
+}
+
+// tmuxSessionTaskID maps a live Yaver-created session back to the task that
+// owns it. The wrapper PID is not the pane PID (tmux forks its own shell), so
+// the older forked-PID heuristic cannot identify these per-task sessions.
+func tmuxSessionTaskID(taskMgr *TaskManager, sessionName string) string {
+	if taskMgr == nil || strings.TrimSpace(sessionName) == "" {
+		return ""
+	}
+	taskMgr.mu.RLock()
+	defer taskMgr.mu.RUnlock()
+	for id, t := range taskMgr.tasks {
+		if t != nil && t.TmuxSession == sessionName && !t.IsAdopted &&
+			(t.Status == TaskStatusQueued || t.Status == TaskStatusRunning) {
 			return id
 		}
 	}
