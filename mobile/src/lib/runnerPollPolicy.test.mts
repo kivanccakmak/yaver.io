@@ -95,11 +95,17 @@ test("dedicated auth status repairs a stale negative without dropping models", (
     installed: true,
     ready: true,
     authConfigured: true,
+    authPresent: true,
+    authVerified: false,
+    authVerifiedAt: 123,
     authSource: "codex login status",
   }]);
   assert.equal(merged[0]?.ready, true);
   assert.equal(merged[0]?.authConfigured, true);
   assert.equal(merged[0]?.error, "");
+  assert.equal(merged[0]?.authPresent, true);
+  assert.equal(merged[0]?.authVerified, false);
+  assert.equal(merged[0]?.authVerifiedAt, 123);
   assert.deepEqual(merged[0]?.models, stale.models);
 });
 

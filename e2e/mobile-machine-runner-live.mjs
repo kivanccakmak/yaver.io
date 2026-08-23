@@ -91,8 +91,17 @@ async function clickPressableWithText(text) {
 }
 
 async function seedSession() {
-  console.log("[audit] mounting RN-web and restoring the signed-in device session");
-  await page.goto(appURL, { waitUntil: "domcontentloaded", timeout: 180_000 });
+  console.log("[audit] probing RN-web before opening Chromium");
+  try {
+    const readiness = await fetch(appURL, { signal: AbortSignal.timeout(15_000) });
+    if (!readiness.ok) throw new Error(`HTTP ${readiness.status}`);
+  } catch (error) {
+    throw new Error(
+      `RN-web is listening but did not answer within 15s (${error instanceof Error ? error.message : String(error)}). Restart this repo's Metro process before opening the browser arc.`,
+    );
+  }
+
+  console.log("[audit] restoring the signed-in device session before the first RN mount");
   const response = await page.request.get(`${convex}/auth/validate?_=${Date.now()}`, {
     headers: { Authorization: `Bearer ${token}`, "Cache-Control": "no-store" },
   });
@@ -103,17 +112,18 @@ async function seedSession() {
     id: row.userId, email: row.email, name: row.fullName, provider: row.provider,
     emailVerified: row.emailVerified, surveyCompleted: row.surveyCompleted, isOwner: row.isOwner,
   };
-  await page.evaluate(({ authToken, userRow, localRelayPassword, localRelayURL }) => {
+  await page.addInitScript(({ authToken, userRow, localRelayPassword, localRelayURL }) => {
     localStorage.setItem("yaver_installed", "1");
     localStorage.setItem("yaver.secure.yaver_auth_token", authToken);
     localStorage.setItem("yaver.secure.yaver_user", JSON.stringify(userRow));
     if (localRelayPassword) localStorage.setItem("yaver.secure.yaver_key_relay_password", localRelayPassword);
     if (localRelayURL) localStorage.setItem("yaver.secure.yaver_key_relay_url", localRelayURL);
   }, { authToken: token, userRow: user, localRelayPassword: relayPassword, localRelayURL: relayURL });
-  // The first anonymous mount redirects the URL itself to /login. Reloading
-  // would faithfully keep that route even after storage is authenticated;
-  // return through the root router so AuthContext can choose Tasks.
-  await page.goto(appURL, { waitUntil: "domcontentloaded", timeout: 180_000 });
+  // Seed before the FIRST document executes. The old harness navigated
+  // anonymously, waited for the cold RN bundle, injected storage, then paid
+  // for a second navigation. When Metro was wedged it burned the full browser
+  // timeout before it could even state that the HTTP origin was dead.
+  await page.goto(appURL, { waitUntil: "commit", timeout: 30_000 });
   if (matrixOnly === "vibing") {
     await page.goto(`${appURL.replace(/\/$/, "")}/more`, { waitUntil: "domcontentloaded", timeout: 180_000 });
     for (let attempt = 0; attempt < 90 && !(await visibleText(/^More$/)); attempt += 1) await page.waitForTimeout(1000);
@@ -231,8 +241,35 @@ async function runHello(machine, runner, ordinal) {
   const input = page.getByRole("textbox").last();
   await input.fill(`Reply with exactly ${marker}. Do not modify files and do not run commands.`);
   const sendText = await visibleText(/^Send$/);
-  if (!sendText) throw new Error("New-task composer has no enabled Send action");
-  await sendText.locator("xpath=ancestor::div[@tabindex='0'][1]").evaluate((element) => element.click());
+  if (!sendText) throw new Error("New-task composer has no Send action");
+  const install = await visibleText(/^Install(?: (?:OpenAI Codex|Claude Code|OpenCode))?$/i);
+  if (install) {
+    // NAMED is a valid terminal result only when it carries the repair AND
+    // the prompt survives. This exact arc catches the 2026-08-23 regression:
+    // MacBook Air + missing Codex let Send dismiss the composer and silently
+    // swallowed "hello" while the overview offered the impossible Restart.
+    const preserved = await input.inputValue();
+    if (!preserved.includes(marker)) throw new Error("Missing-runner guard cleared the typed prompt");
+    const sendControl = sendText.locator("xpath=ancestor::div[@role='button' or @tabindex][1]");
+    const ariaDisabled = await sendControl.getAttribute("aria-disabled").catch(() => null);
+    const tabIndex = await sendControl.getAttribute("tabindex").catch(() => null);
+    if (ariaDisabled !== "true" && tabIndex === "0") {
+      throw new Error("Missing runner still exposes an enabled Send control");
+    }
+    await page.screenshot({ path: join(artifacts, `${safeSlug(machine)}-${safeSlug(runner)}-install-route.png`), fullPage: true });
+    results.push({
+      check: `${ordinal}-${runner}`,
+      verdict: "NAMED",
+      detail: "runner missing; Install route visible, Send blocked, prompt preserved",
+    });
+    console.log(`[audit] ${runner} missing on ${safeSlug(machine)} — named Install route preserved ${marker}`);
+    const close = await visible(page.locator('[aria-label="Close new task"]'));
+    if (close) await close.click();
+    return;
+  }
+  const sendControl = sendText.locator("xpath=ancestor::div[@tabindex='0'][1]");
+  if (!(await sendControl.count())) throw new Error("New-task composer Send action is disabled without a named repair route");
+  await sendControl.evaluate((element) => element.click());
   await page.locator('[aria-label="Back to tasks list"]').waitFor({ state: "visible", timeout: 90_000 });
   const runnerChip = page.locator('[aria-label^="Change coding agent for the next turn"]');
   const expectedRunner = new RegExp(runner, "i");

@@ -98,23 +98,17 @@ for (const rel of ["./DevPreview.tsx", "../../app/(tabs)/apps.tsx"]) {
   );
 }
 
-// Probe-unavailable must NEVER be treated as a successful paint. sfmg proved
-// the old assumption false on 2026-08-22: the box-local doctor rendered in its
-// own browser while the phone iframe stayed entirely black. The first-open
-// status remains until this client gets a real rendered-frame signal.
-for (const [rel, gate] of [
-  ["./DevPreview.tsx", "!webContentLoaded && ("],
-  ["../../app/(tabs)/apps.tsx", "bundleUrl && !webPreviewContentLoaded && ("],
-] as const) {
+// Paint gating is negotiated from the agent's status. A current agent's
+// in-frame signal remains strict; v1.99.418 has no such code in its binary, so
+// waiting for it behind an opaque overlay can never terminate. Both preview
+// implementations must consume the shared decision and render the named
+// unverified-visible state.
+for (const rel of ["./DevPreview.tsx", "../../app/(tabs)/apps.tsx"] as const) {
   const src = stripComments(readFileSync(join(__dirname, rel), "utf8"));
-  ok(
-    src.includes(gate),
-    `${rel} must keep the first-open status until client paint (expected \`${gate}\`)`,
-  );
-  ok(
-    !src.includes(`${gate.slice(0, -1)}&& !probeUnavailable && (`),
-    `${rel} must not equate WEBVIEW_PROBE_UNSUPPORTED with a rendered phone frame`,
-  );
+  ok(src.includes("previewPaintGateMode"), `${rel} must negotiate the agent paint signal`);
+  ok(src.includes('paintGateMode === "blocking"'), `${rel} must keep strict gating when a signal can arrive`);
+  ok(src.includes('paintGateMode === "unverified_visible"'), `${rel} must expose old-agent frames without claiming paint`);
+  ok(src.includes("Update agent"), `${rel} must name the route that restores paint confirmation`);
   ok(src.includes("previewWaitLine"), `${rel} must narrate elapsed time and recent output while waiting`);
 }
 

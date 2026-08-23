@@ -192,6 +192,38 @@ func TestModifyResponsePropagatesAuthQueryOntoAssets(t *testing.T) {
 	}
 }
 
+// The shared relay validates and strips __rp before the request reaches the
+// agent. In that live shape the agent sees only token=, while location.search
+// in the browser still contains both. A static parser-created script must be
+// deferred through the runtime URL helper or it requests with token alone and
+// receives 401 before any app code can run.
+func TestModifyResponseDefersStaticScriptWhenRelayPasswordWasStripped(t *testing.T) {
+	html := `<html><head></head><body><script src="node_modules/expo-router/entry.bundle?platform=web&dev=true" defer></script></body></html>`
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:18080/dev-web/?token=tok123", nil)
+	resp := &http.Response{
+		Header:  http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+		Body:    io.NopCloser(strings.NewReader(html)),
+		Request: req,
+	}
+	if err := rewriteDevIndexBaseHref(resp); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	s := string(got)
+	if !strings.Contains(s, `data-yaver="preview-static-loader"`) {
+		t.Fatalf("parser-created entry script was not deferred through runtime relay auth:\n%s", s)
+	}
+	if !strings.Contains(s, "window.__yaverPreviewURL") {
+		t.Fatalf("runtime URL helper was not exposed to the static loader:\n%s", s)
+	}
+	if strings.Contains(s, `<script src="node_modules/expo-router/entry.bundle`) {
+		t.Fatalf("original parser-created script can still race the runtime auth shim:\n%s", s)
+	}
+	if !strings.Contains(s, `if(!url.searchParams.has(k))url.searchParams.set(k,v)`) {
+		t.Fatalf("runtime shim does not add a missing __rp beside an existing token:\n%s", s)
+	}
+}
+
 // No auth query on the page request → no auth material may appear in the
 // output. The transport shim still has to pin dynamic requests to /dev/ after
 // the guest router sees "/". LAN direct traffic is header-authenticated and

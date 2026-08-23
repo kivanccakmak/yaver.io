@@ -74,4 +74,12 @@ check(
   deriveRunnerBannerState([claudeReady], baseStatus, "claude", "ok")?.text === "Claude Code ready",
 );
 
+const codexMissing = deriveRunnerBannerState([
+  { ...claudeReady, id: "codex", name: "OpenAI Codex", installed: false, ready: false },
+], baseStatus, "codex", "ok");
+check(
+  "selected runner missing routes to install, never restart or send",
+  codexMissing?.kind === "notInstalled" && codexMissing.action === "install",
+);
+
 process.exit(failures);

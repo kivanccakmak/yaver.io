@@ -315,40 +315,21 @@ func taskPlacementRequestFromTaskBody(in taskPlacementRequestInput) taskPlacemen
 	projectSlug := basenameSlug(firstNonEmpty(strings.TrimSpace(in.ProjectName), workDir))
 	project := DetectProjectInfo(workDir)
 
-	// Only classify a directory that is plausibly a project root.
+	// Task admission must stay O(1) with respect to repository size.
 	//
-	// 2026-07-20: workDir defaulted to "." — the agent's CWD — which on a real
-	// box was the user's HOME directory. taskPlacementStackLabel then ran
-	// DetectMonorepo across the entire home tree on EVERY task creation, and
-	// POST /tasks never returned. The phone reported the machine unreachable
-	// while it was perfectly healthy.
+	// 2026-08-23: even after the home-directory guard landed, a REAL (and very
+	// large) project still put three recursive classifiers here. On an 8 GB Mac
+	// under Expo load, POST /tasks spent 22 seconds building advisory placement
+	// metadata, the browser cancelled at 30 seconds, and the user saw
+	// "Sending..." although the direct transport was healthy. File-count and
+	// stack discovery are useful inventory, but they are not permission to hold
+	// the operation they annotate.
 	//
-	// Resolved dynamically, never against a hardcoded path: a remote box can be
-	// any OS, any user, any layout. A home directory is not a monorepo, and an
-	// unspecified workDir is not a licence to scan whatever the daemon happens
-	// to be sitting in.
-	var stackLabel string
-	var appCount, fileCount, repoSizeMb int
-	if isScannableProjectDir(workDir) {
-		stackLabel = taskPlacementStackLabel(project, workDir)
-		appCount, fileCount, repoSizeMb = boundedRepoMetrics(workDir)
-	}
-	// Resolve the default machine class from what we actually detected. The
-	// backend still owns the final placement decision (entitlement, capacity,
-	// quota) — this is the AGENT's honest recommendation, so a workspace that
-	// needs a bigger box asks for one up front rather than OOMing on first run.
-	//
-	// Deliberately derived from `project`/`workDir` rather than assumed: the
-	// default class is 2c/4GB and only Redroid/Gradle or a monorepo justify
-	// more. Guessing high here would silently halve the tier's margin; guessing
-	// low would OOM Metro on a monorepo. See
-	// docs/architecture/yaver-four-tier-deep-analysis.md §9.
-	resourceClass := ""
-	if isScannableProjectDir(workDir) {
-		if detected := stackDetect(workDir); detected != nil {
-			resourceClass = DefaultWorkspacePlacement(detected).MachineClass
-		}
-	}
+	// Only root-marker checks are allowed here. Recursive enrichment belongs in
+	// the supervisor/cache and may be absent; the backend treats zero/empty as
+	// unknown and retains its safe 2c/4 GB default. Native/Docker markers remain
+	// useful and are constant-bounded stat calls.
+	stackLabel := strings.ToLower(project.Framework)
 	return taskPlacementRecordRequest{
 		Kind:             inferPlacementTaskKind(in.KindHint, in.Title, in.Description, in.CustomCommand, in.Source),
 		SourceSurface:    strings.TrimSpace(in.Source),
@@ -357,12 +338,12 @@ func taskPlacementRequestFromTaskBody(in taskPlacementRequestInput) taskPlacemen
 		TargetDeviceID:   strings.TrimSpace(in.TargetDeviceID),
 		ForceCloud:       in.ForceCloud,
 		ForceRelaySource: in.ForceRelaySource,
-		AppCount:         appCount,
-		RepoSizeMb:       repoSizeMb,
-		FileCount:        fileCount,
+		AppCount:         0,
+		RepoSizeMb:       0,
+		FileCount:        0,
 		HasNativeMobile:  hasNativeMobileProjectSignal(workDir, stackLabel),
 		HasDocker:        hasDockerProjectSignal(workDir, stackLabel),
-		ResourceClass:    resourceClass,
+		ResourceClass:    "",
 	}
 }
 

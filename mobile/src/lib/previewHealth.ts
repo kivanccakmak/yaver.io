@@ -23,6 +23,52 @@ export function previewAgentHealthIsAuthoritative(
   return typeof status?.previewHealth?.canOfferProjectFix === "boolean";
 }
 
+/**
+ * Whether the captured tail proves that a server reached a renderable state.
+ * Startup words are deliberately not success: "Starting Metro Bundler" can
+ * be followed immediately by a terminal CommandError. When both appear, the
+ * last terminal/success signal wins so an older agent cannot turn an exited
+ * process into "ready, waiting for paint" merely because its earlier output
+ * contained "starting".
+ */
+export function previewLogsLookHealthy(lines: readonly string[], statusError?: string | null): boolean {
+  if (String(statusError || "").trim()) return false;
+  let healthy = false;
+  for (const raw of lines.slice(-80)) {
+    const line = String(raw).toLowerCase();
+    // Classify failure first: "exited before becoming ready" contains the word
+    // ready, but it is proof of the exact opposite.
+    if (/\b(?:commanderror|failed to start|failed to compile|compilation failed|bundling failed|exited before becoming ready|could not resolve|cannot find module|not installed|required dependencies? (?:is|are) still missing)\b/.test(line)) {
+      healthy = false;
+    } else if (/\b(?:ready(?:\s+100%)?|bundled|compiled|listening|serving on)\b/.test(line)) {
+      healthy = true;
+    }
+  }
+  return healthy;
+}
+
+export type PreviewPaintGateMode = "confirmed" | "blocking";
+
+/**
+ * Decide whether first-open narration may cover the preview.
+ *
+ * A server response is not a rendered app. All clients keep the strict paint
+ * gate until a guest signal arrives or the watchdog converts the wait into a
+ * named failure. The former old-agent fallback exposed an unverified frame;
+ * when that frame was actually empty it produced the exact solid-black
+ * "Preview shown" screen this gate exists to prevent (2026-08-23).
+ */
+export function previewPaintGateMode(
+  status: Pick<DevServerStatus, "previewHealth"> | null | undefined,
+  opts: { contentLoaded: boolean; failed: boolean; probeUnavailable?: string | null },
+): PreviewPaintGateMode {
+  if (opts.contentLoaded) return "confirmed";
+  if (opts.failed) return "blocking";
+  void status;
+  void opts.probeUnavailable;
+  return "blocking";
+}
+
 export function previewHealthCanOfferProjectFix(
   status: Pick<DevServerStatus, "previewHealth" | "error"> | null | undefined,
   lines: readonly string[],

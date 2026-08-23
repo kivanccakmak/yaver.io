@@ -2411,6 +2411,18 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     if (!token || !uid) return 0;
     try {
       const localRelays = parseStoredRelays(await AsyncStorage.getItem(RELAYS_KEY));
+      // Relay credentials are intentionally mirrored into the device keychain
+      // (SecureStore; localStorage only in RN-web). The account settings API
+      // may omit the password even while this device has the valid credential.
+      // Ignoring the local copy leaves cached relay connections able to make
+      // bearer-header API calls but unable to mint iframe URLs with __rp — the
+      // preview HTML loads and entry.bundle 401s. Read both halves before
+      // resolving the relay list so browser-preview subresources inherit the
+      // same credential as task/status requests.
+      const [localSecretRelayUrl, localSecretRelayPassword] = await Promise.all([
+        getLocalSecret(LOCAL_KEYS.relayUrl).catch(() => null),
+        getLocalSecret(LOCAL_KEYS.relayPassword).catch(() => null),
+      ]);
 
       let platformServers: RelayServer[] = [];
       try {
@@ -2426,8 +2438,8 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         // Best-effort — account relay may still work on mobile without platform config.
       }
 
-      let settingsRelayUrl: string | undefined;
-      let settingsRelayPassword: string | undefined;
+      let settingsRelayUrl: string | undefined = localSecretRelayUrl || undefined;
+      let settingsRelayPassword: string | undefined = localSecretRelayPassword || undefined;
       // Distinguish "account genuinely has no relay settings" from "we could not
       // read them". Only the former may fall through to the password-less
       // platform set below; the latter must keep whatever credential we already
@@ -2440,18 +2452,18 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       if (token) {
         try {
           const settings = await getUserSettings(token);
-          settingsRelayUrl = settings.relayUrl;
-          settingsRelayPassword = settings.relayPassword;
-          if (settings.relayUrl) {
-            const resolved = resolveRelayServers(platformServers, settings.relayUrl, settings.relayPassword);
+          settingsRelayUrl = settings.relayUrl || settingsRelayUrl;
+          settingsRelayPassword = settings.relayPassword || settingsRelayPassword;
+          if (settingsRelayUrl) {
+            const resolved = resolveRelayServers(platformServers, settingsRelayUrl, settingsRelayPassword);
             connectionManager.setRelayServersOnAll(resolved);
             // Persist the resolved fallback set so the app can reconnect offline too.
             await AsyncStorage.setItem(RELAY_CACHE_KEY, JSON.stringify(resolved));
             await AsyncStorage.setItem(SYNC_KEY, "true");
-            if (!looksLikeManualRelayOverride(localRelays, platformServers, settings.relayUrl)) {
+            if (!looksLikeManualRelayOverride(localRelays, platformServers, settingsRelayUrl)) {
               await AsyncStorage.removeItem(RELAYS_KEY);
             }
-            mirrorRelayPasswordToNative(resolved, settings.relayPassword);
+            mirrorRelayPasswordToNative(resolved, settingsRelayPassword);
             console.log("[DeviceContext] Loaded", resolved.length, "relay server(s) from Convex user settings");
             return resolved.length;
           }
@@ -3136,11 +3148,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(iv);
   }, [token, user?.id, devices, refreshDevices, isAutoPairBlocked, recordAutoPairFailure, recordAutoPairSuccess]);
 
-  // Relay auto-pair: probe known OFFLINE devices via relay to check
-  // if they're in bootstrap mode. The bootstrap agent connects to the
-  // relay with a placeholder token, so HTTP requests via the relay
-  // still reach it. This covers the most common case: phone on 4G,
-  // Mac at home with a wiped token.
+  // Relay auto-pair: probe only devices whose heartbeat explicitly says
+  // authentication needs recovery. Offline inventory is not evidence of
+  // bootstrap mode. Treating every old/offline row as a recovery candidate
+  // made RN-web fan out /info through the production relay on every launch;
+  // a normal account with stale device rows produced dozens of 502/CORS
+  // errors while the selected machine was healthy (2026-08-23).
   useEffect(() => {
     if (!token || !user?.id) return;
     const relays = quicClient.getRelayServers();
@@ -3148,14 +3161,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
     const probed = new Set<string>();
     const iv = setInterval(async () => {
-      // Target:
-      //   - offline devices (may be in bootstrap but not yet re-registered)
-      //   - online devices with needsAuth=true (re-registered via /devices/bootstrap)
-      // Both need the same encrypted-pair flow via relay.
-      const offlineDevices = devices.filter(
-        (d) => (!d.online || d.needsAuth === true) && d.publicKey && !probed.has(d.id) && !autoPairedRef.current.has(d.id) && !isAutoPairBlocked(d.id)
+      // A fresh bootstrap with no devices row is surfaced by pendingClaims;
+      // an existing row is safe to probe only after the agent names needsAuth.
+      const recoveryDevices = devices.filter(
+        (d) => d.needsAuth === true && d.publicKey && !probed.has(d.id) && !autoPairedRef.current.has(d.id) && !isAutoPairBlocked(d.id)
       );
-      for (const dev of offlineDevices) {
+      for (const dev of recoveryDevices) {
         probed.add(dev.id);
         const relayUrl = `${relays[0].httpUrl}/d/${dev.id}`;
         try {
@@ -3193,7 +3204,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // deliver beacons to the app, and for offline→bootstrap transitions
   // where the relay path would skip because the device appears online.
   useEffect(() => {
-    if (!token || !user?.id || !activeDevice?.host) return;
+    // Healthy authenticated agents deliberately reject anonymous /info. Only
+    // enter the bootstrap/passkey lane when Convex carries the named recovery
+    // signal; otherwise this timer creates a permanent 401 in browser consoles.
+    if (!token || !user?.id || !activeDevice?.host || activeDevice.needsAuth !== true) return;
     if (autoPairedRef.current.has(activeDevice.id)) return;
     if (isAutoPairBlocked(activeDevice.id)) return;
     const iv = setInterval(async () => {
@@ -3247,7 +3261,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       }
     }, 5000);
     return () => clearInterval(iv);
-  }, [token, user?.id, activeDevice?.id, activeDevice?.host, activeDevice?.port, activeDevice?.publicKey, activeDevice?.name, refreshDevices, isAutoPairBlocked, recordAutoPairFailure, recordAutoPairSuccess]);
+  }, [token, user?.id, activeDevice?.id, activeDevice?.host, activeDevice?.port, activeDevice?.publicKey, activeDevice?.name, activeDevice?.needsAuth, refreshDevices, isAutoPairBlocked, recordAutoPairFailure, recordAutoPairSuccess]);
 
   // recoverBootstrapDevice handles the DIRECT-reach reclaim path: the agent's
   // bootstrap HTTP server is reachable on the LAN (or any network where /info
@@ -3981,17 +3995,32 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         }
 
         // No primary/secondary/sticky configured yet (single-device or first
-        // run): keep the best-reachable behaviour so a lone box still connects,
-        // and seed it as primary so next launch narrates it by role.
+        // run): rank only machines whose backend presence is currently online
+        // and whose auth is ready. Probing every historical row made a browser
+        // launch issue relay requests for every retired/offline machine; one
+        // account produced 31 expected 502s before its healthy Mac was usable
+        // (2026-08-23). A user can still explicitly select an offline row from
+        // the picker, while configured primary/secondary roles retain their
+        // bounded failover probes above.
+        const discoveryCandidates = candidates.filter((device) =>
+          device.online &&
+          device.needsAuth !== true &&
+          !unreachableSetRef.current.has(device.id)
+        );
+        if (discoveryCandidates.length === 0) {
+          setConnectionStatus("disconnected");
+          setLastError(null);
+          return;
+        }
         const probes = new Map<string, MobileDeviceStatusProbe>();
         await Promise.all(
-          candidates.map(async (d) => {
+          discoveryCandidates.map(async (d) => {
             const probe = await probeMobileDeviceStatus(d, token, AUTO_CONNECT_PROBE_MS).catch(() => null);
             if (probe) probes.set(d.id, probe);
           }),
         );
         if (isCancelled()) return;
-        const ranked = [...candidates]
+        const ranked = [...discoveryCandidates]
           .map((device) => ({ device, rank: autoConnectRank(device, probes.get(device.id), []) }))
           .filter((row) => row.rank >= 0)
           .sort((a, b) => (b.rank !== a.rank ? b.rank - a.rank : a.device.name.localeCompare(b.device.name)));

@@ -1611,7 +1611,6 @@ func runPing(args []string) {
 		os.Exit(1)
 	}
 
-	authHeader := "Bearer " + cfg.AuthToken
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	// Determine base URL
@@ -1643,17 +1642,20 @@ func runPing(args []string) {
 
 	for i := 0; i < *count; i++ {
 		start := time.Now()
-		req, _ := http.NewRequest("GET", baseURL+"/health", nil)
-		req.Header.Set("Authorization", authHeader)
-		resp, err := client.Do(req)
+		status, raw, err := pingAgentHealth(context.Background(), cfg, client, baseURL, cfg.AuthToken)
+		if err == nil && staleRelayPasswordHTTP(status, raw) && repairRelayPasswordForRemoteHTTP(context.Background()) {
+			// Re-load the persisted credential and retry THIS packet. A repair
+			// that only helps the next CLI invocation is not self-healing UX.
+			cfg, _ = LoadConfig()
+			status, raw, err = pingAgentHealth(context.Background(), cfg, client, baseURL, cfg.AuthToken)
+		}
 		rtt := time.Since(start)
 		rttMs := float64(rtt.Microseconds()) / 1000.0
 
 		if err != nil {
 			fmt.Printf("ping %d: error — %v\n", i+1, err)
 		} else {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
+			if status == 200 {
 				fmt.Printf("pong from %s: time=%.1fms via=%s\n", target.Name, rttMs, mode)
 				totalMs += rttMs
 				if rttMs < minMs {
@@ -1664,7 +1666,7 @@ func runPing(args []string) {
 				}
 				success++
 			} else {
-				fmt.Printf("ping %d: HTTP %d\n", i+1, resp.StatusCode)
+				fmt.Printf("ping %d: HTTP %d\n", i+1, status)
 			}
 		}
 
@@ -1680,6 +1682,47 @@ func runPing(args []string) {
 		fmt.Printf("rtt min/avg/max = %.1f/%.1f/%.1f ms\n",
 			minMs, totalMs/float64(success), maxMs)
 	}
+}
+
+// pingAgentHealth uses the same authenticated transport envelope as tasks,
+// exec, and runner probes. The old CLI sent only the agent bearer to `/d/...`;
+// a password-gated relay correctly returned 401, so `yaver devices` said
+// online while the operation-level `yaver ping` reported 100% loss. A probe
+// weaker than the real operation is a false diagnostic.
+func pingAgentHealth(ctx context.Context, cfg *Config, client *http.Client, baseURL, authToken string) (int, []byte, error) {
+	if client == nil {
+		client = remoteHTTPClient(10 * time.Second)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/health", nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	if strings.TrimSpace(authToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	headers, err := transportHeadersForBase(cfg, baseURL)
+	if err != nil {
+		return 0, nil, err
+	}
+	for key, value := range headers {
+		if strings.TrimSpace(value) != "" {
+			req.Header.Set(key, value)
+		}
+	}
+	if strings.Contains(req.URL.Path, "/d/") {
+		if sk, skErr := LoadOrGenerateSigningKey(); skErr == nil {
+			for key, value := range sk.SignRelayRequest(localDeviceID(), http.MethodGet, req.URL.Path, nil, time.Now().UnixMilli(), newSigNonce()) {
+				req.Header.Set(key, value)
+			}
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	return resp.StatusCode, raw, readErr
 }
 
 func runConnect(args []string) {

@@ -1260,7 +1260,7 @@ func TestVibingExecuteDefersCloudPlacementWithoutMutatingGlobalWorkDir(t *testin
 	}
 }
 
-func TestTaskPlacementRequestUsesCoarseRepoMetadata(t *testing.T) {
+func TestTaskPlacementRequestUsesOnlyConstantBoundedRepoMetadata(t *testing.T) {
 	dir := t.TempDir()
 	touch := func(rel string) {
 		t.Helper()
@@ -1295,7 +1295,7 @@ func TestTaskPlacementRequestUsesCoarseRepoMetadata(t *testing.T) {
 	if !req.HasDocker {
 		t.Fatal("expected docker signal")
 	}
-	if req.FileCount == 0 {
-		t.Fatal("expected bounded file count")
+	if req.FileCount != 0 {
+		t.Fatalf("fileCount = %d, want unknown/zero without a recursive admission-time scan", req.FileCount)
 	}
 }

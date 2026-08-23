@@ -580,51 +580,62 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
   React.useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    for (const device of eligibleDevices) {
-      if (codingStatusByDevice[device.id] !== undefined) continue;
-      const load = async () => {
+    // Runner inventory is useful only for a machine that currently has a
+    // route. The old loop probed every historical/offline row, then committed
+    // each answer independently. Every commit re-ran the effect while sibling
+    // requests were still pending, multiplying six expected relay failures
+    // into 30+ requests whenever the picker opened (2026-08-23).
+    const pending = eligibleDevices.filter((device) =>
+      (device.online || connectedSet.has(device.id)) &&
+      device.needsAuth !== true &&
+      codingStatusByDevice[device.id] === undefined
+    );
+    if (pending.length === 0) return;
+    const load = async () => {
+      const rows = await Promise.all(pending.map(async (device) => {
         try {
           const probe = await probeMobileDeviceStatus(
             { id: device.id, host: (device as any).host, port: (device as any).port, lanIps: (device as any).lanIps },
             token,
             8000,
           );
-          if (cancelled) return;
-          setCodingStatusByDevice((prev) => ({
-            ...prev,
-            [device.id]: probe.reachable
-              ? {
-                  ready: probe.codingReady,
-                  runners: probe.codingRunners,
-                  probeState: probe.codingRunnersProbe,
-                  path: probe.path,
-                }
-              : {
-                  ready: false,
-                  runners: [],
-                  probeState: "network-error",
-                  error: probe.error || "Coding agent status unavailable",
-                },
-          }));
+          return [device.id, probe.reachable
+            ? {
+                ready: probe.codingReady,
+                runners: probe.codingRunners,
+                probeState: probe.codingRunnersProbe,
+                path: probe.path,
+              }
+            : {
+                ready: false,
+                runners: [],
+                probeState: "network-error" as const,
+                error: probe.error || "Coding agent status unavailable",
+              }] as const;
         } catch (err: any) {
-          if (cancelled) return;
-          setCodingStatusByDevice((prev) => ({
-            ...prev,
-            [device.id]: {
+          const status: CodingStatus = {
               ready: false,
               runners: [],
               probeState: "network-error",
               error: err?.message || "Coding agent status unavailable",
-            },
-          }));
+            };
+          return [device.id, status] as const;
         }
-      };
-      void load();
-    }
+      }));
+      if (cancelled) return;
+      // One render for the batch. Per-device commits recursively relaunched
+      // outstanding probes and were the source of the request fan-out.
+      setCodingStatusByDevice((prev) => {
+        const next = { ...prev };
+        for (const [deviceId, status] of rows) next[deviceId] = status;
+        return next;
+      });
+    };
+    void load();
     return () => {
       cancelled = true;
     };
-  }, [visible, eligibleDevices, codingStatusByDevice, token]);
+  }, [visible, eligibleDevices, connectedSet, codingStatusByDevice, token]);
 
   const pickedDevice = eligibleDevices.find((d) => d.id === pickedDeviceId) ?? null;
 
@@ -1178,7 +1189,11 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
                             {probe.line} — make sure it's powered on and running the agent
                           </Text>
                         ) : null}
-                        {codingStatus === undefined ? (
+                        {isDown && codingStatus === undefined ? (
+                          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }}>
+                            Coding agents checked after the machine is reachable
+                          </Text>
+                        ) : codingStatus === undefined ? (
                           <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }}>
                             Checking coding agents…
                           </Text>

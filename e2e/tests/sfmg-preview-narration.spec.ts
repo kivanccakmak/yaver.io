@@ -72,7 +72,10 @@ test.describe("sfmg preview narrates its wait", () => {
     let browserLaneAssetFailure = "";
     page.on("response", (response: Response) => {
       const url = response.url();
-      if (!url.includes("/dev-web/") || !/entry\.bundle(?:\?|$)/.test(url)) return;
+      // Expo may use the main /dev/ lane (platform:web) or the /dev-web/
+      // sibling beside native Metro. Both are browser lanes and both must
+      // serve JavaScript rather than an auth/error HTML document.
+      if (!/\/dev(?:-web)?\//.test(url) || !/entry\.bundle(?:\?|$)/.test(url)) return;
       const contentType = String(response.headers()["content-type"] || "").toLowerCase();
       if (response.status() >= 400) {
         browserLaneAssetFailure = `browser entry bundle returned HTTP ${response.status()}`;
@@ -110,9 +113,14 @@ test.describe("sfmg preview narrates its wait", () => {
         mobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent),
         dpr: window.devicePixelRatio,
       }));
+      const contextViewport = page.viewportSize();
       const viewportMatch = viewportMatchesSurface(surface, {
-        width: shape.w,
-        height: shape.h,
+        // Validate the context Playwright created, not the document's layout
+        // viewport (Expo can report 446px) or the physical screen (852px tall).
+        // The shared profile intentionally describes the visible browser
+        // viewport, 393x659, while touch/UA/DPR below prove device emulation.
+        width: contextViewport?.width ?? 0,
+        height: contextViewport?.height ?? 0,
         hasTouch: shape.touch,
         isMobile: shape.mobile,
       });
@@ -147,10 +155,17 @@ test.describe("sfmg preview narrates its wait", () => {
         localStorage.setItem("yaver_installed", "1");
         localStorage.setItem("yaver.secure.yaver_auth_token", t);
       }, TOKEN);
-      await page.reload({ waitUntil: "domcontentloaded" });
-
-      // Give the app its normal boot: transport ladder, device list, projects.
-      await page.waitForTimeout(12_000);
+      // Boot directly on the surface under test. Reloading `/`, waiting for a
+      // connection, and then doing a second full document navigation to
+      // `/apps` destroys the first transport ladder midway through hydration.
+      // The replacement client can then paint an empty inventory while it is
+      // still reconnecting — a harness-induced false RED that no real tab tap
+      // performs. One authenticated document, one transport lifecycle.
+      await page.goto(`${MOBILE_WEB_URL.replace(/\/$/, "")}/apps`, {
+        waitUntil: "domcontentloaded",
+        timeout: 60_000,
+      });
+      await page.waitForTimeout(18_000);
 
       const body = (await page.locator("body").innerText().catch(() => "")) || "";
       test.skip(
@@ -170,7 +185,7 @@ test.describe("sfmg preview narrates its wait", () => {
       // "Open in Yaver" is the action that opens the preview, it appears only
       // where a preview can be opened, and it is what a user taps. Assert on
       // the verb, not the noun.
-      const sfmgCard = page.getByText(new RegExp(`\\b${PROJECT}\\b`, "i")).first();
+      const sfmgCard = page.getByText(new RegExp(`^${PROJECT}$`, "i")).last();
       await expect(sfmgCard, `${PROJECT} is visible somewhere in the app`).toBeVisible({ timeout: 30_000 });
 
       const openBtn = page.getByText(/open in yaver/i).first();
@@ -178,13 +193,32 @@ test.describe("sfmg preview narrates its wait", () => {
         await openBtn.click();
       } else {
         // No running preview to open — go through Projects instead.
-        await page.getByText(/^projects$/i).first().click().catch(() => {});
-        await page.waitForTimeout(4_000);
-        await page.getByText(new RegExp(`\\b${PROJECT}\\b`, "i")).first().click().catch(() => {});
-        const browserLane = page.getByText(/browser reload/i).first();
-        if (await browserLane.isVisible({ timeout: 8_000 }).catch(() => false)) {
-          await browserLane.click();
+        await sfmgCard.click();
+        // When this project already owns the active dev-server slot, tapping
+        // its row opens the preview directly. Otherwise it opens the action
+        // sheet and Browser Reload is the required lane.
+        let reachedPreview = false;
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          const browserLane = page.getByText(/browser reload/i).first();
+          if (await browserLane.isVisible().catch(() => false)) {
+            await browserLane.click();
+            reachedPreview = true;
+            break;
+          }
+          const narrated = await page
+            .getByText(/server ready — loading page|elapsed.*last output/i)
+            .first()
+            .isVisible()
+            .catch(() => false);
+          const hasControls = await page.locator('[aria-label="Stop dev server"]').first().isVisible().catch(() => false);
+          const hasFrame = (await page.locator("iframe").count()) > 0;
+          if (narrated || hasControls || hasFrame) {
+            reachedPreview = true;
+            break;
+          }
+          await page.waitForTimeout(1_000);
         }
+        expect(reachedPreview, "SFMG row must open Browser Reload or the active browser preview").toBe(true);
       }
 
       // ── AN ARC MUST NOT ACCUSE THE PRODUCT OF SOMETHING IT DID NOT SEE ──
@@ -203,20 +237,22 @@ test.describe("sfmg preview narrates its wait", () => {
       // and if we are not, SKIP with a named cause. "I could not open the
       // preview" is a true statement. "The preview was silent" would not be.
       const onPreview = await page
-        .getByText(/preview logs|show logs|stop serving|back to projects/i)
+          .locator('[aria-label="Stop dev server"]')
+          .isVisible({ timeout: 20_000 })
+          .catch(() => false);
+      const hasPreviewNarration = await page
+        .getByText(/server ready — loading page|elapsed · last output/i)
         .first()
-        .isVisible({ timeout: 20_000 })
+        .isVisible({ timeout: 2_000 })
         .catch(() => false);
       // POSITIVE PROOF REQUIRED. The earlier form skipped only when it could
       // ALSO recognise the Tasks tab — so an unrecognised third screen still
       // reached the assertion and got graded as the preview. Absence of proof
       // that we are on the preview is itself the reason to stop.
-      test.skip(
-        !onPreview,
-        "could not open the preview from this surface — the app stayed on Tasks, so there is no " +
-          "preview wait to judge. RN-web may not present the fullScreen preview Modal; verify on a " +
-          "native simulator build before concluding anything about the product.",
-      );
+      expect(
+        onPreview || hasPreviewNarration,
+        `Browser Reload did not open the preview surface. Visible client text:\n${((await page.locator("body").innerText().catch(() => "")) || "").slice(0, 1400)}`,
+      ).toBe(true);
 
       // ── THE ASSERTION THIS FILE EXISTS FOR ─────────────────────────────
       //

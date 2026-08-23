@@ -18,6 +18,14 @@ export type RunnerBannerKind =
   | "notInstalled"
   | "blocked";
 
+export type RunnerBannerAction =
+  | "none"
+  | "install"
+  | "signIn"
+  | "configure"
+  | "restart"
+  | "retry";
+
 const RUNNER_BANNER_TONES: Record<RunnerBannerKind, string> = {
   ok: "#4ade80",
   loading: "#93c5fd",
@@ -33,7 +41,19 @@ export type RunnerBannerState = {
   text: string;
   tone: string;
   kind: RunnerBannerKind;
+  action: RunnerBannerAction;
   runnerId?: string;
+};
+
+const RUNNER_BANNER_ACTIONS: Record<RunnerBannerKind, RunnerBannerAction> = {
+  ok: "none",
+  loading: "none",
+  failed: "retry",
+  authNeeded: "signIn",
+  needsConfig: "configure",
+  notRunnable: "restart",
+  notInstalled: "install",
+  blocked: "restart",
 };
 
 function normalizeTaskRunnerId(id?: string | null): string {
@@ -60,10 +80,16 @@ export function deriveRunnerBannerState(
     ? runners.find((r) => normalizeTaskRunnerId(r.id) === wantId)
     : null;
   const selectedLabel = selectedRow?.name || displayRunnerLabel(wantId || agentStatus?.runner?.id || "");
-  const make = (kind: RunnerBannerKind, text: string, runnerId?: string): RunnerBannerState => ({
+  const make = (
+    kind: RunnerBannerKind,
+    text: string,
+    runnerId?: string,
+    action: RunnerBannerAction = RUNNER_BANNER_ACTIONS[kind],
+  ): RunnerBannerState => ({
     text,
     tone: RUNNER_BANNER_TONES[kind],
     kind,
+    action,
     runnerId,
   });
 
@@ -109,7 +135,7 @@ export function deriveRunnerBannerState(
   }
 
   if (installed.length === 0) {
-    return make("notInstalled", "No agents available");
+    return make("notInstalled", "No agents available", undefined, "none");
   }
   if (runnable.length === 0 && authed.length === 0) {
     return make("authNeeded", "Agents available, none authenticated");
@@ -119,7 +145,7 @@ export function deriveRunnerBannerState(
   }
   const current = agentStatus?.runner;
   if (current?.installed === false) {
-    return make("notInstalled", `${current.name} not installed`);
+    return make("notInstalled", `${current.name} not installed`, current.id);
   }
   if (current?.error && !current?.authConfigured) {
     return make("authNeeded", `${current.name} needs sign-in`, current.id);

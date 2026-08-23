@@ -23,7 +23,7 @@ import {
 import { WebView } from "./WebViewCompat";
 import { router } from "expo-router";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient, type DevServerStatus } from "../lib/quic";
-import { previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix } from "../lib/previewHealth";
+import { previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix, previewLogsLookHealthy, previewPaintGateMode } from "../lib/previewHealth";
 import { useColors } from "../context/ThemeContext";
 import { isBundleLoaded, loadAppIfChanged, onBundleEvent } from "../lib/bundleLoader";
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../lib/nativeBuild";
@@ -61,6 +61,7 @@ import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
 import { monoFamily } from "../theme/tokens";
 import { DomInspectChip } from "./DomInspectChip";
 import { ScreenContextChip } from "./ScreenContextChip";
+import { DevServerStopDialog, type DevServerStopPhase } from "./DevServerStopDialog";
 
 /**
  * Dev Preview.
@@ -127,13 +128,6 @@ function previewLogColor(
   return colors.textMuted;
 }
 
-function previewLogsLookHealthy(lines: readonly string[]): boolean {
-  const tail = lines.slice(-80).join("\n").toLowerCase();
-  return /\b(queued|starting|ready|ready\s+100%|bundled|compiled|listening|serving on|running)\b/.test(tail) ||
-    /^\s*\$\s+(flutter|npm|npx|yarn|pnpm|bun|expo|vite|next)\b/im.test(tail) ||
-    /\b(?:ios|android|web)\b[^\n]*\b\d{1,3}(?:\.\d+)?%\s*\(\d+\/\d+\)/.test(tail);
-}
-
 function previewLogsNeedProjectFix(lines: readonly string[], statusError?: string | null): boolean {
   const err = String(statusError || "").toLowerCase();
   const tail = lines.slice(-80).join("\n").toLowerCase();
@@ -195,6 +189,8 @@ export function DevPreview({
   const [status, setStatus] = useState<DevServerStatus | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [showPreviewTools, setShowPreviewTools] = useState(false);
+  const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [stopPhase, setStopPhase] = useState<DevServerStopPhase>("confirm");
   const [loading, setLoading] = useState(false);
   const [webViewKey, setWebViewKey] = useState(0);
   const [webStarting, setWebStarting] = useState(false);
@@ -203,14 +199,18 @@ export function DevPreview({
   // renders black while CanvasKit boots or if assets 404 through the proxy — so
   // onLoadEnd alone is a false "ready". We keep the progress overlay up until an
   // injected probe confirms visible content, so the user never stares at black.
+  // RN-web against an older agent is the negotiated exception: that binary has
+  // no in-frame signal, so the frame stays visible with an unverified notice
+  // instead of being hidden behind a wait that cannot terminate.
   const [webContentLoaded, setWebContentLoaded] = useState(false);
   // Terminal failure: the web server never came up within the retry budget, or
   // the agent streamed an error. Drives the failure panel (with logs) instead of
   // an endless spinner or a black page.
   const [previewFailed, setPreviewFailed] = useState(false);
-  // Set when the readiness probe is IMPOSSIBLE (cross-origin iframe on RN-web),
-  // as opposed to merely slow. Distinguishing the two is the whole point: one is
-  // worth waiting for, the other never resolves.
+  // Set when the HOST readiness probe is impossible (cross-origin iframe on
+  // RN-web), as opposed to merely slow. Current agents provide a second,
+  // in-frame channel; old ones do not. previewPaintGateMode negotiates that
+  // difference from status.previewHealth.paintSignal.
   const [probeUnavailable, setProbeUnavailable] = useState<string | null>(null);
   // Rolling tail of dev-server log lines, for the starting + failure panels.
   const [logLines, setLogLines] = useState<string[]>([]);
@@ -221,6 +221,7 @@ export function DevPreview({
   const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
   const browserLaneDoctorRunningRef = useRef(false);
   const browserLaneDoctorRanForKeyRef = useRef("");
+  const webRenderWatchdogFiredRef = useRef(false);
   // The named capability gap behind a failed start (missing Flutter/toolchain),
   // produced by the agent and carried on the /dev/events error frame AND
   // /dev/status. This screen is the OTHER browser-preview implementation: it
@@ -268,6 +269,11 @@ export function DevPreview({
   const previewLogScrollRef = useRef<ScrollView>(null);
   const reportedBundlePath = previewBundlePath(status as any);
   const bundleUrl = reportedBundlePath ? previewClient.getDevServerBundleUrl(reportedBundlePath) : "";
+  const paintGateMode = previewPaintGateMode(status, {
+    contentLoaded: webContentLoaded,
+    failed: previewFailed,
+    probeUnavailable,
+  });
 
   useEffect(() => {
     if (showPreview && bundleUrl) {
@@ -340,6 +346,33 @@ export function DevPreview({
     pushLog(browserLaneProbeLine(verifiedProbe));
   }, [browserLaneProbe, previewProbe, pushLog]);
 
+  // Parity with apps.tsx: once the box says the browser server is ready, the
+  // client gets a bounded window to prove guest paint. Older agents without
+  // the in-frame signal used to bypass this guard and expose a solid-black
+  // frame as "Preview shown". A missing signal is now a named failure after
+  // 20s, with the doctor result and recovery actions, never visible success.
+  useEffect(() => {
+    if (!showPreview || !bundleUrl || paintGateMode !== "blocking") return;
+    if (webContentLoaded || previewFailed || webRenderWatchdogFiredRef.current) return;
+    const serverLooksReady = !!status?.running && (
+      String(status?.devMode || "").toLowerCase() === "web" ||
+      String(status?.platform || "").toLowerCase() === "web" ||
+      previewLogsLookHealthy(logLines, status?.error)
+    );
+    if (!serverLooksReady) return;
+    const id = setTimeout(() => {
+      if (webContentLoaded || previewFailed || webRenderWatchdogFiredRef.current) return;
+      webRenderWatchdogFiredRef.current = true;
+      pushLog(
+        `[preview] server is serving but this client did not confirm rendered pixels after 20s` +
+          (probeUnavailable ? ` (${probeUnavailable})` : ""),
+      );
+      setPreviewFailed(true);
+      runBrowserLaneDoctor("ready-without-render");
+    }, 20_000);
+    return () => clearTimeout(id);
+  }, [bundleUrl, logLines, paintGateMode, previewFailed, probeUnavailable, pushLog, runBrowserLaneDoctor, showPreview, status, webContentLoaded]);
+
   // Auto-retry the WebView while the framework's web server is still compiling
   // (agent returns 503 {status:"starting"} or refuses the connection). Up to
   // ~30 tries × 2.5s ≈ 75s, which covers a cold Flutter/expo web compile.
@@ -372,6 +405,7 @@ export function DevPreview({
     setBrowserLaneProbe(null);
     browserLaneDoctorRunningRef.current = false;
     browserLaneDoctorRanForKeyRef.current = "";
+    webRenderWatchdogFiredRef.current = false;
   }, []);
 
   // Reset the retry budget whenever a fresh preview opens or the WebView loads.
@@ -887,18 +921,14 @@ export function DevPreview({
     });
   }, [showPreview, handleReload]);
 
-  const handleStop = useCallback(async () => {
-    Alert.alert("Stop Serving Preview", "This will stop serving the current preview and close it on this device.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Stop Serving", style: "destructive", onPress: async () => {
-          await previewClient.stopDevServer();
-          setShowPreview(false);
-          setStatus(null);
-        }
-      },
-    ]);
-  }, [previewClient]);
+  // React Native Web's Alert.alert() is an empty function. The old stop flow
+  // therefore did literally nothing in the browser lane. Use the rendered
+  // dialog below on every platform, and keep the card visible until the agent
+  // verifies the process is gone.
+  const handleStop = useCallback(() => {
+    if (stopPhase === "stopping") return;
+    setShowStopConfirm(true);
+  }, [stopPhase]);
 
   // WHICH url the preview loads — previewBundlePath (shared with apps.tsx;
   // the app's two browser-preview implementations, a fix in one is not a
@@ -1044,8 +1074,9 @@ export function DevPreview({
               pressed && { opacity: 0.85 },
             ]}
             onPress={handleStop}
+            disabled={stopPhase === "stopping"}
           >
-            <Text style={styles.stopBtnText}>Stop</Text>
+            <Text style={styles.stopBtnText}>{stopPhase === "stopping" ? "Stopping…" : "Stop"}</Text>
           </Pressable>
         </View>
       </View>
@@ -1115,8 +1146,8 @@ export function DevPreview({
                   <Text style={styles.headerBtnReloadFull}>Full</Text>
                 </Pressable>
               ) : null}
-              <Pressable onPress={handleStop} style={styles.headerBtn}>
-                <Text style={styles.headerBtnStop}>{status.stopActionLabel || "Stop Serving"}</Text>
+              <Pressable onPress={handleStop} disabled={stopPhase === "stopping"} style={styles.headerBtn}>
+                <Text style={styles.headerBtnStop}>{stopPhase === "stopping" ? "Stopping…" : status.stopActionLabel || "Stop Serving"}</Text>
               </Pressable>
             </View>
           </View>
@@ -1167,8 +1198,8 @@ export function DevPreview({
                   ) : null}
 
                   <View style={styles.nativeButtons}>
-                    <Pressable onPress={handleStop} style={[styles.nativeBtn, { backgroundColor: "#2e1a1a" }]}>
-                      <Text style={[styles.nativeBtnText, { color: "#ef4444" }]}>Cancel Build</Text>
+                    <Pressable onPress={handleStop} disabled={stopPhase === "stopping"} style={[styles.nativeBtn, { backgroundColor: "#2e1a1a" }]}>
+                      <Text style={[styles.nativeBtnText, { color: "#ef4444" }]}>{stopPhase === "stopping" ? "Stopping…" : "Cancel Build"}</Text>
                     </Pressable>
                   </View>
                 </>
@@ -1253,8 +1284,8 @@ export function DevPreview({
                         <Text style={[styles.nativeBtnText, { color: "#818cf8" }]}>Full Reload</Text>
                       </Pressable>
                     ) : null}
-                    <Pressable onPress={handleStop} style={[styles.nativeBtn, { backgroundColor: "#2e1a1a" }]}>
-                      <Text style={[styles.nativeBtnText, { color: "#ef4444" }]}>{status.stopActionLabel || "Stop Serving"}</Text>
+                    <Pressable onPress={handleStop} disabled={stopPhase === "stopping"} style={[styles.nativeBtn, { backgroundColor: "#2e1a1a" }]}>
+                      <Text style={[styles.nativeBtnText, { color: "#ef4444" }]}>{stopPhase === "stopping" ? "Stopping…" : status.stopActionLabel || "Stop Serving"}</Text>
                     </Pressable>
                   </View>
                 </>
@@ -1358,11 +1389,10 @@ export function DevPreview({
                 originWhitelist={["*"]}
               />
               )}
-              {/* Keep the first-open status visible until THIS client confirms
-                  paint. Cross-origin probe unavailability is not render
-                  confirmation: the 2026-08-22 sfmg incident had a green
-                  box-local doctor and a completely black phone frame. */}
-              {!webContentLoaded && (
+              {/* Strict when a signal can arrive; non-blocking when an older
+                  agent provably has no cross-origin paint channel. A permanent
+                  opaque wait over a usable frame was the v1.99.418 regression. */}
+              {paintGateMode === "blocking" && (
                 <View style={styles.previewOverlay}>
                   {previewFailed ? (
                     (() => {
@@ -1379,7 +1409,7 @@ export function DevPreview({
                       // to the cheapest possible question.
 	                      const gap = previewGap || capabilityGapFromStatus(status);
 	                      const fixLabel = gapFixLabel(gap);
-	                      const healthyLogs = previewLogsLookHealthy(logLines);
+	                      const healthyLogs = previewLogsLookHealthy(logLines, status?.error);
 	                      const canOfferProjectFix = !gap && (
 	                        previewAgentHealthIsAuthoritative(status)
 	                          ? previewCanOfferProjectFix(status, logLines)
@@ -1534,6 +1564,16 @@ export function DevPreview({
                         ))}
                       </ScrollView>
                       <View style={styles.previewFailBtns}>
+                        {!paneMode ? (
+                          <Pressable
+                            onPress={() => setShowPreview(false)}
+                            accessibilityRole="button"
+                            accessibilityLabel="Back from failed preview"
+                            style={[styles.previewBtn, { backgroundColor: "#27272a" }]}
+                          >
+                            <Text style={[styles.previewBtnText, { color: "#f4f4f5" }]}>Back</Text>
+                          </Pressable>
+                        ) : null}
                         <Pressable
                           onPress={() => { resetPreviewProgress(); setLoading(true); setWebViewKey((k) => k + 1); }}
                           style={[styles.previewBtn, { backgroundColor: "#1a2e1a" }]}
@@ -1548,11 +1588,14 @@ export function DevPreview({
 	                              void quicClient.sendTask(
 	                                `Fix ${proj} preview (${frameworkLabel})`,
 	                                `The ${frameworkLabel} dev server / browser preview for ${proj} (workDir: ${status?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the output below and fix it so the app builds and serves in the browser lane. Common causes: a missing asset declared in config (e.g. a Flutter pubspec asset not on disk), a missing dependency, or a bad import.\n\n--- dev server output ---\n${logs}`,
-	                              ).then(() => setShowPreview(false)).catch(() => {});
+	                              ).then(() => setShowPreview(false)).catch((error) => {
+	                                pushLog(`[fix] could not send task: ${error instanceof Error ? error.message : String(error)}`);
+	                                setPreviewFailed(true);
+	                              });
 	                            }}
 	                            style={[styles.previewBtn, { backgroundColor: "#2e1f3a" }]}
 	                          >
-	                            <Text style={[styles.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
+	                            <Text style={[styles.previewBtnText, { color: "#c084fc" }]}>Fix with AI</Text>
 	                          </Pressable>
 	                        ) : null}
                         <Pressable onPress={() => void handleReload("full")} style={[styles.previewBtn, { backgroundColor: "#1a1a2e" }]}>
@@ -1625,6 +1668,20 @@ export function DevPreview({
           </Modal>
         );
       })()}
+      <DevServerStopDialog
+        visible={showStopConfirm}
+        inline={hostedInModal || paneMode}
+        project={projectLabel}
+        port={status.port}
+        client={previewClient}
+        onCancel={() => setShowStopConfirm(false)}
+        onPhaseChange={setStopPhase}
+        onStopped={() => {
+          setShowStopConfirm(false);
+          setShowPreview(false);
+          setStatus(null);
+        }}
+      />
     </>
   );
 }
@@ -1914,6 +1971,8 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     paddingTop: 54,
     borderBottomWidth: 1,
+    zIndex: 100,
+    elevation: 100,
   },
   headerBtn: { padding: 6 },
   headerBtnClose: { fontSize: 15, fontWeight: "600", color: "#818cf8" },
@@ -1992,6 +2051,14 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 24,
   },
+  previewUnverifiedNotice: {
+    position: "absolute", left: 12, right: 12, bottom: 12, zIndex: 20,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8,
+    paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8,
+    backgroundColor: "rgba(14,14,18,0.86)", borderWidth: 1, borderColor: "#3f3f46",
+  },
+  previewUnverifiedText: { flex: 1, color: "#d4d4d8", fontSize: 10 },
+  previewUnverifiedAction: { color: "#818cf8", fontSize: 10, fontWeight: "700" },
   previewStartTitle: { fontSize: 16, fontWeight: "700", color: "#e4e4e7", textAlign: "center" },
   previewFailTitle: { fontSize: 17, fontWeight: "700", color: "#ef4444", textAlign: "center" },
   previewStepCmd: {

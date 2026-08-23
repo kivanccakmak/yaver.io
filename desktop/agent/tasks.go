@@ -440,6 +440,18 @@ type runnerBinaryCheckEntry struct {
 var (
 	runnerBinaryCheckCache    sync.Map // map[string]runnerBinaryCheckEntry
 	runnerBinaryCheckCacheTTL = 30 * time.Second
+	// A successful runner probe remains useful evidence after the short cache
+	// TTL.  Status polling and task creation can race under load: one
+	// `<runner> --version` child may answer while a sibling misses its deadline
+	// and is SIGKILLed with empty output.  Rejecting the task in that state is a
+	// false negative -- the same binary just proved it runs, and the real task
+	// launch is the operation that ultimately matters.
+	//
+	// Keep the last success long enough to bridge a transient cold/contended
+	// probe, but only use it when the resolved file is still executable and the
+	// new failure is specifically a deadline.  Missing/replaced binaries and
+	// immediate non-zero exits still fail normally.
+	runnerBinaryCheckStaleSuccessTTL = 10 * time.Minute
 )
 
 // ClaudeEvent represents a top-level line of stream-json output from Claude CLI.
@@ -665,6 +677,26 @@ type SystemInfo struct {
 // codex task ran. Status strings are chosen to match what the web's
 // deriveRunnerChipStates already classifies: "ready", "needs-auth",
 // "down".
+// runnerInventoryReady is deliberately stricter than a PATH/configuration
+// check. A credential file can exist while the provider rejects it; only the
+// provider-exercised AuthVerified verdict may put a first-class coding runner
+// in the green state.
+func runnerInventoryReady(id string, rs RunnerRuntimeStatus) bool {
+	id = normalizeRunnerID(id)
+	if id == "codex" || id == "claude" || id == "opencode" {
+		return rs.Ready && rs.AuthConfigured && rs.AuthVerified
+	}
+	return rs.Ready
+}
+
+func runnerVerificationWarning(id string, rs RunnerRuntimeStatus) string {
+	id = normalizeRunnerID(id)
+	if (id == "codex" || id == "claude" || id == "opencode") && rs.AuthConfigured && !rs.AuthVerified {
+		return "Credentials are present but have not completed a provider operation yet"
+	}
+	return ""
+}
+
 func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
@@ -682,13 +714,16 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 		}
 		rs := DetectRunnerRuntimeStatus(cfg, tm.workDir)
 		info.Installed = true
-		info.Ready = rs.Ready
+		info.Ready = runnerInventoryReady(id, rs)
 		info.AuthConfigured = rs.AuthConfigured
 		info.AuthPresent = rs.AuthPresent
 		info.AuthVerified = rs.AuthVerified
 		info.AuthVerifiedAt = runnerAuthVerifiedAtMillis(id)
 		info.AuthSource = rs.AuthSource
 		info.Warning = rs.Warning
+		if !info.Ready && info.Error == "" && rs.AuthConfigured && !rs.AuthVerified {
+			info.Warning = "Credentials are present but have not completed a provider operation yet"
+		}
 		info.Error = rs.Error
 	}
 	for _, t := range tm.tasks {
@@ -759,6 +794,10 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 			// REVOKED claude still shipped status:"ready" to Convex — the
 			// heartbeat half of the same false green.
 			healthStatus = "needs-auth"
+		case !rs.AuthVerified && (id == "codex" || id == "claude" || id == "opencode"):
+			// A local auth file is inventory, not proof. Keep the runner out of
+			// the green ready state until a real provider operation has answered.
+			healthStatus = "needs-verification"
 		}
 		infos = append(infos, RunnerInfo{
 			TaskID:   "",
@@ -773,13 +812,13 @@ func (tm *TaskManager) GetRunnerInfos() []RunnerInfo {
 			// false green moves from memory into the database.
 			CheckedAt:      time.Now().UnixMilli(),
 			Installed:      true,
-			Ready:          rs.Ready,
+			Ready:          runnerInventoryReady(id, rs),
 			AuthConfigured: rs.AuthConfigured,
 			AuthPresent:    rs.AuthPresent,
 			AuthVerified:   rs.AuthVerified,
 			AuthVerifiedAt: runnerAuthVerifiedAtMillis(id),
 			AuthSource:     rs.AuthSource,
-			Warning:        rs.Warning,
+			Warning:        firstNonEmpty(rs.Warning, runnerVerificationWarning(id, rs)),
 			Error:          rs.Error,
 		})
 		seenRunner[normalizeRunnerID(id)] = true
@@ -2398,6 +2437,13 @@ func CheckRunnerBinary(command string) error {
 			storeRunnerBinaryPath(command, path)
 			return nil
 		}
+		if ctx.Err() == context.DeadlineExceeded {
+			if stalePath, ok := recentSuccessfulRunnerBinaryPath(command); ok && stalePath == path {
+				log.Printf("[runner-check] %s at %s timed out after %s with no usable answer; a successful probe is still recent, so attempting the real runner operation",
+					command, path, runnerVersionProbeTimeout)
+				return nil
+			}
+		}
 		return fmt.Errorf("%s found but not working: %v (output: %s)", command, err, strings.TrimSpace(string(out)))
 	}
 	if strings.TrimSpace(string(out)) == "" {
@@ -2412,7 +2458,7 @@ func CheckRunnerBinary(command string) error {
 // runnerVersionProbeTimeout bounds the `--version` probe. It is a liveness
 // bound, not a correctness one: a runner that answers and lingers is still a
 // working runner (see the DeadlineExceeded branch above).
-const runnerVersionProbeTimeout = 10 * time.Second
+var runnerVersionProbeTimeout = 10 * time.Second
 
 func cachedRunnerBinaryPath(command string) (string, bool) {
 	v, ok := runnerBinaryCheckCache.Load(command)
@@ -2421,10 +2467,25 @@ func cachedRunnerBinaryPath(command string) (string, bool) {
 	}
 	entry, _ := v.(runnerBinaryCheckEntry)
 	if time.Since(entry.at) >= runnerBinaryCheckCacheTTL {
-		runnerBinaryCheckCache.Delete(command)
 		return "", false
 	}
 	if entry.path == "" || !isExecutableFile(entry.path) {
+		runnerBinaryCheckCache.Delete(command)
+		return "", false
+	}
+	return entry.path, true
+}
+
+// recentSuccessfulRunnerBinaryPath returns the last known-good path even after
+// the short skip-probe cache expires. It is only a fallback for a fresh probe
+// that timed out; callers must not use it to avoid probing indefinitely.
+func recentSuccessfulRunnerBinaryPath(command string) (string, bool) {
+	v, ok := runnerBinaryCheckCache.Load(command)
+	if !ok {
+		return "", false
+	}
+	entry, _ := v.(runnerBinaryCheckEntry)
+	if entry.path == "" || time.Since(entry.at) >= runnerBinaryCheckStaleSuccessTTL || !isExecutableFile(entry.path) {
 		runnerBinaryCheckCache.Delete(command)
 		return "", false
 	}

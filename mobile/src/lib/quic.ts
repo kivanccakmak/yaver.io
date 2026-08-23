@@ -1234,6 +1234,10 @@ export interface RunnerInfo {
   installed: boolean;
   ready?: boolean;
   authConfigured?: boolean;
+  /** Optional runner-auth evidence from newer agents. */
+  authPresent?: boolean;
+  authVerified?: boolean;
+  authVerifiedAt?: number;
   authSource?: string;
   warning?: string;
   error?: string;
@@ -1679,6 +1683,7 @@ export class QuicClient {
   private relayServers: RelayServer[] = [];  // all available relay servers
   private activeRelayUrl: string | null = null; // currently working relay base URL
   private activeRelayPassword: string | null = null; // password for the active relay (if any)
+  private lastPreviewAuthWarning = "";
   private tunnelServers: TunnelServer[] = [];  // Cloudflare Tunnel endpoints
   private sessionTunnelServers: TunnelServer[] = [];  // selected-device tunnel hint
   private _tunnelUrl: string | null = null;
@@ -1791,6 +1796,91 @@ export class QuicClient {
   /** Set relay servers fetched from platform config. */
   setRelayServers(servers: RelayServer[]): void {
     this.relayServers = servers.sort((a, b) => a.priority - b.priority);
+    // A cached relay path may be restored before the authenticated settings
+    // fetch supplies this account's relay password. Header-authenticated API
+    // calls can still work in that half-state, but iframe/WebView URLs cannot
+    // send headers and omit __rp, so index.html loads while entry.bundle gets
+    // 401 (solid-black Browser Reload, 2026-08-23). Reconcile the live path
+    // whenever the fresh password-bearing list arrives; also replaces a stale
+    // credential after repairRelay refreshes the list.
+    if (this.activeRelayUrl) {
+      const active = this.relayServers.find(
+        (relay) => relay.httpUrl.replace(/\/+$/, "") === this.activeRelayUrl!.replace(/\/+$/, ""),
+      );
+      if (active?.password) this.activeRelayPassword = active.password;
+    }
+  }
+
+  private resolvedActiveRelayPassword(): string | null {
+    if (!this.activeRelayUrl) return null;
+    if (this.activeRelayPassword) return this.activeRelayPassword;
+    const active = this.relayServers.find(
+      (relay) => relay.httpUrl.replace(/\/+$/, "") === this.activeRelayUrl!.replace(/\/+$/, ""),
+    );
+    return active?.password || null;
+  }
+
+  /** Resolve query-string auth from the URL that will actually load.
+   *
+   * A restored browser connection can temporarily expose its relay proxy as a
+   * tunnel/base URL before `activeRelayUrl` is rehydrated. Header-authenticated
+   * API calls still work in that state, but iframe subresources cannot send
+   * headers. Match only configured relay origins and their `/d/` proxy prefix,
+   * so a relay password is never attached to an unrelated direct/tunnel URL. */
+  private resolvedRelayPasswordForUrl(targetUrl: string): string | null {
+    const active = this.resolvedActiveRelayPassword();
+    if (active) return active;
+
+    let target: URL;
+    try {
+      target = new globalThis.URL(targetUrl);
+    } catch {
+      return null;
+    }
+
+    for (const relay of this.relayServers) {
+      if (!relay.password) continue;
+      try {
+        const relayUrl = new globalThis.URL(relay.httpUrl);
+        const relayPath = relayUrl.pathname.replace(/\/+$/, "");
+        const proxyPrefix = `${relayPath}/d/`.replace(/\/{2,}/g, "/");
+        if (
+          target.origin === relayUrl.origin &&
+          (target.pathname === `${relayPath}/d` || target.pathname.startsWith(proxyPrefix))
+        ) {
+          return relay.password;
+        }
+      } catch {
+        // Malformed relay candidates are diagnosed by connection setup. Never
+        // attach a credential speculatively here.
+      }
+    }
+
+    // Legacy connection-cache entries could classify a relay proxy as a
+    // tunnel and persist X-Relay-Password in `_tunnelHeaders`. That exact
+    // header makes fetch-based `/dev/status` succeed, but it was invisible to
+    // iframe URL generation. Reuse it only when the target is below the exact
+    // current base URL and that base is this device's `/d/<id>` proxy path.
+    // This converts the credential already sent to that endpoint from header
+    // form to query form; it does not broaden its destination.
+    const cachedTransportPassword = this._tunnelHeaders["X-Relay-Password"];
+    if (cachedTransportPassword && this.deviceId) {
+      try {
+        const base = new globalThis.URL(this.baseUrl);
+        const deviceProxy = `/d/${encodeURIComponent(this.deviceId)}`;
+        const basePath = base.pathname.replace(/\/+$/, "");
+        if (
+          target.origin === base.origin &&
+          (basePath === deviceProxy || basePath.endsWith(deviceProxy)) &&
+          (target.pathname === basePath || target.pathname.startsWith(`${basePath}/`))
+        ) {
+          return cachedTransportPassword;
+        }
+      } catch {
+        // The base URL is validated by connection setup; fail closed here.
+      }
+    }
+    return null;
   }
 
   /** Set Cloudflare Tunnel endpoints. */
@@ -1973,8 +2063,32 @@ export class QuicClient {
   remoteDesktopFrameUrl(): string {
     const base = `${this.baseUrl}/rd/frame.jpg`;
     let url = `${base}?token=${encodeURIComponent(this.token || "")}`;
-    if (this.activeRelayUrl && this.activeRelayPassword) {
-      url += `&__rp=${encodeURIComponent(this.activeRelayPassword)}`;
+    const relayPassword = this.resolvedRelayPasswordForUrl(url);
+    if (relayPassword) {
+      url += `&__rp=${encodeURIComponent(relayPassword)}`;
+    } else {
+      // A browser frame cannot add the header that fetch() uses, so a
+      // relay-shaped URL without query auth is guaranteed to fail before it
+      // reaches the agent. Emit only non-sensitive state and de-duplicate it.
+      let baseHasDeviceProxy = false;
+      try {
+        baseHasDeviceProxy = new globalThis.URL(this.baseUrl).pathname.includes("/d/");
+      } catch {}
+      if (baseHasDeviceProxy) {
+        const state = JSON.stringify({
+          mode: this._connectionMode,
+          activeRelay: !!this.activeRelayUrl,
+          activeCredential: !!this.activeRelayPassword,
+          relayCount: this.relayServers.length,
+          passwordedRelayCount: this.relayServers.filter((relay) => !!relay.password).length,
+          tunnel: !!this._tunnelUrl,
+          cachedTransportCredential: !!this._tunnelHeaders["X-Relay-Password"],
+        });
+        if (state !== this.lastPreviewAuthWarning) {
+          this.lastPreviewAuthWarning = state;
+          appLog("warn", `[preview-auth] relay preview credential is unavailable; refresh the connection before rendering | ${state}`);
+        }
+      }
     }
     return url;
   }
@@ -1985,8 +2099,9 @@ export class QuicClient {
    *  Token is promoted to a bearer by the agent; the relay validates ?__rp=. */
   captureFrameUrl(): string {
     let url = `${this.baseUrl}/capture/frame.jpg?token=${encodeURIComponent(this.token || "")}`;
-    if (this.activeRelayUrl && this.activeRelayPassword) {
-      url += `&__rp=${encodeURIComponent(this.activeRelayPassword)}`;
+    const relayPassword = this.resolvedActiveRelayPassword();
+    if (relayPassword) {
+      url += `&__rp=${encodeURIComponent(relayPassword)}`;
     }
     return url;
   }
@@ -1995,8 +2110,9 @@ export class QuicClient {
    *  captureFrameUrl polling — WKWebView can't render multipart MJPEG). */
   captureStreamUrl(): string {
     let url = `${this.baseUrl}/capture/stream?token=${encodeURIComponent(this.token || "")}`;
-    if (this.activeRelayUrl && this.activeRelayPassword) {
-      url += `&__rp=${encodeURIComponent(this.activeRelayPassword)}`;
+    const relayPassword = this.resolvedActiveRelayPassword();
+    if (relayPassword) {
+      url += `&__rp=${encodeURIComponent(relayPassword)}`;
     }
     return url;
   }
@@ -2070,7 +2186,7 @@ export class QuicClient {
    *  this exact value into UserDefaults so their /tasks + runner-auth
    *  POSTs carry the same X-Relay-Password the JS task path already
    *  ships with. */
-  get activeRelayPasswordValue(): string | null { return this.activeRelayPassword; }
+  get activeRelayPasswordValue(): string | null { return this.resolvedActiveRelayPassword(); }
 
   /** Reachability candidates for recovery. Keep the successful target URL so
    *  /auth/pair/submit can follow the same path instead of falling back to a
@@ -7507,8 +7623,9 @@ export class QuicClient {
       Authorization: `Bearer ${this.token}`,
       ...this.clientPlatformHeaders(),
     };
-    if (this.activeRelayUrl && this.activeRelayPassword) {
-      headers['X-Relay-Password'] = this.activeRelayPassword;
+    const relayPassword = this.resolvedActiveRelayPassword();
+    if (relayPassword) {
+      headers['X-Relay-Password'] = relayPassword;
     }
     if (this._tunnelUrl && this._tunnelHeaders) {
       Object.assign(headers, this._tunnelHeaders);
@@ -8525,7 +8642,7 @@ export class QuicClient {
         deviceId: this.deviceId,
         mode,
         relayUrl: this.activeRelayUrl,
-        relayPassword: this.activeRelayPassword || undefined,
+        relayPassword: this.resolvedActiveRelayPassword() || undefined,
         ts: Date.now(),
         hadSuccess: true,
       };
@@ -9706,8 +9823,9 @@ export class QuicClient {
     // relay drops the unauthenticated request before it ever reaches the agent.
     const sep = url.includes("?") ? "&" : "?";
     url += `${sep}token=${encodeURIComponent(this.token || "")}`;
-    if (this.activeRelayUrl && this.activeRelayPassword) {
-      url += `&__rp=${encodeURIComponent(this.activeRelayPassword)}`;
+    const relayPassword = this.resolvedRelayPasswordForUrl(url);
+    if (relayPassword) {
+      url += `&__rp=${encodeURIComponent(relayPassword)}`;
     }
     return url;
   }
@@ -12156,6 +12274,9 @@ export interface PreviewHealthSignal {
   signalSource?: string;
   relevantLogLines?: string[];
   hasDeterministicFix?: boolean;
+  /** In-frame paint telemetry the agent injects into preview HTML. Absent on
+   * older agents; never infer it from a version string. */
+  paintSignal?: "in_frame_v1" | string;
 }
 
 export interface DevTargetPreference {
@@ -12186,6 +12307,7 @@ export interface DevCompatibilityStatus {
   packageManager?: string;
   dependenciesInstalled?: boolean;
   needsDependencyInstall?: boolean;
+  missingDependencies?: string[];
   canAutoInstallDependencies?: boolean;
   missingLocalTools?: string[];
   hermesCompiler?: string;

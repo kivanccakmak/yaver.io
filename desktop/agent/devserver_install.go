@@ -136,5 +136,16 @@ func ensureNodeDepsStreamed(ctx context.Context, workDir string, emit func(DevSe
 	if err := installProjectDependenciesTo(workDir, prep, installWriter); err != nil {
 		return fmt.Errorf("%s install failed: %w", prep.PackageManager, err)
 	}
+	// npm/yarn/pnpm can exit zero while an environment setting omits dev
+	// dependencies. The next operation is the bundler, so verify the packages it
+	// will resolve instead of reporting a successful preparation that did not
+	// happen.
+	verified := detectProjectPreparation(workDir, manifest)
+	if verified.NeedsDependencyInstall {
+		if len(verified.MissingDependencies) > 0 {
+			return fmt.Errorf("%s install completed but direct dependencies are still missing: %s", prep.PackageManager, strings.Join(verified.MissingDependencies, ", "))
+		}
+		return fmt.Errorf("%s install completed but project dependencies are still incomplete", prep.PackageManager)
+	}
 	return nil
 }

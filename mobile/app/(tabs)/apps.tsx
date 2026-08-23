@@ -33,7 +33,7 @@ import NoMachineEmpty from "../../src/components/NoMachineEmpty";
 import { isEffectivelyConnected as computeEffectiveConnected } from "../../src/lib/connectionState";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient, type CapabilitySnapshot, type DevCompatibilityStatus, type DevServerStatus, type MobileWorkerPreviewSession } from "../../src/lib/quic";
-import { clientRuntimeLogsNeedProjectFix, previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix } from "../../src/lib/previewHealth";
+import { clientRuntimeLogsNeedProjectFix, previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix, previewLogsLookHealthy, previewPaintGateMode } from "../../src/lib/previewHealth";
 import { getAvailableModules, isBundleLoaderAvailable, loadApp } from "../../src/lib/bundleLoader";
 import { openAppBus } from "../../src/lib/openAppBus";
 import { setActivePreviewLane, subscribeBrowserShake } from "../../src/lib/feedbackTrigger";
@@ -78,6 +78,7 @@ import { listLocalPhoneProjectsMeta } from "../../src/lib/phoneSandboxLocal";
 import { discoverConnectedProviderProjects, type ProviderProject } from "../../src/lib/gitProviderProjects";
 import { cloneGitRepoToPhone } from "../../src/lib/cloneToPhone";
 import { reconcilePreviewDevStatus, usablePreviewDevStatus } from "../../src/lib/previewDevStatus";
+import { DevServerStopDialog, type DevServerStopPhase } from "../../src/components/DevServerStopDialog";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -260,13 +261,6 @@ function previewLogColor(
     return colors.info || colors.accent;
   }
   return colors.textMuted;
-}
-
-function previewLogsLookHealthy(lines: readonly string[]): boolean {
-  const tail = lines.slice(-80).join("\n").toLowerCase();
-  return /\b(queued|starting|ready|ready\s+100%|bundled|compiled|listening|serving on|running)\b/.test(tail) ||
-    /^\s*\$\s+(flutter|npm|npx|yarn|pnpm|bun|expo|vite|next)\b/im.test(tail) ||
-    /\b(?:ios|android|web)\b[^\n]*\b\d{1,3}(?:\.\d+)?%\s*\(\d+\/\d+\)/.test(tail);
 }
 
 function previewLogsNeedProjectFix(lines: readonly string[], statusError?: string | null): boolean {
@@ -738,6 +732,8 @@ export default function AppsScreen() {
   }, [router, connectionStatus]);
 
   const [devStatus, setDevStatus] = useState<DevServerStatus | null>(null);
+  const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [stopPhase, setStopPhase] = useState<DevServerStopPhase>("confirm");
   const [workerSession, setWorkerSession] = useState<MobileWorkerPreviewSession | null>(null);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [repos, setRepos] = useState<RepoItem[]>([]);
@@ -2254,17 +2250,9 @@ export default function AppsScreen() {
   }, [previewClient]);
 
   const handleStop = useCallback(() => {
-    Alert.alert("Stop Dev Server", "Stop the running dev server?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Stop", style: "destructive", onPress: async () => {
-          await previewClient.stopDevServer();
-          setShowWebView(false);
-          setDevStatus(null);
-        }
-      },
-    ]);
-  }, [previewClient]);
+    if (stopPhase === "stopping") return;
+    setShowStopConfirm(true);
+  }, [stopPhase]);
 
   const openVibingFromPreview = useCallback(async () => {
     const project = (
@@ -2369,6 +2357,11 @@ export default function AppsScreen() {
   // spawn failure the 412 can never catch), or /dev/status (a poll that
   // outlives a torn-down stream). One object, one card, one button.
   const activeGap = previewGap || capabilityGapFromStatus(devStatus);
+  const paintGateMode = previewPaintGateMode(devStatus, {
+    contentLoaded: webPreviewContentLoaded,
+    failed: webPreviewFailed,
+    probeUnavailable,
+  });
   const activeGapFixLabel = gapFixLabel(activeGap);
   const gapCard = activeGap ? (
     <View style={s.gapCard}>
@@ -2430,7 +2423,7 @@ export default function AppsScreen() {
   ) : null;
 
   useEffect(() => {
-    if (!showWebView || !bundleUrl || webPreviewContentLoaded || webPreviewFailed) return;
+    if (!showWebView || !bundleUrl || paintGateMode !== "blocking") return;
     if (!webPreviewServerLooksReady || webPreviewRenderWatchdogFiredRef.current) return;
     const id = setTimeout(() => {
       if (webPreviewContentLoaded || webPreviewFailed || webPreviewRenderWatchdogFiredRef.current) return;
@@ -2445,7 +2438,7 @@ export default function AppsScreen() {
       runBrowserLaneDoctor("ready-without-render");
     }, 20000);
     return () => clearTimeout(id);
-  }, [showWebView, bundleUrl, webPreviewContentLoaded, webPreviewFailed, webPreviewServerLooksReady, webPreviewProbe, runBrowserLaneDoctor]);
+  }, [showWebView, bundleUrl, paintGateMode, webPreviewContentLoaded, webPreviewFailed, webPreviewServerLooksReady, webPreviewProbe, runBrowserLaneDoctor]);
 
   const visibleProjects = projects.filter((p) => {
     if (search.trim()) {
@@ -2644,8 +2637,8 @@ export default function AppsScreen() {
                   <Text style={s.openBtnText}>Open</Text>
                 )}
               </Pressable>
-              <Pressable style={[s.actionBtn, s.stopBtn]} onPress={handleStop}>
-                <Text style={s.stopBtnText}>Stop</Text>
+              <Pressable style={[s.actionBtn, s.stopBtn]} onPress={handleStop} disabled={stopPhase === "stopping"}>
+                <Text style={s.stopBtnText}>{stopPhase === "stopping" ? "Stopping…" : "Stop"}</Text>
               </Pressable>
             </View>
 
@@ -3430,7 +3423,7 @@ export default function AppsScreen() {
           <AppScreenHeader
             title={(runningProject || "Preview").split(" / ")[0]}
             onBack={() => setShowWebView(false)}
-            style={{ paddingTop: insets.top + 8 }}
+            style={{ paddingTop: insets.top + 8, zIndex: 100, elevation: 100 }}
             right={
               /* Icons, not three words.
                  "Full · Reload · Stop" as text next to a project title like
@@ -3485,12 +3478,15 @@ export default function AppsScreen() {
                 </Pressable>
                 <Pressable
                   onPress={handleStop}
+                  disabled={stopPhase === "stopping"}
                   hitSlop={10}
                   accessibilityRole="button"
                   accessibilityLabel="Stop dev server"
                   style={s.webViewHeaderBtn}
                 >
-                  <Ionicons name="stop-circle-outline" size={21} color={c.error} />
+                  {stopPhase === "stopping"
+                    ? <ActivityIndicator size="small" color={c.error} />
+                    : <Ionicons name="stop-circle-outline" size={21} color={c.error} />}
                 </Pressable>
               </View>
             }
@@ -3551,12 +3547,15 @@ export default function AppsScreen() {
                 </Pressable>
                 <Pressable
                   onPress={handleStop}
+                  disabled={stopPhase === "stopping"}
                   hitSlop={10}
                   accessibilityRole="button"
                   accessibilityLabel="Stop dev server"
                   style={s.previewEscapeIconBtn}
                 >
-                  <Ionicons name="stop-circle-outline" size={21} color={c.error} />
+                  {stopPhase === "stopping"
+                    ? <ActivityIndicator size="small" color={c.error} />
+                    : <Ionicons name="stop-circle-outline" size={21} color={c.error} />}
                 </Pressable>
               </View>
             </View>
@@ -3918,14 +3917,15 @@ export default function AppsScreen() {
                           onPress={() => {
                             const proj = (runningProject || devStatus?.framework || "the app").split(" / ")[0];
                             const logs = webPreviewLogs.slice(-60).join("\n");
-                            void quicClient.sendTask(
+                            void sendTaskOrWarn(
                               `Fix ${proj} browser preview runtime`,
-                              `The browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) ${webPreviewContentLoaded ? "rendered, but then logged runtime errors or got stuck" : "did not paint because its browser bundle or runtime failed"}. Diagnose the root cause from the runtime output below and fix it in the project, preserving the browser lane.\n\n--- browser/runtime output ---\n${logs}`,
-                            ).then(() => { setShowWebView(false); router.navigate("/(tabs)/tasks" as any); }).catch(() => {});
+                              `The browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) ${webPreviewContentLoaded ? "rendered, but then logged runtime errors or got stuck" : "did not paint because its browser bundle or runtime failed"}. Diagnose the root cause from the structured browser-lane result and runtime output below, then fix it in the project while preserving the Browser Reload lane.\n\n--- browser-lane probe ---\n${JSON.stringify(browserLaneProbe || {})}\n\n--- browser/runtime output ---\n${logs}`,
+                              "Fix browser preview",
+                            ).then((sent) => { if (sent) setShowWebView(false); });
                           }}
                           style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#2e1f3a" }]}
                         >
-                          <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
+                          <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix with AI</Text>
                         </Pressable>
                       ) : null}
                     </View>
@@ -3935,10 +3935,11 @@ export default function AppsScreen() {
                 ) : null}
               </>
             ) : null}
-            {/* A box-local doctor or an unavailable cross-origin probe cannot
-                 satisfy phone paint. Keep the first-open status visible until
-                 this client receives a real rendered-frame signal. */}
-              {bundleUrl && !webPreviewContentLoaded && (
+            {/* A box-local doctor or host-probe failure cannot satisfy phone
+                 paint. Current agents advertise an in-frame signal and remain
+                 strict; older agents expose the frame as visibly unverified so
+                 a missing channel cannot become a permanent opaque wall. */}
+              {bundleUrl && paintGateMode === "blocking" && (
               <View style={s.previewOverlay}>
                 {webPreviewFailed ? (
                   (() => {
@@ -3949,7 +3950,7 @@ export default function AppsScreen() {
                        compile: <reason>", never a raw log dump with the
                        truth buried in purple. Full output stays below. */
                     const compileCard = detectCompileFailure(devStatus?.error, webPreviewLogs);
-                    const healthyLogs = previewLogsLookHealthy(webPreviewLogs);
+                    const healthyLogs = previewLogsLookHealthy(webPreviewLogs, devStatus?.error);
                     const connectionDropped = !effectivelyConnected;
                     const canOfferProjectFix = !activeGap && (
                       previewAgentHealthIsAuthoritative(devStatus)
@@ -3996,6 +3997,14 @@ export default function AppsScreen() {
                       <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
                     )}
                     <View style={s.previewFailBtns}>
+                      <Pressable
+                        onPress={() => setShowWebView(false)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Back from failed preview"
+                        style={[s.previewBtn, { backgroundColor: "#27272a" }]}
+                      >
+                        <Text style={[s.previewBtnText, { color: "#f4f4f5" }]}>Back</Text>
+                      </Pressable>
                       <Pressable onPress={() => { resetWebPreview(); setWebViewLoading(true); setWebViewKey((k) => k + 1); }} style={[s.previewBtn, { backgroundColor: "#1a2e1a" }]}>
                         <Text style={[s.previewBtnText, { color: "#22c55e" }]}>Retry</Text>
                       </Pressable>
@@ -4004,14 +4013,15 @@ export default function AppsScreen() {
                           onPress={() => {
                             const proj = (runningProject || devStatus?.framework || "the app").split(" / ")[0];
                             const logs = webPreviewLogs.slice(-40).join("\n");
-                            void quicClient.sendTask(
+                            void sendTaskOrWarn(
                               `Fix ${proj} preview (${devStatus?.framework || "app"})`,
-                              `The ${devStatus?.framework || "app"} dev server / browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the output below and fix it so the app builds and serves in the browser lane. Common causes: a missing asset declared in config (e.g. a Flutter pubspec asset that isn't on disk), a missing dependency, or a bad import.\n\n--- dev server output ---\n${logs}`,
-                            ).then(() => { setShowWebView(false); router.navigate("/(tabs)/tasks" as any); }).catch(() => {});
+                              `The ${devStatus?.framework || "app"} dev server / browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the structured browser-lane result and output below, then fix it so the app builds and serves through Browser Reload. Common causes: a missing asset declared in config, a missing dependency, or a bad import.\n\n--- browser-lane probe ---\n${JSON.stringify(browserLaneProbe || {})}\n\n--- dev server output ---\n${logs}`,
+                              "Fix browser preview",
+                            ).then((sent) => { if (sent) setShowWebView(false); });
                           }}
                           style={[s.previewBtn, { backgroundColor: "#2e1f3a" }]}
                         >
-                          <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix in Yaver</Text>
+                          <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix with AI</Text>
                         </Pressable>
                       ) : null}
                       <Pressable onPress={() => void handleReload("full")} style={[s.previewBtn, { backgroundColor: "#1a1a2e" }]}>
@@ -4047,10 +4057,23 @@ export default function AppsScreen() {
                   </>
                 )}
               </View>
-            )}
+              )}
           </View>
         </View>
       </Modal>
+      <DevServerStopDialog
+        visible={showStopConfirm}
+        project={(runningProject || devStatus?.workDir?.split("/").pop() || devStatus?.framework || "Preview").split(" / ")[0]}
+        port={devStatus?.port}
+        client={previewClient}
+        onCancel={() => setShowStopConfirm(false)}
+        onPhaseChange={setStopPhase}
+        onStopped={() => {
+          setShowStopConfirm(false);
+          setShowWebView(false);
+          setDevStatus(null);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -4068,6 +4091,14 @@ const s = StyleSheet.create({
     backgroundColor: "#050508",
     alignItems: "center", justifyContent: "center", gap: 10, padding: 24,
   },
+  previewUnverifiedNotice: {
+    position: "absolute", left: 12, right: 12, bottom: 58, zIndex: 68,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8,
+    paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8,
+    backgroundColor: "rgba(14,14,18,0.86)", borderWidth: 1, borderColor: "#3f3f46",
+  },
+  previewUnverifiedText: { flex: 1, color: "#d4d4d8", fontSize: 10 },
+  previewUnverifiedAction: { color: "#818cf8", fontSize: 10, fontWeight: "700" },
   previewStartTitle: { fontSize: 16, fontWeight: "700", textAlign: "center" },
   previewFailTitle: { fontSize: 17, fontWeight: "700", textAlign: "center" },
   previewStepCmd: {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,6 +23,8 @@ type RemoteAgentCandidate struct {
 	Label    string
 	Headers  map[string]string
 }
+
+var errRelayCredentialDenied = errors.New("relay credential denied")
 
 var remoteAgentLastGood sync.Map // deviceID -> baseURL
 var remoteAgentHealth sync.Map   // deviceID|baseURL -> *remoteAgentHealthState
@@ -856,6 +859,7 @@ func doRemoteAgentRequest(ctx context.Context, candidates []RemoteAgentCandidate
 	}
 
 	var errs []string
+	relayCredentialDenied := false
 	for _, candidate := range candidates {
 		if ctx.Err() != nil {
 			errs = append(errs, fmt.Sprintf("%s: not attempted (caller cancelled)", candidate.BaseURL))
@@ -960,6 +964,7 @@ func doRemoteAgentRequest(ctx context.Context, candidates []RemoteAgentCandidate
 		// not been redeployed yet.
 		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) &&
 			isRelayCredentialDenyText(string(raw)) {
+			relayCredentialDenied = true
 			recordRemoteAgentFailure(candidate.DeviceID, candidate.BaseURL, time.Now())
 			errs = append(errs, fmt.Sprintf(
 				"%s: relay refused this client's relay password (HTTP %d) — the request never reached the agent; run `yaver auth` here to refresh it",
@@ -972,7 +977,11 @@ func doRemoteAgentRequest(ctx context.Context, candidates []RemoteAgentCandidate
 		recordRemoteAgentSuccess(candidate.DeviceID, candidate.BaseURL, time.Now())
 		return candidate, resp.StatusCode, raw, nil
 	}
-	return RemoteAgentCandidate{}, 0, nil, fmt.Errorf("remote %s %s failed across %d candidate(s): %s", method, path, len(candidates), strings.Join(errs, " | "))
+	remoteErr := fmt.Errorf("remote %s %s failed across %d candidate(s): %s", method, path, len(candidates), strings.Join(errs, " | "))
+	if relayCredentialDenied {
+		return RemoteAgentCandidate{}, 0, nil, fmt.Errorf("%w: %v", errRelayCredentialDenied, remoteErr)
+	}
+	return RemoteAgentCandidate{}, 0, nil, remoteErr
 }
 
 // looksLikeJSON heuristically decides whether a 404 body came from a
@@ -1013,6 +1022,18 @@ func remoteAgentJSON(ctx context.Context, baseURL, token, method, path string, b
 		Headers:  headers,
 	}
 	_, status, raw, err := doRemoteAgentRequest(ctx, []RemoteAgentCandidate{candidate}, token, method, path, bodyJSON, 60*time.Second)
+	// doRemoteAgentRequest deliberately classifies a relay credential refusal
+	// as a transport error: the request never reached the agent. That means the
+	// old status-only repair branch below could never run for the exact failure
+	// it was meant to repair. Refresh once, rebuild headers, and retry.
+	if err != nil && staleRelayPasswordTransportError(err) && repairRelayPasswordForRemoteHTTP(ctx) {
+		headers, headerErr := transportHeadersForBase(nil, baseURL)
+		if headerErr != nil {
+			return headerErr
+		}
+		candidate.Headers = headers
+		_, status, raw, err = doRemoteAgentRequest(ctx, []RemoteAgentCandidate{candidate}, token, method, path, bodyJSON, 60*time.Second)
+	}
 	if err != nil {
 		return err
 	}
@@ -1057,6 +1078,13 @@ func remoteAgentJSONForDevice(ctx context.Context, deviceHint, method, path stri
 		bodyJSON = data
 	}
 	_, status, raw, err := doRemoteAgentRequest(ctx, candidates, token, method, path, bodyJSON, 60*time.Second)
+	if err != nil && staleRelayPasswordTransportError(err) && repairRelayPasswordForRemoteHTTP(ctx) {
+		candidates, token, err = resolveRemoteAgentCandidates(deviceHint)
+		if err != nil {
+			return err
+		}
+		_, status, raw, err = doRemoteAgentRequest(ctx, candidates, token, method, path, bodyJSON, 60*time.Second)
+	}
 	if err != nil {
 		return err
 	}
@@ -1097,6 +1125,10 @@ func staleRelayPasswordHTTP(status int, raw []byte) bool {
 		return false
 	}
 	return isRelayCredentialDenyText(strings.TrimSpace(string(raw)))
+}
+
+func staleRelayPasswordTransportError(err error) bool {
+	return err != nil && (errors.Is(err, errRelayCredentialDenied) || isRelayCredentialDenyText(err.Error()))
 }
 
 func repairRelayPasswordForRemoteHTTP(ctx context.Context) bool {

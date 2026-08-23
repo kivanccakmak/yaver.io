@@ -189,6 +189,7 @@ type projectPreparationStatus struct {
 	DependenciesInstalled      bool     `json:"dependenciesInstalled"`
 	NeedsDependencyInstall     bool     `json:"needsDependencyInstall"`
 	CanAutoInstallDependencies bool     `json:"canAutoInstallDependencies"`
+	MissingDependencies        []string `json:"missingDependencies,omitempty"`
 	MissingTools               []string `json:"missingTools,omitempty"`
 	HermesCompiler             string   `json:"hermesCompiler,omitempty"`
 	HermesCompilerError        string   `json:"hermesCompilerError,omitempty"`
@@ -845,6 +846,7 @@ func detectProjectPreparation(workDir string, manifest *projectPackageManifest) 
 		}
 	}
 
+	prep.WorkspaceRoot = findWorkspaceRoot(workDir)
 	prep.DependenciesInstalled = projectFileExists(filepath.Join(workDir, "node_modules", ".yarn-integrity")) || projectFileExists(filepath.Join(workDir, "node_modules", ".modules.yaml"))
 	if !prep.DependenciesInstalled {
 		if stat, err := os.Stat(filepath.Join(workDir, "node_modules")); err == nil && stat.IsDir() {
@@ -864,10 +866,41 @@ func detectProjectPreparation(workDir string, manifest *projectPackageManifest) 
 	// install), the root never got installed, Metro's parent walk
 	// found no @backgammon/*, bundle errored — but the prep check
 	// above said "looks fine" because it only checked the leaf.
-	prep.WorkspaceRoot = findWorkspaceRoot(workDir)
 	if prep.WorkspaceRoot != "" && prep.WorkspaceRoot != workDir {
 		rootStat, err := os.Stat(filepath.Join(prep.WorkspaceRoot, "node_modules"))
 		if err != nil || !rootStat.IsDir() {
+			prep.DependenciesInstalled = false
+		}
+	}
+	// A node_modules DIRECTORY is inventory, not the operation. A killed or
+	// partial install can leave that directory behind while omitting packages
+	// the bundler must load. That exact false green left sfmg with expo present
+	// but react-native, react-native-web and typescript absent: Yaver skipped its
+	// streamed install, Expo exited, and the phone waited for paint forever.
+	//
+	// Probe every direct runtime/dev dependency declared by this package. In a
+	// workspace it may be installed beside the leaf or hoisted to the workspace
+	// root, so either real package.json satisfies the check. This is bounded by
+	// the manifest's direct dependency count; it never walks node_modules.
+	if prep.DependenciesInstalled && manifest != nil {
+		roots := []string{workDir}
+		if prep.WorkspaceRoot != "" && prep.WorkspaceRoot != workDir {
+			roots = append(roots, prep.WorkspaceRoot)
+		}
+		declared := make(map[string]struct{}, len(manifest.Dependencies)+len(manifest.DevDependencies))
+		for name := range manifest.Dependencies {
+			declared[name] = struct{}{}
+		}
+		for name := range manifest.DevDependencies {
+			declared[name] = struct{}{}
+		}
+		for name := range declared {
+			if !directNodeDependencyInstalled(roots, name) {
+				prep.MissingDependencies = append(prep.MissingDependencies, name)
+			}
+		}
+		sort.Strings(prep.MissingDependencies)
+		if len(prep.MissingDependencies) > 0 {
 			prep.DependenciesInstalled = false
 		}
 	}
@@ -904,6 +937,28 @@ func detectProjectPreparation(workDir string, manifest *projectPackageManifest) 
 	}
 
 	return prep
+}
+
+// directNodeDependencyInstalled verifies the package marker npm-compatible
+// installers actually materialise. Package names are validated before joining
+// so a hostile package.json cannot turn this read-only probe into a path escape.
+func directNodeDependencyInstalled(roots []string, packageName string) bool {
+	name := strings.TrimSpace(packageName)
+	parts := strings.Split(name, "/")
+	valid := len(parts) == 1 && parts[0] != "" && parts[0] != "." && parts[0] != ".."
+	if strings.HasPrefix(name, "@") {
+		valid = len(parts) == 2 && len(parts[0]) > 1 && parts[1] != "" && parts[1] != "." && parts[1] != ".."
+	}
+	if !valid || filepath.IsAbs(name) || strings.Contains(name, `\`) {
+		return false
+	}
+	for _, root := range roots {
+		pkgPath := filepath.Join(append([]string{root, "node_modules"}, parts...)...)
+		if projectFileExists(filepath.Join(pkgPath, "package.json")) {
+			return true
+		}
+	}
+	return false
 }
 
 func canBootstrapPackageManager(packageManager string, npmExists, corepackExists bool) bool {
@@ -1196,11 +1251,12 @@ func mobileProjectStatus(workDir string) map[string]interface{} {
 	buildState := readNativeBuildStatus(workDir)
 	return map[string]interface{}{
 		"workDir":                    workDir,
-		"ok":                         len(prep.MissingTools) == 0,
+		"ok":                         len(prep.MissingTools) == 0 && !prep.NeedsDependencyInstall,
 		"packageManager":             prep.PackageManager,
 		"dependenciesInstalled":      prep.DependenciesInstalled,
 		"needsDependencyInstall":     prep.NeedsDependencyInstall,
 		"canAutoInstallDependencies": prep.CanAutoInstallDependencies,
+		"missingDependencies":        prep.MissingDependencies,
 		"missingTools":               prep.MissingTools,
 		"hermesCompiler":             prep.HermesCompiler,
 		"hermesCompilerError":        prep.HermesCompilerError,
@@ -4066,7 +4122,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 						strings.Join(parts, ", "),
 					)
 					title = "Runtime family mismatch"
-			userMsg = "The bundle compiled, but Yaver blocked restart because the project app does not match the selected mobile host runtime family."
+					userMsg = "The bundle compiled, but Yaver blocked restart because the project app does not match the selected mobile host runtime family."
 					helpHint = "Use one of Yaver's supported host runtime families, or align the project's Expo, React Native, and React versions to the nearest family before retrying."
 					if report.RuntimeFamily != nil {
 						errMsg = fmt.Sprintf("%s. Closest host family: %s. Host supports: %s",
@@ -4745,6 +4801,7 @@ func (s *HTTPServer) handleDevServerCompatibility(w http.ResponseWriter, r *http
 		"dependenciesInstalled":      prep.DependenciesInstalled,
 		"needsDependencyInstall":     prep.NeedsDependencyInstall,
 		"canAutoInstallDependencies": prep.CanAutoInstallDependencies,
+		"missingDependencies":        prep.MissingDependencies,
 		"missingLocalTools":          prep.MissingTools,
 		"hermesCompiler":             prep.HermesCompiler,
 		"hermesCompilerError":        prep.HermesCompilerError,

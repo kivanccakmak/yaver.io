@@ -231,6 +231,14 @@ function runnerAuthIssue(
   return null;
 }
 
+function runnerVerificationPending(
+  runner: Pick<RunnerInfo, "authConfigured" | "authVerified" | "warning" | "ready"> | null | undefined,
+): boolean {
+  if (!runner || runner.ready !== false || runner.authConfigured !== true) return false;
+  if (runner.authVerified === true) return false;
+  return /provider operation|verification|provider probe/i.test(String(runner.warning || ""));
+}
+
 function runnerFetchAlertMessage(fetchState: RunnerFetchState): string | undefined {
   if (fetchState === "loading" || fetchState === "idle") {
     return "Still reading this machine's agents — the list may be incomplete.";
@@ -1616,12 +1624,15 @@ function buildAgentContextRows(
       rows.push({ label: "Model", value: modelLabel, mono: false });
     }
 
-    // Mode + provider: opencode-flavoured details that the picker
-    // sets per-device. Codex / Claude usually don't write these so
-    // the rows stay hidden when empty — non-opencode tasks render
-    // the same compact panel as before.
+    // Mode + provider are OpenCode routing metadata, not generic runner
+    // metadata. The device keeps a provider preference (for example
+    // DeepSeek) even when the user switches the runner chip to Codex or
+    // Claude. Rendering that per-device preference here made a Codex task
+    // claim it was using DeepSeek (the exact false signal reported on
+    // 2026-08-23). A task's runner is authoritative; only OpenCode has a
+    // provider/model route to show in this panel.
     const deviceId = extras.activeDevice?.id;
-    if (deviceId) {
+    if (deviceId && normalizeTaskRunnerId(task.runnerId) === "opencode") {
       const mode = extras.modeByDevice?.[deviceId];
       if (mode) rows.push({ label: "Mode", value: mode, mono: false });
       const provider = extras.providerByDevice?.[deviceId];
@@ -2578,6 +2589,8 @@ export default function TasksScreen() {
   const newTaskTextRef = useRef("");
   newTaskTextRef.current = newTaskText;
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitInFlightRef = useRef(false);
+  const [taskSubmitError, setTaskSubmitError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>("sonnet");
   const [refreshing, setRefreshing] = useState(false);
   const [followUpText, setFollowUpText] = useState("");
@@ -2642,6 +2655,11 @@ export default function TasksScreen() {
   const [pingResult, setPingResult] = useState<{ ok: boolean; rttMs: number; hostname?: string; mode?: string } | null>(null);
   const [showPingResult, setShowPingResult] = useState(false);
   const [isRestartingRunner, setIsRestartingRunner] = useState(false);
+  const [runnerInstallState, setRunnerInstallState] = useState<{
+    runnerId: string;
+    kind: "installing" | "failed";
+    line: string;
+  } | null>(null);
   const [availableRunners, setAvailableRunners] = useState<RunnerInfo[]>([]);
   const [runnersFetchState, setRunnersFetchState] = useState<RunnerFetchState>("idle");
   const [selectedRunner, setSelectedRunner] = useState<string>(""); // "" = default
@@ -2700,6 +2718,7 @@ export default function TasksScreen() {
     userPickedModelRef.current = false;
     setShowComposerRunnerChoices(false);
     setShowBannerRunnerChoices(false);
+    setRunnerInstallState(null);
   }, [runnerSelectionDeviceId]);
 
   useEffect(() => {
@@ -3195,6 +3214,12 @@ export default function TasksScreen() {
 
   const refreshRunnerState = useCallback(async () => {
     if (connectionStatus !== "connected") return;
+    // Task admission owns the short-request lane while it is awaiting an ACK.
+    // Runner discovery invokes three independent probes and used to overlap a
+    // POST /tasks on browser/low-memory boxes, turning a healthy direct route
+    // into 20-30 seconds of contention. The next self-scheduled cycle catches
+    // up after submit; runner inventory is advisory, task acknowledgement is not.
+    if (submitInFlightRef.current) return;
     setRunnersFetchState((prev) => (prev === "ok" ? prev : "loading"));
     try {
       const client = runnerSelectionDeviceId
@@ -3223,6 +3248,43 @@ export default function TasksScreen() {
       setRunnersFetchState("network-error");
     }
   }, [connectionStatus, runnerSelectionDeviceId]);
+
+  // A missing runner is a deterministic capability gap, not something a
+  // restart can repair. Install through the selected runner box's own pooled
+  // client, stream progress in-place, then re-probe the real generation
+  // capability. Keeping this state in the Tasks surface also keeps the typed
+  // prompt mounted while the repair runs.
+  const handleInstallRunner = useCallback(async (requestedRunnerId?: string | null) => {
+    const runnerId = normalizeTaskRunnerId(requestedRunnerId);
+    if (runnerId !== "claude" && runnerId !== "codex" && runnerId !== "opencode") return;
+    if (runnerInstallState?.kind === "installing") return;
+
+    setRunnerInstallState({ runnerId, kind: "installing", line: `Starting ${displayRunnerLabel(runnerId)} installer…` });
+    try {
+      const client = runnerSelectionDeviceId
+        ? connectionManager.clientFor(runnerSelectionDeviceId)
+        : quicClient;
+      if (!client.isConnected) {
+        throw new Error(`${runnerSelectionDevice?.name || "The selected machine"} is not connected.`);
+      }
+      const result = await client.installRunner(runnerId, {
+        onProgress: (line) => {
+          const trimmed = line.trim();
+          if (!trimmed) return;
+          setRunnerInstallState({ runnerId, kind: "installing", line: trimmed.slice(0, 160) });
+        },
+      });
+      if (!result.ok) throw new Error(result.error || `${displayRunnerLabel(runnerId)} installation failed.`);
+      await refreshRunnerState();
+      setRunnerInstallState(null);
+    } catch (error) {
+      setRunnerInstallState({
+        runnerId,
+        kind: "failed",
+        line: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [refreshRunnerState, runnerInstallState?.kind, runnerSelectionDevice, runnerSelectionDeviceId]);
 
   // Refresh runner + agent state on connect and keep retrying quickly until
   // the runner fetch is healthy. Once healthy, slow back down to background
@@ -3354,6 +3416,10 @@ export default function TasksScreen() {
 
   // Fetch tasks
   const fetchTasks = useCallback(async () => {
+    // Do not let the 3-second history poll compete with task admission. The
+    // successful send path refreshes explicitly, and a failed send preserves
+    // the prompt + renders its error in this composer.
+    if (submitInFlightRef.current) return;
     try {
       const list = await connectionManager.runnerClient().listTasks();
       // Rows come from the runner box when a machine-role split is active —
@@ -4622,6 +4688,8 @@ export default function TasksScreen() {
     }
 
     Keyboard.dismiss();
+    setTaskSubmitError(null);
+    submitInFlightRef.current = true;
     setIsSubmitting(true);
     const taskId = `phone-local-${Date.now()}`;
     const startedAt = Date.now();
@@ -4900,6 +4968,15 @@ export default function TasksScreen() {
       return;
     }
 
+    // Defense in depth for voice / route auto-submit: the visible Send button
+    // is disabled for this state, but non-tap entry points reach the same
+    // function. Never POST a prompt to a runner the selected box explicitly
+    // says is absent, and never dismiss or clear the composer here. The
+    // in-composer Install action below is the route to repair.
+    if (!pendingTarget && runnerBannerState?.action === "install") {
+      return;
+    }
+
     if (selectedRunnerRow?.ready === false && taskExecutionPlacement.lane === "remote" && taskExecutionPlacement.target.id === activeDevice?.id) {
       const detail =
         selectedRunnerAuthIssue ||
@@ -5161,6 +5238,7 @@ export default function TasksScreen() {
           "Yaver kept this prompt on your phone and will dispatch it when the assigned machine is ready.",
         );
       } else if (isAuthError(e)) {
+        setTaskSubmitError("Session expired. Sign in again to send this task; your prompt is still here.");
         Alert.alert(
           "Session expired",
           "Your sign-in is no longer valid, so the task could not be sent. Sign in again to continue — your work is safe.",
@@ -5171,9 +5249,12 @@ export default function TasksScreen() {
         );
       } else {
         const msg = e instanceof Error ? e.message : String(e);
+        const targetName = pendingTarget?.deviceName || runnerSelectionDevice?.name || activeDevice?.name || "the selected machine";
+        setTaskSubmitError(`${targetName} did not accept this task: ${msg}`);
         Alert.alert("Task failed", msg);
       }
     } finally {
+      submitInFlightRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -6728,7 +6809,7 @@ export default function TasksScreen() {
                         </Text>
                       </Pressable>
                     )}
-                    {runnerBannerState?.kind === "needsConfig" ? (
+                    {runnerBannerState?.action === "configure" ? (
                       <Pressable
                         onPress={() => {
                           setOpenCodeConfigTarget(activeDevice?.id || null);
@@ -6740,7 +6821,7 @@ export default function TasksScreen() {
                         <Ionicons name="settings-outline" size={13} color={c.accent} />
                         <Text style={[s.bannerInlineBtnText, { color: c.accent }]}>Configure</Text>
                       </Pressable>
-                    ) : runnerBannerState?.kind === "authNeeded" ? (
+                    ) : runnerBannerState?.action === "signIn" ? (
                       // "X needs sign-in" used to be the ONE banner state with
                       // no action — it named the problem and left the user to
                       // find the remote sign-in flow on their own, on a machine
@@ -6760,10 +6841,17 @@ export default function TasksScreen() {
                         <Ionicons name="log-in-outline" size={13} color={c.accent} />
                         <Text style={[s.bannerInlineBtnText, { color: c.accent }]}>Sign in</Text>
                       </Pressable>
-                    ) : runnerBannerState &&
-                      runnerBannerState.kind !== "ok" &&
-                      runnerBannerState.kind !== "loading" &&
-                      runnerBannerState.kind !== "failed" &&
+                    ) : runnerBannerState?.action === "install" ? (
+                      <Pressable
+                        onPress={() => void handleInstallRunner(runnerBannerState.runnerId || bannerRunnerId)}
+                        disabled={runnerInstallState?.kind === "installing"}
+                        style={[s.bannerInlineBtn, { backgroundColor: c.accentSoft }]}
+                      >
+                        <Text style={[s.bannerInlineBtnText, { color: c.accent }]}>
+                          {runnerInstallState?.kind === "installing" ? "Installing…" : "Install"}
+                        </Text>
+                      </Pressable>
+                    ) : runnerBannerState?.action === "restart" &&
                       (availableRunners.length > 0 || agentStatus) ? (
                       <Pressable
                         onPress={handleRestartRunner}
@@ -6774,7 +6862,7 @@ export default function TasksScreen() {
                           {isRestartingRunner ? "Restarting..." : "Restart"}
                         </Text>
                       </Pressable>
-                    ) : runnerBannerState?.kind === "failed" ? (
+                    ) : runnerBannerState?.action === "retry" ? (
                       <Pressable
                         onPress={() => {
                           void refreshRunnerState();
@@ -7703,6 +7791,45 @@ export default function TasksScreen() {
                     {devices.find((d) => d.id === machineRoles.renderDeviceId)?.name || machineRoles.renderDeviceId.slice(0, 8)}
                   </Text>
                 ) : null}
+                {!pendingTarget && runnerBannerState?.action === "install" ? (
+                  <View
+                    style={{
+                      marginTop: 10,
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: "rgba(248,113,113,0.30)",
+                      backgroundColor: "rgba(248,113,113,0.10)",
+                      padding: 12,
+                    }}
+                    accessibilityLabel={`${runnerBannerState.text} on ${runnerSelectionDevice?.name || "selected machine"}`}
+                  >
+                    <Text style={{ color: "#fecaca", fontSize: 12, lineHeight: 18 }}>
+                      {runnerBannerState.text} on {runnerSelectionDevice?.name || "this machine"}. Install it here before sending; your prompt stays in the composer.
+                    </Text>
+                    {runnerInstallState?.runnerId === normalizeTaskRunnerId(runnerBannerState.runnerId || bannerRunnerId) ? (
+                      <Text style={{ color: runnerInstallState.kind === "failed" ? c.error : c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 7 }}>
+                        {runnerInstallState.line}
+                      </Text>
+                    ) : null}
+                    <Pressable
+                      onPress={() => void handleInstallRunner(runnerBannerState.runnerId || bannerRunnerId)}
+                      disabled={runnerInstallState?.kind === "installing"}
+                      style={{
+                        alignSelf: "flex-start",
+                        marginTop: 10,
+                        borderRadius: 999,
+                        backgroundColor: c.accentSoft,
+                        paddingHorizontal: 13,
+                        paddingVertical: 8,
+                        opacity: runnerInstallState?.kind === "installing" ? 0.65 : 1,
+                      }}
+                    >
+                      <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>
+                        {runnerInstallState?.kind === "installing" ? "Installing…" : runnerInstallState?.kind === "failed" ? "Retry install" : `Install ${displayRunnerLabel(runnerBannerState.runnerId || bannerRunnerId)}`}
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
                 </> : null}
               </View>
               {showTaskOptions ? (
@@ -7742,7 +7869,7 @@ export default function TasksScreen() {
                     placeholder={tasks.length > 0 ? "Send another command…" : "What should the agent do?"}
                     placeholderTextColor={c.textMuted}
                     value={newTaskText}
-                    onChangeText={(t) => { newTaskTextRef.current = t; setNewTaskText(t); setInputFromSpeech(false); }}
+                    onChangeText={(t) => { newTaskTextRef.current = t; setNewTaskText(t); setTaskSubmitError(null); setInputFromSpeech(false); }}
                     multiline numberOfLines={4} textAlignVertical="top" autoFocus
                     autoCorrect={textCorrectionEnabled}
                     autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
@@ -7759,6 +7886,30 @@ export default function TasksScreen() {
                       <Text style={{ color: c.textMuted, fontSize: 12, marginLeft: 8 }}>{reloadFlash}</Text>
                     </View>
                   )}
+                  {taskSubmitError ? (
+                    <View
+                      style={{
+                        marginTop: 10,
+                        borderRadius: 12,
+                        borderWidth: 1,
+                        borderColor: withAlpha(c.error, "66"),
+                        backgroundColor: withAlpha(c.error, "18"),
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                      }}
+                      accessibilityRole="alert"
+                      accessibilityLabel={`Task not sent. ${taskSubmitError}`}
+                      testID="task-submit-error"
+                    >
+                      <Text style={{ color: c.error, fontSize: 12, fontWeight: "700" }}>Task not sent</Text>
+                      <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 3 }}>
+                        {taskSubmitError}
+                      </Text>
+                      <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 }}>
+                        Your prompt is preserved. Tap Send to retry, or change the machine or coding agent above.
+                      </Text>
+                    </View>
+                  ) : null}
                   {attachedImages.length > 0 && (
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.attachmentStrip}>
                       {attachedImages.map((img, i) => (
@@ -7885,6 +8036,8 @@ export default function TasksScreen() {
                         (!newTaskText.trim() && attachedImages.length === 0) ||
                         isSubmitting ||
                         isTranscribing ||
+                        (!pendingTarget && runnerBannerState?.action === "install") ||
+                        runnerInstallState?.kind === "installing" ||
                         !isEffectivelyConnected;
                       return (
                         <Pressable
@@ -8019,6 +8172,7 @@ export default function TasksScreen() {
                   supportsBrowserAuth: id !== "opencode",
                 } as typeof availableRunners[number];
               });
+              const verificationPending = runnerVerificationPending(selectedRunnerRow);
               // Keep the currently-selected runner visible even if it's
               // outside the whitelist (e.g. a custom command from a long-
               // lived task) so opening the picker doesn't silently drop
@@ -8099,7 +8253,30 @@ export default function TasksScreen() {
                           selectedRunnerRow.warning ||
                           `${selectedRunnerRow.name} is installed but not ready on this machine.`}
                       </Text>
-                      {selectedRunnerAuthIssue && selectedRunnerRow.id === "opencode" ? (
+                      {verificationPending ? (
+                        <Pressable
+                          onPress={async () => {
+                            try {
+                              const client = runnerSelectionDeviceId
+                                ? connectionManager.clientFor(runnerSelectionDeviceId)
+                                : quicClient;
+                              await client.testRunner(selectedRunnerRow.id, { prompt: "Reply with exactly: YAVER_PROVIDER_CHECK" });
+                              await refreshRunnerState();
+                            } catch (error) {
+                              Alert.alert("Runner verification failed", error instanceof Error ? error.message : String(error));
+                            }
+                          }}
+                          style={{
+                            alignSelf: "flex-start", marginTop: 10, borderRadius: 999, borderWidth: 1,
+                            borderColor: "rgba(125,211,252,0.35)", backgroundColor: "rgba(125,211,252,0.12)",
+                            paddingHorizontal: 12, paddingVertical: 8,
+                          }}
+                        >
+                          <Text style={{ color: "#e0f2fe", fontSize: 12, fontWeight: "700" }}>
+                            Test {selectedRunnerRow.name}
+                          </Text>
+                        </Pressable>
+                      ) : selectedRunnerAuthIssue && selectedRunnerRow.id === "opencode" ? (
                         <Pressable
                           onPress={() => {
                             setOpenCodeConfigTarget(runnerSelectionDeviceId || null);

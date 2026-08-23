@@ -2329,10 +2329,17 @@ export class AgentClient {
     if (opts?.runner) body.runner = opts.runner;
     if (opts?.model) body.model = opts.model;
     if (opts?.reasoningEffort) body.reasoningEffort = opts.reasoningEffort;
-    const res = await fetch(`${this.taskBaseUrl}/tasks`, {
+    const res = await this.fetchWithTimeout(`${this.taskBaseUrl}/tasks`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
+    }, 30_000).catch((err: any) => {
+      if (err?.name === "AbortError") {
+        throw new Error(
+          "Timed out waiting for the selected machine to accept the task after 30s. Your prompt was not cleared — check that machine's route and retry.",
+        );
+      }
+      throw err;
     });
     if (!res.ok) {
       const cloudRequired = await decodeCloudWorkspaceRequiredError(res);

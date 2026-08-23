@@ -131,6 +131,13 @@ type PreviewHealth struct {
 	SignalSource        string   `json:"signalSource,omitempty"`
 	RelevantLogLines    []string `json:"relevantLogLines,omitempty"`
 	HasDeterministicFix bool     `json:"hasDeterministicFix,omitempty"`
+	// PaintSignal advertises an OPERATIONAL wire capability, not merely an
+	// agent version: HTML served through /dev/, /dev-web/ and the static web
+	// bundle contains the in-frame probe that posts yaver-rendered to its
+	// embedder. Older agents omit this field. RN-web must not place a permanent
+	// opaque cover over their cross-origin iframe while waiting for a message
+	// those agents cannot emit.
+	PaintSignal string `json:"paintSignal,omitempty"` // "in_frame_v1"
 }
 
 // DevServerEvent is pushed via SSE on /dev/events.
@@ -1093,7 +1100,16 @@ func (m *DevServerManager) RecomputePreviewHealth(status *DevServerStatus) {
 	status.PreviewHealth = previewHealthFromAgentSignals(*status, recentLogs)
 }
 
-func previewHealthFromAgentSignals(status DevServerStatus, recentLogs []string) *PreviewHealth {
+func previewHealthFromAgentSignals(status DevServerStatus, recentLogs []string) (health *PreviewHealth) {
+	// Capability negotiation belongs on the status payload the preview already
+	// polls. Inferring this from a version recreated the exact v1.99.418 failure:
+	// the client required an in-frame signal that the installed binary did not
+	// contain, while the dashboard (which does not gate on it) rendered fine.
+	defer func() {
+		if health != nil {
+			health.PaintSignal = "in_frame_v1"
+		}
+	}()
 	if status.CapabilityGap != nil {
 		return &PreviewHealth{
 			State:               "infrastructure_gap",
@@ -2291,7 +2307,7 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 					"Stop that process (lsof -nP -iTCP:%d) or start the preview again to get a free port.\n%s",
 					name, b.port, b.port, tail)
 			}
-            resp, err := devReadinessHTTPClient.Get(readyURL)
+			resp, err := devReadinessHTTPClient.Get(readyURL)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {
@@ -3388,7 +3404,7 @@ func (f *FlutterDevServer) startProcessWithStdin(ctx context.Context, name strin
 					"Stop that process (lsof -nP -iTCP:%d) or start the preview again to get a free port.\n%s",
 					name, f.port, f.port, tail)
 			}
-            resp, err := devReadinessHTTPClient.Get(readyURL)
+			resp, err := devReadinessHTTPClient.Get(readyURL)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {

@@ -82,6 +82,9 @@ export interface ComparableRunner {
   installed?: boolean;
   ready?: boolean;
   authConfigured?: boolean;
+  authPresent?: boolean;
+  authVerified?: boolean;
+  authVerifiedAt?: number;
   authSource?: string;
   error?: string;
   warning?: string;
@@ -96,6 +99,9 @@ export interface ComparableRunnerAuthStatus {
   installed?: boolean;
   ready?: boolean;
   authConfigured?: boolean;
+  authPresent?: boolean;
+  authVerified?: boolean;
+  authVerifiedAt?: number;
   authSource?: string;
   warning?: string;
   error?: string;
@@ -129,6 +135,9 @@ export function reconcileRunnerAuthStatus<T extends ComparableRunner>(
       installed: auth.installed ?? runner.installed,
       ready: auth.ready ?? runner.ready,
       authConfigured: auth.authConfigured ?? runner.authConfigured,
+      authPresent: auth.authPresent ?? (runner as T & { authPresent?: boolean }).authPresent,
+      authVerified: auth.authVerified ?? (runner as T & { authVerified?: boolean }).authVerified,
+      authVerifiedAt: auth.authVerifiedAt ?? (runner as T & { authVerifiedAt?: number }).authVerifiedAt,
       authSource: auth.authSource ?? (runner as T & { authSource?: string }).authSource,
       warning: auth.warning ?? "",
       error: auth.error ?? "",
@@ -179,6 +188,9 @@ export function sameRunnerList(a: ComparableRunner[], b: ComparableRunner[]): bo
       p.installed !== q.installed ||
       p.ready !== q.ready ||
       p.authConfigured !== q.authConfigured ||
+      p.authPresent !== q.authPresent ||
+      p.authVerified !== q.authVerified ||
+      p.authVerifiedAt !== q.authVerifiedAt ||
       (p.authSource ?? "") !== (q.authSource ?? "") ||
       (p.error ?? "") !== (q.error ?? "") ||
       (p.warning ?? "") !== (q.warning ?? "") ||

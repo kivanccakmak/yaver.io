@@ -71,6 +71,40 @@ func TestRealProjectDirIsStillScanned(t *testing.T) {
 	}
 }
 
+// TestTaskPlacementAdmissionDoesNotWalkProject pins the second occurrence of
+// the same defect: a valid project root may be huge, and the advisory metadata
+// builder is on POST /tasks' acknowledgement path. Repository metrics must be
+// unknown here rather than recursively measured. Root-marker signals still
+// work, so placement keeps cheap useful facts without coupling ACK latency to
+// repository breadth.
+func TestTaskPlacementAdmissionDoesNotWalkProject(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"go.mod", "Dockerfile"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Nested content would have contributed to the old recursive counters.
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b", "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a", "b", "c", "payload.bin"), make([]byte, 1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	got := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{WorkDir: dir})
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("task placement admission took %v; advisory metadata is blocking POST /tasks", elapsed)
+	}
+	if got.FileCount != 0 || got.RepoSizeMb != 0 || got.AppCount != 0 {
+		t.Fatalf("critical-path placement recursively enriched repository: %+v", got)
+	}
+	if !got.HasDocker {
+		t.Fatal("cheap root-marker signals should remain available")
+	}
+}
+
 // TestWalkIsBoundedByWallClock is the invariant that actually matters. Depth
 // alone is not a bound: breadth at depth 4 under a home directory is
 // effectively unbounded, which is why the original maxDepth did not save us.

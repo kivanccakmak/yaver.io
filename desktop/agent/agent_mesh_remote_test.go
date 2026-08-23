@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,6 +97,16 @@ func TestRepairRelayPasswordForRemoteHTTPSyncsFreshPassword(t *testing.T) {
 	}
 }
 
+func TestRelayCredentialTransportErrorReachesRepairClassifier(t *testing.T) {
+	err := fmt.Errorf("%w: remote GET /health failed across 1 candidate", errRelayCredentialDenied)
+	if !staleRelayPasswordTransportError(err) {
+		t.Fatal("a relay refusal converted to a transport error must still reach the credential repair rung")
+	}
+	if staleRelayPasswordTransportError(errors.New("HTTP 401: invalid agent token")) {
+		t.Fatal("agent bearer rejection must not rotate the shared relay password")
+	}
+}
+
 func TestRemoteAgentJSONRejectsUntrustedRelayOrigin(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -152,6 +163,29 @@ func TestExecHTTPAddsRelayPasswordHeader(t *testing.T) {
 	}
 	if resp["ok"] != true {
 		t.Fatalf("execHTTP() response ok = %v, want true", resp["ok"])
+	}
+}
+
+func TestPingAgentHealthUsesTaskTransportCredentials(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token-123" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("X-Relay-Password"); got != "relay-secret" {
+			t.Fatalf("X-Relay-Password = %q; ping must use the same envelope as task dispatch", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	cfg := &Config{
+		RelayServers: []RelayServerConfig{{ID: "test", HttpURL: server.URL, Password: "relay-secret"}},
+	}
+	status, _, err := pingAgentHealth(context.Background(), cfg, server.Client(), server.URL+"/d/device-123", "token-123")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("pingAgentHealth status=%d err=%v", status, err)
 	}
 }
 
