@@ -194,9 +194,23 @@ function normalizeRunnerStatusRows(rows: RunnerAuthStatusRow[]): RunnerCardState
  * a default, it would be a feature request.
  */
 const YaverModeBadgeGate: React.FC = () => {
+  const [, refresh] = useState(0);
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('yaverFeedback:dogfoodChanged', () => refresh((n) => n + 1));
+    return () => sub.remove();
+  }, []);
   const cfg = YaverFeedback.getConfig();
   if (cfg?.modeBadge === false) return null;
-  return <YaverModeBadge position={cfg?.modeBadgePosition ?? 'bottom-left'} />;
+  const dogfood = YaverFeedback.getDogfoodStatus();
+  return (
+    <YaverModeBadge
+      position={cfg?.modeBadgePosition ?? 'bottom-left'}
+      force={dogfood.active}
+      dogfood={dogfood.active}
+      dogfoodLabel={dogfood.label}
+      onExitDogfood={() => YaverFeedback.exitDogfoodMode()}
+    />
+  );
 };
 
 export const FeedbackModal: React.FC = () => {
@@ -206,6 +220,7 @@ export const FeedbackModal: React.FC = () => {
   // looks empty on a 1024pt iPad. Mobile keeps 3-col.
   const iconOptionWidthOverride = isTablet ? '18%' : undefined;
   const [visible, setVisible] = useState(false);
+  const [dogfoodActive, setDogfoodActive] = useState(() => YaverFeedback.getDogfoodStatus().active);
   const [action, setAction] = useState<ActionState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -439,12 +454,14 @@ export const FeedbackModal: React.FC = () => {
     mountedRef.current = true;
     const sub = DeviceEventEmitter.addListener('yaverFeedback:startReport', () => {
       if (YaverFeedback.isEnabled()) {
+        const directDogfood = YaverFeedback.getDogfoodStatus().active;
+        setDogfoodActive(directDogfood);
         setVisible(true);
         setError(null);
         setToast(null);
         setProgress(null);
         setAction('idle');
-        setShowVibeInput(false);
+        setShowVibeInput(directDogfood);
         setVibePrompt('');
         // Re-read the "user hid the quick icon" flag on every open so
         // the re-enable row reflects the latest preference (the user
@@ -463,6 +480,14 @@ export const FeedbackModal: React.FC = () => {
         void loadRunnerStatuses();
       }
     });
+    const dogfoodSub = DeviceEventEmitter.addListener(
+      'yaverFeedback:dogfoodChanged',
+      (payload: { active?: boolean }) => {
+        if (!mountedRef.current) return;
+        setDogfoodActive(payload?.active === true);
+        if (payload?.active !== true) setVisible(false);
+      },
+    );
     // Agent streams build / compile progress through the BlackBox
     // SSE command channel as `command: "status"`; YaverFeedback re-emits
     // it as `yaverFeedback:status`. Show the most recent message in the
@@ -487,6 +512,7 @@ export const FeedbackModal: React.FC = () => {
     return () => {
       mountedRef.current = false;
       sub.remove();
+      dogfoodSub.remove();
       statusSub.remove();
     };
   }, [loadRunnerStatuses, loadSelectedMachine]);
@@ -1073,7 +1099,7 @@ export const FeedbackModal: React.FC = () => {
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               >
               <View style={styles.header}>
-                <Text style={styles.title}>Send Feedback</Text>
+                <Text style={styles.title}>{dogfoodActive ? 'Dogfood with Yaver' : 'Send Feedback'}</Text>
                 <Pressable
                   onPress={handleClose}
                   hitSlop={12}
@@ -1085,6 +1111,7 @@ export const FeedbackModal: React.FC = () => {
                 </Pressable>
               </View>
 
+              {!dogfoodActive ? <>
               <Pressable
                 onPress={() => {
                   if (!YaverFeedback.isAuthed()) {
@@ -1295,6 +1322,13 @@ export const FeedbackModal: React.FC = () => {
                   </Text>
                 </View>
               ))}
+              </> : (
+                <View style={styles.quickIconNote}>
+                  <Text style={styles.quickIconNoteText}>
+                    Direct Dogfood mode is active for this approved app account. Describe the change, follow it live, then re-render from the task.
+                  </Text>
+                </View>
+              )}
 
               {/* 3. Vibing — expands to an input box on first tap
                    so the user says WHAT they want to vibe on, just
@@ -1356,13 +1390,13 @@ export const FeedbackModal: React.FC = () => {
               )}
 
               {/* Screenshot & Fix */}
-              <ActionRow
+              {!dogfoodActive ? <ActionRow
                 label={action === 'capturing' ? 'Working…' : 'Screenshot & Fix'}
                 tint="#22c55e"
                 onPress={handleScreenshotAndFix}
                 disabled={busy}
                 busy={action === 'capturing'}
-              />
+              /> : null}
 
               {/* Deploy — opens an inline panel that talks to
                   /fleet/deploy-options on the agent and lets the user
@@ -1370,7 +1404,7 @@ export const FeedbackModal: React.FC = () => {
                   it on. Capabilities (e.g. "Linux can't TestFlight")
                   come from the agent's doctor probes — no client-side
                   platform smarts here. */}
-              {!showDeploy ? (
+              {!dogfoodActive && (!showDeploy ? (
                 <ActionRow
                   label="Deploy"
                   tint="#7f8cf7"
@@ -1379,7 +1413,7 @@ export const FeedbackModal: React.FC = () => {
                 />
               ) : (
                 <DeployPanel onClose={() => setShowDeploy(false)} />
-              )}
+              ))}
 
               {progress !== null && (
                 <View style={styles.progressTrack}>

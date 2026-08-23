@@ -71,6 +71,8 @@ export { FloatingButton } from './FloatingButton';
 // its own overlay tree can place it itself.
 export { YaverModeBadge, hideYaverModeBadge, showYaverModeBadge, isYaverModeBadgeHidden } from './YaverModeBadge';
 export type { YaverModeBadgeProps } from './YaverModeBadge';
+export { resolveSDKDogfood } from './dogfoodPolicy';
+export type { SDKDogfoodConfig, SDKDogfoodStatus } from './dogfoodPolicy';
 export { FeedbackModal } from './FeedbackModal';
 export { QuickActionIcon } from './QuickActionIcon';
 export type { QuickActionIconProps } from './QuickActionIcon';

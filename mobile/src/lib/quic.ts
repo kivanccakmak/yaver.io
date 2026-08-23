@@ -4386,6 +4386,33 @@ export class QuicClient {
     return { ok: res.ok && data?.ok !== false, ...(data as object) } as AttachSessionResult;
   }
 
+  /** Fetch origin/main and safely rebase the selected Yaver checkout before
+   * Dogfood starts. Never pushes or force-writes history. */
+  async prepareDogfoodCheckout(workDir: string): Promise<{
+    ok: boolean;
+    code?: string;
+    workDir?: string;
+    branch?: string;
+    base?: string;
+    head?: string;
+    rebased?: boolean;
+    requiresAgent?: boolean;
+    conflicts?: string[];
+    error?: string;
+    remedy?: string;
+    fixPrompt?: string;
+    output?: string;
+  }> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/attach/prepare`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ workDir }),
+    }, 120_000);
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok && data?.ok !== false, ...(data as object) } as any;
+  }
+
   async refreshAttachSession(sessionId: string): Promise<AttachSessionResult> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(

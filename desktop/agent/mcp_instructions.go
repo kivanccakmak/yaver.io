@@ -14,6 +14,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const mcpStaleDocsWarning = `IMPORTANT — Yaver project guidance rule.
@@ -51,7 +52,7 @@ Full guide: CLAUDE.md. Agent-tool convention variant: AGENTS.md.`
 // MCP session start. Kept short by design — long strings here burn
 // input tokens on every reconnect.
 func mcpInstructions() string {
-	return mcpStaleDocsWarning + `
+	instructions := mcpStaleDocsWarning + `
 
 Vision (screenshots, crash logs, UI failures, video frames):
 
@@ -76,7 +77,21 @@ Vision (screenshots, crash logs, UI failures, video frames):
   vision LLM is only used when you ask for a semantic verdict, and the
   server auto-rewrites image results into this text analysis for
   text-only clients. If no vision provider is configured, the tools say
-  so and still return free OCR.`
+  so and still return free OCR.
+
+Dogfood mode (Yaver rendering Yaver):
+
+  When the user says reload, re-render, or refresh Yaver itself, call
+  dogfood_status first. If it reports active, call dogfood_rerender on that
+  renderer device. Never substitute mobile_hermes_reload or reload whichever
+  unrelated project happens to be active. If Dogfood is inactive, keep the
+  normal Production/project reload semantics.`
+	if runtime := currentDogfoodRuntime(time.Now()); runtime.Active {
+		instructions += "\n\nCURRENT RUNTIME: DOGFOOD ACTIVE on " + runtime.WorkDir + ". Route Yaver re-render intent through dogfood_rerender."
+	} else {
+		instructions += "\n\nCURRENT RUNTIME: PRODUCTION (no local Dogfood attach session). Use dogfood_status with device_id when another owned machine may be the renderer."
+	}
+	return instructions
 }
 
 // projectContextFiles reads the repo's agent-guidance files + an

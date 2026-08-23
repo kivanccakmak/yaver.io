@@ -26,6 +26,7 @@ import {
   setQuickIconColorPreset,
   QuickIconColorPreset,
 } from './preferences';
+import { resolveSDKDogfood, type SDKDogfoodStatus } from './dogfoodPolicy';
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   const maybeNodeTimer = timer as unknown as { unref?: () => void };
@@ -1113,6 +1114,24 @@ export class YaverFeedback {
   /** Returns the current config, or null if not initialized. */
   static getConfig(): FeedbackConfig | null {
     return config;
+  }
+
+  /** Current third-party SDK mode. Fails closed unless enabled + account match. */
+  static getDogfoodStatus(): SDKDogfoodStatus {
+    return resolveSDKDogfood(config?.dogfood);
+  }
+
+  /** Confirmed by the Y badge/UI before this is called. Reverts this SDK to
+   * normal Feedback mode for the remainder of the app run. */
+  static async exitDogfoodMode(): Promise<void> {
+    const cfg = config?.dogfood;
+    if (!cfg) return;
+    cfg.enabled = false;
+    await cfg.onExit?.();
+    try {
+      const { DeviceEventEmitter } = require('react-native');
+      DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: false });
+    } catch { /* noop */ }
   }
 
   /** Returns the resolved relay password the SDK is currently using.

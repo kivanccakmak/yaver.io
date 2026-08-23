@@ -41,6 +41,7 @@ var ownerOnlyToolPrefixes = []string{
 	"mobile_platform_deploy",
 	"playstore_promote",  // mutates Play release tracks (internal→beta→production)
 	"testflight_promote", // mutates TestFlight build availability (owner-only publish)
+	"dogfood_",           // Yaver self-Dogfood runtime state + re-render
 	"robot_",             // robot arm / robotics ops (incl. robot_camera image tool)
 	"arm_",               // generic multi-DOF arm layer
 	"jig_",               // wiring-harness / fixture jig ops

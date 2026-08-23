@@ -54,6 +54,27 @@ A small `Y` button appears in the corner. From there the web SDK can:
 4. trigger hot reloads
 5. start vibing tasks on the connected agent
 
+### Account-scoped Dogfood mode
+
+To let selected accounts improve the app directly instead of filing feedback:
+
+```typescript
+YaverFeedback.init({
+  dogfood: {
+    enabled: true,
+    currentAccountId: session.user.id,
+    accountIds: ['approved-app-account-id'],
+    label: 'My App',
+    onExit: () => disableDogfoodForThisSession(),
+  },
+});
+```
+
+An exact account match opens the direct Dogfood actions and keeps a small `Y`
+exit affordance. Missing or unapproved accounts fail closed to normal Feedback.
+The allowlist is not authentication; all agent operations still require Yaver
+credentials.
+
 ## Discovery And Device Picking
 
 If the user is signed in, discovery is account-aware:

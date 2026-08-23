@@ -940,6 +940,26 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			},
 		},
 		{
+			"name":        "dogfood_status",
+			"description": "Report whether Yaver itself is currently running in owner-only Dogfood mode or Production mode. Returns the active Yaver checkout and live attach-session state. Pass device_id when the Dogfood renderer is a remote Yaver machine. Call this before interpreting 'reload', 're-render', or 'refresh Yaver': when active, use dogfood_rerender rather than a Hermes or unrelated project reload.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional owned remote Yaver machine running the Dogfood browser lane. Empty means this machine."},
+				},
+			},
+		},
+		{
+			"name":        "dogfood_rerender",
+			"description": "Re-render Yaver itself through the active owner-only Dogfood Expo browser lane. Fails explicitly when Dogfood is inactive or its browser lane is not serving; never falls through to Hermes or reloads another project. Pass device_id for the remote primary/render machine. Use when the user says reload/re-render/refresh Yaver and dogfood_status reports active.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"device_id": map[string]interface{}{"type": "string", "description": "Optional owned remote Yaver machine running Dogfood. Empty means this machine."},
+				},
+			},
+		},
+		{
 			"name":        "session_intent",
 			"description": "Classify a natural-language utterance as a session-lifecycle intent (English or Turkish) — 'start a new session', 'close the session', 'which sessions are running', 'switch to codex', 'yeni bir oturum başlat', 'tüm oturumları kapat'. Returns the parsed intent {action, runner?, sessionName?, needsChoice?, reason?} or nothing when the text is a coding prompt (which should be sent to a session via runner_turn). Use this from a voice/car/watch surface before routing speech to a runner, so lifecycle commands never get typed as prompts.",
 			"inputSchema": map[string]interface{}{

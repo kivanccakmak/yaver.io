@@ -1,6 +1,7 @@
 // Type-only: BlackBox.ts already imports from this module, so a value import
 // would close a cycle. `import type` is erased at compile time.
 import type { BlackBoxConfig } from './BlackBox';
+import type { SDKDogfoodConfig } from './dogfoodPolicy';
 
 /**
  * Remote browser-style sign-in session for a coding-agent CLI on the
@@ -168,6 +169,11 @@ export interface FeedbackConfig {
    *  most apps put a FAB, and the badge must never compete with the app's own
    *  primary action. */
   modeBadgePosition?: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
+  /** Account-scoped direct Dogfood UX for an approved third-party app.
+   * When the current app account is allowlisted, the small Y opens Vibing
+   * directly instead of the normal feedback actions. This is a client UX gate,
+   * never an authentication mechanism; agent calls still require Yaver auth. */
+  dogfood?: SDKDogfoodConfig;
   /**
    * Enables the overlay's "App Store screenshots" action + the
    * `capture_store_shots` remote command. The host supplies the route

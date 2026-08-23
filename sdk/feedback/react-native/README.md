@@ -89,6 +89,28 @@ function App() {
 
 Shake your phone to open the feedback modal. On mobile the quick-access icon stays hidden until that first shake, then remains tappable for the rest of the session unless the user hides it. For launch, the sheet exposes three actions only: hot reload, vibing, and screenshot & fix.
 
+### Account-scoped Dogfood mode
+
+An app can send only explicitly approved app accounts directly into Vibing,
+while everyone else keeps the normal Feedback sheet:
+
+```tsx
+YaverFeedback.init({
+  dogfood: {
+    enabled: true,
+    currentAccountId: session.user.id,
+    accountIds: ['approved-app-account-id'],
+    label: 'My App',
+    onExit: () => setDogfoodPreference(false),
+  },
+});
+```
+
+The match is exact and fails closed when the current account is absent. The
+small `Y` identifies Dogfood mode; tapping it offers a confirmed exit back to
+Feedback mode. This allowlist controls SDK presentation only—tasks and reloads
+still require the user's normal Yaver authentication.
+
 ### Quick Icon Styling
 
 The quick icon is configurable at compile time through `YaverFeedback.init(...)`, with render-time overrides still available through `<QuickActionIcon />` props when needed. If you do nothing, the SDK uses a high-visibility orange bubble by default so it stays distinct from the blue/indigo FAB styling many mobile apps already have.

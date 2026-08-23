@@ -12,6 +12,7 @@
 import { connectionManager } from "./connectionManager";
 import { appLog } from "./logger";
 import type { AttachSessionResult } from "./quic";
+import { doctorBrowserLane, type BrowserLaneProbeResult } from "./browserLaneDoctor";
 
 export type { AttachSessionResult };
 
@@ -77,6 +78,163 @@ export async function startYaverBrowserLane(deviceId: string, checkoutDir: strin
     framework: "expo",
     web: true,
   });
+}
+
+export type DogfoodPreparationResult =
+  | {
+      ok: true;
+      sessionId: string;
+      url: string;
+      probe: BrowserLaneProbeResult;
+    }
+  | {
+      ok: false;
+      code: string;
+      error: string;
+      remedy: string;
+      requiresAgent?: boolean;
+      fixPrompt?: string;
+    };
+
+/**
+ * Prove Dogfood mode before navigating away from Production.
+ *
+ * A dev-server PID or URL is inventory. The browser-lane doctor launches the
+ * browser and waits for Yaver to paint. Any failure revokes the partially
+ * minted attach capability so a rejected entry cannot leave hidden live state.
+ */
+export async function prepareDogfoodMode(
+  deviceId: string,
+  checkoutDir: string,
+  onProgress?: (message: string) => void,
+): Promise<DogfoodPreparationResult> {
+  const initialClient = clientFor(deviceId);
+  if (!initialClient) {
+    return {
+      ok: false,
+      code: "DOGFOOD_PRIMARY_DISCONNECTED",
+      error: "The primary device is not connected.",
+      remedy: "Reconnect the primary device, then enter Dogfood mode again.",
+    };
+  }
+
+  onProgress?.("Rebasing Yaver onto origin/main…");
+  const git = await initialClient.prepareDogfoodCheckout(checkoutDir).catch((err) => ({
+    ok: false,
+    code: "DOGFOOD_GIT_PREPARE_FAILED",
+    error: err instanceof Error ? err.message : String(err),
+    remedy: "Check Git and GitHub access on the primary device, then retry.",
+    requiresAgent: false,
+    fixPrompt: undefined,
+  }));
+  if (!git.ok) {
+    return {
+      ok: false,
+      code: git.code || "DOGFOOD_GIT_PREPARE_FAILED",
+      error: git.error || "The Yaver checkout could not be prepared from origin/main.",
+      remedy: git.remedy || "Fix the named Git issue, then retry Dogfood mode.",
+      requiresAgent: git.requiresAgent === true,
+      fixPrompt: git.fixPrompt,
+    };
+  }
+
+  onProgress?.("Authorizing owner session…");
+  const session = await startAttachSession(deviceId, checkoutDir);
+  if (!session.ok || !session.sessionId) {
+    return {
+      ok: false,
+      code: session.code || "DOGFOOD_SESSION_FAILED",
+      error: session.error || "Could not authorize Dogfood mode.",
+      remedy: session.remedy || "Reconnect the primary device and try again.",
+    };
+  }
+
+  const fail = async (code: string, error: string, remedy: string): Promise<DogfoodPreparationResult> => {
+    await stopAttachSession(deviceId, session.sessionId);
+    return { ok: false, code, error, remedy };
+  };
+
+  try {
+    onProgress?.("Starting Yaver with Expo…");
+    const status = await startYaverBrowserLane(deviceId, checkoutDir);
+    const bundlePath = String((status as any)?.previewUrl || (status as any)?.bundleUrl || "").trim();
+    if (!bundlePath) {
+      return fail(
+        "DOGFOOD_NO_RENDER_URL",
+        "Expo started, but the primary device did not report a browser URL for Yaver.",
+        "Open Projects on the primary device and run Browser Reload; its doctor will name the failed stage.",
+      );
+    }
+
+    const client = clientFor(deviceId);
+    if (!client) {
+      return fail(
+        "DOGFOOD_PRIMARY_DISCONNECTED",
+        "The primary device disconnected while Expo was starting.",
+        "Reconnect the primary device, then enter Dogfood mode again.",
+      );
+    }
+
+    // The agent normally reports /dev-web/, not an absolute URL. Resolve it
+    // against THIS device's transport origin so a remote primary stays remote.
+    // Do not use getDevServerBundleUrl(): that legacy preview helper appends the
+    // owner's bearer to the query string. Dogfood instead uses the scoped,
+    // HttpOnly attach cookie minted above.
+    const agentOrigin = client.baseUrl.replace(/\/+$/, "") + "/";
+    const reportedURL = new URL(bundlePath, agentOrigin);
+    const url = new URL(`${reportedURL.pathname}${reportedURL.search}${reportedURL.hash}`, agentOrigin).toString();
+
+    onProgress?.("Proving Yaver renders in the browser…");
+    const probe = await doctorBrowserLane(client, 45);
+    if (!probe) {
+      return fail(
+        "DOGFOOD_RENDER_PROBE_UNAVAILABLE",
+        "The primary device could not verify that Yaver rendered in its browser lane.",
+        "Update or restart the Yaver agent, then retry. Dogfood mode stays off until this probe answers.",
+      );
+    }
+    if (!probe.ok) {
+      return fail(
+        `DOGFOOD_RENDER_${String(probe.stage || "FAILED").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`,
+        probe.detail || `Yaver's browser lane stopped at ${probe.stage || "an unknown stage"}.`,
+        probe.remedy || "Fix the named browser-lane stage, then enter Dogfood mode again.",
+      );
+    }
+
+    return { ok: true, sessionId: session.sessionId, url, probe };
+  } catch (err) {
+    return fail(
+      "DOGFOOD_EXPO_START_FAILED",
+      err instanceof Error ? err.message : String(err),
+      "Check the primary device connection and Expo installation, then retry.",
+    );
+  }
+}
+
+/** Escalate only after deterministic Dogfood preparation/render recovery has
+ * no answer. The task runs on the selected primary against the same checkout. */
+export async function requestDogfoodFixWithAI(
+  deviceId: string,
+  checkoutDir: string,
+  runner: string,
+  prompt: string,
+): Promise<{ taskId: string }> {
+  const client = clientFor(deviceId);
+  if (!client) throw new Error("The primary device disconnected before the AI fix could start.");
+  const task = await client.sendTask(
+    "Fix Yaver Dogfood mode",
+    prompt,
+    undefined,
+    runner || undefined,
+    undefined,
+    undefined,
+    undefined,
+    checkoutDir,
+    undefined,
+    undefined,
+    true,
+  );
+  return { taskId: task.id };
 }
 
 /** Resolve the checkout from the box's real repo inventory. Empty means the

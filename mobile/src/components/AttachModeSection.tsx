@@ -24,7 +24,7 @@ import { useDevice } from "../context/DeviceContext";
 import { computeAttachGate, computeNestingVerdict, ATTACH_SENTINEL_KEY, type AttachStep } from "../lib/attachMode";
 import type { BoxReadiness } from "../lib/boxInit";
 import { loadBoxReadiness } from "../lib/boxInitStore";
-import { discoverYaverCheckout, startAttachSession, startYaverBrowserLane, verifyYaverCheckout } from "../lib/attachClient";
+import { discoverYaverCheckout, prepareDogfoodMode, requestDogfoodFixWithAI, verifyYaverCheckout } from "../lib/attachClient";
 import { appLog } from "../lib/logger";
 
 const CHECKOUT_KEY = "@yaver/attach_checkout_dir";
@@ -49,7 +49,9 @@ export default function AttachModeSection({
   const [verified, setVerified] = useState<boolean | undefined>(undefined);
   const [verifying, setVerifying] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [failure, setFailure] = useState<{ error: string; remedy?: string } | null>(null);
+  const [startProgress, setStartProgress] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ error: string; remedy?: string; fixPrompt?: string } | null>(null);
+  const [fixing, setFixing] = useState(false);
   const [measuredReadiness, setMeasuredReadiness] = useState<BoxReadiness | null>(readiness ?? null);
   const [connectingPrimary, setConnectingPrimary] = useState(false);
   const [mayOffer, setMayOffer] = useState(true);
@@ -171,30 +173,16 @@ export default function AttachModeSection({
     if (!targetDevice?.id || !gate.canAttach) return;
     setStarting(true);
     setFailure(null);
+    setStartProgress("Checking primary device…");
     try {
       const dir = checkoutDir.trim();
-      // 1. Mint the capability. This REFUSES a non-Yaver checkout server-side,
-      //    so the client-side gate is a courtesy, not the guarantee.
-      const session = await startAttachSession(targetDevice.id, dir);
-      if (!session.ok || !session.sessionId) {
+      const prepared = await prepareDogfoodMode(targetDevice.id, dir, setStartProgress);
+      if (!prepared.ok) {
         setFailure({
-          error: session.error || "Could not start Dogfood mode.",
-          remedy: session.remedy,
-        });
-        return;
-      }
-
-      // 2. Serve Yaver's own mobile app on the BROWSER lane. Hermes is refused
-      //    for self-development (409 YAVER_SELF_DEVELOPMENT_RECURSION); the web
-      //    target is the route that refusal names.
-      const status = await startYaverBrowserLane(targetDevice.id, dir);
-
-      const url = (status as any)?.previewUrl || (status as any)?.bundleUrl || "";
-      if (!url) {
-        setFailure({
-          error: "The box started the dev server but did not report an address to render.",
-          remedy:
-            "Open the Apps tab and check the browser-lane preview there — the doctor reports which stage it stopped at.",
+          error: `${prepared.code}: ${prepared.error}`,
+          remedy: prepared.remedy,
+          fixPrompt: prepared.fixPrompt ||
+            `Fix Yaver Dogfood mode in ${dir}. Entry failed with ${prepared.code}: ${prepared.error}. ${prepared.remedy} Preserve all local work, do not force-push, run focused tests, and leave the Expo browser lane ready.`,
         });
         return;
       }
@@ -202,8 +190,8 @@ export default function AttachModeSection({
       router.push({
         pathname: "/attach" as any,
         params: {
-          sessionId: session.sessionId,
-          url,
+          sessionId: prepared.sessionId,
+          url: prepared.url,
           workDir: dir,
           runner,
           deviceId: targetDevice.id,
@@ -218,6 +206,7 @@ export default function AttachModeSection({
       });
     } finally {
       setStarting(false);
+      setStartProgress(null);
     }
   }, [checkoutDir, gate.canAttach, runner, targetDevice?.id, targetDevice?.name]);
 
@@ -237,7 +226,7 @@ export default function AttachModeSection({
       <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Dogfood Yaver in the browser</Text>
       <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 4, lineHeight: 17 }}>
         Serve mobile/ with Expo on your primary device, render it full-screen, and refresh it when a
-        coding turn lands. Production mode always remains one tap away in native chrome.
+        coding turn lands. A small native Y always brings you back to Production after confirmation.
       </Text>
 
       {primaryOnly && !primaryDevice ? (
@@ -345,7 +334,38 @@ export default function AttachModeSection({
               {failure.remedy}
             </Text>
           ) : null}
+          {failure.fixPrompt && targetDevice?.id && targetConnected ? (
+            <Pressable
+              disabled={fixing}
+              onPress={() => {
+                if (fixing || !failure.fixPrompt) return;
+                setFixing(true);
+                void requestDogfoodFixWithAI(targetDevice.id, checkoutDir.trim(), runner, failure.fixPrompt)
+                  .then(({ taskId }) => setFailure({
+                    error: `AI fix task ${taskId} started on ${targetDevice.name}.`,
+                    remedy: "Follow it in Tasks. When it completes, return here and retry Dogfood mode.",
+                  }))
+                  .catch((err) => setFailure({
+                    error: err instanceof Error ? err.message : String(err),
+                    remedy: "Reconnect the primary device and retry Fix with AI.",
+                    fixPrompt: failure.fixPrompt,
+                  }))
+                  .finally(() => setFixing(false));
+              }}
+              style={{ marginTop: 10, alignSelf: "flex-start", borderWidth: 1, borderColor: "#7c5cff", borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8 }}
+            >
+              <Text style={{ color: "#a78bfa", fontSize: 12, fontWeight: "700" }}>
+                {fixing ? "Starting AI fix…" : "Fix with AI"}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
+      ) : null}
+
+      {starting && startProgress ? (
+        <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 10, textAlign: "center" }}>
+          {startProgress}
+        </Text>
       ) : null}
 
       {/* ONE primary action. Disabled states say what is missing via the gate

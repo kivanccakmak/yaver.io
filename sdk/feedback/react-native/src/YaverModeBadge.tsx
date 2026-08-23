@@ -29,7 +29,7 @@
 // could style over it, or unmount it, and the tester would be stuck.
 
 import React, { useEffect, useState } from 'react';
-import { Modal, NativeModules, Pressable, Text, View } from 'react-native';
+import { Alert, Modal, NativeModules, Pressable, Text, View } from 'react-native';
 
 /** True only inside Yaver's container: the YaverInfo native module is
  *  registered by Yaver's app and by nothing else. Same probe ShakeDetector
@@ -94,9 +94,20 @@ export interface YaverModeBadgeProps {
   /** Render even outside Yaver. Development aid only — the badge is meaningless
    *  in a standalone build and would be wallpaper. */
   force?: boolean;
+  /** Account-scoped third-party Dogfood mode. Keeps the same Yaver Y mark but
+   * changes the explanation and offers a confirmed exit to normal Feedback. */
+  dogfood?: boolean;
+  dogfoodLabel?: string;
+  onExitDogfood?: () => void | Promise<void>;
 }
 
-export function YaverModeBadge({ position = 'bottom-left', force = false }: YaverModeBadgeProps) {
+export function YaverModeBadge({
+  position = 'bottom-left',
+  force = false,
+  dogfood = false,
+  dogfoodLabel = 'Dogfood',
+  onExitDogfood,
+}: YaverModeBadgeProps) {
   const [open, setOpen] = useState(false);
   const [, bump] = useState(0);
 
@@ -109,7 +120,7 @@ export function YaverModeBadge({ position = 'bottom-left', force = false }: Yave
   }, []);
 
   // Standalone builds render nothing at all — zero cost, zero pixels.
-  if (!force && !isInsideYaver()) return null;
+  if (!force && !dogfood && !isInsideYaver()) return null;
   if (hiddenThisRun) return null;
 
   const vertical = position.startsWith('top') ? { top: 44 } : { bottom: 28 };
@@ -127,7 +138,7 @@ export function YaverModeBadge({ position = 'bottom-left', force = false }: Yave
         <Pressable
           onPress={() => setOpen(true)}
           accessibilityRole="button"
-          accessibilityLabel="Running inside Yaver"
+          accessibilityLabel={dogfood ? `Exit ${dogfoodLabel} Dogfood mode` : 'Running inside Yaver'}
           hitSlop={10}
           style={({ pressed }) => ({
             width: 22,
@@ -163,16 +174,37 @@ export function YaverModeBadge({ position = 'bottom-left', force = false }: Yave
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Text style={{ color: '#7C5CFF', fontSize: 15, fontWeight: '800' }}>Y</Text>
-              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Running inside Yaver</Text>
+              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                {dogfood ? `${dogfoodLabel} Dogfood mode` : 'Running inside Yaver'}
+              </Text>
             </View>
             <Text style={{ color: '#b6b6c0', fontSize: 13, lineHeight: 19 }}>
-              This is a development build loaded into Yaver — not the version installed on this
-              device. Anything unfinished here is work in progress, not a released bug.
+              {dogfood
+                ? 'This approved account is improving the app directly through Yaver. Tasks and re-render actions target this app instead of creating a feedback report.'
+                : 'This is a development build loaded into Yaver — not the version installed on this device. Anything unfinished here is work in progress, not a released bug.'}
             </Text>
-            <Text style={{ color: '#b6b6c0', fontSize: 13, lineHeight: 19 }}>
-              Shake the device to open Yaver's overlay, where "Back to Yaver" returns you to the
-              installed app.
-            </Text>
+            {dogfood ? (
+              <Pressable
+                onPress={() => Alert.alert(
+                  'Exit Dogfood mode?',
+                  'Return this SDK to normal Feedback mode. Your coding tasks and source changes are untouched.',
+                  [
+                    { text: 'Keep Dogfooding', style: 'cancel' },
+                    { text: 'Exit Dogfood', style: 'destructive', onPress: () => {
+                      void onExitDogfood?.();
+                      setOpen(false);
+                    } },
+                  ],
+                )}
+                style={{ paddingVertical: 10, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fca5a5', fontSize: 13, fontWeight: '700' }}>Exit Dogfood mode</Text>
+              </Pressable>
+            ) : (
+              <Text style={{ color: '#b6b6c0', fontSize: 13, lineHeight: 19 }}>
+                Shake the device to open Yaver's overlay, where "Back to Yaver" returns you to the installed app.
+              </Text>
+            )}
             {/* Polite means closeable. "for now", never "don't show again":
                 the badge returns next launch so nobody forgets which build
                 they're testing. */}

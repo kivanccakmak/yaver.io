@@ -6,18 +6,19 @@
 // one React Native process: the previewed Yaver and the host Yaver both claim
 // shake, so the preview cannot reliably be exited. The web target has no such
 // problem — a WebView cannot register an RN gesture handler on the host and
-// cannot draw over native chrome.
+// cannot draw over native controls.
 //
-// That is only true while the chrome stays OUTSIDE the WebView. The header
-// below is native, always mounted, and never covered by the attached content.
-// Moving it inside the WebView, or letting the WebView render full-bleed over
-// it, reintroduces exactly the trap the refusal exists to prevent.
+// That is only true while the escape stays OUTSIDE the WebView. The two small
+// floating controls below are native siblings, always mounted above the
+// attached content. Moving them inside the WebView reintroduces exactly the
+// trap the refusal exists to prevent.
 //
 // ── What the user sees ─────────────────────────────────────────────────────
 //
-// One honest status line (box · runner · elapsed · last output), the attached
-// app, and Detach. Not a diagnostics wall: an advisory that squeezes the action
-// lane to zero height is a worse bug than missing information (build 482).
+// The attached app, full-screen. A quiet Y exits after confirmation; a quiet ↻
+// re-renders Yaver. Status only appears while it is useful. Not a diagnostics
+// wall: an advisory that squeezes the action lane to zero height is a worse bug
+// than missing information (build 482).
 
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -37,6 +38,7 @@ import { useDevice } from "../src/context/DeviceContext";
 import {
   ATTACH_REFRESH_MS,
   refreshAttachSession,
+  requestDogfoodFixWithAI,
   stopAttachSession,
 } from "../src/lib/attachClient";
 import { ATTACH_SENTINEL_KEY } from "../src/lib/attachMode";
@@ -74,14 +76,21 @@ export default function AttachScreen() {
   const [startedAt] = useState(() => Date.now());
   const [, forceTick] = useState(0);
   const [lastEvent, setLastEvent] = useState<{ label: string; at: number } | null>(null);
-  const [fatal, setFatal] = useState<{ message: string; remedy?: string } | null>(null);
+  const [fatal, setFatal] = useState<{ code: string; message: string; remedy?: string } | null>(null);
+  const [fixing, setFixing] = useState(false);
+  const [fixTaskId, setFixTaskId] = useState<string | null>(null);
   const reloadInFlight = useRef(false);
 
   const reloadDogfoodSurface = useCallback((source: string) => {
     if (reloadInFlight.current) return;
     reloadInFlight.current = true;
     appLog("info", `dogfood: refreshing attached surface (${source})`);
-    setLastEvent({ label: "refreshed after a coding turn", at: Date.now() });
+    setFatal(null);
+    setLoading(true);
+    setLastEvent({
+      label: source === "manual" ? "Re-rendering Yaver" : "Refreshing after task completion",
+      at: Date.now(),
+    });
     setWebViewKey((k) => k + 1);
     setTimeout(() => {
       reloadInFlight.current = false;
@@ -92,6 +101,21 @@ export default function AttachScreen() {
   const deviceName = params.deviceName || activeDevice?.name || "the box";
   const sessionId = params.sessionId || "";
   const attachedUrl = params.url || "";
+
+  useEffect(() => {
+    if (attachedUrl) return;
+    setFatal({
+      code: "DOGFOOD_NO_RENDER_URL",
+      message: "The primary device did not provide a browser-lane URL for Yaver.",
+      remedy: "Return to Production and enter Dogfood mode again. Entry will re-run the Expo and browser probes.",
+    });
+  }, [attachedUrl]);
+
+  useEffect(() => {
+    if (!lastEvent) return;
+    const timer = setTimeout(() => setLastEvent(null), 4500);
+    return () => clearTimeout(timer);
+  }, [lastEvent]);
 
   // The status line must keep MOVING. A frozen "connecting" is the thing that
   // makes a working system look hung, so tick once a second while attached.
@@ -113,6 +137,7 @@ export default function AttachScreen() {
         // Say it. A silently-expired session would present as the attached app
         // mysteriously failing to load anything.
         setFatal({
+          code: res.code || "DOGFOOD_SESSION_REFRESH_FAILED",
           message: res.error || "The attach session expired.",
           remedy: res.remedy || "Switch to Production, then open Dogfood mode again.",
         });
@@ -192,60 +217,8 @@ export default function AttachScreen() {
     window.localStorage.setItem(${JSON.stringify(ATTACH_SENTINEL_KEY)}, "1");
   }catch(e){}})(); true;`;
 
-  const statusLine = [
-    deviceName,
-    params.runner || null,
-    `${elapsedLabel(startedAt)} attached`,
-    lastEvent ? `${lastEvent.label} ${elapsedLabel(lastEvent.at)} ago` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: c.bg }]} edges={["top", "bottom"]}>
-      {/* NATIVE CHROME — outside the WebView, always mounted. See the file
-          header: this is what makes rendering Yaver inside Yaver safe. */}
-      <View style={[styles.chrome, { borderBottomColor: c.border, backgroundColor: c.bgCard }]}>
-        <Pressable
-          onPress={confirmDetach}
-          accessibilityLabel="Switch to Production mode"
-          style={({ pressed }) => [styles.chromeBtn, pressed && { opacity: 0.6 }]}
-        >
-          <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "600" }}>Production</Text>
-        </Pressable>
-
-        <View style={styles.chromeCenter}>
-          <Text numberOfLines={1} style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>
-            Dogfood mode
-          </Text>
-          <Text numberOfLines={1} style={{ color: c.textMuted, fontSize: 11 }}>
-            {statusLine}
-          </Text>
-        </View>
-
-        <Pressable
-          onPress={() => {
-            if (reloadInFlight.current) return;
-            setWebViewKey((k) => k + 1);
-          }}
-          accessibilityLabel="Reload"
-          style={({ pressed }) => [styles.chromeBtn, pressed && { opacity: 0.6 }]}
-        >
-          <Text style={{ color: c.textPrimary, fontSize: 15 }}>{"↻"}</Text>
-        </Pressable>
-      </View>
-
-      {fatal ? (
-        <View style={[styles.fatal, { borderColor: c.errorBorder, backgroundColor: c.errorBg }]}>
-          <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 18 }}>{fatal.message}</Text>
-          {fatal.remedy ? (
-            <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 6, lineHeight: 17 }}>
-              {fatal.remedy}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-
       <View style={styles.surface}>
         {attachedUrl ? (
           <WebView
@@ -262,6 +235,7 @@ export default function AttachScreen() {
             onLoadEnd={() => {
               setLoading(false);
               reloadInFlight.current = false;
+              setLastEvent((event) => event ? { label: "Yaver re-rendered", at: Date.now() } : null);
             }}
             onMessage={(event) => {
               const message = parseDogfoodRenderMessage(event.nativeEvent.data);
@@ -272,6 +246,7 @@ export default function AttachScreen() {
               reloadInFlight.current = false;
               const d = e.nativeEvent;
               setFatal({
+                code: "DOGFOOD_WEBVIEW_LOAD_FAILED",
                 message: `The attached surface failed to load: ${d.description || "unknown error"}`,
                 remedy:
                   "Check the dev server is still running on the box. Detach and re-attach to restart it.",
@@ -296,36 +271,174 @@ export default function AttachScreen() {
           </View>
         ) : null}
       </View>
+
+      {/* NATIVE ESCAPE — a sibling of the WebView, not content inside it.
+          zIndex/elevation keep it reachable even when the rendered Yaver is
+          broken. The app itself still gets the entire layout surface. */}
+      <View pointerEvents="box-none" style={styles.floatingControls}>
+        <Pressable
+          onPress={confirmDetach}
+          accessibilityRole="button"
+          accessibilityLabel="Exit Dogfood mode and switch to Production"
+          hitSlop={8}
+          style={({ pressed }) => [
+            styles.floatingButton,
+            { backgroundColor: c.bgCard, borderColor: c.border },
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={[styles.exitGlyph, { color: c.textPrimary }]}>Y</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => reloadDogfoodSurface("manual")}
+          accessibilityRole="button"
+          accessibilityLabel="Re-render Yaver"
+          hitSlop={8}
+          style={({ pressed }) => [
+            styles.floatingButton,
+            { backgroundColor: c.bgCard, borderColor: c.border },
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={[styles.reloadGlyph, { color: c.textPrimary }]}>↻</Text>
+        </Pressable>
+      </View>
+
+      {lastEvent ? (
+        <View pointerEvents="none" style={[styles.quietStatus, { backgroundColor: c.bgCard, borderColor: c.border }]}>
+          <Text numberOfLines={1} style={{ color: c.textMuted, fontSize: 11 }}>
+            {lastEvent.label} · {deviceName}
+          </Text>
+        </View>
+      ) : null}
+
+      {fatal ? (
+        <View style={styles.fatalScrim}>
+          <View style={[styles.fatal, { borderColor: c.errorBorder, backgroundColor: c.errorBg }]}>
+            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700", lineHeight: 18 }}>
+              Dogfood render stopped
+            </Text>
+            <Text style={{ color: c.error, fontSize: 11, marginTop: 4, fontWeight: "700" }}>
+              {fatal.code}
+            </Text>
+            <Text style={{ color: c.textPrimary, fontSize: 13, marginTop: 6, lineHeight: 18 }}>
+              {fatal.message}
+            </Text>
+            {fatal.remedy ? (
+              <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 6, lineHeight: 17 }}>
+                {fatal.remedy}
+              </Text>
+            ) : null}
+            {fixTaskId ? (
+              <Text style={{ color: c.success, fontSize: 12, marginTop: 7, lineHeight: 17 }}>
+                AI fix task {fixTaskId} started. You can follow it in Tasks, then retry this render.
+              </Text>
+            ) : null}
+            <View style={styles.fatalActions}>
+              <Pressable
+                onPress={confirmDetach}
+                style={({ pressed }) => [styles.fatalAction, { borderColor: c.border }, pressed && styles.pressed]}
+              >
+                <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>Production</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => reloadDogfoodSurface("manual")}
+                style={({ pressed }) => [styles.fatalAction, { borderColor: c.accent }, pressed && styles.pressed]}
+              >
+                <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>Try re-render</Text>
+              </Pressable>
+              <Pressable
+                disabled={fixing}
+                onPress={() => {
+                  if (fixing) return;
+                  setFixing(true);
+                  const prompt = `Fix Yaver Dogfood mode in ${params.workDir || "the active Yaver checkout"}. The live browser surface failed with ${fatal.code}: ${fatal.message}. ${fatal.remedy || "Restore the Expo browser lane."} Preserve local work, never force-push, run focused tests, and leave the app ready to re-render.`;
+                  void requestDogfoodFixWithAI(deviceId, params.workDir || "", params.runner || "", prompt)
+                    .then(({ taskId }) => setFixTaskId(taskId))
+                    .catch((err) => setFatal({
+                      code: "DOGFOOD_AI_FIX_START_FAILED",
+                      message: err instanceof Error ? err.message : String(err),
+                      remedy: "Return to Production, reconnect the primary device, and retry the AI fix.",
+                    }))
+                    .finally(() => setFixing(false));
+                }}
+                style={({ pressed }) => [styles.fatalAction, { borderColor: "#7c5cff" }, pressed && styles.pressed]}
+              >
+                <Text style={{ color: "#a78bfa", fontSize: 12, fontWeight: "700" }}>
+                  {fixing ? "Starting…" : "Fix with AI"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  chrome: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 12,
-  },
-  chromeBtn: { paddingHorizontal: 6, paddingVertical: 4, minWidth: 44 },
-  chromeCenter: { flex: 1, alignItems: "center" },
   surface: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  floatingControls: {
+    position: "absolute",
+    right: 10,
+    top: 10,
+    flexDirection: "row",
+    gap: 7,
+    zIndex: 30,
+    elevation: 30,
+  },
+  floatingButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  exitGlyph: { fontSize: 14, fontWeight: "800", letterSpacing: -0.5 },
+  reloadGlyph: { fontSize: 18, lineHeight: 20 },
+  pressed: { opacity: 0.62, transform: [{ scale: 0.96 }] },
+  quietStatus: {
+    position: "absolute",
+    bottom: 10,
+    alignSelf: "center",
+    maxWidth: "78%",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    zIndex: 20,
+    elevation: 20,
+  },
   loading: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
   },
+  fatalScrim: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+    backgroundColor: "rgba(0,0,0,0.28)",
+    zIndex: 25,
+    elevation: 25,
+  },
   fatal: {
-    marginHorizontal: 12,
-    marginTop: 8,
+    width: "100%",
+    maxWidth: 420,
     padding: 12,
     borderWidth: 1,
     borderRadius: 12,
   },
+  fatalActions: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 12 },
+  fatalAction: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 9 },
 });
 
 // Web note: RN-web has no react-native-webview. Attach Mode is a phone surface;

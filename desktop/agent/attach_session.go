@@ -102,6 +102,29 @@ type attachSession struct {
 	LastSeen  time.Time
 }
 
+// ActiveAttachSession returns the newest non-idle Dogfood session. The copy is
+// deliberate: callers (HTTP/MCP status) must not retain a mutable map pointer.
+// Idle sessions are pruned here so an inventory query can never report a mode
+// active after its capability has already become unusable.
+func ActiveAttachSession(now time.Time) (attachSession, bool) {
+	attachMu.Lock()
+	defer attachMu.Unlock()
+	var newest *attachSession
+	for id, sess := range attachSessions {
+		if now.Sub(sess.LastSeen) > attachSessionMaxIdle {
+			delete(attachSessions, id)
+			continue
+		}
+		if newest == nil || sess.CreatedAt.After(newest.CreatedAt) {
+			newest = sess
+		}
+	}
+	if newest == nil {
+		return attachSession{}, false
+	}
+	return *newest, true
+}
+
 var (
 	attachMu       sync.RWMutex
 	attachSessions = map[string]*attachSession{}

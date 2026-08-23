@@ -1,3 +1,5 @@
+import type { SDKDogfoodConfig } from './dogfoodPolicy';
+
 export interface FeedbackConfig {
   /** Yaver agent URL (e.g., http://192.168.1.100:18080 or relay URL) */
   agentUrl?: string;
@@ -18,6 +20,8 @@ export interface FeedbackConfig {
   /** Corner for the mode badge. Default 'bottom-left' — 'bottom-right' is the
    *  floating feedback button's default, and the two must not overlap. */
   modeBadgePosition?: 'bottom-left' | 'bottom-right' | 'top-left' | 'top-right';
+  /** Account-ID-scoped direct Dogfood UX. Normal accounts keep Feedback. */
+  dogfood?: SDKDogfoodConfig;
   /** Bearer auth token. Optional in 0.2+: omit to use the in-app sign-in modal. */
   authToken?: string;
   /**

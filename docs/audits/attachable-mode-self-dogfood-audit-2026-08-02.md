@@ -6,10 +6,21 @@ not run). Every claim below is `file:line`-anchored; nothing is taken from a
 
 > 2026-08-24 source update: the product entry is now owner-only More → Dogfood
 > mode, targets the account's primary device, serves `mobile/` through Expo's
-> browser lane, and labels the native escape Production. The inner RN-web Tasks
+> browser lane, and keeps only a small native `Y` escape plus `↻` re-render
+> control above the otherwise full-screen app. Exit asks before returning to
+> Production. Entry now fails closed through connection, checkout, Expo start,
+> reported URL and browser-lane render probes; any failed attempt revokes its
+> partial attach session and returns a stable code plus remedy. The inner RN-web Tasks
 > context posts a bounded render message to the outer native host; a module-local
 > event emitter could not cross that WebView boundary. `/attach/start` now also
 > enforces the backend-computed owner verdict instead of relying on hidden UI.
+> Before capability minting, the selected machine fetches `origin/main` and
+> rebases its named branch with `--autostash`; conflicts abort entry and carry a
+> same-checkout `Fix with AI` route. MCP exposes owner-only `dogfood_status` and
+> `dogfood_rerender`, so Yaver reload intent cannot accidentally reload Hermes
+> or an unrelated project. The React Native and web Feedback SDKs expose an
+> exact app-account allowlist for third-party Dogfood UX; this is only a UI gate,
+> while every agent operation keeps normal Yaver authentication.
 
 ## 0. What was asked for
 

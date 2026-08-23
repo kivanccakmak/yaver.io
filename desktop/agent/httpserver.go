@@ -1030,12 +1030,17 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// Web build target outputs (target=web-js-bundle / web-hermes-wasm).
 	// Registered before the catch-all /dev/ proxy so they don't get
 	// shadowed by the dev-server reverse proxy.
-	mux.HandleFunc("/dev/web-bundle/", s.handleServeWebBundle)               // No auth — serves built web bundle (static files)
-	mux.HandleFunc("/dev/hermes-wasm-runtime", s.handleServeHermesWasm)      // No auth — serves hermes.wasm for the runner page
-	mux.HandleFunc("/dev/web-bundle/info", s.auth(s.handleWebBundleInfo))    // Owner — returns metadata about the current bundle
-	mux.HandleFunc("/dev/web-bundle/ack", s.auth(s.handleWebBundleAck))      // Owner — iframe reports successful load
-	mux.HandleFunc("/dev/web-bundle/error", s.auth(s.handleWebBundleError))  // Owner — iframe reports JS error during init
-	mux.HandleFunc("/dev/", s.handleDevServerProxy)                          // No auth — serves proxied dev content for browser/webview preview surfaces
+	mux.HandleFunc("/dev/web-bundle/", s.handleServeWebBundle)              // No auth — serves built web bundle (static files)
+	mux.HandleFunc("/dev/hermes-wasm-runtime", s.handleServeHermesWasm)     // No auth — serves hermes.wasm for the runner page
+	mux.HandleFunc("/dev/web-bundle/info", s.auth(s.handleWebBundleInfo))   // Owner — returns metadata about the current bundle
+	mux.HandleFunc("/dev/web-bundle/ack", s.auth(s.handleWebBundleAck))     // Owner — iframe reports successful load
+	mux.HandleFunc("/dev/web-bundle/error", s.auth(s.handleWebBundleError)) // Owner — iframe reports JS error during init
+	mux.HandleFunc("/dev/", s.handleDevServerProxy)                         // No auth — serves proxied dev content for browser/webview preview surfaces
+	// Dogfood control plane. Prepare and runtime state are owner-authenticated;
+	// the scoped attached-page capability cannot mutate Git or query MCP state.
+	mux.HandleFunc("/attach/prepare", s.auth(s.handleDogfoodPrepare))
+	mux.HandleFunc("/dogfood/status", s.auth(s.handleDogfoodStatus))
+	mux.HandleFunc("/dogfood/rerender", s.auth(s.handleDogfoodRerender))
 	mux.HandleFunc("/$dwdsSseHandler", s.handleDevServerRootWebSocketProxy)  // No auth — Flutter webdev DWDS websocket after /dev/ route rewrite
 	mux.HandleFunc("/$dwdsSseHandler/", s.handleDevServerRootWebSocketProxy) // No auth — same, with any backend suffix
 	// Parallel Expo Web: sibling preview process so the Web Reload tab
@@ -7835,6 +7840,38 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolError(resp.Error + " — " + resp.Output)
 		}
 		return mcpToolResult(fmt.Sprintf("Synced %s on %s: %s → %s", resp.Branch, workDir, strings.Join(resp.Actions, ", "), resp.Hash))
+
+	case "dogfood_status":
+		var args struct {
+			DeviceID string `json:"device_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if strings.TrimSpace(args.DeviceID) != "" {
+			out, err := proxyToDeviceJSON(context.Background(), "dogfood_status", strings.TrimSpace(args.DeviceID), http.MethodGet, "/dogfood/status", nil)
+			if err != nil {
+				return mcpToolError(fmt.Sprintf("dogfood_status: %v", err))
+			}
+			return mcpToolJSON(out)
+		}
+		return mcpToolJSON(currentDogfoodRuntime(time.Now()))
+
+	case "dogfood_rerender":
+		var args struct {
+			DeviceID string `json:"device_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		if strings.TrimSpace(args.DeviceID) != "" {
+			out, err := proxyToDeviceJSON(context.Background(), "dogfood_rerender", strings.TrimSpace(args.DeviceID), http.MethodPost, "/dogfood/rerender", map[string]interface{}{})
+			if err != nil {
+				return mcpToolError(fmt.Sprintf("dogfood_rerender: %v", err))
+			}
+			return mcpToolJSON(out)
+		}
+		status, dogfood := s.dogfoodRerender()
+		if status >= 300 || !dogfood.OK {
+			return mcpToolError(fmt.Sprintf("%s: %s Remedy: %s", dogfood.Code, dogfood.Message, dogfood.Remedy))
+		}
+		return mcpToolJSON(dogfood)
 
 	case "session_intent":
 		var args struct {

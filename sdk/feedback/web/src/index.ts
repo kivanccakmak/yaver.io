@@ -1,4 +1,6 @@
 export { YaverFeedback } from './YaverFeedback';
+export { resolveSDKDogfood } from './dogfoodPolicy';
+export type { SDKDogfoodConfig, SDKDogfoodStatus } from './dogfoodPolicy';
 export { YaverDiscovery } from './discovery';
 export { FeedbackWidget } from './FeedbackWidget';
 export { P2PClient } from './P2PClient';

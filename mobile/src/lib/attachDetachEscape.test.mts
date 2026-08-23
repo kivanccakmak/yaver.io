@@ -10,12 +10,12 @@
  * the app you are looking at.
  *
  * That makes ONE property load-bearing above all others: the way out must live
- * in NATIVE chrome, outside the WebView. Hermes is refused for this exact
+ * in a NATIVE control, outside the WebView. Hermes is refused for this exact
  * scenario (409 YAVER_SELF_DEVELOPMENT_RECURSION) because two shake/exit owners
  * in one RN process means the preview cannot reliably be exited. The web target
  * is only safe because a WebView cannot register a gesture handler on the host
- * or draw over native chrome — so if the Detach control ever moves inside the
- * WebView, or the WebView goes full-bleed over the header, the mode becomes a
+ * or draw over native controls — so if the exit control ever moves inside the
+ * WebView, or loses its native overlay, the mode becomes a
  * one-way door on the user's own phone. There is no recovery from inside: the
  * page you would use to leave is the page that is broken.
  *
@@ -72,10 +72,10 @@ test("the Detach control exists and is NOT inside the WebView", () => {
     "a tappable Detach lives inside the <WebView> — a broken page would take the exit with it, " +
       "and there is no way back from inside an attached Yaver",
   );
-  // And the real control must exist in the native chrome outside it.
+  // And the real control must exist in the native overlay outside it.
   const outside = attachScreen.replace(wv, "");
   assert.match(outside, /onPress[^\n]*[Dd]etach|confirmDetach/,
-    "no Detach control in the native chrome — the only way out would be inside the WebView");
+    "no Detach control in the native overlay — the only way out would be inside the WebView");
 });
 
 test("detaching REVERTS, and asks first — it is a destructive action on the user's checkout", () => {

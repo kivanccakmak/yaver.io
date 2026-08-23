@@ -38,6 +38,7 @@ import { openDevicePickerModal } from './DevicePickerModal';
 import { P2PClient } from './P2PClient';
 import { reloadActions } from './reloadActions';
 import type { DevServerSnapshot, ReloadAction, ReloadWireMode } from './reloadActions';
+import { resolveSDKDogfood, type SDKDogfoodStatus } from './dogfoodPolicy';
 
 /** Escape untrusted text before interpolating into innerHTML strings. */
 function escapeHtml(value: string): string {
@@ -102,8 +103,13 @@ export class YaverFeedback {
     // (feedbackTrigger.ts) — a preview lane is the signal. Otherwise default to
     // enabled only in development.
     const laneEarly = YaverFeedback.detectLane();
+    const dogfoodEarly = resolveSDKDogfood(config.dogfood);
     if (config.enabled === undefined) {
-      config.enabled = laneEarly !== 'standalone' || YaverFeedback.detectDevEnvironment();
+      // An explicitly enabled, account-approved Dogfood configuration is a
+      // stronger opt-in than the hostname heuristic. This is what lets a
+      // selected tester use Dogfood on a deployed third-party build while all
+      // other accounts retain the ordinary production/Feedback behavior.
+      config.enabled = dogfoodEarly.active || laneEarly !== 'standalone' || YaverFeedback.detectDevEnvironment();
     }
 
     if (!config.enabled) {
@@ -182,7 +188,7 @@ export class YaverFeedback {
     // The polite "you are inside Yaver" mark. Default ON (see FeedbackConfig):
     // the failure it prevents is silent and lands on a tester, not a developer.
     // Never created in the 'standalone' lane, so it costs real users nothing.
-    if (config.modeBadge !== false && lane !== 'standalone') {
+    if (config.modeBadge !== false && (lane !== 'standalone' || YaverFeedback.getDogfoodStatus().active)) {
       YaverFeedback.createModeBadge(config.modeBadgePosition || 'bottom-left', lane);
     }
 
@@ -642,6 +648,20 @@ export class YaverFeedback {
     }
   }
 
+  static getDogfoodStatus(): SDKDogfoodStatus {
+    return resolveSDKDogfood(YaverFeedback.config?.dogfood);
+  }
+
+  static async exitDogfoodMode(): Promise<void> {
+    const cfg = YaverFeedback.config?.dogfood;
+    if (!cfg) return;
+    cfg.enabled = false;
+    document.getElementById('yaver-feedback-overlay')?.remove();
+    document.getElementById('yaver-mode-badge')?.remove();
+    await cfg.onExit?.();
+    window.dispatchEvent(new CustomEvent('yaver-feedback:dogfood-changed', { detail: { active: false } }));
+  }
+
   static async getVibingEligibility(): Promise<{
     canVibe: boolean;
     reason?: string;
@@ -884,6 +904,7 @@ export class YaverFeedback {
     YaverFeedback.injectReportStyles();
     document.getElementById('yaver-feedback-overlay')?.remove();
 
+    const dogfood = YaverFeedback.getDogfoodStatus();
     const overlay = document.createElement('div');
     overlay.id = 'yaver-feedback-overlay';
     overlay.innerHTML = `
@@ -891,7 +912,7 @@ export class YaverFeedback {
         <div class="yvr-fb-card">
           <div class="yvr-fb-header">
             <div>
-              <h3 class="yvr-fb-title">Yaver<span class="yvr-fb-version">v${YaverFeedback.SDK_VERSION}</span></h3>
+              <h3 class="yvr-fb-title">${dogfood.active ? `${escapeHtml(dogfood.label)} Dogfood` : `Yaver<span class="yvr-fb-version">v${YaverFeedback.SDK_VERSION}</span>`}</h3>
               <p id="yaver-fb-subtitle" class="yvr-fb-subtitle"></p>
             </div>
             <button id="yaver-fb-close" class="yvr-fb-close" type="button" aria-label="Close">×</button>
@@ -924,6 +945,19 @@ export class YaverFeedback {
     let syncVibingOnboarding: ((eligibility?: Awaited<ReturnType<typeof YaverFeedback.getVibingEligibility>>, errorMessage?: string) => void) | null = null;
     const dashboardUrl = `${(YaverFeedback.config?.authWebBaseUrl || 'https://yaver.io').replace(/\/$/, '')}/dashboard`;
     const closeBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-close')!;
+    if (dogfood.active) {
+      const exit = document.createElement('button');
+      exit.type = 'button';
+      exit.className = 'yvr-fb-link';
+      exit.textContent = 'Exit Dogfood';
+      exit.setAttribute('aria-label', 'Exit Dogfood mode');
+      exit.onclick = () => {
+        if (window.confirm('Exit Dogfood mode and return this SDK to normal Feedback mode? Your tasks and source changes are untouched.')) {
+          void YaverFeedback.exitDogfoodMode();
+        }
+      };
+      closeBtn.parentElement?.insertBefore(exit, closeBtn);
+    }
 
     let busy = false;
 
@@ -2685,6 +2719,7 @@ export class YaverFeedback {
     const decideInitialView = (): 'machine' | 'git' | 'actions' => {
       const cfg = YaverFeedback.config;
       if (!cfg) return 'machine';
+      if (YaverFeedback.getDogfoodStatus().active && cfg.agentUrl && cfg.preferredDeviceId) return 'actions';
       return cfg.agentUrl && cfg.preferredDeviceId ? 'git' : 'machine';
     };
 
@@ -2787,6 +2822,13 @@ export class YaverFeedback {
     ].join('');
 
     const explain = () => {
+      const dogfood = YaverFeedback.getDogfoodStatus();
+      if (dogfood.active) {
+        if (window.confirm(`Exit ${dogfood.label} Dogfood mode?\n\nThis returns the SDK to normal Feedback mode. Tasks and source changes are untouched.`)) {
+          void YaverFeedback.exitDogfoodMode();
+        }
+        return;
+      }
       const detail =
         lane === 'browser'
           ? 'This is a Yaver preview of your app, served from your box — not the deployed site. ' +
