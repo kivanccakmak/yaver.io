@@ -37,6 +37,7 @@ import {
   type MobileDeviceLifecycleState,
   type MobileDeviceStatusProbe,
 } from "../../src/lib/deviceStatus";
+import { describeDeviceCardPing } from "../../src/lib/deviceCardLiveness";
 import { lightCardShadow, spacing, typography } from "../../src/theme/tokens";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
@@ -319,7 +320,10 @@ function DeviceCard({
 }) {
   const c = useColors();
   const { isDark } = useTheme();
-  const [pingState, setPingState] = useState<{ pinging: boolean; rttMs?: number; ok?: boolean }>({ pinging: false });
+  const [pingState, setPingState] = useState<{
+    pinging: boolean;
+    outcome?: ReturnType<typeof describeDeviceCardPing>;
+  }>({ pinging: false });
   const [recovering, setRecovering] = useState(false);
   const [runtimeLabel, setRuntimeLabel] = useState<string | null>(null);
   const [projectSummary, setProjectSummary] = useState<DeviceProjectSummary | null>(null);
@@ -394,6 +398,7 @@ function DeviceCard({
 
   useEffect(() => {
     setRuntimeLabel(null);
+    setPingState({ pinging: false });
   }, [device.id]);
 
   useEffect(() => {
@@ -536,30 +541,58 @@ function DeviceCard({
 
   const handlePing = async () => {
     setPingState({ pinging: true });
-    const relays = quicClient.getRelayServers();
-    const urls = [
-      ...relays.map((r) => `${r.httpUrl}/d/${device.id}`),
-      `http://${device.host}:${device.port}`,
-    ];
-    for (const url of urls) {
-      const start = Date.now();
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(`${url}/health`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (res.ok) {
-          setPingState({ pinging: false, ok: true, rttMs: Date.now() - start });
-          return;
-        }
-      } catch {
-        continue;
-      }
+    const startedAt = Date.now();
+    let probe: MobileDeviceStatusProbe;
+    try {
+      probe = await probeMobileDeviceStatus(device, token, 3000);
+      setStatusProbe(probe);
+      setPingState({
+        pinging: false,
+        outcome: describeDeviceCardPing({
+          reachable: probe.reachable,
+          path: probe.path,
+          elapsedMs: Date.now() - startedAt,
+          errorCode: probe.errorCode,
+        }),
+      });
+    } catch (error) {
+      setPingState({
+        pinging: false,
+        outcome: {
+          ok: false,
+          headline: `Not live · connection check failed`,
+          guidance: error instanceof Error
+            ? error.message
+            : "Make sure the machine is powered on and Yaver is running, then ping again.",
+        },
+      });
+      return;
     }
-    setPingState({ pinging: false, ok: false });
+    if (!probe.reachable) return;
+
+    // A successful operation-level ping should continue the user's original
+    // intent without demanding a second tap. If the agent answers in
+    // bootstrap/expired-auth mode, repair ownership first; otherwise enter
+    // the normal Yaver connect ladder immediately. Keep a recovery failure
+    // distinct from a ping failure: the agent was live even if Yaver auth was
+    // not repaired.
+    try {
+      if (probe.bootstrap || probe.authExpired) {
+        await onRecoverAuth();
+      }
+      await onSelect();
+    } catch (error) {
+      setPingState({
+        pinging: false,
+        outcome: {
+          ok: false,
+          headline: "Live agent · Yaver connection failed",
+          guidance: error instanceof Error
+            ? error.message
+            : "The agent answered, but the Yaver session did not connect. Open Details for recovery.",
+        },
+      });
+    }
   };
 
   const platformLabel = formatDevicePlatform(device, runtimeLabel);
@@ -579,6 +612,27 @@ function DeviceCard({
     isConnected,
     unreachable: isStale,
   });
+  useEffect(() => {
+    if (!pingState.outcome?.ok) return;
+    if (isActive && connectionStatus === "connected" && pingState.outcome.guidance !== "Connected to Yaver.") {
+      setPingState((current) => current.outcome?.ok
+        ? { ...current, outcome: { ...current.outcome, guidance: "Connected to Yaver." } }
+        : current);
+      return;
+    }
+    if (isStale && pingState.outcome.headline !== "Live agent · Yaver connection failed") {
+      setPingState((current) => current.outcome?.ok
+        ? {
+            ...current,
+            outcome: {
+              ok: false,
+              headline: "Live agent · Yaver connection failed",
+              guidance: "The agent answered, but the Yaver session did not connect. Open Details for recovery.",
+            },
+          }
+        : current);
+    }
+  }, [connectionStatus, isActive, isStale, pingState.outcome]);
   const statusLabel =
     isConnecting
       ? "connecting"
@@ -610,15 +664,19 @@ function DeviceCard({
   const statusTone =
     lifecycleState === "offline" ? c.textMuted : statusChip.text;
   const primaryActionLabel =
-    lifecycleState === "bootstrap"
-      ? "Reclaim & Connect"
-      : lifecycleState === "yaver-auth-expired"
-        ? "Re-auth & Connect"
-        : lifecycleState === "connected" && !isActive
-          ? "Use This Device"
-        : lifecycleState === "ready-to-connect"
-          ? "Connect"
-          : "Details";
+    pingState.pinging
+      ? "Pinging…"
+      : lifecycleState === "offline"
+        ? "Ping"
+        : lifecycleState === "bootstrap"
+          ? "Reclaim & Connect"
+          : lifecycleState === "yaver-auth-expired"
+            ? "Re-auth & Connect"
+            : lifecycleState === "connected" && !isActive
+              ? "Use This Device"
+              : lifecycleState === "ready-to-connect"
+                ? "Connect"
+                : "Details";
   const primaryActionTone =
     lifecycleState === "bootstrap"
       ? chipPalette("violet", isDark).text
@@ -634,11 +692,11 @@ function DeviceCard({
       await onSelect();
       return;
     }
-    // Offline device → only place where the silent Details modal
-    // remains. The user can see why it's offline + try recovery
-    // actions from there.
+    // A registered row is inventory; ping the real agent operation before
+    // offering a connection. A failed ping leaves a named NOT LIVE verdict
+    // on the card instead of opening a diagnostics wall or spinning.
     if (lifecycleState === "offline") {
-      setDetailsOpen(true);
+      await handlePing();
       return;
     }
     // Already-connected AND focused: previously this also opened
@@ -709,6 +767,8 @@ function DeviceCard({
               <StatusChip tone="emerald" label="CONNECTED" isDark={isDark} />
             ) : lifecycleState === "ready-to-connect" ? (
               <StatusChip tone="blue" label="READY TO CONNECT" isDark={isDark} />
+            ) : lifecycleState === "offline" ? (
+              <StatusChip tone="slate" label="NOT LIVE" isDark={isDark} />
             ) : null}
           </View>
           <View style={{ marginTop: 6 }}>
@@ -718,8 +778,9 @@ function DeviceCard({
             {[platformLabel, device.host].filter(Boolean).join(" · ")}
           </Text>
           <Text style={[styles.deviceMeta, { color: statusTone, marginTop: 4 }]}>
-            {statusLabel}
-            {device.lastSeen > 0 ? ` · ${timeSince(device.lastSeen)}` : ""}
+            {lifecycleState === "offline"
+              ? `not live${device.lastSeen > 0 ? ` · last seen ${timeSince(device.lastSeen)}` : " · never connected"}`
+              : `${statusLabel}${device.lastSeen > 0 ? ` · ${timeSince(device.lastSeen)}` : ""}`}
           </Text>
           {lifecycleState === "bootstrap" || lifecycleState === "yaver-auth-expired" || lifecycleState === "ready-to-connect" || lifecycleState === "offline" || isActive ? (
             <Text style={[styles.deviceMeta, { color: c.textSecondary, marginTop: 4 }]}>
@@ -730,9 +791,23 @@ function DeviceCard({
                   : lifecycleState === "ready-to-connect"
                     ? "Recent heartbeat — reachability not verified yet."
                     : lifecycleState === "offline"
-                      ? "No recent heartbeat. Power on and run yaver serve."
+                      ? "No recent agent signal. Ping to check this machine now."
                       : "This is the phone you're using."}
             </Text>
+          ) : null}
+          {pingState.pinging ? (
+            <Text style={[styles.deviceMeta, { color: c.warn, marginTop: 6, fontWeight: "700" }]}>
+              Pinging relay and direct paths…
+            </Text>
+          ) : pingState.outcome ? (
+            <View style={{ marginTop: 6 }}>
+              <Text style={[styles.deviceMeta, { color: pingState.outcome.ok ? c.success : c.warn, fontWeight: "700" }]}>
+                {pingState.outcome.headline}
+              </Text>
+              <Text style={[styles.deviceMeta, { color: c.textSecondary, marginTop: 2 }]}>
+                {pingState.outcome.guidance}
+              </Text>
+            </View>
           ) : null}
           {agentVersion || projectSummary ? (
             <Text style={[styles.deviceMeta, { color: c.textSecondary, marginTop: 4 }]}>
@@ -771,20 +846,24 @@ function DeviceCard({
                 setDetailsOpen(true);
               }
             }}
-            disabled={recovering}
+            disabled={recovering || pingState.pinging}
+            accessibilityRole="button"
+            accessibilityLabel={lifecycleState === "offline" ? `Ping ${device.name} and connect` : primaryActionLabel}
           >
             <Text style={[styles.pingBtnText, { color: primaryActionTone, fontWeight: "700" }]}>
               {recovering ? "Recovering..." : primaryActionLabel}
             </Text>
           </Pressable>
-          {primaryActionLabel === "Details" ? null : (
+          {lifecycleState === "offline" || primaryActionLabel !== "Details" ? (
             <Pressable
               style={[styles.pingBtn, { backgroundColor: "transparent", borderWidth: 1, borderColor: c.accent + "55" }]}
               onPress={() => setDetailsOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${device.name} details`}
             >
               <Text style={[styles.pingBtnText, { color: c.accent, fontWeight: "700" }]}>Details</Text>
             </Pressable>
-          )}
+          ) : null}
           {/* Inline elevation actions. The device that's already primary gets
               nothing here. Otherwise we surface
               "Make secondary" / "Unmark secondary" as a pill so the
