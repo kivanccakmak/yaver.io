@@ -1094,8 +1094,8 @@ func ensureWireIOSBuildHeadroom(root string) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"iOS wireless build needs at least %s free; only %s is available on the volume holding %s — inspect reclaimable build caches with `yaver ops disk_manage --payload='{\"action\":\"scan\"}'`, reclaim only reviewed generated artifacts, then retry",
-		humanBytes(wireIOSMinFreeBytes), humanBytes(headroom.FreeBytes), root,
+		"iOS wireless build needs at least %s free; only %s is available on the volume holding %s — inspect reclaimable build caches with `yaver ops diskguard_scan --payload='{\"path\":%q}'`, reclaim only reviewed generated artifacts, then retry",
+		humanBytes(wireIOSMinFreeBytes), humanBytes(headroom.FreeBytes), root, root,
 	)
 }
 

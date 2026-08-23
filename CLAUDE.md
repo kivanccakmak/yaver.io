@@ -1224,7 +1224,7 @@ Before an iOS build mutates dependencies, the command measures the checkout
 volume and requires 10 GiB free. If CocoaPods artifacts are missing, partial,
 or stale, it then streams an incremental `pod install` and rechecks the actual
 Pods project/config files before invoking Xcode. A low-disk refusal names the
-measured space and the `disk_manage` scan route instead of failing midway with
+measured space and the `diskguard_scan` ops route instead of failing midway with
 `No space left on device`.
 Running from `desktop/agent`, `web/`, `relay/`, or any non-mobile
 subdir fails with `no mobile project detected at <path>`. Always
