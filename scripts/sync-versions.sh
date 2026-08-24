@@ -118,6 +118,22 @@ update_pkg_version "$REPO_ROOT/mobile/package.json" "$MOBILE_VERSION" "mobile pa
 # --- Desktop GUI: electron/package.json ---
 update_pkg_version "$REPO_ROOT/electron/package.json" "$GUI_VERSION" "electron/package.json"
 
+# npm ci also treats the root package-lock metadata as authoritative. Keep both
+# top-level GUI version fields aligned so a release bump cannot leave the
+# desktop workflow packaging a stale lockfile identity.
+ELECTRON_LOCK="$REPO_ROOT/electron/package-lock.json"
+if [ -f "$ELECTRON_LOCK" ]; then
+  node - "$ELECTRON_LOCK" "$GUI_VERSION" <<'NODE'
+const fs = require("fs");
+const [file, version] = process.argv.slice(2);
+const lock = JSON.parse(fs.readFileSync(file, "utf8"));
+lock.version = version;
+if (lock.packages?.[""]) lock.packages[""].version = version;
+fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(lock, null, 2)}\n`);
+NODE
+  update_file "$ELECTRON_LOCK" "electron/package-lock.json"
+fi
+
 # --- Web: lib/versions.ts (web tsconfig cannot import JSON outside web/) ---
 WEB_VERSIONS_TS="$REPO_ROOT/web/lib/versions.ts"
 if [ -f "$WEB_VERSIONS_TS" ]; then
