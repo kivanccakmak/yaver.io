@@ -55,6 +55,7 @@ export type WatchTurn =
   | { v: 1; kind: "transcript"; text: string }
   | { v: 1; kind: "confirm"; token: string; reply: string }
   | { v: 1; kind: "intent"; intent: string }
+  | { v: 1; kind: "appearance"; theme?: "light" | "dark" }
   // The wrist asks the phone to WAKE a parked managed box (the watch can't
   // hold the control-plane token cleanly, so the phone does it). machineId
   // is optional — the phone resolves the current/primary managed box when
@@ -67,6 +68,11 @@ export type WatchTurn =
  *  (startManagedCloudMachine) on the watch's behalf. Kept as a dep so the
  *  bridge stays headless-testable. */
 export type WatchWakeFn = (machineId?: string) => Promise<{ ok: boolean; error?: string }>;
+export type WatchAppearanceFn = (theme?: "light" | "dark") => Promise<{
+  ok: boolean;
+  theme?: "light" | "dark";
+  error?: string;
+}>;
 
 /** Optional runtime-turn bridge. When injected, the watch becomes a front door
  *  to the remote runner queue / live-session router. Kept optional so the
@@ -87,6 +93,8 @@ export interface WatchReply {
   status?: string;
   /** handoff: where the detail went ("phone"). */
   target?: string;
+  /** appearance: the watch-scoped value loaded from or saved to Convex. */
+  theme?: "light" | "dark";
 }
 
 function reply(kind: WatchReply["kind"], extra: Partial<WatchReply> = {}): WatchReply {
@@ -136,8 +144,19 @@ export async function handleWatchTurn(
   ops?: CarSurfaceOps,
   wakeBox?: WatchWakeFn,
   runtimeTurn?: WatchRuntimeTurnFn,
+  appearance?: WatchAppearanceFn,
 ): Promise<WatchReply> {
   switch (msg.kind) {
+    case "appearance": {
+      if (!appearance) {
+        return emit(send, reply("error", { spoken: "Open Yaver on your phone to sync appearance." }));
+      }
+      const result = await appearance(msg.theme);
+      if (!result.ok) {
+        return emit(send, reply("error", { spoken: result.error || "Couldn't sync appearance." }));
+      }
+      return emit(send, reply("ack", { theme: result.theme, spoken: "Appearance synced." }));
+    }
     case "wake": {
       if (!wakeBox) {
         return emit(send, reply("error", { spoken: "I can't wake your box from here — open Yaver on your phone." }));

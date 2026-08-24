@@ -644,7 +644,7 @@ export default function VibeCodingView({
   // the task reaches a renderable terminal state (completed/review), never
   // while the runner is coding, deduped per task+turn so follow-ups render
   // again instead of being deduped away.
-  const [agentRenderRequest, setAgentRenderRequest] = useState<{ id: string; reason: string } | null>(null);
+  const [agentRenderRequest, setAgentRenderRequest] = useState<{ id: string; reason: string; yaverSessionId?: string } | null>(null);
   const autoRenderRef = useRef<string | null>(null);
   const [sections, setSections] = useState<Record<SectionKey, SectionState>>(() => loadSectionState());
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -1245,6 +1245,7 @@ export default function VibeCodingView({
             setAgentRenderRequest({
               id: `${activeStreamTaskId}:${String(event.ts || Date.now())}:${reason}`,
               reason,
+              yaverSessionId: typeof event.yaverSessionId === "string" ? event.yaverSessionId : undefined,
             });
           }
         },
@@ -1306,7 +1307,8 @@ export default function VibeCodingView({
     if (!activeTask) return;
     const status = activeTask.status;
     if (status !== "completed" && status !== "review") return;
-    const structuredRequest = agentRenderRequest?.id?.startsWith(`${activeTask.id}:`)
+    const structuredRequest = agentRenderRequest?.id?.startsWith(`${activeTask.id}:`) &&
+      (!agentRenderRequest.yaverSessionId || agentRenderRequest.yaverSessionId === activeTask.executionSession?.yaverSessionId)
       ? agentRenderRequest
       : null;
     if (!structuredRequest) return;
@@ -1707,6 +1709,7 @@ export default function VibeCodingView({
       // — instead of a work run. High-precision; imperative build prompts are
       // left as normal tasks. See lib/ask-intent.ts.
       askMode: rawRunnerCommand ? false : detectAskIntent(goalPrompt),
+      sessionStartedFrom: "vibing" as const,
     };
     let task: Task;
     try {
@@ -1806,73 +1809,19 @@ export default function VibeCodingView({
       machine: connectedMachine,
     });
 
-    // Runtime agent switch: if the user picked a different runner in the
-    // composer than the parent task's runner, fork a child task with
-    // the new runner instead of continuing the parent. Keeps the parent
-    // session immutable (Claude/Codex/OpenCode don't share session
-    // formats) while carrying a bounded recent-context handoff to the
-    // new runner. See task_fork.go and
-    // CODING_AGENT_CHANGE_FROM_MOBILE_APP_CHAT.md.
+    // A vibe owns one task, native runner conversation, and tmux seat. Runner
+    // formats are not interchangeable, so changing the picker requires an
+    // explicit New Task instead of silently redirecting this reply to a child.
     const parentRunner = (activeTask.runnerId || "").trim();
     const desiredRunner = (selectedRunner || "").trim();
     const switching = !!desiredRunner && !!parentRunner && desiredRunner !== parentRunner;
 
     if (switching) {
-      // Confirm before forking — this creates a new child task and
-      // changes which task subsequent sends target. The recent-context
-      // copy avoids forwarding the full transcript by default.
       const niceName = desiredRunner.charAt(0).toUpperCase() + desiredRunner.slice(1);
-      const confirmed = typeof window !== "undefined"
-        ? window.confirm(
-            `Switching to ${niceName} will start a new child chat. ` +
-            `Yaver will include the most recent part of this conversation as context ` +
-            `so the new agent can pick up where you left off.\n\n` +
-            `For speed and token safety, Yaver sends roughly the last ~1200 words plus ` +
-            `the latest task summary, not the entire chat history.`,
-          )
-        : true;
-      if (!confirmed) {
-        setBusy("");
-        return;
-      }
-      try {
-        analyticsAgentSwitch("agent_switch_requested", { from: parentRunner, to: desiredRunner });
-      } catch { /* analytics is best-effort */ }
-      const forkVeto = opencodeModelVeto();
-      if (forkVeto) {
-        setBusy(forkVeto);
-        return;
-      }
-      setBusy(`Switching ${activeTask.title} to ${niceName}…`);
-      try {
-        const result = await agentClient.forkTask(activeTask.id, {
-          runner: desiredRunner,
-          model: selectedModel || undefined,
-          mode: selectedMode || undefined,
-          input: promptText,
-          allowLocalFallback: true,
-          projectDir: selectedProject?.path,
-          mcpServers: selectedMcpServers,
-          includeYaverMcp,
-        });
-        setComposer("");
-        setActiveTaskId(result.taskId);
-        setBusy(`Forked to ${niceName} — ${result.contextWordsUsed} words of context carried.`);
-        setRefreshNonce((value) => value + 1);
-        try {
-          analyticsAgentSwitch("agent_switch_completed", {
-            from: parentRunner,
-            to: desiredRunner,
-            contextWords: result.contextWordsUsed,
-          });
-        } catch { /* analytics is best-effort */ }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setBusy(`Switch to ${niceName} failed: ${msg}`);
-        try {
-          analyticsAgentSwitch("agent_switch_failed", { from: parentRunner, to: desiredRunner, error: msg });
-        } catch { /* analytics is best-effort */ }
-      }
+      setBusy(
+        `This vibe stays in its ${parentRunner || "current"} runner and tmux session. ` +
+        `Start a new task to use ${niceName}.`,
+      );
       return;
     }
 
@@ -3457,6 +3406,19 @@ export default function VibeCodingView({
                       title="Attach on the box with: tmux attach -t <session>"
                     >
                       tmux: {activeTask.tmuxSession || activeTask.tmuxSessionId}
+                    </div>
+                  ) : null}
+                  {!activeGraphRunId && activeTask?.sessionId ? (
+                    <div
+                      className="mt-0.5 font-mono text-[10px] font-normal text-surface-400 select-all"
+                      title="Native coding-agent conversation resumed by follow-ups"
+                    >
+                      runner session: {activeTask.sessionId}
+                    </div>
+                  ) : null}
+                  {!activeGraphRunId && activeTask?.executionSession?.yaverSessionId ? (
+                    <div className="mt-0.5 font-mono text-[10px] font-normal text-surface-400 select-all">
+                      yaver: {activeTask.executionSession.yaverSessionId} · {activeTask.executionSession.remoteBoxId || "local box"} · {activeTask.executionSession.runnerName || activeTask.executionSession.runnerId || "runner"}
                     </div>
                   ) : null}
                 </div>

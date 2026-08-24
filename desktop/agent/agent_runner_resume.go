@@ -23,9 +23,9 @@ import (
 //   - claude: append `--resume <id>` (needs a captured session id);
 //     `--no-session-persistence` is stripped since a non-persisted session
 //     can't be resumed.
-//   - opencode: append `--continue` — resumes the most recent session in the
-//     working dir, no id needed. Robust for the sequential follow-up /
-//     recurring-schedule case.
+//   - opencode: append `--session <id>` — resumes the exact task session.
+//     `--continue` is deliberately forbidden: it means "most recent in this
+//     directory", so two tasks in one repo can cross-wire conversations.
 //   - codex: `exec resume <id>` is a distinct subcommand that does NOT accept
 //     `--full-auto`, so the argv is rebuilt from scratch and the equivalent
 //     sandbox/approval is restored via the GLOBAL `--sandbox` /
@@ -53,8 +53,7 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 		return out, true
 
 	case "opencode":
-		// --continue resumes the last session in cwd; id-independent.
-		return append(append([]string{}, baseArgs...), "--continue"), true
+		return append(append([]string{}, baseArgs...), "--session", sessionID), true
 
 	case "codex":
 		// codex --dangerously-bypass-approvals-and-sandbox
@@ -89,27 +88,22 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 //
 // Per runner:
 //   - claude / codex: resume is id-addressed. No captured id, no context.
-//   - opencode: `--continue` resumes the most recent session in the work dir,
-//     and by construction a resume means this task already ran one there. We
-//     do NOT gate this on a captured session id: opencode's id capture is
-//     best-effort regex over raw output, so gating on it would put the full
-//     preamble back on every opencode follow-up — the exact waste
-//     task_prompt_frame.go exists to remove.
+//   - opencode: resume is also id-addressed (`run --session <id>`). The prior
+//     `--continue` fallback could attach to another task's newest session when
+//     two tasks shared a work directory, so no id now means no continuation.
 //   - any other runner: needs both a captured id and a ResumeArgs template.
 func resumeCanCarryContext(runner RunnerConfig, sessionID string) bool {
 	switch normalizeRunnerID(runner.RunnerID) {
-	case "claude", "codex":
+	case "claude", "codex", "opencode":
 		return strings.TrimSpace(sessionID) != ""
-	case "opencode":
-		return true
 	default:
 		return strings.TrimSpace(sessionID) != "" && len(runner.ResumeArgs) > 0
 	}
 }
 
 // rawSessionID patterns recover a session id from a raw (non-stream-json)
-// output chunk. Best-effort: a miss just means we fall back to id-independent
-// resume (opencode --continue) or carry-memo (codex).
+// output chunk. A miss means a future continuation is refused rather than
+// guessed; "most recent" is not a task identity when runs share a directory.
 var (
 	codexSessionIDPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)session[ _]?id["']?\s*[:=]\s*["']?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`),

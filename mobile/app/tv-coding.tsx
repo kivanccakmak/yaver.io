@@ -193,6 +193,10 @@ export default function TVCodingScreen() {
         selectedMcpServers,
         goalIntent ? goalText : undefined,
         includeYaverMcp,
+        undefined,
+        undefined,
+        "tasks",
+        "tv",
       );
       if (projectName && selectedProjectPath) {
         void saveLastTaskProject({

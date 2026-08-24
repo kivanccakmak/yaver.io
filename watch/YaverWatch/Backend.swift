@@ -22,6 +22,43 @@ enum Backend {
     static let agentPort = 18080
 }
 
+/// Surface-scoped appearance for standalone mode. Paired mode routes through
+/// the phone and never gives the watch its token; standalone already owns a
+/// token explicitly, so making it open the phone would be a false dependency.
+enum WatchAppearanceSettings {
+    static func load(token: String) async throws -> String {
+        var request = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("settings"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("watchos", forHTTPHeaderField: "X-Yaver-Surface")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw PhoneSessionError.appearanceSyncFailed("Couldn't load appearance.")
+        }
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let settings = root?["settings"] as? [String: Any]
+        let rows = settings?["appearanceThemeBySurface"] as? [[String: Any]] ?? []
+        let theme = rows.last(where: { $0["surface"] as? String == "watchos" })?["theme"] as? String
+        return theme == "light" ? "light" : "dark"
+    }
+
+    static func save(token: String, theme: String) async throws -> String {
+        let next = theme == "light" ? "light" : "dark"
+        var request = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("settings"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("watchos", forHTTPHeaderField: "X-Yaver-Surface")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "appearanceThemeForSurface": ["surface": "watchos", "theme": next],
+        ])
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw PhoneSessionError.appearanceSyncFailed("Couldn't save appearance.")
+        }
+        return next
+    }
+}
+
 struct DeviceCodeStart: Decodable {
     let userCode: String
     let deviceCode: String

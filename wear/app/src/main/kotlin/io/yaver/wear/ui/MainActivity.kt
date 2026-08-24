@@ -59,6 +59,7 @@ class MainActivity : ComponentActivity() {
 
         phoneBridge = PhoneBridge(applicationContext)
         haptics = Haptics(applicationContext)
+        WatchState.setAppearanceTheme(StandaloneStore.appearanceTheme(this))
 
         // Resolve the standalone session client once if the user has opted in
         // and has creds. If phone-paired is available, we won't use it — but
@@ -93,6 +94,7 @@ class MainActivity : ComponentActivity() {
                 onDismissWake = { BoxLifecycle.reset() },
                 canRemoveDevice = StandaloneStore.isReady(this),
                 onRemoveDevice = { removeStandaloneDevice() },
+                onAppearance = { setAppearance(it) },
             )
         }
 
@@ -101,6 +103,45 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val reachable = phoneBridge.isPhoneReachable()
             WatchState.setPhoneReachable(reachable)
+            if (reachable) {
+                runCatching { phoneBridge.syncAppearance() }
+            } else {
+                val token = StandaloneStore.token(this@MainActivity)
+                if (token.isNotEmpty()) runCatching {
+                    val saved = Backend().loadAppearance(token)
+                    WatchState.setAppearanceTheme(saved)
+                    StandaloneStore.setAppearanceTheme(this@MainActivity, saved)
+                }
+            }
+        }
+    }
+
+    private fun setAppearance(theme: String) {
+        val next = if (theme == "light") "light" else "dark"
+        val previous = WatchState.appearanceTheme.value
+        WatchState.setAppearanceTheme(next)
+        StandaloneStore.setAppearanceTheme(this, next)
+        lifecycleScope.launch {
+            val saved = runCatching {
+                if (phoneBridge.isPhoneReachable()) {
+                    phoneBridge.syncAppearance(next)
+                    next
+                } else {
+                    val token = StandaloneStore.token(this@MainActivity)
+                    if (token.isEmpty()) throw PhoneBridge.PhoneUnreachableException("Phone not reachable")
+                    Backend().saveAppearance(token, next)
+                }
+            }
+            saved.onFailure {
+                // The picker is optimistic so the wrist responds immediately,
+                // but the durable setting is the cross-surface contract. A
+                // failed phone/backend write must restore both the pixels and
+                // cache instead of showing a value that will silently flip on
+                // the next launch.
+                WatchState.setAppearanceTheme(previous)
+                StandaloneStore.setAppearanceTheme(this@MainActivity, previous)
+                WatchState.setLine("Couldn't sync appearance — reconnect and try again")
+            }
         }
     }
 

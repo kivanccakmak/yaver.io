@@ -13,24 +13,17 @@ function check(name: string, cond: boolean, detail?: string) {
 
 console.log("planFollowUp");
 
-// The reported bug, in one case. A task that finished is the COMMON state by
-// the time a user reads the answer and types a reply — so this path, not
-// "continue", is what most follow-ups actually take. It must carry the
-// conversation, or the user watches their chat get replaced by an empty one.
+// The reported bug: finished is the COMMON state when a user replies. It is a
+// finished turn, not a finished conversation, so it must retain the task.
 {
   const p = planFollowUp({ parentRunner: "codex", desiredRunner: "codex", status: "completed" });
-  check("finished parent forks silently", p.action === "fork-silent", p.action);
-  check("finished parent keeps the same runner", p.forkRunner === "codex", p.forkRunner);
-  check("finished parent carries the conversation", p.carriesConversation);
+  check("finished Codex task continues in place", p.action === "continue", p.action);
 }
 
-// Every finished status forks — not just "completed". A user replying to a
-// FAILED task is asking it to try again, which is the case most likely to be
-// mistaken for "the app lost my message".
+// Every terminal turn status continues the same task/session.
 for (const status of ["completed", "review", "failed", "stopped"]) {
   const p = planFollowUp({ parentRunner: "claude", desiredRunner: "claude", status });
-  check(`status ${status} forks`, p.action === "fork-silent", p.action);
-  check(`status ${status} carries conversation`, p.carriesConversation);
+  check(`status ${status} continues`, p.action === "continue", p.action);
 }
 
 // A live task continues in place — no new task, no fork.
@@ -39,19 +32,17 @@ for (const status of ["running", "queued", "streaming", ""]) {
   check(`live status ${status || "(empty)"} continues`, p.action === "continue", p.action);
 }
 
-// Changing the runner is the one fork the user should be ASKED about: the chat
-// formats differ and it is a deliberate act, unlike replying to a done task.
+// A runner switch cannot masquerade as a follow-up. New Task/Fork is explicit.
 {
   const p = planFollowUp({ parentRunner: "codex", desiredRunner: "claude", status: "running" });
-  check("runner change asks first", p.action === "fork-confirm", p.action);
-  check("runner change forks to the NEW runner", p.forkRunner === "claude", p.forkRunner);
+  check("runner change is blocked", p.action === "runner-change-blocked", p.action);
 }
 
 // Runner change wins over finished: a confirm dialog must not be skipped just
 // because the parent also happens to be done.
 {
   const p = planFollowUp({ parentRunner: "codex", desiredRunner: "claude", status: "completed" });
-  check("runner change beats finished (still confirms)", p.action === "fork-confirm", p.action);
+  check("runner change stays blocked after a finished turn", p.action === "runner-change-blocked", p.action);
 }
 
 // An unknown parent runner must NOT read as "changed". Legacy tasks have no
@@ -66,18 +57,17 @@ for (const status of ["running", "queued", "streaming", ""]) {
   check("empty picker does not count as a change", p.action === "continue", p.action);
 }
 
-// Legacy finished task with no recorded runner still needs a non-empty runner,
-// because the agent's fork endpoint rejects an empty one.
+// Legacy tasks still continue; the agent decides whether it has a real native
+// session identity and reports an explicit conflict if it cannot resume one.
 {
   const p = planFollowUp({ parentRunner: "", desiredRunner: "", status: "completed" });
-  check("legacy finished task falls back to a real runner", p.forkRunner === "claude", p.forkRunner);
+  check("legacy finished task never forks", p.action === "continue", p.action);
 }
 
 // Adopted tmux sessions bypass all of it — input goes to the pane.
 {
   const p = planFollowUp({ isAdopted: true, parentRunner: "codex", status: "completed" });
   check("adopted tmux sends input directly", p.action === "tmux-input", p.action);
-  check("adopted tmux never forks", p.forkRunner === "");
 }
 
 // Whitespace must not create a phantom runner change.

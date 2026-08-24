@@ -31,6 +31,12 @@ test("parseTurn accepts valid v1 messages", () => {
   assert.deepEqual(parseTurn('{"v":1,"kind":"intent","intent":"run-tests"}'), {
     v: 1, kind: "intent", intent: "run-tests",
   });
+  assert.deepEqual(parseTurn('{"v":1,"kind":"appearance","theme":"light"}'), {
+    v: 1, kind: "appearance", theme: "light",
+  });
+  assert.deepEqual(parseTurn('{"v":1,"kind":"appearance"}'), {
+    v: 1, kind: "appearance", theme: undefined,
+  });
 });
 
 test("parseTurn rejects malformed / wrong-version / unknown-kind input", () => {

@@ -47,6 +47,7 @@ object WatchProtocol {
     private const val K_STATUS = "status"
     private const val K_TARGET = "target"
     private const val K_MACHINE_ID = "machineId"
+    private const val K_THEME = "theme"
 
     // ========================================================================
     //  Watch → Phone  (outbound turns)
@@ -85,6 +86,14 @@ object WatchProtocol {
             .put(K_V, PROTOCOL_VERSION)
             .put(K_KIND, "wake")
             .apply { if (machineId.isNotEmpty()) put(K_MACHINE_ID, machineId) }
+            .toString()
+
+    /** Read (null) or write the Wear OS-specific appearance row via the phone. */
+    fun appearance(theme: String? = null): String =
+        JSONObject()
+            .put(K_V, PROTOCOL_VERSION)
+            .put(K_KIND, "appearance")
+            .apply { if (theme == "light" || theme == "dark") put(K_THEME, theme) }
             .toString()
 
     enum class ConfirmReply(val wire: String) {

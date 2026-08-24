@@ -34,6 +34,7 @@ enum WatchRequestKind: String, Codable {
     case confirm      // answer to a confirmNeeded prompt
     case intent       // a fixed complication quick-action
     case wake         // resume a parked managed box (phone holds the token)
+    case appearance   // read/write the watch-scoped Convex theme row
 }
 
 /// Reply to a confirm prompt.
@@ -64,8 +65,9 @@ struct WatchRequest: Codable {
     var reply: ConfirmReply?    // confirm
     var intent: WatchIntent?    // intent
     var machineId: String?      // wake (optional — phone resolves if absent)
+    var theme: String?          // appearance (nil reads; light/dark writes)
 
-    enum CodingKeys: String, CodingKey { case v, kind, text, token, reply, intent, machineId }
+    enum CodingKeys: String, CodingKey { case v, kind, text, token, reply, intent, machineId, theme }
 
     static func transcript(_ text: String) -> WatchRequest {
         WatchRequest(kind: .transcript, text: text)
@@ -78,6 +80,9 @@ struct WatchRequest: Codable {
     }
     static func wake(machineId: String?) -> WatchRequest {
         WatchRequest(kind: .wake, machineId: machineId)
+    }
+    static func appearance(_ theme: String? = nil) -> WatchRequest {
+        WatchRequest(kind: .appearance, theme: theme)
     }
 }
 
@@ -114,13 +119,15 @@ struct WatchReply: Codable {
     var taskId: String?     // working / summary
     var status: String?     // summary — "completed" | "failed" | "review" | …
     var target: String?     // handoff — e.g. "phone"
+    var theme: String?      // appearance sync — "light" | "dark"
 
     // The `kind` raw values use a custom mapping for confirm-needed's hyphen,
     // so decode/encode kind via its rawValue string explicitly.
-    enum CodingKeys: String, CodingKey { case v, kind, spoken, token, prompt, taskId, status, target }
+    enum CodingKeys: String, CodingKey { case v, kind, spoken, token, prompt, taskId, status, target, theme }
 
     init(kind: WatchReplyKind, spoken: String? = nil, token: String? = nil,
-         prompt: String? = nil, taskId: String? = nil, status: String? = nil, target: String? = nil) {
+         prompt: String? = nil, taskId: String? = nil, status: String? = nil, target: String? = nil,
+         theme: String? = nil) {
         self.kind = kind
         self.spoken = spoken
         self.token = token
@@ -128,6 +135,7 @@ struct WatchReply: Codable {
         self.taskId = taskId
         self.status = status
         self.target = target
+        self.theme = theme
     }
 
     init(from decoder: Decoder) throws {
@@ -144,6 +152,7 @@ struct WatchReply: Codable {
         taskId = try? c.decode(String.self, forKey: .taskId)
         status = try? c.decode(String.self, forKey: .status)
         target = try? c.decode(String.self, forKey: .target)
+        theme = try? c.decode(String.self, forKey: .theme)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -156,6 +165,7 @@ struct WatchReply: Codable {
         try c.encodeIfPresent(taskId, forKey: .taskId)
         try c.encodeIfPresent(status, forKey: .status)
         try c.encodeIfPresent(target, forKey: .target)
+        try c.encodeIfPresent(theme, forKey: .theme)
     }
 
     /// Wire string for a kind (the only place the "confirm-needed" hyphen lives).

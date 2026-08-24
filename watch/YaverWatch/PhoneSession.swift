@@ -61,6 +61,15 @@ final class PhoneSession: NSObject, ObservableObject {
         try await send(.intent(intent))
     }
 
+    func syncAppearance(_ theme: String? = nil) async throws -> String {
+        let reply = try await send(.appearance(theme))
+        guard reply.kind != .error, let saved = reply.theme,
+              saved == "light" || saved == "dark" else {
+            throw PhoneSessionError.appearanceSyncFailed(reply.spoken)
+        }
+        return saved
+    }
+
     // MARK: - Control channel (wake box)
 
     /// Outcome of a wake-box request routed through the phone.
@@ -136,7 +145,15 @@ final class PhoneSession: NSObject, ObservableObject {
 
 enum PhoneSessionError: Error, LocalizedError {
     case notReachable
-    var errorDescription: String? { "Your phone isn't reachable. Open the Yaver app on your phone, or use the watch without your phone." }
+    case appearanceSyncFailed(String?)
+    var errorDescription: String? {
+        switch self {
+        case .notReachable:
+            return "Your phone isn't reachable. Open the Yaver app on your phone, or use the watch without your phone."
+        case .appearanceSyncFailed(let message):
+            return message ?? "Couldn't sync appearance through your phone."
+        }
+    }
 }
 
 // MARK: - WCSessionDelegate

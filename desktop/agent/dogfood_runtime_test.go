@@ -17,7 +17,52 @@ func setupDogfoodRepos(t *testing.T) (seed, local, origin string) {
 	syncGitCmd(t, seed, "commit", "-m", "identify yaver")
 	syncGitCmd(t, seed, "push")
 	syncGitCmd(t, local, "pull", "--ff-only")
+	// Keep the checkout's persisted origin production-real while redirecting
+	// network operations to the local bare fixture. This proves the source gate
+	// instead of weakening it for tests.
+	syncGitCmd(t, local, "remote", "set-url", "origin", dogfoodSourceURL)
+	syncGitCmd(t, local, "config", "url."+origin+".insteadOf", dogfoodSourceURL)
 	return seed, local, origin
+}
+
+func TestDogfoodSourceStatusOffersCloneWhenSourceMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	status := dogfoodSourceStatus("")
+	if status.Ready || status.Code != "DOGFOOD_SOURCE_MISSING" || status.Action == nil {
+		t.Fatalf("missing source did not carry clone route: %+v", status)
+	}
+	if status.Action.Path != "/repos/clone" || status.Action.Body["url"] != dogfoodSourceURL {
+		t.Fatalf("missing source clone route drifted: %+v", status.Action)
+	}
+}
+
+func TestDogfoodSourceStatusRejectsYaverLookingCheckoutWithWrongOrigin(t *testing.T) {
+	_, local, _ := setupSyncRepos(t)
+	syncWrite(t, filepath.Join(local, "package.json"), `{"name":"yaver-mobile"}`)
+	status := dogfoodSourceStatus(local)
+	if status.Ready || status.Code != "DOGFOOD_GIT_ORIGIN_WRONG" {
+		t.Fatalf("wrong origin was reported ready: %+v", status)
+	}
+}
+
+func TestDogfoodSourceStatusProvesSourceAndCanonicalOrigin(t *testing.T) {
+	_, local, _ := setupDogfoodRepos(t)
+	status := dogfoodSourceStatus(local)
+	if !status.OK || !status.Ready || status.Code != "DOGFOOD_SOURCE_READY" || status.Path != local {
+		t.Fatalf("canonical source did not become ready: %+v", status)
+	}
+}
+
+func TestDogfoodSourceStatusRejectsAndRedactsEmbeddedOriginCredential(t *testing.T) {
+	_, local, _ := setupDogfoodRepos(t)
+	syncGitCmd(t, local, "remote", "set-url", "origin", "https://secret-token@github.com/yaver-io/yaver.io.git")
+	status := dogfoodSourceStatus(local)
+	if status.Ready || status.Code != "DOGFOOD_GIT_CREDENTIALS_EMBEDDED" {
+		t.Fatalf("embedded credential was reported ready: %+v", status)
+	}
+	if strings.Contains(status.Remote, "secret-token") || status.Remote != dogfoodSourceURL {
+		t.Fatalf("embedded credential was not redacted: %+v", status)
+	}
 }
 
 func TestPrepareDogfoodCheckoutRebasesOntoOriginMainWithoutPush(t *testing.T) {
@@ -102,6 +147,7 @@ func TestDogfoodRuntimeHTTPRefusesNonOwner(t *testing.T) {
 		call   func(http.ResponseWriter, *http.Request)
 	}{
 		{http.MethodPost, "/attach/prepare", s.handleDogfoodPrepare},
+		{http.MethodGet, "/dogfood/source/status", s.handleDogfoodSourceStatus},
 		{http.MethodGet, "/dogfood/status", s.handleDogfoodStatus},
 		{http.MethodPost, "/dogfood/rerender", s.handleDogfoodRerender},
 	} {

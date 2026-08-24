@@ -170,11 +170,40 @@ export interface Task {
    *  tmuxSession is the human name ("yaver-<task>"). */
   tmuxSessionId?: string;
   tmuxSession?: string;
+  sessionId?: string;
+  executionSession?: TaskExecutionIdentity;
   /** Structured task capability gap from POST /tasks. Missing runner/toolchain
    *  preflight failures carry the same routed object as preview gaps, so the
    *  Vibing surface can render Install + streamed retry instead of prose. */
   capabilityGap?: unknown;
   failure?: TaskFailureWire | null;
+}
+
+export interface TaskExecutionIdentity {
+  yaverSessionId: string;
+  taskId: string;
+  remoteBoxId?: string;
+  runnerName?: string;
+  runnerId?: string;
+  runnerSessionId?: string;
+  startedFrom?: string;
+  startedFromSurface?: string;
+  initialSurface?: string;
+  sessionStartedAt: string;
+  lastSurface?: string;
+  lastActiveAt: string;
+  firstUserMessageAt?: string;
+  firstAgentResponseAt?: string;
+  lastUserMessageAt?: string;
+  lastAgentResponseAt?: string;
+  deletedAt?: string;
+  resumable: boolean;
+  tmuxSession?: string;
+  tmuxSessionId?: string;
+  tmuxWindowIndex?: string;
+  tmuxWindowName?: string;
+  tmuxPaneIndex?: string;
+  tmuxPaneId?: string;
 }
 
 export interface RemoteProject {
@@ -1891,6 +1920,7 @@ export type CreateTaskParams = {
    *  deselects the `yaver` chip, so the runner gets ONLY the external MCPs
    *  in mcpServers — possibly none. */
   includeYaverMcp?: boolean;
+  sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace";
 };
 
 export function buildCreateTaskBody(params: CreateTaskParams): Record<string, unknown> {
@@ -1937,6 +1967,7 @@ export function buildCreateTaskBody(params: CreateTaskParams): Record<string, un
     // user choice (or an enabled Use latest preference).
     includeYaverMcp: params.includeYaverMcp ?? false,
     source: "web",
+    sessionStartedFrom: params.sessionStartedFrom ?? "tasks",
   };
 }
 
@@ -2512,6 +2543,8 @@ export class AgentClient {
         deviceName: this.host ?? undefined,
         tmuxSessionId: t.tmuxSessionId || undefined,
         tmuxSession: t.tmuxSession || undefined,
+        sessionId: t.sessionId || undefined,
+        executionSession: t.executionSession || undefined,
         capabilityGap: t.capabilityGap || undefined,
         // Video + proof fields ride the same task JSON. These were silently
         // dropped by this mapper before, which made videoStatus undefined on
@@ -2567,6 +2600,8 @@ export class AgentClient {
       deviceName: this.host ?? undefined,
       tmuxSessionId: t.tmuxSessionId || undefined,
       tmuxSession: t.tmuxSession || undefined,
+      sessionId: t.sessionId || undefined,
+      executionSession: t.executionSession || undefined,
       capabilityGap: t.capabilityGap || undefined,
       // Same video/proof passthrough as listTasks — keep both mappers in sync.
       videoEnabled: t.videoEnabled || undefined,
@@ -2596,7 +2631,7 @@ export class AgentClient {
     if (!res.ok) throw new Error(`Failed to stop task: ${res.status}`);
   }
 
-  async continueTask(taskId: string, input: string, mode?: string): Promise<void> {
+  async continueTask(taskId: string, input: string, mode?: string): Promise<TaskExecutionIdentity> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(
       `${this.taskBaseUrl}/tasks/${taskId}/continue`,
@@ -2625,7 +2660,19 @@ export class AgentClient {
       if (parked?.parked) throw new ParkedTurnError(parked);
       if (parked?.error) throw new Error(parked.error);
     }
-    if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
+    if (!res.ok) {
+      throw new Error(await responseErrorMessage(res, `Failed to continue task: ${res.status}`));
+    }
+    const data = await res.json().catch(() => null) as {
+      taskId?: string;
+      sameTask?: boolean;
+      executionSession?: TaskExecutionIdentity;
+    } | null;
+    const identity = data?.executionSession;
+    if (!data || data.taskId !== taskId || data.sameTask === false || identity?.taskId !== taskId) {
+      throw new Error("The agent did not confirm the same task and runner session for this follow-up.");
+    }
+    return identity;
   }
 
   async completeTask(taskId: string): Promise<void> {
@@ -4084,17 +4131,12 @@ export class AgentClient {
   private activeRelayPassword: string | null = null;
 
   private get authHeaders(): Record<string, string> {
-    // X-Yaver-Caller as a custom header would trigger a CORS preflight
-    // on every request, and neither the relay (≤ v0.1.15) nor the agent
-    // (≤ v1.99.71) list X-Yaver-Caller in Access-Control-Allow-Headers
-    // yet — so the browser blocks the actual request and the dashboard
-    // sees "Load failed" everywhere. Until both sides ship the matching
-    // CORS update, we attribute via the ?caller= query param on SSE URLs
-    // only (where it's always allowed since EventSource never preflights).
-    // Non-SSE requests stay anonymous to the agent's logs for one
-    // release; the next agent + relay rev re-enables the header.
+    // X-Yaver-Surface is advisory session provenance, never authorization.
+    // Agent + relay CORS explicitly allow it so web participates in the same
+    // initial/last-surface contract as native clients.
     const h: Record<string, string> = {
       Authorization: `Bearer ${this.token}`,
+      "X-Yaver-Surface": "web",
     };
     // Carry the relay password whenever the relay is the active transport OR
     // a machine-role route may send this request through a relay despite a

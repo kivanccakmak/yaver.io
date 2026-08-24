@@ -104,4 +104,7 @@ class PhoneBridge(context: Context) {
      */
     suspend fun sendWakeBox(machineId: String) =
         send(WatchProtocol.wake(machineId))
+
+    suspend fun syncAppearance(theme: String? = null) =
+        send(WatchProtocol.appearance(theme))
 }

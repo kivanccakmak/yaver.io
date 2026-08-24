@@ -283,6 +283,7 @@ function agentRequest(method, urlPath, body) {
       path: url.pathname + url.search,
       headers: {
         'Content-Type': 'application/json',
+        'X-Yaver-Surface': 'desktop',
       },
       timeout: 15000,
     };

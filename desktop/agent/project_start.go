@@ -125,6 +125,8 @@ func (s *HTTPServer) handleProjectStart(w http.ResponseWriter, r *http.Request) 
 	}
 	prompt := projectStartPrompt(body.Name, palette, colors)
 	task, err := s.taskMgr.CreateTaskWithOptions(body.Name, prompt, "", "project-start", "", "", nil, TaskCreateOptions{
+		SessionStartedFrom:      "new-application",
+		StartedFromSurface:      sessionSurfaceFromRequest(r),
 		WorkDir:                 generated.Directory,
 		ProjectName:             body.Name,
 		InitialUserPrompt:       prompt,

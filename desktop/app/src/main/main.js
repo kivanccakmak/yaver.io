@@ -296,7 +296,7 @@ async function agentRequest(method, urlPath, body) {
   if (!authToken) authToken = getToken();
 
   const url = `${agentBaseUrl}${urlPath}`;
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json', 'X-Yaver-Surface': 'desktop' };
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
   }

@@ -138,10 +138,19 @@ export class YaverClient {
   async continueTask(taskId: string, message: string, images?: ImageAttachment[]): Promise<void> {
     const body: Record<string, unknown> = { input: message };
     if (images?.length) body.images = images;
-    const result = await this.post<{ ok: boolean; error?: string }>(
+    const result = await this.post<{
+      ok: boolean;
+      error?: string;
+      taskId?: string;
+      sameTask?: boolean;
+      executionSession?: { taskId?: string };
+    }>(
       `/tasks/${taskId}/continue`, body
     );
     if (!result.ok) throw new Error(result.error || 'Failed to continue task');
+    if (result.taskId !== taskId || result.sameTask === false || result.executionSession?.taskId !== taskId) {
+      throw new Error('The agent did not confirm the same task and runner session for this follow-up.');
+    }
   }
 
   /** Clean up old tasks, images, and logs on the agent. */

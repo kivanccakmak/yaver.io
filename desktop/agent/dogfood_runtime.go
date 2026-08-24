@@ -22,10 +22,147 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+const dogfoodSourceURL = "https://github.com/yaver-io/yaver.io.git"
+
+type dogfoodAction struct {
+	Label  string         `json:"label"`
+	Method string         `json:"method"`
+	Path   string         `json:"path"`
+	Body   map[string]any `json:"body,omitempty"`
+}
+
+type dogfoodSourceResponse struct {
+	OK            bool           `json:"ok"`
+	Ready         bool           `json:"ready"`
+	Code          string         `json:"code"`
+	Path          string         `json:"path,omitempty"`
+	SuggestedPath string         `json:"suggestedPath,omitempty"`
+	Branch        string         `json:"branch,omitempty"`
+	Remote        string         `json:"remote,omitempty"`
+	GitVersion    string         `json:"gitVersion,omitempty"`
+	Message       string         `json:"message"`
+	Remedy        string         `json:"remedy,omitempty"`
+	Action        *dogfoodAction `json:"action,omitempty"`
+}
+
+func canonicalYaverRemote(remote string) bool {
+	normalized := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(remote), ".git"))
+	normalized = strings.TrimSuffix(normalized, "/")
+	return strings.HasSuffix(normalized, "github.com/yaver-io/yaver.io") ||
+		strings.HasSuffix(normalized, "github.com:kivanccakmak/yaver.io") ||
+		strings.HasSuffix(normalized, "github.com/kivanccakmak/yaver.io")
+}
+
+// findDogfoodCheckout checks only the normal one-level workspace roots. This
+// is deliberately bounded: Dogfood readiness must never recursively walk a
+// home directory and make an otherwise-live box look offline.
+func findDogfoodCheckout() string {
+	home, _ := os.UserHomeDir()
+	for _, parent := range []string{"Workspace", "Projects", "repos", "code", "src", "dev"} {
+		for _, repo := range scanDirForRepos(filepath.Join(home, parent)) {
+			remote, _ := runGit(repo.Path, "config", "--get", "remote.origin.url")
+			if IsYaverSelfDevelopmentDir(repo.Path) && canonicalYaverRemote(remote) {
+				return repo.Path
+			}
+		}
+	}
+	return ""
+}
+
+func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
+	suggested := filepath.Join(ResolveWorkspaceParent(""), "yaver.io")
+	if gitPath, err := exec.LookPath("git"); err != nil || strings.TrimSpace(gitPath) == "" {
+		return dogfoodSourceResponse{
+			Code: "DOGFOOD_GIT_NOT_INSTALLED", SuggestedPath: suggested,
+			Message: "Git is not installed on this box.",
+			Remedy:  "Install Git here, then Yaver can clone and verify its source.",
+			Action:  &dogfoodAction{Label: "Install Git", Method: http.MethodPost, Path: "/install/git"},
+		}
+	}
+	version, _ := runGit("", "--version")
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		workDir = findDogfoodCheckout()
+	}
+	if workDir == "" {
+		return dogfoodSourceResponse{
+			Code: "DOGFOOD_SOURCE_MISSING", SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
+			Message: "This box does not have Yaver's source code.",
+			Remedy:  "Clone the public Yaver repository on this box, then retry Dogfood mode.",
+			Action: &dogfoodAction{Label: "Clone Yaver source", Method: http.MethodPost, Path: "/repos/clone", Body: map[string]any{
+				"url": dogfoodSourceURL,
+			}},
+		}
+	}
+	if !IsYaverSelfDevelopmentDir(workDir) {
+		return dogfoodSourceResponse{
+			Code: "DOGFOOD_NOT_YAVER_CHECKOUT", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
+			Message: "The selected directory is not Yaver's source checkout.",
+			Remedy:  "Choose the yaver.io repository, or clone a fresh copy on this box.",
+			Action: &dogfoodAction{Label: "Clone Yaver source", Method: http.MethodPost, Path: "/repos/clone", Body: map[string]any{
+				"url": dogfoodSourceURL,
+			}},
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".git")); err != nil {
+		return dogfoodSourceResponse{
+			Code: "DOGFOOD_SOURCE_NOT_GIT", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
+			Message: "Yaver source exists here, but it is not a Git checkout.",
+			Remedy:  "Select or clone a real yaver.io Git checkout so Dogfood can safely sync origin/main.",
+		}
+	}
+	// Read the persisted value rather than `remote get-url`: Git applies
+	// url.*.insteadOf rewrites to the latter, which can make a valid canonical
+	// origin look like a credential helper or local mirror target.
+	remote, remoteErr := runGit(workDir, "config", "--get", "remote.origin.url")
+	remote = strings.TrimSpace(remote)
+	if remoteErr != nil || remote == "" {
+		return dogfoodSourceResponse{
+			Code: "DOGFOOD_GIT_ORIGIN_MISSING", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
+			Message: "The Yaver checkout has no origin remote.",
+			Remedy:  "Repair this checkout's origin to the public yaver-io/yaver.io repository, then retry.",
+		}
+	}
+	if clean := stripURLCredentials(remote); clean != remote {
+		return dogfoodSourceResponse{
+			Code: "DOGFOOD_GIT_CREDENTIALS_EMBEDDED", Path: workDir, SuggestedPath: suggested, Remote: clean, GitVersion: strings.TrimSpace(version),
+			Message: "The Yaver origin stores a credential inside its URL.",
+			Remedy:  "Remove the embedded credential, then use Yaver's Git configuration wizard so secrets stay in the box credential store.",
+		}
+	}
+	if !canonicalYaverRemote(remote) {
+		return dogfoodSourceResponse{
+			Code: "DOGFOOD_GIT_ORIGIN_WRONG", Path: workDir, SuggestedPath: suggested, Remote: stripURLCredentials(remote), GitVersion: strings.TrimSpace(version),
+			Message: "The selected Yaver-looking checkout points at a different origin.",
+			Remedy:  "Verify the repository before changing its origin; Yaver will not rewrite it automatically.",
+		}
+	}
+	branch, _ := runGit(workDir, "rev-parse", "--abbrev-ref", "HEAD")
+	return dogfoodSourceResponse{
+		OK: true, Ready: true, Code: "DOGFOOD_SOURCE_READY", Path: workDir,
+		SuggestedPath: suggested, Branch: strings.TrimSpace(branch), Remote: stripURLCredentials(remote),
+		GitVersion: strings.TrimSpace(version), Message: "Yaver source and its Git origin are ready on this box.",
+	}
+}
+
+func (s *HTTPServer) handleDogfoodSourceStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET required"})
+		return
+	}
+	if !attachOwnerAllowed() {
+		jsonReply(w, http.StatusForbidden, dogfoodSourceResponse{Code: "DOGFOOD_OWNER_ONLY", Message: "Dogfood mode is owner-only."})
+		return
+	}
+	jsonReply(w, http.StatusOK, dogfoodSourceStatus(r.URL.Query().Get("workDir")))
+}
 
 type dogfoodPrepareRequest struct {
 	WorkDir string `json:"workDir"`
@@ -63,12 +200,15 @@ func dogfoodConflictPrompt(workDir, branch string, conflicts []string, detail st
 func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 	workDir = strings.TrimSpace(workDir)
 	resp := dogfoodPrepareResponse{WorkDir: workDir, Base: "origin/main"}
-	if workDir == "" || !IsYaverSelfDevelopmentDir(workDir) {
-		resp.Code = "DOGFOOD_NOT_YAVER_CHECKOUT"
-		resp.Error = "Dogfood mode can prepare only Yaver's own checkout."
-		resp.Remedy = "Select the yaver.io checkout on the primary device and retry."
+	source := dogfoodSourceStatus(workDir)
+	if !source.Ready {
+		resp.Code = source.Code
+		resp.Error = source.Message
+		resp.Remedy = source.Remedy
 		return http.StatusBadRequest, resp
 	}
+	workDir = source.Path
+	resp.WorkDir = workDir
 
 	branch, err := runGit(workDir, "rev-parse", "--abbrev-ref", "HEAD")
 	branch = strings.TrimSpace(branch)
@@ -98,9 +238,16 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 
 	fetchOut, fetchErr := runGit(workDir, "fetch", "origin", "main")
 	if fetchErr != nil {
-		resp.Code = "DOGFOOD_GIT_FETCH_FAILED"
-		resp.Error = "The primary device could not fetch origin/main."
-		resp.Remedy = "Check its GitHub authentication and network, then retry."
+		lower := strings.ToLower(fetchOut)
+		if strings.Contains(lower, "authentication failed") || strings.Contains(lower, "permission denied") || strings.Contains(lower, "could not read username") {
+			resp.Code = "DOGFOOD_GIT_AUTH_UNCONFIGURED"
+			resp.Error = "GitHub authentication is not configured or was rejected on this box."
+			resp.Remedy = "Open the Git configuration wizard on mobile, authorize GitHub for this box, then retry."
+		} else {
+			resp.Code = "DOGFOOD_GIT_FETCH_FAILED"
+			resp.Error = "The primary device could not fetch origin/main."
+			resp.Remedy = "Check its network and Git configuration, then retry."
+		}
 		resp.Output = strings.TrimSpace(fetchOut)
 		return http.StatusBadGateway, resp
 	}

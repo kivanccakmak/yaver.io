@@ -31,7 +31,7 @@
 //   posture as withMeshTunnel.js).
 // ─────────────────────────────────────────────────────────────────────────
 
-import { handleWatchTurn, type WatchReply, type WatchRuntimeTurnFn, type WatchTurn, type WatchWakeFn } from "./watchBridge";
+import { handleWatchTurn, type WatchAppearanceFn, type WatchReply, type WatchRuntimeTurnFn, type WatchTurn, type WatchWakeFn } from "./watchBridge";
 import type { CarVoiceConfig, CarVoiceDeps } from "./carVoiceCoding";
 import type { CarSurfaceOps } from "./carSurfaceIntent";
 
@@ -48,6 +48,8 @@ export interface WatchBridgeWiring {
   /** Resume a parked managed box on the wrist's behalf (the phone holds the
    *  control-plane token). Wire to startManagedCloudMachine. */
   wakeBox?: WatchWakeFn;
+  /** Read/write the watchOS or Wear OS appearance row through the signed-in phone. */
+  appearance?: WatchAppearanceFn;
   /** Optional remote-runtime queue/live-session router. Older agents can omit
    *  this and the bridge falls back to the existing task loop. */
   runtimeTurn?: WatchRuntimeTurnFn;
@@ -87,7 +89,7 @@ export const watchBridgeBus: WatchBridgeBus = {
     }
     const config = w.config?.() ?? {};
     try {
-      return await handleWatchTurn(msg, w.makeDeps(), config, (r) => safeSend(w, r), w.ops, w.wakeBox, w.runtimeTurn);
+      return await handleWatchTurn(msg, w.makeDeps(), config, (r) => safeSend(w, r), w.ops, w.wakeBox, w.runtimeTurn, w.appearance);
     } catch (e) {
       const err: WatchReply = {
         v: 1,
@@ -125,6 +127,10 @@ export function parseTurn(json: string): WatchTurn | null {
         : null;
     case "intent":
       return typeof m.intent === "string" ? { v: 1, kind: "intent", intent: m.intent } : null;
+    case "appearance": {
+      const theme = m.theme === "light" || m.theme === "dark" ? m.theme : undefined;
+      return { v: 1, kind: "appearance", theme };
+    }
     case "wake":
       // machineId is optional — the phone resolves the current/primary managed
       // box when absent.

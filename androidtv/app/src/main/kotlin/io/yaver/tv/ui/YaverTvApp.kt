@@ -4,6 +4,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.SideEffect
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -41,6 +45,8 @@ fun YaverTvApp(store: TvStore) {
     val nav = rememberNavController()
     val token by store.token.collectAsState()
     val authenticated = token.isNotEmpty()
+    val appearanceTheme by store.appearanceTheme.collectAsState()
+    SideEffect { TvColors.applyTheme(appearanceTheme) }
 
     LaunchedEffect(authenticated) {
         if (authenticated) {
@@ -56,10 +62,25 @@ fun YaverTvApp(store: TvStore) {
         }
     }
 
-    NavHost(
-        navController = nav,
-        startDestination = if (authenticated) Routes.DASHBOARD else Routes.SIGN_IN,
+    MaterialTheme(
+        colorScheme = if (appearanceTheme == "light") lightColorScheme(
+            primary = TvColors.Accent,
+            background = TvColors.Bg,
+            surface = TvColors.Card,
+            onBackground = TvColors.TextPrimary,
+            onSurface = TvColors.TextPrimary,
+        ) else darkColorScheme(
+            primary = TvColors.Accent,
+            background = TvColors.Bg,
+            surface = TvColors.Card,
+            onBackground = TvColors.TextPrimary,
+            onSurface = TvColors.TextPrimary,
+        ),
     ) {
+      NavHost(
+          navController = nav,
+          startDestination = if (authenticated) Routes.DASHBOARD else Routes.SIGN_IN,
+      ) {
         composable(Routes.SIGN_IN) { SignInScreen(store = store) }
         composable(Routes.DASHBOARD) { DashboardScreen(store = store, nav = nav) }
         composable(Routes.MACHINES) { MachinePickerScreen(store = store, nav = nav) }
@@ -87,5 +108,6 @@ fun YaverTvApp(store: TvStore) {
                 projectName = entry.arguments?.getString("projectName").orEmpty(),
             )
         }
+      }
     }
 }

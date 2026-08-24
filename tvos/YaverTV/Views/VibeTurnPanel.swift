@@ -988,34 +988,14 @@ struct VibeTurnPanel: View {
                             // silently lost behind the old connection.
                             attach(to: current.id, client: client)
                         }
-                    case .fork(let runner):
-                        let fork = try await client.forkTask(
-                            current.id,
-                            runner: runner,
-                            model: pickedModel,
-                            mode: RegisteredRunner.canonical(pickedRunner) == "opencode" ? pickedMode : "",
-                            input: text,
-                            projectDir: nil,
-                            mcpServers: Array(pickedMCPServers),
-                            includeYaverMcp: yaverMcpOn
-                        )
+                    case .settingsChangeBlocked(let message):
                         await MainActor.run {
-                            taskLog = ""
-                            liveAssistantText = ""
-                            rawCursor = 0
-                            transcriptCursor = 0
-                            activeTask = TaskSummary(
-                                id: fork.taskId,
-                                title: current.title,
-                                status: fork.status ?? "queued",
-                                runner: fork.runnerId,
-                                model: pickedModel,
-                                turns: displayTurns
-                            )
+                            optimisticTurns.removeAll { $0.id == optimistic.id }
+                            if prompt.isEmpty { prompt = text }
+                            turnError = message
                             sending = false
-                            conversationSettingsChanged = false
-                            attach(to: fork.taskId, client: client)
                         }
+                        return
                     }
                 } else {
                     let created = try await client.createTask(
@@ -1027,7 +1007,8 @@ struct VibeTurnPanel: View {
                         model: pickedModel,
                         mode: RegisteredRunner.canonical(pickedRunner) == "opencode" ? pickedMode : "",
                         mcpServers: Array(pickedMCPServers),
-                        includeYaverMcp: yaverMcpOn
+                        includeYaverMcp: yaverMcpOn,
+                        sessionStartedFrom: "vibing"
                     )
                     await MainActor.run {
                         sending = false
@@ -1188,7 +1169,8 @@ struct VibeTurnPanel: View {
             resultText: task.resultText,
             turns: task.turns,
             pendingFollowUps: task.pendingFollowUps,
-            tmuxSession: task.tmuxSession
+            tmuxSession: task.tmuxSession,
+            executionSession: task.executionSession
         )
     }
 }

@@ -345,6 +345,20 @@ struct VisionDashboardView: View {
                     }
                 }
 
+                Button {
+                    Task { await toggleAppearance() }
+                } label: {
+                    Label(
+                        store.appearanceTheme == "light" ? "Dark" : "Light",
+                        systemImage: store.appearanceTheme == "light" ? "moon.fill" : "sun.max.fill"
+                    )
+                }
+                .accessibilityLabel(
+                    store.appearanceTheme == "light"
+                        ? "Switch visionOS to dark appearance"
+                        : "Switch visionOS to light appearance"
+                )
+
                 Button(role: .destructive) {
                     store.signOut()
                 } label: {
@@ -413,6 +427,16 @@ struct VisionDashboardView: View {
     }
 
     // MARK: - Actions
+
+    private func toggleAppearance() async {
+        let next = store.appearanceTheme == "light" ? "dark" : "light"
+        do {
+            try await store.setAppearanceTheme(next)
+            notice = .success("Appearance saved for this Vision Pro.")
+        } catch {
+            notice = .error("Couldn't save appearance: \(error.localizedDescription)")
+        }
+    }
 
     /// Re-read the machine's state.
     ///

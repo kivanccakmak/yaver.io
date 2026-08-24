@@ -121,7 +121,8 @@ func TestNewSessionReArmsThePreamble(t *testing.T) {
 		{"claude with nothing to resume", RunnerConfig{RunnerID: "claude"}, "", false},
 		{"codex with a captured session", RunnerConfig{RunnerID: "codex"}, "abc-123", true},
 		{"codex with nothing to resume", RunnerConfig{RunnerID: "codex"}, "", false},
-		{"opencode resumes by --continue", RunnerConfig{RunnerID: "opencode"}, "", true},
+		{"opencode with exact session", RunnerConfig{RunnerID: "opencode"}, "ses_exact", true},
+		{"opencode with nothing to resume", RunnerConfig{RunnerID: "opencode"}, "", false},
 		{"custom runner with a template", RunnerConfig{RunnerID: "glm", ResumeArgs: []string{"--resume", "{sessionId}"}}, "abc", true},
 		{"custom runner that cannot resume", RunnerConfig{RunnerID: "glm"}, "abc", false},
 	}

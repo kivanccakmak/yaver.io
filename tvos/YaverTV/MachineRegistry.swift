@@ -202,6 +202,12 @@ enum MachineRegistry {
         /// Per-device external-MCP selection + the yaver doorway toggle — the
         /// same mcpServersByDevice row mobile and web write.
         let mcpServersByDevice: [MCPServersPref]?
+        let appearanceThemeBySurface: [AppearanceThemePref]?
+    }
+
+    struct AppearanceThemePref: Decodable {
+        let surface: String
+        let theme: String
     }
 
     struct PrimaryRunnerPref: Decodable {
@@ -326,7 +332,7 @@ enum MachineRegistry {
                             primaryRunnerByDevice: nil,
                             machineRolesByProject: nil,
                             connectionMode: nil, defaultRuntimeProjectByDevice: nil,
-                            mcpServersByDevice: nil)
+                            mcpServersByDevice: nil, appearanceThemeBySurface: nil)
     }
 
     /// POST /settings/repair-relay — re-sync this account's per-user relay
@@ -409,6 +415,12 @@ enum MachineRegistry {
                 "mode": NSNull(),
                 "provider": NSNull(),
             ],
+        ])
+    }
+
+    static func saveAppearanceTheme(token: String, surface: String, theme: String) async throws {
+        try await postSettingsChecked(token: token, body: [
+            "appearanceThemeForSurface": ["surface": surface, "theme": theme],
         ])
     }
 

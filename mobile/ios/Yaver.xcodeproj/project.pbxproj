@@ -1133,7 +1133,7 @@
 				MARKETING_VERSION = 1.18.168;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
 				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile.watch;
-				PRODUCT_NAME = Yaver;
+				PRODUCT_NAME = YaverWatch;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
@@ -1194,7 +1194,7 @@
 				MARKETING_VERSION = 1.18.168;
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
 				PRODUCT_BUNDLE_IDENTIFIER = io.yaver.mobile.watch;
-				PRODUCT_NAME = Yaver;
+				PRODUCT_NAME = YaverWatch;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;

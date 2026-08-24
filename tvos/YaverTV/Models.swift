@@ -157,13 +157,26 @@ struct TaskAgentQuestion: Decodable, Identifiable, Equatable {
 ///
 /// tvOS used to decode only a title/status and present the raw runner console as
 /// "Chat". That is not the mobile mechanic: mobile renders the conversation,
-/// shows the user's message immediately, and lets a finished task continue by
-/// silently forking to the same runner. Keep the wire DTO rich enough for the
-/// native TV to consume that same contract.
+/// shows the user's message immediately, and lets a finished task continue in
+/// its exact runner conversation and task-owned tmux seat.
 ///
 /// POST /tasks answers `taskId`, while GET /tasks answers `id`. Decoding both is
 /// load-bearing: reporting a decode error after POST has already started work
 /// invites a retry and creates a duplicate task.
+struct TaskExecutionIdentity: Decodable {
+    let yaverSessionId: String
+    let taskId: String
+    let remoteBoxId: String?
+    let runnerName: String?
+    let runnerId: String?
+    let runnerSessionId: String?
+    let startedFrom: String?
+    let initialSurface: String?
+    let sessionStartedAt: String?
+    let lastSurface: String?
+    let lastActiveAt: String?
+}
+
 struct TaskSummary: Decodable, Identifiable {
     let id: String
     let title: String?
@@ -178,10 +191,11 @@ struct TaskSummary: Decodable, Identifiable {
     let turns: [TaskConversationTurn]?
     let pendingFollowUps: [TaskPendingFollowUp]?
     let tmuxSession: String?     // present → the task has a live session to drive
+    let executionSession: TaskExecutionIdentity?
 
     enum CodingKeys: String, CodingKey {
         case id, taskId, title, status, runner, runnerId, model, workDir, projectName, sessionId
-        case output, resultText, turns, pendingFollowUps, tmuxSession
+        case output, resultText, turns, pendingFollowUps, tmuxSession, executionSession
     }
 
     init(
@@ -197,7 +211,8 @@ struct TaskSummary: Decodable, Identifiable {
         resultText: String? = nil,
         turns: [TaskConversationTurn]? = nil,
         pendingFollowUps: [TaskPendingFollowUp]? = nil,
-        tmuxSession: String? = nil
+        tmuxSession: String? = nil,
+        executionSession: TaskExecutionIdentity? = nil
     ) {
         self.id = id
         self.title = title
@@ -212,6 +227,7 @@ struct TaskSummary: Decodable, Identifiable {
         self.turns = turns
         self.pendingFollowUps = pendingFollowUps
         self.tmuxSession = tmuxSession
+        self.executionSession = executionSession
     }
 
     init(from decoder: Decoder) throws {
@@ -231,6 +247,7 @@ struct TaskSummary: Decodable, Identifiable {
         turns = try c.decodeIfPresent([TaskConversationTurn].self, forKey: .turns)
         pendingFollowUps = try c.decodeIfPresent([TaskPendingFollowUp].self, forKey: .pendingFollowUps)
         tmuxSession = try c.decodeIfPresent(String.self, forKey: .tmuxSession)
+        executionSession = try c.decodeIfPresent(TaskExecutionIdentity.self, forKey: .executionSession)
     }
 
     /// The title is a raw prompt — it carries absolute paths. Redact for a TV.

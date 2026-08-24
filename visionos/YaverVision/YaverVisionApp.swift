@@ -9,12 +9,13 @@ import SwiftUI
 
 @main
 struct YaverVisionApp: App {
-    @StateObject private var store = YaverStore()
+    @StateObject private var store = YaverStore(appearanceSurface: "visionos")
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .preferredColorScheme(store.appearanceTheme == "light" ? .light : .dark)
         }
         // Tall enough that sign-in shows all three paths — and the fallback code —
         // without the user having to scroll to discover them.
@@ -26,10 +27,16 @@ struct RootView: View {
     @EnvironmentObject var store: YaverStore
 
     var body: some View {
-        if store.isAuthenticated {
-            VisionDashboardView()
-        } else {
-            VisionSignInView()
+        Group {
+            if store.isAuthenticated {
+                VisionDashboardView()
+            } else {
+                VisionSignInView()
+            }
+        }
+        .task(id: store.token) {
+            guard store.isAuthenticated else { return }
+            await store.refreshAppearanceSettings()
         }
     }
 }

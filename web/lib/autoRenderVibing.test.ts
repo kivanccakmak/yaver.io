@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { autoRenderVibingFromSettings, isExplicitRenderPrompt } from "./autoRenderVibingPolicy.ts";
+import { autoRenderVibingFromSettings, isExplicitRenderPrompt } from "./autoRenderVibingPolicy";
 
 test("auto-render defaults off and requires an explicit true", () => {
   assert.equal(autoRenderVibingFromSettings(null), false);

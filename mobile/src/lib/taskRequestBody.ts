@@ -34,6 +34,8 @@ export type SendTaskRequestBodyArgs = {
   /** Product-owned kickoff text can drive the runner without appearing as a
    *  user-authored chat bubble. Ordinary composer sends must leave this off. */
   hideInitialPrompt?: boolean;
+  sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace";
+  startedFromSurface?: string;
 };
 
 export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<string, unknown> {
@@ -58,5 +60,7 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     ...(args.askMode ? { askMode: true } : {}),
     ...(typeof args.includeYaverMcp === "boolean" ? { includeYaverMcp: args.includeYaverMcp } : {}),
     ...(args.hideInitialPrompt ? { hideInitialPrompt: true } : {}),
+    ...(args.sessionStartedFrom ? { sessionStartedFrom: args.sessionStartedFrom } : {}),
+    ...(args.startedFromSurface ? { startedFromSurface: args.startedFromSurface } : {}),
   };
 }

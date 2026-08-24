@@ -966,6 +966,16 @@ export default defineSchema({
 
   userSettings: defineTable({
     userId: v.id("users"),
+    // Per-client appearance rather than one account-wide switch: a bright TV
+    // room may prefer light while the phone remains dark. Unset means dark on
+    // every surface, preserving Yaver's existing factory default.
+    appearanceThemeBySurface: v.optional(
+      v.array(v.object({
+        surface: v.string(),
+        theme: v.union(v.literal("light"), v.literal("dark")),
+        updatedAt: v.number(),
+      })),
+    ),
     // Which tab the mobile app opens on ("projects" | "tasks"). Account-scoped
     // so it follows the user across devices. Not a secret and not derivable
     // from anything else, so it belongs in Convex rather than on the box.

@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Row
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -18,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
@@ -50,11 +53,13 @@ fun WearApp(
     onDismissWake: () -> Unit,
     canRemoveDevice: Boolean,
     onRemoveDevice: () -> Unit,
+    onAppearance: (String) -> Unit,
 ) {
     val line by WatchState.line.collectAsState()
     val phase by WatchState.phase.collectAsState()
     val phoneReachable by WatchState.phoneReachable.collectAsState()
     val wakeStatus by BoxLifecycle.status.collectAsState()
+    val appearanceTheme by WatchState.appearanceTheme.collectAsState()
     var confirmRemoval by remember { mutableStateOf(false) }
 
     // Wall-clock bound on Phase.Working: the only prior exit was a later
@@ -72,10 +77,18 @@ fun WearApp(
         }
     }
 
-    MaterialTheme {
+    MaterialTheme(
+        colors = MaterialTheme.colors.copy(
+            background = if (appearanceTheme == "light") Color(0xFFF7F7F9) else Color(0xFF000000),
+            surface = if (appearanceTheme == "light") Color.White else Color(0xFF1C1C1E),
+            onSurface = if (appearanceTheme == "light") Color(0xFF111114) else Color.White,
+            onBackground = if (appearanceTheme == "light") Color(0xFF111114) else Color.White,
+        ),
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(MaterialTheme.colors.background)
                 .padding(8.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -115,6 +128,8 @@ fun WearApp(
                     onIntent = onIntent,
                     canRemoveDevice = canRemoveDevice,
                     onRemoveDevice = { confirmRemoval = true },
+                    appearanceTheme = appearanceTheme,
+                    onAppearance = onAppearance,
                 )
             }
         }
@@ -130,6 +145,8 @@ private fun MainScreen(
     onIntent: (WatchProtocol.FixedIntent) -> Unit,
     canRemoveDevice: Boolean,
     onRemoveDevice: () -> Unit,
+    appearanceTheme: String,
+    onAppearance: (String) -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -156,8 +173,18 @@ private fun MainScreen(
 
             else -> {
                 // Idle — the primary affordance: tap to speak.
-                Button(onClick = onRecord) {
-                    Text("Speak")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(onClick = onRecord) {
+                        Text("Speak")
+                    }
+                    Button(
+                        onClick = { onAppearance(if (appearanceTheme == "light") "dark" else "light") },
+                    ) {
+                        Text(if (appearanceTheme == "light") "☾" else "☀")
+                    }
                 }
                 if (!phoneReachable) {
                     Spacer(modifier = Modifier.height(6.dp))

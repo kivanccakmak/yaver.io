@@ -224,6 +224,44 @@ class Backend(
         }
     }
 
+    suspend fun loadAppearance(token: String): String = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(convexOrigin.trimEnd('/') + "/settings")
+            .header("Authorization", "Bearer $token")
+            .header("X-Yaver-Surface", "wearos")
+            .get()
+            .build()
+        http.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Couldn't load appearance (${response.code}).")
+            val settings = JSONObject(text).optJSONObject("settings")
+            val rows = settings?.optJSONArray("appearanceThemeBySurface")
+            val theme = if (rows == null) null else (0 until rows.length())
+                .mapNotNull { rows.optJSONObject(it) }
+                .lastOrNull { it.optString("surface") == "wearos" }
+                ?.optString("theme")
+            if (theme == "light") "light" else "dark"
+        }
+    }
+
+    suspend fun saveAppearance(token: String, theme: String): String = withContext(Dispatchers.IO) {
+        val next = if (theme == "light") "light" else "dark"
+        val body = JSONObject().put(
+            "appearanceThemeForSurface",
+            JSONObject().put("surface", "wearos").put("theme", next),
+        )
+        val request = Request.Builder()
+            .url(convexOrigin.trimEnd('/') + "/settings")
+            .header("Authorization", "Bearer $token")
+            .header("X-Yaver-Surface", "wearos")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IllegalStateException("Couldn't save appearance (${response.code}).")
+        }
+        next
+    }
+
     /** Resolve the configured standalone box from the account registry, then
      * remove it through the hosting-correct route. Resolution is operation-
      * based: the stored legacy id may be either a device id or a managed

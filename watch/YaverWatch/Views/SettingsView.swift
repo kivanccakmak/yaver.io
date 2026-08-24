@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var confirmRemoval = false
     @State private var removalError: String?
     @State private var removing = false
+    @State private var appearanceError: String?
 
     /// The update request's lifecycle as far as we can HONESTLY observe it: we
     /// see it accepted, never applied. There is deliberately no `.updating`.
@@ -41,6 +42,19 @@ struct SettingsView: View {
                         .foregroundStyle(store.phone.canUsePhone ? .green : .secondary)
                     Text(store.phone.canUsePhone ? "Paired with iPhone" : "iPhone not reachable")
                         .font(.footnote)
+                }
+
+                Divider()
+
+                Picker("Appearance", selection: Binding(
+                    get: { store.appearanceTheme },
+                    set: { value in Task { await saveAppearance(value) } }
+                )) {
+                    Text("Dark").tag("dark")
+                    Text("Light").tag("light")
+                }
+                if let appearanceError {
+                    Text(appearanceError).font(.caption2).foregroundStyle(.orange)
                 }
 
                 Divider()
@@ -90,7 +104,10 @@ struct SettingsView: View {
         // Backfill the deviceId for a box signed in before it was captured. Here
         // because Settings is where the button lives — if it resolves, the button
         // appears in place; if not, the explanation below does.
-        .task { await store.resolveDeviceIdIfNeeded() }
+        .task {
+            await store.syncAppearance()
+            await store.resolveDeviceIdIfNeeded()
+        }
         .confirmationDialog("Remove this box from Yaver?", isPresented: $confirmRemoval) {
             Button("Remove", role: .destructive) { Task { await removeBox() } }
             Button("Cancel", role: .cancel) {}
@@ -144,6 +161,15 @@ struct SettingsView: View {
             state = .requested(version)
         } catch {
             state = .failed(error.localizedDescription)
+        }
+    }
+
+    private func saveAppearance(_ theme: String) async {
+        appearanceError = nil
+        do {
+            try await store.setAppearanceTheme(theme)
+        } catch {
+            appearanceError = "Open Yaver on your iPhone to save this watch's appearance."
         }
     }
 

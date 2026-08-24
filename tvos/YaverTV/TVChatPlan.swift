@@ -1,9 +1,7 @@
 // TVChatPlan.swift — the native-TV copy of mobile's followUpPlan contract.
 //
-// A live task continues in place. A terminal task silently forks to a child on
-// the SAME recorded runner, and the view carries the transcript across. This is
-// what makes a quick coding run read as one conversation instead of replacing
-// the user's chat with an empty task after every reply.
+// Every reply continues the same task, native runner conversation, and
+// task-owned tmux seat. A terminal status ends one turn, not the conversation.
 
 import Foundation
 
@@ -69,7 +67,7 @@ func tvParkedTurnNotice(code: String?, runner: String?, reauthable: Bool) -> TVP
 
 enum TVChatFollowUpAction: Equatable {
     case continueCurrent
-    case fork(String)
+    case settingsChangeBlocked(String)
 }
 
 func tvChatFollowUpAction(
@@ -84,15 +82,17 @@ func tvChatFollowUpAction(
     let selected = RegisteredRunner.canonical(
         (selectedRunner ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     )
-    // A live runner session cannot safely change runner/model/project/MCP in
-    // place. Once the user changes any hidden chat setting, fork with bounded
-    // context; an untouched reply continues the current session as before.
+    // A task owns one runner conversation and one tmux seat. Changing hidden
+    // settings therefore requires an explicit New Task; a reply must never
+    // silently fork and move Vibing/render state to another task identity.
     if settingsChanged {
-        return .fork(selected.isEmpty ? (recorded.isEmpty ? "claude" : recorded) : selected)
+        let next = selected.isEmpty ? (recorded.isEmpty ? "the selected runner" : recorded) : selected
+        return .settingsChangeBlocked(
+            "This vibe stays in its existing runner and tmux session. Start a new task to use \(next) or different settings."
+        )
     }
-    let terminal = Set(["completed", "review", "failed", "stopped"])
-    if terminal.contains((status ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) {
-        return .fork(recorded.isEmpty ? "claude" : recorded)
-    }
+    // Terminal describes the last turn, not the conversation. Continue it in
+    // place; the agent reattaches the exact native runner session in the same
+    // task-owned tmux pane.
     return .continueCurrent
 }

@@ -20,6 +20,7 @@ import Markdown from "react-native-markdown-display";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
 import { useDevice } from "../context/DeviceContext";
+import { useColors } from "../context/ThemeContext";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient } from "../lib/quic";
 import { subscribeFeedbackLaunch } from "../lib/feedbackTrigger";
 import { getLocalSecret, getUserSettings, LOCAL_KEYS, type SpeechProvider, type TtsProvider } from "../lib/auth";
@@ -116,10 +117,10 @@ function buildLiveAssistantMarkdown(content: string): string {
   return `${body}${activity.length ? `\n\n${activity.map((item) => `- ${item}`).join("\n")}` : ""}\n\n_Working through implementation details…_`.trim();
 }
 
-function feedbackMarkdownStyles() {
+function feedbackMarkdownStyles(c: ReturnType<typeof useColors>) {
   return {
     body: {
-      color: "#111827",
+      color: c.textPrimary,
       fontSize: 13,
       lineHeight: 19,
     },
@@ -132,20 +133,20 @@ function feedbackMarkdownStyles() {
       marginBottom: 8,
     },
     list_item: {
-      color: "#111827",
+      color: c.textPrimary,
     },
     code_inline: {
-      backgroundColor: "#eef2ff",
-      color: "#4338ca",
+      backgroundColor: c.accent + "1f",
+      color: c.accent,
       borderRadius: 4,
       paddingHorizontal: 4,
       paddingVertical: 1,
     },
     fence: {
-      backgroundColor: "#f3f4f6",
+      backgroundColor: c.bgInput,
       borderRadius: 8,
       padding: 10,
-      color: "#374151",
+      color: c.textSecondary,
     },
   } as const;
 }
@@ -158,6 +159,7 @@ function feedbackMarkdownStyles() {
  * opens right when near left edge.
  */
 export function FeedbackOverlay() {
+  const c = useColors();
   const { user, token } = useAuth();
   const { activeDevice, connectionStatus, connectedDeviceIds } = useDevice();
   const [enabled, setEnabled] = useState(false);
@@ -618,7 +620,7 @@ export function FeedbackOverlay() {
         <View style={[
           fullSize ? styles.panelFull : styles.panel,
           { width: panelWidth },
-          { borderColor: `${buttonColor}44`, shadowColor: buttonColor },
+          { backgroundColor: c.bgCard, borderColor: `${buttonColor}44`, shadowColor: buttonColor },
           // Tablet full-size: cap at 720pt content width and pin
           // it to the right edge instead of the old screenWidth-24
           // formula that produced 12.9"-wide panels on iPad.
@@ -633,23 +635,23 @@ export function FeedbackOverlay() {
           <View style={styles.headerRow}>
             <Text style={[styles.headerTitle, { color: buttonColor }]}>yaver debug</Text>
             <View style={[styles.dot, isConnected ? styles.green : styles.red]} />
-            <Text style={styles.headerStatus}>{isConnected ? "live" : "off"}</Text>
+            <Text style={[styles.headerStatus, { color: c.textMuted }]}>{isConnected ? "live" : "off"}</Text>
             <TouchableOpacity onPress={() => setFullSize(!fullSize)} style={styles.xBtn}>
-              <Text style={styles.xBtnText}>{fullSize ? "\u25A1" : "\u2197"}</Text>
+              <Text style={[styles.xBtnText, { color: c.textMuted }]}>{fullSize ? "\u25A1" : "\u2197"}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => { setChatOpen(false); setFullSize(false); setAssistantReply(""); setTaskStatusLine(""); }} style={styles.xBtn}>
-              <Text style={styles.xBtnText}>{"\u2715"}</Text>
+              <Text style={[styles.xBtnText, { color: c.textMuted }]}>{"\u2715"}</Text>
             </TouchableOpacity>
           </View>
 
           {/* Output area */}
-          <View style={[styles.outputArea, fullSize && styles.outputAreaFull]}>
+          <View style={[styles.outputArea, { backgroundColor: c.bgInput }, fullSize && styles.outputAreaFull]}>
             {assistantReply ? (
-              <Markdown style={feedbackMarkdownStyles()}>
+              <Markdown style={feedbackMarkdownStyles(c)}>
                 {assistantReply}
               </Markdown>
             ) : (
-              <Text style={[styles.outputLine, { color: "#333" }]}>
+              <Text style={[styles.outputLine, { color: c.textMuted }]}>
                 {isConnected ? "connected. type a message or use actions below." : "not connected to agent."}
               </Text>
             )}
@@ -669,7 +671,7 @@ export function FeedbackOverlay() {
           {/* Input */}
           <View style={styles.inputRow}>
             <TextInput
-              style={[styles.input, fullSize && styles.inputFull]}
+              style={[styles.input, { backgroundColor: c.bgInput, borderColor: c.border, color: c.textPrimary }, fullSize && styles.inputFull]}
               placeholder="Describe the issue or what to change"
               placeholderTextColor="#6b7280"
               value={message}
@@ -682,7 +684,7 @@ export function FeedbackOverlay() {
               <TouchableOpacity
                 style={[
                   styles.micBtn,
-                  { borderColor: recordingVoice ? "#ef4444" : "#222" },
+                  { backgroundColor: c.bgInput, borderColor: recordingVoice ? "#ef4444" : c.border },
                   (sending || transcribingVoice) && styles.dim,
                 ]}
                 onPress={toggleVoiceInput}
@@ -705,36 +707,36 @@ export function FeedbackOverlay() {
           {/* Action cards — Reload | Build | Bug */}
           <View style={styles.cardRow}>
             <TouchableOpacity
-              style={[styles.card, fullSize && styles.cardFull, !isConnected && styles.dim]}
+              style={[styles.card, { backgroundColor: c.bgInput, borderColor: c.border }, fullSize && styles.cardFull, !isConnected && styles.dim]}
               onPress={handleReload}
               disabled={sending || !isConnected}
             >
               <Text style={[styles.cardIcon, { color: "#fbbf24" }]}>{"\u21BB"}</Text>
-              <Text style={styles.cardLabel}>Hot Reload</Text>
+              <Text style={[styles.cardLabel, { color: c.textSecondary }]}>Hot Reload</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.card, fullSize && styles.cardFull, !isConnected && styles.dim]}
+              style={[styles.card, { backgroundColor: c.bgInput, borderColor: c.border }, fullSize && styles.cardFull, !isConnected && styles.dim]}
               onPress={handleBuild}
               disabled={sending || !isConnected}
             >
               <Text style={[styles.cardIcon, { color: "#60a5fa" }]}>{"\u2692"}</Text>
-              <Text style={styles.cardLabel}>Build</Text>
+              <Text style={[styles.cardLabel, { color: c.textSecondary }]}>Build</Text>
               <Text style={[styles.cardLabel, { fontSize: 8, color: "#555" }]}>+ Deploy</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.card, fullSize && styles.cardFull, !isConnected && styles.dim]}
+              style={[styles.card, { backgroundColor: c.bgInput, borderColor: c.border }, fullSize && styles.cardFull, !isConnected && styles.dim]}
               onPress={handleBugReport}
               disabled={sending || !isConnected}
             >
               <Text style={[styles.cardIcon, { color: "#f87171" }]}>{"\uD83D\uDC1B"}</Text>
-              <Text style={styles.cardLabel}>Report Bug</Text>
+              <Text style={[styles.cardLabel, { color: c.textSecondary }]}>Report Bug</Text>
             </TouchableOpacity>
           </View>
 
           {/* Action cards row 2 — Test App */}
           <View style={styles.cardRow}>
             <TouchableOpacity
-              style={[styles.card, fullSize && styles.cardFull, !isConnected && styles.dim]}
+              style={[styles.card, { backgroundColor: c.bgInput, borderColor: c.border }, fullSize && styles.cardFull, !isConnected && styles.dim]}
               onPress={() => {
                 runAgentAction(
                   "test-app",
@@ -753,16 +755,16 @@ export function FeedbackOverlay() {
               disabled={sending || !isConnected}
             >
               <Text style={[styles.cardIcon, { color: "#a78bfa" }]}>{"\u25B6"}</Text>
-              <Text style={styles.cardLabel}>Test App</Text>
+              <Text style={[styles.cardLabel, { color: c.textSecondary }]}>Test App</Text>
             </TouchableOpacity>
           </View>
 
           {/* Bottom row */}
           <View style={styles.actionsRow}>
-            <TouchableOpacity style={styles.actionBtn} onPress={() => { setOutput([]); setAssistantReply(""); setTaskStatusLine(""); }}>
-              <Text style={styles.actionText}>clear</Text>
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: c.bgInput, borderColor: c.border }]} onPress={() => { setOutput([]); setAssistantReply(""); setTaskStatusLine(""); }}>
+              <Text style={[styles.actionText, { color: c.textMuted }]}>clear</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn} onPress={handleDisable}>
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: c.bgInput, borderColor: c.border }]} onPress={handleDisable}>
               <Text style={[styles.actionText, { color: "#f87171" }]}>quit</Text>
             </TouchableOpacity>
           </View>

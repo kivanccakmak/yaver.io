@@ -198,17 +198,17 @@ final class VibingPlanTests: XCTestCase {
         XCTAssertEqual(tvChatFollowUpAction(status: "queued", runner: "codex"), .continueCurrent)
     }
 
-    func testTerminalChatForksSilentlyToRecordedRunner() {
+    func testTerminalChatContinuesItsExactTaskSession() {
         for status in ["completed", "review", "failed", "stopped"] {
-            XCTAssertEqual(tvChatFollowUpAction(status: status, runner: "opencode"), .fork("opencode"))
+            XCTAssertEqual(tvChatFollowUpAction(status: status, runner: "opencode"), .continueCurrent)
         }
     }
 
-    func testTerminalChatHasAStableRunnerFallback() {
-        XCTAssertEqual(tvChatFollowUpAction(status: "completed", runner: nil), .fork("claude"))
+    func testTerminalChatDoesNotInventARunnerFallback() {
+        XCTAssertEqual(tvChatFollowUpAction(status: "completed", runner: nil), .continueCurrent)
     }
 
-    func testChangingHiddenChatSettingsForksEvenWhileRunnerIsLive() {
+    func testChangingHiddenChatSettingsRequiresANewTask() {
         XCTAssertEqual(
             tvChatFollowUpAction(
                 status: "running",
@@ -216,7 +216,9 @@ final class VibingPlanTests: XCTestCase {
                 selectedRunner: "codex",
                 settingsChanged: true
             ),
-            .fork("codex")
+            .settingsChangeBlocked(
+                "This vibe stays in its existing runner and tmux session. Start a new task to use codex or different settings."
+            )
         )
     }
 

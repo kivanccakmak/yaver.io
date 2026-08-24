@@ -10,7 +10,7 @@
 //   iOS     — copies YaverWatchBridge.swift/.m into the app target. The
 //             watchOS companion target itself is kept durable in the committed
 //             pbxproj by scripts/add-watch-ios-target.js, which embeds the
-//             watch/YaverWatch sources as Yaver.app under Watch/.
+//             watch/YaverWatch sources as YaverWatch.app under Watch/.
 //   Android — copies the Wear bridge Kotlin sources into the app package,
 //             registers YaverWearListenerService (intent-filter PATH_TURN) in
 //             the manifest, adds the play-services-wearable dependency, and

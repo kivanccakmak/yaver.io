@@ -55,13 +55,17 @@ func TestResumeTransform_Opencode(t *testing.T) {
 	runner := RunnerConfig{RunnerID: "opencode", Command: "opencode"}
 	base := []string{"run", "--dangerously-skip-permissions", "do it"}
 
-	// opencode resumes via --continue, no id needed.
-	out, ok := resumeTransform(runner, base, "do it", "/w", "")
+	// opencode resumes the exact task session, never "last in cwd".
+	out, ok := resumeTransform(runner, base, "do it", "/w", "ses_exact")
 	if !ok {
-		t.Fatal("opencode should resume via --continue without an id")
+		t.Fatal("opencode should resume with an exact session id")
 	}
-	if out[len(out)-1] != "--continue" {
-		t.Errorf("expected --continue appended, got %v", out)
+	joined := strings.Join(out, " ")
+	if !strings.Contains(joined, "--session ses_exact") || strings.Contains(joined, "--continue") {
+		t.Errorf("expected exact --session and no --continue, got %v", out)
+	}
+	if _, ok := resumeTransform(runner, base, "do it", "/w", ""); ok {
+		t.Fatal("opencode must not resume an ambiguous latest session without an id")
 	}
 	// base args preserved (not mutated).
 	if base[0] != "run" || len(base) != 3 {

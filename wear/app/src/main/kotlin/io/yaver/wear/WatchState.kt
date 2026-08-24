@@ -17,6 +17,12 @@ import kotlinx.coroutines.flow.StateFlow
  * reference (taskId/token), never the work.
  */
 object WatchState {
+    private val _appearanceTheme = MutableStateFlow("dark")
+    val appearanceTheme: StateFlow<String> = _appearanceTheme
+
+    fun setAppearanceTheme(theme: String) {
+        _appearanceTheme.value = if (theme == "light") "light" else "dark"
+    }
 
     /** What the wrist is currently doing / showing. */
     sealed class Phase {

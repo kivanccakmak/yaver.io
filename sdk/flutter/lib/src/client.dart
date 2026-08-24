@@ -117,6 +117,12 @@ class YaverClient {
       throw YaverException(
           result['error'] as String? ?? 'Failed to continue task');
     }
+    final execution = result['executionSession'] as Map<String, dynamic>?;
+    if (result['taskId'] != taskId || result['sameTask'] == false ||
+        execution?['taskId'] != taskId) {
+      throw YaverException(
+          'The agent did not confirm the same task and runner session for this follow-up.');
+    }
   }
 
   /// Clean up old tasks, images, and logs on the agent.

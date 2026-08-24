@@ -18,7 +18,7 @@
  * The things people assume are the blocker are NOT:
  *   • pixels — tvOS already streams frames (Views/DroidStreamView.swift polls
  *     /droid/frame; AgentClient also has the headless web-preview capture flow)
- *   • /tasks/{id}/continue — the arcs revert with a SEPARATE new task
+ *   • /tasks/{id}/continue — every arc stays on the SAME task/session/tmux seat
  *   • automation — simctl + XCUITest + `simctl io <udid> screenshot` is a
  *     complete driver; Playwright simply isn't the one
  *

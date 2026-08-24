@@ -647,7 +647,10 @@ export class WebClient {
   }
 
   async continueTask(taskId: string, prompt: string): Promise<void> {
-    await this.agentFetch("POST", `/tasks/${encodeURIComponent(taskId)}/continue`, { prompt });
+    const result = await this.agentFetch("POST", `/tasks/${encodeURIComponent(taskId)}/continue`, { input: prompt });
+    if (result?.taskId !== taskId || result?.sameTask === false || result?.executionSession?.taskId !== taskId) {
+      throw new Error("The agent did not confirm the same task and runner session for this follow-up.");
+    }
   }
 
   async stopTask(taskId: string): Promise<void> {

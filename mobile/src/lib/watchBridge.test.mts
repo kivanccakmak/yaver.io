@@ -314,3 +314,23 @@ test("a failed wake surfaces the reason, not a crash", async () => {
   assert.equal(final.kind, "error");
   assert.ok(final.spoken && /insufficient balance/i.test(final.spoken));
 });
+
+test("appearance uses the phone's scoped settings capability", async () => {
+  let received: string | undefined;
+  const final = await handleWatchTurn(
+    { v: 1, kind: "appearance", theme: "light" } as WatchTurn,
+    deps(),
+    {},
+    () => {},
+    undefined,
+    undefined,
+    undefined,
+    async (theme) => {
+      received = theme;
+      return { ok: true, theme: "light" };
+    },
+  );
+  assert.equal(received, "light");
+  assert.equal(final.kind, "ack");
+  assert.equal(final.theme, "light");
+});

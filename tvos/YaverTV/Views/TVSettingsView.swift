@@ -46,6 +46,12 @@ struct TVSettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     intro
 
+                    settingRow(
+                        icon: store.appearanceTheme == "light" ? "sun.max.fill" : "moon.fill",
+                        title: "Appearance",
+                        detail: "Saved for this Apple TV"
+                    ) { appearanceControl }
+
                     if loading {
                         HStack(spacing: 14) {
                             ProgressView()
@@ -217,6 +223,23 @@ struct TVSettingsView: View {
         .accessibilityIdentifier("settings.primary-device")
     }
 
+    private var appearanceControl: some View {
+        HStack(spacing: 10) {
+            appearanceButton("Dark")
+            appearanceButton("Light")
+        }
+        .accessibilityIdentifier("settings.appearance")
+    }
+
+    private func appearanceButton(_ label: String) -> some View {
+        let value = label.lowercased()
+        return Button(label) { Task { await chooseAppearance(value) } }
+            .buttonStyle(.bordered)
+            .tint(store.appearanceTheme == value ? .blue : .secondary)
+            .disabled(saving)
+            .accessibilityValue(store.appearanceTheme == value ? "Selected" : "Not selected")
+    }
+
     private var runnerMenu: some View {
         let rows = availableRunners
         let selected = deviceId.flatMap { store.primaryRunnerByDevice[$0] }
@@ -382,6 +405,20 @@ struct TVSettingsView: View {
         do {
             try await store.setPrimaryRunner(runner, for: deviceId)
             savedMessage = "Primary runner saved"
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func chooseAppearance(_ theme: String) async {
+        guard theme != store.appearanceTheme else { return }
+        saving = true
+        error = nil
+        savedMessage = nil
+        defer { saving = false }
+        do {
+            try await store.setAppearanceTheme(theme)
+            savedMessage = "Appearance saved for this Apple TV"
         } catch {
             self.error = error.localizedDescription
         }

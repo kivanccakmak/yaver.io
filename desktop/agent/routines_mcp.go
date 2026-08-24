@@ -165,7 +165,7 @@ func scheduleSelfToolSchema() map[string]interface{} {
 				"model":            map[string]interface{}{"type": "string", "description": "Optional model override for the next run."},
 				"title":            map[string]interface{}{"type": "string", "description": "Optional label. Defaults to a truncation of prompt."},
 				"max_runs":         map[string]interface{}{"type": "integer", "description": "Stop after this many fires (0 = use the 100-fire safety cap for recurring; one-shot ignores this)."},
-				"resume":           map[string]interface{}{"type": "boolean", "description": "Recurring only: natively resume the previous run's session each fire (claude/glm/codex by session id, opencode by --continue) instead of starting cold. Default false — prefer `memo` for curated continuity unless you need the full prior conversation."},
+				"resume":           map[string]interface{}{"type": "boolean", "description": "Recurring only: natively resume the previous run's exact session id each fire (Claude Code, Codex, OpenCode, or a configured runner) instead of starting cold. Default false — prefer `memo` for curated continuity unless you need the full prior conversation."},
 			},
 		},
 	}

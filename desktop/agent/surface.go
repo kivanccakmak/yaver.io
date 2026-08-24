@@ -79,3 +79,33 @@ func surfaceFromRequest(r *http.Request) ClientSurface {
 	}
 	return normalizeSurface(r.Header.Get(surfaceHeader))
 }
+
+// sessionSurfaceFromRequest preserves the concrete client that entered or
+// most recently touched a Yaver session. Runtime policy intentionally groups
+// tvOS/Android TV as "tv" and watchOS/Wear OS as "watch"; provenance must not,
+// because users move one conversation between those exact surfaces.
+func sessionSurfaceFromRequest(r *http.Request) string {
+	if r == nil {
+		return string(SurfaceUnknown)
+	}
+	raw := strings.ToLower(strings.TrimSpace(r.Header.Get(surfaceHeader)))
+	switch raw {
+	case "tvos", "appletv":
+		return "tvos"
+	case "androidtv":
+		return "androidtv"
+	case "watchos":
+		return "watchos"
+	case "wearos", "wear":
+		return "wearos"
+	case "carplay":
+		return "carplay"
+	case "androidauto", "auto":
+		return "androidauto"
+	case "visionos":
+		return "visionos"
+	case "mobile-tablet", "ipad":
+		return "tablet"
+	}
+	return string(normalizeSurface(raw))
+}

@@ -580,7 +580,7 @@ export default function AppsScreen() {
     try {
       const cloned = await cloneGitRepoToPhone(project.cloneUrl, { ref: project.defaultBranch });
       await loadRemotelessProjects();
-      router.push({ pathname: "/(tabs)/tasks", params: { openNew: "1", phoneCheckout: cloned.slug } } as any);
+      router.push({ pathname: "/(tabs)/tasks", params: { openNew: "1", phoneCheckout: cloned.slug, sessionStartedFrom: "mobile-workspace" } } as any);
     } catch (error) {
       Alert.alert("Clone failed", error instanceof Error ? error.message : "Could not clone this repository to the phone.");
     } finally {
@@ -2491,7 +2491,7 @@ export default function AppsScreen() {
               key={`phone:${project.slug}`}
               accessibilityRole="button"
               accessibilityLabel={`Open phone checkout ${project.name}`}
-              onPress={() => router.push({ pathname: "/(tabs)/tasks", params: { openNew: "1", phoneCheckout: project.slug } } as any)}
+              onPress={() => router.push({ pathname: "/(tabs)/tasks", params: { openNew: "1", phoneCheckout: project.slug, sessionStartedFrom: "mobile-workspace" } } as any)}
               style={{ flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 12 }}
             >
               <Text style={{ fontSize: 24 }}>📱</Text>
@@ -3781,7 +3781,7 @@ export default function AppsScreen() {
                   accessibilityLabel="Dismiss"
                   onPress={() => { setVibingOverPreview(false); setVibingState(null); setCustomTask(""); }}
                 />
-                <View style={[s.vibeOverlaySheet, { paddingBottom: Math.max(16, insets.bottom + 12) }]}>
+                <View style={[s.vibeOverlaySheet, { backgroundColor: c.bgCard, borderColor: c.border, paddingBottom: Math.max(16, insets.bottom + 12) }]}>
                   <View style={s.previewRuntimeLogHeader}>
                     <View style={s.previewRuntimeLogTitleRow}>
                       <Ionicons name="mic-outline" size={18} color={c.accent} />
@@ -3796,7 +3796,7 @@ export default function AppsScreen() {
                       accessibilityLabel="Close vibing"
                       style={s.previewRuntimeLogClose}
                     >
-                      <Ionicons name="close" size={18} color="#fff" />
+                      <Ionicons name="close" size={18} color={c.textPrimary} />
                     </Pressable>
                   </View>
 
@@ -3813,7 +3813,7 @@ export default function AppsScreen() {
 
                   <View style={s.vibeOverlayInputRow}>
                     <TextInput
-                      style={s.vibeOverlayInput}
+                      style={[s.vibeOverlayInput, { color: c.textPrimary, backgroundColor: c.bgInput, borderColor: c.border }]}
                       value={customTask}
                       onChangeText={setCustomTask}
                       placeholder="What should we change?"

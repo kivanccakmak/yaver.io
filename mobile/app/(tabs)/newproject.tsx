@@ -214,6 +214,7 @@ export default function NewProjectScreen() {
           autoSubmit: "1",
           hideInitialPrompt: "1",
           selectProject: "1",
+          sessionStartedFrom: "new-application",
         },
       });
     } catch (cause) {

@@ -26,6 +26,7 @@ object StandaloneStore {
     private const val KEY_MACHINE_ID = "yaver.watch.machineId"
     private const val KEY_RELAY_BASE_URL = "yaver.watch.relayBaseUrl"
     private const val KEY_RELAY_PASSWORD = "yaver.watch.relayPassword"
+    private const val KEY_APPEARANCE = "yaver.watch.appearance"
 
     private fun prefs(ctx: Context): SharedPreferences {
         val app = ctx.applicationContext
@@ -87,6 +88,13 @@ object StandaloneStore {
     /** Per-user relay password. Empty = no relay fallback. */
     fun relayPassword(ctx: Context): String = prefs(ctx).getString(KEY_RELAY_PASSWORD, "") ?: ""
 
+    fun appearanceTheme(ctx: Context): String =
+        if (prefs(ctx).getString(KEY_APPEARANCE, "dark") == "light") "light" else "dark"
+
+    fun setAppearanceTheme(ctx: Context, theme: String) {
+        prefs(ctx).edit().putString(KEY_APPEARANCE, if (theme == "light") "light" else "dark").apply()
+    }
+
     /** Persist standalone creds (called after device-code auth succeeds).
      *  `machineId` is optional — pass the managed machine id so the wrist can
      *  route a targeted wake; empty is fine (the phone resolves it). */
@@ -114,7 +122,8 @@ object StandaloneStore {
 
     /** Clear all standalone creds (sign out). */
     fun clear(ctx: Context) {
-        prefs(ctx).edit().clear().apply()
+        val appearance = appearanceTheme(ctx)
+        prefs(ctx).edit().clear().putString(KEY_APPEARANCE, appearance).apply()
     }
 
     /** True when standalone transport is viable: opted in + has token + has box URL. */

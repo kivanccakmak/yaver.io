@@ -92,10 +92,10 @@ if [ "$UPLOAD" != "1" ]; then
 	esac
 	# -destination only, never -sdk. `-sdk iphonesimulator` is applied to EVERY
   # target in the scheme, which overrides the embedded YaverWatch target's
-  # SDKROOT=watchos and rebuilds it as an iOS app. That target is
-  # PRODUCT_NAME=Yaver, so it then lands on the same
-  # Release-iphonesimulator/Yaver.app path as the real app and the build dies
-  # with "Multiple commands produce .../Yaver.app". -destination lets each
+	# SDKROOT=watchos and rebuilds it as an iOS app. Keep using -destination so
+	# the YaverWatch target stays on watchOS and the phone target stays on iOS;
+	# forcing one SDK across this mixed-platform graph is invalid regardless of
+	# their now-distinct product names. -destination lets each
   # target resolve its own SDK, which is what we wanted here all along.
 	xcodebuild -workspace "$IOS_DIR/Yaver.xcworkspace" \
 		-scheme Yaver \

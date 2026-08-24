@@ -25,11 +25,13 @@ final class WatchStore: ObservableObject {
     // User opt-in to "use without your phone" (mode B/C). Off by default so the
     // watch holds nothing sensitive unless the user asks.
     @AppStorage("yaver.watch.standaloneOptIn") var standaloneOptIn: Bool = false
+    @AppStorage("yaver.watch.appearance") private var storedAppearanceTheme: String = "dark"
 
     // MARK: Live state
 
     @Published var token: String = ""
     @Published var box: BoxTarget?
+    @Published private(set) var appearanceTheme = "dark"
 
     /// The last one-glance line we showed (the reply spoken/displayed). Big and
     /// legible in RootView; never code.
@@ -83,6 +85,7 @@ final class WatchStore: ObservableObject {
     }
 
     init() {
+        appearanceTheme = storedAppearanceTheme == "light" ? "light" : "dark"
         token = WatchCredentialStore.loadToken(legacyFallback: legacyStoredToken)
         if !legacyStoredToken.isEmpty, !token.isEmpty {
             legacyStoredToken = ""
@@ -122,6 +125,44 @@ final class WatchStore: ObservableObject {
     }
 
     func activate() { phone.activate() }
+
+    func syncAppearance() async {
+        let saved: String?
+        if phone.canUsePhone {
+            saved = try? await phone.syncAppearance()
+        } else if !token.isEmpty {
+            saved = try? await WatchAppearanceSettings.load(token: token)
+        } else {
+            saved = nil
+        }
+        guard let saved,
+              saved == "light" || saved == "dark" else { return }
+        appearanceTheme = saved
+        storedAppearanceTheme = saved
+    }
+
+    func setAppearanceTheme(_ theme: String) async throws {
+        let next = theme == "light" ? "light" : "dark"
+        let previous = appearanceTheme
+        appearanceTheme = next
+        storedAppearanceTheme = next
+        do {
+            let saved: String
+            if phone.canUsePhone {
+                saved = try await phone.syncAppearance(next)
+            } else if !token.isEmpty {
+                saved = try await WatchAppearanceSettings.save(token: token, theme: next)
+            } else {
+                throw PhoneSessionError.notReachable
+            }
+            appearanceTheme = saved
+            storedAppearanceTheme = saved
+        } catch {
+            appearanceTheme = previous
+            storedAppearanceTheme = previous
+            throw error
+        }
+    }
 
     // MARK: Standalone credentials
 

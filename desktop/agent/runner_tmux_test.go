@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestShellQuoteRoundTrip(t *testing.T) {
@@ -170,8 +171,16 @@ func TestBuildAutomaticTmuxRunnerCreatesExactTaskSession(t *testing.T) {
 		tmuxRunnerTarget{Session: "yaver-task-fe2ebda2-codex", CreateSession: true},
 		"fe2ebda2", "codex", "/tmp/project", "codex", []string{"exec", "hello"}, nil,
 	)
-	if !strings.Contains(cmd.Args[2], "tmux new-session") || !strings.Contains(cmd.Args[2], "tmux kill-session") {
+	if !strings.Contains(cmd.Args[2], "tmux new-session") {
 		t.Fatalf("automatic wrapper must own an exact session: %s", cmd.Args[2])
+	}
+	if strings.Contains(cmd.Args[2], `tmux kill-session -t "$SESSION"`) ||
+		!strings.Contains(cmd.Args[2], `tmux pipe-pane -t "$TARGET"`) {
+		t.Fatal("completion, failure, and stop must preserve the task-owned tmux session and pane")
+	}
+	if strings.Contains(cmd.Args[2], `tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux new-session`) {
+		t.Fatal("a follow-up must reuse the existing task session, not kill and recreate it")
 	}
 	want := map[string]bool{
 		"YAVER_TMUX_SESSION=yaver-task-fe2ebda2-codex": false,
@@ -189,5 +198,57 @@ func TestBuildAutomaticTmuxRunnerCreatesExactTaskSession(t *testing.T) {
 		if !seen {
 			t.Errorf("automatic wrapper env missing %q: %v", kv, env)
 		}
+	}
+}
+
+func TestAutomaticTmuxRunnerKeepsExactSeatAcrossTurns(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	taskID := "seat-test-" + shortTaskKey(t.Name())
+	session := automaticTaskTmuxSessionName(taskID, "codex")
+	// Exact test-owned target, listed before the destructive cleanup.
+	t.Logf("test tmux session: %s", session)
+	_ = exec.Command(tmuxCmdName(), "kill-session", "-t", session).Run()
+	t.Cleanup(func() { _ = exec.Command(tmuxCmdName(), "kill-session", "-t", session).Run() })
+
+	runTurn := func(text string) tmuxPaneIdentity {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd, additions := buildTmuxRunnerCommand(
+			ctx,
+			tmuxRunnerTarget{Session: session, CreateSession: true},
+			taskID, "codex", t.TempDir(), "/bin/sh", []string{"-c", "printf '%s\\n' " + shellQuoteStrict(text)}, nil,
+		)
+		cmd.Env = append(os.Environ(), additions...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("turn failed: %v: %s", err, out)
+		}
+		pane := waitForTmuxTaskPane(session, taskID, time.Second)
+		if pane.SessionID == "" || pane.PaneID == "" {
+			t.Fatalf("turn did not leave an addressable tmux seat: %+v", pane)
+		}
+		return pane
+	}
+
+	first := runTurn("first")
+	second := runTurn("follow-up")
+	if first.SessionID != second.SessionID || first.PaneID != second.PaneID || first.WindowIndex != second.WindowIndex {
+		t.Fatalf("follow-up changed tmux seat: first=%+v second=%+v", first, second)
+	}
+
+	manager := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	manager.mu.Lock()
+	manager.tasks[taskID] = &Task{
+		ID: taskID, RunnerID: "codex", Status: TaskStatusFinished,
+		TmuxSession: session, TmuxSessionID: second.SessionID, TmuxPaneID: second.PaneID,
+	}
+	manager.mu.Unlock()
+	if err := manager.DeleteTask(taskID); err != nil {
+		t.Fatalf("delete task: %v", err)
+	}
+	if tmuxSessionExists(session) {
+		t.Fatalf("deleting task left its tmux session alive: %s", session)
 	}
 }

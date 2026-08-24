@@ -2,7 +2,7 @@ package main
 
 import "strings"
 
-const RuntimeRenderEventSchema = 1
+const RuntimeRenderEventSchema = 2
 
 func runtimeRenderReasonFromTaskOutput(text string) string {
 	lower := strings.ToLower(text)
@@ -46,12 +46,13 @@ func emitRuntimeRenderRequested(task *Task, reason, text string) {
 		snippet = snippet[:500]
 	}
 	emitTaskEvent(task, map[string]interface{}{
-		"type":    "runtime_render_requested",
-		"schema":  RuntimeRenderEventSchema,
-		"taskId":  task.ID,
-		"reason":  reason,
-		"workDir": workDir,
-		"snippet": snippet,
-		"ts":      nowMillis(),
+		"type":           "runtime_render_requested",
+		"schema":         RuntimeRenderEventSchema,
+		"taskId":         task.ID,
+		"yaverSessionId": task.YaverSessionID,
+		"reason":         reason,
+		"workDir":        workDir,
+		"snippet":        snippet,
+		"ts":             nowMillis(),
 	})
 }

@@ -82,3 +82,14 @@ test("only an initializer-owned kickoff can request a hidden first turn", () => 
   });
   assert.equal(kickoff.hideInitialPrompt, true);
 });
+
+test("task creation records its Yaver entry point and exact client surface", () => {
+  const body = buildSendTaskRequestBody({
+    title: "Continue from my wrist",
+    description: "Keep going",
+    sessionStartedFrom: "tasks",
+    startedFromSurface: "watchos",
+  });
+  assert.equal(body.sessionStartedFrom, "tasks");
+  assert.equal(body.startedFromSurface, "watchos");
+});

@@ -93,6 +93,15 @@ object MachineRegistry {
                     ?: null,
                 mcpServersByDevice = s.optJSONObject("mcpServersByDevice")?.toNestedAnyMap()
                     ?: null,
+                appearanceThemeBySurface = s.optJSONArray("appearanceThemeBySurface")?.let { rows ->
+                    (0 until rows.length()).mapNotNull { i ->
+                        val row = rows.optJSONObject(i) ?: return@mapNotNull null
+                        val surface = row.optString("surface")
+                        val theme = row.optString("theme")
+                        if (surface.isEmpty() || (theme != "light" && theme != "dark")) null
+                        else AppearanceThemePreference(surface, theme)
+                    }
+                } ?: emptyList(),
             )
         }
     }

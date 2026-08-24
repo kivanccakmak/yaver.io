@@ -16,6 +16,7 @@ struct YaverWatchApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .preferredColorScheme(store.appearanceTheme == "light" ? .light : .dark)
                 .onAppear { store.activate() }
                 // Complication quick-actions deep-link in as
                 // yaverwatch://intent/<run-tests|status|deploy>; map and dispatch.

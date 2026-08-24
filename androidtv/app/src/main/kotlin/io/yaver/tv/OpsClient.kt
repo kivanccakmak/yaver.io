@@ -219,7 +219,14 @@ class OpsClient(
 
     suspend fun continueTask(taskId: String, input: String): JSONObject = withContext(Dispatchers.IO) {
         val result = request("POST", "/tasks/$taskId/continue", JSONObject().put("input", input))
-        bodyToJson(result.body) ?: throw AgentError("empty continue response")
+        val body = bodyToJson(result.body) ?: throw AgentError("empty continue response")
+        val execution = body.optJSONObject("executionSession")
+        if (body.optString("taskId") != taskId || body.optBoolean("sameTask", true) == false ||
+            execution?.optString("taskId") != taskId
+        ) {
+            throw AgentError("The agent did not confirm the same task and runner session for this follow-up.")
+        }
+        body
     }
 
     suspend fun forkTask(taskId: String, input: String, contextWords: Int = 1200): JSONObject =

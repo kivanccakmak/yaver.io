@@ -438,8 +438,15 @@ actor AgentClient {
     func continueTask(_ id: String, input: String, mode: String = "") async throws {
         var body: [String: Any] = ["input": input]
         if !mode.isEmpty { body["mode"] = mode }
-        _ = try await request("POST", path: "/tasks/\(id)/continue", jsonBody: body,
-                              failure: "couldn't continue the conversation")
+        let data = try await request("POST", path: "/tasks/\(id)/continue", jsonBody: body,
+                                     failure: "couldn't continue the conversation")
+        guard let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              result["taskId"] as? String == id,
+              result["sameTask"] as? Bool != false,
+              let execution = result["executionSession"] as? [String: Any],
+              execution["taskId"] as? String == id else {
+            throw AgentError(message: "The agent did not confirm the same task and runner session for this follow-up.")
+        }
     }
 
     /// Answer a structured question raised by the runner in this task. TV
@@ -454,8 +461,8 @@ actor AgentClient {
         )
     }
 
-    /// A terminal runner session is not resumed in place. Fork silently to the
-    /// same recorded runner and carry bounded recent context, exactly as mobile.
+    /// Explicit context handoff endpoint. Ordinary replies never call this:
+    /// they continue the task-owned runner/tmux session through continueTask.
     func forkTask(
         _ id: String,
         runner: String,
@@ -464,7 +471,8 @@ actor AgentClient {
         input: String,
         projectDir: String? = nil,
         mcpServers: [String] = [],
-        includeYaverMcp: Bool = false
+        includeYaverMcp: Bool = false,
+        sessionStartedFrom: String = "tasks"
     ) async throws -> TaskForkResult {
         var body: [String: Any] = [
             "runner": runner,
@@ -734,6 +742,7 @@ actor AgentClient {
         // indistinguishable from one started in the dashboard (2026-08-10).
         if !mcpServers.isEmpty { body["mcpServers"] = mcpServers }
         body["includeYaverMcp"] = includeYaverMcp
+        body["sessionStartedFrom"] = sessionStartedFrom
 
         let data = try await request("POST", path: "/tasks", jsonBody: body,
                                      failure: "couldn't start the task")
@@ -761,7 +770,8 @@ actor AgentClient {
             resultText: decoded.resultText,
             turns: decoded.turns,
             pendingFollowUps: decoded.pendingFollowUps,
-            tmuxSession: decoded.tmuxSession
+            tmuxSession: decoded.tmuxSession,
+            executionSession: decoded.executionSession
         )
     }
 

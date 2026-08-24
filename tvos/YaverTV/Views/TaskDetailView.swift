@@ -3,8 +3,8 @@
 // The old screen called a raw stdout terminal "Chat" and offered no reply
 // field. A user had to back out, create another task, then find the new console.
 // Mobile's mechanic is the contract: render user/assistant turns, show a sent
-// message immediately, continue a live task in place, and silently fork a
-// finished task to the same runner while carrying the visible conversation.
+// message immediately and continue finished or live tasks in their exact
+// runner conversation and task-owned tmux seat.
 // The raw console remains available as progressive disclosure, not the primary
 // interaction model.
 
@@ -99,6 +99,17 @@ struct TaskDetailView: View {
                 Text(task.safeTitle).font(.system(size: 22, weight: .semibold)).lineLimit(2)
                 Text([runnerLabel, modelLabel, statusLabel].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.system(size: 15)).foregroundStyle(.secondary)
+                if task.executionSession != nil || task.sessionId?.isEmpty == false || task.tmuxSession?.isEmpty == false {
+                    Text([
+                        task.executionSession.map { "yaver \($0.yaverSessionId)" },
+                        task.executionSession?.remoteBoxId.map { "box \($0)" },
+                        task.sessionId.map { "runner \($0)" },
+                        task.tmuxSession.map { "tmux \($0)" },
+                    ].compactMap { $0 }.joined(separator: " · "))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer()
             if runnerCoding {
@@ -681,35 +692,14 @@ struct TaskDetailView: View {
                         // Cursor-based replay makes this restart lossless.
                         reattachNonce += 1
                     }
-                case .fork(let runner):
-                    let fork = try await client.forkTask(
-                        task.id,
-                        runner: runner,
-                        model: pickedModel,
-                        input: text,
-                        projectDir: pickedProjectPath,
-                        mcpServers: Array(pickedMCPServers),
-                        includeYaverMcp: yaverMcpOn
-                    )
+                case .settingsChangeBlocked(let message):
                     await MainActor.run {
-                        stream?.cancel()
-                        task = TaskSummary(
-                            id: fork.taskId,
-                            title: task.title,
-                            status: fork.status ?? "queued",
-                            runner: fork.runnerId,
-                            model: pickedModel.isEmpty ? task.model : pickedModel,
-                            turns: displayTurns
-                        )
-                        status = fork.status ?? "queued"
-                        console = ""
-                        rawCursor = 0
-                        transcriptCursor = 0
-                        liveAssistantText = ""
-                        streamMessage = nil
-                        reattachNonce += 1
-                        settingsChanged = false
+                        optimisticTurns.removeAll { $0.id == optimistic.id }
+                        if reply.isEmpty { reply = text }
+                        sendError = message
+                        sending = false
                     }
+                    return
                 }
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 await refreshDetail()

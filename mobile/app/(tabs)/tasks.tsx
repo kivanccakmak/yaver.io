@@ -1670,10 +1670,48 @@ function buildAgentContextRows(
       if (provider) rows.push({ label: "Provider", value: provider, mono: false });
     }
   }
-  if (task.tmuxSession || task.tmuxSessionId) {
+  const yaverSession = task.executionSession;
+  if (yaverSession?.yaverSessionId) {
+    rows.push({ label: "Yaver session", value: yaverSession.yaverSessionId, mono: true });
+    rows.push({
+      label: "Session route",
+      value: [
+        yaverSession.remoteBoxId && `box ${yaverSession.remoteBoxId}`,
+        yaverSession.runnerName || yaverSession.runnerId,
+        yaverSession.startedFrom && `started in ${yaverSession.startedFrom}`,
+        yaverSession.initialSurface && `${yaverSession.initialSurface} → ${yaverSession.lastSurface || yaverSession.initialSurface}`,
+      ].filter(Boolean).join(" · "),
+      mono: true,
+    });
+    rows.push({
+      label: "Session activity",
+      value: [
+        yaverSession.sessionStartedAt && `started ${new Date(yaverSession.sessionStartedAt).toLocaleString()}`,
+        yaverSession.lastActiveAt && `active ${new Date(yaverSession.lastActiveAt).toLocaleString()}`,
+        yaverSession.firstUserMessageAt && `first message ${new Date(yaverSession.firstUserMessageAt).toLocaleString()}`,
+        yaverSession.lastAgentResponseAt && `last response ${new Date(yaverSession.lastAgentResponseAt).toLocaleString()}`,
+      ].filter(Boolean).join(" · "),
+      mono: false,
+    });
+  }
+  const runnerSessionId = task.executionSession?.runnerSessionId || task.sessionId;
+  if (runnerSessionId) {
+    rows.push({
+      label: "Runner session",
+      value: `${runnerSessionId}${task.executionSession?.resumable === false ? " · not resumable" : ""}`,
+      mono: true,
+    });
+  }
+  if (task.tmuxSession || task.tmuxSessionId || task.executionSession?.tmuxSession) {
+    const tmux = task.executionSession;
     rows.push({
       label: "Tmux",
-      value: [task.tmuxSession, task.tmuxSessionId].filter(Boolean).join(" · "),
+      value: [
+        tmux?.tmuxSession || task.tmuxSession,
+        tmux?.tmuxSessionId || task.tmuxSessionId,
+        (tmux?.tmuxWindowName || task.tmuxWindowName) && `window ${tmux?.tmuxWindowName || task.tmuxWindowName}`,
+        (tmux?.tmuxPaneId || task.tmuxPaneId) && `pane ${tmux?.tmuxPaneId || task.tmuxPaneId}`,
+      ].filter(Boolean).join(" · "),
       mono: true,
     });
   }
@@ -1974,12 +2012,14 @@ export default function TasksScreen() {
     hideInitialPrompt?: string;
     selectProject?: string;
     phoneCheckout?: string;
+    sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace";
   }>();
   const routeProjectDir = typeof taskParams.dir === "string" ? taskParams.dir : "";
   const initialPrompt = typeof taskParams.prompt === "string" ? taskParams.prompt : "";
   const initialTitle = typeof taskParams.title === "string" ? taskParams.title : "";
   const initialRunner = typeof taskParams.runner === "string" ? taskParams.runner : "";
   const initialPhoneCheckout = typeof taskParams.phoneCheckout === "string" ? taskParams.phoneCheckout : "";
+  const initialSessionStartedFrom = taskParams.sessionStartedFrom || "tasks";
   const shouldOpenNew =
     typeof taskParams.openNew === "string" &&
     (taskParams.openNew === "1" || taskParams.openNew === "true");
@@ -3757,7 +3797,7 @@ export default function TasksScreen() {
   // Listen for streaming output — buffer updates to avoid UI freezing
   const outputBufferRef = useRef<Record<string, string[]>>({});
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRuntimeRenderRef = useRef<{ taskId: string; source: string; workDir?: string; projectName?: string; explicit?: boolean } | null>(null);
+  const pendingRuntimeRenderRef = useRef<{ taskId: string; yaverSessionId?: string; source: string; workDir?: string; projectName?: string; explicit?: boolean } | null>(null);
   const namedReloadExecutorRef = useRef<((projectName: string) => Promise<void>) | null>(null);
 
   // ── raw-lane (live console) ─────────────────────────────────────────
@@ -3924,6 +3964,7 @@ export default function TasksScreen() {
         if (evt.type === "runtime_render_requested") {
           pendingRuntimeRenderRef.current = {
             taskId: selectedTask.id,
+            yaverSessionId: typeof evt.yaverSessionId === "string" ? evt.yaverSessionId : undefined,
             source: `mobile-task-finished-${String(evt.reason || "render")}`,
             workDir: typeof evt.workDir === "string" ? evt.workDir : undefined,
           };
@@ -4092,6 +4133,7 @@ export default function TasksScreen() {
     if ((selectedTask.pendingFollowUps?.length ?? 0) > 0) return;
     const pending = pendingRuntimeRenderRef.current;
     if (!pending || pending.taskId !== selectedTask.id) return;
+    if (pending.yaverSessionId && pending.yaverSessionId !== selectedTask.executionSession?.yaverSessionId) return;
     pendingRuntimeRenderRef.current = null;
     void (async () => {
       if (pending.projectName) {
@@ -5264,6 +5306,7 @@ export default function TasksScreen() {
         taskParams.includeYaverMcp,
         taskParams.askMode,
         options?.hideInitialPrompt === true,
+        initialSessionStartedFrom,
       );
       // A response that names a different runner is proof the requested
       // operation did not happen. Never open a success-shaped OpenCode chat
@@ -5815,13 +5858,12 @@ export default function TasksScreen() {
     // Only the yaver-agent branch above did this, so on every runner path
     // (codex, claude, opencode — what people actually use) the text vanished
     // from the input and appeared NOWHERE until fetchTasks() came back. When
-    // the follow-up also forks (see parentFinished below) the view swaps to a
-    // fresh child task, so the message was invisible in a chat that had itself
-    // just been replaced by an empty one. That is the "I wrote a message and
-    // cannot see it at all, then it shows a new task" report.
+    // the old terminal-state path also forked, the view swapped to a fresh
+    // child task and made the failure worse. That is the "I wrote a message
+    // and it created a new task" report.
     //
-    // The optimistic turn is carried across the fork so the conversation reads
-    // continuously, the way a chat app is expected to behave.
+    // A follow-up never changes task identity. Completion ends the preceding
+    // runner turn, not this conversation.
     const optimisticText = submittedText;
     // Capture the payload NOW, before we clear the composer — the send calls
     // below must use these consts, never the live followUpText/followUpImages
@@ -5848,7 +5890,7 @@ export default function TasksScreen() {
     // simulator) the old flow froze "Sending…" until the POST settled, which
     // read as a stuck UI. The send now runs in the background; a failure rolls
     // the turn back and alerts, and the typed text is restored so the user can
-    // retry. The fork-confirm path re-checks the input from these consts.
+    // retry.
     setFollowUpText("");
     setFollowUpImages([]);
     setIsSendingFollowUp(false);
@@ -5887,135 +5929,53 @@ export default function TasksScreen() {
           : quicClient;
         await taskClient.sendTmuxInput(selectedTask.id, optimisticText);
       } else {
-        // Decide between continue (resume in place) vs. fork (spawn a
-        // child task). We fork when:
-        //   - the user changed the runner picker since this task started, OR
-        //   - the parent task already finished (completed/review/failed/
-        //     stopped). Continuing a finished task in place tries to
-        //     --resume the runner's old session; forking is cleaner and
-        //     matches Codex/Claude Code "continue into a new session"
-        //     semantics. See task_fork.go on the agent side.
+        // A reply is always a continuation of this exact task + native runner
+        // session. Finished/review means the previous TURN ended; it does not
+        // authorize a child task. Runner changes are blocked here because
+        // Claude/Codex/OpenCode session formats are not interchangeable.
         const parentRunner = (selectedTask.runnerId || "").trim();
         // Ordinary replies stay on the task's recorded runner. Only the
         // task-scoped picker above may override it; the global New Task picker
         // is deliberately ignored here so unrelated composer state cannot
         // switch a conversation by accident.
         const desiredRunner = (followUpRunnerOverride || parentRunner || selectedRunner || "").trim();
-        // planFollowUp owns this decision so it can be tested without React
-        // Native — see mobile/src/lib/followUpPlan.test.ts. It is the reason
-        // follow-ups appeared to "create a new task": a finished parent always
-        // forks, and finished is the normal state by the time a reply is typed.
+        // planFollowUp owns this invariant so it can be tested without React
+        // Native — see mobile/src/lib/followUpPlan.test.ts.
         const plan = planFollowUp({
           isAdopted: selectedTask.isAdopted,
           parentRunner,
           desiredRunner,
           status: selectedTask.status,
         });
-        const runnerChanged = plan.action === "fork-confirm";
-        const switching = plan.action === "fork-confirm" || plan.action === "fork-silent";
-
-        if (switching) {
-          // Two flavors of fork:
-          //  - runnerChanged: confirm before switching agents (different
-          //    chat formats, picker explicitly changed by user).
-          //  - parentFinished only: silent fork to a child task, same
-          //    runner. This is the "continue a completed task" path —
-          //    no extra dialog because the user just typed and tapped
-          //    send.
-          if (runnerChanged) {
-            const niceName = desiredRunner.charAt(0).toUpperCase() + desiredRunner.slice(1);
-            const confirmed = await new Promise<boolean>((resolve) => {
-              Alert.alert(
-                `Switch to ${niceName}?`,
-                `Switching to ${niceName} will start a new child chat. ` +
-                  `Yaver will include the most recent part of this conversation as context ` +
-                  `so the new agent can pick up where you left off.\n\n` +
-                  `For speed and token safety, Yaver sends roughly the last ~1200 words plus ` +
-                  `the latest task summary, not the entire chat history.`,
-                [
-                  { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-                  { text: `Switch to ${niceName}`, style: "default", onPress: () => resolve(true) },
-                ],
-              );
-            });
-            if (!confirmed) {
-              // user backed out — drop the throw so the catch below
-              // doesn't double-handle, then leave the input in place.
-              rollbackOptimisticTurn();
-              return;
-            }
-            try {
-              console.log("[yaver-analytics]", JSON.stringify({
-                event: "agent_switch_requested",
-                source: "mobile",
-                from: parentRunner,
-                to: desiredRunner,
-                ts: Date.now(),
-              }));
-            } catch { /* analytics is best-effort */ }
-          }
-          // Fork is non-destructive — no need to stop the parent.
-          // Image attachments don't carry over (the child receives
-          // text-only conversation context instead). When the parent
-          // is finished but the runner is unchanged, send the parent's
-          // runner so the fork uses the same one. Fork requires a
-          // non-empty runner; legacy tasks without a recorded runnerId
-          // fall back to claude.
-          const forkRunner = plan.forkRunner;
-          const result = await connectionManager.runnerClient().forkTask(selectedTask.id, {
-            runner: forkRunner,
-            input: optimisticText,
-            // The in-chat Build|Plan toggle rides the fork — switching modes
-            // on a finished/other-runner parent starts the child in that
-            // mode (2026-08-13). Empty = child keeps the agent default.
-            mode: followUpOpenCodeMode || undefined,
-            // A fork continues a conversation the user is ALREADY having with
-            // this machine — placement must not bounce it to a Cloud Workspace
-            // that is waking. allowLocalFallback keeps the fork here even when
-            // Convex would prefer a cloud lane (2026-08-08).
-            allowLocalFallback: true,
-            projectDir: projectDir || undefined,
-            mcpServers: selectedMcpServers,
-          });
-          // Switch the chat to the new child so subsequent follow-ups
-          // continue against the forked task.
-          // Carry the conversation (including the turn we just optimistically
-          // appended) into the child. Without this the fork presents as an
-          // empty chat and the message the user just sent is gone from view.
-          setSelectedTask((prev) => prev && prev.id === selectedTask.id
-            ? {
-                ...prev,
-                id: result.taskId,
-                runnerId: result.runnerId,
-                status: "queued" as TaskStatus,
-                turns: prev.turns ?? [],
-              }
-            : prev);
-          if (runnerChanged) {
-            try {
-              console.log("[yaver-analytics]", JSON.stringify({
-                event: "agent_switch_completed",
-                source: "mobile",
-                from: parentRunner,
-                to: desiredRunner,
-                contextWords: result.contextWordsUsed,
-                ts: Date.now(),
-              }));
-            } catch { /* analytics is best-effort */ }
-          }
-        } else {
-          // Same runner: regular continue. The agent now accepts
-          // follow-ups while a task is still streaming and queues them
-          // onto the same session instead of requiring a stop first.
-          // The in-chat Build|Plan toggle rides the continue too — a
-          // plan→build switch mid-run is this path (2026-08-13).
-          await connectionManager.runnerClient().continueTask(
-            selectedTask.id,
-            optimisticText,
-            optimisticImages.length > 0 ? optimisticImages : undefined,
-            followUpOpenCodeMode || undefined,
+        if (plan.action === "runner-change-blocked") {
+          rollbackOptimisticTurn();
+          Alert.alert(
+            "This conversation stays with its runner",
+            `This task belongs to ${parentRunner || "its original runner"}. Start a new task if you want to use ${desiredRunner}; a follow-up will never create or switch sessions.`,
           );
+          return;
         }
+        // The agent accepts live follow-ups into this task's queue and resumes
+        // completed turns only when it can address the exact native session.
+        const executionSession = await connectionManager.runnerClient().continueTask(
+          selectedTask.id,
+          optimisticText,
+          optimisticImages.length > 0 ? optimisticImages : undefined,
+          followUpOpenCodeMode || undefined,
+        );
+        const applyIdentity = (task: Task): Task => ({
+          ...task,
+          sessionId: executionSession.runnerSessionId || task.sessionId,
+          executionSession,
+          tmuxSession: executionSession.tmuxSession || task.tmuxSession,
+          tmuxSessionId: executionSession.tmuxSessionId || task.tmuxSessionId,
+          tmuxWindowIndex: executionSession.tmuxWindowIndex || task.tmuxWindowIndex,
+          tmuxWindowName: executionSession.tmuxWindowName || task.tmuxWindowName,
+          tmuxPaneIndex: executionSession.tmuxPaneIndex || task.tmuxPaneIndex,
+          tmuxPaneId: executionSession.tmuxPaneId || task.tmuxPaneId,
+        });
+        setTasks((prev) => prev.map((task) => task.id === selectedTask.id ? applyIdentity(task) : task));
+        setSelectedTask((prev) => prev?.id === selectedTask.id ? applyIdentity(prev) : prev);
       }
       // Input already cleared optimistically above — just refresh.
       await fetchTasks();
@@ -6062,30 +6022,6 @@ export default function TasksScreen() {
       // The send failed, so the message never reached the runner. Take the
       // optimistic turn back out rather than leaving a phantom message.
       rollbackOptimisticTurn();
-      // A fork refused with 409 cloud_workspace_required (placement prefers a
-      // Cloud Workspace that is waking/blocked). We send allowLocalFallback:true
-      // so this should be rare — but if an older agent ignores it, defer the
-      // fork like a new task instead of surfacing a raw 409 dead end.
-      if (err instanceof CloudWorkspaceRequiredError && selectedTask) {
-        try {
-          const forkTask = await saveDeferredCloudWorkspaceTask(err, {
-            title: `Continue "${normalizeTaskTitle(selectedTask.title)}" on ${(followUpRunnerOverride || selectedTask.runnerId || "claude").trim()}`,
-            description: optimisticText,
-            runner: (followUpRunnerOverride || selectedTask.runnerId || "claude").trim(),
-            workDir: projectDir || undefined,
-            projectName: projectNameFromPath(projectDir),
-          });
-          setSelectedTask((prev) => (prev && prev.id === selectedTask.id ? forkTask : prev));
-          setTasks((prev) => [forkTask, ...prev.filter((t) => t.id !== forkTask.id)]);
-          Alert.alert(
-            "Remote machine is preparing",
-            "Yaver kept this switch on your phone and will dispatch it when the assigned machine is ready.",
-          );
-          return;
-        } catch {
-          // fall through to the generic alert below
-        }
-      }
       // SURFACE it. A silent rollback is exactly why the second follow-up
       // "vanished" with no explanation (2026-07-21): the user saw the message
       // disappear and had no idea it hadn't sent. The typed text is preserved
@@ -6097,22 +6033,6 @@ export default function TasksScreen() {
           ? err.message
           : `The message didn't reach ${activeDevice?.name ?? "the machine"}. It's still in the box — tap Send to try again.`,
       );
-      // Best-effort analytics for runtime-switch failures. Other
-      // continue-task failures don't have analytics yet; if we add
-      // them later, gate this on an explicit "was a switch" flag.
-      try {
-        const desiredRunner = (followUpRunnerOverride || "").trim();
-        if (desiredRunner && selectedTask?.runnerId && desiredRunner !== selectedTask.runnerId) {
-          console.log("[yaver-analytics]", JSON.stringify({
-            event: "agent_switch_failed",
-            source: "mobile",
-            from: selectedTask.runnerId,
-            to: desiredRunner,
-            error: err instanceof Error ? err.message : String(err),
-            ts: Date.now(),
-          }));
-        }
-      } catch { /* analytics is best-effort */ }
     } finally {
       setIsSendingFollowUp(false);
     }

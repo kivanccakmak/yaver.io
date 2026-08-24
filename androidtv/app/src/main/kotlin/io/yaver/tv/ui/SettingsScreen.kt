@@ -42,6 +42,7 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
     val boxes by store.boxes.collectAsState()
     val settings by store.settings.collectAsState()
     val selectedBox by store.selectedBox.collectAsState()
+    val appearanceTheme by store.appearanceTheme.collectAsState()
 
     var saved by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -64,10 +65,30 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
         modifier = Modifier.fillMaxSize().background(TvColors.Bg).verticalScroll(rememberScrollState()).padding(48.dp),
         verticalArrangement = Arrangement.spacedBy(28.dp),
     ) {
-        BackBar(title = "Settings", subtitle = "Account defaults — remembered on every surface", onBack = { nav.popBackStack() })
+        BackBar(title = "Settings", subtitle = "Defaults and this TV's appearance", onBack = { nav.popBackStack() })
 
         error?.let { ErrorPanel(message = it) }
         saved?.let { StatusChip(it, TvColors.Green) }
+
+        SettingsRow(
+            title = "Appearance",
+            detail = "Saved for Android TV; other Yaver surfaces keep their own choice",
+        ) {
+            listOf("dark", "light").forEach { theme ->
+                TvChip(
+                    text = if (theme == "dark") "Dark" else "Light",
+                    selected = appearanceTheme == theme,
+                    onClick = {
+                        scope.launch {
+                            error = null
+                            runCatching { store.setAppearanceTheme(theme) }
+                                .onSuccess { saved = "Appearance saved" }
+                                .onFailure { error = it.message }
+                        }
+                    },
+                )
+            }
+        }
 
         // ── Primary device ─────────────────────────────────────────────────
         SettingsRow(

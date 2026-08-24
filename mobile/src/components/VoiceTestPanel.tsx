@@ -25,6 +25,7 @@ import {
   StyleSheet,
 } from "react-native";
 import { getLocalSecret, LOCAL_KEYS, type SpeechProvider, type TtsProvider } from "../lib/auth";
+import { useColors } from "../context/ThemeContext";
 import {
   transcribe,
   initWhisper,
@@ -39,6 +40,7 @@ import {
 type Status = { kind: "idle" | "ok" | "error" | "busy"; msg?: string };
 
 export default function VoiceTestPanel() {
+  const c = useColors();
   const [savedKey, setSavedKey] = useState<string>("");
 
   // ── STT state ──────────────────────────────────────────────────────
@@ -146,28 +148,29 @@ export default function VoiceTestPanel() {
   }, [ttsProvider, ttsNeedsKey, ttsKey, ttsText, ttsVoice]);
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Voice test</Text>
-      <Text style={styles.subtitle}>
+    <ScrollView style={[styles.root, { backgroundColor: c.bg }]} contentContainerStyle={styles.content}>
+      <Text style={[styles.title, { color: c.textPrimary }]}>Voice test</Text>
+      <Text style={[styles.subtitle, { color: c.textSecondary }]}>
         Verify speech-to-text and text-to-speech with the free local engine or your own API key.
       </Text>
 
       {/* ── STT ── */}
-      <Text style={styles.section}>Speech → Text</Text>
+      <Text style={[styles.section, { color: c.textPrimary }]}>Speech → Text</Text>
       <ChipRow
         options={SPEECH_PROVIDERS.map((p) => ({ id: p.id, label: p.name }))}
         selected={sttProvider}
         onSelect={(id) => setSttProvider(id as SpeechProvider)}
         disabled={recording || transcribing}
+        c={c}
       />
-      <Text style={styles.hint}>{sttInfo?.description}</Text>
+      <Text style={[styles.hint, { color: c.textMuted }]}>{sttInfo?.description}</Text>
       {sttNeedsKey && (
         <TextInput
-          style={styles.input}
+          style={[styles.input, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgInput }]}
           value={sttKey}
           onChangeText={setSttKey}
           placeholder={sttInfo?.keyPlaceholder || "API key"}
-          placeholderTextColor="#666"
+          placeholderTextColor={c.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
           secureTextEntry
@@ -186,40 +189,41 @@ export default function VoiceTestPanel() {
         </Text>
       </Pressable>
       {transcript ? (
-        <View style={styles.resultBox}>
-          <Text style={styles.resultLabel}>Transcript</Text>
-          <Text style={styles.resultText}>{transcript}</Text>
+        <View style={[styles.resultBox, { borderColor: c.border, backgroundColor: c.bgCard }]}>
+          <Text style={[styles.resultLabel, { color: c.textMuted }]}>Transcript</Text>
+          <Text style={[styles.resultText, { color: c.textPrimary }]}>{transcript}</Text>
         </View>
       ) : null}
-      <StatusLine status={sttStatus} />
+      <StatusLine status={sttStatus} muted={c.textMuted} />
 
       {/* ── TTS ── */}
-      <Text style={[styles.section, { marginTop: 28 }]}>Text → Speech</Text>
+      <Text style={[styles.section, { color: c.textPrimary, marginTop: 28 }]}>Text → Speech</Text>
       <ChipRow
         options={TTS_PROVIDERS.map((p) => ({ id: p.id, label: p.name }))}
         selected={ttsProvider}
         onSelect={(id) => setTtsProvider(id as TtsProvider)}
         disabled={ttsStatus.kind === "busy"}
+        c={c}
       />
-      <Text style={styles.hint}>{ttsInfo?.description}</Text>
+      <Text style={[styles.hint, { color: c.textMuted }]}>{ttsInfo?.description}</Text>
       {ttsNeedsKey && (
         <TextInput
-          style={styles.input}
+          style={[styles.input, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgInput }]}
           value={ttsKey}
           onChangeText={setTtsKey}
           placeholder="API key (sk-...)"
-          placeholderTextColor="#666"
+          placeholderTextColor={c.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
           secureTextEntry
         />
       )}
       <TextInput
-        style={[styles.input, styles.multiline]}
+        style={[styles.input, styles.multiline, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgInput }]}
         value={ttsText}
         onChangeText={setTtsText}
         placeholder="Text to speak"
-        placeholderTextColor="#666"
+        placeholderTextColor={c.textMuted}
         multiline
       />
       {(ttsProvider === "openai" || ttsProvider === "openrouter") && (
@@ -228,6 +232,7 @@ export default function VoiceTestPanel() {
           selected={ttsVoice}
           onSelect={setTtsVoice}
           disabled={ttsStatus.kind === "busy"}
+          c={c}
         />
       )}
       <Pressable
@@ -240,7 +245,7 @@ export default function VoiceTestPanel() {
       >
         <Text style={styles.btnText}>{ttsStatus.kind === "busy" ? "Speaking…" : "Speak it"}</Text>
       </Pressable>
-      <StatusLine status={ttsStatus} />
+      <StatusLine status={ttsStatus} muted={c.textMuted} />
     </ScrollView>
   );
 }
@@ -250,11 +255,13 @@ function ChipRow({
   selected,
   onSelect,
   disabled,
+  c,
 }: {
   options: { id: string; label: string }[];
   selected: string;
   onSelect: (id: string) => void;
   disabled?: boolean;
+  c: ReturnType<typeof useColors>;
 }) {
   return (
     <View style={styles.chipRow}>
@@ -266,10 +273,10 @@ function ChipRow({
             onPress={() => !disabled && onSelect(o.id)}
             style={[
               styles.chip,
-              { borderColor: active ? "#2563eb" : "#333", backgroundColor: active ? "#1e293b" : "transparent", opacity: disabled ? 0.5 : 1 },
+              { borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "1f" : "transparent", opacity: disabled ? 0.5 : 1 },
             ]}
           >
-            <Text style={{ color: active ? "#60a5fa" : "#cbd5e1", fontSize: 13 }}>{o.label}</Text>
+            <Text style={{ color: active ? c.accent : c.textSecondary, fontSize: 13 }}>{o.label}</Text>
           </Pressable>
         );
       })}
@@ -277,13 +284,13 @@ function ChipRow({
   );
 }
 
-function StatusLine({ status }: { status: Status }) {
+function StatusLine({ status, muted }: { status: Status; muted: string }) {
   if (status.kind === "idle") return null;
   const color =
-    status.kind === "ok" ? "#22c55e" : status.kind === "error" ? "#ef4444" : "#94a3b8";
+    status.kind === "ok" ? "#22c55e" : status.kind === "error" ? "#ef4444" : muted;
   return (
     <View style={styles.statusRow}>
-      {status.kind === "busy" && <ActivityIndicator size="small" color="#94a3b8" />}
+      {status.kind === "busy" && <ActivityIndicator size="small" color={muted} />}
       <Text style={[styles.statusText, { color }]}>{status.msg}</Text>
     </View>
   );

@@ -5,12 +5,13 @@ import SwiftUI
 
 @main
 struct YaverTVApp: App {
-    @StateObject private var store = YaverStore()
+    @StateObject private var store = YaverStore(appearanceSurface: "tvos")
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .preferredColorScheme(store.appearanceTheme == "light" ? .light : .dark)
         }
     }
 }
@@ -19,10 +20,13 @@ struct RootView: View {
     @EnvironmentObject var store: YaverStore
 
     var body: some View {
-        if store.isAuthenticated {
-            DashboardView()
-        } else {
-            SignInView()
+        Group {
+            if store.isAuthenticated {
+                DashboardView()
+            } else {
+                SignInView()
+            }
         }
+        .task(id: store.token) { await store.refreshAppearanceSettings() }
     }
 }

@@ -219,6 +219,10 @@ export default function CarVoiceCodingScreen() {
           mcpServers,
           goalIntent ? goalText : undefined,
           includeYaverMcp,
+          undefined,
+          undefined,
+          "tasks",
+          "car",
         );
         return { id: t.id };
       },

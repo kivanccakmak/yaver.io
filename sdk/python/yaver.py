@@ -127,6 +127,11 @@ class YaverClient:
         result = self._request("POST", f"/tasks/{task_id}/continue", body)
         if not result.get("ok"):
             raise RuntimeError(result.get("error", "Failed to continue task"))
+        execution = result.get("executionSession") or {}
+        if (result.get("taskId") != task_id or result.get("sameTask") is False
+                or execution.get("taskId") != task_id):
+            raise RuntimeError(
+                "The agent did not confirm the same task and runner session for this follow-up")
 
     def clean(self, days: int = 30) -> dict:
         """Clean up old tasks, images, and logs on the agent."""

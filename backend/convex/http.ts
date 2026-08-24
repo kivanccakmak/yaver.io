@@ -5084,6 +5084,7 @@ http.route({
         keyStorage: body.keyStorage,
         multiTargetMode: body.multiTargetMode,
         autoRenderVibing: body.autoRenderVibing,
+        appearanceThemeForSurface: body.appearanceThemeForSurface,
         moreOptionalTools: body.moreOptionalTools,
         // Client sends null to clear the preference, undefined to leave untouched.
         primaryDeviceId: body.primaryDeviceId,

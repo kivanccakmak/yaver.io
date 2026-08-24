@@ -185,7 +185,7 @@ export default function SettingsScreen() {
     primaryRunnerByDevice,
     setPrimaryRunnerForDevice,
   } = useDevice();
-  const { isDark, toggleTheme } = useTheme();
+  const { isDark, setTheme } = useTheme();
   const c = useColors();
   const insets = useSafeAreaInsets();
   // Name is "empty" if it equals the email or is blank
@@ -358,6 +358,7 @@ export default function SettingsScreen() {
   // existing account" prompt) scroll straight to the sign-in-method
   // buttons instead of dumping the user at the top of Settings.
   const accountSectionY = useRef(0);
+  const gitOnboardingSectionY = useRef(0);
 
   // Relay servers
   const [customRelays, setCustomRelays] = useState<RelayServer[]>([]);
@@ -1269,6 +1270,30 @@ export default function SettingsScreen() {
       return first ? [first.id] : [];
     });
   }, [activeDevice?.id, onboardingTargetCandidates.map((device) => device.id).join("|")]);
+
+  // Dogfood failures deep-link here with the exact remote box selected. The
+  // wizard remains the existing owner-authenticated provider flow; no token is
+  // copied into navigation state or Convex.
+  const gitWizardParam = useLocalSearchParams().gitWizard;
+  const gitWizardDeviceParam = useLocalSearchParams().deviceId;
+  const handledGitWizard = useRef(false);
+  useEffect(() => {
+    if (!gitWizardParam || handledGitWizard.current) return;
+    handledGitWizard.current = true;
+    if (typeof gitWizardDeviceParam === "string" && onboardingTargetCandidates.some((d) => d.id === gitWizardDeviceParam)) {
+      setSelectedOnboardingTargetIds([gitWizardDeviceParam]);
+    }
+    setShowIntegrations(true);
+    const t = setTimeout(() => {
+      scrollViewRef.current?.scrollTo({ y: Math.max(0, gitOnboardingSectionY.current - 12), animated: true });
+    }, 450);
+    try {
+      router.setParams({ gitWizard: "", deviceId: "" });
+    } catch {
+      // best-effort on older expo-router versions
+    }
+    return () => clearTimeout(t);
+  }, [gitWizardParam, gitWizardDeviceParam, onboardingTargetCandidates.map((device) => device.id).join("|")]);
 
   useEffect(() => {
     if (!showIntegrations) return;
@@ -3988,14 +4013,47 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Appearance</Text>
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-            <View style={styles.themeRow}>
-              <Text style={[styles.themeLabel, { color: c.textPrimary }]}>Dark Mode</Text>
-              <Switch
-                value={isDark}
-                onValueChange={toggleTheme}
-                trackColor={{ false: c.border, true: c.accent }}
-                thumbColor="#ffffff"
-              />
+            <View style={{ padding: 14 }}>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                {(["dark", "light"] as const).map((next) => {
+                  const previous = isDark ? "dark" : "light";
+                  const selected = previous === next;
+                  return (
+                    <Pressable
+                      key={next}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      onPress={() => {
+                        if (selected) return;
+                        setTheme(next);
+                        if (!token) return;
+                        void saveUserSettings(token, {
+                          appearanceThemeForSurface: { surface: "mobile", theme: next },
+                        }).catch(() => {
+                          setTheme(previous);
+                          Alert.alert("Couldn't Save Appearance", "Yaver kept your previous theme. Reconnect and try again.");
+                        });
+                      }}
+                      style={{
+                        flex: 1,
+                        alignItems: "center",
+                        borderRadius: 10,
+                        borderWidth: 1,
+                        borderColor: selected ? c.accent : c.border,
+                        backgroundColor: selected ? c.accent + "1f" : c.bgInput,
+                        paddingVertical: 10,
+                      }}
+                    >
+                      <Text style={{ color: selected ? c.accent : c.textSecondary, fontWeight: "600" }}>
+                        {next === "dark" ? "Dark" : "Light"}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 8 }}>
+                Saved for this mobile surface.
+              </Text>
             </View>
           </View>
         </View>
@@ -4955,7 +5013,10 @@ export default function SettingsScreen() {
 
               <BoxInitSection c={c} token={token} />
 
-              <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
+              <View
+                onLayout={(e) => { gitOnboardingSectionY.current = e.nativeEvent.layout.y; }}
+                style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]}
+              />
 
               <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Remote machine onboarding</Text>
               <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 4 }}>

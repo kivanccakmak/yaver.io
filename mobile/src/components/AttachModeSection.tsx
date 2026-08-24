@@ -24,7 +24,15 @@ import { useDevice } from "../context/DeviceContext";
 import { computeAttachGate, computeNestingVerdict, ATTACH_SENTINEL_KEY, type AttachStep } from "../lib/attachMode";
 import type { BoxReadiness } from "../lib/boxInit";
 import { loadBoxReadiness } from "../lib/boxInitStore";
-import { discoverYaverCheckout, prepareDogfoodMode, requestDogfoodFixWithAI, verifyYaverCheckout } from "../lib/attachClient";
+import {
+  getDogfoodSourceStatus,
+  installDogfoodGit,
+  installDogfoodSource,
+  prepareDogfoodMode,
+  requestDogfoodFixWithAI,
+  verifyYaverCheckout,
+  type DogfoodSourceStatus,
+} from "../lib/attachClient";
 import { appLog } from "../lib/logger";
 
 const CHECKOUT_KEY = "@yaver/attach_checkout_dir";
@@ -50,8 +58,11 @@ export default function AttachModeSection({
   const [verifying, setVerifying] = useState(false);
   const [starting, setStarting] = useState(false);
   const [startProgress, setStartProgress] = useState<string | null>(null);
-  const [failure, setFailure] = useState<{ error: string; remedy?: string; fixPrompt?: string } | null>(null);
+  const [failure, setFailure] = useState<{ code?: string; error: string; remedy?: string; fixPrompt?: string } | null>(null);
   const [fixing, setFixing] = useState(false);
+  const [sourceStatus, setSourceStatus] = useState<DogfoodSourceStatus | null>(null);
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [sourceProgress, setSourceProgress] = useState<string | null>(null);
   const [measuredReadiness, setMeasuredReadiness] = useState<BoxReadiness | null>(readiness ?? null);
   const [connectingPrimary, setConnectingPrimary] = useState(false);
   const [mayOffer, setMayOffer] = useState(true);
@@ -94,18 +105,25 @@ export default function AttachModeSection({
     })();
   }, []);
 
-  // Primary-device dogfood should be one action in the normal case. Ask the
-  // box for its actual repo inventory instead of guessing a username/path.
+  // Primary-device Dogfood should be one action in the normal case. The Go
+  // agent owns this answer because only it can inspect the box's source and
+  // Git origin. A cached client-side repo list is not an operational check.
   useEffect(() => {
-    if (!primaryOnly || !configLoaded || !targetConnected || !targetDevice?.id || checkoutDir.trim()) return;
+    if (!primaryOnly || !configLoaded || !targetConnected || !targetDevice?.id) return;
     let cancelled = false;
-    void discoverYaverCheckout(targetDevice.id).then((dir) => {
-      if (cancelled || !dir) return;
-      setCheckoutDir(dir);
-      AsyncStorage.setItem(CHECKOUT_KEY, dir).catch(() => {});
+    void getDogfoodSourceStatus(targetDevice.id, checkoutDir.trim() || undefined).then((status) => {
+      if (cancelled) return;
+      setSourceStatus(status);
+      if (status.ready && status.path && !checkoutDir.trim()) {
+        setCheckoutDir(status.path);
+        AsyncStorage.setItem(CHECKOUT_KEY, status.path).catch(() => {});
+      }
     });
     return () => { cancelled = true; };
-  }, [checkoutDir, configLoaded, primaryOnly, targetConnected, targetDevice?.id]);
+  // The explicit checkout is verified by the debounced effect below; this
+  // effect is for initial agent-owned discovery only.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configLoaded, primaryOnly, targetConnected, targetDevice?.id]);
 
   // Verification is the AGENT's answer, never a path guess here. Re-runs when
   // the directory or the box changes, and resets to "unknown" first so a stale
@@ -118,7 +136,11 @@ export default function AttachModeSection({
       }
       setVerifying(true);
       setVerified(undefined);
-      const ok = await verifyYaverCheckout(targetDevice.id, dir.trim());
+      const [ok, status] = await Promise.all([
+        verifyYaverCheckout(targetDevice.id, dir.trim()),
+        getDogfoodSourceStatus(targetDevice.id, dir.trim()),
+      ]);
+      setSourceStatus(status);
       setVerified(ok);
       setVerifying(false);
     },
@@ -179,6 +201,7 @@ export default function AttachModeSection({
       const prepared = await prepareDogfoodMode(targetDevice.id, dir, setStartProgress);
       if (!prepared.ok) {
         setFailure({
+          code: prepared.code,
           error: `${prepared.code}: ${prepared.error}`,
           remedy: prepared.remedy,
           fixPrompt: prepared.fixPrompt ||
@@ -209,6 +232,39 @@ export default function AttachModeSection({
       setStartProgress(null);
     }
   }, [checkoutDir, gate.canAttach, runner, targetDevice?.id, targetDevice?.name]);
+
+  const runSourceFix = useCallback(async () => {
+    if (!targetDevice?.id || !sourceStatus || sourceBusy) return;
+    setSourceBusy(true);
+    setFailure(null);
+    setSourceProgress(sourceStatus.code === "DOGFOOD_GIT_NOT_INSTALLED" ? "Installing Git…" : "Cloning Yaver source…");
+    try {
+      const result = sourceStatus.code === "DOGFOOD_GIT_NOT_INSTALLED"
+        ? await installDogfoodGit(targetDevice.id, (line) => setSourceProgress(line.trim() || "Installing Git…"))
+        : await installDogfoodSource(targetDevice.id, runner);
+      if (!result.ok) {
+        setFailure({
+          code: sourceStatus.code,
+          error: result.error || "The source repair did not complete.",
+          remedy: sourceStatus.code === "DOGFOOD_GIT_NOT_INSTALLED"
+            ? "Open the Git configuration wizard or retry the install on this box."
+            : "Open the Git configuration wizard if GitHub access is required, then retry the clone.",
+        });
+        return;
+      }
+      const installedPath = (result as { path?: string }).path;
+      const status = await getDogfoodSourceStatus(targetDevice.id, installedPath);
+      setSourceStatus(status);
+      if (status.ready && status.path) {
+        setCheckoutDir(status.path);
+        await AsyncStorage.setItem(CHECKOUT_KEY, status.path);
+        await verify(status.path);
+      }
+    } finally {
+      setSourceBusy(false);
+      setSourceProgress(null);
+    }
+  }, [runner, sourceBusy, sourceStatus, targetDevice?.id, verify]);
 
   if (!mayOffer) {
     return (
@@ -265,6 +321,33 @@ export default function AttachModeSection({
       <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 14, marginBottom: 6 }}>
         Yaver checkout on the box
       </Text>
+      {sourceStatus && !sourceStatus.ready ? (
+        <View style={{ borderWidth: 1, borderColor: c.warn, borderRadius: 10, padding: 10, marginBottom: 10 }}>
+          <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>{sourceStatus.message}</Text>
+          {sourceStatus.remedy ? (
+            <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 }}>{sourceStatus.remedy}</Text>
+          ) : null}
+          {sourceStatus.action ? (
+            <Pressable
+              disabled={sourceBusy}
+              onPress={() => void runSourceFix()}
+              style={{ marginTop: 9, alignSelf: "flex-start", paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, backgroundColor: c.accent }}
+            >
+              <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>
+                {sourceBusy ? (sourceProgress || "Working…") : sourceStatus.action.label}
+              </Text>
+            </Pressable>
+          ) : null}
+          {!sourceStatus.action && sourceStatus.code === "DOGFOOD_GIT_CREDENTIALS_EMBEDDED" && targetDevice?.id ? (
+            <Pressable
+              onPress={() => router.push({ pathname: "/(tabs)/settings" as any, params: { gitWizard: "1", deviceId: targetDevice.id } } as any)}
+              style={{ marginTop: 9, alignSelf: "flex-start", paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: c.accent }}
+            >
+              <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>Open Git configuration</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
       <TextInput
         value={checkoutDir}
         onChangeText={(t) => {
@@ -333,6 +416,14 @@ export default function AttachModeSection({
             <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6, lineHeight: 16 }}>
               {failure.remedy}
             </Text>
+          ) : null}
+          {(failure.code === "DOGFOOD_GIT_AUTH_UNCONFIGURED" || failure.code === "DOGFOOD_SOURCE_MISSING") && targetDevice?.id ? (
+            <Pressable
+              onPress={() => router.push({ pathname: "/(tabs)/settings" as any, params: { gitWizard: "1", deviceId: targetDevice.id } } as any)}
+              style={{ marginTop: 10, alignSelf: "flex-start", borderWidth: 1, borderColor: c.accent, borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8 }}
+            >
+              <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>Configure Git on this box</Text>
+            </Pressable>
           ) : null}
           {failure.fixPrompt && targetDevice?.id && targetConnected ? (
             <Pressable

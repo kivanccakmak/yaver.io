@@ -16,7 +16,11 @@ const xcode = require(path.join(__dirname, "..", "mobile", "node_modules", "xcod
 
 const PROJ = path.join(__dirname, "..", "mobile", "ios", "Yaver.xcodeproj", "project.pbxproj");
 const TARGET = "YaverWatch";
-const PRODUCT_NAME = "Yaver";
+// Keep the embedded product distinct from the phone's Yaver.app. Giving both
+// targets PRODUCT_NAME=Yaver makes simulator/archive builds emit the same
+// output directory and Xcode refuses the graph with "Multiple commands
+// produce .../Yaver.app" before compiling either app.
+const PRODUCT_NAME = "YaverWatch";
 const PRODUCT_REF_BASENAME = `${TARGET}.app`;
 const BUNDLE = "io.yaver.mobile.watch";
 const TEAM = "5SJZ4KA39A";
@@ -137,7 +141,7 @@ repairTarget(targetUuid);
 
 fs.writeFileSync(PROJ, proj.writeSync());
 console.log(`✓ added ${TARGET} watchOS companion target → ${path.relative(process.cwd(), PROJ)}`);
-console.log("  Next: build the Yaver iOS scheme; it now embeds Yaver.app under Watch/.");
+console.log("  Next: build the Yaver iOS scheme; it now embeds YaverWatch.app under Watch/.");
 
 function stripQuotes(s) {
   return String(s || "").replace(/^"|"$/g, "");
@@ -145,9 +149,9 @@ function stripQuotes(s) {
 
 // Wire an explicit target dependency main → watch so the watchOS app builds
 // BEFORE the iOS target's "Embed Watch Content" copy phase runs. Without this
-// the archive fails with `lstat(.../Release-watchos/Yaver.app): No such file`
-// because implicit-dependency resolution can't match (the watch product is
-// PRODUCT_NAME=Yaver but its productReference is YaverWatch.app). The xcode lib's
+// the archive fails with `lstat(.../Release-watchos/YaverWatch.app): No such file`
+// because older generated projects could leave the watch product settings and
+// its YaverWatch.app productReference out of sync. The xcode lib's
 // addTargetDependency silently no-ops when these sections don't yet exist
 // (pbxProject.js guards on their presence), so create them first. Idempotent.
 function ensureTargetDependency(mainUuid, depUuid) {

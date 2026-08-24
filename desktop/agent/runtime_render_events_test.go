@@ -21,9 +21,10 @@ func TestRuntimeRenderReasonFromTaskOutputDetectsPreviewMarkers(t *testing.T) {
 
 func TestEmitRuntimeRenderRequestedIncludesWorkDir(t *testing.T) {
 	task := &Task{
-		ID:      "task-1",
-		WorkDir: "/repo/mobile",
-		eventCh: make(chan map[string]interface{}, 1),
+		ID:             "task-1",
+		YaverSessionID: "ys_render_1",
+		WorkDir:        "/repo/mobile",
+		eventCh:        make(chan map[string]interface{}, 1),
 	}
 	emitRuntimeRenderRequested(task, "web-preview-start", "marker")
 	select {
@@ -34,7 +35,7 @@ func TestEmitRuntimeRenderRequestedIncludesWorkDir(t *testing.T) {
 		if ev["schema"] != RuntimeRenderEventSchema {
 			t.Fatalf("schema = %#v", ev["schema"])
 		}
-		if ev["taskId"] != "task-1" || ev["workDir"] != "/repo/mobile" || ev["reason"] != "web-preview-start" {
+		if ev["taskId"] != "task-1" || ev["yaverSessionId"] != "ys_render_1" || ev["workDir"] != "/repo/mobile" || ev["reason"] != "web-preview-start" {
 			t.Fatalf("unexpected event: %#v", ev)
 		}
 	default:

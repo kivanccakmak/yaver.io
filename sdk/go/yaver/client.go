@@ -77,7 +77,7 @@ type CreateTaskOptions struct {
 	Model         string            `json:"model,omitempty"`
 	Runner        string            `json:"runner,omitempty"`
 	CustomCommand string            `json:"customCommand,omitempty"`
-	SpeechContext *SpeechContext     `json:"speechContext,omitempty"`
+	SpeechContext *SpeechContext    `json:"speechContext,omitempty"`
 	Images        []ImageAttachment `json:"images,omitempty"`
 }
 
@@ -193,8 +193,13 @@ func (c *Client) DeleteTask(taskID string) error {
 // ContinueTask sends a follow-up message to a running task.
 func (c *Client) ContinueTask(taskID, message string, images []ImageAttachment) error {
 	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
+		OK               bool   `json:"ok"`
+		Error            string `json:"error"`
+		TaskID           string `json:"taskId"`
+		SameTask         *bool  `json:"sameTask"`
+		ExecutionSession struct {
+			TaskID string `json:"taskId"`
+		} `json:"executionSession"`
 	}
 	body := map[string]interface{}{"input": message}
 	if len(images) > 0 {
@@ -205,6 +210,9 @@ func (c *Client) ContinueTask(taskID, message string, images []ImageAttachment) 
 	}
 	if !result.OK {
 		return fmt.Errorf("continue task failed: %s", result.Error)
+	}
+	if result.TaskID != taskID || (result.SameTask != nil && !*result.SameTask) || result.ExecutionSession.TaskID != taskID {
+		return fmt.Errorf("continue task failed: agent did not confirm the same task and runner session")
 	}
 	return nil
 }

@@ -49,3 +49,23 @@ func TestSurfaceFromHeaders(t *testing.T) {
 		t.Errorf("nil header should be unknown, got %q", s)
 	}
 }
+
+func TestSessionSurfacePreservesConcreteClient(t *testing.T) {
+	cases := map[string]string{
+		"tvOS": "tvos", "androidtv": "androidtv",
+		"watchOS": "watchos", "wearos": "wearos",
+		"carplay": "carplay", "androidauto": "androidauto",
+		"visionOS": "visionos", "mobile-tablet": "tablet",
+		"web": "web", "desktop": "desktop", "mobile": "mobile",
+	}
+	for header, want := range cases {
+		req, err := http.NewRequest(http.MethodGet, "http://agent/tasks/id", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set(surfaceHeader, header)
+		if got := sessionSurfaceFromRequest(req); got != want {
+			t.Errorf("sessionSurfaceFromRequest(%q) = %q, want %q", header, got, want)
+		}
+	}
+}

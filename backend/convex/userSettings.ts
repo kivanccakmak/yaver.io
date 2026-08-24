@@ -28,6 +28,34 @@ const deployPreferencePatchValidator = v.object({
   play: v.optional(v.union(v.string(), v.null())),
 });
 
+const appearanceThemePatchValidator = v.object({
+  surface: v.union(
+    v.literal("mobile"),
+    v.literal("web"),
+    v.literal("tvos"),
+    v.literal("androidtv"),
+    v.literal("watchos"),
+    v.literal("wearos"),
+    v.literal("visionos"),
+    v.literal("carplay"),
+  ),
+  theme: v.union(v.literal("light"), v.literal("dark")),
+});
+
+type AppearanceThemeRow = { surface: string; theme: "light" | "dark"; updatedAt: number };
+
+function mergeAppearanceTheme(
+  existing: AppearanceThemeRow[] | undefined,
+  patch: { surface: string; theme: "light" | "dark" },
+): AppearanceThemeRow[] {
+  const rows = (existing ?? []).filter((row) => row.surface !== patch.surface);
+  return [...rows, {
+    surface: patch.surface,
+    theme: patch.theme,
+    updatedAt: Date.now(),
+  }].slice(-8);
+}
+
 const openCodeConfigSnapshotPatchValidator = v.object({
   deviceId: v.string(),
   model: v.optional(v.union(v.string(), v.null())),
@@ -864,6 +892,7 @@ export const set = internalMutation({
     // so the toggle roams across phones / re-installs.
     multiTargetMode: v.optional(v.boolean()),
     autoRenderVibing: v.optional(v.boolean()),
+    appearanceThemeForSurface: v.optional(appearanceThemePatchValidator),
     connectionMode: v.optional(v.string()),
     moreOptionalTools: v.optional(v.array(v.string())),
     // null sentinel = clear the preference; undefined = leave untouched.
@@ -942,6 +971,12 @@ export const set = internalMutation({
     if (args.keyStorage !== undefined) patch.keyStorage = args.keyStorage;
     if (args.multiTargetMode !== undefined) patch.multiTargetMode = args.multiTargetMode;
     if (args.autoRenderVibing !== undefined) patch.autoRenderVibing = args.autoRenderVibing;
+    if (args.appearanceThemeForSurface !== undefined) {
+      patch.appearanceThemeBySurface = mergeAppearanceTheme(
+        existing?.appearanceThemeBySurface as AppearanceThemeRow[] | undefined,
+        args.appearanceThemeForSurface,
+      );
+    }
     // Only the two values the clients understand. An unknown string would
     // silently read as "not single" everywhere and be impossible to debug.
     if (args.connectionMode !== undefined && (args.connectionMode === "all" || args.connectionMode === "single")) {
@@ -1102,6 +1137,7 @@ export const setByToken = mutation({
     keyStorage: v.optional(v.string()),
     multiTargetMode: v.optional(v.boolean()),
     autoRenderVibing: v.optional(v.boolean()),
+    appearanceThemeForSurface: v.optional(appearanceThemePatchValidator),
     connectionMode: v.optional(v.string()),
     moreOptionalTools: v.optional(v.array(v.string())),
     primaryDeviceId: v.optional(v.union(v.string(), v.null())),
@@ -1168,6 +1204,12 @@ export const setByToken = mutation({
     if (args.keyStorage !== undefined) patch.keyStorage = args.keyStorage;
     if (args.multiTargetMode !== undefined) patch.multiTargetMode = args.multiTargetMode;
     if (args.autoRenderVibing !== undefined) patch.autoRenderVibing = args.autoRenderVibing;
+    if (args.appearanceThemeForSurface !== undefined) {
+      patch.appearanceThemeBySurface = mergeAppearanceTheme(
+        existing?.appearanceThemeBySurface as AppearanceThemeRow[] | undefined,
+        args.appearanceThemeForSurface,
+      );
+    }
     // Only the two values the clients understand. An unknown string would
     // silently read as "not single" everywhere and be impossible to debug.
     if (args.connectionMode !== undefined && (args.connectionMode === "all" || args.connectionMode === "single")) {

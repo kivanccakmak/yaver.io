@@ -1004,8 +1004,14 @@ type TaskSliceContract struct {
 }
 
 type TaskCreateOptions struct {
-	WorkDir          string
-	ProjectSessionID string
+	// SessionStartedFrom is the product entry point that created the shared
+	// Yaver session: tasks, vibing, new-application, or mobile-workspace.
+	// StartedFromSurface records the initiating client; neither changes when
+	// another surface later attaches to the same session.
+	SessionStartedFrom string
+	StartedFromSurface string
+	WorkDir            string
+	ProjectSessionID   string
 
 	// InitialUserPrompt is WHAT THE USER TYPED (or said, or shook their phone
 	// about). It becomes the first stored ConversationTurn — the chat bubble
@@ -1089,7 +1095,7 @@ type TaskCreateOptions struct {
 	// ResumeLast + ResumeSessionID wire native session resume into the FIRST
 	// spawn (used by the scheduler for recurring schedules with resume on).
 	// ResumeSessionID seeds task.SessionID so claude/glm/codex can resume by
-	// id; opencode resumes by --continue regardless. Default zero = fresh.
+	// id; OpenCode also uses its captured id via `run --session`. Default zero = fresh.
 	ResumeLast      bool
 	ResumeSessionID string
 
@@ -1159,10 +1165,77 @@ type TaskFailureDiagnosis struct {
 }
 
 type PendingFollowUp struct {
-	Input   string            `json:"input"`
-	Images  []ImageAttachment `json:"images,omitempty"`
-	Options TaskResumeOptions `json:"options,omitempty"`
+	Input     string            `json:"input"`
+	Images    []ImageAttachment `json:"images,omitempty"`
+	Options   TaskResumeOptions `json:"options,omitempty"`
+	Timestamp time.Time         `json:"timestamp,omitempty"`
 }
+
+func recordSessionMessage(task *Task, role string, at time.Time) {
+	if task == nil {
+		return
+	}
+	switch role {
+	case "user":
+		if task.FirstUserMessageAt == nil {
+			first := at
+			task.FirstUserMessageAt = &first
+		}
+		last := at
+		task.LastUserMessageAt = &last
+	case "assistant":
+		if task.FirstAgentResponseAt == nil {
+			first := at
+			task.FirstAgentResponseAt = &first
+		}
+		last := at
+		task.LastAgentResponseAt = &last
+	}
+	task.LastActiveAt = at
+}
+
+// TaskExecutionIdentity is the one cross-surface answer to "which
+// conversation and terminal seat will my next message use?". Runner session
+// IDs and tmux IDs are different namespaces: the former carries model context;
+// the latter identifies the observable process seat. Surfaces must show both
+// and must never infer one from the other.
+type TaskExecutionIdentity struct {
+	YaverSessionID       string     `json:"yaverSessionId"`
+	TaskID               string     `json:"taskId"`
+	RemoteBoxID          string     `json:"remoteBoxId,omitempty"`
+	RunnerName           string     `json:"runnerName,omitempty"`
+	RunnerID             string     `json:"runnerId,omitempty"`
+	RunnerSessionID      string     `json:"runnerSessionId,omitempty"`
+	StartedFrom          string     `json:"startedFrom,omitempty"`
+	StartedFromSurface   string     `json:"startedFromSurface,omitempty"`
+	InitialSurface       string     `json:"initialSurface,omitempty"`
+	SessionStartedAt     time.Time  `json:"sessionStartedAt"`
+	LastSurface          string     `json:"lastSurface,omitempty"`
+	LastActiveAt         time.Time  `json:"lastActiveAt"`
+	FirstUserMessageAt   *time.Time `json:"firstUserMessageAt,omitempty"`
+	FirstAgentResponseAt *time.Time `json:"firstAgentResponseAt,omitempty"`
+	LastUserMessageAt    *time.Time `json:"lastUserMessageAt,omitempty"`
+	LastAgentResponseAt  *time.Time `json:"lastAgentResponseAt,omitempty"`
+	DeletedAt            *time.Time `json:"deletedAt,omitempty"`
+	Resumable            bool       `json:"resumable"`
+	TmuxSession          string     `json:"tmuxSession,omitempty"`
+	TmuxSessionID        string     `json:"tmuxSessionId,omitempty"`
+	TmuxWindowIndex      string     `json:"tmuxWindowIndex,omitempty"`
+	TmuxWindowName       string     `json:"tmuxWindowName,omitempty"`
+	TmuxPaneIndex        string     `json:"tmuxPaneIndex,omitempty"`
+	TmuxPaneID           string     `json:"tmuxPaneId,omitempty"`
+}
+
+// TaskContinuationConflict is returned when "continue" would actually have
+// to create or switch a native runner session. The caller gets the identity it
+// attempted to resume, so every surface can name the missing/mismatched seat.
+type TaskContinuationConflict struct {
+	Code     string
+	Reason   string
+	Identity TaskExecutionIdentity
+}
+
+func (e *TaskContinuationConflict) Error() string { return e.Reason }
 
 type Task struct {
 	ID          string     `json:"id"`
@@ -1198,6 +1271,23 @@ type Task struct {
 	Source     string `json:"source,omitempty"` // "mobile", "mcp", "cli"
 	Model      string `json:"model,omitempty"`
 	RunnerID   string `json:"runnerId,omitempty"` // which runner is executing this task
+	// YaverSessionID is Yaver's stable, entry-point-independent conversation
+	// handle. Tasks/Chat, Vibing/render, and new-application/workspace views all
+	// attach to this identity; runner and tmux IDs remain child namespaces.
+	YaverSessionID       string     `json:"yaverSessionId,omitempty"`
+	RemoteBoxID          string     `json:"remoteBoxId,omitempty"`
+	RunnerName           string     `json:"runnerName,omitempty"`
+	SessionStartedFrom   string     `json:"sessionStartedFrom,omitempty"`
+	StartedFromSurface   string     `json:"startedFromSurface,omitempty"`
+	InitialSurface       string     `json:"initialSurface,omitempty"`
+	SessionStartedAt     time.Time  `json:"sessionStartedAt,omitempty"`
+	LastSurface          string     `json:"lastSurface,omitempty"`
+	LastActiveAt         time.Time  `json:"lastActiveAt,omitempty"`
+	DeletedAt            *time.Time `json:"deletedAt,omitempty"`
+	FirstUserMessageAt   *time.Time `json:"firstUserMessageAt,omitempty"`
+	FirstAgentResponseAt *time.Time `json:"firstAgentResponseAt,omitempty"`
+	LastUserMessageAt    *time.Time `json:"lastUserMessageAt,omitempty"`
+	LastAgentResponseAt  *time.Time `json:"lastAgentResponseAt,omitempty"`
 	// Transport records the protocol that actually executed the task. It lets
 	// surfaces and doctor distinguish native ACP from the compatibility CLI
 	// lane without guessing from runner output.
@@ -1211,7 +1301,7 @@ type Task struct {
 	// spawn (not just on follow-ups). Set by the scheduler when a recurring
 	// schedule with resume enabled re-fires, so the run picks up where the
 	// previous fire left off (claude/glm via SessionID, opencode via
-	// --continue, codex via exec resume). Default false = fresh spawn.
+	// --session, codex via exec resume). Default false = fresh spawn.
 	ResumeLast bool   `json:"-"`
 	Output     string `json:"output"`
 	// RawOutput is the raw runner stdout tail (ANSI intact) retained for
@@ -1566,6 +1656,7 @@ type TaskInfo struct {
 	TmuxWindowName      string                 `json:"tmuxWindowName,omitempty"`
 	TmuxPaneIndex       string                 `json:"tmuxPaneIndex,omitempty"`
 	TmuxPaneID          string                 `json:"tmuxPaneId,omitempty"`
+	ExecutionSession    TaskExecutionIdentity  `json:"executionSession"`
 	IsAdopted           bool                   `json:"isAdopted,omitempty"`
 	CreatedAt           time.Time              `json:"createdAt"`
 	StartedAt           *time.Time             `json:"startedAt,omitempty"`
@@ -1590,6 +1681,82 @@ type TaskInfo struct {
 	FeedbackID          string                 `json:"feedbackId,omitempty"`
 	AskFreely           bool                   `json:"askFreely,omitempty"`
 	Placement           *TaskPlacementMetadata `json:"placement,omitempty"`
+}
+
+func newYaverSessionID() string {
+	return "ys_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:20]
+}
+
+func (tm *TaskManager) taskExecutionIdentity(task *Task) TaskExecutionIdentity {
+	if task == nil {
+		return TaskExecutionIdentity{}
+	}
+	runner := task.runner
+	if runner.Command == "" {
+		runner = GetRunnerConfig(task.RunnerID)
+	}
+	firstUser, firstAgent := task.FirstUserMessageAt, task.FirstAgentResponseAt
+	lastUser, lastAgent := task.LastUserMessageAt, task.LastAgentResponseAt
+	for _, turn := range task.Turns {
+		ts := turn.Timestamp
+		switch turn.Role {
+		case "user":
+			if turn.Hidden {
+				continue
+			}
+			if firstUser == nil {
+				first := ts
+				firstUser = &first
+			}
+			if lastUser == nil || ts.After(*lastUser) {
+				last := ts
+				lastUser = &last
+			}
+		case "assistant":
+			if firstAgent == nil {
+				first := ts
+				firstAgent = &first
+			}
+			if lastAgent == nil || ts.After(*lastAgent) {
+				last := ts
+				lastAgent = &last
+			}
+		}
+	}
+	startedAt := task.SessionStartedAt
+	if startedAt.IsZero() {
+		startedAt = task.CreatedAt
+	}
+	lastActiveAt := task.LastActiveAt
+	if lastActiveAt.IsZero() {
+		lastActiveAt = startedAt
+	}
+	return TaskExecutionIdentity{
+		YaverSessionID:       task.YaverSessionID,
+		TaskID:               task.ID,
+		RemoteBoxID:          firstNonEmpty(task.RemoteBoxID, tm.DeviceID),
+		RunnerName:           firstNonEmpty(task.RunnerName, runner.Name),
+		RunnerID:             normalizeRunnerID(task.RunnerID),
+		RunnerSessionID:      strings.TrimSpace(task.SessionID),
+		StartedFrom:          firstNonEmpty(task.SessionStartedFrom, "tasks"),
+		StartedFromSurface:   firstNonEmpty(task.StartedFromSurface, task.Source),
+		InitialSurface:       firstNonEmpty(task.InitialSurface, task.StartedFromSurface, task.Source),
+		SessionStartedAt:     startedAt,
+		LastSurface:          firstNonEmpty(task.LastSurface, task.InitialSurface, task.StartedFromSurface, task.Source),
+		LastActiveAt:         lastActiveAt,
+		FirstUserMessageAt:   firstUser,
+		FirstAgentResponseAt: firstAgent,
+		LastUserMessageAt:    lastUser,
+		LastAgentResponseAt:  lastAgent,
+		DeletedAt:            task.DeletedAt,
+		Resumable:            resumeCanCarryContext(runner, task.SessionID),
+		TmuxSession:          task.TmuxSession,
+		TmuxSessionID:        task.TmuxSessionID,
+		TmuxWindowIndex:      task.TmuxWindowIndex,
+		TmuxWindowName:       task.TmuxWindowName,
+		TmuxPaneIndex:        task.TmuxPaneIndex,
+		TmuxPaneID:           task.TmuxPaneID,
+	}
 }
 
 type taskStore interface {
@@ -1646,6 +1813,15 @@ func NewTaskManager(workDir string, store taskStore, runner RunnerConfig) *TaskM
 	// Mark orphaned "running" tasks as failed — they have no live process after restart.
 	now := time.Now()
 	for _, t := range tasks {
+		if strings.TrimSpace(t.YaverSessionID) == "" {
+			t.YaverSessionID = newYaverSessionID()
+		}
+		if t.SessionStartedAt.IsZero() {
+			t.SessionStartedAt = t.CreatedAt
+		}
+		if t.LastActiveAt.IsZero() {
+			t.LastActiveAt = t.SessionStartedAt
+		}
 		if t.Status == TaskStatusRunning {
 			log.Printf("[task %s] Marking orphaned task as failed (was running before restart)", t.ID)
 			t.Status = TaskStatusFailed
@@ -2096,41 +2272,53 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		isRawRunnerCommand(description) ||
 		isRawRunnerCommand(title)
 	task := &Task{
-		ID:               id,
-		Title:            title,
-		Description:      description,
-		PromptText:       opts.PromptText,
-		Status:           TaskStatusQueued,
-		Source:           source,
-		Model:            model,
-		RunnerID:         taskRunner.RunnerID,
-		Goal:             taskRunner.Goal,
-		runner:           taskRunner,
-		CreatedAt:        now,
-		outputCh:         make(chan string, 512),
-		rawOutputCh:      make(chan []byte, 256),
-		eventCh:          make(chan map[string]interface{}, 32),
-		doneCh:           make(chan struct{}),
-		WorkDir:          strings.TrimSpace(opts.WorkDir),
-		ProjectName:      strings.TrimSpace(opts.ProjectName),
-		MCPServers:       append([]string{}, opts.MCPServers...),
-		IncludeYaverMcp:  opts.IncludeYaverMcp,
-		GitRemote:        strings.TrimSpace(opts.GitRemote),
-		GitBranch:        strings.TrimSpace(opts.GitBranch),
-		AutoPush:         strings.TrimSpace(opts.AutoPush),
-		SliceContract:    opts.SliceContract,
-		Placement:        opts.Placement,
-		TaskViewport:     opts.Viewport,
-		VideoEnabled:     opts.VideoEnabled,
-		VideoSource:      opts.VideoSource,
-		AskFreely:        opts.AskFreely,
-		AskMode:          opts.AskMode,
-		RedactPII:        opts.RedactPII,
-		RawRunnerCommand: rawRunnerCommand,
-		ResumeLast:       opts.ResumeLast,
-		SessionID:        opts.ResumeSessionID,
-		ProjectSessionID: strings.TrimSpace(opts.ProjectSessionID),
-		Turns:            initialTurns,
+		ID:                 id,
+		Title:              title,
+		Description:        description,
+		PromptText:         opts.PromptText,
+		Status:             TaskStatusQueued,
+		Source:             source,
+		Model:              model,
+		RunnerID:           taskRunner.RunnerID,
+		YaverSessionID:     newYaverSessionID(),
+		RemoteBoxID:        strings.TrimSpace(tm.DeviceID),
+		RunnerName:         taskRunner.Name,
+		SessionStartedFrom: firstNonEmpty(strings.TrimSpace(opts.SessionStartedFrom), "tasks"),
+		StartedFromSurface: firstNonEmpty(strings.TrimSpace(opts.StartedFromSurface), source),
+		InitialSurface:     firstNonEmpty(strings.TrimSpace(opts.StartedFromSurface), source),
+		SessionStartedAt:   now,
+		LastSurface:        firstNonEmpty(strings.TrimSpace(opts.StartedFromSurface), source),
+		LastActiveAt:       now,
+		Goal:               taskRunner.Goal,
+		runner:             taskRunner,
+		CreatedAt:          now,
+		outputCh:           make(chan string, 512),
+		rawOutputCh:        make(chan []byte, 256),
+		eventCh:            make(chan map[string]interface{}, 32),
+		doneCh:             make(chan struct{}),
+		WorkDir:            strings.TrimSpace(opts.WorkDir),
+		ProjectName:        strings.TrimSpace(opts.ProjectName),
+		MCPServers:         append([]string{}, opts.MCPServers...),
+		IncludeYaverMcp:    opts.IncludeYaverMcp,
+		GitRemote:          strings.TrimSpace(opts.GitRemote),
+		GitBranch:          strings.TrimSpace(opts.GitBranch),
+		AutoPush:           strings.TrimSpace(opts.AutoPush),
+		SliceContract:      opts.SliceContract,
+		Placement:          opts.Placement,
+		TaskViewport:       opts.Viewport,
+		VideoEnabled:       opts.VideoEnabled,
+		VideoSource:        opts.VideoSource,
+		AskFreely:          opts.AskFreely,
+		AskMode:            opts.AskMode,
+		RedactPII:          opts.RedactPII,
+		RawRunnerCommand:   rawRunnerCommand,
+		ResumeLast:         opts.ResumeLast,
+		SessionID:          opts.ResumeSessionID,
+		ProjectSessionID:   strings.TrimSpace(opts.ProjectSessionID),
+		Turns:              initialTurns,
+	}
+	if !opts.InitialUserPromptHidden {
+		recordSessionMessage(task, "user", now)
 	}
 	if len(verbosityCtx) > 0 && verbosityCtx[0] != nil {
 		task.TaskVerbosity = verbosityCtx[0]
@@ -2578,12 +2766,14 @@ func (tm *TaskManager) runDummyTask(task *Task) {
 	tm.mu.Lock()
 	task.Status = taskSuccessStatus(task)
 	task.FinishedAt = &finishNow
+	task.LastActiveAt = finishNow
 	task.ResultText = output.String()
 	task.Turns = append(task.Turns, ConversationTurn{
 		Role:      "assistant",
 		Content:   task.ResultText,
 		Timestamp: finishNow,
 	})
+	recordSessionMessage(task, "assistant", finishNow)
 	tm.persist()
 	tm.fireTaskDone(task)
 	tm.mu.Unlock()
@@ -3550,6 +3740,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			}
 			finishNow := time.Now()
 			task.FinishedAt = &finishNow
+			task.LastActiveAt = finishNow
 			// EVERY terminal outcome passes through here — failed, soft-failed,
 			// empty-reply, and succeeded. The auth classifier above only ran in
 			// the hard-failure branch, which is precisely why the 2026-07-27
@@ -3566,12 +3757,17 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					Content:   task.ResultText,
 					Timestamp: finishNow,
 				})
+				recordSessionMessage(task, "assistant", finishNow)
 			}
 			if (task.Status == TaskStatusReview || task.Status == TaskStatusFinished) && len(task.PendingFollowUps) > 0 {
 				next := task.PendingFollowUps[0]
 				task.PendingFollowUps = task.PendingFollowUps[1:]
 				oldDoneCh := task.doneCh
-				task.Turns = append(task.Turns, ConversationTurn{Role: "user", Content: next.Input, Timestamp: time.Now()})
+				queuedAt := next.Timestamp
+				if queuedAt.IsZero() {
+					queuedAt = time.Now()
+				}
+				task.Turns = append(task.Turns, ConversationTurn{Role: "user", Content: next.Input, Timestamp: queuedAt})
 				if len(next.Images) > 0 {
 					newPaths := saveImages(task.ID, next.Images)
 					task.ImagePaths = append(task.ImagePaths, newPaths...)
@@ -3609,6 +3805,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 				if err := tm.startResume(task, next.Input); err != nil {
 					tm.mu.Lock()
 					task.Status = TaskStatusFailed
+					task.Output = err.Error()
+					task.ResultText = err.Error()
 					now := time.Now()
 					task.FinishedAt = &now
 					tm.persist()
@@ -3738,8 +3936,8 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 					outputMu.Unlock()
 					// Best-effort: recover codex/opencode session id from raw
 					// output so follow-ups / recurring schedules can resume.
-					// A miss is harmless (opencode falls back to --continue,
-					// codex to carry-memo).
+					// A miss is surfaced on follow-up rather than guessing a
+					// different session (especially OpenCode's "last in cwd").
 					tm.mu.RLock()
 					haveSID := task.SessionID != ""
 					tm.mu.RUnlock()
@@ -4298,12 +4496,15 @@ func (tm *TaskManager) GracefulStopTask(id string) error {
 func (tm *TaskManager) DeleteTask(id string) error {
 	tm.mu.RLock()
 	task, ok := tm.tasks[id]
-	if !ok {
+	if !ok || task.DeletedAt != nil {
 		tm.mu.RUnlock()
 		return fmt.Errorf("task %s not found", id)
 	}
 	isRunning := task.Status == TaskStatusRunning || task.Status == TaskStatusQueued
 	isAdoptedTmux := task.IsAdopted && task.TmuxSession != "" && tm.TmuxMgr != nil
+	taskOwnedTmux := !task.IsAdopted && task.TmuxSession != "" &&
+		task.TmuxSession == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
+	taskOwnedTmuxName := task.TmuxSession
 	tm.mu.RUnlock()
 
 	// Auto-stop running tasks before deleting
@@ -4326,10 +4527,39 @@ func (tm *TaskManager) DeleteTask(id string) error {
 			log.Printf("[task %s] Timed out waiting for process exit during delete", id)
 		}
 	}
+	// Successful turns deliberately leave their task-owned seat alive for the
+	// next follow-up. Deleting the task is the explicit lifecycle boundary that
+	// removes that exact session; adopted/user-owned sessions are never touched.
+	if taskOwnedTmux && tmuxSessionExists(taskOwnedTmuxName) {
+		log.Printf("[task %s] Removing task-owned tmux session %q during delete", id, taskOwnedTmuxName)
+		if err := exec.Command(tmuxCmdName(), "kill-session", "-t", taskOwnedTmuxName).Run(); err != nil {
+			log.Printf("[task %s] Task-owned tmux cleanup failed: %v", id, err)
+		}
+	}
 
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-	delete(tm.tasks, id)
+	deletedAt := time.Now()
+	identity := tm.taskExecutionIdentity(task)
+	// Keep only the non-context session tombstone. Prompts, transcript,
+	// output, paths, attachments and runtime handles are private task context
+	// and are purged structurally by replacing the object, not by trying to
+	// remember an ever-growing list of private fields to clear.
+	*task = Task{
+		ID: id, Status: TaskStatusStopped, Source: task.Source,
+		RunnerID: identity.RunnerID, YaverSessionID: identity.YaverSessionID,
+		RemoteBoxID: identity.RemoteBoxID, RunnerName: identity.RunnerName,
+		SessionStartedFrom: identity.StartedFrom, StartedFromSurface: identity.StartedFromSurface,
+		InitialSurface: identity.InitialSurface, SessionStartedAt: identity.SessionStartedAt,
+		LastSurface: identity.LastSurface, LastActiveAt: deletedAt, DeletedAt: &deletedAt,
+		FirstUserMessageAt: identity.FirstUserMessageAt, FirstAgentResponseAt: identity.FirstAgentResponseAt,
+		LastUserMessageAt: identity.LastUserMessageAt, LastAgentResponseAt: identity.LastAgentResponseAt,
+		SessionID:   identity.RunnerSessionID,
+		TmuxSession: identity.TmuxSession, TmuxSessionID: identity.TmuxSessionID,
+		TmuxWindowIndex: identity.TmuxWindowIndex, TmuxWindowName: identity.TmuxWindowName,
+		TmuxPaneIndex: identity.TmuxPaneIndex, TmuxPaneID: identity.TmuxPaneID,
+		CreatedAt: identity.SessionStartedAt, FinishedAt: &deletedAt,
+	}
 	tm.persist()
 	return nil
 }
@@ -4356,21 +4586,30 @@ func (tm *TaskManager) StopAllTasks() int {
 
 // DeleteAllTasks removes all finished tasks from history.
 func (tm *TaskManager) DeleteAllTasks() int {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
-	deleted := 0
+	tm.mu.RLock()
+	var ids []string
 	for id, t := range tm.tasks {
-		if t.Status != TaskStatusRunning && t.Status != TaskStatusQueued {
-			delete(tm.tasks, id)
+		if t.DeletedAt == nil && t.Status != TaskStatusRunning && t.Status != TaskStatusQueued {
+			ids = append(ids, id)
+		}
+	}
+	tm.mu.RUnlock()
+
+	// Use the single-task lifecycle path so completed task-owned tmux seats are
+	// closed too. Removing only the history row would orphan every persistent
+	// vibe terminal introduced for follow-up continuity.
+	deleted := 0
+	for _, id := range ids {
+		if err := tm.DeleteTask(id); err == nil {
 			deleted++
 		}
 	}
-	tm.persist()
 	return deleted
 }
 
 // ResumeTask resumes an existing task in-place with a follow-up prompt.
-// Output is concatenated, same task ID is kept, and Claude session is resumed.
+// Output is concatenated and the same task, runner session, and task-owned tmux
+// seat are kept for every supported runner.
 func (tm *TaskManager) ResumeTask(id, input string, images []ImageAttachment) (*Task, error) {
 	return tm.ResumeTaskWithOptions(id, input, images, TaskResumeOptions{})
 }
@@ -4382,16 +4621,30 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 		tm.mu.Unlock()
 		return nil, fmt.Errorf("task %s not found", id)
 	}
+	identity := tm.taskExecutionIdentity(task)
+	existingRunner := normalizeRunnerID(task.RunnerID)
+	requestedRunner := normalizeRunnerID(opts.RunnerID)
+	if requestedRunner != "" && requestedRunner != existingRunner {
+		tm.mu.Unlock()
+		return nil, &TaskContinuationConflict{
+			Code:     "task_runner_session_mismatch",
+			Reason:   fmt.Sprintf("This task belongs to %s. Start a new task to use %s; a follow-up cannot switch runner sessions.", existingRunner, requestedRunner),
+			Identity: identity,
+		}
+	}
 	if task.Status == TaskStatusRunning || task.Status == TaskStatusQueued {
+		queuedAt := time.Now()
 		// Queue the follow-up onto the running task. The drain runs
 		// after the current response finishes (see startTask / startResume
 		// completion blocks). Works for any task source so phones can
 		// text mid-stream the way Codex/Claude Code do.
 		task.PendingFollowUps = append(task.PendingFollowUps, PendingFollowUp{
-			Input:   input,
-			Images:  append([]ImageAttachment{}, images...),
-			Options: opts,
+			Input:     input,
+			Images:    append([]ImageAttachment{}, images...),
+			Options:   opts,
+			Timestamp: queuedAt,
 		})
+		recordSessionMessage(task, "user", queuedAt)
 		queuedNote := "\n[Follow-up queued; it will run after the current response finishes.]\n"
 		task.Output += queuedNote
 		if task.outputCh != nil {
@@ -4404,6 +4657,17 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 		tm.mu.Unlock()
 		return task, nil
 	}
+	// A follow-up is allowed only when the native runner can address the exact
+	// prior conversation. Falling through to a cold process under the same task
+	// ID is still a new session, merely hidden from the user.
+	if !identity.Resumable {
+		tm.mu.Unlock()
+		return nil, &TaskContinuationConflict{
+			Code:     "runner_session_unavailable",
+			Reason:   fmt.Sprintf("Yaver cannot resume this %s conversation because its runner session ID was not captured. Start a new task; this follow-up was not sent.", existingRunner),
+			Identity: identity,
+		}
+	}
 
 	// Append follow-up to conversation history
 	turn := ConversationTurn{
@@ -4412,20 +4676,17 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 		Timestamp: time.Now(),
 	}
 	task.Turns = append(task.Turns, turn)
+	recordSessionMessage(task, "user", turn.Timestamp)
 
 	// Save new images if any
 	if len(images) > 0 {
 		newPaths := saveImages(id, images)
 		task.ImagePaths = append(task.ImagePaths, newPaths...)
 	}
-	if runnerID := normalizeRunnerID(opts.RunnerID); runnerID != "" {
-		prevRunner := normalizeRunnerID(task.RunnerID)
-		runner := GetRunnerConfig(runnerID)
-		task.runner = runner
-		task.RunnerID = runner.RunnerID
-		if runner.RunnerID != prevRunner {
-			task.SessionID = ""
-		}
+	// The runner is immutable for an in-place continuation. An explicit switch
+	// was rejected above; rehydrate legacy in-memory runner config only.
+	if task.runner.Command == "" && existingRunner != "" {
+		task.runner = GetRunnerConfig(existingRunner)
 	}
 	if model := strings.TrimSpace(opts.Model); model != "" {
 		task.Model = model
@@ -4493,8 +4754,11 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	// really a cold first message and must be briefed like one.
 	carriesContext := resumeCanCarryContext(runner, task.SessionID)
 	if !carriesContext {
-		log.Printf("[task %s] follow-up spawns a COLD %s process (session=%q cannot be resumed) — re-arming the Yaver preamble",
-			task.ID, runner.RunnerID, task.SessionID)
+		return &TaskContinuationConflict{
+			Code:     "runner_session_unavailable",
+			Reason:   fmt.Sprintf("refusing cold follow-up: %s task %s has no resumable runner session", runner.RunnerID, task.ID),
+			Identity: tm.taskExecutionIdentity(task),
+		}
 	}
 	chatModeArg := ""
 	if isChatTaskMode(task.runner.Mode) {
@@ -4502,13 +4766,13 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	}
 	rawFollowUpCommand := isRawRunnerCommand(prompt)
 	systemFrame, prompt := tm.composeTurn(task, prompt, promptFramePolicy{
-		ArmPreamble:      !carriesContext,
+		ArmPreamble:      false,
 		RawRunnerCommand: rawFollowUpCommand,
 		ChatMode:         chatModeArg,
 		// A follow-up that re-arms (cold process, runner switch, unresumable
 		// session) briefs the same way a first message does — including through
 		// the native channel when the runner has one.
-		NativeSystemPrompt: !rawFollowUpCommand && runnerSupportsNativeSystemPrompt(runner.RunnerID),
+		NativeSystemPrompt: false,
 	})
 	// Follow-ups echo too — codex reproduces stdin on EVERY turn, not just the
 	// first — so the guard is re-armed per turn with that turn's exact bytes.
@@ -4524,7 +4788,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	args = append(args, nativeSystemPromptArgs(runner.RunnerID, systemFrame)...)
 
 	// Resume the prior conversation (this is always a follow-up). resumeTransform
-	// handles claude (--resume <id>), opencode (--continue), codex (exec
+	// handles claude (--resume <id>), opencode (--session <id>), codex (exec
 	// resume <id>), and generic ResumeArgs runners; it falls back (ok=false)
 	// when the runner can't resume with what we captured, so we spawn fresh.
 	if newArgs, ok := resumeTransform(runner, args, prompt, resumeWorkDir, task.SessionID); ok {
@@ -4542,12 +4806,19 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	if tmuxTarget.Session != "" {
 		log.Printf("[task %s] tmux mode: dispatching %s follow-up into session %q",
 			task.ID, runner.Command, tmuxTarget.Session)
+		// The standard task-owned target persists across successful turns. Keep
+		// its last-known exact seat visible while the next turn starts; clearing
+		// these fields made the client briefly lose the identity and, before the
+		// persistent wrapper, hid that the session/pane had actually changed.
+		sameTmuxSeat := task.TmuxSession == tmuxTarget.Session
 		task.TmuxSession = tmuxTarget.Session
-		task.TmuxSessionID = ""
-		task.TmuxWindowIndex = ""
-		task.TmuxWindowName = ""
-		task.TmuxPaneIndex = ""
-		task.TmuxPaneID = ""
+		if !sameTmuxSeat {
+			task.TmuxSessionID = ""
+			task.TmuxWindowIndex = ""
+			task.TmuxWindowName = ""
+			task.TmuxPaneIndex = ""
+			task.TmuxPaneID = ""
+		}
 		cmd, tmuxEnvAdditions = buildTmuxRunnerCommand(ctx, tmuxTarget, task.ID, runner.RunnerID, resumeWorkDir, runner.Command, args, nil)
 	} else {
 		task.TmuxSession = ""
@@ -4637,6 +4908,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 			}
 			now := time.Now()
 			task.FinishedAt = &now
+			task.LastActiveAt = now
 			// Save the latest result as a conversation turn
 			if task.ResultText != "" {
 				task.Turns = append(task.Turns, ConversationTurn{
@@ -4644,12 +4916,17 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 					Content:   task.ResultText,
 					Timestamp: now,
 				})
+				recordSessionMessage(task, "assistant", now)
 			}
 			if (task.Status == TaskStatusReview || task.Status == TaskStatusFinished) && len(task.PendingFollowUps) > 0 {
 				next := task.PendingFollowUps[0]
 				task.PendingFollowUps = task.PendingFollowUps[1:]
 				oldDoneCh := task.doneCh
-				task.Turns = append(task.Turns, ConversationTurn{Role: "user", Content: next.Input, Timestamp: time.Now()})
+				queuedAt := next.Timestamp
+				if queuedAt.IsZero() {
+					queuedAt = time.Now()
+				}
+				task.Turns = append(task.Turns, ConversationTurn{Role: "user", Content: next.Input, Timestamp: queuedAt})
 				if len(next.Images) > 0 {
 					newPaths := saveImages(task.ID, next.Images)
 					task.ImagePaths = append(task.ImagePaths, newPaths...)
@@ -4668,6 +4945,8 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 				if err := tm.startResume(task, next.Input); err != nil {
 					tm.mu.Lock()
 					task.Status = TaskStatusFailed
+					task.Output = err.Error()
+					task.ResultText = err.Error()
 					now := time.Now()
 					task.FinishedAt = &now
 					tm.persist()
@@ -4785,6 +5064,9 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 
 	result := make([]TaskInfo, 0, len(tm.tasks))
 	for _, t := range tm.tasks {
+		if t.DeletedAt != nil {
+			continue
+		}
 		// Only include last 2000 chars of output in listings.
 		output := t.Output
 		if len(output) > 2000 {
@@ -4808,34 +5090,35 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			Turns:            t.Turns,
 			PendingFollowUps: append([]PendingFollowUp{},
 				t.PendingFollowUps...),
-			Source:          t.Source,
-			TmuxSession:     t.TmuxSession,
-			TmuxSessionID:   t.TmuxSessionID,
-			TmuxWindowIndex: t.TmuxWindowIndex,
-			TmuxWindowName:  t.TmuxWindowName,
-			TmuxPaneIndex:   t.TmuxPaneIndex,
-			TmuxPaneID:      t.TmuxPaneID,
-			IsAdopted:       t.IsAdopted,
-			CreatedAt:       t.CreatedAt,
-			StartedAt:       t.StartedAt,
-			FinishedAt:      t.FinishedAt,
-			ChainID:         t.ChainID,
-			ChainOrder:      t.ChainOrder,
-			AutoRetry:       t.AutoRetry,
-			AutoRetryCount:  t.AutoRetryCount,
-			AutoRetryMax:    t.AutoRetryMax,
-			VideoEnabled:    t.VideoEnabled,
-			VideoSource:     t.VideoSource,
-			VideoClipID:     t.VideoClipID,
-			VideoStatus:     t.VideoStatus,
-			ProofStatus:     t.ProofStatus,
-			CommitSHA:       t.CommitSHA,
-			CommitSubject:   t.CommitSubject,
-			CommitBranch:    t.CommitBranch,
-			DiffShortstat:   t.DiffShortstat,
-			FeedbackID:      t.FeedbackID,
-			AskFreely:       t.AskFreely,
-			Placement:       t.Placement,
+			Source:           t.Source,
+			TmuxSession:      t.TmuxSession,
+			TmuxSessionID:    t.TmuxSessionID,
+			TmuxWindowIndex:  t.TmuxWindowIndex,
+			TmuxWindowName:   t.TmuxWindowName,
+			TmuxPaneIndex:    t.TmuxPaneIndex,
+			TmuxPaneID:       t.TmuxPaneID,
+			ExecutionSession: tm.taskExecutionIdentity(t),
+			IsAdopted:        t.IsAdopted,
+			CreatedAt:        t.CreatedAt,
+			StartedAt:        t.StartedAt,
+			FinishedAt:       t.FinishedAt,
+			ChainID:          t.ChainID,
+			ChainOrder:       t.ChainOrder,
+			AutoRetry:        t.AutoRetry,
+			AutoRetryCount:   t.AutoRetryCount,
+			AutoRetryMax:     t.AutoRetryMax,
+			VideoEnabled:     t.VideoEnabled,
+			VideoSource:      t.VideoSource,
+			VideoClipID:      t.VideoClipID,
+			VideoStatus:      t.VideoStatus,
+			ProofStatus:      t.ProofStatus,
+			CommitSHA:        t.CommitSHA,
+			CommitSubject:    t.CommitSubject,
+			CommitBranch:     t.CommitBranch,
+			DiffShortstat:    t.DiffShortstat,
+			FeedbackID:       t.FeedbackID,
+			AskFreely:        t.AskFreely,
+			Placement:        t.Placement,
 		})
 	}
 	return result
@@ -4849,7 +5132,32 @@ func (tm *TaskManager) GetTask(id string) (*Task, bool) {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
 	t, ok := tm.tasks[id]
-	return t, ok
+	return t, ok && t.DeletedAt == nil
+}
+
+// TouchTaskSession records the most recent client surface to view or act on a
+// shared Yaver session. This is provenance only and is never authorization.
+func (tm *TaskManager) TouchTaskSession(id, surface string) {
+	surface = strings.TrimSpace(surface)
+	if tm == nil || surface == "" || surface == string(SurfaceUnknown) {
+		return
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	task, ok := tm.tasks[id]
+	if !ok || task == nil || task.DeletedAt != nil {
+		return
+	}
+	now := time.Now()
+	if task.InitialSurface == "" {
+		task.InitialSurface = surface
+	}
+	if task.SessionStartedAt.IsZero() {
+		task.SessionStartedAt = task.CreatedAt
+	}
+	task.LastSurface = surface
+	task.LastActiveAt = now
+	tm.persist()
 }
 
 func (tm *TaskManager) SetTaskVideoState(id, clipID, status string) {
@@ -5015,24 +5323,35 @@ func (tm *TaskManager) CreateChainedTasks(tasks []ChainedTaskInput, model, sourc
 			retryMax = 3
 		}
 		task := &Task{
-			ID:           id,
-			Title:        input.Title,
-			Description:  input.Description,
-			Status:       TaskStatusQueued,
-			Source:       source,
-			Model:        model,
-			RunnerID:     taskRunner.RunnerID,
-			runner:       taskRunner,
-			CreatedAt:    now,
-			outputCh:     make(chan string, 512),
-			rawOutputCh:  make(chan []byte, 256),
-			eventCh:      make(chan map[string]interface{}, 32),
-			doneCh:       make(chan struct{}),
-			ChainID:      chainID,
-			ChainOrder:   i,
-			AutoRetry:    autoRetry,
-			AutoRetryMax: retryMax,
-			TaskViewport: viewport, // set before startProcess so task 0 gets the hint
+			ID:                 id,
+			Title:              input.Title,
+			Description:        input.Description,
+			Status:             TaskStatusQueued,
+			Source:             source,
+			Model:              model,
+			RunnerID:           taskRunner.RunnerID,
+			YaverSessionID:     newYaverSessionID(),
+			RemoteBoxID:        strings.TrimSpace(tm.DeviceID),
+			RunnerName:         taskRunner.Name,
+			SessionStartedFrom: "tasks",
+			StartedFromSurface: source,
+			InitialSurface:     source,
+			SessionStartedAt:   now,
+			LastSurface:        source,
+			LastActiveAt:       now,
+			FirstUserMessageAt: &now,
+			LastUserMessageAt:  &now,
+			runner:             taskRunner,
+			CreatedAt:          now,
+			outputCh:           make(chan string, 512),
+			rawOutputCh:        make(chan []byte, 256),
+			eventCh:            make(chan map[string]interface{}, 32),
+			doneCh:             make(chan struct{}),
+			ChainID:            chainID,
+			ChainOrder:         i,
+			AutoRetry:          autoRetry,
+			AutoRetryMax:       retryMax,
+			TaskViewport:       viewport, // set before startProcess so task 0 gets the hint
 			Turns: []ConversationTurn{
 				{Role: "user", Content: input.Title, Timestamp: now},
 			},

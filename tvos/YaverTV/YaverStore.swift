@@ -17,6 +17,8 @@ final class YaverStore: ObservableObject {
     @Published var token: String = ""
     @Published var boxes: [BoxTarget] = []
     @Published var selectedBox: BoxTarget?
+    @Published private(set) var appearanceTheme = "dark"
+    private var appearanceSurface = "tvos"
     /// Explicitly stay in boxless mode. This is a user choice, not an
     /// inferred transport failure: Tasks can use Yaver Code while Vibing and
     /// rendering correctly remain unavailable without a render machine.
@@ -180,6 +182,24 @@ final class YaverStore: ObservableObject {
         }
     }
 
+    /// Appearance is intentionally surface-scoped: changing Apple TV must not
+    /// unexpectedly recolor the phone or dashboard. UserDefaults gives launch
+    /// an immediate/offline value; Convex remains the signed-in authority.
+    func setAppearanceTheme(_ theme: String) async throws {
+        let next = theme == "light" ? "light" : "dark"
+        let previous = appearanceTheme
+        appearanceTheme = next
+        UserDefaults.standard.set(next, forKey: "yaver.appearance.\(appearanceSurface)")
+        do {
+            try await MachineRegistry.saveAppearanceTheme(
+                token: token, surface: appearanceSurface, theme: next)
+        } catch {
+            appearanceTheme = previous
+            UserDefaults.standard.set(previous, forKey: "yaver.appearance.\(appearanceSurface)")
+            throw error
+        }
+    }
+
     /// True when the favorite row genuinely splits work across two machines.
     var machineSplitActive: Bool {
         guard let r = machineRoles else { return false }
@@ -199,6 +219,12 @@ final class YaverStore: ObservableObject {
 
     func adoptSettings(_ settings: MachineRegistry.UserSettings?, devices: [RegisteredDevice] = []) {
         if let settings { primaryDeviceId = settings.primaryDeviceId }
+        if let theme = settings?.appearanceThemeBySurface?
+            .last(where: { $0.surface == appearanceSurface })?.theme,
+           theme == "light" || theme == "dark" {
+            appearanceTheme = theme
+            UserDefaults.standard.set(theme, forKey: "yaver.appearance.\(appearanceSurface)")
+        }
         if let rows = settings?.machineRolesByProject {
             machineRoles = rows.first(where: { ($0.projectName ?? "").isEmpty && !$0.runnerDeviceId.isEmpty })
         }
@@ -331,7 +357,10 @@ final class YaverStore: ObservableObject {
 
     var isAuthenticated: Bool { !token.isEmpty }
 
-    init() {
+    init(appearanceSurface: String = "tvos") {
+        self.appearanceSurface = appearanceSurface
+        let cached = UserDefaults.standard.string(forKey: "yaver.appearance.\(appearanceSurface)")
+        self.appearanceTheme = cached == "light" ? "light" : "dark"
         // UI tests inject a token through NSArgumentDomain. It must win for
         // that process but must never migrate into Keychain: doing so left the
         // next normal simulator launch signed in as the synthetic test fixture.
@@ -393,6 +422,8 @@ final class YaverStore: ObservableObject {
         selectedBox = nil
         selectedBoxId = ""
         storedBoxesJSON = "[]"
+        appearanceTheme = "dark"
+        UserDefaults.standard.removeObject(forKey: "yaver.appearance.\(appearanceSurface)")
         Task { await DeviceCodeAuth.revokeSession(token: current) }
     }
 
@@ -490,6 +521,15 @@ final class YaverStore: ObservableObject {
                                 relayBaseUrl: url, relayPassword: resolved.password)
         addBox(updated)
         select(updated)
+    }
+
+    /// Appearance sync cannot be coupled to relay repair: a healthy relay (or
+    /// a boxless session) would make that transport-specific method return
+    /// before fetching settings and leave this surface on a stale local color.
+    func refreshAppearanceSettings() async {
+        guard isAuthenticated,
+              let settings = try? await MachineRegistry.fetchSettings(token: token) else { return }
+        adoptSettings(settings)
     }
 
     // MARK: - Narrated auto-connect (Stream C)

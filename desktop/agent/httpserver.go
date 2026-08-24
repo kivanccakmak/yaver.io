@@ -1215,6 +1215,10 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/repos/delete", s.auth(s.handleRepoDelete))
 	mux.HandleFunc("/repos/credentials", s.auth(s.handleRepoCredentials))
 	mux.HandleFunc("/repos/credentials/", s.auth(s.handleRepoCredentialByHost))
+	// Dogfood source readiness is agent-owned: clients cannot inspect the
+	// selected box's filesystem or Git origin and must not infer either from a
+	// cached repo list.
+	mux.HandleFunc("/dogfood/source/status", s.auth(s.handleDogfoodSourceStatus))
 
 	// Mobile project prep/build endpoints used by MCP cross-device proxying.
 	mux.HandleFunc("/mobile/project/status", s.auth(s.handleMobileProjectStatus))
@@ -2548,7 +2552,7 @@ func (s *HTTPServer) trackNewIP(token string, r *http.Request) {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Yaver-Caller, X-Relay-Password, X-Client-Platform")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Yaver-Caller, X-Yaver-Surface, X-Relay-Password, X-Client-Platform")
 		origin := r.Header.Get("Origin")
 		if origin == "" {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -3938,33 +3942,34 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		Turns:      task.Turns,
 		PendingFollowUps: append([]PendingFollowUp{},
 			task.PendingFollowUps...),
-		Source:          task.Source,
-		TmuxSession:     task.TmuxSession,
-		TmuxSessionID:   task.TmuxSessionID,
-		TmuxWindowIndex: task.TmuxWindowIndex,
-		TmuxWindowName:  task.TmuxWindowName,
-		TmuxPaneIndex:   task.TmuxPaneIndex,
-		TmuxPaneID:      task.TmuxPaneID,
-		IsAdopted:       task.IsAdopted,
-		CreatedAt:       task.CreatedAt,
-		StartedAt:       task.StartedAt,
-		FinishedAt:      task.FinishedAt,
-		ChainID:         task.ChainID,
-		ChainOrder:      task.ChainOrder,
-		AutoRetry:       task.AutoRetry,
-		AutoRetryCount:  task.AutoRetryCount,
-		AutoRetryMax:    task.AutoRetryMax,
-		VideoEnabled:    task.VideoEnabled,
-		VideoSource:     task.VideoSource,
-		VideoClipID:     task.VideoClipID,
-		VideoStatus:     task.VideoStatus,
-		ProofStatus:     task.ProofStatus,
-		CommitSHA:       task.CommitSHA,
-		CommitSubject:   task.CommitSubject,
-		CommitBranch:    task.CommitBranch,
-		DiffShortstat:   task.DiffShortstat,
-		FeedbackID:      task.FeedbackID,
-		AskFreely:       task.AskFreely,
+		Source:           task.Source,
+		TmuxSession:      task.TmuxSession,
+		TmuxSessionID:    task.TmuxSessionID,
+		TmuxWindowIndex:  task.TmuxWindowIndex,
+		TmuxWindowName:   task.TmuxWindowName,
+		TmuxPaneIndex:    task.TmuxPaneIndex,
+		TmuxPaneID:       task.TmuxPaneID,
+		ExecutionSession: s.taskMgr.taskExecutionIdentity(task),
+		IsAdopted:        task.IsAdopted,
+		CreatedAt:        task.CreatedAt,
+		StartedAt:        task.StartedAt,
+		FinishedAt:       task.FinishedAt,
+		ChainID:          task.ChainID,
+		ChainOrder:       task.ChainOrder,
+		AutoRetry:        task.AutoRetry,
+		AutoRetryCount:   task.AutoRetryCount,
+		AutoRetryMax:     task.AutoRetryMax,
+		VideoEnabled:     task.VideoEnabled,
+		VideoSource:      task.VideoSource,
+		VideoClipID:      task.VideoClipID,
+		VideoStatus:      task.VideoStatus,
+		ProofStatus:      task.ProofStatus,
+		CommitSHA:        task.CommitSHA,
+		CommitSubject:    task.CommitSubject,
+		CommitBranch:     task.CommitBranch,
+		DiffShortstat:    task.DiffShortstat,
+		FeedbackID:       task.FeedbackID,
+		AskFreely:        task.AskFreely,
 	}
 	capTaskTranscript(&info)
 	s.enrichTaskInfoVideo(&info, r)
@@ -4094,6 +4099,8 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		ProjectName        string            `json:"projectName,omitempty"`
 		BundleID           string            `json:"bundleId,omitempty"` // mobile-app bundle id (e.g. io.example.sfmg) — used to resolve project for feedback-source tasks
 		Source             string            `json:"source"`             // client type: "mobile", "desktop-app", "web", "cli"
+		SessionStartedFrom string            `json:"sessionStartedFrom,omitempty"`
+		StartedFromSurface string            `json:"startedFromSurface,omitempty"`
 		PlacementKind      string            `json:"placementKind,omitempty"`
 		ForceCloud         bool              `json:"forceCloud,omitempty"`
 		ForceRelaySource   bool              `json:"forceRelaySource,omitempty"`
@@ -4261,6 +4268,12 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		PromptText: composeRunnerPrompt(briefing.String(), title, body.Description),
 	}
 	taskOpts.Mode = strings.TrimSpace(body.Mode)
+	taskOpts.SessionStartedFrom = strings.TrimSpace(body.SessionStartedFrom)
+	requestSurface := sessionSurfaceFromRequest(r)
+	if requestSurface == string(SurfaceUnknown) {
+		requestSurface = firstNonEmpty(strings.TrimSpace(body.StartedFromSurface), source)
+	}
+	taskOpts.StartedFromSurface = requestSurface
 	taskOpts.Goal = strings.TrimSpace(body.Goal)
 	// Video summary toggle propagates from request → task → OnTaskDone
 	// hook, where MaybeRecordTaskSummary fires the vibe-preview clip
@@ -4405,13 +4418,14 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	project := DetectProjectInfo(projectWorkDir)
 	hostname, _ := os.Hostname()
 	resp := map[string]interface{}{
-		"ok":         true,
-		"taskId":     task.ID,
-		"status":     task.Status,
-		"runnerId":   task.RunnerID,
-		"model":      task.Model,
-		"deviceName": hostname,
-		"project":    project.Name,
+		"ok":               true,
+		"taskId":           task.ID,
+		"status":           task.Status,
+		"runnerId":         task.RunnerID,
+		"model":            task.Model,
+		"deviceName":       hostname,
+		"project":          project.Name,
+		"executionSession": s.taskMgr.taskExecutionIdentity(task),
 	}
 	// A preflight-failed task renders as a normal failed bubble with the
 	// reason in task.Output. When that reason is "the binary isn't here",
@@ -4490,6 +4504,7 @@ func (s *HTTPServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) getTask(w http.ResponseWriter, r *http.Request, id string) {
 	log.Printf("[HTTP] GET task %s", id)
+	s.taskMgr.TouchTaskSession(id, sessionSurfaceFromRequest(r))
 	task, ok := s.taskMgr.GetTask(id)
 	if !ok {
 		log.Printf("[HTTP] Task %s not found", id)
@@ -4509,6 +4524,7 @@ func (s *HTTPServer) getTask(w http.ResponseWriter, r *http.Request, id string) 
 // streamOutput streams task output as Server-Sent Events (SSE).
 func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id string) {
 	log.Printf("[HTTP] SSE stream requested for task %s", id)
+	s.taskMgr.TouchTaskSession(id, sessionSurfaceFromRequest(r))
 	task, ok := s.taskMgr.GetTask(id)
 	if !ok {
 		log.Printf("[HTTP] SSE task %s not found", id)
@@ -4872,6 +4888,7 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 		jsonError(w, http.StatusBadRequest, "input is required")
 		return
 	}
+	s.taskMgr.TouchTaskSession(id, sessionSurfaceFromRequest(r))
 
 	// Keep the credential alive BEFORE spawning the turn.
 	//
@@ -4918,15 +4935,31 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 		Mode:     body.Mode,
 	})
 	if err != nil {
+		var conflict *TaskContinuationConflict
+		if errors.As(err, &conflict) {
+			jsonReply(w, http.StatusConflict, map[string]interface{}{
+				"ok":               false,
+				"taskId":           id,
+				"sameTask":         true,
+				"code":             conflict.Code,
+				"error":            conflict.Reason,
+				"executionSession": conflict.Identity,
+			})
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("resume failed: %v", err))
 		return
 	}
 
-	log.Printf("[HTTP] Task resumed: %s (session=%s)", id, task.SessionID)
+	identity := s.taskMgr.taskExecutionIdentity(task)
+	log.Printf("[HTTP] Task resumed in place: task=%s runner=%s session=%s tmux=%s pane=%s",
+		id, identity.RunnerID, identity.RunnerSessionID, identity.TmuxSession, identity.TmuxPaneID)
 	jsonReply(w, http.StatusOK, map[string]interface{}{
-		"ok":     true,
-		"taskId": task.ID,
-		"status": task.Status,
+		"ok":               true,
+		"taskId":           task.ID,
+		"sameTask":         task.ID == id,
+		"status":           task.Status,
+		"executionSession": identity,
 	})
 }
 

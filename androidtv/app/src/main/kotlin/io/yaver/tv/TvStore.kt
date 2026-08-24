@@ -46,6 +46,11 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
     private val _settings = MutableStateFlow<UserSettings?>(null)
     val settings: StateFlow<UserSettings?> = _settings.asStateFlow()
 
+    private val _appearanceTheme = MutableStateFlow(
+        prefs.getString(APPEARANCE_THEME_KEY, "dark").takeIf { it == "light" } ?: "dark"
+    )
+    val appearanceTheme: StateFlow<String> = _appearanceTheme.asStateFlow()
+
     private val _autoConnecting = MutableStateFlow(false)
     val autoConnecting: StateFlow<Boolean> = _autoConnecting.asStateFlow()
 
@@ -82,7 +87,7 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
         return runCatching {
             val repairedPassword = MachineRegistry.repairRelay(token)
             val fresh = MachineRegistry.fetchSettings(token)
-            _settings.value = fresh
+            adoptSettings(fresh)
             val box = selectedBox.value ?: return null
             val updated = box.copy(
                 relayBaseUrl = fresh.relayUrl ?: box.relayBaseUrl,
@@ -110,6 +115,8 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
         _boxes.value = emptyList()
         _selectedBoxId.value = null
         _settings.value = null
+        _appearanceTheme.value = "dark"
+        prefs.edit().remove(APPEARANCE_THEME_KEY).apply()
         prefs.edit().remove(SELECTED_BOX_ID).apply()
         prefs.edit().remove(BOXES_KEY).apply()
         if (sessionToRevoke.isNotEmpty()) {
@@ -178,7 +185,7 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
                 Pair(d.await(), s.await())
             }
             _devices.value = deviceRows
-            if (settings != null) _settings.value = settings
+            if (settings != null) adoptSettings(settings)
             val registryBoxes = deviceRows.map { it.toBox(settings?.relayUrl, settings?.relayPassword) }
             // Keep manual boxes that aren't in the registry.
             val manual = _boxes.value.filter { local -> registryBoxes.none { it.id == local.id } }
@@ -203,7 +210,7 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
         if (probe != null) return
         // Re-fetch settings (the relay URL/password may have changed).
         val fresh = runCatching { MachineRegistry.fetchSettings(_token.value) }.getOrNull() ?: return
-        _settings.value = fresh
+        adoptSettings(fresh)
         selectBox(
             box.copy(
                 relayBaseUrl = fresh.relayUrl ?: box.relayBaseUrl,
@@ -239,6 +246,39 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
     fun cancelAutoConnect() {
         _autoConnecting.value = false
         _autoConnectTarget.value = null
+    }
+
+    private fun adoptSettings(settings: UserSettings) {
+        _settings.value = settings
+        settings.appearanceThemeBySurface
+            .lastOrNull { it.surface == TV_SURFACE_ID }
+            ?.theme
+            ?.takeIf { it == "light" || it == "dark" }
+            ?.let {
+                _appearanceTheme.value = it
+                prefs.edit().putString(APPEARANCE_THEME_KEY, it).apply()
+            }
+    }
+
+    suspend fun setAppearanceTheme(theme: String) {
+        val next = theme.takeIf { it == "light" || it == "dark" }
+            ?: throw IllegalArgumentException("Unknown appearance theme")
+        val previous = _appearanceTheme.value
+        _appearanceTheme.value = next
+        prefs.edit().putString(APPEARANCE_THEME_KEY, next).apply()
+        try {
+            MachineRegistry.writeSetting(
+                _token.value,
+                JSONObject().put(
+                    "appearanceThemeForSurface",
+                    JSONObject().put("surface", TV_SURFACE_ID).put("theme", next),
+                ),
+            )
+        } catch (error: Throwable) {
+            _appearanceTheme.value = previous
+            prefs.edit().putString(APPEARANCE_THEME_KEY, previous).apply()
+            throw error
+        }
     }
 
     // ── Persistence ───────────────────────────────────────────────────────
@@ -288,5 +328,6 @@ class TvStore(private val appContext: Context, private val scope: CoroutineScope
         private const val PREFS = "io.yaver.tv"
         private const val BOXES_KEY = "yaver.tv.boxes"
         private const val SELECTED_BOX_ID = "yaver.tv.selectedBox"
+        private const val APPEARANCE_THEME_KEY = "yaver.tv.appearanceTheme"
     }
 }

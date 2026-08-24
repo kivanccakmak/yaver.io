@@ -2,6 +2,7 @@ import React, { useEffect, useMemo } from "react";
 import { NativeEventEmitter, NativeModules, Platform } from "react-native";
 import { useDevice } from "../context/DeviceContext";
 import { useAuth } from "../context/AuthContext";
+import { getUserSettings, saveUserSettings } from "../lib/auth";
 import { makeRealCarVoiceDeps, type CarVoiceConfig, type CarVoiceTaskRef } from "../lib/carVoiceCoding";
 import { connectionManager } from "../lib/connectionManager";
 import { goalFromSlashCommand } from "../lib/goalSlashCommand";
@@ -93,6 +94,10 @@ function makeWatchDeps(deviceId: string, token: string | null | undefined) {
         mcpServers,
         goalIntent ? goalText : undefined,
         includeYaverMcp,
+        undefined,
+        undefined,
+        "tasks",
+        Platform.OS === "ios" ? "watchos" : "wearos",
       );
       return { id: t.id };
     },
@@ -144,6 +149,17 @@ export function WatchBridgeHost() {
         const mid = resolveWakeMachineId(devices, activeDevice, machineId);
         if (!mid) return { ok: false, error: "No parked managed box to wake." };
         return wakeManagedDevice(token, mid);
+      },
+      appearance: async (theme) => {
+        if (!token) return { ok: false, error: "Sign in to Yaver on your phone first." };
+        const surface = Platform.OS === "ios" ? "watchos" : "wearos";
+        if (theme) {
+          await saveUserSettings(token, { appearanceThemeForSurface: { surface, theme } });
+          return { ok: true, theme };
+        }
+        const settings = await getUserSettings(token);
+        const saved = settings.appearanceThemeBySurface?.find((row) => row.surface === surface)?.theme;
+        return { ok: true, theme: saved === "light" ? "light" : "dark" };
       },
       runtimeTurn: (request) => runtimeSurfaceClient.runtimeTurn(targetDeviceId, {
         ...request,

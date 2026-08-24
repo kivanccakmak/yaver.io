@@ -16,7 +16,7 @@ package main
 // session override. startProcess and startResume both wrap eligible spawns in
 // a shell orchestration that:
 //
-//   1. opens a fresh window in the configured tmux session,
+//   1. creates or reuses the task's exact window in its tmux session,
 //   2. runs the runner inside that window,
 //   3. mirrors the pane via `pipe-pane` to a logfile,
 //   4. tails the logfile to our own stdout so the existing readStreamJSON
@@ -24,9 +24,9 @@ package main
 //   5. blocks via `tmux wait-for` until the inner runner exits,
 //   6. recovers the inner exit code from a marker line and propagates it.
 //
-// On task kill / ctx cancel, the wrapper sh's EXIT trap closes the window (for
-// a shared override) or the whole per-task session and removes its private
-// capture file.
+// A task-owned session remains addressable after completion, failure, or stop;
+// DELETE /tasks/{id} is its sole teardown boundary. Operator-owned shared
+// overrides retain their historical per-turn window cleanup.
 //
 // Limitation: stdout and stderr merge inside the pane. For claude
 // stream-json output mode this means JSON lines and human stderr text
@@ -199,11 +199,13 @@ CREATE_SESSION=$YAVER_TMUX_CREATE_SESSION
 RUNNER=$YAVER_TMUX_RUNNER_ID
 CWD=$YAVER_TMUX_CWD
 TARGET=
-
 cleanup() {
   if [ -n "${TAIL_PID:-}" ]; then kill "$TAIL_PID" 2>/dev/null || true; fi
   if [ "$CREATE_SESSION" = "1" ]; then
-    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    # Completion, failure and Stop end a runner TURN, not the task-owned
+    # terminal. Keep the exact session/window/pane and its scrollback until
+    # DELETE /tasks/{id}; DeleteTask is the one explicit teardown path.
+    tmux pipe-pane -t "$TARGET" 2>/dev/null || true
   else
     tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true
   fi
@@ -213,8 +215,9 @@ trap cleanup TERM INT HUP EXIT
 
 : > "$LOG"
 if [ "$CREATE_SESSION" = "1" ]; then
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
-  tmux new-session -d -s "$SESSION" -n "$WIN" -c "$CWD"
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux new-session -d -s "$SESSION" -n "$WIN" -c "$CWD"
+  fi
   TARGET="$SESSION:$WIN.0"
 else
   tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true

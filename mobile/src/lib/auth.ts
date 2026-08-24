@@ -690,6 +690,17 @@ export async function getSurveyStatus(
 export type KeyStorage = "local" | "cloud";
 
 export interface UserSettings {
+  /** Per-client appearance. Unset surface = dark (factory default). */
+  appearanceThemeBySurface?: Array<{
+    surface: "mobile" | "web" | "tvos" | "androidtv" | "watchos" | "wearos" | "visionos" | "carplay";
+    theme: "light" | "dark";
+    updatedAt: number;
+  }>;
+  /** Write-only single-surface patch merged by Convex. */
+  appearanceThemeForSurface?: {
+    surface: "mobile" | "web" | "tvos" | "androidtv" | "watchos" | "wearos" | "visionos" | "carplay";
+    theme: "light" | "dark";
+  };
   /** Account-level consent for agent-initiated Vibing renders. Unset = off. */
   autoRenderVibing?: boolean;
   forceRelay?: boolean;

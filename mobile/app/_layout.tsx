@@ -32,6 +32,7 @@ import { AuthProvider } from "../src/context/AuthContext";
 import { DeviceProvider } from "../src/context/DeviceContext";
 import { CloudStudioProvider } from "../src/context/CloudStudioContext";
 import { ThemeProvider, useTheme } from "../src/context/ThemeContext";
+import { getUserSettings } from "../src/lib/auth";
 import { FeedbackOverlay } from "../src/components/FeedbackOverlay";
 import { ShareComposeModal } from "../src/components/ShareComposeModal";
 import { RunningTasksPill } from "../src/components/RunningTasksPill";
@@ -81,13 +82,26 @@ class ErrorBoundary extends React.Component<
 }
 
 function InnerLayout() {
-  const { isDark, colors } = useTheme();
-  const { user } = useAuth();
+  const { isDark, colors, hydrated: themeHydrated, setTheme } = useTheme();
+  const { user, token } = useAuth();
   const router = useRouter();
   // Branded cold-start overlay ("Remote AI Runtime"). Shows on top of the
   // app the moment the native splash hides, then fades itself out via
   // onDone. One-shot per app launch.
   const [showSplash, setShowSplash] = useState(true);
+  useEffect(() => {
+    if (!token || !themeHydrated) return;
+    let cancelled = false;
+    void getUserSettings(token).then((settings) => {
+      if (cancelled) return;
+      const row = settings.appearanceThemeBySurface?.find((item) => item.surface === "mobile");
+      if (row?.theme === "light" || row?.theme === "dark") setTheme(row.theme);
+    }).catch(() => {
+      // Offline boot keeps the locally cached theme. Appearance must never
+      // delay or block the authenticated app.
+    });
+    return () => { cancelled = true; };
+  }, [setTheme, themeHydrated, token]);
   useEffect(() => {
     // Fresh process = no safe continuation closure. Convert stale RUNNING to
     // REVIEW so no surface can leave an eternal spinner or falsely say done.

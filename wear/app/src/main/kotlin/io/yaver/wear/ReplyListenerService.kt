@@ -2,6 +2,7 @@ package io.yaver.wear
 
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
+import org.json.JSONObject
 
 /**
  * Receives Phone → Watch replies on [WatchProtocol.PATH_REPLY] over the Wear
@@ -21,6 +22,13 @@ class ReplyListenerService : WearableListenerService() {
         if (event.path != WatchProtocol.PATH_REPLY) return
 
         val json = WatchProtocol.text(event.data)
+        val wire = runCatching { JSONObject(json) }.getOrNull()
+        val theme = wire?.optString("theme")
+        if (wire?.optString("kind") == "ack" && (theme == "light" || theme == "dark")) {
+            WatchState.setAppearanceTheme(theme!!)
+            StandaloneStore.setAppearanceTheme(applicationContext, theme)
+            return
+        }
         val reply = WatchProtocol.parseReply(json) // never throws
 
         // Update shared UI state (the foreground Compose UI collects this).

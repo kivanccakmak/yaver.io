@@ -51,7 +51,7 @@ type ScheduledTask struct {
 	LastSessionID string `json:"lastSessionId,omitempty"`
 	// ResumeSession opts a recurring schedule into NATIVE session resume:
 	// each fire after the first resumes the previous run's session (claude/
-	// glm via LastSessionID, opencode via --continue, codex via exec resume).
+	// glm via LastSessionID, opencode via --session, codex via exec resume).
 	// Default false — fresh run each fire, with CarryNotes (the curated memo)
 	// as the continuity mechanism, which is usually preferable for recurring
 	// work. Set via schedule_self's `resume`.

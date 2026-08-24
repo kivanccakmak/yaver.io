@@ -12,37 +12,52 @@ import (
 
 // persistedTask is the JSON-serializable subset of Task that gets written to disk.
 type persistedTask struct {
-	ID              string                `json:"id"`
-	Title           string                `json:"title"`
-	Description     string                `json:"description"`
-	Status          TaskStatus            `json:"status"`
-	Source          string                `json:"source,omitempty"`
-	Transport       string                `json:"transport,omitempty"`
-	SessionID       string                `json:"session_id,omitempty"`
-	TmuxSession     string                `json:"tmux_session,omitempty"`
-	TmuxSessionID   string                `json:"tmux_session_id,omitempty"`
-	TmuxWindowIndex string                `json:"tmux_window_index,omitempty"`
-	TmuxWindowName  string                `json:"tmux_window_name,omitempty"`
-	TmuxPaneIndex   string                `json:"tmux_pane_index,omitempty"`
-	TmuxPaneID      string                `json:"tmux_pane_id,omitempty"`
-	IsAdopted       bool                  `json:"is_adopted,omitempty"`
-	Output          string                `json:"output,omitempty"`
-	ResultText      string                `json:"result_text,omitempty"`
-	Failure         *TaskFailureDiagnosis `json:"failure,omitempty"`
-	CostUSD         float64               `json:"cost_usd,omitempty"`
-	Turns           []ConversationTurn    `json:"turns,omitempty"`
-	WorkDir         string                `json:"work_dir,omitempty"`
-	VideoClipID     string                `json:"video_clip_id,omitempty"`
-	VideoStatus     string                `json:"video_status,omitempty"`
-	ProofStatus     string                `json:"proof_status,omitempty"`
-	CommitSHA       string                `json:"commit_sha,omitempty"`
-	CommitSubject   string                `json:"commit_subject,omitempty"`
-	CommitBranch    string                `json:"commit_branch,omitempty"`
-	DiffShortstat   string                `json:"diff_shortstat,omitempty"`
-	FeedbackID      string                `json:"feedback_id,omitempty"`
-	CreatedAt       time.Time             `json:"created_at"`
-	StartedAt       *time.Time            `json:"started_at,omitempty"`
-	FinishedAt      *time.Time            `json:"finished_at,omitempty"`
+	ID                   string                `json:"id"`
+	Title                string                `json:"title"`
+	Description          string                `json:"description"`
+	Status               TaskStatus            `json:"status"`
+	Source               string                `json:"source,omitempty"`
+	YaverSessionID       string                `json:"yaver_session_id,omitempty"`
+	RemoteBoxID          string                `json:"remote_box_id,omitempty"`
+	RunnerName           string                `json:"runner_name,omitempty"`
+	RunnerID             string                `json:"runner_id,omitempty"`
+	SessionStartedFrom   string                `json:"session_started_from,omitempty"`
+	StartedFromSurface   string                `json:"started_from_surface,omitempty"`
+	InitialSurface       string                `json:"initial_surface,omitempty"`
+	SessionStartedAt     time.Time             `json:"session_started_at,omitempty"`
+	LastSurface          string                `json:"last_surface,omitempty"`
+	LastActiveAt         time.Time             `json:"last_active_at,omitempty"`
+	FirstUserMessageAt   *time.Time            `json:"first_user_message_at,omitempty"`
+	FirstAgentResponseAt *time.Time            `json:"first_agent_response_at,omitempty"`
+	LastUserMessageAt    *time.Time            `json:"last_user_message_at,omitempty"`
+	LastAgentResponseAt  *time.Time            `json:"last_agent_response_at,omitempty"`
+	DeletedAt            *time.Time            `json:"deleted_at,omitempty"`
+	Transport            string                `json:"transport,omitempty"`
+	SessionID            string                `json:"session_id,omitempty"`
+	TmuxSession          string                `json:"tmux_session,omitempty"`
+	TmuxSessionID        string                `json:"tmux_session_id,omitempty"`
+	TmuxWindowIndex      string                `json:"tmux_window_index,omitempty"`
+	TmuxWindowName       string                `json:"tmux_window_name,omitempty"`
+	TmuxPaneIndex        string                `json:"tmux_pane_index,omitempty"`
+	TmuxPaneID           string                `json:"tmux_pane_id,omitempty"`
+	IsAdopted            bool                  `json:"is_adopted,omitempty"`
+	Output               string                `json:"output,omitempty"`
+	ResultText           string                `json:"result_text,omitempty"`
+	Failure              *TaskFailureDiagnosis `json:"failure,omitempty"`
+	CostUSD              float64               `json:"cost_usd,omitempty"`
+	Turns                []ConversationTurn    `json:"turns,omitempty"`
+	WorkDir              string                `json:"work_dir,omitempty"`
+	VideoClipID          string                `json:"video_clip_id,omitempty"`
+	VideoStatus          string                `json:"video_status,omitempty"`
+	ProofStatus          string                `json:"proof_status,omitempty"`
+	CommitSHA            string                `json:"commit_sha,omitempty"`
+	CommitSubject        string                `json:"commit_subject,omitempty"`
+	CommitBranch         string                `json:"commit_branch,omitempty"`
+	DiffShortstat        string                `json:"diff_shortstat,omitempty"`
+	FeedbackID           string                `json:"feedback_id,omitempty"`
+	CreatedAt            time.Time             `json:"created_at"`
+	StartedAt            *time.Time            `json:"started_at,omitempty"`
+	FinishedAt           *time.Time            `json:"finished_at,omitempty"`
 }
 
 // TaskStore persists task metadata to a JSON file under ~/.yaver/.
@@ -76,37 +91,52 @@ func snapshotPersistedTasks(tasks map[string]*Task) []persistedTask {
 			output = output[len(output)-2000:]
 		}
 		records = append(records, persistedTask{
-			ID:              t.ID,
-			Title:           t.Title,
-			Description:     t.Description,
-			Status:          t.Status,
-			Source:          t.Source,
-			Transport:       t.Transport,
-			SessionID:       t.SessionID,
-			TmuxSession:     t.TmuxSession,
-			TmuxSessionID:   t.TmuxSessionID,
-			TmuxWindowIndex: t.TmuxWindowIndex,
-			TmuxWindowName:  t.TmuxWindowName,
-			TmuxPaneIndex:   t.TmuxPaneIndex,
-			TmuxPaneID:      t.TmuxPaneID,
-			IsAdopted:       t.IsAdopted,
-			Output:          output,
-			ResultText:      t.ResultText,
-			Failure:         t.Failure,
-			CostUSD:         t.CostUSD,
-			Turns:           append([]ConversationTurn(nil), t.Turns...),
-			WorkDir:         t.WorkDir,
-			VideoClipID:     t.VideoClipID,
-			VideoStatus:     t.VideoStatus,
-			ProofStatus:     t.ProofStatus,
-			CommitSHA:       t.CommitSHA,
-			CommitSubject:   t.CommitSubject,
-			CommitBranch:    t.CommitBranch,
-			DiffShortstat:   t.DiffShortstat,
-			FeedbackID:      t.FeedbackID,
-			CreatedAt:       t.CreatedAt,
-			StartedAt:       t.StartedAt,
-			FinishedAt:      t.FinishedAt,
+			ID:                   t.ID,
+			Title:                t.Title,
+			Description:          t.Description,
+			Status:               t.Status,
+			Source:               t.Source,
+			YaverSessionID:       t.YaverSessionID,
+			RemoteBoxID:          t.RemoteBoxID,
+			RunnerName:           t.RunnerName,
+			RunnerID:             t.RunnerID,
+			SessionStartedFrom:   t.SessionStartedFrom,
+			StartedFromSurface:   t.StartedFromSurface,
+			InitialSurface:       t.InitialSurface,
+			SessionStartedAt:     t.SessionStartedAt,
+			LastSurface:          t.LastSurface,
+			LastActiveAt:         t.LastActiveAt,
+			FirstUserMessageAt:   t.FirstUserMessageAt,
+			FirstAgentResponseAt: t.FirstAgentResponseAt,
+			LastUserMessageAt:    t.LastUserMessageAt,
+			LastAgentResponseAt:  t.LastAgentResponseAt,
+			DeletedAt:            t.DeletedAt,
+			Transport:            t.Transport,
+			SessionID:            t.SessionID,
+			TmuxSession:          t.TmuxSession,
+			TmuxSessionID:        t.TmuxSessionID,
+			TmuxWindowIndex:      t.TmuxWindowIndex,
+			TmuxWindowName:       t.TmuxWindowName,
+			TmuxPaneIndex:        t.TmuxPaneIndex,
+			TmuxPaneID:           t.TmuxPaneID,
+			IsAdopted:            t.IsAdopted,
+			Output:               output,
+			ResultText:           t.ResultText,
+			Failure:              t.Failure,
+			CostUSD:              t.CostUSD,
+			Turns:                append([]ConversationTurn(nil), t.Turns...),
+			WorkDir:              t.WorkDir,
+			VideoClipID:          t.VideoClipID,
+			VideoStatus:          t.VideoStatus,
+			ProofStatus:          t.ProofStatus,
+			CommitSHA:            t.CommitSHA,
+			CommitSubject:        t.CommitSubject,
+			CommitBranch:         t.CommitBranch,
+			DiffShortstat:        t.DiffShortstat,
+			FeedbackID:           t.FeedbackID,
+			CreatedAt:            t.CreatedAt,
+			StartedAt:            t.StartedAt,
+			FinishedAt:           t.FinishedAt,
 		})
 	}
 	return records
@@ -175,37 +205,52 @@ func (s *TaskStore) Load() map[string]*Task {
 			}
 		}
 		tasks[r.ID] = &Task{
-			ID:              r.ID,
-			Title:           r.Title,
-			Description:     r.Description,
-			Status:          status,
-			Source:          r.Source,
-			Transport:       r.Transport,
-			SessionID:       r.SessionID,
-			TmuxSession:     r.TmuxSession,
-			TmuxSessionID:   r.TmuxSessionID,
-			TmuxWindowIndex: r.TmuxWindowIndex,
-			TmuxWindowName:  r.TmuxWindowName,
-			TmuxPaneIndex:   r.TmuxPaneIndex,
-			TmuxPaneID:      r.TmuxPaneID,
-			IsAdopted:       r.IsAdopted,
-			Output:          r.Output,
-			ResultText:      r.ResultText,
-			Failure:         failure,
-			CostUSD:         r.CostUSD,
-			Turns:           r.Turns,
-			WorkDir:         r.WorkDir,
-			VideoClipID:     r.VideoClipID,
-			VideoStatus:     r.VideoStatus,
-			ProofStatus:     r.ProofStatus,
-			CommitSHA:       r.CommitSHA,
-			CommitSubject:   r.CommitSubject,
-			CommitBranch:    r.CommitBranch,
-			DiffShortstat:   r.DiffShortstat,
-			FeedbackID:      r.FeedbackID,
-			CreatedAt:       r.CreatedAt,
-			StartedAt:       r.StartedAt,
-			FinishedAt:      finishedAt,
+			ID:                   r.ID,
+			Title:                r.Title,
+			Description:          r.Description,
+			Status:               status,
+			Source:               r.Source,
+			YaverSessionID:       r.YaverSessionID,
+			RemoteBoxID:          r.RemoteBoxID,
+			RunnerName:           r.RunnerName,
+			RunnerID:             r.RunnerID,
+			SessionStartedFrom:   r.SessionStartedFrom,
+			StartedFromSurface:   r.StartedFromSurface,
+			InitialSurface:       r.InitialSurface,
+			SessionStartedAt:     r.SessionStartedAt,
+			LastSurface:          r.LastSurface,
+			LastActiveAt:         r.LastActiveAt,
+			FirstUserMessageAt:   r.FirstUserMessageAt,
+			FirstAgentResponseAt: r.FirstAgentResponseAt,
+			LastUserMessageAt:    r.LastUserMessageAt,
+			LastAgentResponseAt:  r.LastAgentResponseAt,
+			DeletedAt:            r.DeletedAt,
+			Transport:            r.Transport,
+			SessionID:            r.SessionID,
+			TmuxSession:          r.TmuxSession,
+			TmuxSessionID:        r.TmuxSessionID,
+			TmuxWindowIndex:      r.TmuxWindowIndex,
+			TmuxWindowName:       r.TmuxWindowName,
+			TmuxPaneIndex:        r.TmuxPaneIndex,
+			TmuxPaneID:           r.TmuxPaneID,
+			IsAdopted:            r.IsAdopted,
+			Output:               r.Output,
+			ResultText:           r.ResultText,
+			Failure:              failure,
+			CostUSD:              r.CostUSD,
+			Turns:                r.Turns,
+			WorkDir:              r.WorkDir,
+			VideoClipID:          r.VideoClipID,
+			VideoStatus:          r.VideoStatus,
+			ProofStatus:          r.ProofStatus,
+			CommitSHA:            r.CommitSHA,
+			CommitSubject:        r.CommitSubject,
+			CommitBranch:         r.CommitBranch,
+			DiffShortstat:        r.DiffShortstat,
+			FeedbackID:           r.FeedbackID,
+			CreatedAt:            r.CreatedAt,
+			StartedAt:            r.StartedAt,
+			FinishedAt:           finishedAt,
 			// doneCh is left nil — these are historical records with no process.
 		}
 	}

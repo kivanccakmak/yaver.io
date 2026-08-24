@@ -76,6 +76,7 @@ export default function PhoneProjectWorkspaceScreen() {
         prompt: workspacePrompt,
         title: `Vibe ${project.name}`,
         openNew: "1",
+        sessionStartedFrom: "mobile-workspace",
       },
     });
   }

@@ -96,6 +96,8 @@ export type DogfoodPreparationResult =
       fixPrompt?: string;
     };
 
+export type DogfoodSourceStatus = Awaited<ReturnType<NonNullable<ReturnType<typeof clientFor>>["dogfoodYaverSourceStatus"]>>;
+
 /**
  * Prove Dogfood mode before navigating away from Production.
  *
@@ -243,7 +245,41 @@ export async function discoverYaverCheckout(deviceId: string): Promise<string> {
   const client = clientFor(deviceId);
   if (!client) return "";
   const status = await client.dogfoodYaverSourceStatus();
-  return status.ok ? String(status.path || "") : "";
+  return status.ready ? String(status.path || "") : "";
+}
+
+/** Agent-owned source/Git readiness. The phone never infers remote disk state. */
+export async function getDogfoodSourceStatus(deviceId: string, workDir?: string): Promise<DogfoodSourceStatus> {
+  const client = clientFor(deviceId);
+  if (!client) {
+    return {
+      ok: false,
+      ready: false,
+      code: "ATTACH_BOX_OFFLINE",
+      message: NOT_CONNECTED.error || "That box is offline.",
+      remedy: NOT_CONNECTED.remedy,
+    };
+  }
+  return client.dogfoodYaverSourceStatus(workDir);
+}
+
+export async function installDogfoodSource(
+  deviceId: string,
+  runner: string,
+): Promise<{ ok: boolean; path?: string; error?: string }> {
+  const client = clientFor(deviceId);
+  if (!client) return { ok: false, error: NOT_CONNECTED.error };
+  return client.dogfoodYaverSourceInstall(undefined, { autoInit: false, runner });
+}
+
+export async function installDogfoodGit(
+  deviceId: string,
+  onProgress?: (line: string) => void,
+): Promise<{ ok: boolean; error?: string }> {
+  const client = clientFor(deviceId);
+  if (!client) return { ok: false, error: NOT_CONNECTED.error };
+  const result = await client.installRunner("git", { onProgress });
+  return { ok: result.ok, error: result.error };
 }
 
 export async function refreshAttachSession(deviceId: string, sessionId: string): Promise<AttachSessionResult> {

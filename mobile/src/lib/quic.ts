@@ -554,6 +554,10 @@ export interface Task {
   /** Name of the device this task is executing on. */
   deviceName?: string;
   projectSessionId?: string;
+  /** Native runner conversation id (Claude/Codex/OpenCode namespace). */
+  sessionId?: string;
+  /** Explicit cross-surface identity for the runner conversation + tmux seat. */
+  executionSession?: TaskExecutionIdentity;
   /** Tmux session name (only set for adopted sessions). */
   tmuxSession?: string;
   /** Tmux session_id/window/pane identity for adopted or monitored sessions. */
@@ -611,6 +615,44 @@ export interface Task {
   commitSha?: string;
   commitSubject?: string;
   diffShortstat?: string;
+}
+
+export interface TaskExecutionIdentity {
+  yaverSessionId: string;
+  taskId: string;
+  remoteBoxId?: string;
+  runnerName?: string;
+  runnerId?: string;
+  runnerSessionId?: string;
+  startedFrom?: string;
+  startedFromSurface?: string;
+  initialSurface?: string;
+  sessionStartedAt: string;
+  lastSurface?: string;
+  lastActiveAt: string;
+  firstUserMessageAt?: string;
+  firstAgentResponseAt?: string;
+  lastUserMessageAt?: string;
+  lastAgentResponseAt?: string;
+  deletedAt?: string;
+  resumable: boolean;
+  tmuxSession?: string;
+  tmuxSessionId?: string;
+  tmuxWindowIndex?: string;
+  tmuxWindowName?: string;
+  tmuxPaneIndex?: string;
+  tmuxPaneId?: string;
+}
+
+export class TaskContinuationError extends Error {
+  readonly code?: string;
+  readonly executionSession?: TaskExecutionIdentity;
+  constructor(message: string, code?: string, executionSession?: TaskExecutionIdentity) {
+    super(message);
+    this.name = "TaskContinuationError";
+    this.code = code;
+    this.executionSession = executionSession;
+  }
 }
 
 export interface RemoteProject {
@@ -2520,7 +2562,7 @@ export class QuicClient {
    * HTTP, the runner pool, and the same Task type. The toggle only
    * changes which prompt-prefix the agent injects.
    */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean, askMode?: boolean, hideInitialPrompt?: boolean): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean, askMode?: boolean, hideInitialPrompt?: boolean, sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace", startedFromSurface?: string): Promise<Task> {
     this.assertConnected();
     // Hard 30s timeout — without it, a stale relay tunnel (e.g. after a
     // failed device-switch attempt) makes this POST hang forever and
@@ -2544,7 +2586,7 @@ export class QuicClient {
     // timed out.)
     let res: Response;
     try {
-      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers, goal, includeYaverMcp, askMode, hideInitialPrompt);
+      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers, goal, includeYaverMcp, askMode, hideInitialPrompt, sessionStartedFrom, startedFromSurface);
     } catch (e) {
       if (e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message))) {
         throw new Error(
@@ -2580,6 +2622,8 @@ export class QuicClient {
       output: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      sessionId: data.executionSession?.runnerSessionId,
+      executionSession: data.executionSession,
     };
   }
 
@@ -2604,10 +2648,16 @@ export class QuicClient {
     includeYaverMcp: boolean | undefined,
     askMode: boolean | undefined,
     hideInitialPrompt: boolean | undefined,
+    sessionStartedFrom: "tasks" | "vibing" | "new-application" | "mobile-workspace" | undefined,
+    startedFromSurface: string | undefined,
   ): Promise<Response> {
     return this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
       method: "POST",
-      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      headers: {
+        ...this.authHeaders,
+        "Content-Type": "application/json",
+        ...(startedFromSurface ? { "X-Yaver-Surface": startedFromSurface } : {}),
+      },
       body: JSON.stringify(buildSendTaskRequestBody({
         title,
         description,
@@ -2627,6 +2677,8 @@ export class QuicClient {
         includeYaverMcp,
         askMode,
         hideInitialPrompt,
+        sessionStartedFrom,
+        startedFromSurface,
       })),
     }, 30000);
   }
@@ -2932,6 +2984,8 @@ export class QuicClient {
         outputTokens: typeof t.outputTokens === "number" ? t.outputTokens : undefined,
         turns: t.turns || undefined,
         pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
+        sessionId: t.sessionId || undefined,
+        executionSession: t.executionSession || undefined,
         turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
         tmuxSession: t.tmuxSession || undefined,
         tmuxSessionId: t.tmuxSessionId || undefined,
@@ -2992,6 +3046,8 @@ export class QuicClient {
       outputTokens: typeof t.outputTokens === "number" ? t.outputTokens : undefined,
       turns: t.turns || undefined,
       pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
+      sessionId: t.sessionId || undefined,
+      executionSession: t.executionSession || undefined,
       turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
       failure: t.failure || undefined,
       tmuxSession: t.tmuxSession || undefined,
@@ -3069,7 +3125,7 @@ export class QuicClient {
   /** Resume a task with a follow-up prompt. `mode` is the opencode agent
    *  selector (build/plan/custom) forwarded to the agent's /continue endpoint,
    *  which accepts it — so a follow-up in the chat can switch plan↔build. */
-  async continueTask(taskId: string, input: string, images?: ImageAttachment[], mode?: string): Promise<void> {
+  async continueTask(taskId: string, input: string, images?: ImageAttachment[], mode?: string): Promise<TaskExecutionIdentity> {
     this.assertConnected();
     // Guarantee headroom under the iOS ~6-connections-per-host ceiling AND give
     // this POST a hard timeout — without BOTH, a SECOND follow-up starves behind
@@ -3114,7 +3170,31 @@ export class QuicClient {
       }
       if (parked?.error) throw new Error(parked.error);
     }
-    if (!res.ok) throw new Error(`Failed to continue task: ${res.status}`);
+    if (!res.ok) {
+      let failure: { error?: string; code?: string; executionSession?: TaskExecutionIdentity } | null = null;
+      try { failure = await res.json(); } catch { /* keep the status fallback */ }
+      throw new TaskContinuationError(
+        failure?.error || `Failed to continue task: ${res.status}`,
+        failure?.code,
+        failure?.executionSession,
+      );
+    }
+    const reply = await res.json() as {
+      taskId?: string;
+      sameTask?: boolean;
+      executionSession?: TaskExecutionIdentity;
+    };
+    // A follow-up endpoint is never allowed to redirect into a child task.
+    // Keep this client-side assertion even though current agents promise it:
+    // it protects new mobile builds talking to a drifting/older agent.
+    if (reply.taskId !== taskId || reply.sameTask === false || reply.executionSession?.taskId !== taskId) {
+      throw new TaskContinuationError(
+        `The machine did not confirm this message stayed in task ${taskId}. Yaver refused it.`,
+        "follow_up_task_identity_changed",
+        reply.executionSession,
+      );
+    }
+    return reply.executionSession;
   }
 
   /**
@@ -7433,40 +7513,47 @@ export class QuicClient {
     return res.json();
   }
 
-  async dogfoodYaverSourceStatus(target?: string): Promise<{
+  async dogfoodYaverSourceStatus(workDir?: string, target?: string): Promise<{
     ok: boolean;
-    cloned: boolean;
-    initialized: boolean;
+    ready: boolean;
+    code: string;
     path?: string;
+    suggestedPath?: string;
     branch?: string;
-    dirty?: boolean;
     remote?: string;
-    initPath?: string;
-    initUpdatedAt?: string;
-    error?: string;
+    gitVersion?: string;
+    message: string;
+    remedy?: string;
+    action?: { label: string; method: string; path: string; body?: Record<string, unknown> };
   }> {
     try {
-      const repos = await this.listRepos(target);
-      const repo = repos.find((r) => {
-        const remote = String(r.remote || "").toLowerCase();
-        const name = String(r.name || "").toLowerCase();
-        return name === "yaver.io" || remote.includes("github.com/kivanccakmak/yaver.io");
-      });
-      if (!repo?.path) return { ok: true, cloned: false, initialized: false };
-      const init = await this.autoinitStatus(repo.path, target).catch(() => null);
+      this.assertConnected();
+      const query = workDir?.trim() ? `?workDir=${encodeURIComponent(workDir.trim())}` : "";
+      const res = await this.fetchWithTimeout(this.peerEndpoint(target, `/dogfood/source/status${query}`), {
+        headers: this.authHeaders,
+      }, 30_000);
+      const data = await res.json().catch(() => ({}));
       return {
-        ok: true,
-        cloned: true,
-        initialized: init?.done === true,
-        path: repo.path,
-        branch: repo.branch,
-        dirty: repo.dirty,
-        remote: repo.remote,
-        initPath: init?.path,
-        initUpdatedAt: init?.updated_at,
+        ok: res.ok && data?.ok !== false,
+        ready: data?.ready === true,
+        code: String(data?.code || (res.ok ? "DOGFOOD_SOURCE_UNKNOWN" : `DOGFOOD_SOURCE_HTTP_${res.status}`)),
+        path: data?.path,
+        suggestedPath: data?.suggestedPath,
+        branch: data?.branch,
+        remote: data?.remote,
+        gitVersion: data?.gitVersion,
+        message: String(data?.message || data?.error || "Could not inspect Yaver source on this box."),
+        remedy: data?.remedy,
+        action: data?.action,
       };
     } catch (err) {
-      return { ok: false, cloned: false, initialized: false, error: err instanceof Error ? err.message : String(err) };
+      return {
+        ok: false,
+        ready: false,
+        code: "DOGFOOD_SOURCE_STATUS_FAILED",
+        message: err instanceof Error ? err.message : String(err),
+        remedy: "Reconnect the box and retry the source check.",
+      };
     }
   }
 
@@ -7476,7 +7563,7 @@ export class QuicClient {
   ): Promise<{ ok: boolean; path?: string; alreadyExisted?: boolean; autoinit?: any; error?: string }> {
     try {
       const res = await this.cloneRepo(
-        "https://github.com/kivanccakmak/yaver.io.git",
+        "https://github.com/yaver-io/yaver.io.git",
         undefined,
         undefined,
         target,
@@ -7667,9 +7754,7 @@ export class QuicClient {
     if (this._tunnelUrl && this._tunnelHeaders) {
       Object.assign(headers, this._tunnelHeaders);
     }
-    if (this.surfaceMarker) {
-      headers["X-Yaver-Surface"] = this.surfaceMarker;
-    }
+    headers["X-Yaver-Surface"] = this.surfaceMarker || "mobile";
     return headers;
   }
 

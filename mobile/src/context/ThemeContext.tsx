@@ -14,24 +14,28 @@ import {
 import * as SecureStore from "../lib/secureStoreCompat";
 
 const THEME_KEY = "yaver_theme";
+export type AppearanceTheme = "light" | "dark";
 
 interface ThemeContextType {
   colors: ThemeColors;
   isDark: boolean;
+  theme: AppearanceTheme;
+  hydrated: boolean;
   toggleTheme: () => void;
-  setTheme: (theme: "light" | "dark") => void;
+  setTheme: (theme: AppearanceTheme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [isDark, setIsDark] = useState(true);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     SecureStore.getItemAsync(THEME_KEY).then((val) => {
       if (val === "light") setIsDark(false);
       if (val === "dark") setIsDark(true);
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setHydrated(true));
   }, []);
 
   const toggleTheme = useCallback(() => {
@@ -42,7 +46,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const setTheme = useCallback((theme: "light" | "dark") => {
+  const setTheme = useCallback((theme: AppearanceTheme) => {
     const dark = theme === "dark";
     setIsDark(dark);
     SecureStore.setItemAsync(THEME_KEY, theme).catch(() => {});
@@ -52,10 +56,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     () => ({
       colors: isDark ? DarkColors : LightColors,
       isDark,
+      theme: isDark ? "dark" : "light",
+      hydrated,
       toggleTheme,
       setTheme,
     }),
-    [isDark, toggleTheme, setTheme]
+    [hydrated, isDark, toggleTheme, setTheme]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

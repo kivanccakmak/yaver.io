@@ -2851,7 +2851,7 @@ func withRelayCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Relay-Password, X-Yaver-Caller, X-Client-Platform")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Relay-Password, X-Yaver-Caller, X-Yaver-Surface, X-Client-Platform")
 		// A proxied dev-server page may carry the account-wide password in its URL
 		// (?__rp=), which would otherwise leak via the Referer header to every
 		// third-party subresource it loads. Suppress it (relay security audit,

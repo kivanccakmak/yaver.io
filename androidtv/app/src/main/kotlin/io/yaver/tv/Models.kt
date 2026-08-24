@@ -103,6 +103,12 @@ data class UserSettings(
     val primaryRunnerByDevice: Map<String, String>? = null,
     val defaultRuntimeProjectByDevice: Map<String, Map<String, String>>? = null,
     val mcpServersByDevice: Map<String, Map<String, Any>>? = null,
+    val appearanceThemeBySurface: List<AppearanceThemePreference> = emptyList(),
+)
+
+data class AppearanceThemePreference(
+    val surface: String,
+    val theme: String,
 )
 
 data class AgentInfo(
@@ -140,6 +146,17 @@ data class TaskRow(
     val runner: String? = null,
     val model: String? = null,
     val projectName: String? = null,
+    val sessionId: String? = null,
+    val tmuxSession: String? = null,
+    val tmuxSessionId: String? = null,
+    val tmuxPaneId: String? = null,
+    val yaverSessionId: String? = null,
+    val remoteBoxId: String? = null,
+    val runnerName: String? = null,
+    val startedFrom: String? = null,
+    val initialSurface: String? = null,
+    val lastSurface: String? = null,
+    val lastActiveAt: String? = null,
     val createdAt: Double? = null,
 ) {
     val safeTitle: String get() = redactHomePaths(title ?: "Untitled task")
@@ -181,6 +198,7 @@ data class McpServer(val name: String, val enabled: Boolean = false)
 fun parseTaskRow(obj: org.json.JSONObject): TaskRow? {
     val id = obj.optString("id").ifEmpty { obj.optString("taskId") }
     if (id.isEmpty()) return null
+    val execution = obj.optJSONObject("executionSession")
     return TaskRow(
         id = id,
         title = obj.optString("title").ifEmpty { null },
@@ -188,6 +206,17 @@ fun parseTaskRow(obj: org.json.JSONObject): TaskRow? {
         runner = obj.optString("runner").ifEmpty { null },
         model = obj.optString("model").ifEmpty { null },
         projectName = obj.optString("projectName").ifEmpty { null },
+        sessionId = obj.optString("sessionId").ifEmpty { null },
+        tmuxSession = obj.optString("tmuxSession").ifEmpty { null },
+        tmuxSessionId = obj.optString("tmuxSessionId").ifEmpty { null },
+        tmuxPaneId = obj.optString("tmuxPaneId").ifEmpty { null },
+        yaverSessionId = execution?.optString("yaverSessionId")?.ifEmpty { null },
+        remoteBoxId = execution?.optString("remoteBoxId")?.ifEmpty { null },
+        runnerName = execution?.optString("runnerName")?.ifEmpty { null },
+        startedFrom = execution?.optString("startedFrom")?.ifEmpty { null },
+        initialSurface = execution?.optString("initialSurface")?.ifEmpty { null },
+        lastSurface = execution?.optString("lastSurface")?.ifEmpty { null },
+        lastActiveAt = execution?.optString("lastActiveAt")?.ifEmpty { null },
         createdAt = if (obj.has("createdAt")) obj.optDouble("createdAt") else null,
     )
 }

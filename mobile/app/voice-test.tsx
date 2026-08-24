@@ -14,14 +14,16 @@ import { useRouter } from "expo-router";
 import { AppBackButton } from "../src/components/AppBackButton";
 import { SafeAreaView } from "react-native-safe-area-context";
 import VoiceTestPanel from "../src/components/VoiceTestPanel";
+import { useColors } from "../src/context/ThemeContext";
 
 export default function VoiceTestScreen(): React.JSX.Element {
   const router = useRouter();
+  const c = useColors();
   return (
-    <SafeAreaView style={styles.root} edges={["top", "left", "right"]}>
+    <SafeAreaView style={[styles.root, { backgroundColor: c.bg }]} edges={["top", "left", "right"]}>
       <View style={styles.headerRow}>
-        <AppBackButton variant="icon" color="#fff" onPress={() => router.back()} />
-        <Text style={styles.headerTitle}>Voice test</Text>
+        <AppBackButton variant="icon" color={c.textPrimary} onPress={() => router.back()} />
+        <Text style={[styles.headerTitle, { color: c.textPrimary }]}>Voice test</Text>
         <View style={{ width: 24 }} />
       </View>
       <VoiceTestPanel />

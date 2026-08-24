@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        TvColors.applyTheme(app.store.appearanceTheme.value)
         setContent {
             Surface(modifier = Modifier.fillMaxSize()) {
                 YaverTvApp(store = app.store)
