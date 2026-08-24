@@ -73,6 +73,10 @@ type RelayServer struct {
 	// password is protected by pwMu for runtime updates
 	pwMu     sync.RWMutex
 	password string // shared password for relay authentication (empty = no auth)
+	// webviewCookieSecret is process-local signing material for browser-preview
+	// cookies. It must exist even when the official relay uses only Convex
+	// per-user authentication and therefore has no shared password.
+	webviewCookieSecret string
 
 	// Convex backend URL for per-user password validation (empty = use shared password only)
 	convexURL string
@@ -271,6 +275,7 @@ func NewRelayServer(quicPort, httpPort int, password, convexURL, exposeDomain st
 		quicPort:            quicPort,
 		httpPort:            httpPort,
 		password:            password,
+		webviewCookieSecret: newWebviewCookieSecret(),
 		convexURL:           convexURL,
 		validatedPw:         make(map[string]time.Time),
 		validatedAccessMeta: make(map[string]validatedAccessMeta),
@@ -1917,7 +1922,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// arrive bare. A signature-valid, device-scoped, expiring cookie (minted
 	// below on the authorized parent request) authorizes exactly those.
 	// Carries no secret — see webview_cookie.go.
-	if !authed && webviewCookieAuthorizes(r, deviceID, s.password) {
+	if !authed && webviewCookieAuthorizes(r, deviceID, s.webviewCookieSecret) {
 		authed = true
 		s.authViaCookie.Add(1)
 	}
@@ -1976,7 +1981,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Hand the browser a scoped cookie so the assets this page is about to
 	// request can authenticate themselves. Only ever on an ALREADY-authorized
 	// request, so this widens nothing.
-	setWebviewAuthCookie(w, r, deviceID, s.password)
+	setWebviewAuthCookie(w, r, deviceID, s.webviewCookieSecret)
 
 	// owner-dev (Convex owner allowlist) is exempt from the per-user rate
 	// limit and the bandwidth cap below. The verdict came from Convex about

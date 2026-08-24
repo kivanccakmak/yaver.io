@@ -15,6 +15,13 @@ import (
 
 const testSecret = "relay-secret-under-test"
 
+func TestOfficialRelayHasIndependentWebviewCookieSecret(t *testing.T) {
+	s := NewRelayServer(0, 0, "", "https://convex.example.test", "")
+	if s.webviewCookieSecret == "" {
+		t.Fatal("official per-user relay must mint preview cookies without a shared password")
+	}
+}
+
 func TestWebviewCookieRoundTrips(t *testing.T) {
 	now := time.Now()
 	v := mintWebviewCookieValue("device-abc", testSecret, now.Add(5*time.Minute))

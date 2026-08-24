@@ -30,9 +30,9 @@ package main
 // attaches it to sub-resource requests automatically.
 //
 // The cookie carries NO secret. It is `<deviceId>.<expiryUnix>.<hmac>` where the
-// HMAC is over that same tuple keyed by the relay's existing secret. The relay
-// verifies the signature; it can be forged only by someone who already holds the
-// secret, in which case they did not need a cookie. Compared to the status quo —
+// HMAC is over that same tuple keyed by a process-local random relay secret. The
+// relay verifies the signature; the signing material is never exposed to clients
+// or persisted. Compared to the status quo —
 // the relay password sitting in a query string, where it lands in access logs,
 // browser history and Referer headers — this is strictly BETTER for the
 // credential.
@@ -56,6 +56,7 @@ package main
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -72,6 +73,21 @@ const webviewCookieName = "yaver_rp"
 // a slow first page + its assets over a phone connection; short enough that a
 // leaked value expires before it is useful.
 const webviewCookieTTL = 15 * time.Minute
+
+// newWebviewCookieSecret creates independent process-local signing material.
+// The official public relay uses Convex per-user authentication and normally
+// has no shared password, so a password cannot be the cookie-signing key. A
+// restart intentionally invalidates outstanding short-lived cookies.
+func newWebviewCookieSecret() string {
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		// Starting without signing material would produce a healthy-looking relay
+		// whose browser previews can never load subresources. Fail the process so
+		// the deployment health gate rolls back instead of shipping a false green.
+		panic(fmt.Sprintf("generate webview cookie signing secret: %v", err))
+	}
+	return string(secret)
+}
 
 // mintWebviewCookieValue builds `<deviceId>.<expiryUnix>.<sig>`.
 //
@@ -132,9 +148,8 @@ func webviewCookiePath(deviceID string) string {
 }
 
 // setWebviewAuthCookie attaches a freshly-minted cookie to an already-authorized
-// response. No-op when there is no secret to sign with (a self-hosted relay
-// running without a password): minting an unsigned cookie would be worse than
-// having none.
+// response. No-op when there is no secret to sign with; minting an unsigned
+// cookie would be worse than having none.
 func setWebviewAuthCookie(w http.ResponseWriter, r *http.Request, deviceID, secret string) {
 	if deviceID == "" || secret == "" {
 		return
