@@ -471,8 +471,7 @@ actor AgentClient {
         input: String,
         projectDir: String? = nil,
         mcpServers: [String] = [],
-        includeYaverMcp: Bool = false,
-        sessionStartedFrom: String = "tasks"
+        includeYaverMcp: Bool = false
     ) async throws -> TaskForkResult {
         var body: [String: Any] = [
             "runner": runner,
@@ -718,7 +717,8 @@ actor AgentClient {
         goal: String = "",
         askMode: Bool = false,
         mcpServers: [String] = [],
-        includeYaverMcp: Bool = false
+        includeYaverMcp: Bool = false,
+        sessionStartedFrom: String = "tasks"
     ) async throws -> TaskSummary {
         var body: [String: Any] = [
             "title": title,

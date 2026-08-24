@@ -104,6 +104,10 @@ grep -q -- '--type appletvos --apiKey' "$tvos_deploy" || \
   fail "tvOS API-key deploys must validate/upload the exported IPA with altool"
 grep -q 'PACKAGE_AUTH_SETTINGS=(-packageAuthorizationProvider netrc -scmProvider system)' "$tvos_deploy" || \
   fail "tvOS public package resolution must not block on the login keychain in headless deploys"
+tvos_agent_client="$ROOT/tvos/YaverTV/AgentClient.swift"
+create_task_signature="$(sed -n '/func createTask(/,/async throws -> TaskSummary/p' "$tvos_agent_client")"
+printf '%s\n' "$create_task_signature" | grep -q 'sessionStartedFrom: String = "tasks"' || \
+  fail "tvOS createTask must accept and default the Yaver session origin"
 
 # A clean mobile checkout has no node_modules. Dependency self-healing must run
 # before either Node-based target injector, and must include their xcode module.
