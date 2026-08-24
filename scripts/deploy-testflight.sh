@@ -574,7 +574,11 @@ ARCHIVE_BUNDLES=(
   "$ARCHIVE_APP"
   "$ARCHIVE_APP/PlugIns/YaverActivity.appex"
   "$ARCHIVE_APP/PlugIns/ShareExtension.appex"
-  "$ARCHIVE_APP/Watch/Yaver.app"
+  # The Watch target product is deliberately YaverWatch.app. Naming it
+  # Yaver.app collides with the containing iOS product in Xcode's mixed
+  # archive graph; the old validator path produced a false failure after a
+  # fully successful archive and blocked the upload.
+  "$ARCHIVE_APP/Watch/YaverWatch.app"
 )
 for bundle in "${ARCHIVE_BUNDLES[@]}"; do
   if [ ! -d "$bundle" ]; then

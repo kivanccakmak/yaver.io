@@ -118,6 +118,11 @@ grep -q 'EXPORT_DESTINATION="export"' "$testflight_script" || \
   fail "iOS API-key deploys must export locally before App Store authentication"
 [ "$(grep -c -- '--type ios --apiKey' "$testflight_script")" -eq 2 ] || \
   fail "iOS API-key deploys must validate/upload the exported IPA with altool"
+grep -q 'Watch/YaverWatch.app' "$testflight_script" || \
+  fail "iOS archive validation must check the collision-free YaverWatch product name"
+if grep -q 'Watch/Yaver.app' "$testflight_script"; then
+  fail "iOS archive validation must not regress to the colliding Yaver.app Watch product"
+fi
 
 # Xcode echoes its full invocation, including API-key flags. Every Apple build
 # lane that supplies those flags must filter the stream before it reaches a
