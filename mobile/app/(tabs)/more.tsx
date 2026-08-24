@@ -1970,7 +1970,7 @@ export default function MoreScreen() {
   // unaffected (the hook returns {} on phones).
   const tabletContent = useTabletContentStyle("wide");
   const { connectionStatus, activeDevice } = useDevice();
-  const { token, user } = useAuth();
+  const { token, user, refreshUser } = useAuth();
   const connected = connectionStatus === "connected";
   const [moreOptionalTools, setMoreOptionalTools] = useState<OptionalMoreToolId[]>([]);
   // Owner-only experimental hardware cells stay hidden for non-owners even if
@@ -2056,7 +2056,11 @@ export default function MoreScreen() {
   useFocusEffect(
     useCallback(() => {
       refreshMoreOptionalTools();
-    }, [refreshMoreOptionalTools]),
+      // Owner entitlement is server-computed and can change while the app is
+      // installed (allowlist repair, linked-account merge). Refresh it when
+      // More becomes visible so Dogfood appears without a logout/reinstall.
+      void refreshUser();
+    }, [refreshMoreOptionalTools, refreshUser]),
   );
 
   const openPair = useCallback(() => {

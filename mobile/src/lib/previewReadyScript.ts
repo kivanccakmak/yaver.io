@@ -177,6 +177,11 @@ export const PREVIEW_RESOURCE_ERROR_SCRIPT = `(function(){try{
     ['token','__rp','access_token','password','secret','key'].forEach(function(k){if(x.searchParams.has(k))x.searchParams.set(k,'[redacted]');});
     return x.toString();
   }catch(e){return String(u||'').replace(/([?&](?:token|__rp|access_token|password|secret|key)=)[^\\s&]+/gi,'$1[redacted]');}}
+  function safePath(u){try{
+    var x=new URL(String(u||''),location.href);
+    ['token','__rp','access_token','password','secret','key'].forEach(function(k){x.searchParams.delete(k);});
+    return x.pathname+(x.searchParams.toString()?'?'+x.searchParams.toString():'');
+  }catch(e){return '';}}
   window.addEventListener('error',function(event){try{
     var target=event&&event.target;
     if(!target||target===window||!(target.src||target.href))return;
@@ -184,6 +189,7 @@ export const PREVIEW_RESOURCE_ERROR_SCRIPT = `(function(){try{
       t:'yaver-preview-resource-error',
       tag:String(target.tagName||'node').toUpperCase(),
       url:clean(target.src||target.href),
+      path:safePath(target.src||target.href),
       ts:Date.now()
     }));
   }catch(e){}},true);

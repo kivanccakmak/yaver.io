@@ -7,10 +7,57 @@ import assert from "node:assert/strict";
 
 import {
   browserLaneProbeLine,
+  doctorBrowserLane,
+  probeBrowserResource,
   reconcileBrowserLaneProbe,
   shouldRetryBrowserResourceFailure,
   shouldRunBrowserLaneDoctor,
 } from "./browserLaneDoctor.ts";
+
+test("doctor preserves a structured relay HTTP refusal instead of returning unavailable", async () => {
+  const probe = await doctorBrowserLane(
+    { baseUrl: "https://relay.example/d/device", getAuthHeaders: () => ({ Authorization: "Bearer test" }) } as any,
+    1,
+    (async () => new Response(JSON.stringify({ code: "RELAY_PASSWORD_INVALID", error: "invalid relay password" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    })) as typeof fetch,
+  );
+  assert.equal(probe.ok, false);
+  assert.equal(probe.stage, "probe-http");
+  assert.equal(probe.httpStatus, 401);
+  assert.match(probe.detail || "", /RELAY_PASSWORD_INVALID/);
+  assert.match(probe.remedy || "", /Reconnect/);
+});
+
+test("doctor names an invalid success envelope", async () => {
+  const probe = await doctorBrowserLane(
+    { baseUrl: "https://relay.example/d/device", getAuthHeaders: () => ({}) } as any,
+    1,
+    (async () => new Response("{}", { status: 200 })) as typeof fetch,
+  );
+  assert.equal(probe.stage, "probe-response");
+  assert.equal(probe.ok, false);
+});
+
+test("resource probe reproduces the exact scoped lane without downloading the bundle", async () => {
+  let method = "";
+  let requested = "";
+  const probe = await probeBrowserResource(
+    { getAuthHeaders: () => ({ Authorization: "Bearer test", "X-Relay-Password": "test" }) } as any,
+    "https://relay.example/d/device/dev-web/?token=secret&__rp=secret",
+    "/d/device/dev-web/node_modules/expo-router/entry.bundle?platform=web&token=secret",
+    (async (url, init) => {
+      requested = String(url);
+      method = String(init?.method);
+      return new Response(null, { status: 401, headers: { "content-type": "application/json" } });
+    }) as typeof fetch,
+  );
+  assert.equal(method, "HEAD");
+  assert.doesNotMatch(requested, /token=|__rp=/);
+  assert.equal(probe.stage, "resource-http");
+  assert.equal(probe.httpStatus, 401);
+});
 
 test("script subresource failure before first render triggers browser-lane doctor", () => {
   assert.equal(

@@ -30,6 +30,7 @@ export interface DogfoodItem {
   taskId?: string;
   deviceId?: string;
   deviceName?: string;
+  runner?: string;
   error?: string;
 }
 
@@ -193,10 +194,12 @@ async function imageToAttachment(path: string, index: number): Promise<ImageAtta
 
 function modePreamble(mode: DogfoodMode, repoDir: string): string {
   const common =
-    "You are improving the Yaver mobile app itself (this repo). The attached " +
+    "You are improving Yaver itself in one continuing Dogfood session. The attached " +
     "screenshot(s) show the running Yaver UI. Make the change(s) the user describes. " +
-    "Prefer JS/TS-only changes so Hermes hot-reload can apply them instantly; keep " +
-    "the mobile app loadable in the Yaver container (no WebView for RN); match " +
+    "Trace and fix every affected layer: mobile/client surface, Go agent, relay/backend " +
+    "and their wiring may all belong to the same issue. Prefer JS/TS-only changes when " +
+    "the defect is client-only so Hermes hot-reload can apply them instantly; keep the " +
+    "mobile app loadable in the Yaver container (no WebView for third-party RN); match " +
     "surrounding code style and keep the diff small.";
   if (mode === "pr") {
     return (
@@ -238,6 +241,7 @@ function buildPrompt(opts: {
 export interface DispatchResult {
   ok: boolean;
   taskId?: string;
+  continued?: boolean;
   error?: string;
 }
 
@@ -273,20 +277,37 @@ export async function dispatchDogfoodItems(opts: {
         : firstCaption
           ? firstCaption.slice(0, 48)
           : "screenshot");
-    const task = await client.sendTask(
-      title,
-      prompt,
-      opts.model,
-      opts.runner,
-      undefined,
-      undefined,
-      images,
-      mode === "vibe" || mode === "pr" ? opts.repoDir || undefined : undefined,
-      undefined,
-      undefined,
-      true, // codeMode
-    );
-    const taskId = (task as any)?.id as string | undefined;
+    // Dogfood is one continuing vibe, not one task per screenshot. Reuse the
+    // newest compatible task on this device/runner; the agent's /continue
+    // contract pins the same task, runner session, Yaver session and tmux
+    // session across Codex, Claude Code and OpenCode. A runner change is an
+    // explicit new session because runner-native conversations are not
+    // interchangeable.
+    const prior = getDogfoodItems()
+      .filter((it) => !!it.taskId && it.deviceId === deviceId && it.mode === mode && it.runner === opts.runner)
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    let taskId: string | undefined;
+    let continued = false;
+    if (prior?.taskId) {
+      await client.continueTask(prior.taskId, prompt, images);
+      taskId = prior.taskId;
+      continued = true;
+    } else {
+      const task = await client.sendTask(
+        title,
+        prompt,
+        opts.model,
+        opts.runner,
+        undefined,
+        undefined,
+        images,
+        mode === "vibe" || mode === "pr" ? opts.repoDir || undefined : undefined,
+        undefined,
+        undefined,
+        true, // codeMode
+      );
+      taskId = (task as any)?.id as string | undefined;
+    }
     await Promise.all(
       batch.map((it) =>
         updateDogfoodItem(it.id, {
@@ -294,12 +315,13 @@ export async function dispatchDogfoodItems(opts: {
           taskId,
           deviceId,
           deviceName: opts.deviceName,
+          runner: opts.runner,
           mode,
           error: undefined,
         }),
       ),
     );
-    return { ok: true, taskId };
+    return { ok: true, taskId, continued };
   } catch (err: any) {
     const msg = err?.message || "Failed to send to the agent.";
     await Promise.all(batch.map((it) => updateDogfoodItem(it.id, { status: "failed", error: msg })));

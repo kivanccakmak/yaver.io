@@ -23,7 +23,7 @@ export interface DogfoodConfig {
 }
 
 export const DEFAULT_DOGFOOD_PROMPT =
-  "Refresh Yaver using Yaver. Use the Go agent for code changes, keep the mobile app loadable in Yaver, and prefer Hermes/mobile-safe workflows.";
+  "Refresh Yaver using Yaver. This Dogfood session owns the full Yaver stack: fix the mobile/client surface, the Go agent, relay/backend wiring, or more than one when the incident crosses that seam. Keep the mobile app loadable and prefer Hermes/mobile-safe workflows when the change is client-only.";
 
 export const DEFAULT_DOGFOOD_CONFIG: DogfoodConfig = {
   repoDir: "",

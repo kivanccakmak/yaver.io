@@ -58,6 +58,9 @@ func runPrimary(args []string) {
 	case "projects":
 		runPrimaryProjects(ctx, args[1:], false)
 		return
+	case "browser-lane":
+		runPrimaryBrowserLaneDoctor(ctx, args[1:])
+		return
 	case "mobiles":
 		runPrimaryProjects(ctx, args[1:], true)
 		return
@@ -89,6 +92,64 @@ func runPrimary(args []string) {
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown subcommand: yaver primary %s\n\n", args[0])
 		primaryUsage()
+		os.Exit(1)
+	}
+}
+
+// runPrimaryBrowserLaneDoctor is the cheap, headless verb for the exact
+// operation mobile otherwise diagnoses through a spinner. It asks the remote
+// primary agent to load its active browser lane in real Chrome and returns the
+// structured stage. No project context, source, token, or relay credential is
+// printed.
+func runPrimaryBrowserLaneDoctor(ctx context.Context, args []string) {
+	asJSON := primaryHasFlag(args, "--json")
+	for _, arg := range args {
+		if arg != "--json" && strings.TrimSpace(arg) != "" {
+			fmt.Fprintf(os.Stderr, "primary browser-lane: unknown argument %q\n", arg)
+			os.Exit(1)
+		}
+	}
+	cfg, _, target, err := resolvePrimaryDeviceForRemote(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "primary browser-lane: %v\n", err)
+		os.Exit(1)
+	}
+	candidates, err := buildRemoteAgentCandidates(cfg, target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "primary browser-lane: %v\n", err)
+		os.Exit(1)
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
+	defer cancel()
+	raw, status, _, err := primaryFetchWithFallthrough(reqCtx, candidates, cfg.AuthToken, "/doctor/browser-lane?waitSeconds=45", 90*time.Second)
+	if err != nil && status == 0 {
+		fmt.Fprintf(os.Stderr, "primary browser-lane: %v\n", err)
+		os.Exit(1)
+	}
+	if asJSON {
+		_, _ = os.Stdout.Write(raw)
+		if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+			fmt.Println()
+		}
+		return
+	}
+	var probe BrowserLaneProbeResult
+	if status < 200 || status >= 300 || json.Unmarshal(raw, &probe) != nil {
+		fmt.Fprintf(os.Stderr, "primary browser-lane: doctor returned HTTP %d\n", status)
+		os.Exit(1)
+	}
+	fmt.Printf("Browser lane: %s", probe.Stage)
+	if probe.Status > 0 {
+		fmt.Printf(" (HTTP %d)", probe.Status)
+	}
+	fmt.Println()
+	if probe.Detail != "" {
+		fmt.Println("  " + probe.Detail)
+	}
+	if probe.Remedy != "" {
+		fmt.Println("  Fix: " + probe.Remedy)
+	}
+	if !probe.OK {
 		os.Exit(1)
 	}
 }
@@ -617,6 +678,9 @@ Usage:
                                   React Native / Flutter / Swift / Kotlin).
                                   Same scanner; filtered surface. Discovery
                                   runs without any coding agent installed.
+  yaver primary browser-lane [--json]
+                                  Prove the active preview paints in real
+                                  Chrome on the primary; returns a named stage.
   yaver primary <claude|claude-code|codex>
                                   Same as 'auth <runner>' — kept as a
                                   shortcut so existing scripts still work

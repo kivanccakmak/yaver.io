@@ -33,7 +33,7 @@ import { PREVIEW_READY_SCRIPT, PREVIEW_LANE_SCRIPT, PREVIEW_RESOURCE_ERROR_SCRIP
 import { WEBVIEW_PROBE_UNSUPPORTED } from "./WebViewCompat";
 import { detectCompileFailure } from "../lib/compileFailure";
 import { previewBundlePath } from "../lib/previewBundlePath";
-import { browserLaneProbeLine, doctorBrowserLane, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
+import { browserLaneProbeLine, doctorBrowserLane, probeBrowserResource, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, type BrowserLaneProbeResult } from "../lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
 import { previewWaitLine } from "../lib/previewWait";
 import { handlePreviewScreenMessage } from "../lib/screenContextBridge";
@@ -221,6 +221,7 @@ export function DevPreview({
   const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
   const browserLaneDoctorRunningRef = useRef(false);
   const browserLaneDoctorRanForKeyRef = useRef("");
+  const browserResourceProbeRanRef = useRef("");
   const webRenderWatchdogFiredRef = useRef(false);
   // The named capability gap behind a failed start (missing Flutter/toolchain),
   // produced by the agent and carried on the /dev/events error frame AND
@@ -405,6 +406,7 @@ export function DevPreview({
     setBrowserLaneProbe(null);
     browserLaneDoctorRunningRef.current = false;
     browserLaneDoctorRanForKeyRef.current = "";
+    browserResourceProbeRanRef.current = "";
     webRenderWatchdogFiredRef.current = false;
   }, []);
 
@@ -1310,6 +1312,8 @@ export function DevPreview({
                 ref={webViewRef}
                 key={webViewKey}
                 source={{ uri: bundleUrl }}
+                sharedCookiesEnabled
+                thirdPartyCookiesEnabled
                 style={styles.webview}
                 onLoadStart={() => { setLoading(true); webErroredThisLoad.current = false; }}
                 onLoadEnd={() => { setLoading(false); }}
@@ -1340,9 +1344,19 @@ export function DevPreview({
                     if (m && m.t === "yaver-preview-resource-error") {
                       const tag = String(m.tag || "resource").toUpperCase();
                       const url = String(m.url || "");
+                      const resourcePath = String(m.path || "");
                       pushLog(`[web:error] resource failed ${tag}${url ? ` ${url}` : ""}`.slice(0, 1400));
                       if (shouldRetryBrowserResourceFailure({ tag, contentLoaded: webContentLoaded })) {
                         scheduleWebRetry();
+                      }
+                      if (resourcePath && browserResourceProbeRanRef.current !== resourcePath) {
+                        browserResourceProbeRanRef.current = resourcePath;
+                        void probeBrowserResource(previewClient, bundleUrl, resourcePath).then((probe) => {
+                          setBrowserLaneProbe(probe);
+                          setPreviewFailed(true);
+                          pushLog(browserLaneProbeLine(probe));
+                          if (probe.stage === "resource-delivery" && probe.httpStatus === 200) scheduleWebRetry();
+                        });
                       }
                       return;
                     }

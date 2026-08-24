@@ -47,7 +47,7 @@ import { connectionManager } from "../../src/lib/connectionManager";
 import { shouldPollDevStatus } from "../../src/lib/devStatusPolling";
 import { detectCompileFailure } from "../../src/lib/compileFailure";
 import { previewBundlePath } from "../../src/lib/previewBundlePath";
-import { browserLaneProbeLine, doctorBrowserLane, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, shouldRunBrowserLaneDoctor, type BrowserLaneProbeResult } from "../../src/lib/browserLaneDoctor";
+import { browserLaneProbeLine, doctorBrowserLane, probeBrowserResource, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, shouldRunBrowserLaneDoctor, type BrowserLaneProbeResult } from "../../src/lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
 import { handlePreviewScreenMessage } from "../../src/lib/screenContextBridge";
 import { handlePreviewDomMessage, subscribeDomInspectMode } from "../../src/lib/domInspectBridge";
@@ -838,6 +838,7 @@ export default function AppsScreen() {
   const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
   const browserLaneDoctorRunningRef = useRef(false);
   const browserLaneDoctorRanForKeyRef = useRef("");
+  const browserResourceProbeRanRef = useRef("");
   const webPreviewLogScrollRef = useRef<ScrollView>(null);
   useEffect(() => () => { if (webPreviewRetryTimer.current) clearTimeout(webPreviewRetryTimer.current); }, []);
   useEffect(() => {
@@ -885,6 +886,7 @@ export default function AppsScreen() {
     setBrowserLaneProbe(null);
     browserLaneDoctorRunningRef.current = false;
     browserLaneDoctorRanForKeyRef.current = "";
+    browserResourceProbeRanRef.current = "";
     webPreviewRenderWatchdogFiredRef.current = false;
     setWebPreviewStartedAt(Date.now());
     setWebPreviewLastLogAt(null);
@@ -3616,10 +3618,12 @@ export default function AppsScreen() {
                 )}
               </View>
             ) : (
-            <WebView
-              ref={webViewRef}
-              key={webViewKey}
-              source={{ uri: bundleUrl }}
+              <WebView
+                ref={webViewRef}
+                key={webViewKey}
+                source={{ uri: bundleUrl }}
+                sharedCookiesEnabled
+                thirdPartyCookiesEnabled
               style={{ flex: 1, backgroundColor: c.bg }}
               onLoadStart={() => { webPreviewErroredRef.current = false; }}
               onLoadEnd={() => {
@@ -3686,6 +3690,7 @@ export default function AppsScreen() {
                   if (m && m.t === "yaver-preview-resource-error") {
                     const tag = String(m.tag || "resource").toUpperCase();
                     const url = String(m.url || "");
+                    const resourcePath = String(m.path || "");
                     const line = `[web:error] resource failed ${tag}${url ? ` ${url}` : ""}`.slice(0, 1400);
                     setWebPreviewLogs((prev) => appendPreviewLogLine(prev, line));
                     setWebRuntimeIssueCount((count) => Math.min(99, count + 1));
@@ -3694,6 +3699,18 @@ export default function AppsScreen() {
                     // main-frame callbacks never retry it after compilation.
                     if (shouldRetryBrowserResourceFailure({ tag, contentLoaded: webPreviewContentLoaded })) {
                       scheduleWebPreviewRetry();
+                    }
+                    if (resourcePath && browserResourceProbeRanRef.current !== resourcePath) {
+                      browserResourceProbeRanRef.current = resourcePath;
+                      void probeBrowserResource(previewClient, bundleUrl, resourcePath).then((probe) => {
+                        setBrowserLaneProbe(probe);
+                        setWebPreviewFailed(true);
+                        setWebPreviewLogs((prev) => appendPreviewLogLine(prev, browserLaneProbeLine(probe)));
+                        // A successful HEAD crossed the exact relay + agent
+                        // route and refreshed the scoped auth cookie in the
+                        // shared jar. Retry once so the WebView consumes it.
+                        if (probe.stage === "resource-delivery" && probe.httpStatus === 200) scheduleWebPreviewRetry();
+                      });
                     }
                     if (shouldRunBrowserLaneDoctor({
                       showWebView,

@@ -14,18 +14,31 @@
 // so an owner can develop the full Hetzner create/remove flow without
 // a LemonSqueezy subscription.
 
-export function isOwnerEmail(email?: string | null): boolean {
+type OwnerEnv = Record<string, string | undefined>;
+
+// Keep every historically-supported spelling additive. Production has used
+// both CLOUD_PREVIEW_OWNER_EMAIL (singular) and CLOUD_PREVIEW_OWNER_EMAILS
+// (plural), while browser-preview deployments use the YAVER-prefixed names.
+// Picking the first truthy variable made a stale singular value shadow a valid
+// plural list, and omitting the plural spelling made the mobile /auth/validate
+// response report isOwner=false for a correctly configured owner account.
+export function ownerEmails(env: OwnerEnv = process.env): string[] {
+  const values = [
+    env.CLOUD_PREVIEW_OWNER_EMAIL,
+    env.CLOUD_PREVIEW_OWNER_EMAILS,
+    env.YAVER_CLOUD_PREVIEW_EMAILS,
+    env.NEXT_PUBLIC_YAVER_CLOUD_PREVIEW_EMAILS,
+  ];
+  return [...new Set(values
+    .flatMap((raw) => String(raw || "").split(","))
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean))];
+}
+
+export function isOwnerEmail(email?: string | null, env: OwnerEnv = process.env): boolean {
   const normalized = (email ?? "").trim().toLowerCase();
   if (!normalized) return false;
-  const raw =
-    process.env.CLOUD_PREVIEW_OWNER_EMAIL ||
-    process.env.YAVER_CLOUD_PREVIEW_EMAILS ||
-    process.env.NEXT_PUBLIC_YAVER_CLOUD_PREVIEW_EMAILS ||
-    "";
-  const allowed = raw
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
+  const allowed = ownerEmails(env);
   if (allowed.length === 0) return false;
   return allowed.includes(normalized);
 }
@@ -36,10 +49,10 @@ export function isOwnerEmail(email?: string | null): boolean {
 // allowlist can never match the owner's primary login. Set
 // CLOUD_PREVIEW_OWNER_USER_IDS to comma-separated user _id values.
 // Unset ⇒ false for everyone (stays fail-closed by default).
-export function isOwnerUserId(userId?: string | null): boolean {
+export function isOwnerUserId(userId?: string | null, env: OwnerEnv = process.env): boolean {
   const id = (userId ?? "").trim();
   if (!id) return false;
-  const raw = process.env.CLOUD_PREVIEW_OWNER_USER_IDS || "";
+  const raw = env.CLOUD_PREVIEW_OWNER_USER_IDS || "";
   const allowed = raw
     .split(",")
     .map((s) => s.trim())
@@ -53,6 +66,7 @@ export function isOwnerUserId(userId?: string | null): boolean {
 export function isOwner(
   email?: string | null,
   userId?: string | null,
+  env: OwnerEnv = process.env,
 ): boolean {
-  return isOwnerEmail(email) || isOwnerUserId(userId);
+  return isOwnerEmail(email, env) || isOwnerUserId(userId, env);
 }
