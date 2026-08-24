@@ -110,8 +110,8 @@ jobs:
         run: |
           # Upload binary + the canonical systemd unit to staging paths.
           # We re-deploy the unit every time so the box's
-          # YAVER_RELAY_OFFICIAL=1 + Environment=CONVEX_URL=... lines
-          # never drift away from the repo's source of truth.
+          # YAVER_RELAY_OFFICIAL=1 and the environment-file fallbacks never
+          # drift away from the repo's source of truth.
           scp -i "$CI_KEY_PATH" \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               /tmp/relay-dl/yaver-relay root@${{ secrets.RELAY_SSH_HOST }}:/tmp/yaver-relay.new
@@ -130,12 +130,10 @@ jobs:
           UNIT_NEW=/tmp/yaver-relay.service.new
           mkdir -p /opt/yaver-relay
 
-          # Preserve the live unit's local-only directives the repo
-          # template doesn't know about — specifically the actual
-          # ExecStart line, which on this box carries the shared
-          # --password=<value>. We keep the live ExecStart and adopt
-          # everything else from the repo template (Environment lines,
-          # hardening directives, EnvironmentFile fallback).
+          # Preserve the live unit's local-only ExecStart arguments, if any.
+          # Authentication itself is supplied by the canonical unit's official
+          # per-user mode plus its owner-only environment-file fallbacks; no
+          # credential needs to appear in this workflow or its logs.
           LIVE_EXEC=$(grep '^ExecStart=' "$UNIT" || true)
           if [ -n "$LIVE_EXEC" ]; then
             # Replace the template's ExecStart placeholder with the

@@ -20,6 +20,11 @@ StateDirectory=yaver-relay
 StateDirectoryMode=0700
 EnvironmentFile=-/etc/default/yaver-relay
 EnvironmentFile=-/etc/yaver-relay/relay.env
+# This unit is the canonical public Yaver relay configuration. Official mode
+# supplies the Yaver-cloud Convex endpoint when no deployment-specific URL is
+# present, so authentication remains per-user and the relay never falls back
+# to an unauthenticated listener.
+Environment=YAVER_RELAY_OFFICIAL=1
 # Optional. If absent, the relay stays healthy but GET /ice fails closed with a
 # named 503. The credential bytes never appear in this unit or the command line.
 Environment=TURN_AUTH_SECRET_FILE=/etc/yaver-relay/turn-secret
