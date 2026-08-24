@@ -185,14 +185,20 @@ test.describe("sfmg preview narrates its wait", () => {
       // "Open in Yaver" is the action that opens the preview, it appears only
       // where a preview can be opened, and it is what a user taps. Assert on
       // the verb, not the noun.
-      const sfmgCard = page.getByText(new RegExp(`^${PROJECT}$`, "i")).last();
-      await expect(sfmgCard, `${PROJECT} is visible somewhere in the app`).toBeVisible({ timeout: 30_000 });
-
-      const openBtn = page.getByText(/open in yaver/i).first();
+      const escapedProject = PROJECT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const openBtn = page
+        .getByRole("button", { name: new RegExp(`Open .*${escapedProject}.* in Yaver`, "i") })
+        .first();
       if (await openBtn.isVisible({ timeout: 15_000 }).catch(() => false)) {
         await openBtn.click();
       } else {
         // No running preview to open — go through Projects instead.
+        // Project discovery labels repository roots as `root (<name>)`, so an
+        // exact `<name>` matcher is stale even though the correct row is on
+        // screen. Keep this fallback strict while accepting that canonical
+        // wrapper; the preferred action above remains unambiguous.
+        const sfmgCard = page.getByText(new RegExp(`^(?:root \\()?${escapedProject}\\)?$`, "i")).last();
+        await expect(sfmgCard, `${PROJECT} is visible somewhere in the app`).toBeVisible({ timeout: 30_000 });
         await sfmgCard.click();
         // When this project already owns the active dev-server slot, tapping
         // its row opens the preview directly. Otherwise it opens the action

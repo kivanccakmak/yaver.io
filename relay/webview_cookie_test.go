@@ -111,8 +111,11 @@ func TestWebviewCookieIsScopedAndHardened(t *testing.T) {
 	if !c.Secure {
 		t.Fatal("cookie must be Secure on a TLS request")
 	}
-	if c.SameSite != http.SameSiteLaxMode {
-		t.Fatal("cookie must set SameSite")
+	if c.SameSite != http.SameSiteNoneMode {
+		t.Fatal("TLS iframe cookie must use SameSite=None")
+	}
+	if !c.Partitioned {
+		t.Fatal("TLS iframe cookie must be partitioned to the top-level Yaver site")
 	}
 	if c.MaxAge <= 0 || time.Duration(c.MaxAge)*time.Second > webviewCookieTTL {
 		t.Fatalf("cookie MaxAge %d must be positive and within the TTL", c.MaxAge)
@@ -120,6 +123,16 @@ func TestWebviewCookieIsScopedAndHardened(t *testing.T) {
 	// The secret must never appear in what we hand the browser.
 	if strings.Contains(c.Value, testSecret) {
 		t.Fatal("the relay secret leaked into the cookie value")
+	}
+}
+
+func TestWebviewCookieUsesLaxWithoutTLS(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "http://relay.example/d/device-abc/dev/", nil)
+	setWebviewAuthCookie(rec, req, "device-abc", testSecret)
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].SameSite != http.SameSiteLaxMode || cookies[0].Partitioned {
+		t.Fatal("plain HTTP cookie must remain non-partitioned SameSite=Lax")
 	}
 }
 

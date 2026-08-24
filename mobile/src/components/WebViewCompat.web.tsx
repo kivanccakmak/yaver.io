@@ -18,13 +18,14 @@
  *     proxies the app at /dev-web/ under its own origin.)
  *   • window.ReactNativeWebView.postMessage is provided to the frame so guest
  *     pages written for the native container keep working unchanged.
- *   • No cookie/storage isolation control, no native gesture handling. Neither
- *     matters for a dev preview.
+ *   • Header-bearing navigation is bootstrapped with a credentialed fetch so
+ *     the relay can mint its scoped HttpOnly, partitioned preview cookie. The
+ *     iframe URL stays clean and guest JavaScript never sees a credential.
  *
  * NATIVE IS UNTOUCHED: this file is only ever loaded for the web target.
  */
 
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 export const WEBVIEW_SUPPORTED = true;
 
@@ -36,7 +37,7 @@ export const WEBVIEW_PROBE_UNSUPPORTED = "yaver.webview.probe_unsupported";
 export const WEBVIEW_UNSUPPORTED_REASON = "";
 
 export interface WebViewProps {
-  source?: { uri?: string; html?: string };
+  source?: { uri?: string; html?: string; headers?: Record<string, string> };
   injectedJavaScript?: string;
   onMessage?: (e: { nativeEvent: { data: string } }) => void;
   onLoadEnd?: () => void;
@@ -52,6 +53,42 @@ export interface WebViewProps {
 export const WebView = forwardRef<any, WebViewProps>(function WebView(props, ref) {
   const { source, injectedJavaScript, onMessage, onLoadEnd, onError, onLoadStart, style } = props;
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [frameUri, setFrameUri] = useState<string | undefined>(() => source?.headers ? undefined : source?.uri);
+  const headerKey = JSON.stringify(source?.headers || {});
+
+  // An iframe cannot attach native WebView navigation headers. Seed the
+  // relay's signed HttpOnly cookie with a credentialed fetch, then navigate the
+  // clean URL. The bearer/password never enters iframe src, history or guest JS.
+  useEffect(() => {
+    const uri = source?.uri;
+    const headers = source?.headers;
+    if (!uri || !headers || Object.keys(headers).length === 0) {
+      setFrameUri(uri);
+      return;
+    }
+    const controller = new AbortController();
+    setFrameUri(undefined);
+    onLoadStart?.();
+    void fetch(uri, {
+      method: "GET",
+      headers,
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal,
+    }).then((response) => {
+      if (controller.signal.aborted) return;
+      if (!response.ok) {
+        props.onHttpError?.({ nativeEvent: { statusCode: response.status } });
+        throw new Error(`preview bootstrap HTTP ${response.status}`);
+      }
+      setFrameUri(uri);
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      onError?.(error);
+    });
+    return () => controller.abort();
+    // headerKey tracks value changes without retriggering on each object render.
+  }, [source?.uri, headerKey]);
 
   // reload() is the one imperative method the preview screen calls.
   useImperativeHandle(ref, () => ({
@@ -113,7 +150,7 @@ export const WebView = forwardRef<any, WebViewProps>(function WebView(props, ref
     onLoadEnd?.();
   };
 
-  const uri = source?.uri;
+  const uri = frameUri;
   const srcDoc = source?.html;
 
   return (

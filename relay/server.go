@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2854,9 +2855,22 @@ func (s *RelayServer) handleBandwidthStats(w http.ResponseWriter, r *http.Reques
 
 func withRelayCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Relay-Password, X-Yaver-Caller, X-Yaver-Surface, X-Client-Platform")
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin == "" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if relayCORSOriginAllowed(origin) {
+			// Credentialed preview bootstrap must use an exact origin; wildcard
+			// CORS makes browsers discard Set-Cookie. Never reflect an arbitrary
+			// hostile origin on this multi-tenant relay.
+			w.Header().Set("Access-Control-Allow-Origin", canonicalRelayOrigin(origin))
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Vary", "Origin")
+		} else if r.Method == http.MethodOptions {
+			http.Error(w, "CORS origin denied", http.StatusForbidden)
+			return
+		}
 		// A proxied dev-server page may carry the account-wide password in its URL
 		// (?__rp=), which would otherwise leak via the Referer header to every
 		// third-party subresource it loads. Suppress it (relay security audit,
@@ -2869,6 +2883,34 @@ func withRelayCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func relayCORSOriginAllowed(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if parsed.Scheme == "https" && (host == "yaver.io" || strings.HasSuffix(host, ".yaver.io")) {
+		return true
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	for _, raw := range strings.Split(os.Getenv("YAVER_RELAY_CORS_ORIGINS"), ",") {
+		if canonicalRelayOrigin(raw) == canonicalRelayOrigin(origin) && canonicalRelayOrigin(raw) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalRelayOrigin(origin string) string {
+	parsed, err := url.Parse(strings.TrimSpace(origin))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host)
 }
 
 // --- TLS ---

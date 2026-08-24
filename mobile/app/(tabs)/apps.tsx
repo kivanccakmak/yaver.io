@@ -67,7 +67,7 @@ import {
 } from "../../src/lib/capabilityGap";
 import { formatFixElapsed, runCapabilityGapFix } from "../../src/lib/capabilityGapFix";
 import { subscribeSse, type SseSubscription } from "../../src/lib/sseClient";
-import { isWebServedStatus } from "../../src/lib/devLane";
+import { isWebServedStatus, shouldUseNativePreview } from "../../src/lib/devLane";
 import { applyPreviewCapabilities, guardYaverSelfDevelopmentActions, isHermesMobileFramework, workspaceAppLanes } from "../../src/lib/mobileProjectActions";
 import { runtimeSurfaceClient } from "../../src/lib/runtimeSurfaceClient";
 import { lightCardShadow, spacing, typography } from "../../src/theme/tokens";
@@ -77,7 +77,11 @@ import type { PhoneProject } from "../../src/lib/phoneProjects";
 import { listLocalPhoneProjectsMeta } from "../../src/lib/phoneSandboxLocal";
 import { discoverConnectedProviderProjects, type ProviderProject } from "../../src/lib/gitProviderProjects";
 import { cloneGitRepoToPhone } from "../../src/lib/cloneToPhone";
-import { reconcilePreviewDevStatus, usablePreviewDevStatus } from "../../src/lib/previewDevStatus";
+import {
+  canOpenPreviewBeforeRefresh,
+  reconcilePreviewDevStatus,
+  usablePreviewDevStatus,
+} from "../../src/lib/previewDevStatus";
 import { DevServerStopDialog, type DevServerStopPhase } from "../../src/components/DevServerStopDialog";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -1216,8 +1220,20 @@ export default function AppsScreen() {
   }, [showWebView, previewClient]);
 
   async function openRunningPreview() {
-    const fresh = await previewClient.getDevServerStatus();
-    const usable = usablePreviewDevStatus(fresh, devStatus);
+    // The running card already represents a measured active route. Open from
+    // that state immediately; a fresh status request is advisory and can hang
+    // behind a reconnecting relay/SSE lane. Before this split, the tap looked
+    // like a no-op until that request happened to finish.
+    let usable = canOpenPreviewBeforeRefresh(devStatus) ? devStatus : null;
+    if (usable) {
+      void previewClient.getDevServerStatus().then((fresh) => {
+        const refreshed = usablePreviewDevStatus(fresh, devStatus);
+        if (refreshed) setDevStatus(refreshed);
+      }).catch(() => {});
+    } else {
+      const fresh = await previewClient.getDevServerStatus();
+      usable = usablePreviewDevStatus(fresh, devStatus);
+    }
     if (usable) setDevStatus(usable);
     // The tablet studio is also the loading surface. Navigate immediately so
     // the device frame and vibe console remain visible while the box starts
@@ -1242,8 +1258,7 @@ export default function AppsScreen() {
       );
       return;
     }
-    if (isHermesMobileFramework(usable.framework)
-        && !isWebServedStatus({ platform: usable.platform, devMode: usable.devMode })) {
+    if (shouldUseNativePreview(usable, isBundleLoaderAvailable())) {
       handleOpenNative(usable.workDir!, usable.framework);
       return;
     }
@@ -2224,7 +2239,7 @@ export default function AppsScreen() {
    *         cache) on the browser lane; Hermes rebuild + push on the
    *         native lane. */
   const handleReload = useCallback(async (kind: "fast" | "full" = "fast") => {
-    const nativeHermes = isHermesMobileFramework(devStatus?.framework) && !isWebServedStatus(devStatus || {});
+    const nativeHermes = shouldUseNativePreview(devStatus || {}, isBundleLoaderAvailable());
     if (!nativeHermes) {
       setWebViewLoading(true);
     }

@@ -907,6 +907,8 @@ export class MobileClient {
       present: boolean;
       httpOnly: boolean;
       sameSiteLax: boolean;
+      sameSiteNone: boolean;
+      partitioned: boolean;
       secure: boolean;
       pathScoped: boolean;
     };
@@ -934,6 +936,8 @@ export class MobileClient {
       present: cookieMatch !== null,
       httpOnly: /(?:^|;)\s*HttpOnly(?:;|$)/i.test(setCookie),
       sameSiteLax: /(?:^|;)\s*SameSite=Lax(?:;|$)/i.test(setCookie),
+      sameSiteNone: /(?:^|;)\s*SameSite=None(?:;|$)/i.test(setCookie),
+      partitioned: /(?:^|;)\s*Partitioned(?:;|$)/i.test(setCookie),
       secure: /(?:^|;)\s*Secure(?:;|$)/i.test(setCookie),
       pathScoped: new RegExp(`(?:^|;)\\s*Path=${escapeRegExp(expectedPath)}(?:;|$)`, "i").test(setCookie),
     };
@@ -947,9 +951,15 @@ export class MobileClient {
         cookie,
       };
     }
+    // `present` is derived from this match, but TypeScript cannot carry that
+    // relationship through the object field.
+    const cookieValue = cookieMatch![1];
 
     const requiresSecure = documentURL.protocol === "https:";
-    if (!cookie.httpOnly || !cookie.sameSiteLax || !cookie.pathScoped || (requiresSecure && !cookie.secure)) {
+    const correctSitePolicy = requiresSecure
+      ? cookie.secure && cookie.sameSiteNone && cookie.partitioned
+      : cookie.sameSiteLax && !cookie.partitioned;
+    if (!cookie.httpOnly || !cookie.pathScoped || !correctSitePolicy) {
       return {
         ok: false,
         code: "PREVIEW_COOKIE_INVALID_SCOPE",
@@ -960,7 +970,7 @@ export class MobileClient {
     }
 
     const assetResponse = await fetch(resourceURL, {
-      headers: { Cookie: `yaver_rp=${cookieMatch[1]}` },
+      headers: { Cookie: `yaver_rp=${cookieValue}` },
       redirect: "manual",
     });
     await assetResponse.body?.cancel();

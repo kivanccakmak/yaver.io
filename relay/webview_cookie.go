@@ -44,7 +44,10 @@ package main
 //     cookie's own scope.
 //   - HttpOnly             — page JS cannot read it, so a hostile guest app
 //     rendered in the preview cannot exfiltrate it.
-//   - SameSite=Lax         — not attached to cross-site form posts.
+//   - SameSite=None + Partitioned on TLS — RN-web embeds the relay in an
+//     iframe, so Lax would deliberately suppress the cookie. Partitioning
+//     binds it to the Yaver top-level site as well as the device path. Plain
+//     HTTP keeps Lax because browsers reject insecure SameSite=None cookies.
 //   - Secure when the request arrived over TLS.
 //   - Short TTL            — minutes, not a session. Long enough to load a page
 //     and its assets, short enough that a leaked cookie is quickly worthless.
@@ -155,6 +158,11 @@ func setWebviewAuthCookie(w http.ResponseWriter, r *http.Request, deviceID, secr
 		return
 	}
 	expiry := time.Now().Add(webviewCookieTTL)
+	secure := requestIsTLS(r)
+	sameSite := http.SameSiteLaxMode
+	if secure {
+		sameSite = http.SameSiteNoneMode
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     webviewCookieName,
 		Value:    mintWebviewCookieValue(deviceID, secret, expiry),
@@ -162,8 +170,12 @@ func setWebviewAuthCookie(w http.ResponseWriter, r *http.Request, deviceID, secr
 		Expires:  expiry,
 		MaxAge:   int(webviewCookieTTL / time.Second),
 		HttpOnly: true,
-		Secure:   requestIsTLS(r),
-		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		SameSite: sameSite,
+		// CHIPS keeps the iframe capability inside the top-level Yaver site's
+		// partition. It remains HttpOnly, short-lived, signed, and device-path
+		// scoped; a different tenant/device still cannot replay it.
+		Partitioned: secure,
 	})
 }
 

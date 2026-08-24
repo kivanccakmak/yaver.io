@@ -79,6 +79,8 @@ describe("relay authentication", () => {
         present: true,
         httpOnly: true,
         sameSiteLax: true,
+        sameSiteNone: false,
+        partitioned: false,
         secure: false,
         pathScoped: true,
       },

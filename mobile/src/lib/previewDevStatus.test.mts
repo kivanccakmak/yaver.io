@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reconcilePreviewDevStatus, usablePreviewDevStatus } from "./previewDevStatus.ts";
+import {
+  canOpenPreviewBeforeRefresh,
+  reconcilePreviewDevStatus,
+  usablePreviewDevStatus,
+} from "./previewDevStatus.ts";
 
 const running = {
   framework: "expo", running: true, serving: true, servingLabel: "Serving expo preview",
@@ -32,4 +36,10 @@ test("Open in Yaver falls back to the measured running route", () => {
 test("a fresh active status always wins", () => {
   const fresh = { ...running, webPort: 9000 };
   assert.equal(usablePreviewDevStatus(fresh, running), fresh);
+});
+
+test("an explicit Open tap does not wait for an advisory status refresh", () => {
+  assert.equal(canOpenPreviewBeforeRefresh(running), true);
+  assert.equal(canOpenPreviewBeforeRefresh(fetchFailure), false);
+  assert.equal(canOpenPreviewBeforeRefresh(null), false);
 });

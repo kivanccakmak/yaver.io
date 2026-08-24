@@ -35,3 +35,13 @@ export function usablePreviewDevStatus(
   if (isActiveDevServerStatus(previous)) return previous;
   return fresh;
 }
+
+/** A previously measured active route is sufficient for an explicit Open tap.
+ * Rechecking it is useful telemetry, but must run in the background: a stalled
+ * relay request must never turn a visible, working Open action into a no-op.
+ */
+export function canOpenPreviewBeforeRefresh(
+  previous: DevServerStatus | null | undefined,
+): previous is DevServerStatus {
+  return isActiveDevServerStatus(previous);
+}

@@ -9,6 +9,7 @@ import {
   hermesLaneStartBody,
   isWebServedStatus,
   mustUseNativePreview,
+  shouldUseNativePreview,
 } from "./devLane.ts";
 
 // Browser Reload must serve the web target, not a Hermes build. (The old
@@ -52,4 +53,11 @@ test("dev-client mode forces native regardless of framework", () => {
   assert.equal(mustUseNativePreview({ framework: "expo", devMode: "dev-client" }), true);
   // ...unless it is explicitly web-served.
   assert.equal(mustUseNativePreview({ framework: "expo", devMode: "web" }), false);
+});
+
+test("a client without a native bundle loader falls back to the browser lane", () => {
+  const status = { framework: "expo", devMode: "dev-client" };
+  assert.equal(shouldUseNativePreview(status, true), true);
+  assert.equal(shouldUseNativePreview(status, false), false);
+  assert.equal(shouldUseNativePreview({ framework: "expo", devMode: "web" }, true), false);
 });

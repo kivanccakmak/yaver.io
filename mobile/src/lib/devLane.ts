@@ -62,3 +62,16 @@ export function mustUseNativePreview(input: {
   // dev-client is a native-runtime mode; but "web" devMode was already handled.
   return isHermes || input.devMode === "dev-client" || !!input.building;
 }
+
+/**
+ * Select the native lane only when this client can actually load a native
+ * bundle. RN-web deliberately has no native bundle loader; routing an Expo
+ * dev-client status there made the Projects "Open" button a silent no-op even
+ * while the measured browser lane was healthy.
+ */
+export function shouldUseNativePreview(
+  input: Parameters<typeof mustUseNativePreview>[0],
+  bundleLoaderAvailable: boolean,
+): boolean {
+  return bundleLoaderAvailable && mustUseNativePreview(input);
+}
