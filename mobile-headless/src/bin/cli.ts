@@ -327,6 +327,18 @@ async function main() {
       out(await mobile.raw.get(path));
       break;
     }
+    case "raw-head": {
+      const path = rest[0] || argv.path;
+      if (!path) die("raw-head needs a path arg");
+      out(await mobile.raw.head(path));
+      break;
+    }
+    case "preview-cookie-probe": {
+      const path = rest[0] || argv.path;
+      if (!path) die("preview-cookie-probe needs a root-relative asset path");
+      out(await mobile.probeRelayPreviewCookie(String(path)));
+      break;
+    }
     case "raw-post": {
       const path = rest[0] || argv.path;
       if (!path) die("raw-post needs a path arg");
@@ -454,6 +466,8 @@ Usage:
   yaver-mobile-headless preview-manifest-create --name="Todo Preview" --bundle-url=<url> [--out=preview.json]
   yaver-mobile-headless repo-bootstrap-remote --repo-url=<url> [--platform=react-native] [hermes feedback]
   yaver-mobile-headless raw-get /info
+  yaver-mobile-headless raw-head /dev/
+  yaver-mobile-headless preview-cookie-probe /dev-web/path/to/asset.js
   yaver-mobile-headless raw-post /some/path --body='{"k":"v"}'
   yaver-mobile-headless mcp                         # stdio MCP server
 

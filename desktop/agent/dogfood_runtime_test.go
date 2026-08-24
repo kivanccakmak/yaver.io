@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,6 +109,73 @@ func TestPrepareDogfoodCheckoutAbortsAndRoutesConflictToAI(t *testing.T) {
 	}
 	if got := syncGitCmd(t, local, "rev-parse", "HEAD"); got != originalHead {
 		t.Fatalf("aborted conflict moved HEAD: got %s want %s", got, originalHead)
+	}
+}
+
+func TestPrepareDogfoodCheckoutStagesMarkerFreeAIResolutionOnRetry(t *testing.T) {
+	seed, local, _ := setupDogfoodRepos(t)
+	syncWrite(t, filepath.Join(seed, "shared.txt"), "base\n")
+	syncGitCmd(t, seed, "add", "shared.txt")
+	syncGitCmd(t, seed, "commit", "-m", "shared base")
+	syncGitCmd(t, seed, "push")
+	syncGitCmd(t, local, "pull", "--ff-only")
+
+	// Local work remains uncommitted, exactly like the Dogfood checkout that
+	// triggered the real incident. origin/main changes the same file, so Git's
+	// autostash restore leaves an unmerged index after the rebase succeeds.
+	syncWrite(t, filepath.Join(local, "shared.txt"), "local work\n")
+	syncWrite(t, filepath.Join(seed, "shared.txt"), "remote work\n")
+	syncGitCmd(t, seed, "add", "shared.txt")
+	syncGitCmd(t, seed, "commit", "-m", "remote shared change")
+	syncGitCmd(t, seed, "push")
+
+	status, first := prepareDogfoodCheckout(local)
+	if status != http.StatusConflict || first.Code != "DOGFOOD_GIT_AUTOSTASH_CONFLICT" {
+		t.Fatalf("expected retained autostash conflict, got status=%d resp=%+v", status, first)
+	}
+	if got := parseConflictedFiles(local); len(got) != 1 || got[0] != "shared.txt" {
+		t.Fatalf("expected shared.txt to remain unmerged, got %v", got)
+	}
+
+	// The runner selects the content but cannot write .git/index. Retrying the
+	// product flow safely performs that mechanical final step.
+	syncWrite(t, filepath.Join(local, "shared.txt"), "resolved local plus remote\n")
+	status, second := prepareDogfoodCheckout(local)
+	if status != http.StatusOK || !second.OK || !second.IndexRecovered {
+		t.Fatalf("marker-free AI resolution was not recovered: status=%d resp=%+v", status, second)
+	}
+	if got := parseConflictedFiles(local); len(got) != 0 {
+		t.Fatalf("unmerged index survived successful retry: %v", got)
+	}
+	resolved, err := os.ReadFile(filepath.Join(local, "shared.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(resolved)); got != "resolved local plus remote" {
+		t.Fatalf("product changed the AI-selected resolution: %q", got)
+	}
+}
+
+func TestRecoverResolvedDogfoodIndexFailsClosedWithMarkers(t *testing.T) {
+	seed, local, _ := setupDogfoodRepos(t)
+	syncWrite(t, filepath.Join(seed, "shared.txt"), "base\n")
+	syncGitCmd(t, seed, "add", "shared.txt")
+	syncGitCmd(t, seed, "commit", "-m", "shared base")
+	syncGitCmd(t, seed, "push")
+	syncGitCmd(t, local, "pull", "--ff-only")
+	syncWrite(t, filepath.Join(local, "shared.txt"), "local work\n")
+	syncWrite(t, filepath.Join(seed, "shared.txt"), "remote work\n")
+	syncGitCmd(t, seed, "add", "shared.txt")
+	syncGitCmd(t, seed, "commit", "-m", "remote shared change")
+	syncGitCmd(t, seed, "push")
+
+	_, _ = prepareDogfoodCheckout(local)
+	status, resp := prepareDogfoodCheckout(local)
+	if status != http.StatusConflict || resp.Code != "DOGFOOD_GIT_CONFLICT_UNRESOLVED" || !resp.RequiresAgent {
+		t.Fatalf("marker-bearing conflict did not fail closed: status=%d resp=%+v", status, resp)
+	}
+	if got := parseConflictedFiles(local); len(got) == 0 {
+		t.Fatal("retry staged a file that still contained conflict markers")
 	}
 }
 

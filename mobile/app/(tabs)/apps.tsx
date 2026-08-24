@@ -2598,18 +2598,27 @@ export default function AppsScreen() {
       <View style={s.container}>
         {/* Running app — green card */}
         {devStatus && (
-          <View style={[s.card, s.activeCard]}>
+          <View
+            style={[
+              s.card,
+              s.activeCard,
+              {
+                backgroundColor: isDark ? c.successBg : c.surfaceMuted,
+                borderColor: c.successBorder,
+              },
+            ]}
+          >
             <View style={s.cardHeader}>
-              <View style={[s.statusDot, { backgroundColor: devServerBuilding ? "#eab308" : "#22c55e" }]} />
+              <View style={[s.statusDot, { backgroundColor: devServerBuilding ? c.warn : c.success }]} />
               <View style={s.cardTitleContainer}>
-                <Text style={s.cardTitle}>{runningProject}</Text>
-                <Text style={s.cardMeta}>
+                <Text style={[s.cardTitle, { color: c.textPrimary }]}>{runningProject}</Text>
+                <Text style={[s.cardMeta, { color: c.textMuted }]}>
                   {devServerBuilding
                     ? `${devStatus.framework} · starting…`
                     : `${devStatus.framework} · browser preview`}
                 </Text>
                 {workerSession?.hasTarget && (
-                  <Text style={[s.cardMeta, { color: workerSession.workerOnline ? "#86efac" : "#fbbf24" }]}>
+                  <Text style={[s.cardMeta, { color: workerSession.workerOnline ? c.success : c.warn }]}>
                     worker · {workerSession.workerOnline ? "online" : "offline"}
                   </Text>
                 )}
@@ -3621,7 +3630,7 @@ export default function AppsScreen() {
               <WebView
                 ref={webViewRef}
                 key={webViewKey}
-                source={{ uri: bundleUrl }}
+                source={{ uri: bundleUrl, headers: previewClient.getAuthHeaders() }}
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
               style={{ flex: 1, backgroundColor: c.bg }}
@@ -3635,11 +3644,9 @@ export default function AppsScreen() {
               // the connection. Auto-retry (~30×2.5s ≈ 75s) instead of a dead page.
               // Every non-2xx is a signal. This used to retry only on >=500,
               // which meant 401/403/404 did nothing at all: no retry, no
-              // failure panel, overlay forever. 401 is the common one — the
-              // WebView URL carries ?token= and &__rp= because a WebView
-              // cannot set an Authorization header, so a missing relay
-              // password produces a silent 401 that no header-authenticated
-              // status check can see.
+              // failure panel, overlay forever. The initial navigation now
+              // carries auth headers and the relay mints a scoped HttpOnly
+              // cookie for subresources; credentials never enter this URL.
               onHttpError={(e) => {
                 const code = e.nativeEvent.statusCode;
                 if (code === 401 || code === 403) {
@@ -4373,9 +4380,7 @@ const s = StyleSheet.create({
     ...lightCardShadow,
   },
   activeCard: {
-    backgroundColor: "#0f1a0f",
     borderWidth: 1,
-    borderColor: "#22c55e44",
     marginTop: 12,
   },
   catalogCard: {
@@ -4384,8 +4389,8 @@ const s = StyleSheet.create({
   },
   cardHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
   cardTitleContainer: { flex: 1 },
-  cardTitle: { fontSize: 16, fontWeight: "700", color: "#fff" },
-  cardMeta: { fontSize: 11, color: "#666", marginTop: 2 },
+  cardTitle: { fontSize: 16, fontWeight: "700" },
+  cardMeta: { fontSize: 11, marginTop: 2 },
   guidanceText: { lineHeight: 15, marginTop: 4 },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   frameworkIcon: {},

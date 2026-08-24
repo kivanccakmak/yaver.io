@@ -24,7 +24,7 @@ import { WebView } from "./WebViewCompat";
 import { router } from "expo-router";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient, type DevServerStatus } from "../lib/quic";
 import { previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix, previewLogsLookHealthy, previewPaintGateMode } from "../lib/previewHealth";
-import { useColors } from "../context/ThemeContext";
+import { useTheme } from "../context/ThemeContext";
 import { isBundleLoaded, loadAppIfChanged, onBundleEvent } from "../lib/bundleLoader";
 import { buildNativeBuildRequest, nativeBuildFailureMessage, nativeBuildFailureTitle } from "../lib/nativeBuild";
 import { isActiveDevServerStatus } from "../lib/devServerState";
@@ -180,7 +180,7 @@ export function DevPreview({
   paneMode?: boolean;
   onLogStateChange?: (state: { lines: string[]; live: boolean }) => void;
 } = {}) {
-  const c = useColors();
+  const { colors: c, isDark } = useTheme();
   const layout = useResponsiveLayout();
   const { activeDevice } = useDevice();
   const previewClient = activeDevice?.id
@@ -981,7 +981,16 @@ export function DevPreview({
   return (
     <>
       {!paneMode ? (
-      <View style={[styles.card, styles.activeCard]}>
+      <View
+        style={[
+          styles.card,
+          styles.activeCard,
+          {
+            backgroundColor: isDark ? c.successBg : c.surfaceMuted,
+            borderColor: c.successBorder,
+          },
+        ]}
+      >
         {/* Mirror the Projects-tab card layout so the Tasks tab's
             dev-server section reads as the same component. The previous
             banner squeezed the project name + meta into a small block
@@ -991,21 +1000,21 @@ export function DevPreview({
             same three-button rhythm Apps uses. */}
         <View style={styles.cardHeader}>
           {status.building ? (
-            <ActivityIndicator size="small" color="#eab308" />
+            <ActivityIndicator size="small" color={c.warn} />
           ) : (
-            <View style={[styles.statusDot, { backgroundColor: "#22c55e" }]} />
+            <View style={[styles.statusDot, { backgroundColor: c.success }]} />
           )}
           <View style={styles.cardTitleContainer}>
-            <Text style={styles.cardTitle} numberOfLines={1}>{projectLabel}</Text>
-            <Text style={styles.cardMeta} numberOfLines={1}>{metaLine}</Text>
-            <Text style={[styles.cardMeta, { color: "#86efac" }]} numberOfLines={1}>
+            <Text style={[styles.cardTitle, { color: c.textPrimary }]} numberOfLines={1}>{projectLabel}</Text>
+            <Text style={[styles.cardMeta, { color: c.textMuted }]} numberOfLines={1}>{metaLine}</Text>
+            <Text style={[styles.cardMeta, { color: c.success }]} numberOfLines={1}>
               mode · {modeLine}
             </Text>
-            <Text style={[styles.cardMeta, { color: "#7dd3fc" }]} numberOfLines={1}>
+            <Text style={[styles.cardMeta, { color: c.info }]} numberOfLines={1}>
               target · {targetLabel}
             </Text>
             {lastLogLine ? (
-              <Text style={[styles.cardMeta, { color: "#94a3b8" }]} numberOfLines={1}>
+              <Text style={[styles.cardMeta, { color: c.textTertiary }]} numberOfLines={1}>
                 {lastLogLine}
               </Text>
             ) : null}
@@ -1311,7 +1320,7 @@ export function DevPreview({
               <WebView
                 ref={webViewRef}
                 key={webViewKey}
-                source={{ uri: bundleUrl }}
+                source={{ uri: bundleUrl, headers: previewClient.getAuthHeaders() }}
                 sharedCookiesEnabled
                 thirdPartyCookiesEnabled
                 style={styles.webview}
@@ -1731,9 +1740,7 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
   },
   activeCard: {
-    backgroundColor: "#0f1a0f",
     borderWidth: 1,
-    borderColor: "#22c55e44",
     marginTop: 12,
   },
   cardHeader: {
@@ -1742,8 +1749,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   cardTitleContainer: { flex: 1 },
-  cardTitle: { fontSize: 16, fontWeight: "700", color: "#fff" },
-  cardMeta: { fontSize: 11, color: "#666", marginTop: 2 },
+  cardTitle: { fontSize: 16, fontWeight: "700" },
+  cardMeta: { fontSize: 11, marginTop: 2 },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   cardActions: { flexDirection: "row", gap: 8, marginTop: 12, alignItems: "center", justifyContent: "flex-start" },
   actionBtn: { minHeight: 36, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, alignItems: "center", justifyContent: "center" },

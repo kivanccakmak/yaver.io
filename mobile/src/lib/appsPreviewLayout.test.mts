@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const mobileRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const src = readFileSync(join(mobileRoot, "app/(tabs)/apps.tsx"), "utf8");
 const sharedPreviewSrc = readFileSync(join(mobileRoot, "src/components/DevPreview.tsx"), "utf8");
+const buildsSrc = readFileSync(join(mobileRoot, "app/(tabs)/builds.tsx"), "utf8");
 const studioSrc = readFileSync(join(mobileRoot, "app/vibe-studio.tsx"), "utf8");
 const studioChatSrc = readFileSync(join(mobileRoot, "src/components/studio/StudioChatPane.tsx"), "utf8");
 
@@ -55,6 +56,16 @@ assert.match(sharedPreviewSrc, /const openLabel =[\s\S]{0,160}: "Open";/,
   "the shared preview must use the concise Open label");
 assert.match(sharedPreviewSrc, /cardActions:\s*\{[^\n]*alignItems:\s*"center"[^\n]*justifyContent:\s*"flex-start"/,
   "the shared preview actions must stay left aligned");
+assert.match(src, /backgroundColor:\s*isDark\s*\?\s*c\.successBg\s*:\s*c\.surfaceMuted/,
+  "the Projects running-preview card must use a soft light surface instead of a dark hardcoded fill");
+assert.match(sharedPreviewSrc, /backgroundColor:\s*isDark\s*\?\s*c\.successBg\s*:\s*c\.surfaceMuted/,
+  "the Tasks running-preview card must use the same theme-aware light surface");
+assert.doesNotMatch(src, /activeCard:\s*\{[\s\S]{0,120}backgroundColor:\s*"#0f1a0f"/,
+  "the Projects running-preview card must not force its dark palette in light mode");
+assert.doesNotMatch(sharedPreviewSrc, /activeCard:\s*\{[\s\S]{0,120}backgroundColor:\s*"#0f1a0f"/,
+  "the Tasks running-preview card must not force its dark palette in light mode");
+assert.match(buildsSrc, /backgroundColor:\s*isRunning\s*\?\s*c\.surfaceMuted\s*:\s*c\.bgCard/,
+  "the legacy project card must keep the same theme-aware running surface");
 assert.doesNotMatch(src, /\[preview\] log stream unavailable/,
   "an optional log-stream failure must not be presented as a preview failure");
 assert.match(src, /previewClient\.subscribeDevEvents/,

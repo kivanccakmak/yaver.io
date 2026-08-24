@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -169,19 +170,100 @@ type dogfoodPrepareRequest struct {
 }
 
 type dogfoodPrepareResponse struct {
-	OK            bool     `json:"ok"`
-	Code          string   `json:"code,omitempty"`
-	WorkDir       string   `json:"workDir,omitempty"`
-	Branch        string   `json:"branch,omitempty"`
-	Base          string   `json:"base,omitempty"`
-	Head          string   `json:"head,omitempty"`
-	Rebased       bool     `json:"rebased,omitempty"`
-	RequiresAgent bool     `json:"requiresAgent,omitempty"`
-	Conflicts     []string `json:"conflicts,omitempty"`
-	Error         string   `json:"error,omitempty"`
-	Remedy        string   `json:"remedy,omitempty"`
-	FixPrompt     string   `json:"fixPrompt,omitempty"`
-	Output        string   `json:"output,omitempty"`
+	OK             bool     `json:"ok"`
+	Code           string   `json:"code,omitempty"`
+	WorkDir        string   `json:"workDir,omitempty"`
+	Branch         string   `json:"branch,omitempty"`
+	Base           string   `json:"base,omitempty"`
+	Head           string   `json:"head,omitempty"`
+	Rebased        bool     `json:"rebased,omitempty"`
+	IndexRecovered bool     `json:"indexRecovered,omitempty"`
+	RequiresAgent  bool     `json:"requiresAgent,omitempty"`
+	Conflicts      []string `json:"conflicts,omitempty"`
+	Error          string   `json:"error,omitempty"`
+	Remedy         string   `json:"remedy,omitempty"`
+	FixPrompt      string   `json:"fixPrompt,omitempty"`
+	Output         string   `json:"output,omitempty"`
+}
+
+const dogfoodConflictInspectionLimit = 8 << 20
+
+// recoverResolvedDogfoodIndex closes the narrow gap between an AI runner's
+// workspace-write sandbox and Git: Codex can resolve files in the checkout,
+// but deliberately cannot write .git/index. On the user's explicit retry we
+// may stage only Git's already-unmerged paths, and only after every surviving
+// file is marker-free. We never choose content, commit, reset, drop a stash or
+// touch a path outside the checkout.
+func recoverResolvedDogfoodIndex(workDir string) (recovered bool, pending []string, err error) {
+	conflicts := parseConflictedFiles(workDir)
+	if len(conflicts) == 0 {
+		return false, nil, nil
+	}
+	root, err := filepath.Abs(workDir)
+	if err != nil {
+		return false, conflicts, err
+	}
+	for _, rel := range conflicts {
+		clean := filepath.Clean(rel)
+		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return false, conflicts, fmt.Errorf("conflict path escapes checkout: %q", rel)
+		}
+		path := filepath.Join(root, clean)
+		if path != root && !strings.HasPrefix(path, root+string(filepath.Separator)) {
+			return false, conflicts, fmt.Errorf("conflict path escapes checkout: %q", rel)
+		}
+		info, statErr := os.Lstat(path)
+		if os.IsNotExist(statErr) {
+			continue // AI intentionally resolved a modify/delete conflict as deletion.
+		}
+		if statErr != nil {
+			return false, conflicts, statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			continue // Git stages the link itself; never follow it during inspection.
+		}
+		if !info.Mode().IsRegular() {
+			return false, conflicts, fmt.Errorf("conflicted path is not a regular file or symlink: %s", rel)
+		}
+		f, openErr := os.Open(path)
+		if openErr != nil {
+			return false, conflicts, openErr
+		}
+		data, readErr := io.ReadAll(io.LimitReader(f, dogfoodConflictInspectionLimit+1))
+		closeErr := f.Close()
+		if readErr != nil {
+			return false, conflicts, readErr
+		}
+		if closeErr != nil {
+			return false, conflicts, closeErr
+		}
+		if len(data) > dogfoodConflictInspectionLimit {
+			return false, conflicts, fmt.Errorf("conflicted file is too large to verify safely: %s", rel)
+		}
+		if containsGitConflictMarker(data) {
+			pending = append(pending, rel)
+		}
+	}
+	if len(pending) > 0 {
+		return false, pending, nil
+	}
+	args := append([]string{"add", "-A", "--"}, conflicts...)
+	if output, addErr := runGit(workDir, args...); addErr != nil {
+		return false, conflicts, fmt.Errorf("stage resolved conflict paths: %v: %s", addErr, strings.TrimSpace(output))
+	}
+	return true, nil, nil
+}
+
+func containsGitConflictMarker(data []byte) bool {
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		if bytes.HasPrefix(line, []byte("<<<<<<<")) ||
+			bytes.Equal(line, []byte("=======")) ||
+			bytes.HasPrefix(line, []byte(">>>>>>>")) {
+			return true
+		}
+	}
+	return false
 }
 
 func dogfoodConflictPrompt(workDir, branch string, conflicts []string, detail string) string {
@@ -235,6 +317,27 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, resp.Conflicts, resp.Error)
 		return http.StatusConflict, resp
 	}
+	// A Fix-with-AI task can edit the resolution but its workspace-write
+	// sandbox cannot mutate .git/index. Retry is the user's explicit signal to
+	// accept those marker-free file choices. Stage only Git's unmerged paths;
+	// fail closed while a marker remains or inspection is not safely bounded.
+	recovered, pending, recoverErr := recoverResolvedDogfoodIndex(workDir)
+	if recoverErr != nil || len(pending) > 0 {
+		resp.Code = "DOGFOOD_GIT_CONFLICT_UNRESOLVED"
+		resp.Error = "The retained Dogfood conflict is not fully resolved yet."
+		resp.Remedy = "Finish resolving the named files with Fix with AI, then retry Dogfood mode."
+		resp.RequiresAgent = true
+		resp.Conflicts = pending
+		if len(resp.Conflicts) == 0 {
+			resp.Conflicts = parseConflictedFiles(workDir)
+		}
+		if recoverErr != nil {
+			resp.Output = recoverErr.Error()
+		}
+		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, resp.Conflicts, resp.Error+" "+resp.Output)
+		return http.StatusConflict, resp
+	}
+	resp.IndexRecovered = recovered
 
 	fetchOut, fetchErr := runGit(workDir, "fetch", "origin", "main")
 	if fetchErr != nil {

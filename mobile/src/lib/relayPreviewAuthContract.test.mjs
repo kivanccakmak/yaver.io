@@ -11,13 +11,25 @@ test("fresh relay settings repair a cached active path for iframe auth", () => {
   assert.match(setter, /if \(active\?\.password\) this\.activeRelayPassword = active\.password/);
 });
 
-test("browser preview URLs use the reconciled relay credential", () => {
+test("browser preview URLs never carry owner or relay credentials", () => {
   const start = source.indexOf("getDevServerBundleUrl(");
   const end = source.indexOf("// ── Container Sandbox", start);
   const method = source.slice(start, end);
-  assert.match(method, /const relayPassword = this\.resolvedRelayPasswordForUrl\(url\)/);
-  assert.match(method, /__rp=\$\{encodeURIComponent\(relayPassword\)\}/);
-  assert.doesNotMatch(method, /this\.activeRelayPassword\)/);
+  assert.match(method, /return `\$\{this\.baseUrl\}\$\{bundlePath\}`/);
+  assert.doesNotMatch(method, /token=|__rp|relayPassword|this\.token/);
+});
+
+test("every real mobile browser-preview surface authenticates the initial WebView request with headers", () => {
+  const files = [
+    new URL("../components/DevPreview.tsx", import.meta.url),
+    new URL("../../app/(tabs)/apps.tsx", import.meta.url),
+    new URL("../../app/(tabs)/project.tsx", import.meta.url),
+  ];
+  for (const file of files) {
+    const body = readFileSync(file, "utf8");
+    assert.match(body, /source=\{\{ uri: (?:bundleUrl|renderUrl), headers: [^}]+\.getAuthHeaders\(\) \}\}/,
+      `${file.pathname} must seed the relay's scoped HttpOnly cookie without URL credentials`);
+  }
 });
 
 test("relay query auth follows a known relay proxy URL before active state hydrates", () => {

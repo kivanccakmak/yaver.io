@@ -1849,12 +1849,11 @@ export class QuicClient {
   setRelayServers(servers: RelayServer[]): void {
     this.relayServers = servers.sort((a, b) => a.priority - b.priority);
     // A cached relay path may be restored before the authenticated settings
-    // fetch supplies this account's relay password. Header-authenticated API
-    // calls can still work in that half-state, but iframe/WebView URLs cannot
-    // send headers and omit __rp, so index.html loads while entry.bundle gets
-    // 401 (solid-black Browser Reload, 2026-08-23). Reconcile the live path
-    // whenever the fresh password-bearing list arrives; also replaces a stale
-    // credential after repairRelay refreshes the list.
+    // fetch supplies this account's relay password. Browser-preview initial
+    // requests now carry this value as a header so the relay can mint a scoped
+    // HttpOnly cookie for subresources; it must never be copied into the URL.
+    // Reconcile the live path whenever the fresh password-bearing list arrives;
+    // also replaces a stale credential after repairRelay refreshes the list.
     if (this.activeRelayUrl) {
       const active = this.relayServers.find(
         (relay) => relay.httpUrl.replace(/\/+$/, "") === this.activeRelayUrl!.replace(/\/+$/, ""),
@@ -9973,22 +9972,15 @@ export class QuicClient {
     return devReloadReachedTarget(result);
   }
 
-  /** Get the full URL for the dev server bundle (through relay if needed). */
+  /** Get the clean URL for the dev-server browser lane.
+   *
+   * The WebView's initial navigation carries getAuthHeaders(); an authenticated
+   * relay response mints a short-lived, device-scoped HttpOnly cookie for its
+   * subresources. Never copy either the owner bearer or relay password into a
+   * preview URL: URLs escape into navigation history, Referer headers, crash
+   * reports, screenshots, and guest-page JavaScript. */
   getDevServerBundleUrl(bundlePath: string): string {
-    let url = `${this.baseUrl}${bundlePath}`;
-    // A WebView cannot send an Authorization header, so authenticate via query
-    // params exactly like remoteDesktopFrameUrl / captureFrameUrl do: the agent
-    // promotes ?token= to a bearer, and the RELAY validates ?__rp=. Without
-    // these, loading the browser-lane preview through relay fails with
-    // "Unauthorized: relay password missing — sign in again to fetch it" — the
-    // relay drops the unauthenticated request before it ever reaches the agent.
-    const sep = url.includes("?") ? "&" : "?";
-    url += `${sep}token=${encodeURIComponent(this.token || "")}`;
-    const relayPassword = this.resolvedRelayPasswordForUrl(url);
-    if (relayPassword) {
-      url += `&__rp=${encodeURIComponent(relayPassword)}`;
-    }
-    return url;
+    return `${this.baseUrl}${bundlePath}`;
   }
 
   // ── Container Sandbox ───────────────────────────────────────────────

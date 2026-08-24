@@ -28,7 +28,8 @@ export interface MobileClientOptions {
    *  endpoints need `connect()` first. */
   agentBaseUrl?: string;
   /** Relay password for relay-backed agentBaseUrl targets. When set,
-   *  every agent request gets `__rp` unless the path already has it. */
+   *  every agent request carries the standard X-Relay-Password header.
+   *  Credentials must never be placed in URLs. */
   agentRelayPassword?: string;
 }
 
@@ -889,6 +890,90 @@ export class MobileClient {
     },
   };
 
+  /**
+   * Prove the browser-preview authentication path end to end.
+   *
+   * The document request uses the same bearer + relay headers as the real
+   * mobile WebView's initial navigation. The asset request intentionally uses
+   * only the short-lived relay cookie, matching browser sub-resource loading.
+   * Cookie values are kept in memory and never returned to callers or logs.
+   */
+  async probeRelayPreviewCookie(resourcePath: string): Promise<{
+    ok: boolean;
+    code: "PREVIEW_COOKIE_READY" | "PREVIEW_COOKIE_NOT_MINTED" | "PREVIEW_COOKIE_INVALID_SCOPE" | "PREVIEW_ASSET_REJECTED";
+    documentStatus: number;
+    assetStatus: number | null;
+    cookie: {
+      present: boolean;
+      httpOnly: boolean;
+      sameSiteLax: boolean;
+      secure: boolean;
+      pathScoped: boolean;
+    };
+  }> {
+    if (!resourcePath.startsWith("/") || resourcePath.startsWith("//")) {
+      throw new Error("probeRelayPreviewCookie needs a root-relative resource path");
+    }
+
+    const documentURL = new URL(this.agentURL("/dev/"));
+    const resourceURL = new URL(this.agentURL(resourcePath));
+    if (documentURL.origin !== resourceURL.origin) {
+      throw new Error("preview resource must stay on the configured agent origin");
+    }
+
+    const documentResponse = await fetch(documentURL, {
+      headers: this.authHeaders(),
+      redirect: "manual",
+    });
+    await documentResponse.body?.cancel();
+
+    const setCookie = documentResponse.headers.get("set-cookie") ?? "";
+    const cookieMatch = setCookie.match(/(?:^|,\s*)yaver_rp=([^;,\s]+)/i);
+    const expectedPath = documentURL.pathname.replace(/\/dev\/$/, "/");
+    const cookie = {
+      present: cookieMatch !== null,
+      httpOnly: /(?:^|;)\s*HttpOnly(?:;|$)/i.test(setCookie),
+      sameSiteLax: /(?:^|;)\s*SameSite=Lax(?:;|$)/i.test(setCookie),
+      secure: /(?:^|;)\s*Secure(?:;|$)/i.test(setCookie),
+      pathScoped: new RegExp(`(?:^|;)\\s*Path=${escapeRegExp(expectedPath)}(?:;|$)`, "i").test(setCookie),
+    };
+
+    if (!cookie.present) {
+      return {
+        ok: false,
+        code: "PREVIEW_COOKIE_NOT_MINTED",
+        documentStatus: documentResponse.status,
+        assetStatus: null,
+        cookie,
+      };
+    }
+
+    const requiresSecure = documentURL.protocol === "https:";
+    if (!cookie.httpOnly || !cookie.sameSiteLax || !cookie.pathScoped || (requiresSecure && !cookie.secure)) {
+      return {
+        ok: false,
+        code: "PREVIEW_COOKIE_INVALID_SCOPE",
+        documentStatus: documentResponse.status,
+        assetStatus: null,
+        cookie,
+      };
+    }
+
+    const assetResponse = await fetch(resourceURL, {
+      headers: { Cookie: `yaver_rp=${cookieMatch[1]}` },
+      redirect: "manual",
+    });
+    await assetResponse.body?.cancel();
+    const ok = assetResponse.status >= 200 && assetResponse.status < 400;
+    return {
+      ok,
+      code: ok ? "PREVIEW_COOKIE_READY" : "PREVIEW_ASSET_REJECTED",
+      documentStatus: documentResponse.status,
+      assetStatus: assetResponse.status,
+      cookie,
+    };
+  }
+
   // ── Repos ──────────────────────────────────────────────────────
   readonly repos = {
     clone: async (url: string, dir?: string, branch?: string): Promise<RepoCloneResult> => {
@@ -1046,6 +1131,19 @@ export class MobileClient {
       const res = await fetch(this.agentURL(p), { headers: this.authHeaders(), signal: opts?.signal });
       return { status: res.status, body: await safeJson(res) };
     },
+    head: async (p: string, opts?: { signal?: AbortSignal }) => {
+      const res = await fetch(this.agentURL(p), {
+        method: "HEAD",
+        headers: this.authHeaders(),
+        signal: opts?.signal,
+      });
+      return {
+        status: res.status,
+        contentType: res.headers.get("content-type"),
+        contentLength: res.headers.get("content-length"),
+        location: res.headers.get("location"),
+      };
+    },
     post: async (p: string, body?: any, opts?: { signal?: AbortSignal }) => {
       const res = await fetch(this.agentURL(p), {
         method: "POST",
@@ -1084,20 +1182,14 @@ export class MobileClient {
 
   // ── helpers ────────────────────────────────────────────────────
   private authHeaders(): Record<string, string> {
-    return this.opts.authToken ? { Authorization: "Bearer " + this.opts.authToken } : {};
+    const headers: Record<string, string> = {};
+    if (this.opts.authToken) headers.Authorization = "Bearer " + this.opts.authToken;
+    if (this.agentRelayPassword) headers["X-Relay-Password"] = this.agentRelayPassword;
+    return headers;
   }
   private agentURL(p: string): string {
     const base = this.agentBaseUrl ?? "http://127.0.0.1:18080";
-    const raw = base.replace(/\/$/, "") + (p.startsWith("/") ? p : "/" + p);
-    const relayPassword = this.agentRelayPassword;
-    if (!relayPassword || raw.includes("__rp=")) return raw;
-    try {
-      const u = new URL(raw);
-      u.searchParams.set("__rp", relayPassword);
-      return u.toString();
-    } catch {
-      return raw;
-    }
+    return base.replace(/\/$/, "") + (p.startsWith("/") ? p : "/" + p);
   }
   private absoluteUrl(base: string, p: string): string {
     return base.replace(/\/$/, "") + (p.startsWith("/") ? p : "/" + p);
@@ -1312,6 +1404,10 @@ export class MobileClient {
 
 async function safeJson(res: Response): Promise<any> {
   try { return await res.json(); } catch { return null; }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export default MobileClient;

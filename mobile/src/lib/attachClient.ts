@@ -179,9 +179,9 @@ export async function prepareDogfoodMode(
 
     // The agent normally reports /dev-web/, not an absolute URL. Resolve it
     // against THIS device's transport origin so a remote primary stays remote.
-    // Do not use getDevServerBundleUrl(): that legacy preview helper appends the
-    // owner's bearer to the query string. Dogfood instead uses the scoped,
-    // HttpOnly attach cookie minted above.
+    // Dogfood uses its scoped HttpOnly attach cookie minted above. Keep the
+    // reported path on this device's transport origin and never copy an owner
+    // credential into the URL.
     const agentOrigin = client.baseUrl.replace(/\/+$/, "") + "/";
     const reportedURL = new URL(bundlePath, agentOrigin);
     const url = new URL(`${reportedURL.pathname}${reportedURL.search}${reportedURL.hash}`, agentOrigin).toString();

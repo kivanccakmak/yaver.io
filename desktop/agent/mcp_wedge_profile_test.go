@@ -60,3 +60,26 @@ func TestWedgeProfileKeepsTheWedge(t *testing.T) {
 		}
 	}
 }
+
+func TestWedgeProfileKeepsOwnerDogfoodRendering(t *testing.T) {
+	t.Setenv("YAVER_MCP_PROFILE", "core")
+	tools := []map[string]interface{}{
+		{"name": "dogfood_status"},
+		{"name": "dogfood_rerender"},
+		{"name": "unrelated_private_cell"},
+	}
+	filtered := filterToWedgeProfile(tools)
+	have := map[string]bool{}
+	for _, tool := range filtered {
+		name, _ := tool["name"].(string)
+		have[name] = true
+	}
+	for _, name := range []string{"dogfood_status", "dogfood_rerender"} {
+		if !have[name] {
+			t.Fatalf("wedge profile dropped %q — owner Dogfood rendering must remain discoverable", name)
+		}
+	}
+	if have["unrelated_private_cell"] {
+		t.Fatal("wedge profile admitted an unrelated family while preserving Dogfood")
+	}
+}

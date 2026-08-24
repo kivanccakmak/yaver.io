@@ -449,8 +449,8 @@ export default function BuildsScreen() {
               <Pressable
                 key={p.path}
                 style={[styles.repoCard, {
-                  backgroundColor: isRunning ? "#0f1a0f" : c.bgCard,
-                  borderColor: isRunning ? "#22c55e44" : c.border,
+                  backgroundColor: isRunning ? c.surfaceMuted : c.bgCard,
+                  borderColor: isRunning ? c.successBorder : c.border,
                 }, cardGridItemStyle]}
                 onPress={() => handleStartProject(p.name, p.path)}
                 disabled={isStarting}
@@ -459,7 +459,7 @@ export default function BuildsScreen() {
                   <View style={[styles.repoDot, { backgroundColor: isRunning ? "#22c55e" : "#555" }]} />
                   <View style={{ flex: 1 }}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                      <Text style={[styles.repoName, { color: isRunning ? "#fff" : c.textSecondary }]}>{p.name}</Text>
+                      <Text style={[styles.repoName, { color: isRunning ? c.textPrimary : c.textSecondary }]}>{p.name}</Text>
                       {p.framework && (
                         <View style={[styles.frameworkChip, isRunning && { backgroundColor: "#22c55e22", borderColor: "#22c55e44" }]}>
                           <Text style={[styles.frameworkChipText, isRunning && { color: "#22c55e" }]}>{p.framework}</Text>

@@ -343,7 +343,7 @@ export default function ProjectDetailScreen() {
               <Text style={{ color: c.textMuted, fontSize: 11 }} numberOfLines={1}>{framework || "web"}</Text>
             </View>
             <WebView
-              source={{ uri: renderUrl }}
+              source={{ uri: renderUrl, headers: quicClient.getAuthHeaders() }}
               style={{ flex: 1, backgroundColor: c.bg }}
               javaScriptEnabled
               domStorageEnabled
