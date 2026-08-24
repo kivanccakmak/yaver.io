@@ -163,7 +163,7 @@ func setWebviewAuthCookie(w http.ResponseWriter, r *http.Request, deviceID, secr
 	if secure {
 		sameSite = http.SameSiteNoneMode
 	}
-	http.SetCookie(w, &http.Cookie{
+	cookie := (&http.Cookie{
 		Name:     webviewCookieName,
 		Value:    mintWebviewCookieValue(deviceID, secret, expiry),
 		Path:     webviewCookiePath(deviceID),
@@ -172,11 +172,14 @@ func setWebviewAuthCookie(w http.ResponseWriter, r *http.Request, deviceID, secr
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: sameSite,
-		// CHIPS keeps the iframe capability inside the top-level Yaver site's
-		// partition. It remains HttpOnly, short-lived, signed, and device-path
-		// scoped; a different tenant/device still cannot replay it.
-		Partitioned: secure,
-	})
+	}).String()
+	if secure {
+		// Go 1.23 added http.Cookie.Partitioned, while the published relay
+		// Docker lane deliberately remains on Go 1.22. Emit the standardized
+		// flag explicitly so both build lanes produce the same hardened cookie.
+		cookie += "; Partitioned"
+	}
+	w.Header().Add("Set-Cookie", cookie)
 }
 
 // webviewCookieAuthorizes reports whether the request carries a valid cookie for
