@@ -88,6 +88,11 @@ fi
 (cd "$TVOS_DIR" && xcodegen generate)
 
 EXTRA_SETTINGS=()
+# tvOS uses public Swift packages. In a headless session Xcode's default
+# keychain provider can block forever asking Security.framework for an
+# irrelevant GitHub credential before it prints any archive output. Force the
+# non-interactive provider and system Git for every build lane.
+PACKAGE_AUTH_SETTINGS=(-packageAuthorizationProvider netrc -scmProvider system)
 if [ -n "$MARKETING_VERSION" ]; then
   EXTRA_SETTINGS+=(MARKETING_VERSION="$MARKETING_VERSION")
 fi
@@ -107,6 +112,7 @@ if [ "$SIM_MODE" = "1" ]; then
     -sdk appletvsimulator \
     -destination "platform=tvOS Simulator,id=$SIM_TARGET" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
+    "${PACKAGE_AUTH_SETTINGS[@]}" \
     CODE_SIGNING_ALLOWED=NO \
     ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
     build
@@ -148,6 +154,7 @@ if [ "$DEVICE_MODE" = "1" ]; then
     -sdk appletvos \
     -destination "generic/platform=tvOS" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
+    "${PACKAGE_AUTH_SETTINGS[@]}" \
     CODE_SIGN_STYLE=Automatic \
     DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
     -allowProvisioningUpdates \
@@ -185,6 +192,7 @@ if [ "$UPLOAD" != "1" ]; then
     -sdk appletvos \
     -destination "generic/platform=tvOS" \
     -derivedDataPath "$DERIVED_DATA_PATH" \
+    "${PACKAGE_AUTH_SETTINGS[@]}" \
     CODE_SIGNING_ALLOWED=NO \
     ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
     build
@@ -253,6 +261,7 @@ xcodebuild -project "$TVOS_DIR/YaverTV.xcodeproj" \
   -destination "generic/platform=tvOS" \
   -archivePath "$ARCHIVE_PATH" \
   -derivedDataPath "$DERIVED_DATA_PATH" \
+  "${PACKAGE_AUTH_SETTINGS[@]}" \
   "${SIGNING_SETTINGS[@]}" \
   ${ALLOW_PROVISIONING_UPDATES[@]+"${ALLOW_PROVISIONING_UPDATES[@]}"} \
   ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \

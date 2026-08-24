@@ -102,6 +102,8 @@ grep -q 'APPLE_XCODE_AUTH_MODE.*api-key' "$tvos_deploy" || \
   fail "tvOS API-key deploys must avoid the expirable Xcode account upload session"
 grep -q -- '--type appletvos --apiKey' "$tvos_deploy" || \
   fail "tvOS API-key deploys must validate/upload the exported IPA with altool"
+grep -q 'PACKAGE_AUTH_SETTINGS=(-packageAuthorizationProvider netrc -scmProvider system)' "$tvos_deploy" || \
+  fail "tvOS public package resolution must not block on the login keychain in headless deploys"
 
 # A clean mobile checkout has no node_modules. Dependency self-healing must run
 # before either Node-based target injector, and must include their xcode module.
