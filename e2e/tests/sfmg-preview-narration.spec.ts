@@ -174,7 +174,15 @@ test.describe("sfmg preview narrates its wait", () => {
         waitUntil: "domcontentloaded",
         timeout: 60_000,
       });
-      await page.waitForTimeout(18_000);
+      // Agent restarts are part of the real update path under test. The RN-web
+      // transport may still be negotiating when the document has already
+      // hydrated, so a fixed sleep can grade an empty, Connecting inventory as
+      // though it were the preview. Require the operation-level connection
+      // signal before asking the Projects surface for sfmg.
+      await expect(page.getByText(/^Connected$/).first(), "mobile transport reaches the selected box").toBeVisible({
+        timeout: 60_000,
+      });
+      await page.waitForTimeout(2_000);
 
       const body = (await page.locator("body").innerText().catch(() => "")) || "";
       test.skip(
