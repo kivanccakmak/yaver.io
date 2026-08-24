@@ -51,3 +51,9 @@ test("desktop companion bootstrap is verified, best-effort, and reversible", () 
   assert.match(source, /YAVER_SKIP_POSTINSTALL_DESKTOP/);
   assert.match(source, /installedDesktopCandidates/);
 });
+
+test("Linux global upgrades bounce both supported system service names", () => {
+  assert.match(source, /for \(const unit of \["yaver", "yaver-agent"\]\)/);
+  assert.match(source, /systemctl is-active \$\{unit\}/);
+  assert.match(source, /systemctl restart \$\{unit\}/);
+});

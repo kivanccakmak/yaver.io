@@ -463,14 +463,20 @@ function bounceRunningAgent() {
       log("Restarted yaver.service (systemd user unit).");
       return;
     } catch (_) {}
-    try {
-      execSync(
-        `systemctl is-active yaver-agent >/dev/null 2>&1 && systemctl restart yaver-agent`,
-        { stdio: "ignore", shell: "/bin/sh" },
-      );
-      log("Restarted yaver-agent.service (systemd system unit).");
-      return;
-    } catch (_) {}
+    // Both names are shipped in the wild: managed/Talos boxes use the system
+    // `yaver.service`, while older installers use `yaver-agent.service`.
+    // Checking only the latter left a successful npm upgrade serving the old
+    // Go process until somebody manually restarted the box.
+    for (const unit of ["yaver", "yaver-agent"]) {
+      try {
+        execSync(
+          `systemctl is-active ${unit} >/dev/null 2>&1 && systemctl restart ${unit}`,
+          { stdio: "ignore", shell: "/bin/sh" },
+        );
+        log(`Restarted ${unit}.service (systemd system unit).`);
+        return;
+      } catch (_) {}
+    }
   } catch (err) {
     // Best-effort.
   }
