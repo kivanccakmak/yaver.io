@@ -59,15 +59,14 @@ func injectScreenContextProbe(html string) string {
 	}
 	// Only touch something that is plausibly an HTML document. A JSON error body
 	// or a JS chunk that reached us by mistake must pass through untouched.
-	lower := strings.ToLower(html)
-	if !strings.Contains(lower, "<html") && !strings.Contains(lower, "<body") && !strings.Contains(lower, "<head") {
+	if indexASCIIFold(html, "<html") < 0 && indexASCIIFold(html, "<body") < 0 && indexASCIIFold(html, "<head") < 0 {
 		return html
 	}
 	tag := screenContextProbeTag()
-	if i := strings.LastIndex(lower, "</body>"); i >= 0 {
+	if i := lastIndexASCIIFold(html, "</body>"); i >= 0 {
 		return html[:i] + tag + html[i:]
 	}
-	if i := strings.LastIndex(lower, "</head>"); i >= 0 {
+	if i := lastIndexASCIIFold(html, "</head>"); i >= 0 {
 		return html[:i] + tag + html[i:]
 	}
 	return html + tag

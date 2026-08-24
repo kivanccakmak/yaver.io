@@ -919,8 +919,8 @@ func relativizeAbsoluteAssetPaths(html []byte) []byte {
 // (very unusual; expo export always emits <head>).
 func injectBaseHref(html []byte, href string) []byte {
 	tag := []byte(`<base href="` + href + `" />`)
-	lower := strings.ToLower(string(html))
-	if idx := strings.Index(lower, "<head>"); idx >= 0 {
+	htmlString := string(html)
+	if idx := indexASCIIFold(htmlString, "<head>"); idx >= 0 {
 		insertAt := idx + len("<head>")
 		out := make([]byte, 0, len(html)+len(tag))
 		out = append(out, html[:insertAt]...)
@@ -928,7 +928,7 @@ func injectBaseHref(html []byte, href string) []byte {
 		out = append(out, html[insertAt:]...)
 		return out
 	}
-	if idx := strings.Index(lower, "<head"); idx >= 0 {
+	if idx := indexASCIIFold(htmlString, "<head"); idx >= 0 {
 		if end := strings.Index(string(html[idx:]), ">"); end >= 0 {
 			insertAt := idx + end + 1
 			out := make([]byte, 0, len(html)+len(tag))

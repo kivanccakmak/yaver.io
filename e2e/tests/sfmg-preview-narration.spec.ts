@@ -70,6 +70,15 @@ test.describe("sfmg preview narrates its wait", () => {
     const ctx = await browser.newContext({ ...devices[descriptorName] });
     const page = await ctx.newPage();
     let browserLaneAssetFailure = "";
+    const frameErrors: string[] = [];
+    const safeError = (value: string) => value
+      .replace(/https?:\/\/\S+/gi, "[url]")
+      .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+      .slice(0, 240);
+    page.on("console", (message) => {
+      if (message.type() === "error") frameErrors.push(safeError(message.text()));
+    });
+    page.on("pageerror", (error) => frameErrors.push(safeError(`${error.name}: ${error.message}`)));
     page.on("response", (response: Response) => {
       const url = response.url();
       // Expo may use the main /dev/ lane (platform:web) or the /dev-web/
@@ -185,6 +194,19 @@ test.describe("sfmg preview narrates its wait", () => {
       // "Open in Yaver" is the action that opens the preview, it appears only
       // where a preview can be opened, and it is what a user taps. Assert on
       // the verb, not the noun.
+      await page.evaluate(() => {
+        const scope = window as typeof window & { __yaverPreviewMessageTypes?: string[] };
+        scope.__yaverPreviewMessageTypes = [];
+        window.addEventListener("message", (event) => {
+          const raw = event.data;
+          let parsed: any = raw;
+          if (typeof raw === "string") {
+            try { parsed = JSON.parse(raw); } catch { return; }
+          }
+          const type = String(parsed?.t || parsed?.type || "").slice(0, 80);
+          if (type) scope.__yaverPreviewMessageTypes!.push(type);
+        });
+      });
       const escapedProject = PROJECT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const openBtn = page
         .getByRole("button", { name: new RegExp(`Open .*${escapedProject}.* in Yaver`, "i") })
@@ -320,11 +342,46 @@ test.describe("sfmg preview narrates its wait", () => {
           "A box-side doctor=rendered verdict cannot satisfy this assertion.",
       }).toBe(true);
 
-      const after = (await page.locator("body").innerText().catch(() => "")) || "";
+      const previewHandle = await page.locator('iframe[title="preview"]').first().elementHandle();
+      const previewFrame = await previewHandle?.contentFrame();
+      const injectedProbe = await previewFrame?.evaluate(() => {
+        const marker = document.querySelector('[data-yaver-screen-probe="1"]');
+        let syntax = "ok";
+        try { new Function(marker?.textContent || ""); } catch (error: any) { syntax = String(error?.message || error); }
+        return {
+          ran: Boolean((window as any).__yaverScreenProbe),
+          marker: Boolean(marker),
+          markerParent: marker?.parentElement?.tagName || "",
+          markerBytes: marker?.textContent?.length || 0,
+          syntax,
+          readyState: document.readyState,
+          path: location.pathname,
+        };
+      }).catch(() => null);
       expect(
-        /\d+(:\d\d)?s? elapsed/i.test(after),
-        "the wait panel is still covering a preview that has already painted",
-      ).toBe(false);
+        injectedProbe?.ran,
+        `the served HTML contained the paint probe but the iframe never executed it: ${JSON.stringify(injectedProbe)} errors=${JSON.stringify(frameErrors.slice(-5))}`,
+      ).toBe(true);
+
+      await expect.poll(async () => page.evaluate(() => {
+        const scope = window as typeof window & { __yaverPreviewMessageTypes?: string[] };
+        return scope.__yaverPreviewMessageTypes?.includes("yaver-rendered") || false;
+      }), {
+        timeout: 10_000,
+        message: "the painted guest never posted its yaver-rendered signal to the phone frame",
+      }).toBe(true);
+
+      // The in-frame probe and React state update are asynchronous with the
+      // CDP DOM observation above. Give that named signal one short delivery
+      // window; checking in the same tick races a healthy paint by milliseconds
+      // and turns the harness red while the overlay is already being removed.
+      await expect.poll(async () => {
+        const after = (await page.locator("body").innerText().catch(() => "")) || "";
+        return /\d+(:\d\d)?s? elapsed/i.test(after);
+      }, {
+        timeout: 10_000,
+        message: "the wait panel is still covering a preview that has already painted",
+      }).toBe(false);
     } finally {
       await ctx.close();
       await browser.close();

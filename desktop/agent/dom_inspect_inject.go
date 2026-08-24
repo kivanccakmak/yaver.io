@@ -43,15 +43,14 @@ func injectDomInspectProbe(html string) string {
 	if html == "" || strings.Contains(html, domProbeMarker) {
 		return html
 	}
-	lower := strings.ToLower(html)
-	if !strings.Contains(lower, "<html") && !strings.Contains(lower, "<body") && !strings.Contains(lower, "<head") {
+	if indexASCIIFold(html, "<html") < 0 && indexASCIIFold(html, "<body") < 0 && indexASCIIFold(html, "<head") < 0 {
 		return html
 	}
 	tag := domInspectProbeTag()
-	if i := strings.LastIndex(lower, "</body>"); i >= 0 {
+	if i := lastIndexASCIIFold(html, "</body>"); i >= 0 {
 		return html[:i] + tag + html[i:]
 	}
-	if i := strings.LastIndex(lower, "</head>"); i >= 0 {
+	if i := lastIndexASCIIFold(html, "</head>"); i >= 0 {
 		return html[:i] + tag + html[i:]
 	}
 	return html + tag

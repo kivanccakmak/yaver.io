@@ -212,12 +212,11 @@ func injectPreviewAuthShim(html string) string {
 		return html
 	}
 	marked := strings.Replace(previewAuthShimJS, "<script>", `<script data-yaver="yaver-preview-auth-shim">`, 1)
-	lower := strings.ToLower(html)
-	if i := strings.Index(lower, "<head>"); i >= 0 {
+	if i := indexASCIIFold(html, "<head>"); i >= 0 {
 		at := i + len("<head>")
 		return html[:at] + marked + html[at:]
 	}
-	if i := strings.Index(lower, "<html"); i >= 0 {
+	if i := indexASCIIFold(html, "<html"); i >= 0 {
 		if j := strings.IndexByte(html[i:], '>'); j >= 0 {
 			at := i + j + 1
 			return html[:at] + marked + html[at:]

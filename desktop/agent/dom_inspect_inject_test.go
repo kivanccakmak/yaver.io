@@ -28,6 +28,20 @@ func TestInjectDomInspectProbe_IsIdempotent(t *testing.T) {
 	}
 }
 
+func TestPreviewProbeCompositionPreservesBothScriptBoundariesWithUnicode(t *testing.T) {
+	html := `<!doctype html><HTML><HEAD></HEAD><BODY><p>İleri →</p></BODY></HTML>`
+	got := injectDomInspectProbe(injectScreenContextProbe(html))
+	if !strings.Contains(got, `</script><script data-yaver-dom-probe="1">`) {
+		t.Fatal("screen and DOM probes merged into one invalid script")
+	}
+	if strings.Contains(got, `</script<script`) || strings.Contains(got, `</script>>`) {
+		t.Fatal("Unicode case folding shifted an HTML insertion byte offset")
+	}
+	if lastIndexASCIIFold(got, "</body>") < 0 {
+		t.Fatal("mixed-case closing body tag was not preserved")
+	}
+}
+
 func TestInjectDomInspectProbe_LeavesNonHTMLAlone(t *testing.T) {
 	for _, in := range []string{
 		``,
