@@ -71,6 +71,10 @@ says no” failure. Browser is similarly limited to browser-capable stacks.
 - Mobile contract tests cover all three Yaver lanes, device switching,
   runner/model controls, overlay mounting, native WebView escape, and Fast
   Reload adjacency. TypeScript checks the integrated surfaces.
+- A real RN-web `iPhone 15` device context renders the Develop Yaver screen
+  with Device, Runner, Browser, Hermes, and WebRTC controls. With no browser
+  device credential, WebRTC is visibly NAMED unavailable instead of spinning;
+  `e2e/tests/dogfood-mobile-live.spec.ts` preserves this closed-loop arc.
 - The guard is also exercised with a negative control before release: break the
   asserted native escape marker, observe the parity test fail, restore it, and
   rerun green.
