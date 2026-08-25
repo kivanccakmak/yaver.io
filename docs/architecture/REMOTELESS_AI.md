@@ -5,6 +5,14 @@ aiFix default. **Handoff to next session: `docs/handoffs/remoteless-ai-2026-08-2
 (repo state, concurrent-session WIP, what's left for P1–P4). See AGENTS.md: this doc is
 context, the code is the source of truth — grep the symbols before trusting them.
 
+Temporary rollout gate (2026-08-25): every executable remoteless lane is
+owner-preview-only. Mobile and tvOS consume the backend-computed `user.isOwner`
+bit; the Go agent stores that same `/auth/validate` entitlement and refuses,
+hides, and declines to probe the `remoteless` runner otherwise. Cached
+`local-only` state is migrated back to `remote-preferred` for non-owners. The
+owner identity remains runtime configuration (`CLOUD_PREVIEW_OWNER_EMAILS`),
+never a literal in this public repository.
+
 ## Goal
 
 Make any owned remote box **usable and fixable from every surface** (electron desktop, mobile,

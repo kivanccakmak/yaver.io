@@ -2212,13 +2212,14 @@ export default function AppsScreen() {
     if (!devReloadReachedTarget(result)) {
       setWebViewLoading(false);
       Alert.alert("Reload failed", describeDevReloadResult(result));
-      return;
+      return false;
     }
     setQuickActionStatus(describeDevReloadResult(result));
     setTimeout(() => setQuickActionStatus(null), 3000);
     if (!nativeHermes) {
       setWebViewKey(k => k + 1);
     }
+    return true;
   }, [devStatus?.framework, previewClient]);
 
   const handleRequestScreenshot = useCallback(async () => {
@@ -3706,6 +3707,8 @@ export default function AppsScreen() {
               <BrowserVibeBubble
                 projectPath={devStatus?.workDir}
                 projectName={(runningProject || devStatus?.framework || "Preview").split(" / ")[0]}
+                onExitPreview={() => setShowWebView(false)}
+                onReload={handleReload}
               />
           </View>
         </View>

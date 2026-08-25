@@ -3251,6 +3251,7 @@ func runServe(args []string) {
 	taskMgr.AuthToken = cfg.AuthToken
 	taskMgr.DeviceID = cfg.DeviceID
 	taskMgr.OwnerEmail = ownerEmail
+	taskMgr.setOwnerPreviewAccess(ownerInfo != nil && ownerInfo.IsOwner)
 	// Enforce dataPolicy.retentionDays from a local (air-gap) company policy by
 	// periodically pruning finished tasks past the retention window. No-op when
 	// no local policy / retention is configured. Idempotent.
@@ -3418,6 +3419,7 @@ func runServe(args []string) {
 					continue
 				}
 				httpServer.SetOwnerUserID(info.UserID)
+				taskMgr.setOwnerPreviewAccess(info.IsOwner)
 				log.Printf("[owner-self-heal] Network recovered — adopted owner %s (%s); box is now owner-reachable.", info.UserID, info.Email)
 				return
 			}

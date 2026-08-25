@@ -679,9 +679,9 @@ export class YaverFeedback {
     return client.getVibingEligibility(YaverFeedback.projectIdentity());
   }
 
-  static async vibing(prompt: string): Promise<{ taskId: string }> {
+  static async vibing(prompt: string, routing?: { runner?: string; model?: string }): Promise<{ taskId: string }> {
     const client = await YaverFeedback.getClient();
-    return client.vibing(prompt, YaverFeedback.projectIdentity());
+    return client.vibing(prompt, { ...YaverFeedback.projectIdentity(), ...routing });
   }
 
   /** Fetch a task by ID. Used by the chat surface to poll output growth
@@ -718,6 +718,7 @@ export class YaverFeedback {
     warning?: string;
     error?: string;
     isDefault: boolean;
+    models: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean }>;
   }>> {
     const client = await YaverFeedback.getClient();
     return client.getAvailableRunners();
@@ -726,6 +727,15 @@ export class YaverFeedback {
   static async switchRunner(runnerId: string): Promise<{ ok: boolean; runnerId: string; runner: string }> {
     const client = await YaverFeedback.getClient();
     return client.switchRunner(runnerId);
+  }
+
+  static async installRunner(runner: string): Promise<RunnerAuthSetupResult> {
+    const client = await YaverFeedback.getClient();
+    return client.setupRunnerAuth({
+      runner,
+      install_if_missing: true,
+      allow_install_only: true,
+    });
   }
 
   static async setupRunnerAuth(runner: string): Promise<RunnerAuthSetupResult | null> {
@@ -1825,6 +1835,12 @@ export class YaverFeedback {
             </div>
             <div id="yaver-fb-runner-summary" class="yvr-fb-runner-summary">Checking agent…</div>
           </div>
+          <label class="yvr-fb-routing-picker-label" for="yaver-fb-routing-picker">
+            Runner and model
+            <select id="yaver-fb-routing-picker" class="yvr-fb-routing-picker" aria-label="Runner and model for Vibing" disabled>
+              <option>Checking available runners…</option>
+            </select>
+          </label>
             <div id="yaver-fb-vibe-onboarding" class="yvr-fb-vibe-onboarding">
             <div id="yaver-fb-vibe-steps" class="yvr-fb-vibe-steps"></div>
             <div class="yvr-fb-vibe-stage">
@@ -1863,11 +1879,54 @@ export class YaverFeedback {
       const machinePill = overlay.querySelector<HTMLButtonElement>('#yaver-fb-machine-pill')!;
       const runnerActions = overlay.querySelector<HTMLDivElement>('#yaver-fb-runner-actions')!;
       const runnerSummary = overlay.querySelector<HTMLDivElement>('#yaver-fb-runner-summary')!;
+      const routingPicker = overlay.querySelector<HTMLSelectElement>('#yaver-fb-routing-picker')!;
       const vibeIntro = overlay.querySelector<HTMLParagraphElement>('#yaver-fb-vibe-intro')!;
       const vibeOnboarding = overlay.querySelector<HTMLDivElement>('#yaver-fb-vibe-onboarding')!;
       const vibeSteps = overlay.querySelector<HTMLDivElement>('#yaver-fb-vibe-steps')!;
       const vibeStageCopy = overlay.querySelector<HTMLDivElement>('#yaver-fb-vibe-stage-copy')!;
       let cachedRunners: Awaited<ReturnType<typeof YaverFeedback.getAvailableRunners>> = [];
+      let selectedRunnerId = '';
+      let selectedModelId = '';
+
+      try {
+        const saved = JSON.parse(localStorage.getItem('yaver_feedback_vibing_route') || '{}') as { runner?: string; model?: string };
+        selectedRunnerId = saved.runner || '';
+        selectedModelId = saved.model || '';
+      } catch { /* optional preference */ }
+
+      const persistRouting = () => {
+        try {
+          localStorage.setItem('yaver_feedback_vibing_route', JSON.stringify({ runner: selectedRunnerId, model: selectedModelId }));
+        } catch { /* private browsing / denied storage */ }
+      };
+
+      const renderRoutingPicker = (runners: typeof cachedRunners) => {
+        const ready = runners.filter((runner) => runner.ready);
+        const selectedRunner = ready.find((runner) => runner.id === selectedRunnerId)
+          || ready.find((runner) => runner.isDefault)
+          || ready[0];
+        if (!selectedRunner) {
+          routingPicker.innerHTML = '<option>No ready runner</option>';
+          routingPicker.disabled = true;
+          return;
+        }
+        selectedRunnerId = selectedRunner.id;
+        const models = selectedRunner.models || [];
+        const selectedModel = models.find((model) => model.id === selectedModelId)
+          || models.find((model) => model.isDefault)
+          || models[0];
+        selectedModelId = selectedModel?.id || '';
+        routingPicker.innerHTML = ready.flatMap((runner) => {
+          const runnerModels = runner.models?.length ? runner.models : [{ id: '', name: 'runner default' }];
+          return runnerModels.map((model) => {
+            const value = `${runner.id}::${model.id}`;
+            const selected = runner.id === selectedRunnerId && model.id === selectedModelId ? ' selected' : '';
+            return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(runner.name || runner.id)} · ${escapeHtml(model.name || model.id || 'runner default')}</option>`;
+          });
+        }).join('');
+        routingPicker.disabled = false;
+        persistRouting();
+      };
 
       const renderRunnerCards = (runners: typeof cachedRunners) => {
         if (!runners.length) {
@@ -1875,7 +1934,9 @@ export class YaverFeedback {
         }
         return runners
           .map((runner) => {
-            const actionLabel = runner.isDefault
+            const actionLabel = !runner.installed
+              ? 'Install'
+              : runner.isDefault
               ? 'Primary'
               : runner.ready
                 ? 'Confirm'
@@ -1900,14 +1961,30 @@ export class YaverFeedback {
       };
 
       const renderRunnerSummary = (runners: typeof cachedRunners) => {
-        const primary = runners.find((runner) => runner.isDefault) || runners.find((runner) => runner.ready) || runners[0];
+        const primary = runners.find((runner) => runner.id === selectedRunnerId) || runners.find((runner) => runner.isDefault) || runners.find((runner) => runner.ready) || runners[0];
         if (!primary) {
           runnerSummary.textContent = 'No agent';
           return;
         }
         runnerSummary.textContent = primary.ready
-          ? `${primary.name || primary.id} ready`
+          ? `${primary.name || primary.id}${selectedModelId ? ` · ${selectedModelId}` : ''}`
           : `${primary.name || primary.id} needs setup`;
+      };
+
+      routingPicker.onchange = async () => {
+        const [runner, model = ''] = routingPicker.value.split('::');
+        if (!runner) return;
+        selectedRunnerId = runner;
+        selectedModelId = model;
+        persistRouting();
+        const row = cachedRunners.find((item) => item.id === runner);
+        try {
+          if (row && !row.isDefault) await YaverFeedback.switchRunner(runner);
+          renderRunnerSummary(cachedRunners);
+          setStatus(`Vibing will use ${row?.name || runner}${model ? ` · ${model}` : ''}.`);
+        } catch (err) {
+          setStatus(err instanceof Error ? err.message : `Could not select ${runner}.`);
+        }
       };
 
       const renderOnboarding = (eligibility?: Awaited<ReturnType<typeof YaverFeedback.getVibingEligibility>>, errorMessage?: string) => {
@@ -2027,6 +2104,7 @@ export class YaverFeedback {
         try {
           const runners = await YaverFeedback.getAvailableRunners();
           cachedRunners = runners;
+          renderRoutingPicker(runners);
           renderRunnerSummary(runners);
           runnerActions.innerHTML = renderRunnerCards(runners);
           runnerActions.querySelectorAll<HTMLButtonElement>('[data-runner]').forEach((button) => {
@@ -2037,7 +2115,15 @@ export class YaverFeedback {
               setActionsBusy(true);
               try {
                 const selected = cachedRunners.find((item) => item.id === runner);
-                if (selected?.ready) {
+                if (selected && !selected.installed) {
+                  setStatus(`Installing ${selected.name || runner} on the remote machine…`);
+                  const result = await YaverFeedback.installRunner(runner);
+                  if (!result.ok) throw new Error(result.detail || `Could not install ${runner}.`);
+                  setStatus(result.detail || `${selected.name || runner} installed.`);
+                } else if (selected?.ready) {
+                  selectedRunnerId = runner;
+                  selectedModelId = selected.models.find((model) => model.isDefault)?.id || selected.models[0]?.id || '';
+                  persistRouting();
                   setStatus(`Setting ${runner} as the primary agent…`);
                   const result = await YaverFeedback.switchRunner(runner);
                   setStatus(`${result.runner} is now the primary agent.`);
@@ -2065,6 +2151,8 @@ export class YaverFeedback {
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Could not load agent selection.';
           cachedRunners = [];
+          routingPicker.innerHTML = `<option>${escapeHtml(message)}</option>`;
+          routingPicker.disabled = true;
           renderRunnerSummary([]);
           renderOnboarding(undefined, message);
           runnerActions.innerHTML = `<div class="yvr-fb-empty">${escapeHtml(message)}</div>`;
@@ -2531,7 +2619,10 @@ export class YaverFeedback {
             // and surfaces the precise reason in the response. That
             // keeps the chat composer non-blocking for the user.
             setChatStatus('Creating vibing task…');
-            const result = await YaverFeedback.vibing(promptText);
+            const result = await YaverFeedback.vibing(promptText, {
+              runner: selectedRunnerId || undefined,
+              model: selectedModelId || undefined,
+            });
             currentTaskId = result.taskId;
             appendUserBubble(promptText);
             appendAgentBubble();
@@ -3557,6 +3648,16 @@ export class YaverFeedback {
         background: rgba(59,130,246,0.12); color: #bfdbfe;
         font-size: 11px; font-weight: 600; text-align: right;
       }
+      .yvr-fb-routing-picker-label {
+        display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px;
+        align-items: center; color: #94a3b8; font-size: 11px; font-weight: 600;
+      }
+      .yvr-fb-routing-picker {
+        min-width: 0; width: 100%; padding: 8px 28px 8px 10px;
+        border-radius: 10px; border: 1px solid rgba(129,140,248,0.34);
+        background: #111827; color: #e0e7ff; font: inherit; font-size: 12px;
+      }
+      .yvr-fb-routing-picker:disabled { opacity: 0.58; }
       .yvr-fb-vibe-onboarding {
         display: grid; gap: 10px; padding: 12px;
         border-radius: 14px; border: 1px solid rgba(148,163,184,0.16);

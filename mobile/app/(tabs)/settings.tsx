@@ -2158,7 +2158,7 @@ export default function SettingsScreen() {
                       </Text>
                     ) : null}
                   </View>
-                  <Pressable
+                  {user?.isOwner === true ? <Pressable
                     onPress={async () => {
                       try {
                         await setCodingMode(codingMode === "local-only" ? "remote-preferred" : "local-only");
@@ -2176,7 +2176,7 @@ export default function SettingsScreen() {
                     <Text style={{ color: c.accent, fontWeight: "600", fontSize: 13 }}>
                       {codingMode === "local-only" ? "Use remote" : "No remote box"}
                     </Text>
-                  </Pressable>
+                  </Pressable> : null}
                 </View>
                 <View style={[styles.aboutRow, { borderTopWidth: 1, borderTopColor: c.border }]}>
                   <View style={{ flex: 1 }}>

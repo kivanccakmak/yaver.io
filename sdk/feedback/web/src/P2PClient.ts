@@ -149,6 +149,7 @@ export class P2PClient {
     install_if_missing?: boolean;
     codex_login?: boolean;
     setup_mcp?: boolean;
+    allow_install_only?: boolean;
   }): Promise<RunnerAuthSetupResult> {
     const resp = await fetch(`${this.baseUrl}/runner-auth/setup`, {
       method: 'POST',
@@ -175,6 +176,7 @@ export class P2PClient {
     warning?: string;
     error?: string;
     isDefault: boolean;
+    models: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean }>;
   }>> {
     const resp = await fetch(`${this.baseUrl}/agent/runners`, {
       method: 'GET',
@@ -196,6 +198,16 @@ export class P2PClient {
       warning: typeof row.warning === 'string' ? row.warning : undefined,
       error: typeof row.error === 'string' ? row.error : undefined,
       isDefault: row.isDefault === true,
+      models: Array.isArray(row.models)
+        ? (row.models as Array<Record<string, unknown>>)
+            .filter((model) => typeof model.id === 'string')
+            .map((model) => ({
+              id: model.id as string,
+              name: typeof model.name === 'string' ? model.name : undefined,
+              provider: typeof model.provider === 'string' ? model.provider : undefined,
+              isDefault: model.isDefault === true,
+            }))
+        : [],
     }));
   }
 
@@ -588,7 +600,7 @@ export class P2PClient {
 
   async vibing(
     prompt: string,
-    opts?: { projectName?: string; projectPath?: string; bundleId?: string },
+    opts?: { projectName?: string; projectPath?: string; bundleId?: string; runner?: string; model?: string },
   ): Promise<{ taskId: string }> {
     const resp = await fetch(`${this.baseUrl}/vibing/execute`, {
       method: 'POST',
@@ -601,6 +613,8 @@ export class P2PClient {
         projectName: opts?.projectName,
         projectPath: opts?.projectPath ?? '',
         bundleId: opts?.bundleId,
+        runner: opts?.runner,
+        model: opts?.model,
       }),
     });
     if (!resp.ok) {

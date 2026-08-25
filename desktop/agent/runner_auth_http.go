@@ -28,6 +28,15 @@ func (s *HTTPServer) handleRunnerAuthStatus(w http.ResponseWriter, r *http.Reque
 		jsonError(w, http.StatusInternalServerError, "runner auth status: "+err.Error())
 		return
 	}
+	if s.taskMgr == nil || !s.taskMgr.ownerPreviewAccessAllowed() {
+		filtered := rows[:0]
+		for _, row := range rows {
+			if normalizeRunnerID(row.ID) != "remoteless" {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	}
 	if r.URL.Query().Get("live") == "1" {
 		rows = applyLiveRunnerAuthProbe(rows, r.URL.Query().Get("runner"))
 	}

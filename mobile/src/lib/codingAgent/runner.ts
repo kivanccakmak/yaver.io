@@ -234,6 +234,11 @@ interface OAIToolCall {
 interface OAIMessage {
   role: "system" | "user" | "assistant" | "tool";
   content?: string | null;
+  /** DeepSeek V4 thinking-mode tool turns must be echoed back verbatim on the
+   *  next request. Keeping this field in the typed message contract prevents a
+   *  future response normalizer from silently dropping it and turning the
+   *  second tool round into HTTP 400. */
+  reasoning_content?: string | null;
   tool_calls?: OAIToolCall[];
   tool_call_id?: string;
 }
@@ -266,11 +271,23 @@ async function runOpenAICompatible(opts: RunCodingAgentOptions): Promise<CodingA
     const sig = combineSignals(opts.signal, opts.timeoutMs ?? 90_000);
     let raw: OAIResponse;
     try {
+      const body: Record<string, unknown> = {
+        model: cfg.model,
+        messages,
+        tools: oaiTools,
+      };
+      // DeepSeek V4 enables thinking by default and rejects `tool_choice` in
+      // that mode. The Tasks agent used to send `tool_choice:"auto"` anyway,
+      // so a valid phone Keychain credential produced a provider HTTP 400
+      // before the first repository read. Omitting the optional field retains
+      // DeepSeek's default automatic tool selection and its deep reasoning.
+      // Other OpenAI-compatible providers keep the explicit auto contract.
+      if (cfg.provider !== "deepseek") body.tool_choice = "auto";
       const res = await f(`${base}/chat/completions`, {
         method: "POST",
         signal: sig.signal,
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-        body: JSON.stringify({ model: cfg.model, messages, tools: oaiTools, tool_choice: "auto" }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");

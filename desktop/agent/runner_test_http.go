@@ -133,6 +133,11 @@ func (s *HTTPServer) handleRunnerTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "runner required", http.StatusBadRequest)
 		return
 	}
+	remotelessAllowed := s.taskMgr != nil && s.taskMgr.ownerPreviewAccessAllowed()
+	if err := validateRemotelessRunnerAccess(remotelessAllowed, runnerID); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	cfg, ok := builtinRunners[runnerID]
 	if !ok {
 		writeRunnerTestResult(w, runnerTestResult{

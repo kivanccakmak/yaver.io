@@ -845,10 +845,10 @@ export function DevPreview({
    *         Hermes bundle rebuild + push on the native lane.
    *  Default stays "fast" so the primary button is the cheap one. */
   const handleReload = useCallback(async (kind: "fast" | "full" = "fast") => {
-    if (reloadLoading || nativeLoading) return;
+    if (reloadLoading || nativeLoading) return false;
     if (mustUseNativePreview && !bundleMounted) {
       await handleRunInYaver();
-      return;
+      return true;
     }
     setReloadLoading(true);
     if (!mustUseNativePreview) {
@@ -868,7 +868,7 @@ export function DevPreview({
       if (!devReloadReachedTarget(result)) {
         setLoading(false);
         Alert.alert("Reload Failed", describeDevReloadResult(result));
-        return;
+        return false;
       }
       if (!mustUseNativePreview) {
         if (!showPreview || !status?.running) {
@@ -877,6 +877,7 @@ export function DevPreview({
           setTimeout(() => setWebViewKey(k => k + 1), 500);
         }
       }
+      return true;
     } finally {
       setReloadLoading(false);
     }
@@ -1644,6 +1645,9 @@ export function DevPreview({
             <BrowserVibeBubble
               projectPath={status.workDir}
               projectName={status.workDir?.split("/").pop() || status.framework}
+              onExitPreview={() => setShowPreview(false)}
+              onReload={handleReload}
+              reloadBusy={reloadLoading || nativeLoading}
             />
           ) : null}
         </View>

@@ -37,6 +37,13 @@ interface StudioChatPaneProps {
   previewLogsLive?: boolean;
   /** Bubble/sheet host: conversation only, without project/task inventory. */
   compact?: boolean;
+  /** Feedback-style host chrome used over a running guest preview. */
+  feedbackStyle?: boolean;
+  /** Explicit runner/model selected in the preview card. */
+  runner?: string;
+  model?: string;
+  /** Lets the preview host queue reloads and lock routing while coding. */
+  onTaskStateChange?: (task: Task | null) => void;
 }
 
 type ChatRow =
@@ -51,8 +58,33 @@ export function StudioChatPane({
   previewLogs = [],
   previewLogsLive = false,
   compact = false,
+  feedbackStyle = false,
+  runner,
+  model,
+  onTaskStateChange,
 }: StudioChatPaneProps) {
-  const c = useColors();
+  const theme = useColors();
+  // Browser-preview Vibing is the React-Native twin of the native
+  // YaverFeedbackPane. Keep its transcript/composer dark and purple even when
+  // the host app uses the light theme, so opening the same Y affordance does
+  // not produce two unrelated products depending on the render lane.
+  const c = feedbackStyle ? {
+    ...theme,
+    bg: "#0e0c1c",
+    bgCard: "#151128",
+    bgInput: "rgba(255,255,255,0.08)",
+    surface: "#19152c",
+    surfaceMuted: "#171329",
+    border: "rgba(255,255,255,0.15)",
+    borderSubtle: "rgba(255,255,255,0.10)",
+    textPrimary: "#ffffff",
+    textSecondary: "rgba(255,255,255,0.78)",
+    textMuted: "rgba(255,255,255,0.58)",
+    textTertiary: "rgba(255,255,255,0.38)",
+    accent: "#8b8df8",
+    accentSoft: "rgba(139,141,248,0.16)",
+    brandPrimary: "#7568f8",
+  } : theme;
   const { activeDevice, connectionStatus } = useDevice();
   const connected = connectionStatus === "connected" && !!activeDevice;
 
@@ -161,7 +193,11 @@ export function StudioChatPane({
         setActiveTask((prev) => prev ? { ...prev, status: "running" } : prev);
         subscribeTask(activeTask.id, "running");
       } else {
-        const result = await quicClient.executeVibingSuggestion(text, projectPath || "");
+        const result = await quicClient.executeVibingSuggestion(text, projectPath || "", {
+          projectName,
+          runner,
+          model,
+        });
         const taskId = (result as any)?.taskId;
         if (taskId) {
           const now = Date.now();
@@ -186,7 +222,7 @@ export function StudioChatPane({
       setSending(false);
       void refreshTasks();
     }
-  }, [composerText, sending, connected, projectPath, subscribeTask, refreshTasks, activeTask]);
+  }, [composerText, sending, connected, projectPath, projectName, runner, model, subscribeTask, refreshTasks, activeTask]);
 
   const handleTaskTap = useCallback(
     (task: Task) => {
@@ -230,6 +266,10 @@ export function StudioChatPane({
     projectPathRef.current = projectPath;
     resetConversation();
   }, [projectPath, resetConversation]);
+
+  useEffect(() => {
+    onTaskStateChange?.(activeTask);
+  }, [activeTask, onTaskStateChange]);
 
   return (
     <View style={[styles.wrap, { backgroundColor: c.bg }]}>
@@ -351,7 +391,7 @@ export function StudioChatPane({
         {conversationRows.length === 0 && !rawText.trim() ? (
           <Text style={[styles.emptyHint, { color: c.textTertiary }]}>
             {connected
-              ? "Type a vibe prompt — the box's runner will edit the project and the live console will show it working."
+              ? `Type a vibe prompt — ${[runner, model].filter(Boolean).join(" · ") || "the box's runner"} will edit the project and the live console will show it working.`
               : "Connect a box to start vibing."}
           </Text>
         ) : null}

@@ -92,6 +92,7 @@ type RunnerCardState = {
   detail?: string;
   actionLabel?: string;
   actionRunner?: string;
+  models?: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean }>;
 };
 
 type ProviderEditorState = {
@@ -143,6 +144,7 @@ function normalizeRunnerStatusRows(rows: RunnerAuthStatusRow[]): RunnerCardState
         version: row.version,
         tone: 'warning',
         statusLine: 'Not installed on the selected machine',
+        models: row.models,
         detail,
       };
     }
@@ -160,6 +162,7 @@ function normalizeRunnerStatusRows(rows: RunnerAuthStatusRow[]): RunnerCardState
         statusLine: configured
           ? `${versionPrefix}Configured on the selected machine`
           : `${versionPrefix}Needs provider config on the selected machine`,
+        models: row.models,
         detail,
       };
     }
@@ -176,6 +179,7 @@ function normalizeRunnerStatusRows(rows: RunnerAuthStatusRow[]): RunnerCardState
       statusLine: authed
         ? `${versionPrefix}Signed in on the selected machine`
         : `${versionPrefix}Not signed in on the selected machine`,
+      models: row.models,
       detail,
       actionLabel: authed ? 'Re-auth' : 'Sign in',
       actionRunner: id,
@@ -420,7 +424,7 @@ export const FeedbackModal: React.FC = () => {
       if (!client) {
         throw new Error('Not connected to the selected machine yet.');
       }
-      const rows = await client.getRunnerAuthStatus();
+      const rows = await client.getAvailableRunners();
       if (mountedRef.current) {
         setRunnerCards(normalizeRunnerStatusRows(rows));
       }
@@ -1174,6 +1178,13 @@ export const FeedbackModal: React.FC = () => {
                   </Pressable>
                 </View>
 
+                <View style={styles.routingSummary}>
+                  <Text style={styles.routingSummaryLabel}>Vibing uses</Text>
+                  <Text style={styles.routingSummaryValue} numberOfLines={1}>
+                    {[preferredRunner || 'automatic runner', preferredModel].filter(Boolean).join(' · ')}
+                  </Text>
+                </View>
+
                 {runnerCards.map((row) => (
                   <View
                     key={row.id}
@@ -1198,20 +1209,53 @@ export const FeedbackModal: React.FC = () => {
                           {row.statusLine}
                         </Text>
                       </View>
-                      {row.actionRunner ? (
-                        <Pressable
-                          onPress={() => setRunnerAuthModal(row.actionRunner ?? null)}
-                          style={({ pressed }) => [
-                            styles.runnerActionBtn,
-                            pressed && styles.buttonPressed,
-                          ]}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${row.actionLabel} ${row.name}`}
-                        >
-                          <Text style={styles.runnerActionBtnText}>{row.actionLabel}</Text>
-                        </Pressable>
-                      ) : null}
+                      <View style={styles.runnerCardActions}>
+                        {row.ready ? (
+                          <Pressable
+                            onPress={() => {
+                              const nextModel = row.models?.find((model) => model.isDefault)?.id || row.models?.[0]?.id || '';
+                              setPreferredRunnerState(row.id);
+                              setPreferredModelState(nextModel);
+                              void setPreferredRunner(row.id);
+                              void setPreferredModel(nextModel || null);
+                            }}
+                            style={({ pressed }) => [styles.runnerActionBtn, preferredRunner === row.id && styles.runnerActionBtnSelected, pressed && styles.buttonPressed]}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Use ${row.name} for Vibing`}
+                          >
+                            <Text style={styles.runnerActionBtnText}>{preferredRunner === row.id ? 'Using' : 'Use'}</Text>
+                          </Pressable>
+                        ) : null}
+                        {row.actionRunner ? (
+                          <Pressable
+                            onPress={() => setRunnerAuthModal(row.actionRunner ?? null)}
+                            style={({ pressed }) => [styles.runnerActionBtn, pressed && styles.buttonPressed]}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${row.actionLabel} ${row.name}`}
+                          >
+                            <Text style={styles.runnerActionBtnText}>{row.actionLabel}</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
                     </View>
+                    {preferredRunner === row.id && (row.models?.length || 0) > 0 ? (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modelChoiceRow}>
+                        {row.models!.map((model) => (
+                          <Pressable
+                            key={model.id}
+                            onPress={() => {
+                              setPreferredModelState(model.id);
+                              void setPreferredModel(model.id);
+                            }}
+                            style={[styles.modelChoice, preferredModel === model.id && styles.modelChoiceSelected]}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Use ${model.name || model.id} model`}
+                          >
+                            <Text style={[styles.modelChoiceText, preferredModel === model.id && styles.modelChoiceTextSelected]}>{model.name || model.id}</Text>
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                    ) : null}
                     {row.detail ? (
                       <Text style={styles.runnerCardDetail}>{row.detail}</Text>
                     ) : null}
@@ -1746,6 +1790,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
+  runnerCardActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   runnerCardTitle: {
     color: '#f8fafc',
     fontSize: 14,
@@ -1783,6 +1828,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  runnerActionBtnSelected: { borderColor: '#818cf8', backgroundColor: 'rgba(79,70,229,0.44)' },
+  routingSummary: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 2 },
+  routingSummaryLabel: { color: '#94a3b8', fontSize: 11, fontWeight: '600' },
+  routingSummaryValue: { flex: 1, color: '#c7d2fe', fontSize: 12, fontWeight: '700', textAlign: 'right' },
+  modelChoiceRow: { gap: 6, paddingTop: 2 },
+  modelChoice: { borderRadius: 9, borderWidth: 1, borderColor: 'rgba(148,163,184,0.18)', paddingHorizontal: 9, paddingVertical: 6 },
+  modelChoiceSelected: { borderColor: '#818cf8', backgroundColor: 'rgba(79,70,229,0.30)' },
+  modelChoiceText: { color: '#94a3b8', fontSize: 11 },
+  modelChoiceTextSelected: { color: '#e0e7ff', fontWeight: '700' },
   runnerSectionError: {
     color: '#fca5a5',
     fontSize: 12,

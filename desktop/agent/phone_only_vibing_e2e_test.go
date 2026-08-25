@@ -119,8 +119,16 @@ func TestPhoneOnlyTodoE2E_MobileHTTPFlow(t *testing.T) {
 		"prompt":      "Add a completed-state filter to the todo list.",
 		"projectPath": projectDir,
 		"projectName": "Phone Only Todo",
+		"runner":      "claude-code",
+		"model":       "claude-sonnet-4-6",
 	})
 	execResp := phoneOnlyPostJSON(t, baseURL, "phone-tok", "/vibing/execute", string(execBody))
+	if got := execResp["runner"]; got != "claude" {
+		t.Fatalf("vibing execute runner = %v, want explicit claude", got)
+	}
+	if got := execResp["model"]; got != "claude-sonnet-4-6" {
+		t.Fatalf("vibing execute model = %v, want explicit pin", got)
+	}
 	taskID, _ := execResp["taskId"].(string)
 	if taskID == "" {
 		t.Fatalf("expected taskId from vibing execute, got %+v", execResp)

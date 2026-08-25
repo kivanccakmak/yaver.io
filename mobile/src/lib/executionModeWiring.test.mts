@@ -22,6 +22,10 @@ test("No remote box is selectable from every requested entry point", async () =>
     assert.match(source, /No remote box/);
     assert.match(source, /setCodingMode\("local-only"\)|setCodingMode\(codingMode === "local-only"/);
   }
+  assert.match(devices, /user\?\.isOwner === true/);
+  assert.match(devices, /testID="devices-remoteless-card"/);
+  assert.match(devices, /borderStyle: "dashed"/);
+  assert.match(devices, /REMOTELESS · OWNER PREVIEW/);
 });
 
 test("phone-local Tasks require a phone checkout and use explicit placement", async () => {
@@ -29,10 +33,15 @@ test("phone-local Tasks require a phone checkout and use explicit placement", as
   assert.match(source, /forceLocal: codingMode === "local-only"/);
   assert.match(source, /codingMode === "local-only" && !selectedPhoneCheckout/);
   assert.match(source, /askModeEnabled \? "audit" : "vibe"/);
-  assert.match(source, /!isPhoneLocalTask\(selectedTask\) && connectionStatus !== "connected"/);
+  assert.match(source, /const isLocalFollowUp = isPhoneLocalTask\(selectedTask\) \|\| selectedTask\.runnerId === "yaver-agent"/);
   assert.match(source, /isPhoneLocalTask\(task\)/);
   assert.match(source, /SandboxGitPanel/);
   assert.match(source, /Review &amp; deliver/);
+  assert.match(source, /canComposeWithRemoteless/);
+  assert.match(source, /ownerRemotelessEnabled && phoneProjects\.length/);
+  assert.match(source, /taskExecutionPlacement\.lane === "blocked"/);
+  assert.match(source, /Images need a remote box/);
+  assert.match(source, /endRemotelessTask\(taskId, "stopped"/);
 });
 
 test("DeepSeek can be configured from the backend screen that advertises it", async () => {

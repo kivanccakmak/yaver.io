@@ -270,7 +270,12 @@ enum DeviceCodeAuth {
     /// only reset the existing clock. Returns a rotated token IF the server ever
     /// returns one (it won't without opt-in), else nil. Any failure is a silent
     /// no-op; the existing token stays valid.
-    static func refreshSession(token: String) async -> String? {
+    struct SessionRefresh {
+        let token: String?
+        let isOwner: Bool
+    }
+
+    static func refreshSession(token: String) async -> SessionRefresh? {
         var req = URLRequest(url: Backend.convexSiteURL.appendingPathComponent("auth/refresh"))
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -279,7 +284,7 @@ enum DeviceCodeAuth {
               let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             return nil
         }
-        struct Raw: Decodable { let token: String?; let userId: String? }
+        struct Raw: Decodable { let token: String?; let userId: String?; let isOwner: Bool? }
         let raw = try? JSONDecoder().decode(Raw.self, from: data)
         // Remember WHO this TV belongs to (opaque user doc id, grants
         // nothing). It survives sign-out ON PURPOSE: it is the owner HINT the
@@ -288,7 +293,8 @@ enum DeviceCodeAuth {
         if let uid = raw?.userId, !uid.isEmpty {
             UserDefaults.standard.set(uid, forKey: lastOwnerUserIdKey)
         }
-        return raw?.token
+        guard let raw else { return nil }
+        return SessionRefresh(token: raw.token, isOwner: raw.isOwner == true)
     }
 
     /// Best-effort server revocation for a shared-room device. Local Keychain

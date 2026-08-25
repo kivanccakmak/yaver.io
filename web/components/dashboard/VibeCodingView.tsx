@@ -541,8 +541,15 @@ export default function VibeCodingView({
   useEffect(() => {
     if (selectedRunner !== "remoteless") return;
     const preferred = runners.find((runner) => runner.ready && runner.id !== "remoteless");
-    if (preferred) setSelectedRunner(preferred.id);
-  }, [runners, selectedRunner]);
+    if (preferred) {
+      setSelectedRunner(preferred.id);
+    } else if (user?.isOwner !== true) {
+      // A stale browser session may remember the preview runner even though
+      // the agent now correctly hides it. Clear that value before dispatch so
+      // non-owners cannot reach the server-side refusal via stale UI state.
+      setSelectedRunner("");
+    }
+  }, [runners, selectedRunner, user?.isOwner]);
   const [selectedModel, setSelectedModel] = useState("");
   // OpenCode-specific: which agent (build / plan / custom) drives the
   // task. Maps to `--agent <mode>` on `opencode run`. Empty = the
@@ -2469,7 +2476,7 @@ export default function VibeCodingView({
               ) : null}
             </div>
           </div>
-          {selectedRunner === "remoteless" ? (
+          {user?.isOwner === true && selectedRunner === "remoteless" ? (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
               <span>
                 Remoteless fallback in use · hosted DeepSeek coding is handling this turn. Configured device runners remain preferred.

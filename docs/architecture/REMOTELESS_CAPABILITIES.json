@@ -1,6 +1,12 @@
 {
   "$comment": "Canonical client contract. Automatic placement is explicit target, primary, secondary, then remoteless. Mobile may explicitly select phone-local execution, but it is never the default and does not replace primary/secondary assignments. Unsupported work is blocked with a named code and route; it is never reported as completed.",
   "version": 2,
+  "previewAccess": {
+    "policy": "owner-only",
+    "source": "server-computed auth user.isOwner",
+    "failClosed": true,
+    "note": "Temporary rollout gate. No owner email is embedded in clients or agent binaries."
+  },
   "placementOrder": ["explicit-target", "primary", "secondary", "remoteless"],
   "explicitRemotelessSelection": {
     "mobile": true,

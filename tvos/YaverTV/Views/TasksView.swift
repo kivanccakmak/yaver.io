@@ -186,7 +186,7 @@ struct TasksView: View {
                 .font(.system(size: 20))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 760, alignment: .leading)
-            if store.taskRuntimePlan().kind == .boxlessUnavailable {
+            if store.remotelessAllowed && store.taskRuntimePlan().kind == .boxlessUnavailable {
                 Text("remoteless.code-edit.unavailable · This TV's fallback is analysis/chat only. Nothing was sent. Use a primary/secondary runner for Git editing, or open the analysis fallback below.")
                     .font(.system(size: 16))
                     .foregroundStyle(.tertiary)
@@ -194,8 +194,10 @@ struct TasksView: View {
             }
             NavigationLink("Choose or add a machine", destination: MachinePickerView())
                 .buttonStyle(.borderedProminent)
-            NavigationLink("Use boxless Yaver Code", destination: BoxlessCodeView())
-                .buttonStyle(.bordered)
+            if store.remotelessAllowed {
+                NavigationLink("Use boxless Yaver Code", destination: BoxlessCodeView())
+                    .buttonStyle(.bordered)
+            }
         }
         .padding(56)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

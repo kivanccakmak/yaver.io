@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Alert } from "react-native";
 import { getConvexSiteUrlSync } from "../../src/lib/backendConfig";
@@ -1429,7 +1430,8 @@ export default function DevicesScreen() {
           onRefresh={refreshDevices}
           ListHeaderComponent={(
             <>
-              <Pressable
+              {user?.isOwner === true ? <Pressable
+                testID="devices-remoteless-card"
                 disabled={!codingModeReady}
                 onPress={() => {
                   void setCodingMode("local-only").catch((e: any) =>
@@ -1442,9 +1444,11 @@ export default function DevicesScreen() {
                   gap: 12,
                   borderWidth: codingMode === "local-only" ? 1.5 : 1,
                   borderColor: codingMode === "local-only" ? c.accent : c.border,
-                  backgroundColor: c.bgCard,
-                  borderRadius: 10,
-                  padding: 14,
+                  borderStyle: "dashed",
+                  backgroundColor: codingMode === "local-only" ? c.accentSoft : c.bgCard,
+                  borderRadius: 22,
+                  paddingHorizontal: 16,
+                  paddingVertical: 15,
                   marginBottom: 12,
                   opacity: !codingModeReady ? 0.55 : pressed ? 0.8 : 1,
                 })}
@@ -1452,8 +1456,13 @@ export default function DevicesScreen() {
                 accessibilityLabel="Use no remote box"
                 accessibilityState={{ selected: codingMode === "local-only", disabled: !codingModeReady }}
               >
-                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: codingMode === "local-only" ? c.warn : c.textMuted }} />
+                <View style={{ width: 38, height: 48, borderRadius: 13, borderWidth: 1, borderColor: codingMode === "local-only" ? c.accent : c.border, backgroundColor: c.bgInput, alignItems: "center", justifyContent: "center" }}>
+                  <Ionicons name="phone-portrait-outline" size={22} color={codingMode === "local-only" ? c.accent : c.textSecondary} />
+                </View>
                 <View style={{ flex: 1 }}>
+                  <Text style={{ color: codingMode === "local-only" ? c.accent : c.textMuted, fontSize: 10, fontWeight: "800", letterSpacing: 0.7 }}>
+                    REMOTELESS · OWNER PREVIEW
+                  </Text>
                   <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>No remote box</Text>
                   <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 3 }}>
                     DeepSeek + GitHub/GitLab projects on this phone
@@ -1463,9 +1472,9 @@ export default function DevicesScreen() {
                   </Text>
                 </View>
                 <Text style={{ color: codingMode === "local-only" ? c.accent : c.textMuted, fontSize: 12, fontWeight: "700" }}>
-                  {codingMode === "local-only" ? "SELECTED" : "LOCAL"}
+                  {codingMode === "local-only" ? "SELECTED" : "PHONE"}
                 </Text>
-              </Pressable>
+              </Pressable> : null}
               {hiddenDeviceCount > 0 ? (
               <View
                 style={{

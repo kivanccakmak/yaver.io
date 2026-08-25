@@ -18,3 +18,35 @@ export function allowsRemoteAutoConnect(mode: MobileExecutionMode): boolean {
 export function isExplicitRemoteless(mode: MobileExecutionMode): boolean {
   return mode === "local-only";
 }
+
+/** Remoteless is an owner-preview capability for now. `isOwner` is computed by
+ * the backend allowlist and carried in /auth/validate; no account identity is
+ * embedded in the public mobile bundle. */
+export function remotelessAccessAllowed(isOwner: boolean | null | undefined): boolean {
+  return isOwner === true;
+}
+
+/** A connected box is not required for the owner dogfood account because the
+ * task composer can fall through to the on-phone Remoteless lane. Everyone
+ * else must have a real remote execution target. */
+export function canComposeWithRemoteless(
+  hasRemoteConnection: boolean,
+  isOwner: boolean | null | undefined,
+): boolean {
+  return hasRemoteConnection || remotelessAccessAllowed(isOwner);
+}
+
+export const REMOTELESS_OWNER_ONLY_MESSAGE =
+  "Remoteless is temporarily available only to the Yaver owner account.";
+
+/** Fail closed when an older install persisted local-only before the preview
+ * gate existed. */
+export function executionModeForAccess(
+  value: unknown,
+  isOwner: boolean | null | undefined,
+): MobileExecutionMode {
+  const mode = normalizeMobileExecutionMode(value);
+  return mode !== "remote-preferred" && !remotelessAccessAllowed(isOwner)
+    ? "remote-preferred"
+    : mode;
+}

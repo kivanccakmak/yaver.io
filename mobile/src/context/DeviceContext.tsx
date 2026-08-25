@@ -36,7 +36,10 @@ import { aliasCollisionOutcome, agentInstanceRelation } from "../lib/aliasShadow
 import { resolveIdentityMerge, type IdentityCandidate } from "../lib/deviceIdentityMerge";
 import {
   allowsRemoteAutoConnect,
+  executionModeForAccess,
   normalizeMobileExecutionMode,
+  REMOTELESS_OWNER_ONLY_MESSAGE,
+  remotelessAccessAllowed,
   type MobileExecutionMode,
 } from "../lib/executionMode";
 
@@ -1177,7 +1180,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     void AsyncStorage.getItem(executionModeKey(user.id))
       .then((value) => {
         if (cancelled) return;
-        const next = normalizeMobileExecutionMode(value);
+        const next = executionModeForAccess(value, user?.isOwner);
+        if (next !== normalizeMobileExecutionMode(value)) {
+          // Remove stale preview state so every later boot is remote-first too.
+          void AsyncStorage.setItem(executionModeKey(user.id), next).catch(() => {});
+        }
         codingModeRef.current = next;
         setCodingModeState(next);
         if (!allowsRemoteAutoConnect(next)) {
@@ -1200,10 +1207,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         if (!cancelled) setCodingModeReady(true);
       });
     return () => { cancelled = true; };
-  }, [user?.id]);
+  }, [user?.id, user?.isOwner]);
 
   const setCodingMode = useCallback(async (mode: MobileExecutionMode) => {
     const normalized = normalizeMobileExecutionMode(mode);
+    if (normalized !== "remote-preferred" && !remotelessAccessAllowed(user?.isOwner)) {
+      throw new Error(REMOTELESS_OWNER_ONLY_MESSAGE);
+    }
     const previous = codingModeRef.current;
     codingModeRef.current = normalized;
     // Commit the phone-scoped choice before painting SELECTED. Otherwise a
@@ -1234,7 +1244,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     setAutoConnectTarget(null);
     setAutoConnectStage(null);
     setAgentAuthExpired(false);
-  }, [user?.id]);
+  }, [user?.id, user?.isOwner]);
 
   const setMultiTargetMode = useCallback(async (enabled: boolean) => {
     setMultiTargetModeState(enabled);

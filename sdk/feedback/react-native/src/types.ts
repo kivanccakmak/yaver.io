@@ -37,6 +37,8 @@ export interface RunnerAuthStatusRow {
   path?: string;
   detail?: string;
   version?: string;
+  isDefault?: boolean;
+  models?: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean }>;
 }
 
 export interface OpenCodeProviderSummary {

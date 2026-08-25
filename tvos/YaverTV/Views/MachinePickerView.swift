@@ -183,7 +183,7 @@ struct MachinePickerView: View {
             Text("Run `yaver serve` on a computer signed in as you, and it appears here. Or type a LAN address.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 640)
             NavigationLink("Type an address", destination: AddBoxView()).padding(.top, 8)
-            remotelessOption
+            if store.remotelessAllowed { remotelessOption }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

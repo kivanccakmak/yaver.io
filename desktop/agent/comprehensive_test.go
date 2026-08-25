@@ -210,9 +210,9 @@ func TestTaskCreateWithModel(t *testing.T) {
 	defer cancel()
 
 	code, resp := doRequest(t, "POST", baseURL+"/tasks", token,
-		`{"title":"Model test","model":"opus"}`)
+		`{"title":"Model test","model":"opus","runner":"claude"}`)
 	if code != 200 && code != 201 {
-		t.Fatalf("expected 200/201, got %d", code)
+		t.Fatalf("expected 200/201, got %d: %v", code, resp)
 	}
 	if resp["ok"] != true {
 		t.Fatalf("expected ok=true")

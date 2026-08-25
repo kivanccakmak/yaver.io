@@ -20,17 +20,45 @@ test("browser lane has no host navigation or tools and mounts one Y bubble", () 
   const browserModal = projects.slice(projects.indexOf("{/* Full-screen WebView */}"));
   assert.ok(!browserModal.includes("<AppScreenHeader"), "Projects browser lane still renders top navigation");
   assert.ok(source.includes('testID="browser-vibe-bubble"'));
-  assert.ok(source.includes('>Y</Text>') || source.includes('open ? "×" : "Y"'));
+  assert.ok(source.includes('open ? "−" : "Y"'));
 });
 
 test("the bubble opens only Vibing chat with same-task follow-ups", () => {
   assert.ok(source.includes("<StudioChatPane"), "bubble does not reuse the Vibing conversation");
-  assert.ok(source.includes("<StudioChatPane compact"), "bubble still exposes Studio inventory instead of chat only");
+  assert.match(source, /<StudioChatPane[\s\S]*?\bcompact\b/, "bubble still exposes Studio inventory instead of chat only");
   assert.ok(source.includes('!open && styles.hidden'), "closing the bubble unmounts and loses the active task session");
   assert.ok(!source.includes("DomInspect"));
   assert.ok(!source.includes("ScreenContext"));
-  assert.ok(!source.includes("Hot Reload"));
   assert.ok(!source.includes("Report Bug"));
   assert.ok(chat.includes("quicClient.executeVibingSuggestion"));
   assert.ok(chat.includes("quicClient.continueTask(activeTask.id, text)"));
+});
+
+test("browser Vibing mirrors feedback controls and remains mounted when minimized", () => {
+  assert.ok(source.includes("KeyboardAvoidingView"), "composer can still be covered by the iOS keyboard");
+  assert.ok(source.includes('accessibilityLabel="Minimize Vibing"'));
+  assert.ok(source.includes('accessibilityLabel="Exit preview and return to Yaver"'));
+  assert.ok(source.includes('accessibilityLabel="Reload preview"'));
+  assert.ok(source.includes('testID="browser-vibe-runner-picker"'));
+  assert.ok(source.includes("setPrimaryRunnerForDevice"), "runner/model picker does not persist its visible choice");
+  assert.ok(source.includes('!open && styles.hidden'), "minimizing unmounts the live task instead of backgrounding it");
+  assert.ok(source.includes('reload("full")'), "full reload is missing from the card");
+  assert.ok(source.includes("Reload queued until coding finishes"), "reload executes over an active coding turn instead of queueing");
+  assert.ok(source.includes("onTaskStateChange={setActiveTask}"), "preview host cannot distinguish coding from idle");
+  assert.ok(source.includes('testID="browser-vibe-machine-failure"'), "machine disconnect has no visible route to recovery");
+  assert.ok(source.includes('testID="browser-vibe-runner-failure"'), "no-ready-runner state has no visible route to setup");
+  assert.ok(source.includes("<RunnerAuthModal"), "runner deauthentication has no in-place sign-in route");
+  assert.ok(source.includes("<OpenCodeConfigModal"), "OpenCode failure has no in-place configuration route");
+  assert.ok(source.includes("quicClient.installRunner"), "missing runner has no streamed install route");
+  assert.ok(source.includes('reloaded === false'), "reload failure can still be reported as success");
+  assert.ok(preview.includes("onExitPreview={() => setShowPreview(false)}"));
+  assert.ok(projects.includes("onExitPreview={() => setShowWebView(false)}"));
+});
+
+test("the visible runner and model are pinned onto the task request", () => {
+  assert.ok(source.includes("runner={selectedRunnerId || savedRunner || undefined}"));
+  assert.ok(source.includes("model={selectedModelId || savedModel || undefined}"));
+  assert.ok(chat.includes("projectName,"));
+  assert.ok(chat.includes("runner,"));
+  assert.ok(chat.includes("model,"));
 });

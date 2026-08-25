@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1791,10 +1792,11 @@ type TaskManager struct {
 	OnTaskDone func(task *Task) // called when a task finishes (completed/failed/stopped)
 
 	// Convex reporting (set after construction)
-	ConvexURL  string
-	AuthToken  string
-	DeviceID   string
-	OwnerEmail string // for dev logging
+	ConvexURL    string
+	AuthToken    string
+	DeviceID     string
+	OwnerEmail   string // for dev logging
+	ownerIsOwner bool   // server-computed ownerAllowlist gate for preview-only runners
 
 	// Warm session: forked at startup, reused for all tasks
 	warmSessionID string    // Claude session ID from warmup
@@ -2109,9 +2111,34 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 	return tm.CreateTaskWithOptions(title, description, model, source, runnerID, customCommand, images, TaskCreateOptions{}, verbosityCtx...)
 }
 
+const remotelessOwnerOnlyError = "remoteless is temporarily available only to the Yaver owner account"
+
+func validateRemotelessRunnerAccess(ownerIsOwner bool, runnerID string) error {
+	if normalizeRunnerID(runnerID) == "remoteless" && !ownerIsOwner {
+		return errors.New(remotelessOwnerOnlyError)
+	}
+	return nil
+}
+
+func (tm *TaskManager) ownerPreviewAccessAllowed() bool {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.ownerIsOwner
+}
+
+func (tm *TaskManager) setOwnerPreviewAccess(allowed bool) {
+	tm.mu.Lock()
+	tm.ownerIsOwner = allowed
+	tm.mu.Unlock()
+}
+
 func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, runnerID, customCommand string, images []ImageAttachment, opts TaskCreateOptions, verbosityCtx ...*TaskVerbosity) (*Task, error) {
 	var taskRunner RunnerConfig
 	callerRunnerID := normalizeRunnerID(runnerID)
+	ownerPreviewAccess := tm.ownerPreviewAccessAllowed()
+	if err := validateRemotelessRunnerAccess(ownerPreviewAccess, callerRunnerID); err != nil {
+		return nil, err
+	}
 	var perDeviceMode string
 
 	if customCommand != "" {
@@ -2144,6 +2171,9 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 				perDeviceModel = pref.Model
 				perDeviceMode = pref.Mode
 			}
+		}
+		if err := validateRemotelessRunnerAccess(ownerPreviewAccess, effectiveRunnerID); err != nil {
+			return nil, err
 		}
 
 		taskRunner = tm.runner // default (could be custom)
@@ -2182,6 +2212,9 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 				}
 			}
 		}
+	}
+	if err := validateRemotelessRunnerAccess(ownerPreviewAccess, taskRunner.RunnerID); err != nil {
+		return nil, err
 	}
 
 	// Pre-flight: verify the runner binary is available (skip in dummy mode).

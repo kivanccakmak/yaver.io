@@ -6,6 +6,7 @@ import SwiftUI
 /// terminal and never claims to edit Git or run a build without a runner.
 struct BoxlessCodeView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: YaverStore
     @State private var prompt = ""
     @State private var editingRequest = 0
     @State private var answer = ""
@@ -84,6 +85,10 @@ struct BoxlessCodeView: View {
     private func send(mode: String) {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy else { return }
+        guard store.remotelessAllowed else {
+            error = "Remoteless is temporarily available only to the Yaver owner account."
+            return
+        }
         busy = true; error = nil; answer = ""
         Task {
             do {

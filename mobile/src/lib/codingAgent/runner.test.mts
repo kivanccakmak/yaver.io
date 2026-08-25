@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   runCodingAgent,
   defaultCodingAgentConfig,
+  defaultDeepSeekCodingAgentConfig,
   type CodingAgentConfig,
 } from "./runner.ts";
 import type { CodingSandbox, CodingSandboxEntry, CodingTool } from "./sandboxTools.ts";
@@ -101,6 +102,44 @@ test("provider error diagnostics never echo the API key", async () => {
     () => runCodingAgent({ prompt: "audit", sandbox: memSandbox(), config: GLM_CFG, fetchImpl }),
     (error: Error) => !error.message.includes("glm-key") && error.message.includes("401"),
   );
+});
+
+test("DeepSeek V4 tool turns keep thinking enabled without the rejected tool_choice field", async () => {
+  const box = memSandbox({ "App.tsx": "export default null\n" });
+  const firstTurn = {
+    ok: true,
+    async json() {
+      return {
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            role: "assistant",
+            content: null,
+            reasoning_content: "I need to inspect the file first.",
+            tool_calls: [{
+              id: "ds1",
+              type: "function",
+              function: { name: "read_file", arguments: '{"path":"App.tsx"}' },
+            }],
+          },
+        }],
+        usage: {},
+      };
+    },
+  } as any;
+  const { fetchImpl, requests } = scriptedFetch([firstTurn, oaiTurn({ content: "Audit complete." })]);
+
+  await runCodingAgent({
+    prompt: "deep audit",
+    sandbox: box,
+    config: defaultDeepSeekCodingAgentConfig("deepseek-key"),
+    fetchImpl,
+  });
+
+  assert.equal(requests[0].body.tool_choice, undefined);
+  const assistant = requests[1].body.messages.find((message: any) => message.role === "assistant");
+  assert.equal(assistant.reasoning_content, "I need to inspect the file first.");
+  assert.equal(requests[1].body.tool_choice, undefined);
 });
 
 test("multi-step loop: read_file → edit_file → finish, feeds tool results back", async () => {

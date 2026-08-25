@@ -409,6 +409,19 @@ export class P2PClient {
     return Array.isArray(data.runners) ? (data.runners as RunnerAuthStatusRow[]) : [];
   }
 
+  /** Canonical runner + model catalogue used by Vibing routing controls. */
+  async getAvailableRunners(): Promise<RunnerAuthStatusRow[]> {
+    const resp = await fetch(`${this.baseUrl}/agent/runners`, {
+      headers: this.authHeaders(),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`getAvailableRunners HTTP ${resp.status}: ${text}`);
+    }
+    const data = await resp.json().catch(() => ({} as Record<string, unknown>));
+    return Array.isArray(data.runners) ? (data.runners as RunnerAuthStatusRow[]) : [];
+  }
+
   async getOpenCodeConfig(): Promise<OpenCodeConfigSummary | null> {
     const resp = await fetch(`${this.baseUrl}/runner/opencode/config`, {
       headers: this.authHeaders(),

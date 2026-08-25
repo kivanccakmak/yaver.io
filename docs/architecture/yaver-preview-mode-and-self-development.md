@@ -16,7 +16,7 @@ Companions: `yaver-four-tier-deep-analysis.md` (§9 default path),
 
 Yaver's mobile app is a **container**: it loads third-party RN apps in-process
 via a Hermes bundle. The container owns the shake gesture, because shake is how
-you get the "Reload / Back to Yaver" overlay. Guest apps cooperate — the RN
+you get the "Reload / Exit Preview" overlay. Guest apps cooperate — the RN
 feedback SDK detects it is inside Yaver (`YaverInfo.isYaver`) and silently
 suppresses its own shake handler so the two overlays cannot collide.
 
@@ -75,12 +75,25 @@ only one that matters when things are actually broken.
 | Strategy | Previewed app runs | Escape owned by | Can the app capture it? |
 |---|---|---|---|
 | **chrome-webrtc** | on the box, in Chrome | phone's **native viewer chrome** | ❌ never — it only sends pixels |
+| **browser lane (host WebView)** | on the box, served into the phone's WebView | host-owned `BrowserVibeBubble` | ❌ the guest cannot remove the React-Native overlay |
 | **hermes-bundle** (guest) | **in-process**, in the container | container's ShakeDetector + overlay | ⚠️ only if the guest ignores the suppression contract |
 | **redroid-webrtc** | on the box, in Android | phone's native viewer chrome | ❌ never |
 | **hermes-bundle (Yaver-in-Yaver)** | **in-process, same code** | 🔴 **ambiguous — this is the trap** | ✅ yes |
 
 The pattern is stark: **whenever the preview is pixels, the escape is safe.
 Whenever the preview is in-process, the escape depends on cooperation.**
+
+The current browser lane's host overlay is also the Vibing control surface. It
+must remain mounted while minimized (the task/SSE continues in the background),
+keyboard-avoid its composer, show and persist the exact runner/model it pins on
+`POST /vibing/execute`, queue reload intent until coding is idle, and expose
+Hot Reload, Full Reload, and Exit Preview from the same card. Missing runners
+install with streamed progress; Claude/Codex authentication and OpenCode
+provider configuration reuse the feedback SDK's in-place flows. A disconnected
+machine keeps the last good preview visible and offers a named reconnect route.
+Both browser
+preview hosts—`DevPreview.tsx` and `app/(tabs)/apps.tsx`—mount that one shared
+component; a callback missing from either host is a parity failure.
 
 Cooperation is fine for third-party guests — they link our SDK, and the SDK
 suppresses itself. It is *not* fine when the guest is Yaver, because Yaver's own
@@ -132,7 +145,7 @@ the bug.
 | Context | Shake does | Owner |
 |---|---|---|
 | Yaver shell, no preview | opens Yaver's own feedback | container |
-| Guest RN app via Hermes | opens **container** overlay (Reload / Back to Yaver). Guest SDK suppressed via `YaverInfo.isYaver` | container |
+| Guest RN app via Hermes | opens **container** overlay (Reload / Exit Preview). Guest SDK suppressed via `YaverInfo.isYaver` | container |
 | Guest app **standalone** (TestFlight/Play) | opens the **guest's own** feedback overlay | guest SDK |
 | **WebRTC preview** (any strategy) | phone sends a `shake` **session command** to the box, which injects a synthetic event into the streamed surface; the app's own SDK fires **inside the stream** | box + inner app |
 | **Yaver-on-Yaver over WebRTC** | same as above — the inner Yaver's own feedback opens **inside the stream**, the outer phone keeps its exit | box + inner Yaver |

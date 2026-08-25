@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,18 @@ func TestGetRunnerConfigRemoteless(t *testing.T) {
 	}
 	if !IsSupportedRunner("remoteless") {
 		t.Fatalf("remoteless must be in supportedRunnerIDs")
+	}
+}
+
+func TestRemotelessRunnerIsOwnerPreviewOnly(t *testing.T) {
+	if err := validateRemotelessRunnerAccess(false, "remoteless"); err == nil || !strings.Contains(err.Error(), "owner account") {
+		t.Fatalf("non-owner remoteless request must fail closed with a named cause, got %v", err)
+	}
+	if err := validateRemotelessRunnerAccess(true, "remoteless"); err != nil {
+		t.Fatalf("owner remoteless request rejected: %v", err)
+	}
+	if err := validateRemotelessRunnerAccess(false, "opencode"); err != nil {
+		t.Fatalf("ordinary runners must remain available: %v", err)
 	}
 }
 

@@ -23,6 +23,8 @@ final class YaverStore: ObservableObject {
     /// inferred transport failure: Tasks can use Yaver Code while Vibing and
     /// rendering correctly remain unavailable without a render machine.
     @Published private(set) var remotelessMode = false
+    /// Server-computed owner-preview bit. A cached mode never grants access.
+    @Published private(set) var remotelessAllowed = false
 
     // Narrated auto-connect (Stream C parity with mobile). On launch, if no box
     // is picked yet, silently reach the account's best LIVE machine and connect,
@@ -316,6 +318,7 @@ final class YaverStore: ObservableObject {
     }
 
     func useRemotelessMode() {
+        guard remotelessAllowed else { return }
         remotelessMode = true
         storedRemotelessMode = true
         selectedBox = nil
@@ -380,7 +383,10 @@ final class YaverStore: ObservableObject {
             legacyStoredToken = ""
         }
         boxes = (try? JSONDecoder().decode([BoxTarget].self, from: Data(storedBoxesJSON.utf8))) ?? []
-        remotelessMode = storedRemotelessMode
+        // Fail closed until the live session refresh proves owner preview
+        // access. Older builds may have persisted this choice for any account.
+        remotelessMode = false
+        if storedRemotelessMode { storedRemotelessMode = false }
         selectedBox = remotelessMode ? nil : (boxes.first(where: { $0.id == selectedBoxId }) ?? boxes.first)
         refreshSessionOnLaunch()
     }
@@ -392,15 +398,21 @@ final class YaverStore: ObservableObject {
         let current = token
         guard !current.isEmpty else { return }
         Task { [weak self] in
-            let rotated = await DeviceCodeAuth.refreshSession(token: current)
-            guard let rotated, !rotated.isEmpty else { return }
+            guard let refresh = await DeviceCodeAuth.refreshSession(token: current) else { return }
             await MainActor.run {
                 guard let self else { return }
                 // Only adopt the rotated token if we're still on the same one —
                 // the user may have signed out/in while the refresh was in flight.
                 guard self.token == current else { return }
-                self.token = rotated
-                TokenStore.save(rotated)
+                self.remotelessAllowed = refresh.isOwner
+                if !refresh.isOwner {
+                    self.remotelessMode = false
+                    self.storedRemotelessMode = false
+                }
+                if let rotated = refresh.token, !rotated.isEmpty {
+                    self.token = rotated
+                    TokenStore.save(rotated)
+                }
             }
         }
     }
@@ -409,11 +421,15 @@ final class YaverStore: ObservableObject {
         self.token = token
         legacyStoredToken = ""
         TokenStore.save(token)
+        refreshSessionOnLaunch()
     }
 
     func signOut() {
         let current = token
         token = ""
+        remotelessAllowed = false
+        remotelessMode = false
+        storedRemotelessMode = false
         legacyStoredToken = ""
         TokenStore.clear()
         // Clear the machine list too. On a family Apple TV, leaving boxes behind

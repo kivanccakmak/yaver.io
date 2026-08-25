@@ -2016,6 +2016,11 @@ http.route({
     }
     const token = authHeader.slice(7);
     const tokenHash = await sha256Hex(token);
+    // Capture the server-computed preview entitlement before an opt-in token
+    // rotation invalidates the old hash. Native lean-back clients use this to
+    // fail closed without embedding an account identity in the public bundle.
+    const session = await authenticateRequest(ctx, request);
+    if (!session) return errorResponse("Session expired or invalid", 401);
 
     // Rotation is OPT-IN, not default-on. An older agent (<1.99.12)
     // that hits this endpoint calls POST /auth/refresh with no opt-in
@@ -2063,6 +2068,7 @@ http.route({
       token: result.rotated ? newToken : undefined,
       rotated: !!result.rotated,
       userId: userDocId ?? undefined,
+      isOwner: session.isOwner,
     });
   }),
 });

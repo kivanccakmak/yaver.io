@@ -430,7 +430,8 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
     latestCliVersion,
     lastError,
   } = deviceCtx;
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const remotelessEnabled = user?.isOwner === true;
 
   const connectedSet = React.useMemo(() => new Set(connectedDeviceIds), [connectedDeviceIds]);
   const eligibleDevices = React.useMemo(
@@ -961,10 +962,12 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
               Choose where work runs
             </Text>
             <Text style={{ color: c.textMuted, fontSize: 13, marginBottom: 20 }}>
-              Remote boxes support builds, shells, tests, and live reload. No remote box keeps coding and Git work on this phone with DeepSeek; it is never selected by default.
+              {remotelessEnabled
+                ? "Remote boxes support builds, shells, tests, and live reload. No remote box keeps coding and Git work on this phone with DeepSeek; it is never selected by default."
+                : "Choose the remote box that should run this work."}
             </Text>
 
-            <Pressable
+            {remotelessEnabled ? <Pressable
               onPress={() => {
                 setPickedRemoteless(true);
                 setPickedDeviceId(null);
@@ -996,7 +999,7 @@ export default function RemoteBoxPickerModal({ visible, onClose, onSelected }: P
                   {pickedRemoteless ? "SELECTED" : "LOCAL"}
                 </Text>
               </View>
-            </Pressable>
+            </Pressable> : null}
 
             {eligibleDevices.length === 0 ? (
               <Pressable

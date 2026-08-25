@@ -1458,6 +1458,11 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 		// the loose prompt-matcher when nothing identifies the target.
 		ProjectName string `json:"projectName"`
 		BundleID    string `json:"bundleId"`
+		// Preview overlays expose the same runner/model picker as the native
+		// feedback pane. These are per-turn pins: the label the user sees must
+		// be the runner/model CreateTask actually receives.
+		Runner string `json:"runner"`
+		Model  string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -1513,7 +1518,32 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 	// CheckRunnerReady (binary present + auth/config check). The
 	// configured primary still wins when it's actually ready, so the
 	// behaviour for healthy machines is unchanged.
-	pickedRunner := pickReadyVibingRunner(s)
+	pickedRunner := strings.TrimSpace(req.Runner)
+	if pickedRunner != "" {
+		pickedRunner = normalizeRunnerID(pickedRunner)
+		if !IsSupportedRunner(pickedRunner) {
+			jsonError(w, http.StatusBadRequest, "unsupported vibing runner: "+pickedRunner)
+			return
+		}
+		if !s.taskMgr.DummyMode {
+			cfg, ok := builtinRunners[pickedRunner]
+			if !ok {
+				jsonError(w, http.StatusBadRequest, "unknown vibing runner: "+pickedRunner)
+				return
+			}
+			if err := CheckRunnerReady(cfg, req.ProjectPath); err != nil {
+				jsonError(w, http.StatusConflict, fmt.Sprintf("runner %s is not ready: %v", pickedRunner, err))
+				return
+			}
+		}
+	} else {
+		pickedRunner = pickReadyVibingRunner(s)
+	}
+	pickedModel := strings.TrimSpace(req.Model)
+	if pickedModel != "" && !runnerModelCompatible(pickedRunner, pickedModel) {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("model %q is not compatible with runner %q", pickedModel, pickedRunner))
+		return
+	}
 
 	taskOpts := TaskCreateOptions{WorkDir: req.ProjectPath}
 	meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
@@ -1559,7 +1589,7 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 
 	taskOpts.InitialUserPrompt = req.Prompt
 	taskOpts.PromptText = composeRunnerPrompt(runnerBriefing, req.Prompt, "")
-	task, err := s.taskMgr.CreateTaskWithOptions(req.Prompt, "", "", "vibing", pickedRunner, "", nil, taskOpts)
+	task, err := s.taskMgr.CreateTaskWithOptions(req.Prompt, "", pickedModel, "vibing", pickedRunner, "", nil, taskOpts)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1569,6 +1599,7 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 		"ok":     true,
 		"taskId": task.ID,
 		"runner": pickedRunner,
+		"model":  pickedModel,
 	})
 }
 

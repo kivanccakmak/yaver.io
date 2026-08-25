@@ -133,6 +133,7 @@ import { isRepo } from "../../src/lib/codingAgent/sandboxGit";
 import { restoreTurnSnapshot, type TurnSnapshot } from "../../src/lib/codingAgent/turnTransaction";
 import { redactProgressText, redactSecrets, redactValue } from "../../src/lib/codingAgent/secretRedaction";
 import {
+  endRemotelessTask,
   listRemotelessTasks,
   recoverInterruptedRemotelessTasks,
 } from "../../src/lib/remotelessTaskLifecycle";
@@ -177,6 +178,11 @@ import SandboxGitPanel from "../../src/components/SandboxGitPanel";
 import { deriveRunnerBannerState, type RunnerFetchState } from "../../src/lib/runnerBannerState";
 import { reconcileRunnerAuthStatus, runnerPollCadenceMs, sameAgentStatus, sameRunnerList } from "../../src/lib/runnerPollPolicy";
 import { resolveRemotelessPlacement, type ExecutionCandidate } from "../../src/_core/remoteless";
+import {
+  canComposeWithRemoteless,
+  REMOTELESS_OWNER_ONLY_MESSAGE,
+  remotelessAccessAllowed,
+} from "../../src/lib/executionMode";
 import { isPhoneLocalTask, phoneLocalTurnStatus } from "../../src/lib/phoneLocalTaskRoutingCore";
 import { TaskHeader } from "../../src/components/TaskHeader";
 import {
@@ -2323,7 +2329,7 @@ export default function TasksScreen() {
             ) : null}
           </View>
           <View>
-            {phoneProjects.length > 0 ? (
+            {ownerRemotelessEnabled && phoneProjects.length > 0 ? (
               <>
                 <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 14 }]}>{codingMode === "local-only" ? "ON THIS PHONE" : "REMOTELESS FALLBACK"}</Text>
                 <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 10 }}>
@@ -2911,6 +2917,7 @@ export default function TasksScreen() {
 
   // Speech state
   const { token, user, logout } = useAuth();
+  const ownerRemotelessEnabled = remotelessAccessAllowed(user?.isOwner);
   const [autoRenderVibing, setAutoRenderVibing] = useState(false);
   useEffect(() => subscribeAutoRenderVibing(setAutoRenderVibing), []);
   useEffect(() => {
@@ -4803,6 +4810,10 @@ export default function TasksScreen() {
     const slug = selectedPhoneCheckout;
     const promptText = (promptOverride ?? newTaskTextRef.current).trim();
     if (!slug || !promptText) return;
+    if (!remotelessAccessAllowed(user?.isOwner)) {
+      Alert.alert("Owner preview", REMOTELESS_OWNER_ONLY_MESSAGE);
+      return;
+    }
     const config = await loadCodingConfig();
     if (!config) {
       Alert.alert(
@@ -4917,7 +4928,7 @@ export default function TasksScreen() {
       yaverAgentAbortersRef.current.delete(taskId);
       setIsSubmitting(false);
     }
-  }, [askModeEnabled, selectedPhoneCheckout, taskRouter]);
+  }, [askModeEnabled, selectedPhoneCheckout, taskRouter, user?.isOwner]);
 
   const handleCreateTask = async (promptOverride?: string, options?: { hideInitialPrompt?: boolean }) => {
     const submittedText = (promptOverride ?? newTaskTextRef.current).trim();
@@ -4972,6 +4983,23 @@ export default function TasksScreen() {
         [
           { text: "Cancel", style: "cancel" },
           { text: "Open Projects", onPress: () => taskRouter.push("/(tabs)/projects") },
+        ],
+      );
+      return;
+    }
+
+    if (taskExecutionPlacement.lane === "blocked") {
+      Alert.alert("Owner preview", taskExecutionPlacement.banner || REMOTELESS_OWNER_ONLY_MESSAGE);
+      return;
+    }
+
+    if (taskExecutionPlacement.lane !== "remote" && attachedImages.length > 0) {
+      Alert.alert(
+        "Images need a remote box",
+        "Phone-only execution currently accepts text-only prompts. Your prompt and images are still here; select a remote box to send them together.",
+        [
+          { text: "Keep editing", style: "cancel" },
+          { text: "Choose remote box", onPress: () => taskRouter.navigate("/devices" as any) },
         ],
       );
       return;
@@ -5522,6 +5550,7 @@ export default function TasksScreen() {
         return next;
       });
       setSelectedTask((prev) => prev ? stopLocal(prev) : prev);
+      void endRemotelessTask(taskId, "stopped", "Stopped.").catch(() => {});
       return;
     }
     try {
@@ -5647,7 +5676,8 @@ export default function TasksScreen() {
     // message would vanish with zero feedback (the 2026-07-21 "second follow-up
     // never submitted" report). The main composer already guards this way; the
     // follow-up path did not. Return BEFORE clearing the input so the text is kept.
-    if (!isPhoneLocalTask(selectedTask) && connectionStatus !== "connected") {
+    const isLocalFollowUp = isPhoneLocalTask(selectedTask) || selectedTask.runnerId === "yaver-agent";
+    if (!isLocalFollowUp && connectionStatus !== "connected") {
       Alert.alert(
         "Not connected",
         `Can't reach ${activeDevice?.name ?? "your machine"} right now — wait for the status dot to turn green, then tap Send again. Your message is kept.`,
@@ -5671,6 +5701,19 @@ export default function TasksScreen() {
       const slug = selectedTask.localCheckoutId;
       if (!promptText || !slug) {
         setIsSendingFollowUp(false);
+        return;
+      }
+      if (!remotelessAccessAllowed(user?.isOwner)) {
+        setIsSendingFollowUp(false);
+        Alert.alert("Owner preview", REMOTELESS_OWNER_ONLY_MESSAGE);
+        return;
+      }
+      if (followUpImages.length > 0) {
+        setIsSendingFollowUp(false);
+        Alert.alert(
+          "Images need a remote box",
+          "Remoteless follow-ups are text only for now. Your message and images are still here; switch to a remote task to send them.",
+        );
         return;
       }
       const config = await loadCodingConfig();
@@ -5767,6 +5810,14 @@ export default function TasksScreen() {
       const promptText = submittedText;
       if (!promptText) {
         setIsSendingFollowUp(false);
+        return;
+      }
+      if (followUpImages.length > 0) {
+        setIsSendingFollowUp(false);
+        Alert.alert(
+          "Images need a remote box",
+          "Yaver Agent follow-ups are text only for now. Your message and images are still here; switch to a remote task to send them.",
+        );
         return;
       }
       const taskId = selectedTask.id;
@@ -6318,15 +6369,20 @@ export default function TasksScreen() {
     add(activeDevice?.id, "focused");
     return rows;
   }, [activeDevice?.id, connectedDeviceIds, devices, machineRoles, primaryDeviceId, runnerSelectionDeviceId, secondaryDeviceId]);
-  const taskExecutionPlacement = useMemo(
-    () => resolveRemotelessPlacement({
+  const taskExecutionPlacement = useMemo(() => {
+    const placement = resolveRemotelessPlacement({
       capability: "code-edit",
       surface: Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : "web",
       candidates: taskExecutionCandidates,
       forceLocal: codingMode === "local-only",
-    }),
-    [codingMode, taskExecutionCandidates],
-  );
+    });
+    // The core placement engine is account-agnostic. Apply the server-derived
+    // owner entitlement at the UI boundary too, so stale local settings or a
+    // route-seeded phone checkout cannot silently enter Remoteless.
+    return placement.lane === "remoteless" && !ownerRemotelessEnabled
+      ? { ...placement, lane: "blocked" as const, banner: REMOTELESS_OWNER_ONLY_MESSAGE }
+      : placement;
+  }, [codingMode, ownerRemotelessEnabled, taskExecutionCandidates]);
   const phoneFallbackInUse = taskExecutionPlacement.lane === "remoteless" && (
     !!selectedPhoneCheckout || tasks.some((task) => task.source === "phone-local" && (task.status === "running" || task.status === "queued"))
   );
@@ -6492,7 +6548,10 @@ export default function TasksScreen() {
   // client means the user HAS a box to send a task to, even when this tab's
   // focused client has momentarily slipped to "disconnected".
   const hasAnyPooledConnection = anyPoolConnected;
-  const canComposeTask = isEffectivelyConnected || hasAnyPooledConnection;
+  const canComposeTask = canComposeWithRemoteless(
+    isEffectivelyConnected || hasAnyPooledConnection,
+    user?.isOwner,
+  );
 
   // The FAB's handler, hoisted so the "All Clear" empty state can offer the
   // same action — the old copy pointed at a + button that scrolls off-screen

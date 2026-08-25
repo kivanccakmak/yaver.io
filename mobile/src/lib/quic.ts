@@ -4692,14 +4692,18 @@ export class QuicClient {
   }
 
   /** Execute a vibing suggestion as a task or structured runtime action. */
-  async executeVibingSuggestion(prompt: string, projectPath: string): Promise<{ taskId?: string; runtimeDeploy?: any; message?: string }> {
+  async executeVibingSuggestion(
+    prompt: string,
+    projectPath: string,
+    options: { projectName?: string; runner?: string; model?: string } = {},
+  ): Promise<{ taskId?: string; runtimeDeploy?: any; message?: string; runner?: string; model?: string }> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(`${this.baseUrl}/vibing/execute`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, projectPath }),
+      body: JSON.stringify({ prompt, projectPath, ...options }),
     });
-    if (!res.ok) throw new Error(`Failed to execute: ${res.status}`);
+    if (!res.ok) throw new Error(await responseErrorMessage(res, `Failed to execute: ${res.status}`));
     return res.json();
   }
 

@@ -22,6 +22,11 @@ import {
   type ApplyTarget,
 } from "../mobile/src/lib/llmClient.ts";
 import { createOpenAiProvider } from "../mobile/src/lib/llmOpenAI.ts";
+import {
+  defaultDeepSeekCodingAgentConfig,
+  runCodingAgent,
+} from "../mobile/src/lib/codingAgent/runner.ts";
+import type { CodingSandbox } from "../mobile/src/lib/codingAgent/sandboxTools.ts";
 
 const liveEnabled = process.env.YAVER_LIVE_DEEPSEEK === "1";
 const apiKey = process.env.DEEPSEEK_API_KEY?.trim() ?? "";
@@ -58,6 +63,30 @@ describe("DeepSeek request compatibility", () => {
 });
 
 describe("DeepSeek live phone-side coding probe", { skip: !runLive }, () => {
+  it("completes the production agentic deep-audit tool loop", { timeout: 90_000 }, async () => {
+    const source = "export const REMOTELESS_AUDIT_MARKER = true;\n";
+    const sandbox: CodingSandbox = {
+      async readFile(path) {
+        if (path !== "src/marker.ts") throw new Error(`not found: ${path}`);
+        return source;
+      },
+      async listFiles() {
+        return [{ path: "src/marker.ts", isDirectory: false, size: source.length }];
+      },
+      async writeFile() { throw new Error("deep audit must stay read-only"); },
+      async deleteFile() { throw new Error("deep audit must stay read-only"); },
+    };
+    const result = await runCodingAgent({
+      prompt: "Deep-audit this tiny repository. You must inspect src/marker.ts with a tool, make no changes, and report the exported constant.",
+      sandbox,
+      config: defaultDeepSeekCodingAgentConfig(apiKey),
+      maxSteps: 6,
+    });
+    assert.ok(result.toolCalls.some((call) => call.name === "read_file"), "DeepSeek did not inspect the requested file");
+    assert.deepEqual(result.mutatedPaths, []);
+    assert.match(result.finalText, /REMOTELESS_AUDIT_MARKER/i);
+  });
+
   it("returns and applies a structured edit plan without exposing the key", { timeout: 90_000 }, async () => {
     const marker = `YAVER_DEEPSEEK_LIVE_${Date.now().toString(36).toUpperCase()}`;
     const provider = createOpenAiProvider({

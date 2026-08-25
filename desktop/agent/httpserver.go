@@ -3406,9 +3406,13 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 
 	var runners []runnerInfoRow
 	seenIDs := make(map[string]bool)
+	remotelessAllowed := s.taskMgr != nil && s.taskMgr.ownerPreviewAccessAllowed()
 	// Add default runner first, then others sorted by ID
 	defaultID := s.taskMgr.runner.RunnerID
 	addRunner := func(r RunnerConfig) {
+		if r.RunnerID == "remoteless" && !remotelessAllowed {
+			return
+		}
 		if seenIDs[r.RunnerID] {
 			return
 		}
@@ -3612,6 +3616,10 @@ func (s *HTTPServer) handleRunnerSwitch(w http.ResponseWriter, r *http.Request) 
 	}
 
 	runnerID := normalizeRunnerID(body.RunnerID)
+	if err := validateRemotelessRunnerAccess(s.taskMgr.ownerPreviewAccessAllowed(), runnerID); err != nil {
+		jsonError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if reason, retired := retiredRunnerReason(runnerID); retired {
 		jsonError(w, http.StatusBadRequest, reason)
 		return
