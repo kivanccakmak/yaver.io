@@ -27,6 +27,7 @@ import { loadBoxReadiness } from "../lib/boxInitStore";
 import { runBoxAction } from "../lib/boxInitStore";
 import {
   getDogfoodSourceStatus,
+  getDogfoodRunners,
   dogfoodNativeRuntimeAvailable,
   installDogfoodGit,
   installDogfoodSource,
@@ -54,25 +55,21 @@ const GIT_CONFIG_FAILURE_CODES = new Set([
 export default function AttachModeSection({
   c,
   readiness,
-  primaryOnly = false,
 }: {
   c: ThemeColors;
   readiness?: BoxReadiness | null;
-  primaryOnly?: boolean;
 }) {
   const {
     devices,
     activeDevice,
     connectionStatus,
     connectedDeviceIds,
-    primaryDeviceId,
     primaryRunnerByDevice,
+    primaryModelByDevice,
     selectDevice,
     setPrimaryRunnerForDevice,
   } = useDevice();
-  const primaryDevice = primaryDeviceId ? devices.find((d) => d.id === primaryDeviceId) ?? null : null;
-  const primaryConnected = !!primaryDevice && connectedDeviceIds.includes(primaryDevice.id);
-  const targetDevice = primaryOnly ? (primaryConnected ? primaryDevice : activeDevice ?? primaryDevice) : activeDevice;
+  const targetDevice = activeDevice;
   const targetConnected = !!targetDevice && (
     connectedDeviceIds.includes(targetDevice.id) ||
     (connectionStatus === "connected" && activeDevice?.id === targetDevice.id)
@@ -80,6 +77,7 @@ export default function AttachModeSection({
   const [checkoutDir, setCheckoutDir] = useState("");
   const [configLoaded, setConfigLoaded] = useState(false);
   const [runner, setRunner] = useState("codex");
+  const [runnerRows, setRunnerRows] = useState<Awaited<ReturnType<typeof getDogfoodRunners>>>([]);
   const [lane, setLane] = useState<DogfoodLane>("browser");
   const [nativeRuntimeAvailable, setNativeRuntimeAvailable] = useState(false);
   const [runnerSetupBusy, setRunnerSetupBusy] = useState(false);
@@ -139,11 +137,23 @@ export default function AttachModeSection({
     setRunner(primaryRunnerByDevice[targetDevice.id] || "codex");
   }, [primaryRunnerByDevice, targetDevice?.id]);
 
-  // Primary-device Dogfood should be one action in the normal case. The Go
+  useEffect(() => {
+    let cancelled = false;
+    if (!targetDevice?.id || !targetConnected) {
+      setRunnerRows([]);
+      return;
+    }
+    void getDogfoodRunners(targetDevice.id)
+      .then((rows) => { if (!cancelled) setRunnerRows(rows); })
+      .catch(() => { if (!cancelled) setRunnerRows([]); });
+    return () => { cancelled = true; };
+  }, [targetConnected, targetDevice?.id]);
+
+  // Dogfood should be one action in the normal case. The Go
   // agent owns this answer because only it can inspect the box's source and
   // Git origin. A cached client-side repo list is not an operational check.
   useEffect(() => {
-    if (!primaryOnly || !configLoaded || !targetConnected || !targetDevice?.id) return;
+    if (!configLoaded || !targetConnected || !targetDevice?.id) return;
     let cancelled = false;
     void (async () => {
       let status = await getDogfoodSourceStatus(targetDevice.id, checkoutDir.trim() || undefined);
@@ -165,7 +175,7 @@ export default function AttachModeSection({
   // The explicit checkout is verified by the debounced effect below; this
   // effect is for initial agent-owned discovery only.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configLoaded, primaryOnly, targetConnected, targetDevice?.id]);
+  }, [configLoaded, targetConnected, targetDevice?.id]);
 
   // Verification is the AGENT's answer, never a path guess here. Re-runs when
   // the directory or the box changes, and resets to "unknown" first so a stale
@@ -213,6 +223,9 @@ export default function AttachModeSection({
     nativeRuntimeAvailable,
     selfDevelopment: true,
   }), [nativeRuntimeAvailable]);
+  const normalizedRunner = runner === "claude-code" ? "claude" : runner;
+  const selectedRunnerRow = runnerRows.find((row) => (row.id === "claude-code" ? "claude" : row.id) === normalizedRunner);
+  const selectedModel = targetDevice?.id ? primaryModelByDevice[targetDevice.id] || "" : "";
 
   useEffect(() => {
     if (!laneOptions.some((option) => option.lane === lane && option.supported)) {
@@ -350,32 +363,46 @@ export default function AttachModeSection({
 
   return (
     <View>
-      <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Dogfood Yaver in the browser</Text>
+      <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Dogfood Yaver</Text>
 
-      {primaryOnly && !primaryDevice ? (
-        <Text style={{ color: c.warn, fontSize: 12, marginTop: 10 }}>
-          Pick a primary device in Settings before starting Dogfood mode.
-        </Text>
-      ) : null}
-
-      {primaryOnly && primaryDevice && !targetConnected ? (
-        <Pressable
-          disabled={connectingPrimary}
-          onPress={() => {
-            setConnectingPrimary(true);
-            void selectDevice(primaryDevice)
-              .catch((err) => setFailure({
-                error: err instanceof Error ? err.message : String(err),
-                remedy: "Wake or repair the primary device, then retry.",
-              }))
-              .finally(() => setConnectingPrimary(false));
-          }}
-          style={{ marginTop: 12, alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: c.accentSoft }}
-        >
-          <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>
-            {connectingPrimary ? "Connecting…" : `Connect ${primaryDevice.name}`}
-          </Text>
-        </Pressable>
+      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Device</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        {devices.map((device) => {
+          const selected = targetDevice?.id === device.id;
+          const connected = connectedDeviceIds.includes(device.id);
+          return (
+            <Pressable
+              key={device.id}
+              disabled={connectingPrimary}
+              onPress={() => {
+                setConnectingPrimary(true);
+                setFailure(null);
+                void selectDevice(device)
+                  .catch((err) => setFailure({
+                    error: err instanceof Error ? err.message : String(err),
+                    remedy: `Wake or repair ${device.name}, then retry.`,
+                  }))
+                  .finally(() => setConnectingPrimary(false));
+              }}
+              style={{
+                paddingHorizontal: 11,
+                paddingVertical: 8,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: selected ? c.accent : c.border,
+                backgroundColor: selected ? `${c.accent}22` : c.bg,
+                opacity: connected ? 1 : 0.65,
+              }}
+            >
+              <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: selected ? "700" : "500" }}>
+                {device.name}{connected ? "" : " · offline"}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {!devices.length ? (
+        <Text style={{ color: c.warn, fontSize: 12 }}>Connect a same-account device to start Dogfood.</Text>
       ) : null}
 
       {/* The gate. One line per step, each with its fix. */}
@@ -466,6 +493,22 @@ export default function AttachModeSection({
           );
         })}
       </View>
+      {selectedRunnerRow?.models?.length ? (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+          {selectedRunnerRow.models.map((model) => {
+            const on = selectedModel === model.id || (!selectedModel && model.isDefault);
+            return (
+              <Pressable
+                key={model.id}
+                onPress={() => targetDevice?.id && void setPrimaryRunnerForDevice(targetDevice.id, runner, model.id)}
+                style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: on ? c.accent : c.border, backgroundColor: on ? `${c.accent}22` : c.bg }}
+              >
+                <Text style={{ color: c.textPrimary, fontSize: 11, fontWeight: on ? "700" : "500" }}>{model.name || model.id}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
       {verified === true && runnerCheck && runnerCheck.status !== "ok" ? (
         <Pressable
           disabled={runnerSetupBusy}

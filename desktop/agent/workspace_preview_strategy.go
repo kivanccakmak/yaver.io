@@ -481,23 +481,6 @@ func isDirPath(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-// ShouldRefuseYaverSelfDevelopmentHermes is the decision behind the
-// /dev/build-native recursion guard, split out so it can be tested without
-// driving a real Metro/hermesc build.
-//
-// Only the mobile-hermes target is dangerous: it loads a bundle INTO the Yaver
-// container, which is what puts two shake/exit owners in one process. The web
-// targets render pixels in a browser and cannot trap anyone — refusing those
-// would block the very route this guard steers people toward.
-func ShouldRefuseYaverSelfDevelopmentHermes(buildTarget, workDir, projectName, bundleID string) bool {
-	if buildTarget != "mobile-hermes" {
-		return false
-	}
-	// Identity, never ancestor path: `yaver.io/demo/mobile/todo-rn` is a
-	// third-party fixture that legitimately wants Hermes.
-	return IsYaverSelfDevelopmentDir(workDir) || IsYaverSelfDevelopment(projectName, bundleID)
-}
-
 // EscapeOwner is the layer that owns the exit affordance for a preview.
 type EscapeOwner string
 
@@ -513,56 +496,32 @@ const (
 )
 
 // EscapeOwnerFor returns who owns the exit for a strategy.
-func EscapeOwnerFor(p PreviewStrategy, selfDev bool) EscapeOwner {
+func EscapeOwnerFor(p PreviewStrategy, _ bool) EscapeOwner {
 	switch p {
 	case PreviewChromeWebRTC, PreviewRedroidWebRTC:
 		// Pixels. Structurally safe, self-development or not.
 		return EscapeNativeViewer
 	case PreviewHermesBundle:
-		if selfDev {
-			// Two identical layers, both claiming shake. This is the trap.
-			return EscapeAmbiguous
-		}
+		// Native host code owns the escape, not either JS bundle. iOS uses
+		// AppDelegate/CoreMotion to present Back to Yaver above the guest;
+		// Android unloads the guest from its native shake detector. Yaver's
+		// own JS therefore cannot capture the way out.
 		return EscapeContainerOverlay
 	default:
 		return EscapeNativeViewer
 	}
 }
 
-// ResolveSelfDevelopmentPreview is ResolveWorkspacePreview with the recursion
-// guard applied.
-//
-// Yaver-on-Yaver is forced onto chrome-webrtc even when a device is paired and
-// Hermes would otherwise win. Two independent reasons, either sufficient:
-//
-//  1. SAFETY — Hermes puts two identical shake-owning layers in one process
-//     (see above). Pixels cannot trap the host.
-//  2. SPEED — the chrome-webrtc reload chain is save → HMR → repaint → frame,
-//     roughly 200-600ms. The Hermes chain is save → Metro rebuild → HBC compile
-//     → device pull → bridge reload, roughly 2-6s. An order of magnitude, on the
-//     loop we run most.
-//
-// Accepted limitation, stated rather than hidden: this exercises the RN WEB
-// target, not the native container. Hermes loader, ShakeDetectingWindow and
-// YaverHTTPServer are NOT covered — native-container changes still need
-// `yaver wire push` to a real device.
+// ResolveSelfDevelopmentPreview keeps Yaver on the same lane contract as every
+// React Native project: Hermes exercises the installed container, browser
+// exercises RN-web, and WebRTC exercises a native runtime. The native host
+// owns the Hermes escape (EscapeOwnerFor), outside the guest JS bridge.
 func ResolveSelfDevelopmentPreview(projectSlug, repoURL string, hasPairedDevice bool) WorkspacePreviewPlan {
 	plan := ResolveWorkspacePreview("react-native", hasPairedDevice)
 	if !IsYaverSelfDevelopment(projectSlug, repoURL) {
 		return plan
 	}
-	plan.Primary = PreviewChromeWebRTC
-	// Hermes is REMOVED from the fallbacks, not merely deprioritised. A
-	// fallback that can trap the user is not a fallback.
-	plan.Fallbacks = nil
-	plan.MachineClass = "standard"
-	plan.Feedback = FeedbackInAppSDK
-	plan.Supported = true
-	plan.Reason = "Yaver developing Yaver: forced to chrome-webrtc. Hermes would load Yaver " +
-		"into Yaver — two identical layers both owning shake, so the preview could not be " +
-		"exited. Streaming pixels keeps the escape in the phone's native chrome, where the " +
-		"previewed app cannot reach it. Covers the RN web target; native-container changes " +
-		"still need `yaver wire push`."
+	plan.Reason = "Yaver developing Yaver uses the normal React Native lane matrix: Hermes for the real container, browser for RN-web, and WebRTC for a native runtime. The installed host's native Back to Yaver escape remains outside the guest JS bridge."
 	return plan
 }
 

@@ -2,16 +2,12 @@
 //
 // ── The escape lives out here, and that is the whole safety argument ────────
 //
-// Hermes is refused for Yaver-on-Yaver because it puts two shake/exit owners in
-// one React Native process: the previewed Yaver and the host Yaver both claim
-// shake, so the preview cannot reliably be exited. The web target has no such
-// problem — a WebView cannot register an RN gesture handler on the host and
-// cannot draw over native controls.
+// Browser Dogfood runs in a WebView, while Hermes Dogfood uses the native
+// AppDelegate/YaverShakeDetector escape that survives replacement of the JS
+// runtime. Both lanes therefore keep their exit owner outside guest content.
 //
-// That is only true while the escape stays OUTSIDE the WebView. The two small
-// floating controls below are native siblings, always mounted above the
-// attached content. Moving them inside the WebView reintroduces exactly the
-// trap the refusal exists to prevent.
+// This browser-lane escape stays OUTSIDE the WebView. BrowserVibeBubble is a
+// native sibling, always mounted above the attached content.
 //
 // ── What the user sees ─────────────────────────────────────────────────────
 //
@@ -50,6 +46,7 @@ import {
 } from "../src/lib/feedbackTrigger";
 import { appLog } from "../src/lib/logger";
 import { parseDogfoodRenderMessage } from "../src/lib/dogfoodRenderBridge";
+import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
 
 function elapsedLabel(sinceMs: number): string {
   const secs = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
@@ -272,37 +269,16 @@ export default function AttachScreen() {
         ) : null}
       </View>
 
-      {/* NATIVE ESCAPE — a sibling of the WebView, not content inside it.
-          zIndex/elevation keep it reachable even when the rendered Yaver is
-          broken. The app itself still gets the entire layout surface. */}
-      <View pointerEvents="box-none" style={styles.floatingControls}>
-        <Pressable
-          onPress={confirmDetach}
-          accessibilityRole="button"
-          accessibilityLabel="Exit Dogfood mode and switch to Production"
-          hitSlop={8}
-          style={({ pressed }) => [
-            styles.floatingButton,
-            { backgroundColor: c.bgCard, borderColor: c.border },
-            pressed && styles.pressed,
-          ]}
-        >
-          <Text style={[styles.exitGlyph, { color: c.textPrimary }]}>Y</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => reloadDogfoodSurface("manual")}
-          accessibilityRole="button"
-          accessibilityLabel="Re-render Yaver"
-          hitSlop={8}
-          style={({ pressed }) => [
-            styles.floatingButton,
-            { backgroundColor: c.bgCard, borderColor: c.border },
-            pressed && styles.pressed,
-          ]}
-        >
-          <Text style={[styles.reloadGlyph, { color: c.textPrimary }]}>↻</Text>
-        </Pressable>
-      </View>
+      {/* Native sibling: Vibing, Fast Reload, two-level routing, and escape. */}
+      <BrowserVibeBubble
+        projectPath={params.workDir}
+        projectName="Yaver"
+        onExitPreview={confirmDetach}
+        onReload={() => {
+          reloadDogfoodSurface("manual");
+          return true;
+        }}
+      />
 
       {lastEvent ? (
         <View pointerEvents="none" style={[styles.quietStatus, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -380,29 +356,6 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   surface: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  floatingControls: {
-    position: "absolute",
-    right: 10,
-    top: 10,
-    flexDirection: "row",
-    gap: 7,
-    zIndex: 30,
-    elevation: 30,
-  },
-  floatingButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  exitGlyph: { fontSize: 14, fontWeight: "800", letterSpacing: -0.5 },
-  reloadGlyph: { fontSize: 18, lineHeight: 20 },
   pressed: { opacity: 0.62, transform: [{ scale: 0.96 }] },
   quietStatus: {
     position: "absolute",

@@ -3203,35 +3203,6 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 	// based (see classify.go::detectFramework) so this is cheap and
 	// consistent with the rest of the agent's framework typing.
 	if buildTarget == "mobile-hermes" {
-		// Yaver-into-Yaver recursion guard, enforced HERE rather than in a
-		// surface's action sheet.
-		//
-		// workspace_preview_strategy.go documents this as "a REFUSAL, not a
-		// preference", but for a while the only thing implementing it was the
-		// mobile Projects action sheet — which merely hides buttons. Every
-		// other caller of this endpoint reached the trap unimpeded: the web
-		// dashboard, `ops`/MCP verbs, the CLI, tvOS, a second phone, and the
-		// feedback→vibe auto-fix path that calls /dev/build-native directly.
-		// Hiding a button is not a guard; the operation has to refuse.
-		//
-		// The trap itself: a Hermes bundle of Yaver loaded into the Yaver
-		// container puts two identical shake/exit owners in one RN process, so
-		// the inner preview can capture the escape gesture and strand the user
-		// in an app they cannot leave.
-		if ShouldRefuseYaverSelfDevelopmentHermes(buildTarget, workDir, req.ProjectName, req.BundleID) {
-			jsonReply(w, http.StatusConflict, map[string]string{
-				"error": "build-native: refusing to build a Hermes bundle of Yaver for the Yaver container. " +
-					"Loading Yaver into Yaver puts two identical shake/exit owners in one React Native " +
-					"process, so the preview cannot be exited. Use the browser/WebRTC preview instead " +
-					"(remote-runtime / 'Stream over WebRTC'), where the escape stays in the phone's " +
-					"native chrome. Native-container changes still need `yaver wire push` to a real device.",
-				"code":     "YAVER_SELF_DEVELOPMENT_RECURSION",
-				"remedy":   "stream-over-webrtc",
-				"strategy": string(PreviewChromeWebRTC),
-			})
-			return
-		}
-
 		framework := detectFramework(workDir)
 		switch framework {
 		case "expo", "react-native":

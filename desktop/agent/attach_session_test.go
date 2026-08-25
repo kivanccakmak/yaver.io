@@ -200,7 +200,7 @@ func TestAttachScopeDeniesTheDangerousRoutes(t *testing.T) {
 		{"POST", "/rd/input"},
 		{"GET", "/rd/stream"},
 		{"POST", "/approve-device"},
-		{"POST", "/dev/build-native"}, // Hermes: refused for self-dev anyway
+		{"POST", "/dev/build-native"}, // attach capability is browser-only; owner auth starts Hermes builds
 		{"DELETE", "/tasks"},          // wrong method on an allowed prefix
 		{"POST", "/info"},             // wrong method on an allowed prefix
 		{"GET", "/"},                  // must not match everything

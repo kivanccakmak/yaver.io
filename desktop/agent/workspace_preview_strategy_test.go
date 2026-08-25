@@ -78,23 +78,13 @@ func TestResolveWorkspacePreview(t *testing.T) {
 	}
 }
 
-func TestYaverSelfDevelopmentRecursionGuard(t *testing.T) {
-	// Yaver-on-Yaver must be forced to chrome-webrtc EVEN WITH a paired device,
-	// where Hermes would otherwise win. Pixels cannot trap the host.
+func TestYaverSelfDevelopmentKeepsReactNativeLanePlan(t *testing.T) {
 	p := ResolveSelfDevelopmentPreview("yaver.io", "git@github.com:yaver-io/yaver.io.git", true)
-	if p.Primary != PreviewChromeWebRTC {
-		t.Fatalf("self-dev must force chrome-webrtc, got %q", p.Primary)
+	if p.Primary != PreviewHermesBundle {
+		t.Fatalf("paired self-dev should exercise the real Hermes container, got %q", p.Primary)
 	}
-	// Hermes must be REMOVED, not merely deprioritised: a fallback that can
-	// trap the user is not a fallback.
-	for _, f := range p.Fallbacks {
-		if f == PreviewHermesBundle {
-			t.Fatal("hermes must not remain a fallback for self-development")
-		}
-	}
-	// The refusal must be explained, or it looks like a resolver bug.
-	if !strings.Contains(p.Reason, "shake") {
-		t.Fatalf("refusal must name the recursion cause, got: %s", p.Reason)
+	if !strings.Contains(p.Reason, "native Back to Yaver") {
+		t.Fatalf("self-development must name the native escape owner, got: %s", p.Reason)
 	}
 	// A third-party RN app with a device still gets Hermes — the guard must be
 	// narrow, not a blanket downgrade.
@@ -118,9 +108,9 @@ func TestEscapeOwnership(t *testing.T) {
 	if EscapeOwnerFor(PreviewHermesBundle, false) != EscapeContainerOverlay {
 		t.Fatal("hermes guest should be owned by the container overlay")
 	}
-	// ...and AMBIGUOUS for Yaver-on-Yaver. That is the trap this guards.
-	if EscapeOwnerFor(PreviewHermesBundle, true) != EscapeAmbiguous {
-		t.Fatal("hermes self-development must report an ambiguous escape owner")
+	// ...including Yaver-on-Yaver, because native host code owns the escape.
+	if EscapeOwnerFor(PreviewHermesBundle, true) != EscapeContainerOverlay {
+		t.Fatal("hermes self-development must keep the native container escape")
 	}
 }
 

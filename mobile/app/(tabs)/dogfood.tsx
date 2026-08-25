@@ -24,7 +24,7 @@ export default function DogfoodScreen() {
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <AppScreenHeader title="Develop Yaver" onBack={() => router.navigate("/(tabs)/more" as any)} />
       <ScrollView contentContainerStyle={[{ padding: 16, paddingBottom: 40 }, tabletContent]}>
-        <AttachModeSection c={c} primaryOnly />
+        <AttachModeSection c={c} />
       </ScrollView>
     </View>
   );

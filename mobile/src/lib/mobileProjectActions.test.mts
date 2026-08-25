@@ -4,7 +4,6 @@ import {
   applyPreviewCapabilities,
   guardYaverSelfDevelopmentActions,
   isYaverSelfDevelopmentProject,
-  YAVER_SELF_DEV_HERMES_BLOCK_REASON,
   workspaceAppLanes,
   type MobileProjectAction,
 } from "./mobileProjectActions.ts";
@@ -27,17 +26,11 @@ test("does not classify third-party RN apps as Yaver self-development", () => {
   assert.equal(isYaverSelfDevelopmentProject("todo", "/Users/me/Workspace/todo/mobile", "git@github.com:acme/todo.git"), false);
 });
 
-test("Yaver self-development puts WebRTC first and blocks Hermes actions", () => {
+test("Yaver self-development preserves browser, Hermes, and WebRTC actions", () => {
   const planned = guardYaverSelfDevelopmentActions(actions, "mobile", "/Users/me/Workspace/yaver.io/mobile");
-
-  assert.equal(planned[0].type, "remote-runtime");
-  assert.equal(planned[0].label, "Stream over WebRTC");
-
-  const openNative = planned.find((a) => a.type === "open-native");
-  const compile = planned.find((a) => a.type === "compile-hermes");
-  assert.equal(openNative?.supported, false);
-  assert.equal(compile?.supported, false);
-  assert.equal(openNative?.reason, YAVER_SELF_DEV_HERMES_BLOCK_REASON);
+  assert.deepEqual(planned.map((a) => a.type), actions.map((a) => a.type));
+  assert.equal(planned.find((a) => a.type === "open-native")?.supported, true);
+  assert.equal(planned.find((a) => a.type === "compile-hermes")?.supported, true);
 });
 
 test("third-party RN apps keep the agent/fallback order", () => {

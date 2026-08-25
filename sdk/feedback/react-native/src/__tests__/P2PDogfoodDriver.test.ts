@@ -60,4 +60,21 @@ describe('createP2PDogfoodDriver', () => {
     await controller.stop();
     expect(closeRuntime).toHaveBeenCalledWith('runtime-1');
   });
+
+  it('delivers Hermes without stopping an unrelated dev server on exit', async () => {
+    const stop = jest.fn(async () => {});
+    const client = {
+      subscribeDogfoodDevEvents: () => jest.fn(),
+      startDogfoodDevServer: jest.fn(async () => ({ running: true, framework: 'expo', workDir: '/workspace/app' })),
+      stopDogfoodDevServer: stop,
+    } as unknown as P2PClient;
+    const controller = new DogfoodController(
+      { name: 'RN app', framework: 'expo', workDir: '/workspace/app', lane: 'hermes' },
+      createP2PDogfoodDriver(client),
+    );
+
+    await expect(controller.trigger()).resolves.toMatchObject({ lane: 'hermes', metadata: { delivered: true } });
+    await controller.stop();
+    expect(stop).not.toHaveBeenCalled();
+  });
 });

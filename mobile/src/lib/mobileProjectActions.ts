@@ -104,7 +104,7 @@ export function applyPreviewCapabilities(
     const tmpl = byType.get(o.id);
     if (tmpl) {
       // Local template exists: merge the agent's verdict onto it. The local
-      // surface can also veto (e.g. Hermes compatibility, self-dev guard) —
+      // surface can also veto (for example Hermes compatibility) —
       // both must agree for the lane to be enabled.
       return {
         ...tmpl,
@@ -206,35 +206,19 @@ export function isYaverSelfDevelopmentProject(project?: string, path?: string, r
     haystack.includes("io.yaver.mobile");
 }
 
-export const YAVER_SELF_DEV_HERMES_BLOCK_REASON =
-  "Yaver developing Yaver must use WebRTC/browser preview. Loading Yaver into Yaver via Hermes puts two shake/exit owners in one process, so the preview can trap the host app.";
-
 export function guardYaverSelfDevelopmentActions(
   actions: MobileProjectAction[],
   project?: string,
   path?: string,
   repoURL?: string,
 ): MobileProjectAction[] {
-  if (!isYaverSelfDevelopmentProject(project, path, repoURL)) {
-    return actions;
-  }
-
-  const guarded = actions.map((action) => {
-    if ((action.type === "open-native" || action.type === "compile-hermes") && isHermesMobileFramework(action.framework)) {
-      return {
-        ...action,
-        supported: false,
-        reason: YAVER_SELF_DEV_HERMES_BLOCK_REASON,
-      };
-    }
-    return action;
-  });
-
-  const firstRemoteRuntime = guarded.findIndex((action) => action.type === "remote-runtime" && isHermesMobileFramework(action.framework));
-  if (firstRemoteRuntime <= 0) {
-    return guarded;
-  }
-
-  const [remoteRuntime] = guarded.splice(firstRemoteRuntime, 1);
-  return [remoteRuntime, ...guarded];
+  // Self-development used to disable Hermes because its JS runtime could not
+  // own a trustworthy escape. The escape now lives below JS (AppDelegate on
+  // iOS, YaverShakeDetector on Android), so Yaver follows the same three-lane
+  // contract as every other React Native project. Keep this compatibility
+  // function for mixed-version callers, but never rewrite the agent's lanes.
+  void project;
+  void path;
+  void repoURL;
+  return actions;
 }

@@ -10,10 +10,9 @@
  * the app you are looking at.
  *
  * That makes ONE property load-bearing above all others: the way out must live
- * in a NATIVE control, outside the WebView. Hermes is refused for this exact
- * scenario (409 YAVER_SELF_DEVELOPMENT_RECURSION) because two shake/exit owners
- * in one RN process means the preview cannot reliably be exited. The web target
- * is only safe because a WebView cannot register a gesture handler on the host
+ * in a NATIVE control, outside the WebView. Hermes has a separate native escape
+ * below the replaceable JS runtime. The browser target is safe because a
+ * WebView cannot register a gesture handler on the host
  * or draw over native controls — so if the exit control ever moves inside the
  * WebView, or loses its native overlay, the mode becomes a
  * one-way door on the user's own phone. There is no recovery from inside: the

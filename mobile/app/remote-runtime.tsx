@@ -5,8 +5,9 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { AppScreenHeader } from "../src/components/AppScreenHeader";
+import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
 import { useColors } from "../src/context/ThemeContext";
-import { quicClient, type RemoteRuntimeCapabilities, type RemoteRuntimeSession } from "../src/lib/quic";
+import { devReloadReachedTarget, quicClient, type RemoteRuntimeCapabilities, type RemoteRuntimeSession } from "../src/lib/quic";
 import { setActiveRemoteRuntimeSession, triggerFeedbackLaunch } from "../src/lib/feedbackTrigger";
 
 export default function RemoteRuntimeScreen() {
@@ -219,6 +220,23 @@ export default function RemoteRuntimeScreen() {
       Alert.alert("Could not close session", e instanceof Error ? e.message : String(e));
     }
   }, [session]);
+
+  const exitRuntime = useCallback(() => {
+    void (async () => {
+      if (session) await closeSession();
+      router.back();
+    })();
+  }, [closeSession, router, session]);
+
+  const reloadRuntime = useCallback(async (kind: "fast" | "full") => {
+    const result = await quicClient.reloadDevServerDetailed({
+      mode: kind,
+      allowBundleFallback: false,
+      projectName: project,
+      projectPath: path,
+    });
+    return devReloadReachedTarget(result);
+  }, [path, project]);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.bg }]} edges={["top", "left", "right"]}>
@@ -443,6 +461,12 @@ export default function RemoteRuntimeScreen() {
           </View>
         </View>
       ) : null}
+      <BrowserVibeBubble
+        projectPath={path}
+        projectName={project}
+        onExitPreview={exitRuntime}
+        onReload={reloadRuntime}
+      />
     </SafeAreaView>
   );
 }

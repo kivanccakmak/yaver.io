@@ -183,23 +183,10 @@ func DetectProjectPreviewCapabilities(workDir, frameworkHint string, hasPairedDe
 	// ── React Native / Expo — the only Hermes-capable stacks ─────────────
 	case hermesCapableFramework(framework):
 		if caps.SelfDevelopment {
-			// Yaver-into-Yaver withholds HERMES — and only Hermes. The web
-			// lane is the route the refusal itself names
-			// (ShouldRefuseYaverSelfDevelopmentHermes: "refusing those would
-			// block the very route this guard steers people toward"), so it
-			// MUST be advertised here.
-			//
-			// It was not, until 2026-08-02. This arm offered exactly one
-			// option — Stream over WebRTC — and mobileProjectActions.ts's
-			// consuming rule is "a lane the agent doesn't offer is ABSENT,
-			// not greyed out". So Browser Reload did not exist as a button
-			// for Yaver's own repo: the refusal said "go this way" and the
-			// advertiser never drew the door. Attach Mode (Yaver rendering
-			// Yaver over the browser lane) was unreachable by construction.
-			//
-			// The pairing is now asserted by TestSelfDevOffersTheLaneTheRefusalNames:
-			// whatever ShouldRefuseYaverSelfDevelopmentHermes leaves legal,
-			// this arm must offer.
+			// Native host code owns Back to Yaver outside the guest JS bridge:
+			// AppDelegate/CoreMotion on iOS and the native unload/recreate path
+			// on Android. Yaver's own bundle therefore uses the same three-lane
+			// contract as every other React Native project.
 			caps.Options = append(caps.Options,
 				ProjectPreviewOption{
 					ID: PreviewOptionDevServer, Label: "Browser Reload",
@@ -208,14 +195,22 @@ func DetectProjectPreviewCapabilities(workDir, frameworkHint string, hasPairedDe
 						"lives in the phone's native chrome, outside anything the previewed app can reach",
 				},
 				ProjectPreviewOption{
+					ID: PreviewOptionOpenNative, Label: "Open in Yaver",
+					Supported: hasPairedDevice, Framework: framework,
+					Reason: pairedDeviceReason(hasPairedDevice),
+				},
+				ProjectPreviewOption{
+					ID: PreviewOptionHermes, Label: "Compile Hermes bundle",
+					Supported: true, Framework: framework,
+					Reason: "the installed host keeps a native Back to Yaver escape outside the guest JS bridge",
+				},
+				ProjectPreviewOption{
 					ID: PreviewOptionRemoteRuntime, Label: "Stream over WebRTC",
 					Supported: true, Framework: framework,
-					Reason: "streams pixels from a browser on the box; heavier than Browser Reload, same escape guarantee",
+					Reason: "runs Yaver on a native runtime and streams its pixels to the viewer",
 				},
 			)
-			caps.Reason = "Yaver self-development: Hermes is withheld because loading Yaver into Yaver " +
-				"puts two shake/exit owners in one React Native process and the preview could not be exited. " +
-				"The web target is unaffected and is the primary route."
+			caps.Reason = "Yaver self-development supports Browser Reload, Hermes in the installed host, and native WebRTC. Native host code owns the Hermes escape."
 		} else {
 			caps.Options = append(caps.Options,
 				ProjectPreviewOption{

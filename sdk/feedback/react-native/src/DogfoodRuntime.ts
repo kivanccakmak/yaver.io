@@ -48,14 +48,18 @@ export function dogfoodLaneOptions(
 ): DogfoodLaneOption[] {
   const normalized = String(framework || '').trim().toLowerCase();
   const reactNative = normalized === 'expo' || normalized === 'react-native';
+  const browserCapable = reactNative || [
+    'flutter', 'web', 'next', 'nextjs', 'vite', 'remix', 'svelte', 'vue', 'angular',
+  ].includes(normalized);
   const nativeAvailable = capabilities.nativeRuntimeAvailable === true;
-  const hermesReason = !reactNative
-    ? 'Hermes is available only for Expo and React Native projects.'
-    : capabilities.selfDevelopment
-      ? 'Yaver cannot load Yaver into its own Hermes host because two native shake/exit owners could trap the control app.'
-      : undefined;
+  const hermesReason = reactNative
+    ? undefined
+    : 'Hermes is available only for Expo and React Native projects.';
+  const browserReason = browserCapable
+    ? undefined
+    : 'The browser lane is available for browser-capable projects such as React Native, Expo, Flutter, and web apps.';
   return [
-    { lane: 'browser', label: 'Browser lane', supported: true, default: true },
+    { lane: 'browser', label: 'Browser lane', supported: browserCapable, default: browserCapable, reason: browserReason },
     { lane: 'hermes', label: 'Hermes', supported: !hermesReason, default: false, reason: hermesReason },
     {
       lane: 'webrtc', label: 'WebRTC native', supported: nativeAvailable, default: false,
@@ -215,7 +219,11 @@ export class DogfoodController {
   readonly project: DogfoodProject;
   private readonly driver: DogfoodDriver;
   private generation = 0;
-  private cleanups: Cleanup[] = [];
+  // Cleanup ownership is per attempt. An old async attempt may finish after
+  // Stop + Retry has already acquired a new runtime; a shared list lets that
+  // obsolete attempt tear down the newer session. Generation-keyed ownership
+  // makes that race impossible while keeping Stop able to release everything.
+  private cleanups = new Map<number, Cleanup[]>();
   private runPromise: Promise<DogfoodResult> | null = null;
   private readonly maxLogLines: number;
   private readonly onChange?: (snapshot: DogfoodSnapshot) => void;
@@ -286,7 +294,9 @@ export class DogfoodController {
           void Promise.resolve(cleanup()).catch(() => {});
           return;
         }
-        this.cleanups.push({ fn: cleanup, scope });
+        const owned = this.cleanups.get(generation) || [];
+        owned.push({ fn: cleanup, scope });
+        this.cleanups.set(generation, owned);
       },
       isCurrent: () => generation === this.generation,
     };
@@ -300,7 +310,7 @@ export class DogfoodController {
       context.setPhase('starting', `Starting ${this.project.name} on the ${this.project.lane} lane…`);
       const result = await this.driver.start(context);
       if (!context.isCurrent()) {
-        await this.runCleanups('all');
+        await this.runCleanups('all', generation);
         throw new DogfoodRuntimeError({
           code: 'DOGFOOD_ATTEMPT_REPLACED', error: 'A newer Dogfood attempt replaced this one.',
           remedy: 'Wait for the newer attempt.', retryable: true,
@@ -310,7 +320,7 @@ export class DogfoodController {
       return result;
     } catch (error) {
       const failure = failureFrom(error);
-      await this.runCleanups('all');
+      await this.runCleanups('all', generation);
       if (generation === this.generation) {
         this.replace({ ...this.state, phase: 'failed', message: failure.error, failure, result: undefined });
       }
@@ -334,14 +344,23 @@ export class DogfoodController {
    */
   async handoff(): Promise<DogfoodResult | undefined> {
     if (this.state.phase !== 'ready') return undefined;
-    await this.runCleanups('transient');
-    this.cleanups = [];
+    await this.runCleanups('transient', this.generation);
+    // The receiving screen now owns the live session. Forget its session
+    // cleanup without touching cleanups belonging to any other generation.
+    this.cleanups.delete(this.generation);
     return this.state.result;
   }
 
-  private async runCleanups(which: 'all' | 'transient'): Promise<void> {
-    const selected = which === 'all' ? this.cleanups : this.cleanups.filter((item) => item.scope === 'transient');
-    this.cleanups = which === 'all' ? [] : this.cleanups.filter((item) => item.scope !== 'transient');
+  private async runCleanups(which: 'all' | 'transient', generation?: number): Promise<void> {
+    const generations = generation === undefined ? [...this.cleanups.keys()] : [generation];
+    const selected: Cleanup[] = [];
+    for (const key of generations) {
+      const owned = this.cleanups.get(key) || [];
+      selected.push(...(which === 'all' ? owned : owned.filter((item) => item.scope === 'transient')));
+      const retained = which === 'all' ? [] : owned.filter((item) => item.scope !== 'transient');
+      if (retained.length) this.cleanups.set(key, retained);
+      else this.cleanups.delete(key);
+    }
     for (const cleanup of selected.reverse()) {
       try { await cleanup.fn(); } catch { /* cleanup is best-effort but never skipped */ }
     }

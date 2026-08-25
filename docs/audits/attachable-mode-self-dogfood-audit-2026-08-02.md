@@ -5,11 +5,12 @@ not run). Every claim below is `file:line`-anchored; nothing is taken from a
 `.md`.
 
 > 2026-08-25 source update: the product entry is now available to every signed-in
-> contributor under More → Develop Yaver. It targets the account's primary
+> contributor under More → Develop Yaver. It targets any connected device on
+> the account, with the device choice visible in place,
 > device, accepts either a canonical clone or a fork with canonical `upstream`,
 > serves `mobile/` through Expo's
-> browser lane, and keeps only a small native `Y` escape plus `↻` re-render
-> control above the otherwise full-screen app. Exit asks before returning to
+> browser lane, and keeps the native Vibing control plus adjacent Fast Reload
+> above the otherwise full-screen app. Exit asks before returning to
 > Production. Entry now fails closed through connection, checkout, Expo start,
 > reported URL and browser-lane render probes; any failed attempt revokes its
 > partial attach session and returns a stable code plus remedy. The inner RN-web Tasks
@@ -29,9 +30,9 @@ not run). Every claim below is `file:line`-anchored; nothing is taken from a
 > `sdk/feedback/react-native/src/DogfoodRuntime.ts` now provides the
 > reusable explicit-trigger lifecycle, retry cleanup, raw `/dev/events` console,
 > and one Browser/Hermes/WebRTC lane matrix. Browser is the default for Expo,
-> React Native, and Flutter. Hermes is Expo/RN-only; Yaver self-development keeps
-> it visibly unavailable because nested Yaver shake/exit ownership can trap the
-> control app. Native WebRTC is offered only after a real enabled runtime target
+> React Native, and Flutter. Hermes is Expo/RN-only, including Yaver itself: its
+> escape owner now lives below replaceable JS on iOS and Android. Native WebRTC
+> is offered only after a real enabled runtime target
 > is measured. Yaver mobile is the first consumer and Projects/Dogfood share the
 > same browser start and reconnecting log-stream adapter.
 

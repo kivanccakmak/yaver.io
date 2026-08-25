@@ -22,9 +22,6 @@ package main
 //     downgrade for Swift.
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,7 +90,7 @@ func TestIsYaverSelfDevelopmentDir_ThirdPartyFixtureInsideTheRepoIsNotSelfDev(t 
 	})
 	if IsYaverSelfDevelopmentDir(dir) {
 		t.Fatalf("third-party fixture under a yaver.io checkout was misdetected as Yaver itself — "+
-			"Hermes would be refused for a legitimate RN app (%s)", dir)
+			"self-development policy would be applied to a legitimate RN app (%s)", dir)
 	}
 }
 
@@ -109,91 +106,26 @@ func TestIsYaverSelfDevelopmentDir_EmptyAndUnknownAreNotSelfDev(t *testing.T) {
 	}
 }
 
-// The execution-layer refusal: ANY surface hitting /dev/build-native for the
-// Yaver app must be turned away, not just the one whose UI hides the button.
-func TestBuildNativeRefusesYaverSelfDevelopmentFromAnySurface(t *testing.T) {
-	dir := writePreviewProject(t, filepath.Join(t.TempDir(), "yaverapp"), map[string]string{
-		"package.json": `{"name":"yaver-mobile","dependencies":{"expo":"*"}}`,
-	})
-	s := &HTTPServer{devServerMgr: NewDevServerManager()}
-
-	// Every caller that could reach this endpoint, not just mobile.
-	for _, caller := range []string{
-		"web-dashboard/1.1.163", "mcp/ops", "cli/1.99.344", "tvos/1.0", "mobile/1.18.154", "",
-	} {
-		// Explicit target: a web-dashboard caller defaults to web-js-bundle,
-		// which is deliberately NOT guarded. The dangerous request is a
-		// mobile-hermes build, and any surface can ask for one.
-		body := `{"target":"mobile-hermes","platform":"ios","projectPath":` + jsonQuote(dir) + `}`
-		req := httptest.NewRequest(http.MethodPost, "/dev/build-native", strings.NewReader(body))
-		if caller != "" {
-			req.Header.Set("X-Yaver-Caller", caller)
-		}
-		rec := httptest.NewRecorder()
-		s.handleBuildNativeBundle(rec, req)
-
-		if rec.Code != http.StatusConflict {
-			t.Fatalf("caller %q: status = %d, want 409 — the recursion trap is reachable from this surface",
-				caller, rec.Code)
-		}
-		var out map[string]string
-		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-			t.Fatalf("caller %q: bad body: %v", caller, err)
-		}
-		if out["code"] != "YAVER_SELF_DEVELOPMENT_RECURSION" {
-			t.Fatalf("caller %q: code = %q", caller, out["code"])
-		}
-		// A refusal that doesn't name the alternative just blocks the user.
-		if !strings.Contains(strings.ToLower(out["error"]), "webrtc") {
-			t.Fatalf("caller %q: refusal does not point at the WebRTC route: %q", caller, out["error"])
-		}
+// Yaver-on-Yaver Hermes is safe only because the way out lives in native host
+// code on BOTH mobile platforms. This source-level parity guard is cheap and
+// fails if either side loses the operation that a guest JS bridge cannot
+// intercept.
+func TestSelfDevelopmentHermesHasNativeEscapeOnBothMobilePlatforms(t *testing.T) {
+	root := filepath.Join("..", "..")
+	ios, err := os.ReadFile(filepath.Join(root, "mobile", "ios", "Yaver", "AppDelegate.swift"))
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// The "allow" side is asserted on the pure decision rather than through the
-// handler: letting the handler proceed would run a real npm install + Metro
-// build (50s and a network fetch in an earlier revision of this file). The
-// refusal path above still goes through the real handler, because it returns
-// before any build starts.
-func TestSelfDevelopmentGuardAllowsThirdPartyRNInsideTheRepo(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "yaver.io")
-	dir := writePreviewProject(t, filepath.Join(root, "demo", "mobile", "todo-rn"), map[string]string{
-		"package.json": `{"name":"todo-rn","dependencies":{"expo":"~52.0.0","react-native":"0.76.0"}}`,
-	})
-	if ShouldRefuseYaverSelfDevelopmentHermes("mobile-hermes", dir, "todo-rn", "io.yaver.todorn") {
-		t.Fatalf("third-party RN fixture under a yaver.io checkout was refused as self-development")
+	android, err := os.ReadFile(filepath.Join(root, "mobile", "android", "app", "src", "main", "java", "io", "yaver", "mobile", "YaverShakeDetectorModule.kt"))
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// Web targets are pixels-in-a-browser and cannot trap anyone, so the guard must
-// NOT block them — Yaver-on-Yaver over WebRTC is the whole recommended path.
-func TestSelfDevelopmentGuardAllowsWebTargetsForYaverItself(t *testing.T) {
-	dir := writePreviewProject(t, filepath.Join(t.TempDir(), "yaverapp"), map[string]string{
-		"package.json": `{"name":"yaver-mobile","dependencies":{"expo":"*"}}`,
-	})
-	if !ShouldRefuseYaverSelfDevelopmentHermes("mobile-hermes", dir, "", "") {
-		t.Fatalf("mobile-hermes for Yaver itself must be refused")
+	if !strings.Contains(string(ios), "CoreMotion shake detector started") || !strings.Contains(string(ios), "Back to Yaver") {
+		t.Fatal("iOS no longer proves a native guest escape")
 	}
-	for _, target := range []string{"web-js-bundle", "web-hermes-wasm"} {
-		if ShouldRefuseYaverSelfDevelopmentHermes(target, dir, "", "") {
-			t.Fatalf("target %q blocked by the recursion guard — that route is the recommended one", target)
-		}
+	if !strings.Contains(string(android), "unloadGuestAndRecreate") || !strings.Contains(string(android), "ACTION_RELOAD") {
+		t.Fatal("Android no longer proves a native guest escape")
 	}
-}
-
-// A caller that names the app without a resolvable path must still be caught.
-func TestSelfDevelopmentGuardCatchesIdentityWithoutAPath(t *testing.T) {
-	if !ShouldRefuseYaverSelfDevelopmentHermes("mobile-hermes", "", "yaver.io", "io.yaver.mobile") {
-		t.Fatalf("self-development by name/bundle id was not refused")
-	}
-	if ShouldRefuseYaverSelfDevelopmentHermes("mobile-hermes", "", "acme-todo", "com.acme.todo") {
-		t.Fatalf("unrelated app refused")
-	}
-}
-
-func jsonQuote(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
 }
 
 // ── The framework matrix: RN / Flutter / Swift / Kotlin ────────────────────

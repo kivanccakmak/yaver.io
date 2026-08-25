@@ -522,11 +522,11 @@ export function BrowserVibeBubble({
       />
 
       <Pressable
-        onPress={() => void reload("full")}
+        onPress={() => void reload("fast")}
         disabled={busy || !renderConnected}
         accessibilityRole="button"
-        accessibilityLabel={isCoding ? "Queue full reload after coding" : "Full reload preview"}
-        testID="browser-vibe-full-reload"
+        accessibilityLabel={isCoding ? "Queue fast reload after coding" : "Fast reload preview"}
+        testID="browser-vibe-fast-reload"
         style={({ pressed }) => [
           styles.reloadBubble,
           { bottom: Math.max(insets.bottom + 14, 18) },
@@ -535,7 +535,7 @@ export function BrowserVibeBubble({
         ]}
       >
         {busy ? <ActivityIndicator size="small" color="#6f58f5" /> : <Ionicons name="reload-outline" size={18} color="#6f58f5" />}
-        <Text style={styles.reloadBubbleText}>Full Reload</Text>
+        <Text style={styles.reloadBubbleText}>Fast Reload</Text>
       </Pressable>
 
       <Pressable

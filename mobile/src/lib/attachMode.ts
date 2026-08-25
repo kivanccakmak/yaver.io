@@ -10,16 +10,12 @@
 // checkout and the surface refreshes when the turn lands. The app you are
 // looking at is the app being edited.
 //
-// ── Why the browser lane, and not Hermes ────────────────────────────────────
+// ── Escape ownership across lanes ──────────────────────────────────────────
 //
-// Hermes is REFUSED for Yaver-on-Yaver (409 YAVER_SELF_DEVELOPMENT_RECURSION):
-// loading Yaver into the Yaver container puts two shake/exit owners in one RN
-// process, so the preview could not be exited. The web target has no such
-// problem — a WebView cannot register a gesture handler on the host or draw
-// over native chrome — which is why the refusal itself names it as the route.
-//
-// The escape therefore MUST live in native chrome OUTSIDE the WebView. That is
-// not a UI preference; it is the property that makes this safe at all.
+// Browser uses native chrome outside the WebView. Hermes uses an escape below
+// the replaceable JS runtime (AppDelegate/YaverShakeDetector). WebRTC keeps its
+// host controls outside the streamed guest. This is what makes all three lanes
+// safe for Yaver-on-Yaver instead of relying on guest code to release itself.
 //
 // ── The gate ────────────────────────────────────────────────────────────────
 //

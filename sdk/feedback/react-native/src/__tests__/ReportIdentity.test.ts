@@ -1,15 +1,17 @@
-import { resolveReportIdentity } from '../P2PClient';
-
 // resolveAppIdentity() has always fed /vibing/execute and /dev/reload-app so
 // the agent could route "vibe on THIS app" to the right repo, but nothing fed
 // /feedback — reports carried no identity at all, so the agent's fix router
 // had nothing to resolve and fell back to whatever directory it was sitting
 // in. resolveReportIdentity() closes that gap for the feedback path.
 
-jest.mock('react-native', () => ({
+const mockReactNative = {
   Platform: { OS: 'ios' },
   NativeModules: {},
-}));
+};
+const mockExpoModule: { default: Record<string, unknown> } = { default: {} };
+
+jest.mock('react-native', () => mockReactNative);
+jest.mock('expo-constants', () => mockExpoModule, { virtual: true });
 
 /** Mirrors mobile/app.json in the Talos repo — the SDK's first external consumer. */
 const EXPO_CONFIG = {
@@ -21,11 +23,13 @@ const EXPO_CONFIG = {
 };
 
 function mockExpoConstants(expoConfig: unknown, extra: Record<string, unknown> = {}) {
-  jest.doMock('expo-constants', () => ({ default: { expoConfig, ...extra } }), { virtual: true });
+  mockExpoModule.default = { expoConfig, ...extra };
 }
 
 beforeEach(() => {
-  jest.resetModules();
+  mockReactNative.Platform.OS = 'ios';
+  mockReactNative.NativeModules = {};
+  mockExpoModule.default = {};
 });
 
 describe('resolveReportIdentity', () => {
@@ -86,10 +90,7 @@ describe('resolveReportIdentity', () => {
     };
 
     function mockContainer(yaverInfo: Record<string, unknown>) {
-      jest.doMock('react-native', () => ({
-        Platform: { OS: 'ios' },
-        NativeModules: { YaverInfo: { isYaver: true, ...yaverInfo } },
-      }));
+      mockReactNative.NativeModules = { YaverInfo: { isYaver: true, ...yaverInfo } };
       // The host's manifest — what expo-constants answers for a guest bundle.
       mockExpoConstants(YAVER_CONFIG);
     }
@@ -186,13 +187,7 @@ describe('resolveReportIdentity', () => {
   it('omits the project block when nothing identifies the app', () => {
     // Bare RN with no expo-constants and no native modules. The report must
     // still upload — the agent just resolves it by its own means.
-    jest.doMock(
-      'expo-constants',
-      () => {
-        throw new Error('not installed');
-      },
-      { virtual: true },
-    );
+    mockExpoModule.default = {};
     const { resolveReportIdentity: resolve } = require('../P2PClient');
 
     const identity = resolve();

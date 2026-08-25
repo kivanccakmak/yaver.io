@@ -254,7 +254,7 @@ func TestHermesBuildForAnotherPlatformStillOffersCompile(t *testing.T) {
 
 // ── Yaver self-development ─────────────────────────────────────────────────
 
-func TestSelfDevelopmentReplacesHermesWithStreaming(t *testing.T) {
+func TestSelfDevelopmentOffersAllReactNativeLanes(t *testing.T) {
 	caps := capsFor(t, map[string]string{
 		"package.json": `{"name":"yaver-mobile","dependencies":{"expo":"*"}}`,
 	}, true)
@@ -262,33 +262,23 @@ func TestSelfDevelopmentReplacesHermesWithStreaming(t *testing.T) {
 	if !caps.SelfDevelopment {
 		t.Fatalf("yaver-mobile not detected as self-development")
 	}
-	if HermesOfferedFor(caps) {
-		t.Fatalf("Hermes offered for Yaver self-development — that is the recursion trap")
+	if !HermesOfferedFor(caps) {
+		t.Fatalf("Hermes missing for Yaver self-development: %+v", caps.Options)
 	}
-	if !hasOption(caps, PreviewOptionRemoteRuntime) {
-		t.Fatalf("no streaming option offered as the replacement: %+v", caps.Options)
+	for _, option := range []string{PreviewOptionDevServer, PreviewOptionOpenNative, PreviewOptionRemoteRuntime} {
+		if !hasOption(caps, option) {
+			t.Fatalf("self-development missing %s: %+v", option, caps.Options)
+		}
 	}
 	if caps.Reason == "" {
 		t.Fatalf("self-development gave no reason")
 	}
 }
 
-// THE PAIRING TEST. Two policies decide what Yaver-on-Yaver may do, and until
-// 2026-08-02 nothing bound them together — so they disagreed:
-//
-//   - ShouldRefuseYaverSelfDevelopmentHermes refuses ONLY "mobile-hermes", and
-//     its comment says web targets must stay open because refusing them "would
-//     block the very route this guard steers people toward";
-//   - this file's self-dev arm offered ONE option, Stream over WebRTC.
-//
-// Since a surface treats an unoffered lane as ABSENT (mobileProjectActions.ts),
-// the refusal pointed at a door the advertiser never drew. Browser Reload did
-// not exist for Yaver's own repo, which made Attach Mode unreachable.
-//
-// This asserts the invariant directly: whatever the refusal leaves LEGAL, the
-// advertiser must OFFER. Break it by deleting the dev-server option from the
-// self-dev arm and this fails.
-func TestSelfDevOffersTheLaneTheRefusalNames(t *testing.T) {
+// Browser stays the light default even though Hermes and WebRTC are available;
+// the choice is explicit and no lane disappears merely because the project is
+// Yaver itself.
+func TestSelfDevBrowserDefaultDoesNotHideOtherLanes(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "package.json"),
 		[]byte(`{"name":"yaver-mobile","dependencies":{"expo":"*"}}`), 0o600); err != nil {
@@ -299,25 +289,14 @@ func TestSelfDevOffersTheLaneTheRefusalNames(t *testing.T) {
 		t.Fatalf("yaver-mobile not detected as self-development")
 	}
 
-	// The refusal's own verdict, asked directly rather than restated.
-	if ShouldRefuseYaverSelfDevelopmentHermes("mobile-hermes", dir, "", "") != true {
-		t.Fatalf("refusal no longer refuses mobile-hermes for self-dev")
-	}
-	if ShouldRefuseYaverSelfDevelopmentHermes("web", dir, "", "") != false {
-		t.Fatalf("refusal now refuses the web target — the advertiser assumption below is void")
-	}
-
-	// Therefore the web lane must be offered, and must lead.
 	if !hasOption(caps, PreviewOptionDevServer) {
-		t.Fatalf("web target is legal per the refusal but Browser Reload is not offered: %+v", caps.Options)
+		t.Fatalf("Browser Reload is not offered: %+v", caps.Options)
 	}
 	if caps.Options[0].ID != PreviewOptionDevServer || !caps.Options[0].Primary {
 		t.Fatalf("Browser Reload must be the primary self-dev lane, got %+v", caps.Options[0])
 	}
-	// And Hermes must still be gone — this test must not become a way to
-	// re-open the recursion trap.
-	if HermesOfferedFor(caps) {
-		t.Fatalf("Hermes offered for Yaver self-development — that is the recursion trap")
+	if !HermesOfferedFor(caps) || !hasOption(caps, PreviewOptionRemoteRuntime) {
+		t.Fatalf("self-development lost Hermes or WebRTC: %+v", caps.Options)
 	}
 }
 

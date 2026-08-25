@@ -11,7 +11,7 @@
 
 import { connectionManager } from "./connectionManager";
 import { appLog } from "./logger";
-import type { AttachSessionResult } from "./quic";
+import { describeDevReloadResult, devReloadReachedTarget, type AttachSessionResult, type RunnerInfo } from "./quic";
 import { doctorBrowserLane, type BrowserLaneProbeResult } from "./browserLaneDoctor";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "./projectPreviewRuntime";
 
@@ -112,6 +112,13 @@ export async function dogfoodNativeRuntimeAvailable(deviceId: string, checkoutDi
   } catch {
     return false;
   }
+}
+
+/** Live runner/model inventory for the two-level Dogfood settings surface. */
+export async function getDogfoodRunners(deviceId: string): Promise<RunnerInfo[]> {
+  const client = clientFor(deviceId);
+  if (!client) return [];
+  return client.getRunners();
 }
 
 export type DogfoodCheckoutPreparation =
@@ -281,6 +288,44 @@ export async function prepareDogfoodMode(
   } finally {
     stopDevEvents?.();
   }
+}
+
+/** Build and deliver Yaver's own RN bundle into the installed Yaver host.
+ * The way out is native on both platforms (iOS AppDelegate/CoreMotion;
+ * Android native guest unload), so the guest JS cannot capture it. */
+export async function startDogfoodHermesLane(
+  deviceId: string,
+  checkoutDir: string,
+): Promise<{ ok: true; deliveredTo?: number; message: string } | { ok: false; code: string; error: string; remedy: string }> {
+  const client = clientFor(deviceId);
+  if (!client) {
+    return {
+      ok: false, code: "DOGFOOD_PRIMARY_DISCONNECTED",
+      error: "The selected device is not connected.",
+      remedy: "Reconnect that device, then retry Hermes Dogfood.",
+    };
+  }
+  const projectPath = checkoutDir.replace(/\/+$/, "") + "/mobile";
+  const result = await client.reloadDevServerDetailed({
+    mode: "bundle",
+    projectName: "Yaver",
+    projectPath,
+  });
+  if (!devReloadReachedTarget(result)) {
+    return {
+      ok: false,
+      code: String((result as any)?.code || "DOGFOOD_HERMES_DELIVERY_FAILED"),
+      error: describeDevReloadResult(result),
+      remedy: result.nativeChangesDetected
+        ? "Native files changed. Install a fresh Yaver build on the phone, then retry Hermes Dogfood."
+        : "Read the live compiler output, fix the named Hermes build or delivery failure, then retry.",
+    };
+  }
+  return {
+    ok: true,
+    deliveredTo: result.deliveredTo,
+    message: describeDevReloadResult(result),
+  };
 }
 
 /** Escalate only after deterministic Dogfood preparation/render recovery has

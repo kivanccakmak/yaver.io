@@ -17,7 +17,8 @@
 // This badge is a HINT, not the exit. The real escape is the host's native
 // chrome (attach.tsx's Detach) or the container overlay (shake). If the badge
 // were the only way out, a previewed app that drew over the header would trap
-// the user — the exact recursion trap the Hermes refusal exists to prevent.
+// the user. Hermes therefore owns its real escape below the replaceable JS
+// runtime, while browser/WebRTC keep theirs outside the guest surface.
 // So: the badge is additive, and every mode's genuine escape lives elsewhere.
 
 import React, { useCallback, useEffect, useState } from "react";

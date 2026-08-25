@@ -44,8 +44,8 @@ test("browser Vibing mirrors feedback controls and remains mounted when minimize
   assert.ok(source.includes('testID="browser-vibe-machine-routing"'));
   assert.ok(source.includes("setPrimaryRunnerForDevice"), "runner/model picker does not persist its visible choice");
   assert.ok(source.includes('!open && styles.hidden'), "minimizing unmounts the live task instead of backgrounding it");
-  assert.ok(source.includes('testID="browser-vibe-full-reload"'), "full reload is not beside the floating Vibing control");
-  assert.ok(source.includes('reload("full")'), "full reload is missing from the preview overlay");
+  assert.ok(source.includes('testID="browser-vibe-fast-reload"'), "fast reload is not beside the floating Vibing control");
+  assert.ok(source.includes('reload("fast")'), "fast reload is missing from the preview overlay");
   assert.ok(!source.includes("Hot Reload"), "lower-frequency reload controls still crowd Settings");
   assert.ok(source.includes("Reload queued until coding finishes"), "reload executes over an active coding turn instead of queueing");
   assert.ok(source.includes("onTaskStateChange={setActiveTask}"), "preview host cannot distinguish coding from idle");

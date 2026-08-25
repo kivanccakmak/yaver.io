@@ -12,6 +12,7 @@ import {
   prepareDogfoodMode,
   prepareDogfoodCheckoutOnly,
   requestDogfoodFixWithAI,
+  startDogfoodHermesLane,
   stopAttachSession,
 } from "../src/lib/attachClient";
 import {
@@ -68,6 +69,12 @@ export default function DogfoodLaunchScreen() {
       const handed = await controller.handoff();
       if (!handed) return;
       handedOffRef.current = true;
+      if (result.lane === "hermes") {
+        // Delivery swaps the host bridge to the freshly built guest. If a
+        // platform takes a moment to recreate, keep this native launch screen
+        // alive rather than navigating to a browser-only route with no URL.
+        return;
+      }
       if (result.lane === "webrtc") {
         router.replace({
           pathname: "/remote-runtime" as any,
@@ -108,12 +115,28 @@ export default function DogfoodLaunchScreen() {
     }, {
       async start(context) {
         if (lane === "hermes") {
-          throw new DogfoodRuntimeError({
-            code: "DOGFOOD_SELF_HERMES_UNSAFE",
-            error: "Yaver cannot be loaded into its own Hermes host.",
-            remedy: "Use Browser lane (default) or WebRTC native. Those lanes keep the production control app available.",
-            retryable: false,
+          const prepared = await prepareDogfoodCheckoutOnly(deviceId, workDir, (message) => {
+            context.setPhase("preparing", message);
+            context.log({ text: message, at: Date.now(), stream: "system" });
           });
+          if (!prepared.ok) {
+            throw new DogfoodRuntimeError({
+              code: prepared.code, error: prepared.error, remedy: prepared.remedy,
+              retryable: true, fixPrompt: prepared.fixPrompt,
+            });
+          }
+          context.setPhase("compiling", "Compiling Yaver for the installed Hermes host…");
+          const delivered = await startDogfoodHermesLane(deviceId, workDir);
+          if (!delivered.ok) {
+            throw new DogfoodRuntimeError({
+              code: delivered.code, error: delivered.error, remedy: delivered.remedy, retryable: true,
+            });
+          }
+          context.log({ text: delivered.message, at: Date.now(), stream: "system" });
+          return {
+            lane: "hermes",
+            metadata: { branch: prepared.branch, pushPolicy: prepared.pushPolicy, deliveredTo: delivered.deliveredTo },
+          };
         }
         if (lane === "webrtc") {
           const prepared = await prepareDogfoodCheckoutOnly(deviceId, workDir, (message) => {
@@ -190,7 +213,9 @@ export default function DogfoodLaunchScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
           {running ? <ActivityIndicator size="large" color={c.accent} /> : null}
-          <Text style={[styles.title, { color: c.textPrimary }]}>{running ? phase : "Dogfood could not start"}</Text>
+          <Text style={[styles.title, { color: c.textPrimary }]}>
+            {running ? phase : failure ? "Dogfood could not start" : lane === "hermes" ? "Yaver delivered to Hermes" : phase}
+          </Text>
           <Text style={[styles.meta, { color: c.textMuted }]}>{deviceName} · {runner}</Text>
 
           <LaneStartupStatus
@@ -220,17 +245,17 @@ export default function DogfoodLaunchScreen() {
             </View>
           ) : null}
 
-          {!running ? (
+          {!running && failure ? (
             <View style={styles.actions}>
               <Pressable onPress={() => router.back()} style={[styles.action, { backgroundColor: c.bg }]}>
                 <Text style={{ color: c.textPrimary, fontWeight: "700" }}>Back</Text>
               </Pressable>
-              <Pressable onPress={() => {
+              {failure.retryable ? <Pressable onPress={() => {
                 const controller = controllerRef.current;
                 if (controller) void launch(controller);
               }} style={[styles.action, { backgroundColor: c.accent }]}>
                 <Text style={{ color: "#fff", fontWeight: "700" }}>Retry</Text>
-              </Pressable>
+              </Pressable> : null}
               {failure?.fixPrompt ? (
                 <Pressable
                   disabled={fixing}

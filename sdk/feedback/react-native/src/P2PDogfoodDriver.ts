@@ -72,7 +72,12 @@ export function createP2PDogfoodDriver(
         workDir: project.workDir,
         lane: project.lane,
       });
-      context.registerCleanup(() => client.stopDogfoodDevServer(), 'session');
+      // Browser Dogfood owns a long-lived dev server. Hermes is a one-shot
+      // build + delivery to the Yaver container; calling /dev/stop when that
+      // guest exits can kill an unrelated browser preview on the same box.
+      if (project.lane === 'browser') {
+        context.registerCleanup(() => client.stopDogfoodDevServer(), 'session');
+      }
       if (status.error) {
         throw new DogfoodRuntimeError({
           code: 'DOGFOOD_DEV_SERVER_FAILED', error: status.error,
@@ -116,7 +121,11 @@ export function createP2PDogfoodDriver(
       return {
         lane: project.lane,
         url: reported ? client.resolveDogfoodUrl(reported) : undefined,
-        metadata: { framework: latest.framework, workDir: latest.workDir || project.workDir },
+        metadata: {
+          framework: latest.framework || project.framework,
+          workDir: latest.workDir || project.workDir,
+          ...(project.lane === 'hermes' ? { delivered: latest.running === true } : {}),
+        },
       };
     },
   };

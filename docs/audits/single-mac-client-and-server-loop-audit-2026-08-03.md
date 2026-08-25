@@ -59,7 +59,12 @@ one Mac therefore needs **two distinct device identities** (separate
 `YAVER_CONFIG_DIR`/HOME), not one binary twice. Doable, but it is setup, and a
 half-done version fails as a confusing eviction rather than a clear error.
 
-### 2c. Yaver-on-Yaver is REFUSED for the Hermes lane, by design
+### 2c. Historical constraint: Yaver-on-Yaver Hermes was refused
+
+> 2026-08-25 source update: this constraint was removed after both native hosts
+> gained an escape below the replaceable JS runtime. Yaver self-development now
+> exposes the same Browser + Hermes + WebRTC matrix as any React Native app.
+> The paragraph below records the state when this audit was written.
 
 `devserver_http.go:3268` returns **409 `YAVER_SELF_DEVELOPMENT_RECURSION`**:
 loading a Hermes bundle of Yaver into the Yaver container puts two identical

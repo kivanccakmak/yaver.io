@@ -58,6 +58,40 @@ describe('DogfoodController', () => {
     expect(stop).toHaveBeenCalledTimes(1);
     expect(controller.snapshot()).toMatchObject({ phase: 'failed', failure: { code: 'DOGFOOD_RENDER_FAILED' } });
   });
+
+  test('an obsolete attempt cannot clean up the replacement attempt', async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let firstStarted!: () => void;
+    const firstStartedGate = new Promise<void>((resolve) => { firstStarted = resolve; });
+    const stopFirst = jest.fn();
+    const stopSecond = jest.fn();
+    let starts = 0;
+    const controller = new DogfoodController(expo, {
+      async start(ctx) {
+        starts += 1;
+        if (starts === 1) {
+          ctx.registerCleanup(stopFirst);
+          firstStarted();
+          await firstGate;
+          return { lane: 'browser', sessionId: 'old' };
+        }
+        ctx.registerCleanup(stopSecond);
+        return { lane: 'browser', sessionId: 'new' };
+      },
+    });
+
+    const old = controller.trigger();
+    await firstStartedGate;
+    await controller.stop();
+    await expect(controller.trigger()).resolves.toMatchObject({ sessionId: 'new' });
+    releaseFirst();
+    await expect(old).rejects.toMatchObject({ failure: { code: 'DOGFOOD_ATTEMPT_REPLACED' } });
+    expect(stopFirst).toHaveBeenCalledTimes(1);
+    expect(stopSecond).not.toHaveBeenCalled();
+    await controller.stop();
+    expect(stopSecond).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('Dogfood lanes and console events', () => {
@@ -78,11 +112,18 @@ describe('Dogfood lanes and console events', () => {
     expect(flutter.find((option) => option.lane === 'hermes')?.supported).toBe(false);
   });
 
-  test('keeps self-development Hermes visible but safely unavailable', () => {
+  test('keeps Yaver self-development on the same RN three-lane contract', () => {
     const options = dogfoodLaneOptions('expo', { nativeRuntimeAvailable: true, selfDevelopment: true });
     expect(options).toHaveLength(3);
-    expect(options.find((option) => option.lane === 'hermes')).toMatchObject({ supported: false });
+    expect(options.find((option) => option.lane === 'hermes')).toMatchObject({ supported: true });
     expect(options.find((option) => option.lane === 'webrtc')).toMatchObject({ supported: true });
+  });
+
+  test('native-only projects use WebRTC rather than fake browser or Hermes lanes', () => {
+    const swift = dogfoodLaneOptions('swift', { nativeRuntimeAvailable: true });
+    expect(swift.map((option) => [option.lane, option.supported])).toEqual([
+      ['browser', false], ['hermes', false], ['webrtc', true],
+    ]);
   });
 
   test('reads raw and replayed package-manager logs from /dev/events', () => {
