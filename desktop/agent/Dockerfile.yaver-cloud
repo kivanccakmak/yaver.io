@@ -63,6 +63,7 @@ FROM node:22-bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/usr/local/go/bin:/root/go/bin:/root/.cargo/bin:/usr/local/bin:${PATH}"
 ENV HOME=/root
+ENV SHELL=/bin/zsh
 
 # ── System packages ──────────────────────────────────────────────────
 # chromium + ffmpeg power the browser-video recorder (browser_video.go): a
@@ -74,7 +75,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl wget ca-certificates gnupg2 openssh-client \
       build-essential cmake pkg-config \
       python3 python3-pip python3-venv \
-      zip unzip jq tree ripgrep tmux file \
+      zip unzip jq tree ripgrep tmux zsh fzf vim file \
       chromium ffmpeg fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 

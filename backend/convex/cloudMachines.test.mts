@@ -56,6 +56,11 @@ test("buildManagedCloudInit writes managed agent config and service", () => {
   assert.match(cloudInit, /command -v codex >\/dev\/null 2>&1 \|\| missing_pkgs="\$missing_pkgs @openai\/codex"/);
   assert.match(cloudInit, /command -v opencode >\/dev\/null 2>&1 \|\| missing_pkgs="\$missing_pkgs opencode-ai"/);
   assert.match(cloudInit, /npm install -g \$missing_pkgs/);
+  assert.match(cloudInit, /  - fzf\n/);
+  assert.match(cloudInit, /  - vim\n/);
+  assert.match(cloudInit, /  - zsh\n/);
+  assert.match(cloudInit, /usermod --shell \/usr\/bin\/zsh yaver/);
+  assert.match(cloudInit, /install -m 0644 \/dev\/null \/etc\/yaver\/cloud-workspace/);
 });
 
 test("buildManagedCloudInit fetches the yaver agent as a .tar.gz and extracts it", () => {
@@ -222,6 +227,7 @@ test("buildManagedCloudInitContainer: byok runs only the agent; hosted adds self
   assert.match(byok, /clone_one https:\/\/github\.com\/kivanccakmak\/yaver\.io\.git yaver\.io/);
   assert.doesNotMatch(byok, /clone_one https:\/\/github\.com\/kivanccakmak\/(?!yaver\.io\.git)/);
   assert.match(byok, /-v \/srv\/yaver\/state\/Workspace:\/srv\/yaver\/workspace/);
+  assert.match(byok, /-e YAVER_CLOUD_WORKSPACE=1/);
   assert.doesNotMatch(byok, /HC_Volume_/);
   assert.doesNotMatch(byok, /ghcr\.io\/get-convex\/convex-backend/);
   assert.doesNotMatch(byok, /docker run -d --name yaver-convex/);

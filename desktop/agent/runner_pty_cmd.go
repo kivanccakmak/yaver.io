@@ -477,7 +477,7 @@ func runRunnerPassthrough(runnerName string, args []string) {
 //
 //	claude/glm → --dangerously-skip-permissions
 //	codex      → --dangerously-bypass-approvals-and-sandbox
-//	opencode   → nothing (its TUI takes no permission flag; config-driven)
+//	opencode   → --auto
 //
 // Injection is skipped when the args already carry a permission/sandbox
 // stance, and when the first arg is a management subcommand (codex login,
@@ -507,6 +507,17 @@ func applyRunnerYoloDefaults(runnerID string, args []string) []string {
 			"mcp": true, "app-server": true, "completion": true,
 			"debug": true, "apply": true, "a": true, "resume": true,
 			"sandbox": true, "proto": true, "help": true,
+		}
+	case "opencode":
+		yolo = "--auto"
+		conflicts = []string{"--auto"}
+		subcommands = map[string]bool{
+			"completion": true, "acp": true, "attach": true, "run": true,
+			"debug": true, "providers": true, "auth": true, "agent": true,
+			"upgrade": true, "uninstall": true, "serve": true, "web": true,
+			"models": true, "stats": true, "export": true, "import": true,
+			"github": true, "pr": true, "session": true, "plugin": true,
+			"db": true, "help": true,
 		}
 	default:
 		return args
@@ -1263,11 +1274,10 @@ Yaver-owned flags (everything else goes verbatim to %[1]s):
   --yaver-safe             do NOT inject the default no-approvals flag
   --yaver-help             this help
 
-No approvals by default: claude/glm get --dangerously-skip-permissions and
-codex gets --dangerously-bypass-approvals-and-sandbox automatically (skipped
-for management subcommands, when you pass your own permission/sandbox flags,
-or with --yaver-safe). opencode's TUI has no such flag — configure its
-permission settings instead.
+No approvals by default: claude/glm get --dangerously-skip-permissions, codex
+gets --dangerously-bypass-approvals-and-sandbox, and opencode gets --auto
+automatically (skipped for management subcommands, when you pass your own
+permission/sandbox flags, or with --yaver-safe).
 
 Remote sessions run inside tmux on the target machine: a dropped connection
 leaves the runner alive; rerunning the same command reattaches. The same

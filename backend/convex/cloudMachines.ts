@@ -505,6 +505,7 @@ ${optionalRepoClone}    SCRIPT
   }
   yaverDockerRunLines.push(
     `      -e YAVER_HOSTNAME=${shellSingleQuote(spec.hostname)} \\`,
+    `      -e YAVER_CLOUD_WORKSPACE=1 \\`,
   );
   if (spec.boxRelayPassword) {
     yaverDockerRunLines.push(
@@ -772,7 +773,10 @@ packages:
   - git
   - gnupg
   - jq
+  - fzf
   - tmux
+  - vim
+  - zsh
   - ufw
   - unzip
   - build-essential
@@ -844,7 +848,8 @@ runcmd:
   # HOME/CLAUDE_CONFIG_DIR/CODEX_HOME under /srv/yaver/tenants/<id>.
   # The TLS reconciler below stays a separate root unit (nginx/certbot
   # need root); it only proxies to the agent on loopback:18080.
-  - id yaver >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/yaver --shell /bin/bash yaver
+  - id yaver >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/yaver --shell /usr/bin/zsh yaver
+  - usermod --shell /usr/bin/zsh yaver
   - usermod -aG docker yaver || true
   - install -d -o root -g root -m 0755 /srv /srv/yaver
   - install -d -o root -g root -m 0711 /srv/yaver/tenants
@@ -852,6 +857,7 @@ runcmd:
   - install -d -o yaver -g yaver -m 0700 /home/yaver/.config/opencode
   - install -d -o yaver -g yaver -m 0755 /home/yaver/Workspace
   - mkdir -p /etc/yaver
+  - install -m 0644 /dev/null /etc/yaver/cloud-workspace
   - |
     cat > /home/yaver/.yaver/config.json <<'EOF'
     {

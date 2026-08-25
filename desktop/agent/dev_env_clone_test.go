@@ -117,6 +117,25 @@ func TestDevConfigBundleAllowlistAndSecretFilter(t *testing.T) {
 	}
 }
 
+func TestDevConfigBundleRejectsProviderSpecificShellTokens(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	zshrc := filepath.Join(home, ".zshrc")
+	if err := os.WriteFile(zshrc, []byte("export EXAMPLE_PROVIDER_AUTH_TOKEN='must-not-travel'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle := buildDevConfigBundle([]string{"zshrc"})
+	if len(bundle.Items) != 0 {
+		t.Fatalf("secret-bearing zshrc entered bundle: %#v", bundle.Items)
+	}
+	if len(bundle.Skipped) == 0 || !strings.Contains(bundle.Skipped[0], "looked secret-bearing") {
+		t.Fatalf("secret refusal must be visible without exposing its value: %#v", bundle.Skipped)
+	}
+	if bundle.SourceHome != "" {
+		t.Fatalf("bundle leaked absolute source home: %q", bundle.SourceHome)
+	}
+}
+
 func TestApplyDevConfigBundleRejectsPathTraversal(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

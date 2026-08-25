@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -50,19 +51,27 @@ const (
 
 func devConfigCandidates() []devConfigCandidate {
 	return []devConfigCandidate{
-		{key: "vimrc", kind: "vim", rel: ".vimrc"},
-		{key: "gvimrc", kind: "vim", rel: ".gvimrc"},
-		{key: "vim-config", kind: "vim", rel: ".vim", dir: true},
-		{key: "nvim-config", kind: "nvim", rel: ".config/nvim", dir: true},
-		{key: "tmux", kind: "tmux", rel: ".tmux.conf"},
-		{key: "tmux-config", kind: "tmux", rel: ".config/tmux", dir: true},
+		// Small, user-authored files go first. Directory bundles can hit the
+		// global file cap; putting ~/.vim ahead of shell rc files used to make a
+		// large plugin tree silently crowd the requested shell setup out.
 		{key: "zshrc", kind: "shell", rel: ".zshrc"},
+		{key: "zprofile", kind: "shell", rel: ".zprofile"},
+		{key: "zshenv", kind: "shell", rel: ".zshenv"},
+		{key: "fzf-zsh", kind: "shell", rel: ".fzf.zsh"},
+		{key: "fzf-bash", kind: "shell", rel: ".fzf.bash"},
+		{key: "p10k", kind: "prompt", rel: ".p10k.zsh"},
 		{key: "bashrc", kind: "shell", rel: ".bashrc"},
 		{key: "bash-profile", kind: "shell", rel: ".bash_profile"},
 		{key: "profile", kind: "shell", rel: ".profile"},
 		{key: "inputrc", kind: "shell", rel: ".inputrc"},
+		{key: "tmux", kind: "tmux", rel: ".tmux.conf"},
+		{key: "vimrc", kind: "vim", rel: ".vimrc"},
+		{key: "gvimrc", kind: "vim", rel: ".gvimrc"},
 		{key: "oh-my-zsh-custom", kind: "shell", rel: ".oh-my-zsh/custom", dir: true},
 		{key: "starship", kind: "prompt", rel: ".config/starship.toml"},
+		{key: "vim-config", kind: "vim", rel: ".vim", dir: true},
+		{key: "nvim-config", kind: "nvim", rel: ".config/nvim", dir: true},
+		{key: "tmux-config", kind: "tmux", rel: ".config/tmux", dir: true},
 		{key: "i3", kind: "window-manager", rel: ".config/i3", dir: true},
 		{key: "i3-legacy", kind: "window-manager", rel: ".i3", dir: true},
 		{key: "sway", kind: "window-manager", rel: ".config/sway", dir: true},
@@ -161,7 +170,10 @@ func buildDevConfigBundle(keys []string) DevConfigBundle {
 		bundle.Skipped = append(bundle.Skipped, "home directory unavailable")
 		return bundle
 	}
-	bundle.SourceHome = home
+	// SourceHome used to put an absolute /Users/<name> or /home/<name> into
+	// every P2P bundle even though the target never consumed it. Keep the wire
+	// field for compatibility but leave it empty: config contents need relative
+	// paths only, and a username is private inventory with no operational value.
 	allowedKeys := map[string]bool{}
 	for _, key := range keys {
 		key = strings.TrimSpace(key)
@@ -258,8 +270,17 @@ func looksLikeSecretConfig(data []byte) bool {
 			return true
 		}
 	}
+	// Shell rc files commonly carry provider-specific names such as
+	// EXAMPLE_PROVIDER_AUTH_TOKEN. The old fixed substrings missed those and
+	// would have copied the whole file. Match assignment NAMES generically and
+	// fail closed; values are deliberately never returned or logged.
+	if secretAssignmentPattern.Match(data) {
+		return true
+	}
 	return false
 }
+
+var secretAssignmentPattern = regexp.MustCompile(`(?im)^\s*(?:export\s+)?[a-z_][a-z0-9_]*(?:token|secret|password|passwd|api_?key|private_?key|account_sid)[a-z0-9_]*\s*=`)
 
 func trimHomePath(home, path string) string {
 	if rel, err := filepath.Rel(home, path); err == nil {

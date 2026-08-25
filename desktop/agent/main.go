@@ -3278,6 +3278,13 @@ func runServe(args []string) {
 	// read: without tmux this agent will accept an autorun and silently never
 	// run it. Best-effort and never interactive — see EnsureTmuxInstalled.
 	EnsureTmuxInstalled(context.Background(), log.Printf)
+	if cloudWorkspaceComfortEnabled() {
+		if err := ensureCloudWorkspaceComfortDefaults(log.Printf); err != nil {
+			log.Printf("Cloud Workspace: developer defaults unavailable (non-fatal): %v", err)
+		} else {
+			go ensureCloudWorkspaceComfortAssets(ctx, log.Printf)
+		}
+	}
 
 	// Same argument for a browser: chrome-webrtc is the fallback preview path
 	// for EVERY browser-renderable stack (RN, Expo, Flutter, SwiftWasm, Next)

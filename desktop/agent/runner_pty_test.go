@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -560,8 +561,7 @@ func TestApplyRunnerYoloDefaults(t *testing.T) {
 		{"codex", nil, []string{"--dangerously-bypass-approvals-and-sandbox"}},
 		{"claude", nil, []string{"--dangerously-skip-permissions"}},
 		{"glm", nil, []string{"--dangerously-skip-permissions"}},
-		// opencode's TUI has no permission flag — untouched.
-		{"opencode", nil, nil},
+		{"opencode", nil, []string{"--auto"}},
 		// A prompt positional still gets the flag prepended.
 		{"claude", []string{"fix the failing tests"}, []string{"--dangerously-skip-permissions", "fix the failing tests"}},
 		// Already carrying a stance → untouched.
@@ -569,10 +569,12 @@ func TestApplyRunnerYoloDefaults(t *testing.T) {
 		{"codex", []string{"--sandbox=workspace-write"}, []string{"--sandbox=workspace-write"}},
 		{"claude", []string{"--permission-mode", "plan"}, []string{"--permission-mode", "plan"}},
 		{"claude", []string{"--dangerously-skip-permissions"}, []string{"--dangerously-skip-permissions"}},
+		{"opencode", []string{"--auto"}, []string{"--auto"}},
 		// Management subcommands must not get a root flag shoved in front.
 		{"codex", []string{"login", "--device-auth"}, []string{"login", "--device-auth"}},
 		{"codex", []string{"resume", "abc123"}, []string{"resume", "abc123"}},
 		{"claude", []string{"mcp", "list"}, []string{"mcp", "list"}},
+		{"opencode", []string{"auth", "login"}, []string{"auth", "login"}},
 		// Flags-first invocations still get it.
 		{"codex", []string{"--model", "gpt-5.4"}, []string{"--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5.4"}},
 	}
@@ -580,6 +582,19 @@ func TestApplyRunnerYoloDefaults(t *testing.T) {
 		got := applyRunnerYoloDefaults(c.runner, c.in)
 		if strings.Join(got, "\x00") != strings.Join(c.want, "\x00") {
 			t.Errorf("applyRunnerYoloDefaults(%s, %v) = %v, want %v", c.runner, c.in, got, c.want)
+		}
+	}
+}
+
+func TestInteractiveRunnerArgsUseEachCLIsDangerousMode(t *testing.T) {
+	cases := map[string][]string{
+		"claude":   {"--dangerously-skip-permissions"},
+		"codex":    {"--dangerously-bypass-approvals-and-sandbox"},
+		"opencode": {"--auto"},
+	}
+	for runner, want := range cases {
+		if got := interactiveRunnerArgs(runner); !slices.Equal(got, want) {
+			t.Errorf("interactiveRunnerArgs(%s) = %v, want %v", runner, got, want)
 		}
 	}
 }

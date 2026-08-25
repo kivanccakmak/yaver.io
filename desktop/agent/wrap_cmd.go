@@ -42,10 +42,10 @@ func interactiveRunnerArgs(runnerID string) []string {
 		// codex CLI `--help`).
 		return []string{"--dangerously-bypass-approvals-and-sandbox"}
 	case "opencode":
-		// Plain `opencode` opens its interactive TUI. The
-		// --dangerously-skip-permissions flag belongs to `opencode run`
-		// (headless) and is rejected in interactive mode, so wrap omits it.
-		return nil
+		// OpenCode's interactive TUI exposes --auto for auto-approving
+		// permissions. Its --dangerously-skip-permissions spelling belongs to
+		// `opencode run` and is rejected by the interactive command.
+		return []string{"--auto"}
 	}
 	return nil
 }

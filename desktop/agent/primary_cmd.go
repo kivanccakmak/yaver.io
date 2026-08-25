@@ -75,7 +75,7 @@ func runPrimary(args []string) {
 		return
 	}
 	if runner := normalizePrimaryRunnerQuickArg(args[0]); runner != "" {
-		runPrimaryRunnerQuickFlow(ctx, runner, args[1:])
+		runPrimaryRunnerQuickFlow(runner, args[1:])
 		return
 	}
 	switch args[0] {
@@ -224,8 +224,8 @@ func runPrimaryAuth(ctx context.Context, args []string) {
 		return
 	}
 	runner := normalizeRunnerAuthName(args[0])
-	if runner != "claude" && runner != "codex" {
-		fmt.Fprintf(os.Stderr, "primary auth: unsupported runner %q. Use claude / claude-code / codex.\n", args[0])
+	if runner != "claude" && runner != "codex" && runner != "opencode" {
+		fmt.Fprintf(os.Stderr, "primary auth: unsupported runner %q. Use claude / claude-code / codex / opencode.\n", args[0])
 		os.Exit(1)
 	}
 	runRunnerQuickFlow(current, runner, args[1:])
@@ -660,7 +660,7 @@ Usage:
                                   relay transport stack
   yaver primary auth              Run remote 'yaver auth --headless' on
                                   the primary device (Yaver-level auth)
-  yaver primary auth <claude|claude-code|codex>
+  yaver primary auth <claude|claude-code|codex|opencode>
                                   Run the runner sanity/auth flow on the
                                   primary device for the named coding agent
   yaver primary signout [-y]      Sign the primary device out (clears its
@@ -681,9 +681,13 @@ Usage:
   yaver primary browser-lane [--json]
                                   Prove the active preview paints in real
                                   Chrome on the primary; returns a named stage.
-  yaver primary <claude|claude-code|codex>
-                                  Same as 'auth <runner>' — kept as a
-                                  shortcut so existing scripts still work
+  yaver primary <claude|claude-code|codex|opencode> [runner args...]
+                                  Open that runner on the primary in a FRESH
+                                  runner-specific tmux session. Codex, Claude,
+                                  and OpenCode start with their no-approval
+                                  mode; pass --yaver-safe to opt out. Disconnect
+                                  freely, then adopt/attach the tmux session
+                                  from another Yaver surface.
   yaver primary set [deviceId|name|alias|self]
                                   Mark a device as primary. With NO arg (or
                                   'self' / 'me' / 'local' / '.') marks THIS
@@ -699,7 +703,7 @@ Single-device users auto-connect regardless of this setting.
 func normalizePrimaryRunnerQuickArg(arg string) string {
 	runner := normalizeRunnerAuthName(arg)
 	switch runner {
-	case "claude", "codex":
+	case "claude", "codex", "opencode":
 		return runner
 	default:
 		return ""
@@ -1048,25 +1052,19 @@ func runPrimaryClear(ctx context.Context) {
 	fmt.Println("Primary device cleared. Multi-device users will be asked to pick on next login.")
 }
 
-func runPrimaryRunnerQuickFlow(ctx context.Context, runner string, extra []string) {
-	if len(extra) > 0 {
-		fmt.Fprintf(os.Stderr, "primary: unexpected extra arguments after %s: %s\n", runner, strings.Join(extra, " "))
-		os.Exit(1)
-	}
-	token, convex, err := primaryLoadAuth()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	current, err := primaryGetCurrent(ctx, token, convex)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read settings: %v\n", err)
-		os.Exit(1)
-	}
-	current = strings.TrimSpace(current)
-	if current == "" {
-		fmt.Fprintln(os.Stderr, "No primary device set. Run `yaver primary set <deviceId>` first.")
-		os.Exit(1)
-	}
-	runRunnerQuickFlow(current, runner, nil)
+func primaryRunnerPassthroughArgs(extra []string) []string {
+	// Append the Yaver-owned invariants so a runner argument cannot redirect
+	// this shortcut away from the primary or silently resume stale state.
+	// --yaver-no-sync also makes this a remote-home launch, not an implicit
+	// clone/pull of whichever local checkout happened to contain the caller.
+	out := append([]string(nil), extra...)
+	return append(out, "--machine=primary", "--yaver-no-sync", "--yaver-fresh")
+}
+
+func runPrimaryRunnerQuickFlow(runner string, extra []string) {
+	// The remote-runner path owns transport failover, auth repair, tmux
+	// persistence, phone adoption, and the per-runner dangerous-mode defaults.
+	// Fresh is intentional for this shortcut: every invocation gets a clean
+	// runner process in the stable yaver-<runner> tmux seat.
+	runRunnerPassthrough(runner, primaryRunnerPassthroughArgs(extra))
 }
