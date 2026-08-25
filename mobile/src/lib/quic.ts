@@ -4465,8 +4465,9 @@ export class QuicClient {
     return { ok: res.ok && data?.ok !== false, ...(data as object) } as AttachSessionResult;
   }
 
-  /** Fetch origin/main and safely rebase the selected Yaver checkout before
-   * Dogfood starts. Never pushes or force-writes history. */
+  /** Fetch canonical main (origin for a clone, upstream for a fork) and safely
+   * rebase the selected Yaver checkout before Dogfood starts. Community users
+   * are moved off main. Never pushes or force-writes history. */
   async prepareDogfoodCheckout(workDir: string): Promise<{
     ok: boolean;
     code?: string;
@@ -4475,6 +4476,8 @@ export class QuicClient {
     base?: string;
     head?: string;
     rebased?: boolean;
+    contributionBranch?: boolean;
+    pushPolicy?: string;
     requiresAgent?: boolean;
     conflicts?: string[];
     error?: string;
@@ -7524,6 +7527,8 @@ export class QuicClient {
     suggestedPath?: string;
     branch?: string;
     remote?: string;
+    baseRemote?: string;
+    baseRef?: string;
     gitVersion?: string;
     message: string;
     remedy?: string;
@@ -7544,6 +7549,8 @@ export class QuicClient {
         suggestedPath: data?.suggestedPath,
         branch: data?.branch,
         remote: data?.remote,
+        baseRemote: data?.baseRemote,
+        baseRef: data?.baseRef,
         gitVersion: data?.gitVersion,
         message: String(data?.message || data?.error || "Could not inspect Yaver source on this box."),
         remedy: data?.remedy,

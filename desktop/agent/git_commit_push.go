@@ -42,6 +42,7 @@ type commitPushRequest struct {
 
 type commitPushResponse struct {
 	OK              bool     `json:"ok"`
+	Code            string   `json:"code,omitempty"`
 	Branch          string   `json:"branch,omitempty"`
 	Hash            string   `json:"hash,omitempty"`
 	Actions         []string `json:"actions,omitempty"`
@@ -54,7 +55,31 @@ type commitPushResponse struct {
 	RequiresAgent bool     `json:"requiresAgent,omitempty"`
 	Conflicts     []string `json:"conflicts,omitempty"`
 	Error         string   `json:"error,omitempty"`
+	Remedy        string   `json:"remedy,omitempty"`
 	Output        string   `json:"output,omitempty"`
+}
+
+// Maintainers may intentionally land through the canonical main branch. Every
+// other signed-in account gets the contribution lane. Kept as a seam so the
+// negative control proves the refusal without depending on Convex in tests.
+var canonicalMainPushAllowed = currentUserIsOwner
+
+func canonicalMainPushTarget(workDir, branch string) bool {
+	if strings.TrimSpace(branch) != "main" {
+		return false
+	}
+	remoteName, _ := runGit(workDir, "config", "--get", "branch.main.remote")
+	remoteName = strings.TrimSpace(remoteName)
+	if remoteName == "" || remoteName == "." {
+		remoteName = "origin"
+	}
+	remoteURL, _ := runGit(workDir, "config", "--get", "remote."+remoteName+".pushurl")
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		remoteURL, _ = runGit(workDir, "config", "--get", "remote."+remoteName+".url")
+		remoteURL = strings.TrimSpace(remoteURL)
+	}
+	return canonicalYaverRemote(remoteURL)
 }
 
 func (s *HTTPServer) handleGitCommitPush(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +118,19 @@ func (s *HTTPServer) handleGitCommitPush(w http.ResponseWriter, r *http.Request)
 		jsonReply(w, http.StatusInternalServerError, resp)
 		return
 	}
+	branch = strings.TrimSpace(branch)
 	resp.Branch = branch
+
+	// Refuse before `git add` or `git commit`: a blocked push must not mutate
+	// the checkout and then strand an unexpected commit. Fork main branches are
+	// fine; this targets only yaver-io/yaver.io main (including its old redirect).
+	if canonicalMainPushTarget(workDir, branch) && !canonicalMainPushAllowed() {
+		resp.Code = "CANONICAL_MAIN_PROTECTED"
+		resp.Error = "Community Dogfood cannot push to yaver-io/yaver.io main."
+		resp.Remedy = "Create a contribution branch, add your fork as a push remote, and open a pull request."
+		jsonReply(w, http.StatusForbidden, resp)
+		return
+	}
 
 	// Stage everything tracked + untracked. The web "Commit & Push" intent
 	// is "ship what I'm looking at" — partial staging belongs in the Git

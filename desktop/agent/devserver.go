@@ -2192,6 +2192,23 @@ func (b *baseDevServer) Stop() error {
 	return nil
 }
 
+// emitDevCommand puts the exact operation at the top of the same raw log lane
+// that carries npm/Metro/Flutter output. A child process can take tens of
+// seconds to print its first byte; without this banner the UI cannot
+// distinguish a real compile from a dead start.
+func emitDevCommand(emit func(DevServerEvent), framework, name string, args []string, workDir string) {
+	if emit == nil {
+		return
+	}
+	command := strings.TrimSpace(strings.Join(append([]string{name}, args...), " "))
+	emit(DevServerEvent{
+		Type:      "log",
+		Framework: framework,
+		LogLine:   fmt.Sprintf("$ %s   (in %s)", command, workDir),
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
 // startProcess launches a command and waits for readiness by polling a URL.
 func (b *baseDevServer) startProcess(ctx context.Context, name string, args []string, workDir string, env []string, readyURL string) error {
 	b.mu.Lock()
@@ -2244,6 +2261,7 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 	}
 	cmd.Stdout = logWriter
 	cmd.Stderr = logWriter
+	emitDevCommand(b.emitFn, b.name, name, args, workDir)
 
 	// Keep stdin open (Flutter needs it for "r" hot reload)
 	stdinPipe, _ := cmd.StdinPipe()
@@ -2766,6 +2784,7 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 	}
 	cmd.Stdout = logWriter
 	cmd.Stderr = logWriter
+	emitDevCommand(e.emitFn, "expo-web", "npx", args, workDir)
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -3337,18 +3356,8 @@ func (f *FlutterDevServer) startProcessWithStdin(ctx context.Context, name strin
 	cmd.Stdout = logWriter
 	cmd.Stderr = logWriter
 
-	// Announce the exact command AND the directory it runs in, immediately, so
-	// the overlay is never blank while the first line of real output is still
-	// tens of seconds away. Requested directly: "show the directory it runs the
-	// command in".
-	if f.emitFn != nil {
-		f.emitFn(DevServerEvent{
-			Type:      "log",
-			Framework: f.name,
-			LogLine:   fmt.Sprintf("$ %s %s   (in %s)", name, strings.Join(args, " "), workDir),
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-		})
-	}
+	// Announce the exact command AND directory before the first compiler byte.
+	emitDevCommand(f.emitFn, f.name, name, args, workDir)
 
 	// Create stdin pipe and save it for Reload()
 	pipe, err := cmd.StdinPipe()

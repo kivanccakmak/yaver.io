@@ -165,7 +165,7 @@ export async function rerenderActivePreviewSurface(opts: {
     webrtcTargetCanRender: !session?.targetId || canRunGuestOnRemoteTarget(session.targetId),
     webrtcTargetLabel: session?.targetLabel || session?.targetId,
     inFlight: remoteRuntimeRenderInFlight,
-    // Entering owner-only Dogfood mode is the explicit consent to keep
+    // Entering Dogfood mode is the explicit consent to keep
     // refreshing Yaver after completed UI turns; production remains outside
     // this WebView and is always reachable from native chrome.
     autoRenderEnabled: dogfoodBridge || opts.autoRenderEnabled,

@@ -13,6 +13,7 @@ import { connectionManager } from "./connectionManager";
 import { appLog } from "./logger";
 import type { AttachSessionResult } from "./quic";
 import { doctorBrowserLane, type BrowserLaneProbeResult } from "./browserLaneDoctor";
+import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "./projectPreviewRuntime";
 
 export type { AttachSessionResult };
 
@@ -73,10 +74,9 @@ export async function startAttachSession(deviceId: string, workDir: string): Pro
 export async function startYaverBrowserLane(deviceId: string, checkoutDir: string) {
   const client = clientFor(deviceId);
   if (!client) throw new Error(NOT_CONNECTED.error);
-  return client.startDevServer({
+  return startBrowserProjectLane(client, {
     workDir: checkoutDir.replace(/\/+$/, "") + "/mobile",
     framework: "expo",
-    web: true,
   });
 }
 
@@ -86,6 +86,8 @@ export type DogfoodPreparationResult =
       sessionId: string;
       url: string;
       probe: BrowserLaneProbeResult;
+      branch?: string;
+      pushPolicy?: string;
     }
   | {
       ok: false;
@@ -98,6 +100,63 @@ export type DogfoodPreparationResult =
 
 export type DogfoodSourceStatus = Awaited<ReturnType<NonNullable<ReturnType<typeof clientFor>>["dogfoodYaverSourceStatus"]>>;
 
+export async function dogfoodNativeRuntimeAvailable(deviceId: string, checkoutDir: string): Promise<boolean> {
+  const client = clientFor(deviceId);
+  if (!client || !checkoutDir.trim()) return false;
+  try {
+    const caps = await client.getRemoteRuntimeCapabilities(
+      checkoutDir.replace(/\/+$/, "") + "/mobile",
+      "expo",
+    );
+    return caps.targets.some((target) => target.id !== "browser-window" && target.enabled);
+  } catch {
+    return false;
+  }
+}
+
+export type DogfoodCheckoutPreparation =
+  | { ok: true; branch?: string; pushPolicy?: string }
+  | { ok: false; code: string; error: string; remedy: string; requiresAgent?: boolean; fixPrompt?: string };
+
+/** Git-only preparation shared by browser and native WebRTC Dogfood lanes. */
+export async function prepareDogfoodCheckoutOnly(
+  deviceId: string,
+  checkoutDir: string,
+  onProgress?: (message: string) => void,
+): Promise<DogfoodCheckoutPreparation> {
+  const client = clientFor(deviceId);
+  if (!client) {
+    return {
+      ok: false, code: "DOGFOOD_PRIMARY_DISCONNECTED",
+      error: "The primary device is not connected.",
+      remedy: "Reconnect the primary device, then enter Dogfood mode again.",
+    };
+  }
+  onProgress?.("Syncing Yaver with canonical main…");
+  const git = await client.prepareDogfoodCheckout(checkoutDir).catch((err) => ({
+    ok: false, code: "DOGFOOD_GIT_PREPARE_FAILED",
+    error: err instanceof Error ? err.message : String(err),
+    remedy: "Check Git and GitHub access on the primary device, then retry.",
+    requiresAgent: false,
+    fixPrompt: undefined,
+    contributionBranch: false,
+    branch: undefined,
+    pushPolicy: undefined,
+  }));
+  if (!git.ok) {
+    return {
+      ok: false,
+      code: git.code || "DOGFOOD_GIT_PREPARE_FAILED",
+      error: git.error || "The Yaver checkout could not be prepared from canonical main.",
+      remedy: git.remedy || "Fix the named Git issue, then retry Dogfood mode.",
+      requiresAgent: git.requiresAgent === true,
+      fixPrompt: git.fixPrompt,
+    };
+  }
+  if (git.contributionBranch && git.branch) onProgress?.(`Contribution branch ${git.branch} ready…`);
+  return { ok: true, branch: git.branch, pushPolicy: git.pushPolicy };
+}
+
 /**
  * Prove Dogfood mode before navigating away from Production.
  *
@@ -109,6 +168,7 @@ export async function prepareDogfoodMode(
   deviceId: string,
   checkoutDir: string,
   onProgress?: (message: string) => void,
+  onLog?: (line: string) => void,
 ): Promise<DogfoodPreparationResult> {
   const initialClient = clientFor(deviceId);
   if (!initialClient) {
@@ -120,27 +180,11 @@ export async function prepareDogfoodMode(
     };
   }
 
-  onProgress?.("Rebasing Yaver onto origin/main…");
-  const git = await initialClient.prepareDogfoodCheckout(checkoutDir).catch((err) => ({
-    ok: false,
-    code: "DOGFOOD_GIT_PREPARE_FAILED",
-    error: err instanceof Error ? err.message : String(err),
-    remedy: "Check Git and GitHub access on the primary device, then retry.",
-    requiresAgent: false,
-    fixPrompt: undefined,
-  }));
+  const git = await prepareDogfoodCheckoutOnly(deviceId, checkoutDir, onProgress);
   if (!git.ok) {
-    return {
-      ok: false,
-      code: git.code || "DOGFOOD_GIT_PREPARE_FAILED",
-      error: git.error || "The Yaver checkout could not be prepared from origin/main.",
-      remedy: git.remedy || "Fix the named Git issue, then retry Dogfood mode.",
-      requiresAgent: git.requiresAgent === true,
-      fixPrompt: git.fixPrompt,
-    };
+    return git;
   }
-
-  onProgress?.("Authorizing owner session…");
+  onProgress?.("Authorizing Dogfood session…");
   const session = await startAttachSession(deviceId, checkoutDir);
   if (!session.ok || !session.sessionId) {
     return {
@@ -156,7 +200,13 @@ export async function prepareDogfoodMode(
     return { ok: false, code, error, remedy };
   };
 
+  let stopDevEvents: (() => void) | null = null;
   try {
+    stopDevEvents = subscribeProjectPreviewOutput(
+      initialClient,
+      (lines) => lines.forEach((line) => onLog?.(line)),
+      (health) => { if (health?.kind === "lost") onLog?.(`[logs] ${health.message}`); },
+    );
     onProgress?.("Starting Yaver with Expo…");
     const status = await startYaverBrowserLane(deviceId, checkoutDir);
     const bundlePath = String((status as any)?.previewUrl || (status as any)?.bundleUrl || "").trim();
@@ -187,13 +237,31 @@ export async function prepareDogfoodMode(
     const url = new URL(`${reportedURL.pathname}${reportedURL.search}${reportedURL.hash}`, agentOrigin).toString();
 
     onProgress?.("Proving Yaver renders in the browser…");
-    const probe = await doctorBrowserLane(client, 45);
+    let probe = await doctorBrowserLane(client, 45);
     if (!probe) {
       return fail(
         "DOGFOOD_RENDER_PROBE_UNAVAILABLE",
         "The primary device could not verify that Yaver rendered in its browser lane.",
         "Update or restart the Yaver agent, then retry. Dogfood mode stays off until this probe answers.",
       );
+    }
+    if (!probe.ok && probe.stage === "compiling") {
+      onProgress?.("Compiling Yaver’s first web build…");
+      onLog?.(probe.detail || "Metro is compiling the first web bundle");
+      // Older agents return `compiling` immediately even though their doctor
+      // accepts a waitSeconds parameter. Keep the launch screen alive and
+      // re-probe the real browser operation until Metro paints or the overall
+      // first-build allowance expires. Newer agents also wait internally, so
+      // this remains a bounded compatibility loop rather than a second lane.
+      const compileDeadline = Date.now() + 90_000;
+      while (!probe.ok && probe.stage === "compiling" && Date.now() < compileDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        const remainingSeconds = Math.max(1, Math.ceil((compileDeadline - Date.now()) / 1000));
+        probe = await doctorBrowserLane(client, Math.min(15, remainingSeconds));
+        if (!probe.ok && probe.stage === "compiling") {
+          onLog?.(probe.detail || "Metro is still compiling the first web bundle");
+        }
+      }
     }
     if (!probe.ok) {
       return fail(
@@ -203,13 +271,15 @@ export async function prepareDogfoodMode(
       );
     }
 
-    return { ok: true, sessionId: session.sessionId, url, probe };
+    return { ok: true, sessionId: session.sessionId, url, probe, branch: git.branch, pushPolicy: git.pushPolicy };
   } catch (err) {
     return fail(
       "DOGFOOD_EXPO_START_FAILED",
       err instanceof Error ? err.message : String(err),
       "Check the primary device connection and Expo installation, then retry.",
     );
+  } finally {
+    stopDevEvents?.();
   }
 }
 

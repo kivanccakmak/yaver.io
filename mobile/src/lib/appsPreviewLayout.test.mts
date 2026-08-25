@@ -14,8 +14,10 @@ const buildsSrc = readFileSync(join(mobileRoot, "app/(tabs)/builds.tsx"), "utf8"
 const studioSrc = readFileSync(join(mobileRoot, "app/vibe-studio.tsx"), "utf8");
 const studioChatSrc = readFileSync(join(mobileRoot, "src/components/studio/StudioChatPane.tsx"), "utf8");
 
-assert.doesNotMatch(src, /<LaneStartupStatus[\s\S]{0,400}lines=\{webPreviewLogs\}/,
-  "elapsed status must not repeat loose log lines above the log box");
+assert.match(src, /<LaneStartupStatus[\s\S]{0,800}lines=\{webPreviewLogs\}/,
+  "the first-glance browser wait must show the newest dev-server log lines");
+assert.match(src, /<LaneStartupStatus[\s\S]{0,900}emptyText=/,
+  "the first-glance browser wait must label an empty log stream honestly");
 assert.doesNotMatch(src, /webPreviewLogs\.length > 0 && !webRuntimeLogOpen/,
   "preview output must have one log surface, not a second inline log box");
 assert.doesNotMatch(src, />Preview logs</,
@@ -40,8 +42,8 @@ assert.match(src, /stopBtn:\s*\{[^\n]*minWidth:\s*72/,
   "Open and Stop must have matching compact widths");
 assert.match(src, /filterRow:\s*\{\s*height:\s*38/,
   "the chip ScrollView must be taller than its 34pt selected chips");
-assert.doesNotMatch(src, /previewWaitLine|previewWaitWrap|previewWaitCard/,
-  "the preview must have one waiting layer and one timer");
+assert.match(src, /previewWaitLine/,
+  "the Projects preview must use the shared wait narration contract");
 assert.doesNotMatch(src, /quicClient\.getDevServerBundleUrl|doctorBrowserLane\(quicClient/,
   "the iOS preview URL and doctor must use the selected box's pooled client");
 assert.match(src, /reconcilePreviewDevStatus\(previous, status, showWebViewRef\.current\)/,
@@ -68,8 +70,10 @@ assert.match(buildsSrc, /backgroundColor:\s*isRunning\s*\?\s*c\.surfaceMuted\s*:
   "the legacy project card must keep the same theme-aware running surface");
 assert.doesNotMatch(src, /\[preview\] log stream unavailable/,
   "an optional log-stream failure must not be presented as a preview failure");
-assert.match(src, /previewClient\.subscribeDevEvents/,
-  "the Projects preview must use the reconnecting shared dev-events lane");
+assert.match(src, /subscribeProjectPreviewOutput\(previewClient/,
+  "the Projects preview must use the shared Dogfood\/Projects output lane");
+assert.match(readFileSync(join(mobileRoot, "src", "lib", "projectPreviewRuntime.ts"), "utf8"), /client\.subscribeDevEvents/,
+  "the shared Dogfood\/Projects lane must retain reconnecting dev-events transport");
 assert.match(sharedPreviewSrc, /previewClient\.subscribeDevEvents/,
   "the shared preview must use the reconnecting shared dev-events lane");
 assert.match(src, /project:\s*usable\?\.workDir\s*\|\|\s*currentProject\?\.path\s*\|\|\s*runningProject/,

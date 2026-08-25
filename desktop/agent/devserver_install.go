@@ -131,7 +131,7 @@ func ensureNodeDepsStreamed(ctx context.Context, workDir string, emit func(DevSe
 	}
 	log.Printf("[dev] Installing dependencies in %s with %s...", workDir, prep.PackageManager)
 	if installWriter != nil {
-		fmt.Fprintf(installWriter, "running `%s install` in %s ...\n", prep.PackageManager, workDir)
+		fmt.Fprintf(installWriter, "$ %s install   (in %s)\n", prep.PackageManager, workDir)
 	}
 	if err := installProjectDependenciesTo(workDir, prep, installWriter); err != nil {
 		return fmt.Errorf("%s install failed: %w", prep.PackageManager, err)

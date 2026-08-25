@@ -1,4 +1,4 @@
-// AttachModeSection.tsx — the owner-only More → Dogfood mode runtime gate.
+// AttachModeSection.tsx — the contributor-facing More → Develop Yaver gate.
 //
 // Yaver rendering Yaver: the phone shows Yaver's own app, served as RN-web from
 // a box over the browser lane, and refreshes when a coding turn lands.
@@ -16,27 +16,40 @@
 // opinion, so this panel and the box checklist cannot drift apart.
 
 import { router } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Pressable, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { ThemeColors } from "../constants/colors";
 import { useDevice } from "../context/DeviceContext";
 import { computeAttachGate, computeNestingVerdict, ATTACH_SENTINEL_KEY, type AttachStep } from "../lib/attachMode";
 import type { BoxReadiness } from "../lib/boxInit";
 import { loadBoxReadiness } from "../lib/boxInitStore";
+import { runBoxAction } from "../lib/boxInitStore";
 import {
   getDogfoodSourceStatus,
+  dogfoodNativeRuntimeAvailable,
   installDogfoodGit,
   installDogfoodSource,
-  prepareDogfoodMode,
   requestDogfoodFixWithAI,
   verifyYaverCheckout,
   type DogfoodSourceStatus,
 } from "../lib/attachClient";
-import { appLog } from "../lib/logger";
+import {
+  dogfoodLaneOptions,
+  type DogfoodLane,
+} from "../../../sdk/feedback/react-native/src/DogfoodRuntime";
+import RunnerAuthModal from "./RunnerAuthModal";
+import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 
 const CHECKOUT_KEY = "@yaver/attach_checkout_dir";
-const RUNNER_KEY = "@yaver/attach_runner";
+const GIT_CONFIG_FAILURE_CODES = new Set([
+  "DOGFOOD_GIT_AUTH_UNCONFIGURED",
+  "DOGFOOD_GIT_CREDENTIALS_EMBEDDED",
+  "DOGFOOD_GIT_FETCH_FAILED",
+  "DOGFOOD_GIT_ORIGIN_MISSING",
+  "DOGFOOD_GIT_UPSTREAM_MISSING",
+  "DOGFOOD_SOURCE_MISSING",
+]);
 
 export default function AttachModeSection({
   c,
@@ -47,17 +60,34 @@ export default function AttachModeSection({
   readiness?: BoxReadiness | null;
   primaryOnly?: boolean;
 }) {
-  const { devices, activeDevice, connectionStatus, primaryDeviceId, selectDevice } = useDevice();
+  const {
+    devices,
+    activeDevice,
+    connectionStatus,
+    connectedDeviceIds,
+    primaryDeviceId,
+    primaryRunnerByDevice,
+    selectDevice,
+    setPrimaryRunnerForDevice,
+  } = useDevice();
   const primaryDevice = primaryDeviceId ? devices.find((d) => d.id === primaryDeviceId) ?? null : null;
-  const targetDevice = primaryOnly ? primaryDevice : activeDevice;
-  const targetConnected = !!targetDevice && connectionStatus === "connected" && activeDevice?.id === targetDevice.id;
+  const primaryConnected = !!primaryDevice && connectedDeviceIds.includes(primaryDevice.id);
+  const targetDevice = primaryOnly ? (primaryConnected ? primaryDevice : activeDevice ?? primaryDevice) : activeDevice;
+  const targetConnected = !!targetDevice && (
+    connectedDeviceIds.includes(targetDevice.id) ||
+    (connectionStatus === "connected" && activeDevice?.id === targetDevice.id)
+  );
   const [checkoutDir, setCheckoutDir] = useState("");
   const [configLoaded, setConfigLoaded] = useState(false);
-  const [runner, setRunner] = useState("claude-code");
+  const [runner, setRunner] = useState("codex");
+  const [lane, setLane] = useState<DogfoodLane>("browser");
+  const [nativeRuntimeAvailable, setNativeRuntimeAvailable] = useState(false);
+  const [runnerSetupBusy, setRunnerSetupBusy] = useState(false);
+  const [runnerSetupMessage, setRunnerSetupMessage] = useState<string | null>(null);
+  const [runnerAuthFor, setRunnerAuthFor] = useState<"claude" | "codex" | null>(null);
+  const [showOpenCodeConfig, setShowOpenCodeConfig] = useState(false);
   const [verified, setVerified] = useState<boolean | undefined>(undefined);
   const [verifying, setVerifying] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [startProgress, setStartProgress] = useState<string | null>(null);
   const [failure, setFailure] = useState<{ code?: string; error: string; remedy?: string; fixPrompt?: string } | null>(null);
   const [fixing, setFixing] = useState(false);
   const [sourceStatus, setSourceStatus] = useState<DogfoodSourceStatus | null>(null);
@@ -91,12 +121,8 @@ export default function AttachModeSection({
   useEffect(() => {
     (async () => {
       try {
-        const [dir, r] = await Promise.all([
-          AsyncStorage.getItem(CHECKOUT_KEY),
-          AsyncStorage.getItem(RUNNER_KEY),
-        ]);
+        const dir = await AsyncStorage.getItem(CHECKOUT_KEY);
         if (dir) setCheckoutDir(dir);
-        if (r) setRunner(r);
       } catch {
         // best-effort
       } finally {
@@ -105,20 +131,36 @@ export default function AttachModeSection({
     })();
   }, []);
 
+  // Dogfood uses the same per-device runner preference as Tasks and Vibing.
+  // Switching the connected/primary device therefore restores its runner
+  // instead of maintaining a second Dogfood-only choice.
+  useEffect(() => {
+    if (!targetDevice?.id) return;
+    setRunner(primaryRunnerByDevice[targetDevice.id] || "codex");
+  }, [primaryRunnerByDevice, targetDevice?.id]);
+
   // Primary-device Dogfood should be one action in the normal case. The Go
   // agent owns this answer because only it can inspect the box's source and
   // Git origin. A cached client-side repo list is not an operational check.
   useEffect(() => {
     if (!primaryOnly || !configLoaded || !targetConnected || !targetDevice?.id) return;
     let cancelled = false;
-    void getDogfoodSourceStatus(targetDevice.id, checkoutDir.trim() || undefined).then((status) => {
+    void (async () => {
+      let status = await getDogfoodSourceStatus(targetDevice.id, checkoutDir.trim() || undefined);
+      // Cached test/validation worktrees are commonly detached. Prefer the
+      // agent's normal named checkout when it can prove one, so a stale local
+      // preference does not strand Dogfood on a disposable clone.
+      if (status.ready && status.branch === "HEAD" && status.suggestedPath && status.suggestedPath !== status.path) {
+        const suggested = await getDogfoodSourceStatus(targetDevice.id, status.suggestedPath);
+        if (suggested.ready && suggested.branch && suggested.branch !== "HEAD") status = suggested;
+      }
       if (cancelled) return;
       setSourceStatus(status);
-      if (status.ready && status.path && !checkoutDir.trim()) {
+      if (status.ready && status.path && status.path !== checkoutDir.trim()) {
         setCheckoutDir(status.path);
         AsyncStorage.setItem(CHECKOUT_KEY, status.path).catch(() => {});
       }
-    });
+    })();
     return () => { cancelled = true; };
   // The explicit checkout is verified by the debounced effect below; this
   // effect is for initial agent-owned discovery only.
@@ -156,6 +198,28 @@ export default function AttachModeSection({
     return () => clearTimeout(t);
   }, [checkoutDir, verify]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!targetDevice?.id || !targetConnected || verified !== true) {
+      setNativeRuntimeAvailable(false);
+      return;
+    }
+    void dogfoodNativeRuntimeAvailable(targetDevice.id, checkoutDir.trim())
+      .then((available) => { if (!cancelled) setNativeRuntimeAvailable(available); });
+    return () => { cancelled = true; };
+  }, [checkoutDir, targetConnected, targetDevice?.id, verified]);
+
+  const laneOptions = useMemo(() => dogfoodLaneOptions("expo", {
+    nativeRuntimeAvailable,
+    selfDevelopment: true,
+  }), [nativeRuntimeAvailable]);
+
+  useEffect(() => {
+    if (!laneOptions.some((option) => option.lane === lane && option.supported)) {
+      setLane("browser");
+    }
+  }, [lane, laneOptions]);
+
   // Readiness is an operational probe, not an optional decoration. The old
   // call site supplied no value, leaving the gate at "checking…" forever.
   useEffect(() => {
@@ -190,48 +254,55 @@ export default function AttachModeSection({
     checkoutDir: checkoutDir.trim() || null,
     checkoutVerified: verifying ? undefined : verified,
   });
+  const runnerCheckKey = runner === "claude-code" ? "claude" : runner;
+  const runnerCheck = measuredReadiness?.checks.find((check) => check.key === runnerCheckKey);
 
-  const attach = useCallback(async () => {
-    if (!targetDevice?.id || !gate.canAttach) return;
-    setStarting(true);
+  const configureRunner = useCallback(async () => {
+    if (!targetDevice?.id || !runnerCheck || runnerCheck.status === "ok" || runnerSetupBusy) return;
+    if (runnerCheck.status !== "missing") {
+      if (runner === "opencode") setShowOpenCodeConfig(true);
+      else setRunnerAuthFor(runner === "claude-code" ? "claude" : "codex");
+      return;
+    }
+    setRunnerSetupBusy(true);
+    setRunnerSetupMessage(`Installing ${runner}…`);
     setFailure(null);
-    setStartProgress("Checking primary device…");
     try {
-      const dir = checkoutDir.trim();
-      const prepared = await prepareDogfoodMode(targetDevice.id, dir, setStartProgress);
-      if (!prepared.ok) {
-        setFailure({
-          code: prepared.code,
-          error: `${prepared.code}: ${prepared.error}`,
-          remedy: prepared.remedy,
-          fixPrompt: prepared.fixPrompt ||
-            `Fix Yaver Dogfood mode in ${dir}. Entry failed with ${prepared.code}: ${prepared.error}. ${prepared.remedy} Preserve all local work, do not force-push, run focused tests, and leave the Expo browser lane ready.`,
-        });
-        return;
+      const result = await runBoxAction(targetDevice.id, runnerCheck.action);
+      if (!result.ok) throw new Error(result.error || `Could not install ${runner}.`);
+      const next = await loadBoxReadiness(targetDevice.id);
+      setMeasuredReadiness(next);
+      const nextCheck = next.checks.find((check) => check.key === runnerCheckKey);
+      setRunnerSetupMessage(result.detail || "Runner installed");
+      if (nextCheck?.status !== "ok") {
+        if (runner === "opencode") setShowOpenCodeConfig(true);
+        else setRunnerAuthFor(runner === "claude-code" ? "claude" : "codex");
       }
-
-      router.push({
-        pathname: "/attach" as any,
-        params: {
-          sessionId: prepared.sessionId,
-          url: prepared.url,
-          workDir: dir,
-          runner,
-          deviceId: targetDevice.id,
-          deviceName: targetDevice.name,
-        },
-      } as any);
-    } catch (err: any) {
-      appLog("warn", `attach: start failed: ${err?.message || String(err)}`);
+    } catch (error) {
       setFailure({
-        error: err?.message || "Could not start Dogfood mode.",
-        remedy: "Check the box is reachable and try again.",
+        code: "DOGFOOD_RUNNER_SETUP_FAILED",
+        error: error instanceof Error ? error.message : String(error),
+        remedy: `Retry ${runner} setup on ${targetDevice.name}.`,
       });
     } finally {
-      setStarting(false);
-      setStartProgress(null);
+      setRunnerSetupBusy(false);
     }
-  }, [checkoutDir, gate.canAttach, runner, targetDevice?.id, targetDevice?.name]);
+  }, [runner, runnerCheck, runnerCheckKey, runnerSetupBusy, targetDevice?.id, targetDevice?.name]);
+
+  const attach = useCallback(() => {
+    if (!targetDevice?.id || !gate.canAttach) return;
+    setFailure(null);
+    router.push({
+      pathname: "/dogfood-launch" as any,
+      params: {
+        workDir: checkoutDir.trim(),
+        runner,
+        lane,
+        deviceId: targetDevice.id,
+        deviceName: targetDevice.name,
+      },
+    } as any);
+  }, [checkoutDir, gate.canAttach, lane, runner, targetDevice?.id, targetDevice?.name]);
 
   const runSourceFix = useCallback(async () => {
     if (!targetDevice?.id || !sourceStatus || sourceBusy) return;
@@ -280,10 +351,6 @@ export default function AttachModeSection({
   return (
     <View>
       <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Dogfood Yaver in the browser</Text>
-      <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 4, lineHeight: 17 }}>
-        Serve mobile/ with Expo on your primary device, render it full-screen, and refresh it when a
-        coding turn lands. A small native Y always brings you back to Production after confirmation.
-      </Text>
 
       {primaryOnly && !primaryDevice ? (
         <Text style={{ color: c.warn, fontSize: 12, marginTop: 10 }}>
@@ -338,7 +405,7 @@ export default function AttachModeSection({
               </Text>
             </Pressable>
           ) : null}
-          {!sourceStatus.action && sourceStatus.code === "DOGFOOD_GIT_CREDENTIALS_EMBEDDED" && targetDevice?.id ? (
+          {!sourceStatus.action && GIT_CONFIG_FAILURE_CODES.has(sourceStatus.code) && targetDevice?.id ? (
             <Pressable
               onPress={() => router.push({ pathname: "/(tabs)/settings" as any, params: { gitWizard: "1", deviceId: targetDevice.id } } as any)}
               style={{ marginTop: 9, alignSelf: "flex-start", paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: c.accent }}
@@ -380,7 +447,7 @@ export default function AttachModeSection({
               key={r}
               onPress={() => {
                 setRunner(r);
-                AsyncStorage.setItem(RUNNER_KEY, r).catch(() => {});
+                if (targetDevice?.id) void setPrimaryRunnerForDevice(targetDevice.id, r, null);
               }}
               style={({ pressed }) => [
                 {
@@ -399,6 +466,52 @@ export default function AttachModeSection({
           );
         })}
       </View>
+      {verified === true && runnerCheck && runnerCheck.status !== "ok" ? (
+        <Pressable
+          disabled={runnerSetupBusy}
+          onPress={() => void configureRunner()}
+          style={{ marginTop: 8, alignSelf: "flex-start", paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, backgroundColor: c.accentSoft }}
+        >
+          <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>
+            {runnerSetupBusy ? "Installing…" : runnerCheck.status === "missing" ? `Install ${runner}` : `Configure ${runner}`}
+          </Text>
+        </Pressable>
+      ) : null}
+      {runnerSetupMessage ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>{runnerSetupMessage}</Text> : null}
+
+      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Runtime</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        {laneOptions.map((option) => {
+          const selected = lane === option.lane;
+          return (
+            <Pressable
+              key={option.lane}
+              disabled={!option.supported}
+              onPress={() => setLane(option.lane)}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected, disabled: !option.supported }}
+              style={{
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: selected ? c.accent : c.border,
+                backgroundColor: selected ? `${c.accent}22` : c.bg,
+                opacity: option.supported ? 1 : 0.45,
+              }}
+            >
+              <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: selected ? "700" : "500" }}>
+                {option.label}{option.default ? " · default" : ""}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {laneOptions.filter((option) => !option.supported).map((option) => (
+        <Text key={`${option.lane}-reason`} style={{ color: c.textMuted, fontSize: 10, lineHeight: 14, marginTop: 5 }}>
+          {option.label}: {option.reason}
+        </Text>
+      ))}
 
       {failure ? (
         <View
@@ -411,13 +524,14 @@ export default function AttachModeSection({
             padding: 10,
           }}
         >
+          {failure.code ? <Text style={{ color: c.textMuted, fontSize: 10, marginBottom: 4 }}>{failure.code}</Text> : null}
           <Text style={{ color: c.textPrimary, fontSize: 12, lineHeight: 17 }}>{failure.error}</Text>
           {failure.remedy ? (
             <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6, lineHeight: 16 }}>
               {failure.remedy}
             </Text>
           ) : null}
-          {(failure.code === "DOGFOOD_GIT_AUTH_UNCONFIGURED" || failure.code === "DOGFOOD_SOURCE_MISSING") && targetDevice?.id ? (
+          {failure.code && GIT_CONFIG_FAILURE_CODES.has(failure.code) && targetDevice?.id ? (
             <Pressable
               onPress={() => router.push({ pathname: "/(tabs)/settings" as any, params: { gitWizard: "1", deviceId: targetDevice.id } } as any)}
               style={{ marginTop: 10, alignSelf: "flex-start", borderWidth: 1, borderColor: c.accent, borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8 }}
@@ -453,17 +567,11 @@ export default function AttachModeSection({
         </View>
       ) : null}
 
-      {starting && startProgress ? (
-        <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 10, textAlign: "center" }}>
-          {startProgress}
-        </Text>
-      ) : null}
-
       {/* ONE primary action. Disabled states say what is missing via the gate
           rows above rather than a second explanation down here. */}
       <Pressable
         onPress={() => void attach()}
-        disabled={!gate.canAttach || starting}
+        disabled={!gate.canAttach}
         style={({ pressed }) => [
           {
             marginTop: 14,
@@ -473,7 +581,7 @@ export default function AttachModeSection({
             backgroundColor: gate.canAttach ? c.accent : c.bg,
             borderWidth: gate.canAttach ? 0 : 1,
             borderColor: c.border,
-            opacity: !gate.canAttach || starting ? 0.6 : 1,
+            opacity: !gate.canAttach ? 0.6 : 1,
             flexDirection: "row",
             justifyContent: "center",
             gap: 8,
@@ -481,7 +589,6 @@ export default function AttachModeSection({
           pressed && { opacity: 0.75 },
         ]}
       >
-        {starting ? <ActivityIndicator size="small" color={c.textPrimary} /> : null}
         <Text
           style={{
             color: gate.canAttach ? "#fff" : c.textMuted,
@@ -489,9 +596,28 @@ export default function AttachModeSection({
             fontSize: 14,
           }}
         >
-          {starting ? "Starting Dogfood…" : "Enter Dogfood mode"}
+          Enter Dogfood mode
         </Text>
       </Pressable>
+      <RunnerAuthModal
+        visible={runnerAuthFor !== null}
+        runner={runnerAuthFor || "codex"}
+        deviceName={targetDevice?.name || "primary device"}
+        target={targetDevice?.id}
+        onClose={() => setRunnerAuthFor(null)}
+        onCompleted={() => {
+          setRunnerAuthFor(null);
+          if (targetDevice?.id) void loadBoxReadiness(targetDevice.id).then(setMeasuredReadiness);
+        }}
+      />
+      <OpenCodeConfigModal
+        visible={showOpenCodeConfig}
+        target={targetDevice?.id}
+        onClose={() => {
+          setShowOpenCodeConfig(false);
+          if (targetDevice?.id) void loadBoxReadiness(targetDevice.id).then(setMeasuredReadiness);
+        }}
+      />
     </View>
   );
 }

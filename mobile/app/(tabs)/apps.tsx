@@ -49,6 +49,7 @@ import { detectCompileFailure } from "../../src/lib/compileFailure";
 import { previewBundlePath } from "../../src/lib/previewBundlePath";
 import { browserLaneProbeLine, doctorBrowserLane, probeBrowserResource, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, shouldRunBrowserLaneDoctor, type BrowserLaneProbeResult } from "../../src/lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
+import { previewWaitLine } from "../../src/lib/previewWait";
 import { handlePreviewScreenMessage } from "../../src/lib/screenContextBridge";
 import { BrowserVibeBubble } from "../../src/components/BrowserVibeBubble";
 import {
@@ -83,6 +84,7 @@ import {
   usablePreviewDevStatus,
 } from "../../src/lib/previewDevStatus";
 import { DevServerStopDialog, type DevServerStopPhase } from "../../src/components/DevServerStopDialog";
+import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "../../src/lib/projectPreviewRuntime";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -1082,74 +1084,34 @@ export default function AppsScreen() {
     // made a relay hiccup look like the whole preview had failed, even though
     // /dev/status and the browser route were healthy. Status polling remains
     // authoritative; logs are useful narration, never a prerequisite to paint.
-    const unsubscribe = previewClient.subscribeDevEvents((event: any) => {
+    const unsubscribe = subscribeProjectPreviewOutput(previewClient, (sharedLines, event: any) => {
                 setWebPreviewLastLogAt((prev) => prev ?? Date.now());
+                if (sharedLines.length) {
+                  setWebPreviewLastLogAt(Date.now());
+                  setWebPreviewLogs((previous) => {
+                    if (event.type === "snapshot") {
+                      const fresh = sharedLines.filter((line) => !previous.includes(line));
+                      return fresh.length ? [...previous, ...fresh].slice(-MAX_WEB_PREVIEW_LOGS) : previous;
+                    }
+                    return sharedLines.reduce((next, line) => appendPreviewLogLine(next, line), previous);
+                  });
+                }
                 if (event.type === "reload" || event.type === "ready") {
                   setWebViewKey(k => k + 1);
                   setWebViewLoading(true);
-                } else if (event.type === "log" && event.logLine) {
-                  setWebPreviewLastLogAt(Date.now());
-                  const ln = String(event.logLine).trim();
-                  if (ln) setWebPreviewLogs((p) => appendPreviewLogLine(p, ln));
-                } else if (event.type === "building" && event.message) {
-                  setWebPreviewLastLogAt(Date.now());
-                  const ln = String(event.message).trim();
-                  if (ln) setWebPreviewLogs((p) => appendPreviewLogLine(p, ln));
-                } else if (event.type === "snapshot" && Array.isArray(event.snapshot?.recentLogs)) {
-                  // The agent's periodic snapshot carries `recentLogs` — the
-                  // tail of what the subprocess has printed SO FAR. Without
-                  // this branch the overlay only ever saw live `log` frames, so
-                  // a client that attached after the interesting output (or to a
-                  // process that has gone quiet — e.g. a Flutter run wedged on
-                  // "Failed to bind web development server: Address already in
-                  // use") showed "waiting for the first output from the box"
-                  // while the box was streaming its whole log tail every 5s.
-                  // Observed 2026-07-25 against a Mac mini: heartbeat + snapshot
-                  // frames arriving fine, zero of them rendered.
-                  const tail = (event.snapshot.recentLogs as unknown[])
-                    .map((l) => String(l).trimEnd())
-                    .filter(Boolean);
-                  if (tail.length) {
-                    setWebPreviewLastLogAt(Date.now());
-                    // Merge rather than replace: live `log` frames may already
-                    // have delivered newer lines than this snapshot's tail.
-                    setWebPreviewLogs((p) => {
-                      const fresh = tail.filter((ln) => !p.includes(ln));
-                      return fresh.length ? [...p, ...fresh].slice(-MAX_WEB_PREVIEW_LOGS) : p;
-                    });
-                  }
+                }
+                if (event.type === "snapshot") {
                   if (event.snapshot?.previewHealth) {
                     setDevStatus((prev) => prev ? { ...prev, previewHealth: event.snapshot.previewHealth } : prev);
                   }
-                } else if (event.type === "progress" || event.type === "phase") {
-                  // Structured progress (Yaver Protocol v1): the agent parses
-                  // Metro/Expo/Flutter output into {phase, pct, currentFile}.
-                  // DevPreview.tsx rendered these; this screen — the one the
-                  // Projects tab actually opens — did not, so a compile with exact
-                  // percentages still looked idle here. Fold it into the same log
-                  // tail so the wait narrates itself with real numbers.
-                  const phase = typeof event.phase === "string" ? event.phase.replace(/_/g, " ") : "";
-                  const pct = typeof event.pct === "number" ? ` ${Math.round(event.pct)}%` : "";
-                  const file =
-                    typeof event.currentFile === "string" && event.currentFile
-                      ? ` · ${String(event.currentFile).split("/").slice(-2).join("/")}`
-                      : "";
-                  const line = `${phase || "working"}${pct}${file}`.trim();
-                  if (line) {
-                    setWebPreviewLastLogAt(Date.now());
-                    setWebPreviewLogs((p) => appendPreviewLogLine(p, line));
-                  }
-                } else if (event.type === "heartbeat") {
+                }
+                if (event.type === "heartbeat") {
                   // Proof of life even when nothing new is printed. It keeps
                   // "last output Ns ago" honest instead of letting a healthy but
                   // quiet compile read as a stall.
                   setWebPreviewLastLogAt((prev) => prev ?? Date.now());
-                } else if (event.type === "error") {
-                  // The agent packs the real tail into the message (newlines) —
-                  // split it so the failure panel reads like a log, not one blob.
-                  const em = String(event.message || "Dev server failed to start").trim();
-                  const lines = em.split("\n").map((l) => l.trimEnd()).filter(Boolean);
-                  setWebPreviewLogs((p) => [...p, ...lines].slice(-MAX_WEB_PREVIEW_LOGS));
+                }
+                if (event.type === "error") {
                   setWebPreviewFailed(true);
                   // THE ROUTE. mgr.Start returns before the process is spawned,
                   // so a missing toolchain ("exec flutter: executable file not
@@ -1160,8 +1122,7 @@ export default function AppsScreen() {
                   const gap = capabilityGapFromDevEvent(event);
                   if (gap) setPreviewGap(gap);
                 }
-      }, {
-        onStreamHealth: (health) => {
+      }, (health) => {
           if (!health) {
             setWebPreviewLastLogAt(Date.now());
             return;
@@ -1172,8 +1133,7 @@ export default function AppsScreen() {
               "[logs] Live output is unavailable; preview startup continues via status checks.",
             ));
           }
-        },
-    });
+        });
     return unsubscribe;
     // Re-subscribe only when the preview opens or its selected box changes.
     // Depending on devStatus would still tear this stream down every poll.
@@ -1481,14 +1441,13 @@ export default function AppsScreen() {
       let deferStartingClear = false;
       // One closure for "start this preview", so the capability-gap fix can
       // re-issue the EXACT request that was refused instead of approximating it.
-      const startThisPreview = () => previewClient.startDevServer({
+      const startThisPreview = () => startBrowserProjectLane(previewClient, {
         framework: action.framework || "",
         workDir: targetPath,
         // Browser Reload = the browser lane. Serve the web target, never a
         // Hermes native bundle (Hermes needs the guest's native modules to
         // match the container — sfmg dies on expo-gl — has no meaning for
         // Flutter, and is blocked for Yaver-self-dev).
-        web: true,
         targetDeviceId: selectedTarget?.id,
         targetDeviceName: selectedTarget?.name,
         targetDeviceClass: selectedTarget?.deviceClass,
@@ -2243,6 +2202,18 @@ export default function AppsScreen() {
   const webPreviewServerLooksReady =
     (devStatus ? isWebServedStatus(devStatus) : false) ||
     webPreviewLogs.some((line) => /\b(listening|serving on|compiled|ready|running)\b/i.test(line));
+  // Keep the Projects/browser implementation on the same narration contract
+  // as DevPreview.tsx. The two screens are separate React trees; sharing the
+  // pure helper prevents SFMG from saying "loading page" on one surface while
+  // the other reports the actual compile line and heartbeat.
+  const narratedPreviewWait = previewWaitLine({
+    contentLoaded: webPreviewContentLoaded,
+    startedAt: webPreviewStartedAt,
+    lastOutputAt: webPreviewLastLogAt,
+    now: previewNowTick,
+    logs: webPreviewLogs,
+    workDir: devStatus?.workDir,
+  });
 
   const runBrowserLaneDoctor = useCallback((reason: string) => {
     if (!showWebView || !bundleUrl || webPreviewContentLoaded) return;
@@ -3685,7 +3656,7 @@ export default function AppsScreen() {
                         previewPhase.ts maps status+probe to the honest line —
                         shared with DevPreview.tsx. */}
                     <Text style={[s.previewStartTitle, { color: c.textPrimary }]}>
-                      {previewPhaseTitle(devStatus, webPreviewProbe)}
+                      {narratedPreviewWait?.title || previewPhaseTitle(devStatus, webPreviewProbe)}
                     </Text>
                     <Text style={s.previewStepCmd}>{devServerStepsFor(devStatus?.framework)}</Text>
                     <Text style={[s.previewSubtle, { color: c.textMuted }]}>
@@ -3695,8 +3666,18 @@ export default function AppsScreen() {
                       startedAt={webPreviewStartedAt}
                       lastOutputAt={webPreviewLastLogAt}
                       now={previewNowTick}
+                      // The browser lane already receives the agent's live
+                      // dev-server stream above. Keep a small rolling tail on
+                      // the first-glance card so a cold SFMG compile feels
+                      // alive instead of looking like an opaque spinner. Full
+                      // history remains available in the diagnostic/failure
+                      // path; this is deliberately only the newest few lines.
+                      lines={webPreviewLogs}
+                      maxLines={4}
+                      emptyText="waiting for the first line from the box…"
                       mutedColor={c.textMuted}
                       warnColor={c.warn}
+                      lineColorFor={(line) => previewLogColor(line, c)}
                       stallHint="Stop and retry if this persists"
                     />
                   </>

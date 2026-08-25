@@ -21,6 +21,7 @@ import { StudioChatPane } from "./studio/StudioChatPane";
 
 type ReloadKind = "fast" | "full";
 type VibeTab = "chat" | "settings";
+type MachineRole = "runner" | "render";
 
 function runnerKey(id: string | undefined): string {
   return id === "claude-code" ? "claude" : (id || "").trim();
@@ -69,6 +70,9 @@ export function BrowserVibeBubble({
   } = useDevice();
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<VibeTab>("chat");
+  const [visibleMachineRole, setVisibleMachineRole] = useState<MachineRole>("runner");
+  const [machineChoicesOpen, setMachineChoicesOpen] = useState(false);
+  const [runnerChoicesOpen, setRunnerChoicesOpen] = useState(false);
   const [runners, setRunners] = useState<RunnerInfo[]>([]);
   const [runnersLoading, setRunnersLoading] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -89,6 +93,9 @@ export function BrowserVibeBubble({
   const renderDeviceId = machineRoles?.renderDeviceId || fallbackDeviceId;
   const codingDevice = devices.find((row) => row.id === codingDeviceId) || activeDevice;
   const renderDevice = devices.find((row) => row.id === renderDeviceId) || activeDevice;
+  const visibleDevice = visibleMachineRole === "runner" ? codingDevice : renderDevice;
+  const visibleDeviceId = visibleMachineRole === "runner" ? codingDeviceId : renderDeviceId;
+  const visibleDeviceConnected = !!visibleDeviceId && connectedDeviceIds.includes(visibleDeviceId);
   const codingConnected = !!codingDeviceId && connectedDeviceIds.includes(codingDeviceId);
   const renderConnected = !!renderDeviceId && connectedDeviceIds.includes(renderDeviceId);
   const codingClient = useMemo(
@@ -218,7 +225,7 @@ export function BrowserVibeBubble({
   }, [localReloadBusy, queuedReload, reloadNotice]);
 
   const busy = reloadBusy || localReloadBusy;
-  const chipLabel = runnersLoading && !selectedRunnerId
+  const runnerSummary = runnersLoading && !selectedRunnerId
     ? "Checking runner…"
     : [
         runnerLabel(
@@ -313,6 +320,14 @@ export function BrowserVibeBubble({
                 <Text style={styles.panelSubtitle} numberOfLines={1}>{projectName || "browser preview"}</Text>
               </View>
               <Pressable
+                onPress={() => { setOpen(false); onExitPreview(); }}
+                accessibilityRole="button"
+                accessibilityLabel="Exit preview and return to Yaver"
+                style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
+              >
+                <Ionicons name="exit-outline" size={19} color="#777782" />
+              </Pressable>
+              <Pressable
                 onPress={() => setOpen(false)}
                 accessibilityRole="button"
                 accessibilityLabel="Minimize Vibing"
@@ -338,49 +353,78 @@ export function BrowserVibeBubble({
             {reloadNotice ? <Text style={styles.reloadNotice}>{reloadNotice}</Text> : isCoding ? (
               <Text style={styles.reloadNotice}>Runner is coding · minimize Vibing to keep testing</Text>
             ) : null}
-            {activeTab === "chat" ? (
-              <Pressable onPress={() => setActiveTab("settings")} style={styles.routeSummary} accessibilityRole="button" accessibilityLabel="Open Vibing settings">
-                <Ionicons name="git-compare-outline" size={14} color="#7568f8" />
-                <Text style={styles.routeSummaryText} numberOfLines={2}>
-                  {`${codingDevice?.name || "Coding machine"} · ${chipLabel || "choose runner"} → ${renderDevice?.name || "Render machine"}`}
-                </Text>
-                <Ionicons name="settings-outline" size={15} color="#777782" />
-              </Pressable>
-            ) : null}
 
             <View style={[styles.tabBody, activeTab !== "settings" && styles.hidden]}>
               <ScrollView style={styles.settingsScroll} contentContainerStyle={styles.settingsContent} keyboardShouldPersistTaps="handled">
-                <Text style={styles.sectionLabel}>Machines</Text>
-                <View style={styles.machineGrid} testID="browser-vibe-machine-routing">
-                  <View style={styles.machineRoleCard}>
-                    <Text style={styles.machineRoleLabel}>Coding machine</Text>
-                    <Text style={styles.machineRoleValue} numberOfLines={1}>{codingDevice?.name || "Choose machine"}</Text>
+                <View style={styles.settingsCard} testID="browser-vibe-machine-routing">
+                  <View style={styles.cardHeader}>
+                    <View style={styles.cardHeaderCopy}>
+                      <Text style={styles.cardTitle}>Device</Text>
+                      <Text style={styles.cardValue} numberOfLines={1}>{visibleDevice?.name || "Choose device"}</Text>
+                    </View>
+                    <Pressable
+                      onPress={() => setMachineChoicesOpen((value) => !value)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${machineChoicesOpen ? "Hide" : "Change"} ${visibleMachineRole} device`}
+                      accessibilityState={{ expanded: machineChoicesOpen }}
+                      style={({ pressed }) => [styles.changeButton, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.changeButtonText}>{machineChoicesOpen ? "Done" : "Change"}</Text>
+                    </Pressable>
+                  </View>
+                  <View style={styles.roleTabs}>
+                    {(["runner", "render"] as const).map((role) => (
+                      <Pressable
+                        key={role}
+                        onPress={() => setVisibleMachineRole(role)}
+                        accessibilityRole="tab"
+                        accessibilityState={{ selected: visibleMachineRole === role }}
+                        style={[styles.roleTab, visibleMachineRole === role && styles.roleTabSelected]}
+                      >
+                        <Text style={[styles.roleTabText, visibleMachineRole === role && styles.roleTabTextSelected]}>
+                          {role === "runner" ? "Runner" : "Render"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <View style={styles.currentRow}>
+                    <View style={[styles.machineDot, { backgroundColor: visibleDeviceConnected ? "#22c55e" : "#a7a7b0" }]} />
+                    <Text style={styles.currentMeta}>{visibleDeviceConnected ? "Connected" : "Offline"}</Text>
+                  </View>
+                  {machineChoicesOpen ? (
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
                       {devices.map((device) => (
-                        <Pressable key={`runner:${device.id}`} onPress={() => void saveMachineRole("runner", device.id)} disabled={isCoding} style={[styles.machineChoice, device.id === codingDeviceId && styles.optionSelected]}>
+                        <Pressable
+                          key={`${visibleMachineRole}:${device.id}`}
+                          onPress={() => void saveMachineRole(visibleMachineRole, device.id)}
+                          disabled={isCoding}
+                          style={[styles.machineChoice, device.id === visibleDeviceId && styles.optionSelected]}
+                        >
                           <View style={[styles.machineDot, { backgroundColor: connectedDeviceIds.includes(device.id) ? "#22c55e" : "#a7a7b0" }]} />
-                          <Text style={[styles.optionText, device.id === codingDeviceId && styles.optionTextSelected]}>{device.name || device.id.slice(0, 8)}</Text>
+                          <Text style={[styles.optionText, device.id === visibleDeviceId && styles.optionTextSelected]}>{device.name || device.id.slice(0, 8)}</Text>
                         </Pressable>
                       ))}
                     </ScrollView>
-                  </View>
-                  <View style={styles.machineRoleCard}>
-                    <Text style={styles.machineRoleLabel}>Render machine</Text>
-                    <Text style={styles.machineRoleValue} numberOfLines={1}>{renderDevice?.name || "Choose machine"}</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
-                      {devices.map((device) => (
-                        <Pressable key={`render:${device.id}`} onPress={() => void saveMachineRole("render", device.id)} disabled={isCoding} style={[styles.machineChoice, device.id === renderDeviceId && styles.optionSelected]}>
-                          <View style={[styles.machineDot, { backgroundColor: connectedDeviceIds.includes(device.id) ? "#22c55e" : "#a7a7b0" }]} />
-                          <Text style={[styles.optionText, device.id === renderDeviceId && styles.optionTextSelected]}>{device.name || device.id.slice(0, 8)}</Text>
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                  </View>
+                  ) : null}
                 </View>
 
-                <Text style={styles.sectionLabel}>Runner and model</Text>
-                <View style={styles.picker} testID="browser-vibe-runner-picker">
-                {runnersLoading ? <ActivityIndicator size="small" color="#a8a9ff" /> : (
+                <View style={styles.settingsCard} testID="browser-vibe-runner-picker">
+                  <View style={styles.cardHeader}>
+                    <View style={styles.cardHeaderCopy}>
+                      <Text style={styles.cardTitle}>Runner</Text>
+                      <Text style={styles.cardValue} numberOfLines={2}>{runnerSummary || "Choose runner and model"}</Text>
+                    </View>
+                    <Pressable
+                      onPress={() => setRunnerChoicesOpen((value) => !value)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${runnerChoicesOpen ? "Hide" : "Change"} runner and model`}
+                      accessibilityState={{ expanded: runnerChoicesOpen }}
+                      style={({ pressed }) => [styles.changeButton, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.changeButtonText}>{runnerChoicesOpen ? "Done" : "Change"}</Text>
+                    </Pressable>
+                  </View>
+                {runnerChoicesOpen && (runnersLoading ? <ActivityIndicator size="small" color="#a8a9ff" /> : (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
                     {runners.map((runner) => {
                       const ready = runner.installed && runner.ready !== false;
@@ -408,8 +452,8 @@ export function BrowserVibeBubble({
                       );
                     })}
                   </ScrollView>
-                )}
-                {(selectedRunner?.models?.length || 0) > 0 ? (
+                ))}
+                {runnerChoicesOpen && (selectedRunner?.models?.length || 0) > 0 ? (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
                     {selectedRunner!.models.map((model) => {
                       const selected = model.id === selectedModelId;
@@ -425,21 +469,6 @@ export function BrowserVibeBubble({
                 {runnerSetupProgress ? <Text style={styles.setupProgress} numberOfLines={2}>{runnerSetupProgress}</Text> : null}
                 </View>
 
-                <Text style={styles.sectionLabel}>Preview</Text>
-                <View style={styles.actionShelf} testID="browser-vibe-actions">
-                  <Pressable onPress={() => void reload("fast")} disabled={busy || !renderConnected} style={[styles.actionItem, (busy || !renderConnected) && styles.disabled]}>
-                    <Ionicons name="flash-outline" size={18} color="#7568f8" />
-                    <Text style={styles.actionText}>Hot Reload</Text>
-                  </Pressable>
-                  <Pressable onPress={() => void reload("full")} disabled={busy || !renderConnected} style={[styles.actionItem, (busy || !renderConnected) && styles.disabled]}>
-                    <Ionicons name="reload-outline" size={18} color="#7568f8" />
-                    <Text style={styles.actionText}>Full Reload</Text>
-                  </Pressable>
-                  <Pressable onPress={() => { setOpen(false); onExitPreview(); }} style={[styles.actionItem, styles.exitAction]} accessibilityRole="button" accessibilityLabel="Exit preview and return to Yaver">
-                    <Ionicons name="exit-outline" size={18} color="#fff" />
-                    <Text style={[styles.actionText, { color: "#fff" }]}>Exit Preview</Text>
-                  </Pressable>
-                </View>
                 {!renderConnected ? <Text style={styles.selectionError}>Render machine disconnected · choose a connected renderer or exit preview to reconnect.</Text> : null}
               </ScrollView>
             </View>
@@ -491,6 +520,23 @@ export function BrowserVibeBubble({
         target={codingDeviceId && codingDeviceId !== fallbackDeviceId ? codingDeviceId : undefined}
         onClose={() => { setShowOpenCodeConfig(false); void loadRunners(); }}
       />
+
+      <Pressable
+        onPress={() => void reload("full")}
+        disabled={busy || !renderConnected}
+        accessibilityRole="button"
+        accessibilityLabel={isCoding ? "Queue full reload after coding" : "Full reload preview"}
+        testID="browser-vibe-full-reload"
+        style={({ pressed }) => [
+          styles.reloadBubble,
+          { bottom: Math.max(insets.bottom + 14, 18) },
+          (busy || !renderConnected) && styles.disabled,
+          pressed && styles.pressed,
+        ]}
+      >
+        {busy ? <ActivityIndicator size="small" color="#6f58f5" /> : <Ionicons name="reload-outline" size={18} color="#6f58f5" />}
+        <Text style={styles.reloadBubbleText}>Full Reload</Text>
+      </Pressable>
 
       <Pressable
         onPress={() => setOpen((value) => !value)}
@@ -549,33 +595,25 @@ const styles = StyleSheet.create({
   tabSelected: { backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.08, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
   tabText: { color: "#858590", fontSize: 12, fontWeight: "700" },
   tabTextSelected: { color: "#6252e8" },
-  routeSummary: { minHeight: 38, marginHorizontal: 12, marginTop: 7, paddingHorizontal: 10, borderRadius: 11, flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: "#f0efff", borderWidth: StyleSheet.hairlineWidth, borderColor: "#d8d4ff" },
-  routeSummaryText: { flex: 1, color: "#555561", fontSize: 10, lineHeight: 14, fontWeight: "600" },
   tabBody: { flex: 1, minHeight: 0 },
   settingsScroll: { flex: 1 },
-  settingsContent: { paddingVertical: 10, paddingBottom: 18, gap: 8 },
-  sectionLabel: { color: "#686873", fontSize: 11, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.5, paddingHorizontal: 12, marginTop: 2 },
-  machineGrid: { paddingHorizontal: 12, gap: 8 },
-  machineRoleCard: { padding: 10, gap: 6, borderRadius: 13, backgroundColor: "#fff", borderWidth: StyleSheet.hairlineWidth, borderColor: "#e0e0e8" },
-  machineRoleLabel: { color: "#898994", fontSize: 10, fontWeight: "700" },
-  machineRoleValue: { color: "#1d1d24", fontSize: 13, fontWeight: "800" },
+  settingsContent: { padding: 12, paddingBottom: 18, gap: 10 },
+  settingsCard: { padding: 12, gap: 9, borderRadius: 15, backgroundColor: "#fff", borderWidth: StyleSheet.hairlineWidth, borderColor: "#e0e0e8" },
+  cardHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  cardHeaderCopy: { flex: 1, minWidth: 0 },
+  cardTitle: { color: "#898994", fontSize: 10, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.5 },
+  cardValue: { color: "#1d1d24", fontSize: 14, lineHeight: 19, fontWeight: "800", marginTop: 2 },
+  changeButton: { minHeight: 34, paddingHorizontal: 10, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#f0efff" },
+  changeButtonText: { color: "#6252e8", fontSize: 11, fontWeight: "800" },
+  roleTabs: { flexDirection: "row", padding: 3, gap: 4, borderRadius: 10, backgroundColor: "#f0f0f5" },
+  roleTab: { flex: 1, minHeight: 30, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  roleTabSelected: { backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  roleTabText: { color: "#858590", fontSize: 11, fontWeight: "700" },
+  roleTabTextSelected: { color: "#6252e8" },
+  currentRow: { minHeight: 18, flexDirection: "row", alignItems: "center", gap: 6 },
+  currentMeta: { color: "#777782", fontSize: 10, fontWeight: "600" },
   machineChoice: { minHeight: 34, maxWidth: 180, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 9, borderRadius: 10, backgroundColor: "#f5f5f8", borderWidth: 1, borderColor: "#e6e6ec" },
   machineDot: { width: 7, height: 7, borderRadius: 4 },
-  actionShelf: { flexDirection: "row", gap: 7, paddingHorizontal: 12, paddingBottom: 8 },
-  actionItem: {
-    flex: 1,
-    minHeight: 42,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 3,
-    backgroundColor: "#fff",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#e2e2e9",
-  },
-  exitAction: { backgroundColor: "#6f58f5", borderColor: "#6f58f5" },
-  actionText: { color: "#4f4f5a", fontSize: 11, fontWeight: "700" },
-  picker: { paddingHorizontal: 12, paddingBottom: 8, gap: 6 },
   optionRow: { gap: 7, alignItems: "stretch" },
   option: { minHeight: 42, flexDirection: "row", alignItems: "center", paddingLeft: 11, borderRadius: 10, backgroundColor: "#fff", borderWidth: 1, borderColor: "#e3e3e9" },
   optionChoice: { flex: 1, minWidth: 110, justifyContent: "center", paddingVertical: 7, paddingRight: 7 },
@@ -594,6 +632,27 @@ const styles = StyleSheet.create({
   failureAction: { marginTop: 5, minHeight: 42, paddingHorizontal: 16, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#6f58f5" },
   failureActionText: { color: "#fff", fontSize: 12, fontWeight: "800" },
   reloadNotice: { color: "#6555df", fontSize: 11, paddingHorizontal: 14, paddingTop: 6 },
+  reloadBubble: {
+    position: "absolute",
+    right: 80,
+    minWidth: 116,
+    height: 56,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    backgroundColor: "#fff",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#dedee7",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 9,
+    elevation: 19,
+  },
+  reloadBubbleText: { color: "#5e4ce6", fontSize: 12, fontWeight: "800" },
   bubble: {
     position: "absolute",
     right: 16,

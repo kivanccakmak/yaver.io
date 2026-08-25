@@ -2,7 +2,7 @@ package main
 
 // attach_http.go — the HTTP surface for Attach Mode.
 //
-// Three owner-only verbs (start / refresh / stop) plus the middleware that lets
+// Three authenticated verbs (start / refresh / stop) plus the middleware that lets
 // the ATTACHED page authenticate with the capability minted in
 // attach_session.go instead of the user's session token.
 //
@@ -33,21 +33,9 @@ type attachStartResponse struct {
 	Remedy string `json:"remedy,omitempty"`
 }
 
-// Kept as a seam so the HTTP boundary can be negative-control tested without
-// reaching Convex. Production always resolves the server-computed owner claim.
-var attachOwnerAllowed = currentUserIsOwner
-
 func (s *HTTPServer) handleAttachStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-	if !attachOwnerAllowed() {
-		writeJSON(w, http.StatusForbidden, attachStartResponse{
-			Code:   "DOGFOOD_OWNER_ONLY",
-			Error:  "Dogfood mode is available only to the Yaver owner account.",
-			Remedy: "Switch back to the owner account to develop Yaver itself.",
-		})
 		return
 	}
 	var req attachStartRequest
@@ -90,7 +78,7 @@ func (s *HTTPServer) handleAttachStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAttachRefresh extends a live session. Reachable BOTH with the owner's
+// handleAttachRefresh extends a live session. Reachable BOTH with the user's
 // bearer (the host phone refreshing while the surface is open) and with the
 // capability itself, so the attached page can keep itself alive without the
 // host having to poll.
@@ -154,7 +142,7 @@ func (s *HTTPServer) handleAttachStop(w http.ResponseWriter, r *http.Request) {
 }
 
 // attachSessionIDFromRequest resolves the session from the capability cookie,
-// falling back to an explicit body/query id for the owner-bearer path.
+// falling back to an explicit body/query id for the normal bearer path.
 func attachSessionIDFromRequest(r *http.Request) string {
 	if c, err := r.Cookie(attachCookieName); err == nil && c.Value != "" {
 		if sess, ok := VerifyAttachCapability(c.Value, time.Now()); ok {
@@ -172,7 +160,7 @@ func attachSessionIDFromRequest(r *http.Request) string {
 //
 // Order matters: the capability is checked first and, when present and valid,
 // terminates the decision. A capability must never be able to fall through to
-// the bearer path and inherit owner scope.
+// the bearer path and inherit full user scope.
 func (s *HTTPServer) attachOrAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(attachCookieName); err == nil && c.Value != "" {

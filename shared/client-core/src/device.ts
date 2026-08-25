@@ -211,7 +211,7 @@ export function isDeviceFresh(d: CoreDevice, now = Date.now()): boolean {
 
 /**
  * Choose the best candidate for an auto-connect attempt. Preference:
- *   1. explicit `preferredDeviceId` that's still fresh
+ *   1. explicit `preferredDeviceId`, by identity alone; missing means fail
  *   2. fresh (online + recent heartbeat) + has a quicHost
  *   3. online + has a quicHost
  *   4. first with a quicHost
@@ -222,11 +222,10 @@ export function pickTargetDevice(
 ): CoreDevice | null {
   if (!devices.length) return null;
   if (preferredDeviceId) {
-    const preferred = devices.find(
-      (d) => d.deviceId === preferredDeviceId && d.quicHost,
-    );
-    if (preferred && isDeviceFresh(preferred)) return preferred;
-    if (preferred) return preferred;
+    // An off-LAN device normally has no quicHost; the relay addresses it by
+    // id. Never fall through to a different healthy machine after the user
+    // selected one explicitly — failure is safer than misrouting their work.
+    return devices.find((d) => d.deviceId === preferredDeviceId) || null;
   }
   const fresh = devices.find((d) => isDeviceFresh(d) && d.quicHost);
   if (fresh) return fresh;

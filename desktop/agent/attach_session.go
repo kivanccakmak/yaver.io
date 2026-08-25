@@ -43,7 +43,8 @@ package main
 //
 // Preconditions, all checked at MINT time, deny by default:
 //
-//  1. the caller is the OWNER (s.auth already established the owner bearer);
+//  1. the caller is the authenticated owner of this box (s.auth established
+//     the normal user bearer; no Yaver product-owner entitlement is required);
 //  2. IsYaverSelfDevelopmentDir(workDir) is TRUE. This is the structural
 //     guarantee. Attach Mode's capability CANNOT be minted for a third-party
 //     project, because the mint refuses any workDir that is not Yaver's own
@@ -281,8 +282,9 @@ func RevokeAttachSession(sessionID string) bool {
 // or reaches beyond the box being attached.
 //
 // Starting a coding task IS allowed and is genuinely powerful — that is the
-// feature. It is bounded by the capability being owner-only, short-lived,
-// origin-pinned and revocable, rather than by being weak.
+// feature. It is bounded by the capability being minted only through normal
+// authenticated user access, short-lived, origin-pinned and revocable, rather
+// than by being weak. It never grants deploy or canonical-main authority.
 var attachAllowedRoutes = []struct {
 	prefix  string
 	methods []string

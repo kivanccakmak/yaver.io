@@ -65,19 +65,19 @@ test("every non-ok step names an action — nothing is a dead end", () => {
   }
 });
 
-test("an unready box blocks and surfaces the FIRST pending check", () => {
+test("an unreachable agent blocks before source and runner setup", () => {
+  const unavailable = readiness("not-ready");
+  unavailable.checks = unavailable.checks.map((check) =>
+    check.key === "agent" ? { ...check, status: "missing" as const, detail: "unreachable" } : check,
+  );
   const gate = computeAttachGate({
     ...ready,
-    readiness: readiness("not-ready", {
-      pending: [
-        { key: "claude", label: "Claude Code", status: "missing", detail: "not installed", action: "setup_claude" },
-      ],
-    }),
+    readiness: unavailable,
   });
   assert.equal(gate.canAttach, false);
   assert.equal(gate.nextStep?.key, "box");
-  assert.match(gate.nextStep!.detail, /Claude Code/);
-  assert.match(gate.nextStep!.detail, /not installed/);
+  assert.match(gate.nextStep!.detail, /Agent online/);
+  assert.match(gate.nextStep!.detail, /unreachable/);
   assert.equal(gate.nextStep!.action, "fix_box_readiness");
 });
 

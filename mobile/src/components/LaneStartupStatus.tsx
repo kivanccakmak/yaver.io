@@ -46,13 +46,15 @@ export type LaneStartupStatusProps = {
   warnColor?: string;
   /** Optional syntax/severity color for each log line. */
   lineColorFor?: (line: string) => string;
+  /** Shown when this lane has started but no log line has arrived yet. */
+  emptyText?: string;
   /** Optional extra hint, e.g. what the user can do about a stall. */
   stallHint?: string;
 };
 
 export default function LaneStartupStatus({
   startedAt, lastOutputAt, now, lines, maxLines = 4,
-  mutedColor, warnColor = "#f59e0b", lineColorFor, stallHint,
+  mutedColor, warnColor = "#f59e0b", lineColorFor, emptyText, stallHint,
 }: LaneStartupStatusProps) {
   const progress = describeLaneProgress({ startedAt, lastOutputAt, now });
   if (!progress) return null;
@@ -64,9 +66,11 @@ export default function LaneStartupStatus({
         {progress.text}
         {progress.stalled && stallHint ? ` — ${stallHint}` : ""}
       </Text>
-      {tail.length > 0 && (
+      {(tail.length > 0 || emptyText) && (
         <View style={styles.tail}>
-          {tail.map((ln, i) => (
+          {tail.length === 0 ? (
+            <Text style={[styles.logLabel, { color: mutedColor }]}>Live logs · {emptyText}</Text>
+          ) : tail.map((ln, i) => (
             <Text
               key={`${i}-${ln.slice(0, 24)}`}
               numberOfLines={1}
@@ -89,4 +93,5 @@ const styles = StyleSheet.create({
   progress: { fontSize: 12, textAlign: "center" },
   tail: { marginTop: 8 },
   line: { fontSize: 10, fontFamily: "Menlo", textAlign: "center" },
+  logLabel: { fontSize: 10, fontFamily: "Menlo", textAlign: "center", opacity: 0.8 },
 });

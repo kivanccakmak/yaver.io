@@ -246,8 +246,9 @@ export class YaverFeedback {
   }
 
   private static async rebuildP2PClient(agentUrl?: string): Promise<void> {
-    if (!config) return;
-    const effectiveUrl = agentUrl ?? config.agentUrl;
+    const currentConfig = config;
+    if (!currentConfig) return;
+    const effectiveUrl = agentUrl ?? currentConfig.agentUrl;
     if (!effectiveUrl) {
       p2pClient = null;
       renderP2PClient = null;
@@ -255,6 +256,9 @@ export class YaverFeedback {
       return;
     }
     const token = await YaverFeedback.resolveP2PAuthToken();
+    // reset() can clear config while relay-password resolution is awaiting.
+    // Do not resurrect a client from that stale init generation.
+    if (config !== currentConfig) return;
     if (!token) {
       p2pClient = null;
       renderP2PClient = null;
@@ -263,8 +267,9 @@ export class YaverFeedback {
     }
     p2pAuthToken = token;
     const rp = await resolveRelayPassword(token);
+    if (config !== currentConfig) return;
     p2pClient = new P2PClient(effectiveUrl, token, rp);
-    const renderUrl = config.renderAgentUrl || effectiveUrl;
+    const renderUrl = currentConfig.renderAgentUrl || effectiveUrl;
     renderP2PClient = renderUrl === effectiveUrl ? p2pClient : new P2PClient(renderUrl, token, rp);
   }
 

@@ -4,8 +4,10 @@ Date: 2026-08-02 · Branch: `vibing-false-green-fixes` · Static audit (code rea
 not run). Every claim below is `file:line`-anchored; nothing is taken from a
 `.md`.
 
-> 2026-08-24 source update: the product entry is now owner-only More → Dogfood
-> mode, targets the account's primary device, serves `mobile/` through Expo's
+> 2026-08-25 source update: the product entry is now available to every signed-in
+> contributor under More → Develop Yaver. It targets the account's primary
+> device, accepts either a canonical clone or a fork with canonical `upstream`,
+> serves `mobile/` through Expo's
 > browser lane, and keeps only a small native `Y` escape plus `↻` re-render
 > control above the otherwise full-screen app. Exit asks before returning to
 > Production. Entry now fails closed through connection, checkout, Expo start,
@@ -13,14 +15,25 @@ not run). Every claim below is `file:line`-anchored; nothing is taken from a
 > partial attach session and returns a stable code plus remedy. The inner RN-web Tasks
 > context posts a bounded render message to the outer native host; a module-local
 > event emitter could not cross that WebView boundary. `/attach/start` now also
-> enforces the backend-computed owner verdict instead of relying on hidden UI.
-> Before capability minting, the selected machine fetches `origin/main` and
-> rebases its named branch with `--autostash`; conflicts abort entry and carry a
-> same-checkout `Fix with AI` route. MCP exposes owner-only `dogfood_status` and
+> relies on normal same-account authentication rather than a product-owner
+> allowlist. Before capability minting, the selected machine fetches canonical
+> `main` (`origin/main` for a clone, `upstream/main` for a fork) and rebases its
+> named branch with `--autostash`; community sessions entering on `main` are
+> moved to a fresh contribution branch. Deterministic Commit & Push refuses
+> canonical `main` before staging any file. Conflicts abort entry and carry a
+> same-checkout `Fix with AI` route. MCP exposes `dogfood_status` and
 > `dogfood_rerender`, so Yaver reload intent cannot accidentally reload Hermes
 > or an unrelated project. The React Native and web Feedback SDKs expose an
 > exact app-account allowlist for third-party Dogfood UX; this is only a UI gate,
 > while every agent operation keeps normal Yaver authentication.
+> `sdk/feedback/react-native/src/DogfoodRuntime.ts` now provides the
+> reusable explicit-trigger lifecycle, retry cleanup, raw `/dev/events` console,
+> and one Browser/Hermes/WebRTC lane matrix. Browser is the default for Expo,
+> React Native, and Flutter. Hermes is Expo/RN-only; Yaver self-development keeps
+> it visibly unavailable because nested Yaver shake/exit ownership can trap the
+> control app. Native WebRTC is offered only after a real enabled runtime target
+> is measured. Yaver mobile is the first consumer and Projects/Dogfood share the
+> same browser start and reconnecting log-stream adapter.
 
 ## 0. What was asked for
 

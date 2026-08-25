@@ -262,6 +262,14 @@ export interface FeedbackConfig {
   voiceCapabilities?: string[];
   sttProvider?: string;
   ttsProvider?: string;
+  /**
+   * Opt in to the microphone/STT controls in the feedback Vibing card.
+   *
+   * This is deliberately false unless explicitly enabled: ordinary phone
+   * and tablet surfaces stay keyboard-first. Car/watch-style hosts that are
+   * inherently voice-driven may set this to true.
+   */
+  voiceInputEnabled?: boolean;
   /** How feedback collection is triggered */
   trigger?: 'shake' | 'floating-button' | 'manual';
   /**

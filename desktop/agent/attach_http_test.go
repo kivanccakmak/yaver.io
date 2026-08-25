@@ -9,36 +9,9 @@ import (
 	"time"
 )
 
-func allowAttachOwnerForTest(t *testing.T) {
-	t.Helper()
-	previous := attachOwnerAllowed
-	attachOwnerAllowed = func() bool { return true }
-	t.Cleanup(func() { attachOwnerAllowed = previous })
-}
-
-func TestAttachStartRefusesNonOwnerBeforeInspectingTheCheckout(t *testing.T) {
-	previous := attachOwnerAllowed
-	attachOwnerAllowed = func() bool { return false }
-	t.Cleanup(func() { attachOwnerAllowed = previous })
-
-	s := &HTTPServer{}
-	r := httptest.NewRequest(http.MethodPost, "/attach/start", strings.NewReader(`{"workDir":"/does/not/matter"}`))
-	w := httptest.NewRecorder()
-	s.handleAttachStart(w, r)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status %d, want 403", w.Code)
-	}
-	var resp attachStartResponse
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.Code != "DOGFOOD_OWNER_ONLY" {
-		t.Fatalf("code %q, want DOGFOOD_OWNER_ONLY", resp.Code)
-	}
-}
-
 // A non-Yaver workDir is refused at the HTTP boundary too, with a stable code
 // so no surface has to regex the sentence.
 func TestAttachStartRefusesForeignWorkDirWithAStableCode(t *testing.T) {
-	allowAttachOwnerForTest(t)
 	s := &HTTPServer{}
 	r := httptest.NewRequest(http.MethodPost, "/attach/start",
 		strings.NewReader(`{"workDir":"`+thirdPartyDir(t)+`"}`))
@@ -58,7 +31,6 @@ func TestAttachStartRefusesForeignWorkDirWithAStableCode(t *testing.T) {
 // argument: the attached page can USE the capability but never READ it, so a
 // hostile bundle in the checkout cannot exfiltrate it.
 func TestAttachStartSetsAnHttpOnlyCookieAndNoTokenInTheBody(t *testing.T) {
-	allowAttachOwnerForTest(t)
 	s := &HTTPServer{}
 	dir := yaverCheckoutDir(t)
 	r := httptest.NewRequest(http.MethodPost, "/attach/start",

@@ -208,6 +208,87 @@ func TestGitCommitPushNothingToCommit(t *testing.T) {
 	}
 }
 
+func TestGitCommitPushRefusesCanonicalMainBeforeStaging(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := filepath.Join(t.TempDir(), "repo")
+	mustGit(t, "", "init", "-b", "main", repo)
+	mustGit(t, repo, "config", "user.email", "contributor@example.com")
+	mustGit(t, repo, "config", "user.name", "Contributor")
+	mustGit(t, repo, "remote", "add", "origin", "https://github.com/yaver-io/yaver.io.git")
+	writeFile(t, filepath.Join(repo, "README.md"), "base\n")
+	mustGit(t, repo, "add", "README.md")
+	mustGit(t, repo, "commit", "-m", "base")
+	writeFile(t, filepath.Join(repo, "community.txt"), "must stay untracked\n")
+
+	previous := canonicalMainPushAllowed
+	canonicalMainPushAllowed = func() bool { return false }
+	t.Cleanup(func() { canonicalMainPushAllowed = previous })
+
+	body, _ := json.Marshal(map[string]interface{}{"workDir": repo})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/git/commit-push", bytes.NewReader(body))
+	(&HTTPServer{}).handleGitCommitPush(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", rr.Code, rr.Body.String())
+	}
+	var resp commitPushResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp.Code != "CANONICAL_MAIN_PROTECTED" || resp.Pushed {
+		t.Fatalf("canonical main refusal was not structured: %+v", resp)
+	}
+	if staged := syncGitCmd(t, repo, "diff", "--cached", "--name-only"); staged != "" {
+		t.Fatalf("blocked push staged files before refusing: %q", staged)
+	}
+}
+
+func TestGitCommitPushAllowsOwnerOnCanonicalMain(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "canonical.git")
+	repo := filepath.Join(tmp, "repo")
+	canonicalURL := "https://github.com/yaver-io/yaver.io.git"
+	mustGit(t, "", "init", "--bare", bare)
+	mustGit(t, "", "init", "-b", "main", repo)
+	mustGit(t, repo, "config", "user.email", "maintainer@example.com")
+	mustGit(t, repo, "config", "user.name", "Maintainer")
+	mustGit(t, repo, "remote", "add", "origin", canonicalURL)
+	// Keep the persisted remote canonical so the production guard sees the
+	// real policy target, while Git rewrites network traffic into the local bare
+	// repository. The test never contacts or mutates GitHub.
+	mustGit(t, repo, "config", "url.file://"+filepath.ToSlash(bare)+".insteadOf", canonicalURL)
+	writeFile(t, filepath.Join(repo, "README.md"), "base\n")
+	mustGit(t, repo, "add", "README.md")
+	mustGit(t, repo, "commit", "-m", "base")
+	mustGit(t, repo, "push", "-u", "origin", "main")
+	writeFile(t, filepath.Join(repo, "owner-main.txt"), "maintainer lane\n")
+
+	previous := canonicalMainPushAllowed
+	canonicalMainPushAllowed = func() bool { return true }
+	t.Cleanup(func() { canonicalMainPushAllowed = previous })
+
+	body, _ := json.Marshal(map[string]interface{}{"workDir": repo})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/git/commit-push", bytes.NewReader(body))
+	(&HTTPServer{}).handleGitCommitPush(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("owner main push status %d, want 200: %s", rr.Code, rr.Body.String())
+	}
+	var resp commitPushResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if !resp.OK || !resp.Pushed || resp.Branch != "main" {
+		t.Fatalf("owner main lane was blocked: %+v", resp)
+	}
+	if got := syncGitCmd(t, "", "--git-dir", bare, "show", "main:owner-main.txt"); got != "maintainer lane" {
+		t.Fatalf("owner main push did not reach canonical test remote: %q", got)
+	}
+}
+
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

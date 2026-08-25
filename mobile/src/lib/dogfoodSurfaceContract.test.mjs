@@ -10,17 +10,20 @@ const dogfood = readFileSync(join(mobile, "app", "(tabs)", "dogfood.tsx"), "utf8
 const settings = readFileSync(join(mobile, "app", "(tabs)", "settings.tsx"), "utf8");
 const attached = readFileSync(join(mobile, "app", "attach.tsx"), "utf8");
 const rootLayout = readFileSync(join(mobile, "app", "_layout.tsx"), "utf8");
+const gate = readFileSync(join(mobile, "src", "components", "AttachModeSection.tsx"), "utf8");
+const launch = readFileSync(join(mobile, "app", "dogfood-launch.tsx"), "utf8");
 
-test("More removes the Vibing row and exposes Dogfood only behind isOwner", () => {
+test("More removes the old Vibing row and exposes contributor Dogfood to everyone", () => {
   assert.doesNotMatch(more, /accessibilityLabel="Open Vibing"|>Vibing<|navigate\("\/vibing"/);
-  const ownerBlock = more.slice(more.indexOf("{isOwner ? ("), more.indexOf("{isOwner ? (") + 1500);
-  assert.match(ownerBlock, /Dogfood mode/);
-  assert.match(ownerBlock, /\(tabs\)\/dogfood/);
+  assert.match(more, /Develop Yaver/);
+  assert.match(more, /\(tabs\)\/dogfood/);
+  assert.doesNotMatch(more, /isOwner\s*\?\s*\([\s\S]{0,500}Dogfood/);
 });
 
-test("a guessed Dogfood route still fails closed for a non-owner", () => {
-  assert.match(dogfood, /user\?\.isOwner === true/);
-  assert.match(dogfood, /Owner access only/);
+test("Dogfood is a signed-in contributor workflow, not a product-owner entitlement", () => {
+  assert.doesNotMatch(dogfood, /user\?\.isOwner|Owner access only|owner account/);
+  assert.match(dogfood, /<AttachModeSection c=\{c\} primaryOnly/);
+  assert.match(dogfood, /canonical main branch is protected/);
   assert.doesNotMatch(settings, /AttachModeSection/);
   assert.doesNotMatch(rootLayout, /DogfoodCaptureHost|loadDogfoodMode/,
     "the retired screenshot catcher would silently keep the old meaning alive");
@@ -56,4 +59,16 @@ test("Dogfood entry is fail-closed until Expo and the browser lane are proved", 
     "the agent's relative browser path must resolve through the selected primary device");
   assert.doesNotMatch(attachClient, /getDevServerBundleUrl\(bundlePath\)/,
     "Dogfood must not copy the owner bearer into a WebView URL");
+});
+
+test("Dogfood exposes the shared three-lane matrix with browser as the default", () => {
+  assert.match(gate, /dogfoodLaneOptions\("expo"/);
+  assert.match(gate, /useState<DogfoodLane>\("browser"\)/);
+  assert.match(gate, /option\.label/);
+  assert.match(launch, /lane === "webrtc"/);
+  assert.match(launch, /DOGFOOD_SELF_HERMES_UNSAFE/);
+  assert.match(launch, /prepareDogfoodMode/,
+    "browser Dogfood must retain the proved attach/browser implementation");
+  assert.match(launch, /pathname: "\/remote-runtime"/,
+    "WebRTC Dogfood must reuse the Projects native runtime surface");
 });

@@ -380,9 +380,9 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/integrations/whatsapp/command", s.handleWhatsAppCommand)
 
 	// Attach Mode (Yaver rendering Yaver). /attach/start MINTS a capability and
-	// is therefore owner-bearer ONLY — s.auth, never attachOrAuth, or an
+	// therefore requires normal user auth — s.auth, never attachOrAuth, or an
 	// attached page could mint itself a fresh capability forever. refresh/stop
-	// accept either the owner's bearer or the capability, since the attached
+	// accept either the user's bearer or the capability, since the attached
 	// surface must be able to keep itself alive and to detach itself.
 	// See attach_session.go for why this is a capability and not the session.
 	// The capability answer over plain HTTP. Attach Mode uses it to have the
@@ -1036,7 +1036,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/dev/web-bundle/ack", s.auth(s.handleWebBundleAck))     // Owner — iframe reports successful load
 	mux.HandleFunc("/dev/web-bundle/error", s.auth(s.handleWebBundleError)) // Owner — iframe reports JS error during init
 	mux.HandleFunc("/dev/", s.handleDevServerProxy)                         // No auth — serves proxied dev content for browser/webview preview surfaces
-	// Dogfood control plane. Prepare and runtime state are owner-authenticated;
+	// Dogfood control plane. Prepare and runtime state require normal user auth;
 	// the scoped attached-page capability cannot mutate Git or query MCP state.
 	mux.HandleFunc("/attach/prepare", s.auth(s.handleDogfoodPrepare))
 	mux.HandleFunc("/dogfood/status", s.auth(s.handleDogfoodStatus))

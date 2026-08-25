@@ -2274,6 +2274,23 @@ export default function MoreScreen() {
           <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203a"}</Text>
         </Pressable>
 
+        {/* Contributor Dogfood is part of the lean default menu. Keeping it
+            outside the legacy LEAN_MORE_SURFACE branches prevents the public
+            entry point from disappearing when the lean surface is enabled. */}
+        <Pressable
+          style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
+          onPress={() => router.navigate("/(tabs)/dogfood" as any)}
+          accessibilityRole="button"
+          accessibilityLabel="Develop Yaver with Yaver"
+        >
+          <Text style={[s.icon, { color: c.textMuted }]}>{"🐕"}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[s.label, { color: c.textPrimary }]}>Develop Yaver</Text>
+            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Dogfood a Yaver source checkout</Text>
+          </View>
+          <Text style={{ color: c.textMuted, fontSize: 16 }}>{"›"}</Text>
+        </Pressable>
+
         <Pressable
           style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
           onPress={handleSettings}
@@ -2573,24 +2590,6 @@ export default function MoreScreen() {
               <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Setup and guides</Text>
             </View>
             <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203A"}</Text>
-          </Pressable>
-        ) : null}
-
-        {/* Server-computed owner gate: no owner identity ships in the bundle.
-            Dogfood renders Yaver's own Expo web target from the primary box. */}
-        {isOwner ? (
-          <Pressable
-            style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
-            onPress={() => router.navigate("/(tabs)/dogfood" as any)}
-            accessibilityRole="button"
-            accessibilityLabel="Open Dogfood mode"
-          >
-            <Text style={[s.icon, { color: c.textMuted }]}>{"🐕"}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={[s.label, { color: c.textPrimary }]}>Dogfood mode</Text>
-              <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Run Yaver from your primary device</Text>
-            </View>
-            <Text style={{ color: c.textMuted, fontSize: 16 }}>{"›"}</Text>
           </Pressable>
         ) : null}
 

@@ -7,8 +7,8 @@ package main
 // these operations succeeded on the selected render box:
 //
 //   1. the checkout is Yaver itself;
-//   2. origin/main was fetched;
-//   3. the current branch rebased onto origin/main with --autostash;
+//   2. canonical main was fetched (origin for a clone, upstream for a fork);
+//   3. the current contribution branch rebased onto that base with --autostash;
 //   4. no rebase or autostash conflict remains;
 //   5. an attach session is live and its Expo browser lane is serving.
 //
@@ -47,6 +47,8 @@ type dogfoodSourceResponse struct {
 	SuggestedPath string         `json:"suggestedPath,omitempty"`
 	Branch        string         `json:"branch,omitempty"`
 	Remote        string         `json:"remote,omitempty"`
+	BaseRemote    string         `json:"baseRemote,omitempty"`
+	BaseRef       string         `json:"baseRef,omitempty"`
 	GitVersion    string         `json:"gitVersion,omitempty"`
 	Message       string         `json:"message"`
 	Remedy        string         `json:"remedy,omitempty"`
@@ -61,20 +63,79 @@ func canonicalYaverRemote(remote string) bool {
 		strings.HasSuffix(normalized, "github.com/kivanccakmak/yaver.io")
 }
 
+// dogfoodCanonicalBase accepts both the simple clone layout
+// (origin=yaver-io/yaver.io) and the normal contributor layout
+// (origin=<their fork>, upstream=yaver-io/yaver.io). The canonical remote is
+// fetch-only base truth; it is never inferred from a repo-shaped directory.
+func dogfoodCanonicalBase(workDir string) (name, remote string) {
+	remotesOut, err := runGit(workDir, "remote")
+	if err != nil {
+		return "", ""
+	}
+	remotes := strings.Fields(remotesOut)
+	ordered := make([]string, 0, len(remotes)+2)
+	for _, preferred := range []string{"upstream", "origin"} {
+		for _, candidate := range remotes {
+			if candidate == preferred {
+				ordered = append(ordered, candidate)
+			}
+		}
+	}
+	for _, candidate := range remotes {
+		if candidate != "upstream" && candidate != "origin" {
+			ordered = append(ordered, candidate)
+		}
+	}
+	for _, candidate := range ordered {
+		url, _ := runGit(workDir, "config", "--get", "remote."+candidate+".url")
+		url = strings.TrimSpace(url)
+		if canonicalYaverRemote(url) {
+			return candidate, url
+		}
+	}
+	return "", ""
+}
+
 // findDogfoodCheckout checks only the normal one-level workspace roots. This
 // is deliberately bounded: Dogfood readiness must never recursively walk a
 // home directory and make an otherwise-live box look offline.
 func findDogfoodCheckout() string {
 	home, _ := os.UserHomeDir()
+	bestPath := ""
+	bestScore := -1 << 30
 	for _, parent := range []string{"Workspace", "Projects", "repos", "code", "src", "dev"} {
 		for _, repo := range scanDirForRepos(filepath.Join(home, parent)) {
-			remote, _ := runGit(repo.Path, "config", "--get", "remote.origin.url")
-			if IsYaverSelfDevelopmentDir(repo.Path) && canonicalYaverRemote(remote) {
-				return repo.Path
+			baseRemote, _ := dogfoodCanonicalBase(repo.Path)
+			if IsYaverSelfDevelopmentDir(repo.Path) && baseRemote != "" {
+				score := dogfoodCheckoutScore(repo.Path)
+				if score > bestScore {
+					bestPath, bestScore = repo.Path, score
+				}
 			}
 		}
 	}
-	return ""
+	return bestPath
+}
+
+// Prefer the user's real named checkout over disposable validation fixtures.
+// A detached worktree is still a valid fallback, but it must never beat a
+// normal branch just because directory enumeration happened to return it first.
+func dogfoodCheckoutScore(workDir string) int {
+	name := strings.ToLower(filepath.Base(filepath.Clean(workDir)))
+	score := 0
+	if name == "yaver.io" {
+		score += 200
+	} else if name == "yaver" {
+		score += 160
+	}
+	if strings.Contains(name, "validation") || strings.Contains(name, "fixture") || strings.Contains(name, "test-") {
+		score -= 200
+	}
+	branch, _ := runGit(workDir, "rev-parse", "--abbrev-ref", "HEAD")
+	if branch = strings.TrimSpace(branch); branch != "" && branch != "HEAD" {
+		score += 100
+	}
+	return score
 }
 
 func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
@@ -116,39 +177,48 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 		return dogfoodSourceResponse{
 			Code: "DOGFOOD_SOURCE_NOT_GIT", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
 			Message: "Yaver source exists here, but it is not a Git checkout.",
-			Remedy:  "Select or clone a real yaver.io Git checkout so Dogfood can safely sync origin/main.",
+			Remedy:  "Select or clone a real yaver.io Git checkout so Dogfood can safely sync canonical main.",
 		}
 	}
 	// Read the persisted value rather than `remote get-url`: Git applies
 	// url.*.insteadOf rewrites to the latter, which can make a valid canonical
 	// origin look like a credential helper or local mirror target.
-	remote, remoteErr := runGit(workDir, "config", "--get", "remote.origin.url")
-	remote = strings.TrimSpace(remote)
-	if remoteErr != nil || remote == "" {
+	origin, originErr := runGit(workDir, "config", "--get", "remote.origin.url")
+	origin = strings.TrimSpace(origin)
+	if originErr != nil || origin == "" {
 		return dogfoodSourceResponse{
 			Code: "DOGFOOD_GIT_ORIGIN_MISSING", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
-			Message: "The Yaver checkout has no origin remote.",
-			Remedy:  "Repair this checkout's origin to the public yaver-io/yaver.io repository, then retry.",
+			Message: "The Yaver checkout has no origin remote for contribution branches.",
+			Remedy:  "Add your fork as origin, or clone the public yaver-io/yaver.io repository, then retry.",
 		}
 	}
-	if clean := stripURLCredentials(remote); clean != remote {
+	if clean := stripURLCredentials(origin); clean != origin {
 		return dogfoodSourceResponse{
 			Code: "DOGFOOD_GIT_CREDENTIALS_EMBEDDED", Path: workDir, SuggestedPath: suggested, Remote: clean, GitVersion: strings.TrimSpace(version),
 			Message: "The Yaver origin stores a credential inside its URL.",
 			Remedy:  "Remove the embedded credential, then use Yaver's Git configuration wizard so secrets stay in the box credential store.",
 		}
 	}
-	if !canonicalYaverRemote(remote) {
+	baseRemote, canonicalURL := dogfoodCanonicalBase(workDir)
+	if baseRemote == "" {
 		return dogfoodSourceResponse{
-			Code: "DOGFOOD_GIT_ORIGIN_WRONG", Path: workDir, SuggestedPath: suggested, Remote: stripURLCredentials(remote), GitVersion: strings.TrimSpace(version),
-			Message: "The selected Yaver-looking checkout points at a different origin.",
-			Remedy:  "Verify the repository before changing its origin; Yaver will not rewrite it automatically.",
+			Code: "DOGFOOD_GIT_UPSTREAM_MISSING", Path: workDir, SuggestedPath: suggested, Remote: stripURLCredentials(origin), GitVersion: strings.TrimSpace(version),
+			Message: "The checkout has no remote pointing to yaver-io/yaver.io.",
+			Remedy:  "Keep your fork as origin and add the canonical repository as upstream, then retry.",
+		}
+	}
+	if clean := stripURLCredentials(canonicalURL); clean != canonicalURL {
+		return dogfoodSourceResponse{
+			Code: "DOGFOOD_GIT_CREDENTIALS_EMBEDDED", Path: workDir, SuggestedPath: suggested, Remote: clean, GitVersion: strings.TrimSpace(version),
+			Message: "The canonical Yaver remote stores a credential inside its URL.",
+			Remedy:  "Remove the embedded credential; public upstream fetches do not need one.",
 		}
 	}
 	branch, _ := runGit(workDir, "rev-parse", "--abbrev-ref", "HEAD")
 	return dogfoodSourceResponse{
 		OK: true, Ready: true, Code: "DOGFOOD_SOURCE_READY", Path: workDir,
-		SuggestedPath: suggested, Branch: strings.TrimSpace(branch), Remote: stripURLCredentials(remote),
+		SuggestedPath: suggested, Branch: strings.TrimSpace(branch), Remote: stripURLCredentials(origin),
+		BaseRemote: baseRemote, BaseRef: baseRemote + "/main",
 		GitVersion: strings.TrimSpace(version), Message: "Yaver source and its Git origin are ready on this box.",
 	}
 }
@@ -156,10 +226,6 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 func (s *HTTPServer) handleDogfoodSourceStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET required"})
-		return
-	}
-	if !attachOwnerAllowed() {
-		jsonReply(w, http.StatusForbidden, dogfoodSourceResponse{Code: "DOGFOOD_OWNER_ONLY", Message: "Dogfood mode is owner-only."})
 		return
 	}
 	jsonReply(w, http.StatusOK, dogfoodSourceStatus(r.URL.Query().Get("workDir")))
@@ -170,20 +236,22 @@ type dogfoodPrepareRequest struct {
 }
 
 type dogfoodPrepareResponse struct {
-	OK             bool     `json:"ok"`
-	Code           string   `json:"code,omitempty"`
-	WorkDir        string   `json:"workDir,omitempty"`
-	Branch         string   `json:"branch,omitempty"`
-	Base           string   `json:"base,omitempty"`
-	Head           string   `json:"head,omitempty"`
-	Rebased        bool     `json:"rebased,omitempty"`
-	IndexRecovered bool     `json:"indexRecovered,omitempty"`
-	RequiresAgent  bool     `json:"requiresAgent,omitempty"`
-	Conflicts      []string `json:"conflicts,omitempty"`
-	Error          string   `json:"error,omitempty"`
-	Remedy         string   `json:"remedy,omitempty"`
-	FixPrompt      string   `json:"fixPrompt,omitempty"`
-	Output         string   `json:"output,omitempty"`
+	OK                 bool     `json:"ok"`
+	Code               string   `json:"code,omitempty"`
+	WorkDir            string   `json:"workDir,omitempty"`
+	Branch             string   `json:"branch,omitempty"`
+	Base               string   `json:"base,omitempty"`
+	Head               string   `json:"head,omitempty"`
+	Rebased            bool     `json:"rebased,omitempty"`
+	ContributionBranch bool     `json:"contributionBranch,omitempty"`
+	PushPolicy         string   `json:"pushPolicy,omitempty"`
+	IndexRecovered     bool     `json:"indexRecovered,omitempty"`
+	RequiresAgent      bool     `json:"requiresAgent,omitempty"`
+	Conflicts          []string `json:"conflicts,omitempty"`
+	Error              string   `json:"error,omitempty"`
+	Remedy             string   `json:"remedy,omitempty"`
+	FixPrompt          string   `json:"fixPrompt,omitempty"`
+	Output             string   `json:"output,omitempty"`
 }
 
 const dogfoodConflictInspectionLimit = 8 << 20
@@ -266,22 +334,33 @@ func containsGitConflictMarker(data []byte) bool {
 	return false
 }
 
-func dogfoodConflictPrompt(workDir, branch string, conflicts []string, detail string) string {
+func dogfoodConflictPrompt(workDir, branch, baseRef string, conflicts []string, detail string) string {
 	files := strings.Join(conflicts, ", ")
 	if files == "" {
 		files = "ask Git for the unresolved files"
 	}
-	return fmt.Sprintf(`Prepare Yaver Dogfood mode in %s. The current branch %s could not be safely rebased onto origin/main. Resolve the Git conflict while preserving BOTH the local work and origin/main; never force-push, never drop a stash, and never discard uncommitted changes. Conflicted files: %s. Failure detail: %s. After resolving, run the relevant focused tests and leave the checkout ready for a normal git rebase origin/main.`, workDir, branch, files, strings.TrimSpace(detail))
+	if strings.TrimSpace(baseRef) == "" {
+		baseRef = "origin/main"
+	}
+	return fmt.Sprintf(`Prepare Yaver Dogfood mode in %s. The current branch %s could not be safely rebased onto %s. Resolve the Git conflict while preserving BOTH the local work and %s; never force-push, never drop a stash, and never discard uncommitted changes. Conflicted files: %s. Failure detail: %s. After resolving, run the relevant focused tests and leave the checkout ready for a normal git rebase %s.`, workDir, branch, baseRef, baseRef, files, strings.TrimSpace(detail), baseRef)
 }
 
-// prepareDogfoodCheckout fetches origin/main and rebases the current named
-// branch onto it. --autostash preserves tracked local edits. An active rebase
+// prepareDogfoodCheckout fetches the canonical main remote (origin for a
+// simple clone, upstream for a fork) and rebases the current named branch onto
+// it. --autostash preserves tracked local edits. An active rebase
 // is refused rather than inherited. A rebase conflict is aborted immediately;
 // an autostash re-apply conflict is reported honestly because Git has already
 // completed the rebase and there is no rebase left to abort.
 func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
+	return prepareDogfoodCheckoutWithPolicy(workDir, true)
+}
+
+// prepareDogfoodCheckoutWithPolicy keeps the maintainer lane unchanged while
+// making community Dogfood safe by construction. A contributor who enters on
+// main is moved to a fresh local branch before any runner can edit or push.
+func prepareDogfoodCheckoutWithPolicy(workDir string, allowCanonicalMainPush bool) (int, dogfoodPrepareResponse) {
 	workDir = strings.TrimSpace(workDir)
-	resp := dogfoodPrepareResponse{WorkDir: workDir, Base: "origin/main"}
+	resp := dogfoodPrepareResponse{WorkDir: workDir}
 	source := dogfoodSourceStatus(workDir)
 	if !source.Ready {
 		resp.Code = source.Code
@@ -291,6 +370,10 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 	}
 	workDir = source.Path
 	resp.WorkDir = workDir
+	resp.Base = source.BaseRef
+	if resp.Base == "" {
+		resp.Base = "origin/main"
+	}
 
 	branch, err := runGit(workDir, "rev-parse", "--abbrev-ref", "HEAD")
 	branch = strings.TrimSpace(branch)
@@ -302,20 +385,43 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 		resp.Output = branch
 		return http.StatusConflict, resp
 	}
-	if branch == "HEAD" || branch == "" {
-		resp.Code = "DOGFOOD_GIT_DETACHED_HEAD"
-		resp.Error = "The Yaver checkout is on a detached HEAD, so it cannot be safely rebased."
-		resp.Remedy = "Check out a named branch, then retry."
-		return http.StatusConflict, resp
-	}
 	if isMergeInProgress(workDir) || isRebaseInProgress(workDir) {
 		resp.Code = "DOGFOOD_GIT_OPERATION_IN_PROGRESS"
 		resp.Error = "The Yaver checkout already has a merge or rebase in progress."
 		resp.Remedy = "Finish or abort that existing Git operation before entering Dogfood mode."
 		resp.RequiresAgent = true
 		resp.Conflicts = parseConflictedFiles(workDir)
-		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, resp.Conflicts, resp.Error)
+		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, resp.Base, resp.Conflicts, resp.Error)
 		return http.StatusConflict, resp
+	}
+	if branch == "HEAD" || branch == "" {
+		recovered, contribution, out, recoverErr := recoverDetachedDogfoodBranch(workDir, resp.Base, allowCanonicalMainPush)
+		if recoverErr != nil {
+			resp.Code = "DOGFOOD_GIT_DETACHED_RECOVERY_FAILED"
+			resp.Error = "Yaver could not preserve the detached checkout on a named branch."
+			resp.Remedy = "Choose another Yaver checkout or create a named branch, then retry."
+			resp.Output = strings.TrimSpace(out)
+			return http.StatusConflict, resp
+		}
+		branch = recovered
+		resp.Branch = branch
+		resp.ContributionBranch = contribution
+	}
+	if !allowCanonicalMainPush {
+		resp.PushPolicy = "canonical-main-protected"
+		if branch == "main" {
+			contributionBranch := "dogfood/community-" + time.Now().UTC().Format("20060102-150405.000")
+			if out, switchErr := runGit(workDir, "checkout", "-b", contributionBranch); switchErr != nil {
+				resp.Code = "DOGFOOD_CONTRIBUTION_BRANCH_FAILED"
+				resp.Error = "Yaver could not create a safe contribution branch from main."
+				resp.Remedy = "Create a non-main branch in this checkout, then retry Dogfood mode."
+				resp.Output = strings.TrimSpace(out)
+				return http.StatusConflict, resp
+			}
+			branch = contributionBranch
+			resp.Branch = branch
+			resp.ContributionBranch = true
+		}
 	}
 	// A Fix-with-AI task can edit the resolution but its workspace-write
 	// sandbox cannot mutate .git/index. Retry is the user's explicit signal to
@@ -334,12 +440,16 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 		if recoverErr != nil {
 			resp.Output = recoverErr.Error()
 		}
-		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, resp.Conflicts, resp.Error+" "+resp.Output)
+		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, resp.Base, resp.Conflicts, resp.Error+" "+resp.Output)
 		return http.StatusConflict, resp
 	}
 	resp.IndexRecovered = recovered
 
-	fetchOut, fetchErr := runGit(workDir, "fetch", "origin", "main")
+	baseRemote := source.BaseRemote
+	if baseRemote == "" {
+		baseRemote = "origin"
+	}
+	fetchOut, fetchErr := runGit(workDir, "fetch", baseRemote, "main")
 	if fetchErr != nil {
 		lower := strings.ToLower(fetchOut)
 		if strings.Contains(lower, "authentication failed") || strings.Contains(lower, "permission denied") || strings.Contains(lower, "could not read username") {
@@ -348,25 +458,25 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 			resp.Remedy = "Open the Git configuration wizard on mobile, authorize GitHub for this box, then retry."
 		} else {
 			resp.Code = "DOGFOOD_GIT_FETCH_FAILED"
-			resp.Error = "The primary device could not fetch origin/main."
+			resp.Error = "The primary device could not fetch " + resp.Base + "."
 			resp.Remedy = "Check its network and Git configuration, then retry."
 		}
 		resp.Output = strings.TrimSpace(fetchOut)
 		return http.StatusBadGateway, resp
 	}
-	if _, verifyErr := runGit(workDir, "rev-parse", "--verify", "origin/main"); verifyErr != nil {
+	if _, verifyErr := runGit(workDir, "rev-parse", "--verify", resp.Base); verifyErr != nil {
 		resp.Code = "DOGFOOD_GIT_MAIN_MISSING"
-		resp.Error = "The fetched repository does not expose origin/main."
-		resp.Remedy = "Restore the Yaver origin remote and its main branch, then retry."
+		resp.Error = "The fetched repository does not expose " + resp.Base + "."
+		resp.Remedy = "Restore the canonical Yaver remote and its main branch, then retry."
 		return http.StatusConflict, resp
 	}
 
-	rebaseOut, rebaseErr := runGit(workDir, "rebase", "--autostash", "origin/main")
+	rebaseOut, rebaseErr := runGit(workDir, "rebase", "--autostash", resp.Base)
 	if rebaseErr != nil {
 		conflicts := parseConflictedFiles(workDir)
 		abortOut, abortErr := runGit(workDir, "rebase", "--abort")
 		resp.Code = "DOGFOOD_GIT_REBASE_CONFLICT"
-		resp.Error = "The Yaver checkout could not be rebased onto origin/main without conflicts."
+		resp.Error = "The Yaver checkout could not be rebased onto " + resp.Base + " without conflicts."
 		resp.Remedy = "Use Fix with AI to resolve the named files, then retry Dogfood mode."
 		resp.RequiresAgent = true
 		resp.Conflicts = conflicts
@@ -374,7 +484,7 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 		if abortErr != nil && strings.TrimSpace(abortOut) != "" {
 			resp.Output += "\nrebase abort: " + strings.TrimSpace(abortOut)
 		}
-		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, conflicts, resp.Output)
+		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, resp.Base, conflicts, resp.Output)
 		return http.StatusConflict, resp
 	}
 
@@ -382,12 +492,12 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 	// UU entries. Never call that ready and let Metro discover the markers.
 	if conflicts := parseConflictedFiles(workDir); len(conflicts) > 0 {
 		resp.Code = "DOGFOOD_GIT_AUTOSTASH_CONFLICT"
-		resp.Error = "origin/main was rebased, but restoring local edits produced conflicts."
+		resp.Error = resp.Base + " was rebased, but restoring local edits produced conflicts."
 		resp.Remedy = "Use Fix with AI to reconcile the retained autostash, then retry Dogfood mode."
 		resp.RequiresAgent = true
 		resp.Conflicts = conflicts
 		resp.Output = strings.TrimSpace(rebaseOut)
-		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, conflicts, resp.Output)
+		resp.FixPrompt = dogfoodConflictPrompt(workDir, branch, resp.Base, conflicts, resp.Output)
 		return http.StatusConflict, resp
 	}
 
@@ -399,13 +509,38 @@ func prepareDogfoodCheckout(workDir string) (int, dogfoodPrepareResponse) {
 	return http.StatusOK, resp
 }
 
+// recoverDetachedDogfoodBranch never moves or deletes a commit. Maintainers
+// return to main only when detached HEAD already equals the local main tip;
+// otherwise a recovery branch preserves the exact HEAD. Contributors always
+// enter their isolated community branch.
+func recoverDetachedDogfoodBranch(workDir, baseRef string, allowCanonicalMainPush bool) (branch string, contribution bool, output string, err error) {
+	head, headErr := runGit(workDir, "rev-parse", "HEAD")
+	if headErr != nil || strings.TrimSpace(head) == "" {
+		return "", false, head, headErr
+	}
+	if allowCanonicalMainPush {
+		mainHead, _ := runGit(workDir, "rev-parse", "--verify", "refs/heads/main")
+		if strings.TrimSpace(mainHead) == strings.TrimSpace(head) {
+			out, checkoutErr := runGit(workDir, "checkout", "main")
+			return "main", false, out, checkoutErr
+		}
+		baseHead, _ := runGit(workDir, "rev-parse", "--verify", baseRef)
+		if strings.TrimSpace(mainHead) == "" && strings.TrimSpace(baseHead) == strings.TrimSpace(head) {
+			out, checkoutErr := runGit(workDir, "checkout", "-b", "main", "--track", baseRef)
+			return "main", false, out, checkoutErr
+		}
+		branch = "dogfood/recovered-" + time.Now().UTC().Format("20060102-150405.000")
+	} else {
+		branch = "dogfood/community-" + time.Now().UTC().Format("20060102-150405.000")
+		contribution = true
+	}
+	out, checkoutErr := runGit(workDir, "checkout", "-b", branch)
+	return branch, contribution, out, checkoutErr
+}
+
 func (s *HTTPServer) handleDogfoodPrepare(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
-		return
-	}
-	if !attachOwnerAllowed() {
-		jsonReply(w, http.StatusForbidden, dogfoodPrepareResponse{Code: "DOGFOOD_OWNER_ONLY", Error: "Dogfood mode is owner-only."})
 		return
 	}
 	var req dogfoodPrepareRequest
@@ -413,7 +548,7 @@ func (s *HTTPServer) handleDogfoodPrepare(w http.ResponseWriter, r *http.Request
 		jsonReply(w, http.StatusBadRequest, dogfoodPrepareResponse{Code: "DOGFOOD_BAD_REQUEST", Error: "Invalid Dogfood prepare request."})
 		return
 	}
-	status, resp := prepareDogfoodCheckout(req.WorkDir)
+	status, resp := prepareDogfoodCheckoutWithPolicy(req.WorkDir, currentUserIsOwner())
 	jsonReply(w, status, resp)
 }
 
@@ -446,10 +581,6 @@ func currentDogfoodRuntime(now time.Time) dogfoodRuntimeResponse {
 func (s *HTTPServer) handleDogfoodStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET required"})
-		return
-	}
-	if !attachOwnerAllowed() {
-		jsonReply(w, http.StatusForbidden, dogfoodRuntimeResponse{OK: false, Active: false, Mode: "production", Code: "DOGFOOD_OWNER_ONLY", Message: "Dogfood mode is owner-only."})
 		return
 	}
 	jsonReply(w, http.StatusOK, currentDogfoodRuntime(time.Now()))
@@ -501,10 +632,6 @@ func (s *HTTPServer) dogfoodRerender() (int, dogfoodRuntimeResponse) {
 func (s *HTTPServer) handleDogfoodRerender(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
-		return
-	}
-	if !attachOwnerAllowed() {
-		jsonReply(w, http.StatusForbidden, dogfoodRuntimeResponse{OK: false, Active: false, Mode: "production", Code: "DOGFOOD_OWNER_ONLY", Message: "Dogfood mode is owner-only."})
 		return
 	}
 	status, resp := s.dogfoodRerender()

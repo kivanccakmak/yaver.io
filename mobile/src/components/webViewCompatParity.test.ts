@@ -82,11 +82,10 @@ for (const rel of previewSurfaces) {
   );
 }
 
-// BOTH browser-preview implementations must consume the probe-unsupported
-// signal. Landing it in one is the drift that shipped a broken heartbeat,
-// dropped SSE frames and a dead shake gesture in apps.tsx while DevPreview.tsx
-// was fine — and here it would mean one surface waits forever on a confirmation
-// the browser forbids, while the other renders.
+// BOTH browser-preview implementations must consume the shared wait narration
+// and strict paint gate. These are independent React trees; landing a fix in
+// only one is the drift that shipped different browser behavior on Projects
+// and Tasks.
 for (const rel of ["./DevPreview.tsx", "../../app/(tabs)/apps.tsx"]) {
   const src = stripComments(readFileSync(join(__dirname, rel), "utf8"));
   // `=== WEBVIEW_PROBE_UNSUPPORTED` and not just the identifier: the import line
@@ -107,8 +106,7 @@ for (const rel of ["./DevPreview.tsx", "../../app/(tabs)/apps.tsx"] as const) {
   const src = stripComments(readFileSync(join(__dirname, rel), "utf8"));
   ok(src.includes("previewPaintGateMode"), `${rel} must negotiate the agent paint signal`);
   ok(src.includes('paintGateMode === "blocking"'), `${rel} must keep strict gating when a signal can arrive`);
-  ok(src.includes('paintGateMode === "unverified_visible"'), `${rel} must expose old-agent frames without claiming paint`);
-  ok(src.includes("Update agent"), `${rel} must name the route that restores paint confirmation`);
+  ok(src.includes('paintGateMode === "blocking"'), `${rel} must keep the strict paint gate while the first frame is unconfirmed`);
   ok(src.includes("previewWaitLine"), `${rel} must narrate elapsed time and recent output while waiting`);
 }
 

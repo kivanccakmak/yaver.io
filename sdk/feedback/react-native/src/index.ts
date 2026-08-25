@@ -41,6 +41,14 @@ export type { YaverUpdatesConfig, PendingUpdate } from './YaverUpdates';
 export { initExpo } from './expo';
 export { YaverDiscovery } from './Discovery';
 export { P2PClient } from './P2PClient';
+export type {
+  DogfoodDevEvent,
+  DogfoodDevServerStatus,
+  DogfoodRemoteRuntimeCapabilities,
+  DogfoodRemoteRuntimeSession,
+  DogfoodRemoteRuntimeTarget,
+} from './P2PClient';
+export { createP2PDogfoodDriver, type P2PDogfoodDriverOptions } from './P2PDogfoodDriver';
 export {
   reloadActions,
   reloadRequest,
@@ -73,6 +81,28 @@ export { YaverModeBadge, hideYaverModeBadge, showYaverModeBadge, isYaverModeBadg
 export type { YaverModeBadgeProps } from './YaverModeBadge';
 export { resolveSDKDogfood } from './dogfoodPolicy';
 export type { SDKDogfoodConfig, SDKDogfoodStatus } from './dogfoodPolicy';
+export {
+  DogfoodController,
+  DogfoodRuntimeError,
+  defaultDogfoodLane,
+  dogfoodLaneOptions,
+  dogfoodLogLinesFromDevEvent,
+  runtimeLogLinesFromDevEvent,
+  validateDogfoodProject,
+} from './DogfoodRuntime';
+export type {
+  DogfoodControllerOptions,
+  DogfoodDriver,
+  DogfoodFailure,
+  DogfoodLane,
+  DogfoodLaneOption,
+  DogfoodLogLine,
+  DogfoodPhase,
+  DogfoodProject,
+  DogfoodResult,
+  DogfoodRunContext,
+  DogfoodSnapshot,
+} from './DogfoodRuntime';
 export { FeedbackModal } from './FeedbackModal';
 export { QuickActionIcon } from './QuickActionIcon';
 export type { QuickActionIconProps } from './QuickActionIcon';

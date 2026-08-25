@@ -56,6 +56,8 @@ interface Props {
   project?: string;
   model?: string;
   runner?: string;
+  /** Show the optional voice/STT controls. Defaults to keyboard-only. */
+  voiceInputEnabled?: boolean;
   /** Standalone SDK hosts use this to fold back to the floating Y without
    * destroying the live task subscription or transcript state. */
   onMinimize?: () => void;
@@ -72,6 +74,7 @@ export function VibeChatScreen({
   project,
   model,
   runner,
+  voiceInputEnabled = false,
   onMinimize,
   codingMachine,
   renderMachine,
@@ -243,6 +246,7 @@ export function VibeChatScreen({
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (!voiceInputEnabled) return;
       if (!isVoiceCaptureSupported() || !isVoiceStreamSupported()) return;
       try {
         const res = await fetch(`${client.agentBaseUrl}/voice/status`, { headers: client.voiceAuthHeaders() });
@@ -259,7 +263,7 @@ export function VibeChatScreen({
       } catch { /* leave hidden */ }
     })();
     return () => { cancelled = true; };
-  }, [client]);
+  }, [client, voiceInputEnabled]);
 
   useEffect(() => () => { voiceSessionRef.current?.close(); }, []);
 
@@ -472,7 +476,7 @@ export function VibeChatScreen({
       </ScrollView>
 
       <View style={[styles.footer, activeTab !== 'chat' && styles.hidden]}>
-        {voiceAvailable && voiceState !== 'idle' && (
+        {voiceInputEnabled && voiceAvailable && voiceState !== 'idle' && (
           <Text style={styles.engineCaption}>
             {voiceState === 'recording' ? 'listening' : voiceState === 'uploading' ? 'sending' : voiceState === 'thinking' ? 'agent working' : 'speaking'}
             {activeEngine ? ` · ${activeEngine}` : ` · ${voiceMode === 'flux' ? 'Flux (Deepgram)' : 'Local (whisper)'}`}
@@ -488,7 +492,7 @@ export function VibeChatScreen({
           multiline
         />
         <View style={styles.actions}>
-          {voiceAvailable && (
+          {voiceInputEnabled && voiceAvailable && (
             <>
               {/* Local ↔ Flux engine toggle. Only shows Flux when the
                   agent has a Deepgram key; otherwise the label just

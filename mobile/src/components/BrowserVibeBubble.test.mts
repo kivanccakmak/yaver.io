@@ -40,11 +40,13 @@ test("browser Vibing mirrors feedback controls and remains mounted when minimize
   assert.ok(source.includes("KeyboardAvoidingView"), "composer can still be covered by the iOS keyboard");
   assert.ok(source.includes('accessibilityLabel="Minimize Vibing"'));
   assert.ok(source.includes('accessibilityLabel="Exit preview and return to Yaver"'));
-  assert.ok(source.includes("Hot Reload"));
   assert.ok(source.includes('testID="browser-vibe-runner-picker"'));
+  assert.ok(source.includes('testID="browser-vibe-machine-routing"'));
   assert.ok(source.includes("setPrimaryRunnerForDevice"), "runner/model picker does not persist its visible choice");
   assert.ok(source.includes('!open && styles.hidden'), "minimizing unmounts the live task instead of backgrounding it");
-  assert.ok(source.includes('reload("full")'), "full reload is missing from the card");
+  assert.ok(source.includes('testID="browser-vibe-full-reload"'), "full reload is not beside the floating Vibing control");
+  assert.ok(source.includes('reload("full")'), "full reload is missing from the preview overlay");
+  assert.ok(!source.includes("Hot Reload"), "lower-frequency reload controls still crowd Settings");
   assert.ok(source.includes("Reload queued until coding finishes"), "reload executes over an active coding turn instead of queueing");
   assert.ok(source.includes("onTaskStateChange={setActiveTask}"), "preview host cannot distinguish coding from idle");
   assert.ok(source.includes('testID="browser-vibe-machine-failure"'), "machine disconnect has no visible route to recovery");
@@ -57,11 +59,21 @@ test("browser Vibing mirrors feedback controls and remains mounted when minimize
   assert.ok(projects.includes("onExitPreview={() => setShowWebView(false)}"));
 });
 
+test("Settings uses two progressive-disclosure cards and Chat stays focused", () => {
+  assert.ok(source.includes("machineChoicesOpen"));
+  assert.ok(source.includes("runnerChoicesOpen"));
+  assert.ok(source.includes('type MachineRole = "runner" | "render"'));
+  assert.ok(source.includes("visibleMachineRole"));
+  assert.ok(!source.includes("routeSummary"), "Chat repeats routing already available in Settings");
+  assert.ok(!chat.includes("Type a vibe prompt"), "Chat repeats runner/model guidance already available in Settings");
+});
+
 test("coding and rendering machines are independent routes", () => {
   assert.ok(source.includes('machineRoles?.runnerDeviceId'));
   assert.ok(source.includes('machineRoles?.renderDeviceId'));
-  assert.ok(source.includes('saveMachineRole("runner"'));
-  assert.ok(source.includes('saveMachineRole("render"'));
+  assert.ok(source.includes('role === "runner" ? nextDeviceId'));
+  assert.ok(source.includes('role === "render" ? nextDeviceId'));
+  assert.ok(source.includes("saveMachineRole(visibleMachineRole, device.id)"));
   assert.ok(source.includes('client={codingClient}'));
   assert.ok(preview.includes('connectionManager.renderClient()'));
   assert.ok(projects.includes('connectionManager.renderClient()'));

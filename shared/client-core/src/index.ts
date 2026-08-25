@@ -17,3 +17,4 @@ export * from './device';
 export * from './ansi';
 export * from './trace';
 export * from './remoteless';
+export * from './buildFeedbackPrompt';

@@ -1044,6 +1044,7 @@ export const FeedbackModal: React.FC = () => {
               project={activeVibe.project}
               runner={activeVibe.runner}
               model={activeVibe.model}
+              voiceInputEnabled={YaverFeedback.getConfig()?.voiceInputEnabled === true}
               onClose={() => setActiveVibe(null)}
               onMinimize={handleClose}
               codingMachine={YaverFeedback.getMachineRouting().codingDeviceId}

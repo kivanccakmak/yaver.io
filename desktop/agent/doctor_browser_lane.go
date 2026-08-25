@@ -305,11 +305,33 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 	_ = chromedp.Run(runCtx, chromedp.Evaluate(
 		`(document.body && document.body.innerText || '').trim().slice(0,400)`, &bodyText))
 
-	// The agent's structured 503 while a web dev server is still binding.
+	// The agent's structured 503 while a web dev server is still binding. Honor
+	// waitSeconds by reloading the real preview URL until the starting response
+	// clears. Returning here immediately made the endpoint claim it had waited
+	// while Dogfood failed after only a few seconds on every first Expo build.
+	compileDeadline := start.Add(wait)
+	for strings.Contains(bodyText, `"status":"starting"`) && time.Now().Before(compileDeadline) {
+		select {
+		case <-runCtx.Done():
+			break
+		case <-time.After(500 * time.Millisecond):
+		}
+		if runCtx.Err() != nil {
+			break
+		}
+		if err := chromedp.Run(runCtx,
+			chromedp.Navigate(previewURL),
+			chromedp.Evaluate(`(document.body && document.body.innerText || '').trim().slice(0,400)`, &bodyText),
+		); err != nil {
+			res.Stage = BrowserLaneStageNavigate
+			res.Detail = "navigation failed while waiting for the first web build: " + err.Error()
+			return finish()
+		}
+	}
 	if strings.Contains(bodyText, `"status":"starting"`) {
 		res.Stage = BrowserLaneStageCompiling
 		res.Status = 503
-		res.Detail = "dev server is still compiling its first web build"
+		res.Detail = fmt.Sprintf("dev server was still compiling after %s", wait)
 		res.BodyPreview = truncateForPreview(bodyText)
 		return finish()
 	}

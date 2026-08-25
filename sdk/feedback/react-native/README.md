@@ -111,6 +111,56 @@ small `Y` identifies Dogfood mode; tapping it offers a confirmed exit back to
 Feedback mode. This allowlist controls SDK presentation only—tasks and reloads
 still require the user's normal Yaver authentication.
 
+### Embeddable Dogfood runtime
+
+App owners can also embed the actual source → dev-server → render lifecycle.
+`DogfoodController` is deliberately headless: constructing it does nothing;
+your own button calls `trigger()`, your preview renders `result.url`, and your
+console renders `snapshot.logs`. Retry and partial-session cleanup are handled
+by the controller.
+
+```tsx
+import {
+  DogfoodController,
+  P2PClient,
+  createP2PDogfoodDriver,
+} from 'yaver-feedback-react-native';
+
+const client = new P2PClient(agentUrl, signedInUserToken);
+const dogfood = new DogfoodController(
+  {
+    name: 'My App',
+    workDir: '/workspace/my-app',
+    framework: 'expo',       // also react-native, flutter, vite, next
+    lane: 'browser',         // Hermes is Expo/RN only; Flutter uses browser/WebRTC
+  },
+  createP2PDogfoodDriver(client),
+  {
+    onChange(snapshot) {
+      setPhase(snapshot.phase);
+      setConsoleText(snapshot.logs.map((line) => line.text).join('\n'));
+    },
+  },
+);
+
+// Explicit user intent: call only from your Dogfood button.
+const onDogfoodPress = () => dogfood.trigger().then(({ url }) => setPreviewUrl(url));
+const onRetryPress = () => dogfood.retry();
+const onLeaveScreen = () => dogfood.stop();
+```
+
+The default P2P driver calls the same `/dev/start`, `/dev/status`, `/dev/stop`,
+and `/dev/events` endpoints as Yaver's Projects browser lane. Package-manager
+and compiler output—including `$ npm install`, Expo/Metro, and Flutter web
+output—arrives uncollapsed in `snapshot.logs`. Starting tools requires the
+normal signed-in Yaver user token; a narrow feedback-only SDK token cannot
+spawn processes.
+
+For Yaver itself, installing `yaver-cli` supplies these agent endpoints. The
+native Yaver app checks the selected box for a real Yaver checkout and offers
+`Clone Yaver source` when it is absent; cloning still occurs only after that
+explicit tap.
+
 ### Quick Icon Styling
 
 The quick icon is configurable at compile time through `YaverFeedback.init(...)`, with render-time overrides still available through `<QuickActionIcon />` props when needed. If you do nothing, the SDK uses a high-visibility orange bubble by default so it stays distinct from the blue/indigo FAB styling many mobile apps already have.

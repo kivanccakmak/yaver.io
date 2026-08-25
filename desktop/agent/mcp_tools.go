@@ -941,7 +941,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "dogfood_status",
-			"description": "Report whether Yaver itself is currently running in owner-only Dogfood mode or Production mode. Returns the active Yaver checkout and live attach-session state. Pass device_id when the Dogfood renderer is a remote Yaver machine. Call this before interpreting 'reload', 're-render', or 'refresh Yaver': when active, use dogfood_rerender rather than a Hermes or unrelated project reload.",
+			"description": "Report whether Yaver itself is currently running in contributor Dogfood mode or Production mode. Returns the active Yaver checkout and live attach-session state. Pass device_id when the Dogfood renderer is a remote Yaver machine. Call this before interpreting 'reload', 're-render', or 'refresh Yaver': when active, use dogfood_rerender rather than a Hermes or unrelated project reload.",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -951,7 +951,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "dogfood_rerender",
-			"description": "Re-render Yaver itself through the active owner-only Dogfood Expo browser lane. Fails explicitly when Dogfood is inactive or its browser lane is not serving; never falls through to Hermes or reloads another project. Pass device_id for the remote primary/render machine. Use when the user says reload/re-render/refresh Yaver and dogfood_status reports active.",
+			"description": "Re-render Yaver itself through the active contributor Dogfood Expo browser lane. Fails explicitly when Dogfood is inactive or its browser lane is not serving; never falls through to Hermes or reloads another project. Pass device_id for the remote primary/render machine. Use when the user says reload/re-render/refresh Yaver and dogfood_status reports active.",
 			"inputSchema": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{

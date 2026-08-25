@@ -23,6 +23,17 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   }
 }
 
+async function dogfoodFetch(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  unrefTimer(timer);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface FeedbackEvent {
   type: string;
   timestamp: string;
@@ -36,6 +47,56 @@ export interface ReloadAck {
   message: string;
   nativeChangesDetected?: boolean;
   changeClass?: string;
+}
+
+export interface DogfoodDevServerStatus {
+  running?: boolean;
+  serving?: boolean;
+  starting?: boolean;
+  building?: boolean;
+  framework?: string;
+  workDir?: string;
+  bundleUrl?: string;
+  previewUrl?: string;
+  error?: string;
+  capabilityGap?: unknown;
+}
+
+export interface DogfoodDevEvent {
+  type: string;
+  framework?: string;
+  logLine?: string;
+  message?: string;
+  phase?: string;
+  pct?: number;
+  currentFile?: string;
+  snapshot?: { recentLogs?: string[]; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+export interface DogfoodRemoteRuntimeTarget {
+  id: string;
+  label: string;
+  enabled: boolean;
+  reason?: string;
+  platform?: string;
+  surface?: string;
+  displaySurface?: string;
+}
+
+export interface DogfoodRemoteRuntimeCapabilities {
+  remoteRuntimeEligible?: boolean;
+  targets: DogfoodRemoteRuntimeTarget[];
+}
+
+export interface DogfoodRemoteRuntimeSession {
+  id: string;
+  status: string;
+  targetId?: string;
+  targetLabel?: string;
+  transportMode?: string;
+  note?: string;
+  [key: string]: unknown;
 }
 
 /**
@@ -738,6 +799,205 @@ export class P2PClient {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Start the ordinary Projects runtime for an embedded Dogfood host.
+   * Requires a full signed-in-user token because /dev/start can spawn tools;
+   * a narrow feedback SDK token intentionally cannot use it.
+   */
+  async startDogfoodDevServer(input: {
+    framework: string;
+    workDir: string;
+    lane: 'browser' | 'hermes';
+  }): Promise<DogfoodDevServerStatus> {
+    if (input.lane === 'hermes') {
+      const ack = await this.reloadApp('bundle', { projectPath: input.workDir });
+      return { running: ack.ok, framework: input.framework, workDir: input.workDir };
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 45_000);
+    unrefTimer(timer);
+    try {
+      const response = await fetch(`${this.baseUrl}/dev/start`, {
+        method: 'POST',
+        headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          framework: input.framework,
+          workDir: input.workDir,
+          platform: 'web',
+          caller: 'sdk',
+        }),
+        signal: ctrl.signal,
+      });
+      const data = (await response.json().catch(() => ({}))) as DogfoodDevServerStatus & {
+        code?: string; remedy?: string; retryable?: boolean;
+      };
+      if (!response.ok) {
+        const error = new Error(data.error || `Dogfood preview start failed with HTTP ${response.status}`) as Error & {
+          code?: string; remedy?: string; retryable?: boolean; capabilityGap?: unknown;
+        };
+        error.code = data.code || `DOGFOOD_DEV_START_HTTP_${response.status}`;
+        error.remedy = data.remedy || 'Fix the named dev-server failure, then retry Dogfood.';
+        error.retryable = data.retryable !== false;
+        error.capabilityGap = data.capabilityGap;
+        throw error;
+      }
+      return data;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Full status for Dogfood startup; unlike the compact feedback snapshot,
+   * this retains render URLs and structured startup failures. */
+  async getDogfoodDevServerStatus(): Promise<DogfoodDevServerStatus | null> {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    unrefTimer(timer);
+    try {
+      const response = await fetch(`${this.baseUrl}${AGENT_ENDPOINTS.devStatus}`, {
+        headers: this.authHeaders(),
+        signal: ctrl.signal,
+      });
+      if (!response.ok) return null;
+      return await response.json().catch(() => null) as DogfoodDevServerStatus | null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async getDogfoodRemoteRuntimeCapabilities(
+    workDir: string,
+    framework: string,
+  ): Promise<DogfoodRemoteRuntimeCapabilities> {
+    const query = `?workDir=${encodeURIComponent(workDir)}&framework=${encodeURIComponent(framework)}`;
+    const response = await dogfoodFetch(`${this.baseUrl}/remote-runtime/capabilities${query}`, {
+      headers: this.authHeaders(),
+    }, 20_000);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.error || `Remote-runtime capabilities failed with HTTP ${response.status}`);
+    return { ...data, targets: Array.isArray(data?.targets) ? data.targets : [] };
+  }
+
+  async startDogfoodRemoteRuntime(
+    workDir: string,
+    framework: string,
+    targetId: string,
+  ): Promise<DogfoodRemoteRuntimeSession> {
+    const response = await dogfoodFetch(`${this.baseUrl}/remote-runtime/sessions`, {
+      method: 'POST',
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ workDir, framework, targetId, surface: 'sdk' }),
+    }, 45_000);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.error || `Remote-runtime start failed with HTTP ${response.status}`);
+    return data as DogfoodRemoteRuntimeSession;
+  }
+
+  async stopDogfoodRemoteRuntime(sessionId: string): Promise<void> {
+    const response = await dogfoodFetch(`${this.baseUrl}/remote-runtime/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE', headers: this.authHeaders(),
+    }, 15_000);
+    if (!response.ok) throw new Error(`Remote-runtime stop failed with HTTP ${response.status}`);
+  }
+
+  /** Stop the runtime this SDK host started. Full user auth, same as start. */
+  async stopDogfoodDevServer(): Promise<void> {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    unrefTimer(timer);
+    try {
+      const response = await fetch(`${this.baseUrl}/dev/stop`, {
+        method: 'POST', headers: this.authHeaders(), signal: ctrl.signal,
+      });
+      if (!response.ok) throw new Error(`Dogfood preview stop failed with HTTP ${response.status}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Resolve an agent-reported /dev/ or /dev-web/ route without putting auth in the URL. */
+  resolveDogfoodUrl(path: string): string {
+    return new URL(path, `${this.baseUrl.replace(/\/+$/, '')}/`).toString();
+  }
+
+  /**
+   * React-Native-safe /dev/events stream. XHR is intentional: Hermes fetch
+   * exposes no streaming response body. Reconnects are bounded and every
+   * reconnect/loss is surfaced to the host console.
+   */
+  subscribeDogfoodDevEvents(
+    onEvent: (event: DogfoodDevEvent) => void,
+    onHealth?: (health: { kind: 'reattaching' | 'lost'; message: string } | null) => void,
+  ): () => void {
+    let disposed = false;
+    let xhr: XMLHttpRequest | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
+    const open = () => {
+      if (disposed) return;
+      const request = new XMLHttpRequest();
+      xhr = request;
+      let parsed = 0;
+      let carry = '';
+      const consume = () => {
+        const text = request.responseText || '';
+        if (text.length <= parsed) return;
+        carry += text.slice(parsed);
+        parsed = text.length;
+        const normalized = carry.replace(/\r\n/g, '\n');
+        const frames = normalized.split('\n\n');
+        carry = frames.pop() || '';
+        for (const frame of frames) {
+          const data = frame.split('\n')
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).replace(/^ /, ''))
+            .join('\n');
+          if (!data) continue;
+          try {
+            attempt = 0;
+            onHealth?.(null);
+            onEvent(JSON.parse(data));
+          } catch { /* comments and non-JSON keepalives are valid SSE */ }
+        }
+      };
+      const reconnect = (reason: string) => {
+        if (disposed) return;
+        if (attempt >= 5) {
+          onHealth?.({ kind: 'lost', message: `Dev-server logs stopped: ${reason}` });
+          return;
+        }
+        const wait = Math.min(8_000, 500 * (2 ** attempt));
+        attempt += 1;
+        onHealth?.({ kind: 'reattaching', message: `Dev-server logs interrupted; reconnecting (${attempt}/5): ${reason}` });
+        retryTimer = setTimeout(open, wait);
+        unrefTimer(retryTimer);
+      };
+      request.open('GET', `${this.baseUrl}/dev/events`, true);
+      for (const [key, value] of Object.entries(this.authHeaders({ Accept: 'text/event-stream' }))) {
+        try { request.setRequestHeader(key, value); } catch { /* restricted RN header */ }
+      }
+      request.onprogress = consume;
+      request.onload = () => { consume(); reconnect(`HTTP ${request.status || 0}`); };
+      request.onerror = () => reconnect('connection failed');
+      request.onabort = () => reconnect('connection aborted');
+      request.ontimeout = () => reconnect('connection timed out');
+      try {
+        request.send();
+      } catch (error) {
+        reconnect(error instanceof Error ? error.message : 'connection could not start');
+      }
+    };
+    open();
+    return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      try { xhr?.abort(); } catch { /* idempotent */ }
+    };
   }
 
   /**

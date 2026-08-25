@@ -397,11 +397,9 @@ export function StudioChatPane({
           </View>
         ) : null}
 
-        {conversationRows.length === 0 && !rawText.trim() ? (
+        {conversationRows.length === 0 && !rawText.trim() && !connected ? (
           <Text style={[styles.emptyHint, { color: c.textTertiary }]}>
-            {connected
-              ? `Type a vibe prompt — ${[runner, model].filter(Boolean).join(" · ") || "the box's runner"} will edit the project and the live console will show it working.`
-              : "Connect a box to start vibing."}
+            Connect a box to start vibing.
           </Text>
         ) : null}
         {conversationRows.map((row, i) => {

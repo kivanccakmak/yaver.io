@@ -11,7 +11,6 @@ func TestMcpToolIsOwnerOnly(t *testing.T) {
 		"deploy_all", "deploy_run", "deploy_rollback", "cf_deploy",
 		"mobile_platform_deploy", "fly_deploy", "railway_deploy",
 		"pscale_deploy",
-		"dogfood_status", "dogfood_rerender",
 	}
 	for _, n := range ownerOnly {
 		if !mcpToolIsOwnerOnly(n) {
@@ -24,6 +23,7 @@ func TestMcpToolIsOwnerOnly(t *testing.T) {
 		"vault_env", "ev_charging", "ev_networks",
 		"hue_lights", "govee_control", "shelly_status", "sonos_discover",
 		"ha_states", "mqtt_publish", "yaver_lazy_setup", "browser_open",
+		"dogfood_status", "dogfood_rerender",
 	}
 	for _, n := range public {
 		if mcpToolIsOwnerOnly(n) {
@@ -57,12 +57,12 @@ func TestFilterOwnerOnlyTools(t *testing.T) {
 	for _, tl := range got {
 		names[tl["name"].(string)] = true
 	}
-	for _, hidden := range []string{"robot_status", "arm_movej", "circuit_plot", "deploy_all", "mobile_platform_deploy", "dogfood_status"} {
+	for _, hidden := range []string{"robot_status", "arm_movej", "circuit_plot", "deploy_all", "mobile_platform_deploy"} {
 		if names[hidden] {
 			t.Errorf("non-owner should NOT see %q", hidden)
 		}
 	}
-	for _, shown := range []string{"create_task", "hue_lights", "ev_charging", "mobile_deploy_to_phone"} {
+	for _, shown := range []string{"create_task", "hue_lights", "ev_charging", "mobile_deploy_to_phone", "dogfood_status"} {
 		if !names[shown] {
 			t.Errorf("non-owner SHOULD see %q", shown)
 		}

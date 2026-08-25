@@ -24,15 +24,15 @@
 // ── The gate ────────────────────────────────────────────────────────────────
 //
 // Turning the mode on with nothing connected used to mean landing in a broken
-// state with no route out. So enabling runs an ordered gate — box, then runner,
-// then checkout — and every step reports what is wrong AND the action that
+// state with no route out. So enabling runs an ordered gate — box, then source,
+// then runner — and every step reports what is wrong AND the action that
 // fixes it. Readiness comes from computeBoxReadiness() (boxInit.ts) rather than
 // a second opinion, so the two cannot drift.
 
 import type { BoxReadiness } from "./boxInit";
 
-/** Ordered steps. The order is the dependency order: a runner on an offline
- *  box is meaningless, and a checkout on a box with no runner cannot be vibed. */
+/** Display steps stay Box / Runner / Checkout for the compact ready summary.
+ *  computeAttachGate uses the operational order Box / Checkout / Runner. */
 export type AttachStepKey = "box" | "runner" | "checkout";
 
 export type AttachStepStatus = "ok" | "blocked" | "pending";
@@ -99,15 +99,13 @@ function boxStep(input: AttachGateInput): AttachStep {
       action: "none",
     };
   }
-  if (input.readiness.overall === "not-ready") {
-    // Reuse boxInit's own summary rather than inventing a second wording for
-    // the same state — that is how two surfaces start disagreeing.
-    const first = input.readiness.pending[0];
+  const agent = input.readiness.checks.find((check) => check.key === "agent");
+  if (agent && agent.status !== "ok") {
     return {
       key: "box",
       label: "Box",
       status: "blocked",
-      detail: first ? `${name}: ${first.label} — ${first.detail}` : `${name} is not ready`,
+      detail: `${name}: ${agent.label} — ${agent.detail}`,
       action: "fix_box_readiness",
     };
   }
@@ -121,6 +119,15 @@ function runnerStep(input: AttachGateInput): AttachStep {
       label: "Runner",
       status: "pending",
       detail: "pick a box first",
+      action: "none",
+    };
+  }
+  if (!input.checkoutDir || input.checkoutVerified !== true) {
+    return {
+      key: "runner",
+      label: "Runner",
+      status: "pending",
+      detail: "prepare the Yaver checkout first",
       action: "none",
     };
   }
@@ -224,7 +231,7 @@ function checkoutStep(input: AttachGateInput): AttachStep {
 
 export function computeAttachGate(input: AttachGateInput): AttachGate {
   const steps = [boxStep(input), runnerStep(input), checkoutStep(input)];
-  const nextStep = steps.find((s) => s.status !== "ok") ?? null;
+  const nextStep = [steps[0], steps[2], steps[1]].find((s) => s.status !== "ok") ?? null;
   return { canAttach: nextStep === null, steps, nextStep };
 }
 

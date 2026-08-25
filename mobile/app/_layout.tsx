@@ -21,12 +21,12 @@ import "../src/lib/polyfills";
 import { installRuntimeDebugHandlers } from "../src/lib/runtimeDebug";
 installRuntimeDebugHandlers();
 
-import { Stack, useRouter } from "expo-router";
+import { router as navigationRouter, Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SplashScreen from "expo-splash-screen";
 import * as ScreenOrientation from "expo-screen-orientation";
 import React, { useEffect, useState } from "react";
-import { AppState, Dimensions, NativeModules, Platform, ScrollView, Text, View } from "react-native";
+import { AppState, Dimensions, NativeModules, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { breakpoints } from "../src/theme/tokens";
 import { AuthProvider } from "../src/context/AuthContext";
 import { DeviceProvider } from "../src/context/DeviceContext";
@@ -51,29 +51,47 @@ import { markCachedRemotelessTasksForReview } from "../src/lib/storage";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
-  { error: Error | null }
+  { error: Error | null; detailsOpen: boolean }
 > {
-  state = { error: null as Error | null };
+  state = { error: null as Error | null, detailsOpen: false };
 
   static getDerivedStateFromError(error: Error) {
-    return { error };
+    return { error, detailsOpen: false };
   }
+
+  private recover = (destination: "back" | "more") => {
+    try {
+      if (destination === "back" && navigationRouter.canGoBack()) navigationRouter.back();
+      else navigationRouter.replace("/(tabs)/more" as any);
+    } finally {
+      this.setState({ error: null, detailsOpen: false });
+    }
+  };
 
   render() {
     if (this.state.error) {
       return (
         <View style={{ flex: 1, backgroundColor: "#0a0a0a", justifyContent: "center", padding: 24 }}>
           <Text style={{ color: "#ef4444", fontSize: 18, fontWeight: "700", marginBottom: 12 }}>
-            App Error
+            This screen hit an error
           </Text>
-          <ScrollView style={{ maxHeight: 400 }}>
-            <Text style={{ color: "#ffffff", fontSize: 13, fontFamily: "monospace" }}>
-              {this.state.error.message}
-            </Text>
-            <Text style={{ color: "#888888", fontSize: 11, fontFamily: "monospace", marginTop: 8 }}>
-              {this.state.error.stack}
-            </Text>
-          </ScrollView>
+          <Text style={{ color: "#d4d4d8", fontSize: 13, lineHeight: 18 }}>{this.state.error.message}</Text>
+          <View style={{ flexDirection: "row", gap: 10, marginTop: 18 }}>
+            <Pressable onPress={() => this.recover("back")} style={{ flex: 1, minHeight: 44, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#27272a" }}>
+              <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>Back</Text>
+            </Pressable>
+            <Pressable onPress={() => this.recover("more")} style={{ flex: 1, minHeight: 44, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#6f58f5" }}>
+              <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>Return to More</Text>
+            </Pressable>
+          </View>
+          <Pressable onPress={() => this.setState((state) => ({ ...state, detailsOpen: !state.detailsOpen }))} style={{ marginTop: 14, paddingVertical: 8 }}>
+            <Text style={{ color: "#a1a1aa", fontSize: 12 }}>{this.state.detailsOpen ? "Hide details" : "Show details"}</Text>
+          </Pressable>
+          {this.state.detailsOpen ? (
+            <ScrollView style={{ maxHeight: 240 }}>
+              <Text style={{ color: "#888888", fontSize: 11, fontFamily: "monospace" }}>{this.state.error.stack}</Text>
+            </ScrollView>
+          ) : null}
         </View>
       );
     }

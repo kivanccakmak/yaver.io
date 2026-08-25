@@ -41,7 +41,7 @@ func TestDogfoodSourceStatusRejectsYaverLookingCheckoutWithWrongOrigin(t *testin
 	_, local, _ := setupSyncRepos(t)
 	syncWrite(t, filepath.Join(local, "package.json"), `{"name":"yaver-mobile"}`)
 	status := dogfoodSourceStatus(local)
-	if status.Ready || status.Code != "DOGFOOD_GIT_ORIGIN_WRONG" {
+	if status.Ready || status.Code != "DOGFOOD_GIT_UPSTREAM_MISSING" {
 		t.Fatalf("wrong origin was reported ready: %+v", status)
 	}
 }
@@ -51,6 +51,18 @@ func TestDogfoodSourceStatusProvesSourceAndCanonicalOrigin(t *testing.T) {
 	status := dogfoodSourceStatus(local)
 	if !status.OK || !status.Ready || status.Code != "DOGFOOD_SOURCE_READY" || status.Path != local {
 		t.Fatalf("canonical source did not become ready: %+v", status)
+	}
+}
+
+func TestDogfoodSourceStatusAcceptsContributorForkWithCanonicalUpstream(t *testing.T) {
+	_, local, origin := setupDogfoodRepos(t)
+	syncGitCmd(t, local, "remote", "set-url", "origin", "https://github.com/contributor/yaver.io.git")
+	syncGitCmd(t, local, "remote", "add", "upstream", dogfoodSourceURL)
+	syncGitCmd(t, local, "config", "url."+origin+".insteadOf", dogfoodSourceURL)
+
+	status := dogfoodSourceStatus(local)
+	if !status.Ready || status.BaseRemote != "upstream" || status.BaseRef != "upstream/main" {
+		t.Fatalf("fork + canonical upstream was not accepted: %+v", status)
 	}
 }
 
@@ -86,6 +98,22 @@ func TestPrepareDogfoodCheckoutRebasesOntoOriginMainWithoutPush(t *testing.T) {
 	}
 	if behind := syncGitCmd(t, local, "rev-list", "--count", "HEAD..origin/main"); behind != "0" {
 		t.Fatalf("prepared checkout is still behind origin/main: %s", behind)
+	}
+}
+
+func TestPrepareCommunityDogfoodMovesMainToContributionBranch(t *testing.T) {
+	_, local, origin := setupDogfoodRepos(t)
+	remoteBefore := syncGitCmd(t, "", "--git-dir", origin, "rev-parse", "refs/heads/main")
+
+	status, resp := prepareDogfoodCheckoutWithPolicy(local, false)
+	if status != http.StatusOK || !resp.OK || !resp.ContributionBranch || resp.PushPolicy != "canonical-main-protected" {
+		t.Fatalf("community preparation did not enforce contribution policy: status=%d resp=%+v", status, resp)
+	}
+	if resp.Branch == "main" || !strings.HasPrefix(resp.Branch, "dogfood/community-") {
+		t.Fatalf("community session remained on main: %+v", resp)
+	}
+	if got := syncGitCmd(t, "", "--git-dir", origin, "rev-parse", "refs/heads/main"); got != remoteBefore {
+		t.Fatalf("community preparation changed canonical main: got %s want %s", got, remoteBefore)
 	}
 }
 
@@ -203,11 +231,7 @@ func TestDogfoodMCPInstructionsNameStatusBeforeRerender(t *testing.T) {
 	}
 }
 
-func TestDogfoodRuntimeHTTPRefusesNonOwner(t *testing.T) {
-	previous := attachOwnerAllowed
-	attachOwnerAllowed = func() bool { return false }
-	t.Cleanup(func() { attachOwnerAllowed = previous })
-
+func TestDogfoodRuntimeHTTPHasNoProductOwnerGate(t *testing.T) {
 	s := &HTTPServer{}
 	for _, tc := range []struct {
 		method string
@@ -222,8 +246,8 @@ func TestDogfoodRuntimeHTTPRefusesNonOwner(t *testing.T) {
 		r := httptest.NewRequest(tc.method, tc.path, nil)
 		w := httptest.NewRecorder()
 		tc.call(w, r)
-		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "DOGFOOD_OWNER_ONLY") {
-			t.Fatalf("%s: got %d %s, want owner-only 403", tc.path, w.Code, w.Body.String())
+		if w.Code == http.StatusForbidden || strings.Contains(w.Body.String(), "DOGFOOD_OWNER_ONLY") {
+			t.Fatalf("%s: contributor Dogfood was owner-gated: %d %s", tc.path, w.Code, w.Body.String())
 		}
 	}
 }

@@ -51,9 +51,11 @@ func TestAttachRefusesAnyProjectThatIsNotYaver(t *testing.T) {
 	}
 
 	// And the legitimate case still works, or the guard is useless.
-	if _, err := StartAttachSession(yaverCheckoutDir(t), "user-1", now); err != nil {
+	sess, err := StartAttachSession(yaverCheckoutDir(t), "user-1", now)
+	if err != nil {
 		t.Fatalf("refused the Yaver checkout: %v", err)
 	}
+	defer RevokeAttachSession(sess.ID)
 }
 
 func TestAttachCapabilityRoundTrips(t *testing.T) {

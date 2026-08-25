@@ -205,8 +205,9 @@ function modePreamble(mode: DogfoodMode, repoDir: string): string {
     return (
       common +
       ` Work in ${repoDir || "the yaver.io checkout"}. When done, commit to a new ` +
-      "branch and open a GitHub pull request via `gh pr create`, then report the PR URL. " +
-      "Do NOT push to main."
+      "contribution branch and push only to the contributor's fork before opening a GitHub " +
+      "pull request via `gh pr create`. The canonical yaver-io/yaver.io main branch is read-only " +
+      "for community Dogfood sessions. Never push to it and never bypass the product's push guard."
     );
   }
   return (
