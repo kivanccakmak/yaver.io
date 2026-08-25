@@ -37,7 +37,6 @@ import { browserLaneProbeLine, doctorBrowserLane, probeBrowserResource, reconcil
 import { previewPhaseTitle, previewTimeoutExplanation } from "../lib/previewPhase";
 import { previewWaitLine } from "../lib/previewWait";
 import { handlePreviewScreenMessage } from "../lib/screenContextBridge";
-import { handlePreviewDomMessage, subscribeDomInspectMode } from "../lib/domInspectBridge";
 import {
   capabilityGapFromDevEvent,
   capabilityGapFromStatus,
@@ -59,8 +58,7 @@ import { reconcilePreviewDevStatus } from "../lib/previewDevStatus";
 import { setActivePreviewLane, subscribeBrowserRender, subscribeBrowserShake } from "../lib/feedbackTrigger";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
 import { monoFamily } from "../theme/tokens";
-import { DomInspectChip } from "./DomInspectChip";
-import { ScreenContextChip } from "./ScreenContextChip";
+import { BrowserVibeBubble } from "./BrowserVibeBubble";
 import { DevServerStopDialog, type DevServerStopPhase } from "./DevServerStopDialog";
 
 /**
@@ -188,7 +186,6 @@ export function DevPreview({
     : quicClient;
   const [status, setStatus] = useState<DevServerStatus | null>(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [showPreviewTools, setShowPreviewTools] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [stopPhase, setStopPhase] = useState<DevServerStopPhase>("confirm");
   const [loading, setLoading] = useState(false);
@@ -290,23 +287,6 @@ export function DevPreview({
     const id = setInterval(() => setPreviewNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [previewStartedAt, showPreview, webContentLoaded]);
-
-  // DOM mode: when the user flips Inspect on (in the Tasks-tab chip), inject
-  // the enable command into THIS WebView — the probe is loaded from the
-  // agent-proxied bundle, so it is present and listening on this window. The
-  // probe auto-offs after a selection, which is the right one-tap mobile UX.
-  useEffect(() => {
-    return subscribeDomInspectMode((on) => {
-      if (!on) return;
-      try {
-        webViewRef.current?.injectJavaScript(
-          'window.postMessage({source:"yaver-dom",t:"yaver-dom-mode",enabled:true},"*");true;',
-        );
-      } catch {
-        /* webview not mounted — the toggle just stays local until it is */
-      }
-    });
-  }, []);
 
   useEffect(() => {
     if (!showPreview || logLines.length === 0) return;
@@ -1104,7 +1084,11 @@ export function DevPreview({
       {(() => {
         const previewBody = (
         <View style={[styles.container, { backgroundColor: c.bg }, hostedInModal && styles.inlineOverlay]}>
-          {/* Header */}
+          {/* Native/Hermes keeps its runtime controls. A browser preview is the
+              guest surface itself: no Yaver nav bar, reload row, DOM inspector,
+              or debug inventory over its pixels. Its sole host affordance is
+              the floating Vibing bubble rendered below. */}
+          {mustUseNativePreview ? (
           <View style={[styles.header, { backgroundColor: "#111", borderBottomColor: "#333", paddingTop: paneMode ? 8 : 54 }]}>
             {paneMode ? (
               <View style={{ width: 44 }} />
@@ -1122,16 +1106,6 @@ export function DevPreview({
               </View>
             </View>
             <View style={styles.headerRight}>
-              <Pressable
-                onPress={() => setShowPreviewTools((visible) => !visible)}
-                style={styles.headerBtn}
-                accessibilityRole="button"
-                accessibilityLabel={showPreviewTools ? "Hide preview tools" : "More preview tools"}
-                accessibilityState={{ expanded: showPreviewTools }}
-                testID="preview-tools-more"
-              >
-                <Ionicons name="ellipsis-horizontal" size={20} color="#cbd5e1" />
-              </Pressable>
               <Pressable onPress={() => void handleReload("fast")} style={styles.headerBtn} accessibilityLabel="Fast Reload">
                 <Text style={styles.headerBtnReload}>Fast</Text>
               </Pressable>
@@ -1162,11 +1136,6 @@ export function DevPreview({
               </Pressable>
             </View>
           </View>
-          {showPreviewTools ? (
-            <View style={{ paddingHorizontal: 10, paddingTop: 8, gap: 8, backgroundColor: "#111" }}>
-              <ScreenContextChip workDir={status.workDir} />
-              <DomInspectChip workDir={status.workDir} />
-            </View>
           ) : null}
 
           {mustUseNativePreview ? (
@@ -1346,10 +1315,6 @@ export function DevPreview({
                     // probe and got none of the feature. Forwarded over the
                     // authed quicClient, never straight from the page.
                     if (handlePreviewScreenMessage(m, status?.workDir)) return;
-                    // DOM mode SECOND: the clicked element (and the
-                    // interactive-items inventory) from the dom probe, over the
-                    // same authed channel.
-                    if (handlePreviewDomMessage(m, status?.workDir)) return;
                     if (m && m.t === "yaver-preview-resource-error") {
                       const tag = String(m.tag || "resource").toUpperCase();
                       const url = String(m.url || "");
@@ -1675,6 +1640,12 @@ export function DevPreview({
               )}
             </>
           )}
+          {!mustUseNativePreview ? (
+            <BrowserVibeBubble
+              projectPath={status.workDir}
+              projectName={status.workDir?.split("/").pop() || status.framework}
+            />
+          ) : null}
         </View>
         );
         if (paneMode) {

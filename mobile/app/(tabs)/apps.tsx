@@ -33,7 +33,7 @@ import NoMachineEmpty from "../../src/components/NoMachineEmpty";
 import { isEffectivelyConnected as computeEffectiveConnected } from "../../src/lib/connectionState";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { describeDevReloadResult, devReloadReachedTarget, quicClient, type CapabilitySnapshot, type DevCompatibilityStatus, type DevServerStatus, type MobileWorkerPreviewSession } from "../../src/lib/quic";
-import { clientRuntimeLogsNeedProjectFix, previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix, previewLogsLookHealthy, previewPaintGateMode } from "../../src/lib/previewHealth";
+import { previewAgentHealthIsAuthoritative, previewHealthCanOfferProjectFix, previewLogsLookHealthy, previewPaintGateMode } from "../../src/lib/previewHealth";
 import { getAvailableModules, isBundleLoaderAvailable, loadApp } from "../../src/lib/bundleLoader";
 import { openAppBus } from "../../src/lib/openAppBus";
 import { setActivePreviewLane, subscribeBrowserShake } from "../../src/lib/feedbackTrigger";
@@ -50,7 +50,7 @@ import { previewBundlePath } from "../../src/lib/previewBundlePath";
 import { browserLaneProbeLine, doctorBrowserLane, probeBrowserResource, reconcileBrowserLaneProbe, shouldRetryBrowserResourceFailure, shouldRunBrowserLaneDoctor, type BrowserLaneProbeResult } from "../../src/lib/browserLaneDoctor";
 import { previewPhaseTitle, previewTimeoutExplanation } from "../../src/lib/previewPhase";
 import { handlePreviewScreenMessage } from "../../src/lib/screenContextBridge";
-import { handlePreviewDomMessage, subscribeDomInspectMode } from "../../src/lib/domInspectBridge";
+import { BrowserVibeBubble } from "../../src/components/BrowserVibeBubble";
 import {
   capabilityGapFromDevEvent,
   capabilityGapFromError,
@@ -780,12 +780,6 @@ export default function AppsScreen() {
   const [loadingActions, setLoadingActions] = useState(false);
 
   // Vibing
-  /// True when Vibing was opened from a RUNNING preview, so it renders as an
-  /// overlay on top of that preview instead of as its own full-screen page.
-  /// The distinction is the whole fix: from the project list there is nothing
-  /// to preserve, from a preview there is, and destroying it was the bug.
-  const [vibingOverPreview, setVibingOverPreview] = useState(false);
-
   const [vibingState, setVibingState] = useState<{
     project: string; path: string;
     suggestions: { id: string; icon: string; label: string; desc: string; category: string; prompt: string; reasoning?: string }[];
@@ -801,22 +795,6 @@ export default function AppsScreen() {
   const [projectsDiscovering, setProjectsDiscovering] = useState(false);
   const [mobileDiscovery, setMobileDiscovery] = useState<MobileDiscoveryState | null>(null);
   const webViewRef = useRef<WebView>(null);
-  // DOM mode: when the user flips Inspect on (in the Tasks-tab chip), inject
-  // the enable command into THIS WebView — the probe is loaded from the
-  // agent-proxied bundle, so it is present and listening on this window. The
-  // probe auto-offs after a selection, which is the right one-tap mobile UX.
-  useEffect(() => {
-    return subscribeDomInspectMode((on) => {
-      if (!on) return;
-      try {
-        webViewRef.current?.injectJavaScript(
-          'window.postMessage({source:"yaver-dom",t:"yaver-dom-mode",enabled:true},"*");true;',
-        );
-      } catch {
-        /* webview not mounted — the toggle just stays local until it is */
-      }
-    });
-  }, []);
   // Browser-preview cold-start retry budget (see the WebView onError/onHttpError
   // below). A web dev server can take up to a minute to compile on first open.
   const webPreviewRetryRef = useRef(0);
@@ -828,28 +806,14 @@ export default function AppsScreen() {
   // page that renders black while CanvasKit boots never shows as a blank void.
   const [webPreviewContentLoaded, setWebPreviewContentLoaded] = useState(false);
   const [webPreviewFailed, setWebPreviewFailed] = useState(false);
-  // Full-screen preview: hide the app bar so the previewed app gets the whole
-  // display. Requested directly — a phone-sized app rendered under a header is
-  // not what the app actually looks like, which is the point of the preview.
-  // Tap anywhere on the app to bring the bar back, so there is always a way out
-  // (a preview you cannot leave would be worse than a header you cannot hide).
-  const [previewFullScreen, setPreviewFullScreen] = useState(false);
   const [webPreviewLogs, setWebPreviewLogs] = useState<string[]>([]);
-  const [webRuntimeLogOpen, setWebRuntimeLogOpen] = useState(false);
-  const [webRuntimeIssueCount, setWebRuntimeIssueCount] = useState(0);
   const [webPreviewProbe, setWebPreviewProbe] = useState<PreviewProbeState | null>(null);
   const webPreviewProbeRef = useRef<PreviewProbeState | null>(null);
   const [browserLaneProbe, setBrowserLaneProbe] = useState<BrowserLaneProbeResult | null>(null);
   const browserLaneDoctorRunningRef = useRef(false);
   const browserLaneDoctorRanForKeyRef = useRef("");
   const browserResourceProbeRanRef = useRef("");
-  const webPreviewLogScrollRef = useRef<ScrollView>(null);
   useEffect(() => () => { if (webPreviewRetryTimer.current) clearTimeout(webPreviewRetryTimer.current); }, []);
-  useEffect(() => {
-    if (!showWebView || webPreviewLogs.length === 0) return;
-    const id = setTimeout(() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true }), 30);
-    return () => clearTimeout(id);
-  }, [showWebView, webPreviewLogs.length]);
   // Elapsed + last-output heartbeat.
   //
   // A spinner that never changes reads as HUNG, and a first web compile can
@@ -877,14 +841,11 @@ export default function AppsScreen() {
   const gapRetryRef = useRef<(() => Promise<void>) | null>(null);
   const resetWebPreview = useCallback(() => {
     setPreviewGap(null);
-    setPreviewFullScreen(false);
     webPreviewRetryRef.current = 0;
     webPreviewErroredRef.current = false;
     setWebPreviewContentLoaded(false);
     setWebPreviewFailed(false);
     setWebPreviewLogs([]);
-    setWebRuntimeLogOpen(false);
-    setWebRuntimeIssueCount(0);
     setWebPreviewProbe(null);
     webPreviewProbeRef.current = null;
     setBrowserLaneProbe(null);
@@ -2271,51 +2232,6 @@ export default function AppsScreen() {
     setShowStopConfirm(true);
   }, [stopPhase]);
 
-  const openVibingFromPreview = useCallback(async () => {
-    const project = (
-      projects.find((item) => item.path === devStatus?.workDir)?.name ||
-      devStatus?.workDir?.split("/").pop() ||
-      devStatus?.framework ||
-      "Preview"
-    ).split(" / ")[0];
-    const path = devStatus?.workDir || "";
-    setWebRuntimeLogOpen(false);
-    setPreviewFullScreen(false);
-
-    if (layout.isTablet) {
-      router.push({ pathname: "/vibe-studio", params: { project: path || project } });
-      return;
-    }
-
-    // DO NOT TEAR THE PREVIEW DOWN.
-    //
-    // This used to call setShowWebView(false) — for a real reason: the Vibing
-    // <Modal> is a sibling declared before the presentationStyle="fullScreen"
-    // WebView <Modal>, and iOS cannot present a second modal over an
-    // already-presented full-screen one, so setting vibingState while the
-    // preview was up flipped state and rendered nothing (the mic "did
-    // nothing"). Dismissing the preview made the mic work.
-    //
-    // But it made it work by DESTROYING what the user was looking at. You tap
-    // a microphone on your running app and your app disappears, replaced by a
-    // full-screen page of nine dev-action tiles. That is the surprise
-    // re-render CLAUDE.md forbids ("keep the last good iframe/native surface
-    // visible"), and it is a wall of inventory in answer to a one-word intent:
-    // a mic tap means "I want to say something", not "show me every action".
-    //
-    // The right shape is an OVERLAY INSIDE the preview modal — the same place
-    // the Logs sheet already lives, which is the proof it works. The
-    // app stays on screen behind it, so you can watch it change while you talk
-    // to it, which is the entire point of vibing on a preview.
-    setVibingOverPreview(true);
-    try {
-      const state = await previewClient.getVibingState(project);
-      setVibingState(state || { project, path, suggestions: [], quickActions: [], history: [] });
-    } catch {
-      setVibingState({ project, path, suggestions: [], quickActions: [], history: [] });
-    }
-  }, [devStatus?.framework, devStatus?.workDir, projects, layout.isTablet, previewClient, router]);
-
   // WHICH url the preview loads — previewBundlePath (shared with
   // DevPreview.tsx) applies the agent-is-authority rule, the single legacy
   // "/dev/"+webPort override, and the empty-url guard.
@@ -2345,7 +2261,6 @@ export default function AppsScreen() {
       setWebPreviewLogs((prev) => appendPreviewLogLine(prev, browserLaneProbeLine(verifiedProbe)));
       if (!verifiedProbe.ok) {
         setWebPreviewFailed(true);
-        setWebRuntimeIssueCount((count) => Math.max(count, 1));
       }
     }).catch((err) => {
       setWebPreviewLogs((prev) => appendPreviewLogLine(prev, `[doctor] browser lane probe failed: ${err instanceof Error ? err.message : String(err)}`));
@@ -2364,7 +2279,6 @@ export default function AppsScreen() {
     if (verifiedProbe === browserLaneProbe) return;
     setBrowserLaneProbe(verifiedProbe);
     setWebPreviewFailed(true);
-    setWebRuntimeIssueCount((count) => Math.max(count, 1));
     setWebPreviewLogs((prev) => appendPreviewLogLine(prev, browserLaneProbeLine(verifiedProbe)));
   }, [browserLaneProbe, webPreviewProbe]);
 
@@ -3183,11 +3097,11 @@ export default function AppsScreen() {
       </Modal>
 
       {/* Vibing modal — AI pair programming widget */}
-      <Modal visible={!!vibingState && !vibingOverPreview} animationType="slide">
+      <Modal visible={!!vibingState} animationType="slide">
         <View style={[s.safe, { backgroundColor: c.bg }]}>
           <AppScreenHeader
             title="Vibing"
-            onBack={() => { setVibingState(null); setVibingOverPreview(false); setCustomTask(""); setVibingTaskStatus(""); setVibingTaskId(null); }}
+            onBack={() => { setVibingState(null); setCustomTask(""); setVibingTaskStatus(""); setVibingTaskId(null); }}
             style={{ paddingTop: insets.top + 8 }}
           />
           {vibingState?.project ? (
@@ -3445,147 +3359,13 @@ export default function AppsScreen() {
       {/* Full-screen WebView */}
       <Modal visible={showWebView} animationType="slide" presentationStyle="fullScreen">
         <View style={[s.safe, { backgroundColor: c.bg }]}>
-          {previewFullScreen ? null : (
-          <AppScreenHeader
-            title={(runningProject || "Preview").split(" / ")[0]}
-            onBack={() => setShowWebView(false)}
-            style={{ paddingTop: insets.top + 8, zIndex: 100, elevation: 100 }}
-            right={
-              /* Icons, not three words.
-                 "Full · Reload · Stop" as text next to a project title like
-                 "e-mobile (Elevathor)" left the bar visibly crammed on a 390pt
-                 phone — the labels collided with the title and with each other
-                 (reported 2026-07-25). Icons cut the right slot from ~150pt to
-                 ~96pt, give each control a real 44pt touch target, and let the
-                 title keep the space it needs. Accessibility labels carry the
-                 words for screen readers. */
-	              <View style={s.webViewHeaderActions}>
-                <Pressable
-                  onPress={() => void openVibingFromPreview()}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Vibe with this project"
-                  style={s.webViewHeaderBtn}
-                >
-                  <Ionicons name="mic-outline" size={20} color={c.accent} />
-                </Pressable>
-		                <Pressable
-		                  onPress={() => {
-	                    setWebRuntimeLogOpen(false);
-	                    setPreviewFullScreen(true);
-	                  }}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Full screen"
-                  style={s.webViewHeaderBtn}
-                >
-                  <Ionicons name="expand-outline" size={20} color={c.accent} />
-                </Pressable>
-                {/* Two reload icons — Fast (refresh) and Full (sync).
-                    Icons keep the bar uncrammed per the 2026-07-25 report;
-                    the fast/full words live in the accessibility labels. */}
-                <Pressable
-                  onPress={() => void handleReload("fast")}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Fast reload preview"
-                  style={s.webViewHeaderBtn}
-                >
-                  <Ionicons name="refresh" size={21} color={c.accent} />
-                </Pressable>
-                <Pressable
-                  onPress={() => void handleReload("full")}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Full reload preview"
-                  style={s.webViewHeaderBtn}
-                >
-                  <Ionicons name="sync" size={21} color={c.accent} />
-                </Pressable>
-                <Pressable
-                  onPress={handleStop}
-                  disabled={stopPhase === "stopping"}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Stop dev server"
-                  style={s.webViewHeaderBtn}
-                >
-                  {stopPhase === "stopping"
-                    ? <ActivityIndicator size="small" color={c.error} />
-                    : <Ionicons name="stop-circle-outline" size={21} color={c.error} />}
-                </Pressable>
-              </View>
-            }
-          />
-          )}
+          {/* The browser guest owns every pixel. Host navigation, reload,
+              stop, DOM and diagnostics chrome stay off this surface; the one
+              host affordance is the Y Vibing bubble below. */}
           {webViewLoading && !webPreviewContentLoaded && (
             <View style={[s.loadingBar, { backgroundColor: c.accent }]} />
           )}
 
-          {previewFullScreen && (
-            <View style={[s.previewEscapeBar, { top: insets.top + 8 }]}>
-              <Pressable
-                onPress={() => setShowWebView(false)}
-                hitSlop={10}
-                accessibilityRole="button"
-                accessibilityLabel="Back to projects"
-                style={s.previewEscapeBtn}
-              >
-                <Ionicons name="chevron-back" size={22} color="#fff" />
-                <Text style={s.previewEscapeText}>Back</Text>
-              </Pressable>
-	              <View style={s.previewEscapeActions}>
-                <Pressable
-                  onPress={() => void openVibingFromPreview()}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Vibe with this project"
-                  style={s.previewEscapeIconBtn}
-                >
-                  <Ionicons name="mic-outline" size={20} color={c.accent} />
-                </Pressable>
-                <Pressable
-                  onPress={() => setPreviewFullScreen((v) => !v)}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel={previewFullScreen ? "Exit full screen" : "Full screen"}
-                  style={s.previewEscapeIconBtn}
-                >
-                  <Ionicons name={previewFullScreen ? "contract-outline" : "expand-outline"} size={20} color={c.accent} />
-                </Pressable>
-                <Pressable
-                  onPress={() => void handleReload("fast")}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Fast reload preview"
-                  style={s.previewEscapeIconBtn}
-                >
-                  <Ionicons name="refresh" size={20} color={c.accent} />
-                </Pressable>
-                <Pressable
-                  onPress={() => void handleReload("full")}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Full reload preview"
-                  style={s.previewEscapeIconBtn}
-                >
-                  <Ionicons name="sync" size={20} color={c.accent} />
-                </Pressable>
-                <Pressable
-                  onPress={handleStop}
-                  disabled={stopPhase === "stopping"}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Stop dev server"
-                  style={s.previewEscapeIconBtn}
-                >
-                  {stopPhase === "stopping"
-                    ? <ActivityIndicator size="small" color={c.error} />
-                    : <Ionicons name="stop-circle-outline" size={21} color={c.error} />}
-                </Pressable>
-              </View>
-            </View>
-          )}
           <View style={{ flex: 1 }}>
             {/* An empty bundleUrl means devStatus has not reported yet. Mounting
                 a WebView on uri:"" issues no request, so nothing can ever fail
@@ -3708,14 +3488,12 @@ export default function AppsScreen() {
                   // DOM mode SECOND: the clicked element (and the
                   // interactive-items inventory) from the dom probe, over the
                   // same authed channel.
-                  if (handlePreviewDomMessage(m, devStatus?.workDir)) return;
                   if (m && m.t === "yaver-preview-resource-error") {
                     const tag = String(m.tag || "resource").toUpperCase();
                     const url = String(m.url || "");
                     const resourcePath = String(m.path || "");
                     const line = `[web:error] resource failed ${tag}${url ? ` ${url}` : ""}`.slice(0, 1400);
                     setWebPreviewLogs((prev) => appendPreviewLogLine(prev, line));
-                    setWebRuntimeIssueCount((count) => Math.min(99, count + 1));
                     // Cold Expo/Metro can return index.html before the entry
                     // bundle is ready. The document stays 200, so WebView's
                     // main-frame callbacks never retry it after compilation.
@@ -3766,7 +3544,6 @@ export default function AppsScreen() {
                     setWebPreviewProbe((m.state || null) as PreviewProbeState | null);
                     setWebPreviewContentLoaded(true);
                     setWebPreviewFailed(false);
-                    setWebRuntimeLogOpen(false);
                     webPreviewRetryRef.current = 0;
                   } else if (m && m.t === "yaver-preview-log") {
                     const level = String(m.level || "log").toLowerCase();
@@ -3775,7 +3552,6 @@ export default function AppsScreen() {
                     const line = `[web:${level}] ${text}`.slice(0, 1400);
                     setWebPreviewLogs((prev) => appendPreviewLogLine(prev, line));
                     if (isPreviewRuntimeIssueLevel(level)) {
-                      setWebRuntimeIssueCount((count) => Math.min(99, count + 1));
                       if (shouldRunBrowserLaneDoctor({
                         showWebView,
                         bundleUrl,
@@ -3801,179 +3577,9 @@ export default function AppsScreen() {
               allowsInlineMediaPlayback
             />
             )}
-            {/* ── VIBING, AS AN OVERLAY ON THE LIVE PREVIEW ──────────────────
-                Opened by the mic in the preview toolbar. It deliberately does
-                NOT show the nine dev-action tiles the full Vibing page shows:
-                the user tapped a MICROPHONE, and the honest answer to "I want
-                to say something" is a place to say it, not an inventory of
-                everything else that is possible. Ship to TestFlight, Run
-                Tests, Update Deps and the rest all still live one screen back,
-                where the user came looking for them.
-
-                The app stays rendered behind this. That is the point — you
-                watch it change while you talk to it. */}
-            {showWebView && vibingOverPreview && vibingState ? (
-              <View style={s.vibeOverlayBackdrop}>
-                <Pressable
-                  style={StyleSheet.absoluteFill}
-                  accessibilityRole="button"
-                  accessibilityLabel="Dismiss"
-                  onPress={() => { setVibingOverPreview(false); setVibingState(null); setCustomTask(""); }}
-                />
-                <View style={[s.vibeOverlaySheet, { backgroundColor: c.bgCard, borderColor: c.border, paddingBottom: Math.max(16, insets.bottom + 12) }]}>
-                  <View style={s.previewRuntimeLogHeader}>
-                    <View style={s.previewRuntimeLogTitleRow}>
-                      <Ionicons name="mic-outline" size={18} color={c.accent} />
-                      <Text style={s.previewRuntimeLogTitle}>
-                        {vibingState.project ? `Vibe · ${vibingState.project}` : "Vibe"}
-                      </Text>
-                    </View>
-                    <Pressable
-                      onPress={() => { setVibingOverPreview(false); setVibingState(null); setCustomTask(""); }}
-                      hitSlop={10}
-                      accessibilityRole="button"
-                      accessibilityLabel="Close vibing"
-                      style={s.previewRuntimeLogClose}
-                    >
-                      <Ionicons name="close" size={18} color={c.textPrimary} />
-                    </Pressable>
-                  </View>
-
-                  {/* The turn narrates itself here, over the app it is changing,
-                      instead of on a page that replaced it. */}
-                  {vibingTaskStatus ? (
-                    <View style={[s.vibingStatus, { backgroundColor: c.accent + "11", borderColor: c.accent + "33", marginHorizontal: 12, marginTop: 10 }]}>
-                      <ActivityIndicator size="small" color={c.accent} style={{ marginTop: 2 }} />
-                      <Text style={{ color: c.textSecondary, fontSize: 13, flex: 1, lineHeight: 18 }} numberOfLines={3}>
-                        {vibingTaskStatus}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  <View style={s.vibeOverlayInputRow}>
-                    <TextInput
-                      style={[s.vibeOverlayInput, { color: c.textPrimary, backgroundColor: c.bgInput, borderColor: c.border }]}
-                      value={customTask}
-                      onChangeText={setCustomTask}
-                      placeholder="What should we change?"
-                      placeholderTextColor={c.textMuted}
-                      multiline
-                      autoFocus
-                    />
-                    <Pressable
-                      onPress={async () => {
-                        if (!customTask.trim() || !vibingState) return;
-                        const prompt = customTask;
-                        setCustomTask("");
-                        try {
-                          const result = await quicClient.executeVibingSuggestion(prompt, vibingState.path);
-                          setVibingTaskId((result as any)?.taskId || null);
-                          setVibingTaskStatus("Working…");
-                        } catch (e: any) {
-                          // Never a silent no-op: a send that did not send has
-                          // to say so on the surface that accepted it.
-                          setVibingTaskStatus(`Could not start: ${e?.message || "unknown error"}`);
-                        }
-                      }}
-                      disabled={!customTask.trim()}
-                      accessibilityRole="button"
-                      accessibilityLabel="Send"
-                      style={[s.vibeOverlayGo, { opacity: customTask.trim() ? 1 : 0.4 }]}
-                    >
-                      <Text style={s.vibeOverlayGoText}>Go</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              </View>
-            ) : null}
-            {showWebView && !previewFullScreen && webPreviewLogs.length > 0 ? (
-              <>
-                {!webRuntimeLogOpen ? (
-                  <Pressable
-                    onPress={() => setWebRuntimeLogOpen(true)}
-                    accessibilityRole="button"
-                    accessibilityLabel="Show preview logs"
-                    style={[
-                      s.previewRuntimeLogFab,
-                      {
-                        bottom: Math.max(18, insets.bottom + 14),
-                        backgroundColor: webRuntimeIssueCount > 0 ? "#321313" : "#10101a",
-                        borderColor: webRuntimeIssueCount > 0 ? "#ef444466" : "#818cf855",
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name={webRuntimeIssueCount > 0 ? "alert-circle-outline" : "terminal-outline"}
-                      size={18}
-                      color={webRuntimeIssueCount > 0 ? c.error : c.accent}
-                    />
-                    <Text style={[s.previewRuntimeLogFabText, { color: webRuntimeIssueCount > 0 ? c.error : c.accent }]}>
-                      {webRuntimeIssueCount > 0 ? `${webRuntimeIssueCount} issue${webRuntimeIssueCount === 1 ? "" : "s"}` : "Logs"}
-                    </Text>
-                  </Pressable>
-                ) : null}
-                {webRuntimeLogOpen ? (
-                  <View style={[s.previewRuntimeLogPanel, { bottom: Math.max(18, insets.bottom + 14) }]}>
-                    <View style={s.previewRuntimeLogHeader}>
-                      <View style={s.previewRuntimeLogTitleRow}>
-                        <Ionicons
-                          name={webRuntimeIssueCount > 0 ? "alert-circle-outline" : "terminal-outline"}
-                          size={18}
-                          color={webRuntimeIssueCount > 0 ? c.error : c.accent}
-                        />
-                        <Text style={s.previewRuntimeLogTitle}>Logs</Text>
-                      </View>
-                      <Pressable
-                        onPress={() => setWebRuntimeLogOpen(false)}
-                        hitSlop={10}
-                        accessibilityRole="button"
-                        accessibilityLabel="Close preview logs"
-                        style={s.previewRuntimeLogClose}
-                      >
-                        <Ionicons name="close" size={18} color="#fff" />
-                      </Pressable>
-                    </View>
-                    <ScrollView
-                      ref={webPreviewLogScrollRef}
-                      style={s.previewRuntimeLogScroll}
-                      contentContainerStyle={{ padding: 10 }}
-                      onContentSizeChange={() => webPreviewLogScrollRef.current?.scrollToEnd({ animated: true })}
-                    >
-                      {webPreviewLogs.slice(-32).map((ln, i) => (
-                        <Text key={i} style={[s.previewLogLine, { color: previewLogColor(ln, c) }]}>{ln}</Text>
-                      ))}
-                    </ScrollView>
-                    {(() => {
-                      const canOfferProjectFix = webRuntimeIssueCount > 0 &&
-                        (previewCanOfferProjectFix(devStatus, webPreviewLogs) || clientRuntimeLogsNeedProjectFix(webPreviewLogs));
-                      return (
-                    <View style={s.previewRuntimeLogActions}>
-                      <Pressable onPress={() => { setWebViewLoading(true); setWebRuntimeLogOpen(false); setWebViewKey((k) => k + 1); }} style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#1a2e1a" }]}>
-                        <Text style={[s.previewBtnText, { color: "#22c55e" }]}>Reload</Text>
-                      </Pressable>
-                      {canOfferProjectFix ? (
-                        <Pressable
-                          onPress={() => {
-                            const proj = (runningProject || devStatus?.framework || "the app").split(" / ")[0];
-                            const logs = webPreviewLogs.slice(-60).join("\n");
-                            void sendTaskOrWarn(
-                              `Fix ${proj} browser preview runtime`,
-                              `The browser preview for ${proj} (workDir: ${devStatus?.workDir || "?"}) ${webPreviewContentLoaded ? "rendered, but then logged runtime errors or got stuck" : "did not paint because its browser bundle or runtime failed"}. Diagnose the root cause from the structured browser-lane result and runtime output below, then fix it in the project while preserving the Browser Reload lane.\n\n--- browser-lane probe ---\n${JSON.stringify(browserLaneProbe || {})}\n\n--- browser/runtime output ---\n${logs}`,
-                              "Fix browser preview",
-                            ).then((sent) => { if (sent) setShowWebView(false); });
-                          }}
-                          style={[s.previewBtn, s.previewRuntimeActionBtn, { backgroundColor: "#2e1f3a" }]}
-                        >
-                          <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix with AI</Text>
-                        </Pressable>
-                      ) : null}
-                    </View>
-                      );
-                    })()}
-                  </View>
-                ) : null}
-              </>
-            ) : null}
+            {/* Routine diagnostics never compete with the guest or Vibing.
+                Failures still replace the guest below with their named cause
+                and route-to-fix; healthy runtime logs remain internal. */}
             {/* A box-local doctor or host-probe failure cannot satisfy phone
                  paint. Current agents advertise an in-frame signal and remain
                  strict; older agents expose the frame as visibly unverified so
@@ -4097,6 +3703,10 @@ export default function AppsScreen() {
                 )}
               </View>
               )}
+              <BrowserVibeBubble
+                projectPath={devStatus?.workDir}
+                projectName={(runningProject || devStatus?.framework || "Preview").split(" / ")[0]}
+              />
           </View>
         </View>
       </Modal>

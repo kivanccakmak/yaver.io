@@ -35,6 +35,8 @@ interface StudioChatPaneProps {
   onRequestProject?: () => void;
   previewLogs?: readonly string[];
   previewLogsLive?: boolean;
+  /** Bubble/sheet host: conversation only, without project/task inventory. */
+  compact?: boolean;
 }
 
 type ChatRow =
@@ -48,6 +50,7 @@ export function StudioChatPane({
   onRequestProject,
   previewLogs = [],
   previewLogsLive = false,
+  compact = false,
 }: StudioChatPaneProps) {
   const c = useColors();
   const { activeDevice, connectionStatus } = useDevice();
@@ -231,7 +234,7 @@ export function StudioChatPane({
   return (
     <View style={[styles.wrap, { backgroundColor: c.bg }]}>
       {/* Header strip: box + project + task-list toggle */}
-      <View style={[styles.header, { borderBottomColor: c.borderSubtle }]}>
+      {!compact ? <View style={[styles.header, { borderBottomColor: c.borderSubtle }]}>
         <View style={styles.headerChips}>
           <View style={[styles.chip, { backgroundColor: connected ? c.successBg : c.surfaceMuted, borderColor: connected ? c.successBorder : c.borderSubtle }]}>
             <View style={[styles.dot, { backgroundColor: connected ? c.success : c.textTertiary }]} />
@@ -270,10 +273,10 @@ export function StudioChatPane({
             <Ionicons name={showTasks ? "list" : "list-outline"} size={18} color={c.textSecondary} />
           </Pressable>
         </View>
-      </View>
+      </View> : null}
 
       {/* Task list (foldable, advisory) */}
-      {showTasks ? (
+      {!compact && showTasks ? (
         <ScrollView
           style={[styles.taskList, { borderBottomColor: c.borderSubtle, backgroundColor: c.surfaceMuted }]}
           nestedScrollEnabled

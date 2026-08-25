@@ -305,22 +305,22 @@ test("agrees with the Go probe on the wire literals and keeps the RN branch", ()
 // exist is what stops this landing as a tested island — the exact shape of
 // "shipped" that leaves the phone's prompts still element-free.
 //
-// BOTH preview implementations, not one: apps.tsx and DevPreview.tsx are the
-// two mobile browser-preview lanes, and a fix that lands in one of two
-// implementations is not landed.
+// Mobile browser previews deliberately stopped exposing DOM tooling in the
+// bubble-only guest surface. The bridge remains for non-mobile consumers, but
+// neither mobile implementation may ingest or render it.
 
 const PREVIEW_IMPLS = ["mobile/app/(tabs)/apps.tsx", "mobile/src/components/DevPreview.tsx"];
 
 for (const rel of PREVIEW_IMPLS) {
-  test(`${rel} consumes the probe message instead of swallowing it`, () => {
+  test(`${rel} keeps DOM inspection out of the mobile guest surface`, () => {
     const src = readFileSync(join(repoRoot, rel), "utf8");
     assert.ok(
-      src.includes("handlePreviewDomMessage"),
-      `${rel} never calls handlePreviewDomMessage — the probe's postMessage still dies in a bare catch {}`,
+      !src.includes("handlePreviewDomMessage"),
+      `${rel} still consumes DOM inspection messages`,
     );
     assert.ok(
-      src.includes("domInspectBridge"),
-      `${rel} does not import the bridge, so nothing forwards over the authed channel`,
+      !src.includes("domInspectBridge"),
+      `${rel} still imports the DOM inspection bridge`,
     );
   });
 }
@@ -355,7 +355,7 @@ test("the chip shows what is attached and DELETES it when switched off", () => {
   assert.ok(chip.includes("Browse") && chip.includes("Inspect"), "chip has no Browse|Inspect radio");
 });
 
-test("Tasks keeps preview-only DOM and screen context out of its composers", () => {
+test("mobile browser preview exposes Vibing without DOM or context chrome", () => {
   const tasks = readFileSync(join(repoRoot, "mobile/app/(tabs)/tasks.tsx"), "utf8");
   const preview = readFileSync(join(repoRoot, "mobile/src/components/DevPreview.tsx"), "utf8");
   assert.ok(!tasks.includes("<DomInspectChip"), "Tasks rendered DOM mode; it belongs to the Vibing preview flow");
@@ -366,12 +366,10 @@ test("Tasks keeps preview-only DOM and screen context out of its composers", () 
     /showTaskOptions\s*\?\s*\([\s\S]*?testID="composer-project-chip"/,
     "project/MCP configuration is visible outside the task options ellipsis",
   );
-  assert.ok(preview.includes('testID="preview-tools-more"'), "DevPreview has no preview-tools ellipsis");
-  assert.match(
-    preview,
-    /showPreviewTools\s*\?\s*\([\s\S]*?<ScreenContextChip[\s\S]*?<DomInspectChip/,
-    "preview context and DOM controls are not scoped behind the render/reload ellipsis",
-  );
+  assert.ok(!preview.includes('testID="preview-tools-more"'), "browser preview still renders the tools ellipsis");
+  assert.ok(!preview.includes("<DomInspectChip"), "browser preview still renders DOM inspection chrome");
+  assert.ok(!preview.includes("<ScreenContextChip"), "browser preview still renders context chrome");
+  assert.ok(preview.includes("<BrowserVibeBubble"), "browser preview has no Vibing bubble");
 });
 
 test("DOM mode is gated on a DOM-capable preview lane (Hermes/native honesty)", () => {

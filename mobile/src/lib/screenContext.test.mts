@@ -410,10 +410,9 @@ test("the chip shows what is attached and DELETES it when switched off", () => {
   assert.ok(chip.includes("setEnabled"), "chip has no opt-out");
   const preview = readFileSync(join(repoRoot, "mobile/src/components/DevPreview.tsx"), "utf8");
   const mounts = preview.split("<ScreenContextChip").length - 1;
-  assert.equal(mounts, 1, "screen context belongs once in the preview tools, not in both task composers");
-  assert.match(
-    preview,
-    /showPreviewTools\s*\?\s*\([\s\S]*?<ScreenContextChip/,
-    "screen context must remain behind the preview-tools ellipsis",
+  assert.equal(mounts, 0, "mobile browser preview must not expose screen-context debug chrome");
+  assert.ok(
+    preview.includes("handlePreviewScreenMessage"),
+    "removing the visible control also removed the authenticated automatic screen-context signal",
   );
 });
