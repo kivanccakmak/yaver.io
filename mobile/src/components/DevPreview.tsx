@@ -180,10 +180,12 @@ export function DevPreview({
 } = {}) {
   const { colors: c, isDark } = useTheme();
   const layout = useResponsiveLayout();
-  const { activeDevice } = useDevice();
-  const previewClient = activeDevice?.id
-    ? connectionManager.clientFor(activeDevice.id)
-    : quicClient;
+  useDevice();
+  // Rendering may intentionally happen on a different machine from coding.
+  // The connection manager falls back to the focused machine when no split
+  // route is configured, preserving the original single-machine behavior.
+  const previewClient = connectionManager.renderClient();
+  const codingClient = connectionManager.runnerClient();
   const [status, setStatus] = useState<DevServerStatus | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
@@ -235,7 +237,7 @@ export function DevPreview({
     if (!fix || gapFixRunning) return;
     setGapFixRunning(true);
     try {
-      await (quicClient as any).invokeGapFix(fix.method, fix.path, gapFixBody(fix));
+      await (previewClient as any).invokeGapFix(fix.method, fix.path, gapFixBody(fix));
       pushLog(`[fix] sent to the runner — ${fix.label}`);
       setPreviewGap(null);
     } catch (err) {
@@ -439,7 +441,7 @@ export function DevPreview({
   useEffect(() => {
     let mounted = true;
     const poll = async () => {
-      const s = await previewClient.getDevServerStatus();
+      const s = await connectionManager.renderClient().getDevServerStatus();
       if (!mounted) return;
       if (s?.error && showPreview) {
         // A transient relay miss is not evidence that the already-open route
@@ -708,7 +710,7 @@ export function DevPreview({
   // Declared before handleOpen so the latter can close over it without
   // tripping the TS "used before declaration" rule.
   const handleRunInYaver = useCallback(async () => {
-    const baseUrl = (quicClient as any).baseUrl;
+    const baseUrl = (previewClient as any).baseUrl;
     if (!baseUrl) {
       Alert.alert("Error", "Not connected to agent");
       return;
@@ -728,7 +730,7 @@ export function DevPreview({
       // Ask the Go agent to build a production Hermes bytecode bundle
       const platform = require("react-native").Platform.OS;
       const headers = {
-        ...(quicClient as any).authHeaders,
+        ...(previewClient as any).authHeaders,
         "Content-Type": "application/json",
       };
       const buildRes = await fetch(`${baseUrl}/dev/build-native`, {
@@ -791,7 +793,7 @@ export function DevPreview({
         bundleUrl,
         moduleName,
         buildResult.md5,
-        (quicClient as any).authHeaders,
+        (previewClient as any).authHeaders,
       );
       if (loadResult.skipped) {
         setLastLogLine("Already up to date");
@@ -1440,7 +1442,7 @@ export function DevPreview({
                                 if (gapFixRunning) return;
                                 setGapFixRunning(true);
                                 setGapFixStartedAt(Date.now());
-                                gapFixCancelRef.current = runCapabilityGapFix(quicClient as any, gap, {
+                                gapFixCancelRef.current = runCapabilityGapFix(previewClient as any, gap, {
                                   onLine: (line) => { pushLog(line); setLastByteAt(Date.now()); },
                                   onDone: (ok, error) => {
                                     gapFixCancelRef.current = null;
@@ -1574,7 +1576,7 @@ export function DevPreview({
 	                            onPress={() => {
 	                              const proj = projectLabel || frameworkLabel || "the app";
 	                              const logs = logLines.slice(-40).join("\n");
-	                              void quicClient.sendTask(
+	                              void codingClient.sendTask(
 	                                `Fix ${proj} preview (${frameworkLabel})`,
 	                                `The ${frameworkLabel} dev server / browser preview for ${proj} (workDir: ${status?.workDir || "?"}) failed to build or render. Diagnose the ROOT cause from the output below and fix it so the app builds and serves in the browser lane. Common causes: a missing asset declared in config (e.g. a Flutter pubspec asset not on disk), a missing dependency, or a bad import.\n\n--- dev server output ---\n${logs}`,
 	                              ).then(() => setShowPreview(false)).catch((error) => {
@@ -1690,7 +1692,7 @@ export function useDevServerStatus() {
   useEffect(() => {
     let mounted = true;
     const poll = async () => {
-      const s = await quicClient.getDevServerStatus();
+      const s = await connectionManager.renderClient().getDevServerStatus();
       if (mounted) setStatus(s && (isActiveDevServerStatus(s) || Boolean((s as DevServerStatus).error)) ? s : null);
     };
     poll();

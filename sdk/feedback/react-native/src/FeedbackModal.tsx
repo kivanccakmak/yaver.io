@@ -267,6 +267,7 @@ export const FeedbackModal: React.FC = () => {
   const [runnerStatusError, setRunnerStatusError] = useState<string | null>(null);
   const [preferredRunner, setPreferredRunnerState] = useState<string | null>(null);
   const [preferredModel, setPreferredModelState] = useState('');
+  const [activeTab, setActiveTab] = useState<'chat' | 'settings'>('chat');
   const [showOpenCodeConfig, setShowOpenCodeConfig] = useState(false);
   const mountedRef = useRef(true);
 
@@ -674,8 +675,10 @@ export const FeedbackModal: React.FC = () => {
         }
 
         let ackMessage = `${reloadAction.label} requested.`;
-        await runWithReconnect(async (client) => {
-          const ack = await client.reloadWithMode(reloadAction.mode, devSnapshot);
+        await runWithReconnect(async () => {
+          const renderClient = YaverFeedback.getRenderP2PClient();
+          if (!renderClient) throw new Error('Render machine is not connected yet.');
+          const ack = await renderClient.reloadWithMode(reloadAction.mode, devSnapshot);
           ackMessage = ack.message;
           setToast(ack.message);
           setProgress(0.2);
@@ -730,8 +733,10 @@ export const FeedbackModal: React.FC = () => {
       // map this app to its MobileProject scan entry without needing
       // `yaver dev start` to have been run.
       let ackMessage = 'Reload request acknowledged.';
-      await runWithReconnect(async (client) => {
-        const ack = await client.reloadApp('bundle');
+      await runWithReconnect(async () => {
+        const renderClient = YaverFeedback.getRenderP2PClient();
+        if (!renderClient) throw new Error('Render machine is not connected yet.');
+        const ack = await renderClient.reloadApp('bundle');
         ackMessage = ack.message;
         setToast(ack.message);
         setProgress(0.2);
@@ -1007,6 +1012,7 @@ export const FeedbackModal: React.FC = () => {
   */
 
   const busy = action !== 'idle';
+  const machineRouting = YaverFeedback.getMachineRouting();
   const readyRunnerCount = runnerCards.filter((row) => row.ready || row.authConfigured).length;
   const missingRunnerCount = runnerCards.filter((row) => !row.installed).length;
   const needsAuthRunnerCount = runnerCards.filter(
@@ -1017,7 +1023,7 @@ export const FeedbackModal: React.FC = () => {
   // for the live chat screen. The chat manages its own SSE
   // subscription, multi-turn follow-ups, and Reload button. Closing
   // the chat returns to idle and clears the active vibe.
-  if (visible && activeVibe) {
+  if (activeVibe) {
     const client = YaverFeedback.getP2PClient();
     return (
       <>
@@ -1028,7 +1034,7 @@ export const FeedbackModal: React.FC = () => {
           visible={visible}
           animationType="slide"
           transparent
-          onRequestClose={() => setActiveVibe(null)}
+          onRequestClose={handleClose}
         >
           {client ? (
             <VibeChatScreen
@@ -1039,8 +1045,11 @@ export const FeedbackModal: React.FC = () => {
               runner={activeVibe.runner}
               model={activeVibe.model}
               onClose={() => setActiveVibe(null)}
+              onMinimize={handleClose}
+              codingMachine={YaverFeedback.getMachineRouting().codingDeviceId}
+              renderMachine={YaverFeedback.getMachineRouting().renderDeviceId}
               onReload={async () => {
-                const c = YaverFeedback.getP2PClient();
+                const c = YaverFeedback.getRenderP2PClient();
                 if (!c) throw new Error('Not connected');
                 await c.reloadApp();
               }}
@@ -1115,6 +1124,21 @@ export const FeedbackModal: React.FC = () => {
                 </Pressable>
               </View>
 
+              <View style={styles.tabs} accessibilityRole="tablist">
+                {(['chat', 'settings'] as const).map((tab) => (
+                  <Pressable
+                    key={tab}
+                    onPress={() => setActiveTab(tab)}
+                    style={[styles.tab, activeTab === tab && styles.tabSelected]}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: activeTab === tab }}
+                  >
+                    <Text style={[styles.tabText, activeTab === tab && styles.tabTextSelected]}>{tab === 'chat' ? 'Chat' : 'Settings'}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <View style={[styles.tabContent, activeTab !== 'settings' && styles.hidden]}>
               {!dogfoodActive ? <>
               <Pressable
                 onPress={() => {
@@ -1141,7 +1165,7 @@ export const FeedbackModal: React.FC = () => {
                         machineCard.status === 'offline' && styles.machineDotOffline,
                       ]}
                     />
-                    <Text style={styles.machineLabel}>Selected Machine</Text>
+                    <Text style={styles.machineLabel}>Coding Machine</Text>
                   </View>
                   <Text style={styles.machineAction}>
                     {machineCard.loading ? 'Refreshing…' : 'Change'}
@@ -1152,6 +1176,17 @@ export const FeedbackModal: React.FC = () => {
                 </Text>
                 <Text style={styles.machineMeta}>{machineCard.detail}</Text>
               </Pressable>
+
+              <View style={styles.machineRoutes}>
+                <View style={styles.machineRouteCard}>
+                  <Text style={styles.machineRouteLabel}>Coding machine</Text>
+                  <Text style={styles.machineRouteValue} numberOfLines={1}>{machineRouting.codingDeviceId || machineCard.title}</Text>
+                </View>
+                <View style={styles.machineRouteCard}>
+                  <Text style={styles.machineRouteLabel}>Render machine</Text>
+                  <Text style={styles.machineRouteValue} numberOfLines={1}>{machineRouting.renderDeviceId || machineRouting.codingDeviceId || machineCard.title}</Text>
+                </View>
+              </View>
 
               <View style={styles.runnerSection}>
                 <View style={styles.runnerSectionHeader}>
@@ -1373,7 +1408,9 @@ export const FeedbackModal: React.FC = () => {
                   </Text>
                 </View>
               )}
+              </View>
 
+              <View style={[styles.tabContent, activeTab !== 'chat' && styles.hidden]}>
               {/* 3. Vibing — expands to an input box on first tap
                    so the user says WHAT they want to vibe on, just
                    like the Yaver mobile app's Vibing tab. Second
@@ -1458,6 +1495,7 @@ export const FeedbackModal: React.FC = () => {
               ) : (
                 <DeployPanel onClose={() => setShowDeploy(false)} />
               ))}
+              </View>
 
               {progress !== null && (
                 <View style={styles.progressTrack}>
@@ -1559,7 +1597,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   vibeInput: {
-    color: '#fff',
+    color: '#24242b',
     fontSize: 15,
     minHeight: 64,
     textAlignVertical: 'top',
@@ -1610,7 +1648,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modal: {
-    backgroundColor: '#141422',
+    backgroundColor: '#f8f8fb',
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     padding: 22,
@@ -1634,7 +1672,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#fff',
+    color: '#17171d',
   },
   closeBtn: {
     width: 36,
@@ -1642,10 +1680,10 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: '#ededf3',
   },
   closeIcon: {
-    color: '#fff',
+    color: '#656570',
     fontSize: 22,
     lineHeight: 24,
     fontWeight: '400',
@@ -1664,12 +1702,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
+  tabs: { flexDirection: 'row', gap: 6, padding: 3, borderRadius: 12, backgroundColor: '#ededf3' },
+  tab: { flex: 1, minHeight: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  tabSelected: { backgroundColor: '#fff' },
+  tabText: { color: '#858590', fontSize: 12, fontWeight: '700' },
+  tabTextSelected: { color: '#6252e8' },
+  tabContent: { gap: 12 },
+  hidden: { display: 'none' },
   machineCard: {
     borderRadius: 14,
     borderWidth: 1,
     padding: 14,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: '#fff',
+    borderColor: '#e1e1e8',
   },
   machineCardLive: {
     backgroundColor: 'rgba(34,197,94,0.10)',
@@ -1683,6 +1728,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239,68,68,0.10)',
     borderColor: 'rgba(239,68,68,0.35)',
   },
+  machineRoutes: { flexDirection: 'row', gap: 8 },
+  machineRouteCard: { flex: 1, minWidth: 0, borderRadius: 11, padding: 10, gap: 3, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e1e1e8' },
+  machineRouteLabel: { color: '#7b7b86', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+  machineRouteValue: { color: '#222229', fontSize: 12, fontWeight: '700' },
   machineHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1710,7 +1759,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ef4444',
   },
   machineLabel: {
-    color: '#cbd5e1',
+    color: '#73737e',
     fontSize: 12,
     fontWeight: '700',
     textTransform: 'uppercase',
@@ -1722,12 +1771,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   machineName: {
-    color: '#fff',
+    color: '#222229',
     fontSize: 16,
     fontWeight: '700',
   },
   machineMeta: {
-    color: '#cbd5e1',
+    color: '#73737e',
     fontSize: 12,
     marginTop: 4,
     lineHeight: 17,
@@ -1742,33 +1791,33 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   runnerSectionTitle: {
-    color: '#f8fafc',
+    color: '#222229',
     fontSize: 16,
     fontWeight: '700',
   },
   runnerSectionSubtitle: {
     marginTop: 2,
-    color: '#94a3b8',
+    color: '#83838e',
     fontSize: 12,
   },
   runnerRefreshBtn: {
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.22)',
-    backgroundColor: 'rgba(15,23,42,0.65)',
+    borderColor: '#dedee7',
+    backgroundColor: '#fff',
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
   runnerRefreshBtnText: {
-    color: '#cbd5e1',
+    color: '#5f5f69',
     fontSize: 12,
     fontWeight: '600',
   },
   runnerCard: {
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.14)',
-    backgroundColor: 'rgba(15,23,42,0.45)',
+    borderColor: '#e2e2e9',
+    backgroundColor: '#fff',
     paddingHorizontal: 12,
     paddingVertical: 11,
     gap: 6,
@@ -1792,14 +1841,14 @@ const styles = StyleSheet.create({
   },
   runnerCardActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   runnerCardTitle: {
-    color: '#f8fafc',
+    color: '#222229',
     fontSize: 14,
     fontWeight: '700',
   },
   runnerCardStatus: {
     marginTop: 2,
     fontSize: 12,
-    color: '#cbd5e1',
+    color: '#666671',
   },
   runnerCardStatusOk: {
     color: '#86efac',
@@ -1811,7 +1860,7 @@ const styles = StyleSheet.create({
     color: '#fca5a5',
   },
   runnerCardDetail: {
-    color: '#94a3b8',
+    color: '#858590',
     fontSize: 11,
     lineHeight: 16,
   },
@@ -1830,13 +1879,13 @@ const styles = StyleSheet.create({
   },
   runnerActionBtnSelected: { borderColor: '#818cf8', backgroundColor: 'rgba(79,70,229,0.44)' },
   routingSummary: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 2 },
-  routingSummaryLabel: { color: '#94a3b8', fontSize: 11, fontWeight: '600' },
-  routingSummaryValue: { flex: 1, color: '#c7d2fe', fontSize: 12, fontWeight: '700', textAlign: 'right' },
+  routingSummaryLabel: { color: '#7c7c87', fontSize: 11, fontWeight: '600' },
+  routingSummaryValue: { flex: 1, color: '#6555df', fontSize: 12, fontWeight: '700', textAlign: 'right' },
   modelChoiceRow: { gap: 6, paddingTop: 2 },
   modelChoice: { borderRadius: 9, borderWidth: 1, borderColor: 'rgba(148,163,184,0.18)', paddingHorizontal: 9, paddingVertical: 6 },
   modelChoiceSelected: { borderColor: '#818cf8', backgroundColor: 'rgba(79,70,229,0.30)' },
-  modelChoiceText: { color: '#94a3b8', fontSize: 11 },
-  modelChoiceTextSelected: { color: '#e0e7ff', fontWeight: '700' },
+  modelChoiceText: { color: '#73737e', fontSize: 11 },
+  modelChoiceTextSelected: { color: '#5e4ce6', fontWeight: '700' },
   runnerSectionError: {
     color: '#fca5a5',
     fontSize: 12,
@@ -1848,7 +1897,7 @@ const styles = StyleSheet.create({
   progressTrack: {
     height: 6,
     borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: '#e5e5eb',
     overflow: 'hidden',
     marginTop: 4,
   },
@@ -1875,10 +1924,10 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: '#ededf3',
   },
   quickIconToggleText: {
-    color: '#cbd5e1',
+    color: '#5f5f69',
     fontSize: 12,
     fontWeight: '700',
   },
@@ -1890,25 +1939,25 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   quickIconNoteText: {
-    color: '#fde68a',
+    color: '#8a5a12',
     fontSize: 12,
     lineHeight: 17,
   },
   iconSelector: {
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.09)',
-    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderColor: '#e1e1e8',
+    backgroundColor: '#fff',
     padding: 12,
     gap: 10,
   },
   iconSelectorTitle: {
-    color: '#f8fafc',
+    color: '#222229',
     fontSize: 13,
     fontWeight: '700',
   },
   iconSelectorText: {
-    color: '#cbd5e1',
+    color: '#73737e',
     fontSize: 12,
     lineHeight: 17,
   },
@@ -1922,8 +1971,8 @@ const styles = StyleSheet.create({
     minWidth: 84,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(255,255,255,0.02)',
+    borderColor: '#e4e4ea',
+    backgroundColor: '#f8f8fb',
     paddingVertical: 10,
     paddingHorizontal: 8,
     alignItems: 'center',
@@ -1950,7 +1999,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   iconOptionText: {
-    color: '#e2e8f0',
+    color: '#555561',
     fontSize: 11,
     fontWeight: '600',
   },
@@ -1958,14 +2007,14 @@ const styles = StyleSheet.create({
     marginTop: 4,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
+    borderColor: '#e1e1e8',
     paddingVertical: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: '#fff',
   },
   cancelBtnText: {
-    color: '#e5e7eb',
+    color: '#555561',
     fontSize: 15,
     fontWeight: '700',
   },

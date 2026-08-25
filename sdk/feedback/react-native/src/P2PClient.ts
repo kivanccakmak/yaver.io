@@ -884,7 +884,7 @@ export class P2PClient {
    */
   async vibing(
     prompt: string,
-    opts?: { projectName?: string; bundleId?: string; projectPath?: string },
+    opts?: { projectName?: string; bundleId?: string; projectPath?: string; runner?: string; model?: string },
   ): Promise<{ taskId: string }> {
     // Resolve app identity exactly the same way we do for
     // reloadApp — bundle ID from expo-constants or native config.
@@ -902,6 +902,8 @@ export class P2PClient {
         projectPath: identity.projectPath ?? opts?.projectPath ?? '',
         projectName: identity.projectName,
         bundleId: identity.bundleId,
+        runner: opts?.runner,
+        model: opts?.model,
       }),
     });
     if (!response.ok) {

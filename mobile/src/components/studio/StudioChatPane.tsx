@@ -24,7 +24,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { summarizeRawConsole } from "../../_core/ansi";
 import { AnsiConsoleText } from "../AnsiConsoleText";
 import { MessageBubble } from "../MessageBubble";
-import { quicClient, type Task } from "../../lib/quic";
+import { quicClient, type QuicClient, type Task } from "../../lib/quic";
 import { useColors } from "../../context/ThemeContext";
 import { useDevice } from "../../context/DeviceContext";
 
@@ -42,6 +42,12 @@ interface StudioChatPaneProps {
   /** Explicit runner/model selected in the preview card. */
   runner?: string;
   model?: string;
+  /** Exact coding-machine client. Browser/Hermes previews may render from a
+   * different box, so task traffic must never fall through to focused/render
+   * singleton state. */
+  client?: QuicClient;
+  clientConnected?: boolean;
+  codingMachineName?: string;
   /** Lets the preview host queue reloads and lock routing while coding. */
   onTaskStateChange?: (task: Task | null) => void;
 }
@@ -61,32 +67,35 @@ export function StudioChatPane({
   feedbackStyle = false,
   runner,
   model,
+  client = quicClient,
+  clientConnected,
+  codingMachineName,
   onTaskStateChange,
 }: StudioChatPaneProps) {
   const theme = useColors();
-  // Browser-preview Vibing is the React-Native twin of the native
-  // YaverFeedbackPane. Keep its transcript/composer dark and purple even when
-  // the host app uses the light theme, so opening the same Y affordance does
-  // not produce two unrelated products depending on the render lane.
+  // Browser-preview Vibing is the React-Native twin of the standalone feedback
+  // card. It deliberately uses the same calm white surface regardless of the
+  // guest theme; the overlay belongs to Yaver, not to the rendered app.
   const c = feedbackStyle ? {
     ...theme,
-    bg: "#0e0c1c",
-    bgCard: "#151128",
-    bgInput: "rgba(255,255,255,0.08)",
-    surface: "#19152c",
-    surfaceMuted: "#171329",
-    border: "rgba(255,255,255,0.15)",
-    borderSubtle: "rgba(255,255,255,0.10)",
-    textPrimary: "#ffffff",
-    textSecondary: "rgba(255,255,255,0.78)",
-    textMuted: "rgba(255,255,255,0.58)",
-    textTertiary: "rgba(255,255,255,0.38)",
-    accent: "#8b8df8",
-    accentSoft: "rgba(139,141,248,0.16)",
+    bg: "#f8f8fb",
+    bgCard: "#ffffff",
+    bgInput: "#f0f0f5",
+    surface: "#ffffff",
+    surfaceMuted: "#f2f2f7",
+    border: "#dedee7",
+    borderSubtle: "#e8e8ef",
+    textPrimary: "#16161d",
+    textSecondary: "#555561",
+    textMuted: "#777782",
+    textTertiary: "#a0a0aa",
+    accent: "#6f58f5",
+    accentSoft: "#ebe8ff",
     brandPrimary: "#7568f8",
   } : theme;
   const { activeDevice, connectionStatus } = useDevice();
-  const connected = connectionStatus === "connected" && !!activeDevice;
+  const connected = clientConnected ?? (connectionStatus === "connected" && !!activeDevice);
+  const taskClient = client;
 
   const [composerText, setComposerText] = useState("");
   const [sending, setSending] = useState(false);
@@ -112,14 +121,14 @@ export function StudioChatPane({
     if (!connected) return;
     setLoadingTasks(true);
     try {
-      const list = await quicClient.listTasks();
+      const list = await taskClient.listTasks();
       setTasks(list.slice(0, 12));
     } catch {
       // keep the last list; the surface is advisory
     } finally {
       setLoadingTasks(false);
     }
-  }, [connected]);
+  }, [connected, taskClient]);
 
   useEffect(() => {
     void refreshTasks();
@@ -141,7 +150,7 @@ export function StudioChatPane({
     setConsoleExpanded(status === "running" || status === "queued");
     // Seed with the retained tail (rawSince=0 → raw_replay full=true) so a
     // just-finished task paints its console immediately.
-    streamAbortRef.current = quicClient.streamTaskOutput(
+    streamAbortRef.current = taskClient.streamTaskOutput(
       taskId,
       () => {
         // groomed transcript already lives in the task; we show raw only
@@ -151,7 +160,7 @@ export function StudioChatPane({
         setActiveTask((prev) => prev?.id === taskId ? { ...prev, status: status as Task["status"] } : prev);
         if (consolePreferenceRef.current === null) setConsoleExpanded(false);
         setLastRawVersion((v) => v + 1);
-        void quicClient.getTask(taskId).then((task) => {
+        void taskClient.getTask(taskId).then((task) => {
           setActiveTask(task);
           setRows([]);
         }).catch(() => {});
@@ -176,7 +185,7 @@ export function StudioChatPane({
         onEnd: () => setRawLive(false),
       },
     );
-  }, [refreshTasks]);
+  }, [refreshTasks, taskClient]);
 
   const handleSend = useCallback(async () => {
     const text = composerText.trim();
@@ -189,11 +198,11 @@ export function StudioChatPane({
       if (activeTask) {
         // A chat stays one task. Creating a fresh /vibing/execute task for every
         // message made the Studio look conversational while discarding context.
-        await quicClient.continueTask(activeTask.id, text);
+        await taskClient.continueTask(activeTask.id, text);
         setActiveTask((prev) => prev ? { ...prev, status: "running" } : prev);
         subscribeTask(activeTask.id, "running");
       } else {
-        const result = await quicClient.executeVibingSuggestion(text, projectPath || "", {
+        const result = await taskClient.executeVibingSuggestion(text, projectPath || "", {
           projectName,
           runner,
           model,
@@ -203,7 +212,7 @@ export function StudioChatPane({
           const now = Date.now();
           setActiveTask({ id: String(taskId), title: text, description: "", status: "queued", output: [], createdAt: now, updatedAt: now });
           subscribeTask(String(taskId), "queued");
-          void quicClient.getTask(String(taskId)).then((task) => {
+          void taskClient.getTask(String(taskId)).then((task) => {
             setActiveTask(task);
             if (task.turns?.length) setRows([]);
           }).catch(() => {});
@@ -222,16 +231,16 @@ export function StudioChatPane({
       setSending(false);
       void refreshTasks();
     }
-  }, [composerText, sending, connected, projectPath, projectName, runner, model, subscribeTask, refreshTasks, activeTask]);
+  }, [composerText, sending, connected, projectPath, projectName, runner, model, subscribeTask, refreshTasks, activeTask, taskClient]);
 
   const handleTaskTap = useCallback(
     (task: Task) => {
       setActiveTask(task);
       setRows([]);
-      void quicClient.getTask(task.id).then((hydrated) => setActiveTask(hydrated)).catch(() => {});
+      void taskClient.getTask(task.id).then((hydrated) => setActiveTask(hydrated)).catch(() => {});
       subscribeTask(task.id, task.status);
     },
-    [subscribeTask],
+    [subscribeTask, taskClient],
   );
 
   const isRunning = activeTask?.status === "running" || activeTask?.status === "queued";
@@ -279,7 +288,7 @@ export function StudioChatPane({
           <View style={[styles.chip, { backgroundColor: connected ? c.successBg : c.surfaceMuted, borderColor: connected ? c.successBorder : c.borderSubtle }]}>
             <View style={[styles.dot, { backgroundColor: connected ? c.success : c.textTertiary }]} />
             <Text style={[styles.chipText, { color: connected ? c.success : c.textMuted }]} numberOfLines={1}>
-              {connected ? activeDevice?.name || "box" : "disconnected"}
+              {connected ? codingMachineName || activeDevice?.name || "box" : "disconnected"}
             </Text>
           </View>
           {projectName ? (

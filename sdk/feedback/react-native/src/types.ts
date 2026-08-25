@@ -149,6 +149,13 @@ export interface StoreShotsConfig {
 export interface FeedbackConfig {
   /** URL of the Yaver agent (e.g. "http://192.168.1.10:18080"). If omitted, auto-discovery is used. */
   agentUrl?: string;
+  /** Optional coding route. Defaults to agentUrl. */
+  codingAgentUrl?: string;
+  /** Optional render/reload route. Defaults to codingAgentUrl/agentUrl. */
+  renderAgentUrl?: string;
+  /** Device identities shown in the unified Settings card when routes differ. */
+  codingDeviceId?: string;
+  renderDeviceId?: string;
   /**
    * Show the small "Y" mark while this app is running INSIDE Yaver's container
    * (a Hermes-pushed development bundle), so a tester can tell it apart from

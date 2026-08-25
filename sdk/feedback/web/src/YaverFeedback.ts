@@ -97,6 +97,10 @@ export class YaverFeedback {
 
   /** Initialize the feedback SDK. Call once in your app entry point. */
   static async init(config: FeedbackConfig = {}): Promise<void> {
+    config.agentUrl = config.codingAgentUrl || config.agentUrl;
+    config.preferredDeviceId = config.codingDeviceId || config.preferredDeviceId;
+    config.codingDeviceId = config.codingDeviceId || config.preferredDeviceId;
+    config.renderDeviceId = config.renderDeviceId || config.codingDeviceId || config.preferredDeviceId;
     // Running inside a Yaver preview lane is an EXPLICIT opt-in: the user chose
     // to preview this app in Yaver, so feedback is on regardless of the app's
     // own dev-env heuristic. Mirrors the RN side's isImplicitOptIn
@@ -132,7 +136,11 @@ export class YaverFeedback {
     }
     if (!config.preferredDeviceId) {
       const selected = getSelectedDeviceId();
-      if (selected) config.preferredDeviceId = selected;
+      if (selected) {
+        config.preferredDeviceId = selected;
+        config.codingDeviceId = selected;
+        config.renderDeviceId = config.renderDeviceId || selected;
+      }
     }
 
     // Auto-discover agent if no URL provided
@@ -532,7 +540,7 @@ export class YaverFeedback {
   }
 
   static async reloadApp(mode: 'dev' | 'bundle' = 'dev'): Promise<ReloadAck> {
-    const client = await YaverFeedback.getClient();
+    const client = await YaverFeedback.getRenderClient();
     return client.reloadApp(mode, YaverFeedback.projectIdentity());
   }
 
@@ -541,7 +549,7 @@ export class YaverFeedback {
    * Reload buttons and any host app that wants to wire its own control.
    */
   static async reloadWithMode(mode: ReloadWireMode): Promise<ReloadAck> {
-    const client = await YaverFeedback.getClient();
+    const client = await YaverFeedback.getRenderClient();
     if (mode === 'bundle') return client.reloadApp('bundle', YaverFeedback.projectIdentity());
     const snapshot = await client.getDevServerStatus().catch(() => null);
     return client.reloadWithMode(mode, snapshot);
@@ -635,6 +643,8 @@ export class YaverFeedback {
     if (YaverFeedback.config) {
       YaverFeedback.config.authToken = undefined;
       YaverFeedback.config.preferredDeviceId = undefined;
+      YaverFeedback.config.codingDeviceId = undefined;
+      YaverFeedback.config.renderDeviceId = undefined;
       YaverFeedback.config.agentUrl = undefined;
     }
     YaverFeedback.client = null;
@@ -885,12 +895,26 @@ export class YaverFeedback {
     }
     try {
       const device = await openDevicePickerModal(YaverFeedback.config.authToken);
-      YaverFeedback.config.preferredDeviceId = device.deviceId;
+      YaverFeedback.setCodingDeviceRoute(device.deviceId);
       YaverFeedback.config.agentUrl = undefined;
       return true;
     } catch {
       return false;
     }
+  }
+
+  private static setCodingDeviceRoute(deviceId: string): void {
+    const cfg = YaverFeedback.config;
+    if (!cfg) return;
+    const wasUnified = !cfg.renderDeviceId
+      || cfg.renderDeviceId === cfg.codingDeviceId
+      || cfg.renderDeviceId === cfg.preferredDeviceId;
+    cfg.preferredDeviceId = deviceId;
+    cfg.codingDeviceId = deviceId;
+    if (wasUnified) cfg.renderDeviceId = deviceId;
+    cfg.agentUrl = undefined;
+    cfg.codingAgentUrl = undefined;
+    if (wasUnified) cfg.renderAgentUrl = undefined;
   }
 
   private static async tryDiscoverSelectedMachine(): Promise<boolean> {
@@ -912,7 +936,12 @@ export class YaverFeedback {
 
   private static openReportOverlay(): void {
     YaverFeedback.injectReportStyles();
-    document.getElementById('yaver-feedback-overlay')?.remove();
+    const existing = document.getElementById('yaver-feedback-overlay');
+    if (existing) {
+      existing.style.display = '';
+      existing.querySelector<HTMLTextAreaElement>('#yaver-fb-vibe-prompt')?.focus();
+      return;
+    }
 
     const dogfood = YaverFeedback.getDogfoodStatus();
     const overlay = document.createElement('div');
@@ -925,7 +954,7 @@ export class YaverFeedback {
               <h3 class="yvr-fb-title">${dogfood.active ? `${escapeHtml(dogfood.label)} Dogfood` : `Yaver<span class="yvr-fb-version">v${YaverFeedback.SDK_VERSION}</span>`}</h3>
               <p id="yaver-fb-subtitle" class="yvr-fb-subtitle"></p>
             </div>
-            <button id="yaver-fb-close" class="yvr-fb-close" type="button" aria-label="Close">×</button>
+            <button id="yaver-fb-close" class="yvr-fb-close" type="button" aria-label="Minimize to Y">−</button>
           </div>
 
           <div id="yaver-fb-auth-strip" class="yvr-fb-auth-strip"></div>
@@ -993,18 +1022,16 @@ export class YaverFeedback {
         : `Last report: ${report.id}`;
     };
 
-    const cleanup = () => {
-      window.removeEventListener('yaver-feedback:status', statusListener);
-      overlay.remove();
-    };
-
     const close = () => {
       if (YaverFeedback.recording) {
         YaverFeedback.mediaRecorder?.stop();
         YaverFeedback.audioRecorder?.stop();
         YaverFeedback.recording = false;
       }
-      cleanup();
+      // Fold to the existing Y button. Keeping this DOM mounted preserves the
+      // live task poller, transcript, composer draft, and selected route while
+      // the user tests the underlying app.
+      overlay.style.display = 'none';
     };
 
     closeBtn.onclick = close;
@@ -1114,6 +1141,8 @@ export class YaverFeedback {
           if (busy) return;
           if (YaverFeedback.config) {
             YaverFeedback.config.preferredDeviceId = undefined;
+            YaverFeedback.config.codingDeviceId = undefined;
+            YaverFeedback.config.renderDeviceId = undefined;
             YaverFeedback.config.agentUrl = undefined;
           }
           // Drop the persisted device pin so future page loads
@@ -1171,8 +1200,7 @@ export class YaverFeedback {
             try {
               saveSelectedDeviceId(device.deviceId);
               if (YaverFeedback.config) {
-                YaverFeedback.config.preferredDeviceId = device.deviceId;
-                YaverFeedback.config.agentUrl = undefined;
+                YaverFeedback.setCodingDeviceRoute(device.deviceId);
               }
               const discovered = await YaverFeedback.tryDiscoverSelectedMachine();
               if (!discovered) {
@@ -1799,6 +1827,11 @@ export class YaverFeedback {
     const renderActionsView = () => {
       subtitle.textContent = 'Step 4 of 4 — Vibing tools and chat.';
       body.innerHTML = `
+        <div class="yvr-fb-tabs" role="tablist" aria-label="Vibing sections">
+          <button id="yaver-fb-tab-chat" class="yvr-fb-tab yvr-fb-tab-active" type="button" role="tab" aria-selected="true">Chat</button>
+          <button id="yaver-fb-tab-settings" class="yvr-fb-tab" type="button" role="tab" aria-selected="false">Settings</button>
+        </div>
+        <div id="yaver-fb-settings-pane" class="yvr-fb-tab-pane" style="display:none;">
         <button id="yaver-fb-machine-pill" class="yvr-fb-machine-pill" type="button">
           <span class="yvr-fb-dot yvr-fb-dot-green"></span>
           <span class="yvr-fb-machine-pill-text">
@@ -1807,6 +1840,11 @@ export class YaverFeedback {
           </span>
           <span class="yvr-fb-link">Change</span>
         </button>
+
+        <div class="yvr-fb-machine-routes">
+          <div class="yvr-fb-machine-route"><span>Coding machine</span><strong>${escapeHtml(YaverFeedback.config?.codingDeviceId || YaverFeedback.config?.preferredDeviceId || 'Selected machine')}</strong></div>
+          <div class="yvr-fb-machine-route"><span>Render machine</span><strong>${escapeHtml(YaverFeedback.config?.renderDeviceId || YaverFeedback.config?.codingDeviceId || YaverFeedback.config?.preferredDeviceId || 'Same machine')}</strong></div>
+        </div>
 
         <div class="yvr-fb-toolbar">
           <button id="yaver-fb-screenshot" class="yvr-fb-tool yvr-fb-tool-screenshot" type="button" title="Screenshot + note">
@@ -1827,7 +1865,7 @@ export class YaverFeedback {
           </button>
         </div>
 
-        <div class="yvr-fb-vibe-shell">
+        <div class="yvr-fb-vibe-shell yvr-fb-vibe-settings">
           <div class="yvr-fb-vibe-topline">
             <div class="yvr-fb-vibe-topline-copy">
               <label class="yvr-fb-vibe-label" for="yaver-fb-vibe-prompt">Vibing</label>
@@ -1850,7 +1888,10 @@ export class YaverFeedback {
               </div>
             </div>
           </div>
-
+        </div>
+        </div>
+        <div id="yaver-fb-chat-pane" class="yvr-fb-tab-pane">
+          <div class="yvr-fb-vibe-shell">
           <div class="yvr-fb-vibe-block yvr-fb-chat">
             <div id="yaver-fb-vibe-gate" class="yvr-fb-vibe-gate" style="display:none;"></div>
             <button id="yaver-fb-vibe-repair" class="yvr-fb-action yvr-fb-action-secondary" type="button" style="display:none;">Continue Setup</button>
@@ -1867,7 +1908,25 @@ export class YaverFeedback {
             </div>
           </div>
         </div>
+        </div>
       `;
+
+      const chatTab = overlay.querySelector<HTMLButtonElement>('#yaver-fb-tab-chat')!;
+      const settingsTab = overlay.querySelector<HTMLButtonElement>('#yaver-fb-tab-settings')!;
+      const chatPane = overlay.querySelector<HTMLDivElement>('#yaver-fb-chat-pane')!;
+      const settingsPane = overlay.querySelector<HTMLDivElement>('#yaver-fb-settings-pane')!;
+      const selectActionsTab = (tab: 'chat' | 'settings') => {
+        const showChat = tab === 'chat';
+        chatPane.style.display = showChat ? '' : 'none';
+        settingsPane.style.display = showChat ? 'none' : '';
+        chatTab.classList.toggle('yvr-fb-tab-active', showChat);
+        settingsTab.classList.toggle('yvr-fb-tab-active', !showChat);
+        chatTab.setAttribute('aria-selected', showChat ? 'true' : 'false');
+        settingsTab.setAttribute('aria-selected', showChat ? 'false' : 'true');
+        if (showChat) requestAnimationFrame(() => overlay.querySelector<HTMLTextAreaElement>('#yaver-fb-vibe-prompt')?.focus());
+      };
+      chatTab.onclick = () => selectActionsTab('chat');
+      settingsTab.onclick = () => selectActionsTab('settings');
 
       const screenshotBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-screenshot')!;
       const reloadTools = overlay.querySelector<HTMLElement>('#yaver-fb-reload-tools')!;
@@ -3041,6 +3100,14 @@ export class YaverFeedback {
     return YaverFeedback.client;
   }
 
+  private static async getRenderClient(): Promise<P2PClient> {
+    const codingClient = await YaverFeedback.getClient();
+    const cfg = YaverFeedback.config;
+    const renderUrl = cfg?.renderAgentUrl?.trim();
+    if (!renderUrl || renderUrl === cfg?.agentUrl) return codingClient;
+    return new P2PClient(renderUrl, cfg?.authToken ?? '', cfg?.relayPassword ?? '');
+  }
+
   private static async ensureAgentConnection(): Promise<boolean> {
     if (!YaverFeedback.config) return false;
     const authed = await YaverFeedback.ensureAuthToken();
@@ -3597,6 +3664,10 @@ export class YaverFeedback {
       }
       .yvr-fb-machine-pill:hover:not(:disabled) { background: rgba(255,255,255,0.05); }
       .yvr-fb-machine-pill:disabled { opacity: 0.6; cursor: not-allowed; }
+      .yvr-fb-machine-routes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .yvr-fb-machine-route { display: grid; gap: 3px; padding: 9px 10px; border-radius: 10px; background: #fff; border: 1px solid #e1e1e8; min-width: 0; }
+      .yvr-fb-machine-route span { color: #7b7b86; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+      .yvr-fb-machine-route strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #222229; font-size: 12px; }
       .yvr-fb-machine-pill-text { flex: 1; display: grid; gap: 2px; min-width: 0; }
       .yvr-fb-machine-pill-name { font-size: 13px; font-weight: 600; color: #e2e8f0; }
       .yvr-fb-machine-pill-meta {
@@ -3608,6 +3679,31 @@ export class YaverFeedback {
       .yvr-fb-toolbar {
         display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
       }
+      .yvr-fb-tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        padding: 3px;
+        margin-bottom: 10px;
+        border-radius: 12px;
+        background: #ededf3;
+      }
+      .yvr-fb-tab {
+        min-height: 34px;
+        border: 0;
+        border-radius: 9px;
+        background: transparent;
+        color: #858590;
+        font: 700 12px/1 system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .yvr-fb-tab-active {
+        background: #fff;
+        color: #6252e8;
+        box-shadow: 0 1px 4px rgba(20,20,30,.08);
+      }
+      .yvr-fb-tab-pane { min-height: 0; }
+      .yvr-fb-vibe-settings .yvr-fb-vibe-block { display: none; }
       .yvr-fb-tool {
         display: inline-flex; flex-direction: column; align-items: center;
         justify-content: center; gap: 6px;
@@ -3826,6 +3922,28 @@ export class YaverFeedback {
       .yvr-fb-chat-actions .yvr-fb-action {
         padding: 8px 12px; font-size: 12px;
       }
+
+      /* Shared Feedback surface contract: the browser SDK, RN SDK, and
+       * Yaver-container card all use the same quiet white control surface. */
+      .yvr-fb-card { background: #f8f8fb; color: #222229; border-color: #dedee7; box-shadow: 0 24px 60px rgba(30,30,45,.22); }
+      .yvr-fb-subtitle, .yvr-fb-auth-strip, .yvr-fb-device-meta, .yvr-fb-device-loading,
+      .yvr-fb-empty, .yvr-fb-vibe-intro, .yvr-fb-routing-picker-label,
+      .yvr-fb-runner-card-kicker, .yvr-fb-runner-card-meta, .yvr-fb-vibe-label,
+      .yvr-fb-chat-status, .yvr-fb-status, .yvr-fb-last-report { color: #7b7b86; }
+      .yvr-fb-auth-strip strong, .yvr-fb-device-name, .yvr-fb-machine-pill-name,
+      .yvr-fb-vibe-stage-title, .yvr-fb-runner-card-title { color: #222229; }
+      .yvr-fb-device-row, .yvr-fb-machine-pill, .yvr-fb-tool, .yvr-fb-runner-card,
+      .yvr-fb-vibe-onboarding, .yvr-fb-vibe-step, .yvr-fb-vibe-input,
+      .yvr-fb-chat-transcript, .yvr-fb-chat-bubble--agent {
+        background: #fff; color: #44444f; border-color: #e1e1e8;
+      }
+      .yvr-fb-device-row:hover:not(:disabled), .yvr-fb-machine-pill:hover:not(:disabled),
+      .yvr-fb-tool:hover:not(:disabled), .yvr-fb-runner-card:hover:not(:disabled) { background: #f1f0ff; }
+      .yvr-fb-routing-picker { background: #fff; color: #4b3fd0; border-color: #cfcaff; }
+      .yvr-fb-runner-summary { background: #efedff; color: #5d4cdb; border-color: #d6d1ff; }
+      .yvr-fb-vibe-stage-text, .yvr-fb-vibe-radio, .yvr-fb-chat-bubble--agent { color: #555561; }
+      .yvr-fb-chat-bubble--user { color: #332a7b; background: #e9e6ff; border-color: #cfc9ff; }
+      .yvr-fb-action-secondary { background: #ececf2; color: #555561; border-color: #dedee7; }
 
       @media (max-width: 640px) {
         /* On phones, fall back to the centered modal layout — a

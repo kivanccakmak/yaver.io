@@ -537,9 +537,8 @@ export default function AppsScreen() {
   // Mixing this with the focus-bound singleton produced a green status card
   // from the pool followed by `Failed to fetch` (and an empty WebView URL)
   // from a singleton that was still reconnecting.
-  const previewClient = activeDevice?.id
-    ? connectionManager.clientFor(activeDevice.id)
-    : quicClient;
+  const previewClient = connectionManager.renderClient();
+  const codingClient = connectionManager.runnerClient();
   // Effective state — focused box OR any pool client live. See
   // lib/connectionState; aligns this tab with Devices/Tasks/Reload so
   // we no longer disagree about "connected" when the focused box is
@@ -548,7 +547,7 @@ export default function AppsScreen() {
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const mobileWorkers = devices.filter((d) => d.deviceClass === "edge-mobile");
   const selectedTarget = mobileWorkers.find((d) => d.id === selectedTargetId) || null;
-  const isDirectConnection = quicClient.connectionMode === "direct";
+  const isDirectConnection = previewClient.connectionMode === "direct";
   const router = useRouter();
   const [remotelessPhoneProjects, setRemotelessPhoneProjects] = useState<PhoneProject[]>([]);
   const [remotelessProviderProjects, setRemotelessProviderProjects] = useState<ProviderProject[]>([]);
@@ -624,12 +623,12 @@ export default function AppsScreen() {
       setLiveDeployCaps({});
       return;
     }
-    quicClient.capabilitySnapshot()
+    previewClient.capabilitySnapshot()
       .then(setCapabilitySnapshot)
       .catch(() => setCapabilitySnapshot(null));
     // Fire-and-forget; older agents 404 and we just fall through to
     // the snapshot-based blocker below.
-    quicClient.deployCapabilities()
+    previewClient.deployCapabilities()
       .then((report) => {
         const map: Record<string, { canDeploy: boolean; reason?: string; platformLock?: string }> = {};
         report.targets.forEach((t) => {
@@ -670,7 +669,7 @@ export default function AppsScreen() {
     labelForUser: string,
   ): Promise<boolean> => {
     try {
-      await quicClient.sendTask(title, description);
+      await codingClient.sendTask(title, description);
       setQuickActionStatus(`${labelForUser} sent`);
       setTimeout(() => setQuickActionStatus(null), 3000);
       router.navigate("/(tabs)/tasks");
@@ -685,7 +684,7 @@ export default function AppsScreen() {
           {
             text: "Retry",
             onPress: () => {
-              void quicClient.sendTask(title, description)
+              void codingClient.sendTask(title, description)
                 .then(() => {
                   setQuickActionStatus(`${labelForUser} sent`);
                   setTimeout(() => setQuickActionStatus(null), 3000);
@@ -720,7 +719,7 @@ export default function AppsScreen() {
         text: actionLabel || "Ask AI to Fix",
         onPress: async () => {
           try {
-            const r = await quicClient.recover(ctx);
+            const r = await previewClient.recover(ctx);
             setQuickActionStatus(`Fix task queued: ${r.title}`);
             setTimeout(() => setQuickActionStatus(null), 5000);
             router.navigate("/(tabs)/tasks");
@@ -751,7 +750,7 @@ export default function AppsScreen() {
     setPullRefreshing(true);
     try {
       await Promise.allSettled([
-        quicClient.refreshMobileProjects(),
+        previewClient.refreshMobileProjects(),
         refreshDevices(),
       ]);
     } finally {
@@ -953,7 +952,7 @@ export default function AppsScreen() {
     if (!activeDevice?.id || !isConnected) return;
     if (lastScanKickedDeviceIdRef.current === activeDevice.id) return;
     lastScanKickedDeviceIdRef.current = activeDevice.id;
-    void quicClient.refreshMobileProjects().catch(() => {});
+    void previewClient.refreshMobileProjects().catch(() => {});
   }, [activeDevice?.id, isConnected]);
 
   // Poll dev server status + all projects.
@@ -1247,15 +1246,15 @@ export default function AppsScreen() {
     setLoadingActions(true);
     try {
       const result = projectPath
-        ? await quicClient.getProjectActionsByPath(projectPath)
-        : await quicClient.getProjectActions(projectName);
+        ? await previewClient.getProjectActionsByPath(projectPath)
+        : await previewClient.getProjectActions(projectName);
       let compatibility: DevCompatibilityStatus | null = null;
       const hermesFramework = result.actions.find((a: any) => isHermesMobileFramework(a.framework))?.framework;
       const secondClassFramework = result.actions.find((a: any) => isSecondClassMobileFramework(a.framework))?.framework;
       if (isHermesMobileFramework(hermesFramework)) {
         try {
           const availableModules = await getAvailableModules();
-          compatibility = await quicClient.getDevCompatibility(result.path, availableModules);
+          compatibility = await previewClient.getDevCompatibility(result.path, availableModules);
         } catch {
           compatibility = null;
         }
@@ -1319,7 +1318,7 @@ export default function AppsScreen() {
       // browser lane, exactly like web's target discovery. Best-effort —
       // an older agent without /workspace/apps changes nothing.
       try {
-        const apps = await quicClient.getWorkspaceApps(undefined, result.path || projectPath);
+        const apps = await previewClient.getWorkspaceApps(undefined, result.path || projectPath);
         composed = [...composed, ...workspaceAppLanes(apps as any)];
       } catch {
         /* no workspace manifest or older agent — no sub-app step */
@@ -1409,7 +1408,7 @@ export default function AppsScreen() {
       // Open vibing mode — delay to let action sheet modal fully close first
       setTimeout(async () => {
         try {
-          const state = await quicClient.getVibingState(project);
+          const state = await codingClient.getVibingState(project);
           if (state) {
             setVibingState(state);
           } else {
@@ -1482,7 +1481,7 @@ export default function AppsScreen() {
       let deferStartingClear = false;
       // One closure for "start this preview", so the capability-gap fix can
       // re-issue the EXACT request that was refused instead of approximating it.
-      const startThisPreview = () => quicClient.startDevServer({
+      const startThisPreview = () => previewClient.startDevServer({
         framework: action.framework || "",
         workDir: targetPath,
         // Browser Reload = the browser lane. Serve the web target, never a
@@ -1518,7 +1517,7 @@ export default function AppsScreen() {
         // never increments and the failure panel is unreachable. The user gets
         // an overlay that never lifts. Cheap call, removes a whole dead end.
         try {
-          const st = await quicClient.getDevServerStatus();
+          const st = await previewClient.getDevServerStatus();
           if (isActiveDevServerStatus(st)) setDevStatus(st);
         } catch { /* the poll will catch up; the empty-url guard below covers us */ }
 
@@ -1584,7 +1583,7 @@ export default function AppsScreen() {
   useEffect(() => {
     if (!isConnected) return;
     let mounted = true;
-    quicClient.getDevServerTarget()
+    previewClient.getDevServerTarget()
       .then((target) => {
         if (!mounted) return;
         setSelectedTargetId(target?.targetDeviceId || null);
@@ -1608,7 +1607,7 @@ export default function AppsScreen() {
     if (!devStatus?.workDir) return;
     setBuildStatus("queued");
     try {
-      const build = await quicClient.startBuild("xcode-device-install", devStatus.workDir, true);
+      const build = await previewClient.startBuild("xcode-device-install", devStatus.workDir, true);
       setBuildStatus("running");
 
       // Poll build status every 3s
@@ -1681,7 +1680,7 @@ export default function AppsScreen() {
             text: deploy.label,
             onPress: async () => {
               try {
-                await quicClient.sendTask(deploy.prompt(projectName, workDir), `[Store Deploy] ${projectName} · ${framework}`);
+                await codingClient.sendTask(deploy.prompt(projectName, workDir), `[Store Deploy] ${projectName} · ${framework}`);
                 setQuickActionStatus(`${deploy.label} task sent`);
                 setTimeout(() => setQuickActionStatus(null), 4000);
                 router.navigate("/(tabs)/tasks");
@@ -1700,13 +1699,13 @@ export default function AppsScreen() {
       setLoadingStatus("Flushing Flutter app...");
       setQuickActionStatus("Starting Flutter flush...");
       try {
-        const currentStatus = await quicClient.getDevServerStatus();
+        const currentStatus = await previewClient.getDevServerStatus();
         if (currentStatus?.running && currentStatus.workDir === workDir && currentStatus.framework === "flutter") {
-          await quicClient.reloadDevServer();
+          await previewClient.reloadDevServer();
           setQuickActionStatus("Flutter reload sent");
           Alert.alert("Flutter Flushed", "A Flutter reload was sent over LAN.");
         } else {
-          await quicClient.startDevServer({
+          await previewClient.startDevServer({
             framework: "flutter",
             workDir,
             targetDeviceId: selectedTarget?.id,
@@ -1746,14 +1745,14 @@ export default function AppsScreen() {
       setBuildStatus("queued");
       setQuickActionStatus("Starting native iOS flush...");
       try {
-        const build = await quicClient.startBuild("xcode-device-install", workDir, true);
+        const build = await previewClient.startBuild("xcode-device-install", workDir, true);
         setBuildStatus("running");
         let consecutivePollFailures = 0;
         for (let i = 0; i < 120; i++) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
-          let b: Awaited<ReturnType<typeof quicClient.getBuild>> | null = null;
+          let b: Awaited<ReturnType<typeof previewClient.getBuild>> | null = null;
           try {
-            b = await quicClient.getBuild(build.id);
+            b = await previewClient.getBuild(build.id);
           } catch (pollErr) {
             consecutivePollFailures += 1;
             if (consecutivePollFailures >= 5) {
@@ -1812,14 +1811,14 @@ export default function AppsScreen() {
       setBuildStatus("queued");
       setQuickActionStatus("Building Android APK...");
       try {
-        const build = await quicClient.startBuild("gradle-apk", workDir);
+        const build = await previewClient.startBuild("gradle-apk", workDir);
         setBuildStatus("running");
         let consecutivePollFailures = 0;
         for (let i = 0; i < 180; i++) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
-          let b: Awaited<ReturnType<typeof quicClient.getBuild>> | null = null;
+          let b: Awaited<ReturnType<typeof previewClient.getBuild>> | null = null;
           try {
-            b = await quicClient.getBuild(build.id);
+            b = await previewClient.getBuild(build.id);
           } catch (pollErr) {
             consecutivePollFailures += 1;
             if (consecutivePollFailures >= 5) {
@@ -1845,8 +1844,8 @@ export default function AppsScreen() {
             let localPath: string;
             try {
               localPath = await downloadArtifact(
-                quicClient.baseUrl,
-                quicClient.getAuthHeaders(),
+                previewClient.baseUrl,
+                previewClient.getAuthHeaders(),
                 build.id,
               );
             } catch (dlErr) {
@@ -1895,7 +1894,7 @@ export default function AppsScreen() {
   }, [isDirectConnection, selectedTarget, activeDevice?.os, router]);
 
   const ensureHermesDevServer = useCallback(async (workDir: string, framework?: string) => {
-    const currentStatus = await quicClient.getDevServerStatus();
+    const currentStatus = await previewClient.getDevServerStatus();
     // `running` alone is NOT "the lane I need is up".
     //
     // A dev server for this workDir can be serving the WEB target (caller
@@ -1919,7 +1918,7 @@ export default function AppsScreen() {
 
     setLoadingStatus("Starting dev server...");
     setBuildProgress(0.05);
-    await quicClient.startDevServer({
+    await previewClient.startDevServer({
       framework: framework || "expo",
       workDir,
       targetDeviceId: selectedTarget?.id,
@@ -1929,7 +1928,7 @@ export default function AppsScreen() {
 
     for (let i = 0; i < 30; i++) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      const status = await quicClient.getDevServerStatus();
+      const status = await previewClient.getDevServerStatus();
       setLoadingStatus(status?.running ? "Dev server ready" : "Starting dev server...");
       if (status?.running && status.workDir === workDir) return;
     }
@@ -2920,8 +2919,8 @@ export default function AppsScreen() {
                         label: "Restart scan",
                         onPress: async () => {
                           try {
-                            await quicClient.stopMobileProjectsScan().catch(() => undefined);
-                            await quicClient.refreshMobileProjects();
+                            await previewClient.stopMobileProjectsScan().catch(() => undefined);
+                            await previewClient.refreshMobileProjects();
                           } catch {}
                         },
                       }
@@ -2930,7 +2929,7 @@ export default function AppsScreen() {
                         onPress: async () => {
                           try {
                             setProjectsDiscovering(true);
-                            await quicClient.refreshMobileProjects();
+                            await previewClient.refreshMobileProjects();
                           } catch {}
                         },
                       }
@@ -3230,7 +3229,7 @@ export default function AppsScreen() {
                     style={[s.vibingFeatureCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
                     onPress={async () => {
                       try {
-                        const result = await quicClient.executeVibingSuggestion(sg.prompt, vibingState!.path);
+                        const result = await codingClient.executeVibingSuggestion(sg.prompt, vibingState!.path);
                         if (result.taskId) {
                           setVibingTaskId(result.taskId);
                           setVibingTaskStatus(`Running: ${sg.label}`);
@@ -3248,7 +3247,7 @@ export default function AppsScreen() {
                           { text: "Cancel", style: "cancel" },
                           { text: "Add to Todo", onPress: async () => {
                             try {
-                              await quicClient.sendTask(sg.label, sg.prompt + (sg.reasoning ? `\n\nContext: ${sg.reasoning}` : ""));
+                              await codingClient.sendTask(sg.label, sg.prompt + (sg.reasoning ? `\n\nContext: ${sg.reasoning}` : ""));
                             } catch {}
                           }},
                           { text: "Delete", style: "destructive", onPress: () => {
@@ -3292,7 +3291,7 @@ export default function AppsScreen() {
                   ]}
                   onPress={async () => {
                     try {
-                      const result = await quicClient.executeVibingSuggestion(qa.prompt, vibingState!.path);
+                      const result = await codingClient.executeVibingSuggestion(qa.prompt, vibingState!.path);
                       if (result.taskId) {
                         setVibingTaskId(result.taskId);
                         setVibingTaskStatus(`Running: ${qa.label}`);
@@ -3326,7 +3325,7 @@ export default function AppsScreen() {
                 onPress={async () => {
                   if (!customTask.trim() || !vibingState) return;
                   try {
-                    const result = await quicClient.executeVibingSuggestion(customTask, vibingState.path);
+                    const result = await codingClient.executeVibingSuggestion(customTask, vibingState.path);
                     if (result.taskId) {
                       setVibingTaskId(result.taskId);
                       setVibingTaskStatus(`Running: ${customTask.slice(0, 40)}`);

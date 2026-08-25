@@ -3,6 +3,13 @@ import type { SDKDogfoodConfig } from './dogfoodPolicy';
 export interface FeedbackConfig {
   /** Yaver agent URL (e.g., http://192.168.1.100:18080 or relay URL) */
   agentUrl?: string;
+  /** Optional coding route. Defaults to agentUrl. */
+  codingAgentUrl?: string;
+  /** Optional render/reload route. Defaults to codingAgentUrl/agentUrl. */
+  renderAgentUrl?: string;
+  /** Device identities shown when coding and rendering use different boxes. */
+  codingDeviceId?: string;
+  renderDeviceId?: string;
   /**
    * Show the small "Y" mark while this page is running INSIDE Yaver (a browser
    * -lane preview or a streamed WebRTC surface), so a tester can tell it apart

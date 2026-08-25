@@ -19,6 +19,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -54,6 +56,11 @@ interface Props {
   project?: string;
   model?: string;
   runner?: string;
+  /** Standalone SDK hosts use this to fold back to the floating Y without
+   * destroying the live task subscription or transcript state. */
+  onMinimize?: () => void;
+  codingMachine?: string;
+  renderMachine?: string;
 }
 
 export function VibeChatScreen({
@@ -65,7 +72,11 @@ export function VibeChatScreen({
   project,
   model,
   runner,
+  onMinimize,
+  codingMachine,
+  renderMachine,
 }: Props) {
+  const [activeTab, setActiveTab] = useState<'chat' | 'settings'>('chat');
   const [taskId, setTaskId] = useState(initialTaskId);
   const [turns, setTurns] = useState<VibeTurn[]>(() => [
     {
@@ -86,6 +97,7 @@ export function VibeChatScreen({
   const [followUp, setFollowUp] = useState('');
   const [isResuming, setIsResuming] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
+  const [reloadQueued, setReloadQueued] = useState(false);
   const scrollRef = useRef<ScrollView | null>(null);
   const abortRef = useRef<(() => void) | null>(null);
 
@@ -197,6 +209,10 @@ export function VibeChatScreen({
 
   const handleReload = useCallback(async () => {
     if (isReloading || !onReload) return;
+    if (status === 'running') {
+      setReloadQueued(true);
+      return;
+    }
     setIsReloading(true);
     try {
       await onReload();
@@ -213,7 +229,13 @@ export function VibeChatScreen({
     } finally {
       setIsReloading(false);
     }
-  }, [isReloading, onReload]);
+  }, [isReloading, onReload, status]);
+
+  useEffect(() => {
+    if (!reloadQueued || status === 'running' || isReloading) return;
+    setReloadQueued(false);
+    void handleReload();
+  }, [handleReload, isReloading, reloadQueued, status]);
 
   // Probe whether voice is usable: deps present (expo-av + expo-file-
   // system + buffer) AND the agent reports STT/TTS ready. Hide the mic
@@ -367,19 +389,35 @@ export function VibeChatScreen({
   };
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
       <View style={styles.header}>
-        <Text style={styles.title}>Vibe</Text>
-        {onClose && (
-          <TouchableOpacity onPress={onClose} accessibilityLabel="Close vibe chat">
-            <Text style={styles.close}>✕</Text>
+        <View>
+          <Text style={styles.title}>Vibing</Text>
+          <Text style={styles.routeCaption} numberOfLines={1}>
+            {[runner || 'automatic runner', model].filter(Boolean).join(' · ')}
+          </Text>
+        </View>
+        <View style={styles.headerActions}>
+          {onMinimize ? <TouchableOpacity onPress={onMinimize} accessibilityLabel="Minimize Vibing"><Text style={styles.close}>−</Text></TouchableOpacity> : null}
+          {onClose ? <TouchableOpacity onPress={onClose} accessibilityLabel="End vibe chat"><Text style={styles.close}>✕</Text></TouchableOpacity> : null}
+        </View>
+      </View>
+
+      <View style={styles.tabs} accessibilityRole="tablist">
+        {(['chat', 'settings'] as const).map((tab) => (
+          <TouchableOpacity key={tab} onPress={() => setActiveTab(tab)} style={[styles.tab, activeTab === tab && styles.tabSelected]} accessibilityRole="tab" accessibilityState={{ selected: activeTab === tab }}>
+            <Text style={[styles.tabText, activeTab === tab && styles.tabTextSelected]}>{tab === 'chat' ? 'Chat' : 'Settings'}</Text>
           </TouchableOpacity>
-        )}
+        ))}
       </View>
 
       <ScrollView
         ref={scrollRef}
-        style={styles.transcript}
+        style={[styles.transcript, activeTab !== 'chat' && styles.hidden]}
         contentContainerStyle={styles.transcriptContent}
         keyboardShouldPersistTaps="handled"
       >
@@ -413,7 +451,27 @@ export function VibeChatScreen({
         )}
       </ScrollView>
 
-      <View style={styles.footer}>
+      <ScrollView style={[styles.settings, activeTab !== 'settings' && styles.hidden]} contentContainerStyle={styles.settingsContent}>
+        <Text style={styles.settingsLabel}>Coding route</Text>
+        <View style={styles.settingsCard}>
+          <Text style={styles.settingsMeta}>Coding machine · {codingMachine || 'selected machine'}</Text>
+          <Text style={styles.settingsMeta}>Render machine · {renderMachine || codingMachine || 'same machine'}</Text>
+          <Text style={styles.settingsTitle}>{runner || 'Automatic runner'}</Text>
+          <Text style={styles.settingsMeta}>{model || 'Runner default model'}</Text>
+          {project ? <Text style={styles.settingsMeta}>{project}</Text> : null}
+        </View>
+        <Text style={styles.settingsLabel}>Preview</Text>
+        <View style={styles.settingsCard}>
+          <Text style={styles.settingsTitle}>Reload rendered app</Text>
+          <Text style={styles.settingsMeta}>{reloadQueued ? 'Reload queued. It will run when coding finishes.' : status === 'running' ? 'Reload will run when the current coding turn finishes.' : 'Apply the latest rendered output without ending this chat.'}</Text>
+          {onReload ? <TouchableOpacity style={[styles.settingsButton, isReloading && styles.actionBtnDisabled]} onPress={handleReload} disabled={isReloading}>
+            <Text style={styles.settingsButtonText}>{isReloading ? 'Reloading…' : reloadQueued ? 'Reload Queued' : status === 'running' ? 'Queue Reload' : 'Reload'}</Text>
+          </TouchableOpacity> : null}
+        </View>
+        {onMinimize ? <TouchableOpacity style={styles.returnButton} onPress={onMinimize} accessibilityLabel="Return to app and keep Vibing running"><Text style={styles.returnButtonText}>Return to App</Text></TouchableOpacity> : null}
+      </ScrollView>
+
+      <View style={[styles.footer, activeTab !== 'chat' && styles.hidden]}>
         {voiceAvailable && voiceState !== 'idle' && (
           <Text style={styles.engineCaption}>
             {voiceState === 'recording' ? 'listening' : voiceState === 'uploading' ? 'sending' : voiceState === 'thinking' ? 'agent working' : 'speaking'}
@@ -494,12 +552,12 @@ export function VibeChatScreen({
           </TouchableOpacity>
         </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a' },
+  container: { flex: 1, backgroundColor: '#f8f8fb' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -508,10 +566,17 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 8,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
+    borderBottomColor: '#e5e5ec',
   },
-  title: { color: '#fff', fontSize: 17, fontWeight: '600' },
-  close: { color: '#9ca3af', fontSize: 18 },
+  title: { color: '#17171d', fontSize: 17, fontWeight: '700' },
+  routeCaption: { color: '#858590', fontSize: 10, marginTop: 2, maxWidth: 250 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 22 },
+  close: { color: '#656570', fontSize: 20, fontWeight: '700' },
+  tabs: { flexDirection: 'row', gap: 6, marginHorizontal: 12, marginTop: 8, padding: 3, borderRadius: 12, backgroundColor: '#ededf3' },
+  tab: { flex: 1, minHeight: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  tabSelected: { backgroundColor: '#fff' },
+  tabText: { color: '#858590', fontSize: 12, fontWeight: '700' },
+  tabTextSelected: { color: '#6252e8' },
   transcript: { flex: 1 },
   transcriptContent: { padding: 12, paddingBottom: 24 },
   turn: {
@@ -525,8 +590,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
   turnAssistant: {
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: '#fff',
+    borderColor: '#e4e4ea',
     borderWidth: 1,
     alignSelf: 'flex-start',
   },
@@ -535,7 +600,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     paddingHorizontal: 4,
   },
-  turnText: { color: '#f1f5f9', fontSize: 14, lineHeight: 20 },
+  turnText: { color: '#28282f', fontSize: 14, lineHeight: 20 },
   spinnerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -545,15 +610,17 @@ const styles = StyleSheet.create({
   spinnerText: { color: '#9ca3af', fontSize: 12, marginLeft: 8 },
   footer: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
+    borderTopColor: '#e5e5ec',
     padding: 10,
   },
   input: {
     minHeight: 40,
     maxHeight: 120,
-    color: '#f1f5f9',
+    color: '#28282f',
     fontSize: 14,
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e2e2e9',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -570,12 +637,23 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   actionBtnDisabled: { opacity: 0.5 },
-  reloadBtn: { backgroundColor: 'rgba(255,255,255,0.08)' },
+  reloadBtn: { backgroundColor: '#e9e9ef' },
   voiceBtn: { backgroundColor: 'rgba(16,185,129,0.18)' },
   voiceBtnActive: { backgroundColor: '#ef4444' },
-  engineToggle: { backgroundColor: 'rgba(255,255,255,0.06)', marginRight: 'auto', marginLeft: 0 },
-  engineToggleText: { color: '#cbd5e1', fontSize: 12, fontWeight: '600' },
+  engineToggle: { backgroundColor: '#e9e9ef', marginRight: 'auto', marginLeft: 0 },
+  engineToggleText: { color: '#555561', fontSize: 12, fontWeight: '600' },
   engineCaption: { color: '#9ca3af', fontSize: 11, marginBottom: 6, marginLeft: 4 },
   sendBtn: { backgroundColor: '#7582f5' },
   actionText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  settings: { flex: 1 },
+  settingsContent: { padding: 14, gap: 10, paddingBottom: 30 },
+  settingsLabel: { color: '#777782', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 },
+  settingsCard: { borderRadius: 14, padding: 14, gap: 5, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e3e3e9' },
+  settingsTitle: { color: '#222229', fontSize: 14, fontWeight: '800' },
+  settingsMeta: { color: '#777782', fontSize: 12, lineHeight: 17 },
+  settingsButton: { alignSelf: 'flex-start', marginTop: 8, borderRadius: 10, backgroundColor: '#6f58f5', paddingHorizontal: 14, paddingVertical: 9 },
+  settingsButtonText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  returnButton: { minHeight: 46, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#6f58f5', marginTop: 4 },
+  returnButtonText: { color: '#fff', fontWeight: '800' },
+  hidden: { display: 'none' },
 });

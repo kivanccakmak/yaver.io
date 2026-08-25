@@ -158,6 +158,7 @@ if (IS_HOST_MODE) {
 let config: FeedbackConfig | null = null;
 let enabled = false;
 let p2pClient: P2PClient | null = null;
+let renderP2PClient: P2PClient | null = null;
 let shakeDetector: ShakeDetector | null = null;
 /** Unsubscribe for the BlackBox command handler registered by init(). Held so
  *  a re-init (or destroy) can drop the old one instead of stacking. */
@@ -249,18 +250,22 @@ export class YaverFeedback {
     const effectiveUrl = agentUrl ?? config.agentUrl;
     if (!effectiveUrl) {
       p2pClient = null;
+      renderP2PClient = null;
       p2pAuthToken = null;
       return;
     }
     const token = await YaverFeedback.resolveP2PAuthToken();
     if (!token) {
       p2pClient = null;
+      renderP2PClient = null;
       p2pAuthToken = null;
       return;
     }
     p2pAuthToken = token;
     const rp = await resolveRelayPassword(token);
     p2pClient = new P2PClient(effectiveUrl, token, rp);
+    const renderUrl = config.renderAgentUrl || effectiveUrl;
+    renderP2PClient = renderUrl === effectiveUrl ? p2pClient : new P2PClient(renderUrl, token, rp);
   }
 
   /**
@@ -349,6 +354,9 @@ export class YaverFeedback {
       maxRecordingDuration: 120,
       autoLogin: true,
       ...cfg,
+      agentUrl: cfg.codingAgentUrl || cfg.agentUrl,
+      codingDeviceId: cfg.codingDeviceId || cfg.preferredDeviceId,
+      renderDeviceId: cfg.renderDeviceId || cfg.codingDeviceId || cfg.preferredDeviceId,
     };
     if (IS_HOST_MODE) {
       // sfmg / talos / etc. running inside Yaver mobile (compile-time
@@ -425,11 +433,16 @@ export class YaverFeedback {
       // is set, so set a placeholder header here that won't 401 a
       // direct-LAN url and will be overwritten before any relay hop.
       p2pClient = new P2PClient(config.agentUrl, config.authToken ?? '', p2pRelayPassword);
+      const renderUrl = config.renderAgentUrl || config.agentUrl;
+      renderP2PClient = renderUrl === config.agentUrl
+        ? p2pClient
+        : new P2PClient(renderUrl, config.authToken ?? '', p2pRelayPassword);
       if (config.authToken) {
         void YaverFeedback.rebuildP2PClient(config.agentUrl);
       }
     } else {
       p2pClient = null;
+      renderP2PClient = null;
       // Auto-discover agent in the background when convexUrl or LAN is available
       if (enabled && (config.authToken || config.preferredDeviceId)) {
         YaverFeedback.discoverAgent();
@@ -787,9 +800,17 @@ export class YaverFeedback {
    */
   static async setPreferredDevice(deviceId: string): Promise<void> {
     if (!config) return;
+    const wasUnified = !config.renderDeviceId
+      || config.renderDeviceId === config.codingDeviceId
+      || config.renderDeviceId === config.preferredDeviceId;
     config.preferredDeviceId = deviceId;
+    config.codingDeviceId = deviceId;
+    if (wasUnified) config.renderDeviceId = deviceId;
     config.agentUrl = undefined;
+    config.codingAgentUrl = undefined;
+    if (wasUnified) config.renderAgentUrl = undefined;
     p2pClient = null;
+    renderP2PClient = null;
     p2pAuthToken = null;
     await YaverFeedback.discoverAgent();
   }
@@ -859,6 +880,7 @@ export class YaverFeedback {
       config.agentUrl = undefined;
     }
     p2pClient = null;
+    renderP2PClient = null;
     p2pAuthToken = null;
   }
 
@@ -1317,6 +1339,18 @@ export class YaverFeedback {
     return p2pClient;
   }
 
+  /** Renderer/reload route; intentionally distinct from the coding client. */
+  static getRenderP2PClient(): P2PClient | null {
+    return renderP2PClient ?? p2pClient;
+  }
+
+  static getMachineRouting(): { codingDeviceId?: string; renderDeviceId?: string } {
+    return {
+      codingDeviceId: config?.codingDeviceId || config?.preferredDeviceId,
+      renderDeviceId: config?.renderDeviceId || config?.codingDeviceId || config?.preferredDeviceId,
+    };
+  }
+
   // ─── One-stop SaaS replacement methods ─────────────────────────
   //
   // These are the three solo-dev SaaS-replacement entry points
@@ -1436,6 +1470,7 @@ export class YaverFeedback {
           config.agentUrl = result.url;
           const rp = await resolveRelayPassword(config.authToken ?? '');
           p2pClient = new P2PClient(result.url, config.authToken ?? '', rp);
+          renderP2PClient = p2pClient;
         }
       } catch {}
     }
@@ -1668,6 +1703,7 @@ export class YaverFeedback {
     enabled = false;
     config = null;
     p2pClient = null;
+    renderP2PClient = null;
     errorBuffer = [];
   }
 }
