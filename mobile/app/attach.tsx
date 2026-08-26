@@ -249,6 +249,18 @@ export default function AttachScreen() {
                   "Check the dev server is still running on the box. Detach and re-attach to restart it.",
               });
             }}
+            onHttpError={(e) => {
+              setLoading(false);
+              reloadInFlight.current = false;
+              const status = e.nativeEvent.statusCode;
+              setFatal({
+                code: "DOGFOOD_WEBVIEW_HTTP_FAILED",
+                message: `The attached surface returned HTTP ${status}.`,
+                remedy: status === 404
+                  ? "The selected machine is serving Yaver, but this device received the wrong preview route. Return to Production and retry after updating Yaver."
+                  : "Return to Production and retry. If it repeats, keep the named HTTP status visible and use Fix with AI.",
+              });
+            }}
             style={{ flex: 1, backgroundColor: c.bg }}
           />
         ) : (

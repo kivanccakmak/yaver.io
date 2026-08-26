@@ -14,6 +14,7 @@ import { appLog } from "./logger";
 import { describeDevReloadResult, devReloadReachedTarget, type AttachSessionResult, type RunnerInfo } from "./quic";
 import { doctorBrowserLane, type BrowserLaneProbeResult } from "./browserLaneDoctor";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "./projectPreviewRuntime";
+import { probeAgentPreviewRoute, resolveAgentPreviewUrl } from "./agentPreviewUrl";
 
 export type { AttachSessionResult };
 
@@ -239,9 +240,24 @@ export async function prepareDogfoodMode(
     // Dogfood uses its scoped HttpOnly attach cookie minted above. Keep the
     // reported path on this device's transport origin and never copy an owner
     // credential into the URL.
-    const agentOrigin = client.baseUrl.replace(/\/+$/, "") + "/";
-    const reportedURL = new URL(bundlePath, agentOrigin);
-    const url = new URL(`${reportedURL.pathname}${reportedURL.search}${reportedURL.hash}`, agentOrigin).toString();
+    const url = resolveAgentPreviewUrl(client.baseUrl, bundlePath);
+
+    onProgress?.("Verifying the phone’s Dogfood route…");
+    const routeProbe = await probeAgentPreviewRoute(url, client.getAuthHeaders());
+    if (!routeProbe.ok) {
+      const suffix = routeProbe.status > 0 ? `HTTP_${routeProbe.status}` : "TRANSPORT";
+      const detail = routeProbe.status > 0
+        ? `The exact Dogfood URL returned HTTP ${routeProbe.status} before the WebView opened.`
+        : `The phone could not reach the exact Dogfood URL: ${routeProbe.error || "transport failed"}.`;
+      return fail(
+        `DOGFOOD_RENDER_ROUTE_${suffix}`,
+        detail,
+        routeProbe.status === 404
+          ? "Update Yaver so the relay keeps the selected device prefix, then retry Dogfood mode."
+          : "Reconnect the selected machine and retry. Dogfood remains off until the phone route answers successfully.",
+      );
+    }
+    onLog?.(`[route] phone handoff HTTP ${routeProbe.status} (${routeProbe.contentType})`);
 
     onProgress?.("Proving Yaver renders in the browser…");
     let probe = await doctorBrowserLane(client, 45);

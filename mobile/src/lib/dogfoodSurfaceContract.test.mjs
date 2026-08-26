@@ -46,6 +46,9 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
   assert.match(attached, /reloadDogfoodSurface\("manual"\)/);
   assert.match(attached, /DOGFOOD_WEBVIEW_LOAD_FAILED/,
     "an in-mode browser failure must carry a stable code, not only prose");
+  assert.match(attached, /onHttpError=/);
+  assert.match(attached, /DOGFOOD_WEBVIEW_HTTP_FAILED/,
+    "HTTP failures must not paint a raw server error as if Dogfood succeeded");
   assert.match(attached, /parseDogfoodRenderMessage/);
   assert.match(attached, /onMessage=/);
 });
@@ -57,9 +60,12 @@ test("Dogfood entry is fail-closed until Expo and the browser lane are proved", 
   assert.match(attachClient, /await stopAttachSession\(deviceId, session\.sessionId\)/,
     "a failed entry must revoke the partially minted capability");
   assert.match(attachClient, /DOGFOOD_PRIMARY_DISCONNECTED/);
-  assert.match(attachClient, /const agentOrigin = client\.baseUrl/);
-  assert.match(attachClient, /new URL\(bundlePath, agentOrigin\)/,
-    "the agent's relative browser path must resolve through the selected primary device");
+  assert.match(attachClient, /resolveAgentPreviewUrl\(client\.baseUrl, bundlePath\)/,
+    "the agent's relative browser path must retain the selected device's relay prefix");
+  assert.match(attachClient, /probeAgentPreviewRoute\(url, client\.getAuthHeaders\(\)\)/,
+    "Dogfood must probe the exact phone handoff URL instead of trusting only the box-local doctor");
+  assert.match(attachClient, /DOGFOOD_RENDER_ROUTE_/,
+    "a failed handoff route must stop entry with a stable code");
   assert.doesNotMatch(attachClient, /getDevServerBundleUrl\(bundlePath\)/,
     "Dogfood must not copy the owner bearer into a WebView URL");
 });

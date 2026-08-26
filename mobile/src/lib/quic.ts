@@ -33,6 +33,7 @@ import { appLog } from "./logger";
 import { describeDirectProbeFailure, isUnroutableFailure } from "./directProbeFailure";
 import { ParkedTurnError, type ParkedTurnRejection } from "./parkedTurn";
 import { reattachDelayMs } from "./taskStreamRecovery";
+import { resolveAgentPreviewUrl } from "./agentPreviewUrl";
 
 /**
  * Reattach budget for /dev/events. Same shape as the task-output ladder
@@ -9991,7 +9992,7 @@ export class QuicClient {
    * preview URL: URLs escape into navigation history, Referer headers, crash
    * reports, screenshots, and guest-page JavaScript. */
   getDevServerBundleUrl(bundlePath: string): string {
-    return `${this.baseUrl}${bundlePath}`;
+    return resolveAgentPreviewUrl(this.baseUrl, bundlePath);
   }
 
   // ── Container Sandbox ───────────────────────────────────────────────

@@ -15,7 +15,7 @@ test("browser preview URLs never carry owner or relay credentials", () => {
   const start = source.indexOf("getDevServerBundleUrl(");
   const end = source.indexOf("// ── Container Sandbox", start);
   const method = source.slice(start, end);
-  assert.match(method, /return `\$\{this\.baseUrl\}\$\{bundlePath\}`/);
+  assert.match(method, /return resolveAgentPreviewUrl\(this\.baseUrl, bundlePath\)/);
   assert.doesNotMatch(method, /token=|__rp|relayPassword|this\.token/);
 });
 
