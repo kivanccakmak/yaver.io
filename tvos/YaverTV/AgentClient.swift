@@ -989,6 +989,24 @@ actor AgentClient {
         )
     }
 
+    @discardableResult
+    func sendRemoteRuntimeCommand(
+        sessionId: String,
+        command: String,
+        source: String,
+        workDir: String?
+    ) async throws -> RemoteRuntimeCommandEnvelope {
+        var body: [String: Any] = ["command": command, "source": source]
+        if let workDir, !workDir.isEmpty { body["workDir"] = workDir }
+        let data = try await request(
+            "POST",
+            path: "/remote-runtime/sessions/\(sessionId)/command",
+            jsonBody: body,
+            failure: "the remote runtime command was rejected"
+        )
+        return try JSONDecoder().decode(RemoteRuntimeCommandEnvelope.self, from: data)
+    }
+
     // ---- Web preview streaming (headless capture → frames) ----------------
     //
     // tvOS has no WebKit, so a web project can't be rendered in-process — it's

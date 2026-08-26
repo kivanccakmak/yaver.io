@@ -75,6 +75,7 @@ var surfaceCannotHost = map[PreviewSurface]map[string]string{
 		PreviewOptionHermes:     "tvOS runs a SwiftUI app, not a React Native container — a Hermes bundle has nothing to load into. Stream the preview instead.",
 		PreviewOptionOpenNative: "tvOS runs a SwiftUI app, not a React Native container — a Hermes bundle has nothing to load into. Stream the preview instead.",
 		PreviewOptionWirePush:   "there is no USB install path to a TV. Stream the preview from the box instead.",
+		PreviewOptionDevServer:  "Apple TV Dogfood runs the native tvOS app in a simulator on the render box and receives it over authenticated WebRTC; it cannot use a browser lane.",
 	},
 	PreviewSurfaceWatch: {
 		PreviewOptionHermes:     "watchOS runs a SwiftUI app, not a React Native container — a Hermes bundle has nothing to load into.",
@@ -99,7 +100,7 @@ func ParsePreviewSurface(s string) PreviewSurface {
 		return PreviewSurfaceMobile
 	case "tablet", "ipad":
 		return PreviewSurfaceTablet
-	case "web", "dashboard", "browser":
+	case "web", "dashboard", "browser", "desktop-gui", "electron", "macos":
 		return PreviewSurfaceWeb
 	case "tv", "tvos", "appletv":
 		return PreviewSurfaceTV

@@ -2720,6 +2720,19 @@ func (s *HTTPServer) handleDevWebProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	port := s.devServerMgr.WebPreviewPort()
 	if port == 0 {
+		// A browser start is asynchronous. While Expo is compiling, /dev/status
+		// truthfully says Building and the direct /dev/ proxy returns the same
+		// structured retry signal. Keep /dev-web/ on that contract too: callers
+		// must not turn a cold first-build 503 into "renderer disconnected".
+		if st := s.devServerMgr.Status(); st != nil && st.Building {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "2")
+			w.Header().Set("X-Yaver-DevServer", "starting")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, `{"status":"starting","framework":%q,"port":%d,"message":%q}`,
+				st.Framework, st.Port, st.ServingLabel)
+			return
+		}
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "no Expo Web preview running — POST /dev/web-preview/start"})
 		return
 	}

@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -40,19 +41,25 @@ type dogfoodAction struct {
 }
 
 type dogfoodSourceResponse struct {
-	OK            bool           `json:"ok"`
-	Ready         bool           `json:"ready"`
-	Code          string         `json:"code"`
-	Path          string         `json:"path,omitempty"`
-	SuggestedPath string         `json:"suggestedPath,omitempty"`
-	Branch        string         `json:"branch,omitempty"`
-	Remote        string         `json:"remote,omitempty"`
-	BaseRemote    string         `json:"baseRemote,omitempty"`
-	BaseRef       string         `json:"baseRef,omitempty"`
-	GitVersion    string         `json:"gitVersion,omitempty"`
-	Message       string         `json:"message"`
-	Remedy        string         `json:"remedy,omitempty"`
-	Action        *dogfoodAction `json:"action,omitempty"`
+	OK            bool                       `json:"ok"`
+	Ready         bool                       `json:"ready"`
+	Code          string                     `json:"code"`
+	Path          string                     `json:"path,omitempty"`
+	SuggestedPath string                     `json:"suggestedPath,omitempty"`
+	Branch        string                     `json:"branch,omitempty"`
+	Remote        string                     `json:"remote,omitempty"`
+	BaseRemote    string                     `json:"baseRemote,omitempty"`
+	BaseRef       string                     `json:"baseRef,omitempty"`
+	GitVersion    string                     `json:"gitVersion,omitempty"`
+	Candidates    []dogfoodCheckoutCandidate `json:"candidates,omitempty"`
+	Message       string                     `json:"message"`
+	Remedy        string                     `json:"remedy,omitempty"`
+	Action        *dogfoodAction             `json:"action,omitempty"`
+}
+
+type dogfoodCheckoutCandidate struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch,omitempty"`
 }
 
 func canonicalYaverRemote(remote string) bool {
@@ -96,25 +103,44 @@ func dogfoodCanonicalBase(workDir string) (name, remote string) {
 	return "", ""
 }
 
-// findDogfoodCheckout checks only the normal one-level workspace roots. This
+// findDogfoodCheckouts checks only the normal one-level workspace roots. This
 // is deliberately bounded: Dogfood readiness must never recursively walk a
 // home directory and make an otherwise-live box look offline.
-func findDogfoodCheckout() string {
+func findDogfoodCheckouts() []dogfoodCheckoutCandidate {
 	home, _ := os.UserHomeDir()
-	bestPath := ""
-	bestScore := -1 << 30
+	type scoredCandidate struct {
+		dogfoodCheckoutCandidate
+		score int
+	}
+	seen := make(map[string]bool)
+	candidates := make([]scoredCandidate, 0)
 	for _, parent := range []string{"Workspace", "Projects", "repos", "code", "src", "dev"} {
 		for _, repo := range scanDirForRepos(filepath.Join(home, parent)) {
+			if seen[repo.Path] {
+				continue
+			}
+			seen[repo.Path] = true
 			baseRemote, _ := dogfoodCanonicalBase(repo.Path)
 			if IsYaverSelfDevelopmentDir(repo.Path) && baseRemote != "" {
-				score := dogfoodCheckoutScore(repo.Path)
-				if score > bestScore {
-					bestPath, bestScore = repo.Path, score
-				}
+				branch, _ := runGit(repo.Path, "rev-parse", "--abbrev-ref", "HEAD")
+				candidates = append(candidates, scoredCandidate{
+					dogfoodCheckoutCandidate: dogfoodCheckoutCandidate{Path: repo.Path, Branch: strings.TrimSpace(branch)},
+					score:                    dogfoodCheckoutScore(repo.Path),
+				})
 			}
 		}
 	}
-	return bestPath
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score == candidates[j].score {
+			return candidates[i].Path < candidates[j].Path
+		}
+		return candidates[i].score > candidates[j].score
+	})
+	result := make([]dogfoodCheckoutCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		result = append(result, candidate.dogfoodCheckoutCandidate)
+	}
+	return result
 }
 
 // Prefer the user's real named checkout over disposable validation fixtures.
@@ -150,12 +176,16 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 	}
 	version, _ := runGit("", "--version")
 	workDir = strings.TrimSpace(workDir)
+	var candidates []dogfoodCheckoutCandidate
 	if workDir == "" {
-		workDir = findDogfoodCheckout()
+		candidates = findDogfoodCheckouts()
+		if len(candidates) > 0 {
+			workDir = candidates[0].Path
+		}
 	}
 	if workDir == "" {
 		return dogfoodSourceResponse{
-			Code: "DOGFOOD_SOURCE_MISSING", SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
+			Code: "DOGFOOD_SOURCE_MISSING", SuggestedPath: suggested, GitVersion: strings.TrimSpace(version), Candidates: candidates,
 			Message: "This box does not have Yaver's source code.",
 			Remedy:  "Clone the public Yaver repository on this box, then retry Dogfood mode.",
 			Action: &dogfoodAction{Label: "Clone Yaver source", Method: http.MethodPost, Path: "/repos/clone", Body: map[string]any{
@@ -165,7 +195,7 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 	}
 	if !IsYaverSelfDevelopmentDir(workDir) {
 		return dogfoodSourceResponse{
-			Code: "DOGFOOD_NOT_YAVER_CHECKOUT", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
+			Code: "DOGFOOD_NOT_YAVER_CHECKOUT", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version), Candidates: candidates,
 			Message: "The selected directory is not Yaver's source checkout.",
 			Remedy:  "Choose the yaver.io repository, or clone a fresh copy on this box.",
 			Action: &dogfoodAction{Label: "Clone Yaver source", Method: http.MethodPost, Path: "/repos/clone", Body: map[string]any{
@@ -175,7 +205,7 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 	}
 	if _, err := os.Stat(filepath.Join(workDir, ".git")); err != nil {
 		return dogfoodSourceResponse{
-			Code: "DOGFOOD_SOURCE_NOT_GIT", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
+			Code: "DOGFOOD_SOURCE_NOT_GIT", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version), Candidates: candidates,
 			Message: "Yaver source exists here, but it is not a Git checkout.",
 			Remedy:  "Select or clone a real yaver.io Git checkout so Dogfood can safely sync canonical main.",
 		}
@@ -187,14 +217,14 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 	origin = strings.TrimSpace(origin)
 	if originErr != nil || origin == "" {
 		return dogfoodSourceResponse{
-			Code: "DOGFOOD_GIT_ORIGIN_MISSING", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version),
+			Code: "DOGFOOD_GIT_ORIGIN_MISSING", Path: workDir, SuggestedPath: suggested, GitVersion: strings.TrimSpace(version), Candidates: candidates,
 			Message: "The Yaver checkout has no origin remote for contribution branches.",
 			Remedy:  "Add your fork as origin, or clone the public yaver-io/yaver.io repository, then retry.",
 		}
 	}
 	if clean := stripURLCredentials(origin); clean != origin {
 		return dogfoodSourceResponse{
-			Code: "DOGFOOD_GIT_CREDENTIALS_EMBEDDED", Path: workDir, SuggestedPath: suggested, Remote: clean, GitVersion: strings.TrimSpace(version),
+			Code: "DOGFOOD_GIT_CREDENTIALS_EMBEDDED", Path: workDir, SuggestedPath: suggested, Remote: clean, GitVersion: strings.TrimSpace(version), Candidates: candidates,
 			Message: "The Yaver origin stores a credential inside its URL.",
 			Remedy:  "Remove the embedded credential, then use Yaver's Git configuration wizard so secrets stay in the box credential store.",
 		}
@@ -202,24 +232,34 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 	baseRemote, canonicalURL := dogfoodCanonicalBase(workDir)
 	if baseRemote == "" {
 		return dogfoodSourceResponse{
-			Code: "DOGFOOD_GIT_UPSTREAM_MISSING", Path: workDir, SuggestedPath: suggested, Remote: stripURLCredentials(origin), GitVersion: strings.TrimSpace(version),
+			Code: "DOGFOOD_GIT_UPSTREAM_MISSING", Path: workDir, SuggestedPath: suggested, Remote: stripURLCredentials(origin), GitVersion: strings.TrimSpace(version), Candidates: candidates,
 			Message: "The checkout has no remote pointing to yaver-io/yaver.io.",
 			Remedy:  "Keep your fork as origin and add the canonical repository as upstream, then retry.",
 		}
 	}
 	if clean := stripURLCredentials(canonicalURL); clean != canonicalURL {
 		return dogfoodSourceResponse{
-			Code: "DOGFOOD_GIT_CREDENTIALS_EMBEDDED", Path: workDir, SuggestedPath: suggested, Remote: clean, GitVersion: strings.TrimSpace(version),
+			Code: "DOGFOOD_GIT_CREDENTIALS_EMBEDDED", Path: workDir, SuggestedPath: suggested, Remote: clean, GitVersion: strings.TrimSpace(version), Candidates: candidates,
 			Message: "The canonical Yaver remote stores a credential inside its URL.",
 			Remedy:  "Remove the embedded credential; public upstream fetches do not need one.",
 		}
 	}
 	branch, _ := runGit(workDir, "rev-parse", "--abbrev-ref", "HEAD")
+	foundSelected := false
+	for _, candidate := range candidates {
+		if candidate.Path == workDir {
+			foundSelected = true
+			break
+		}
+	}
+	if !foundSelected {
+		candidates = append(candidates, dogfoodCheckoutCandidate{Path: workDir, Branch: strings.TrimSpace(branch)})
+	}
 	return dogfoodSourceResponse{
 		OK: true, Ready: true, Code: "DOGFOOD_SOURCE_READY", Path: workDir,
 		SuggestedPath: suggested, Branch: strings.TrimSpace(branch), Remote: stripURLCredentials(origin),
 		BaseRemote: baseRemote, BaseRef: baseRemote + "/main",
-		GitVersion: strings.TrimSpace(version), Message: "Yaver source and its Git origin are ready on this box.",
+		GitVersion: strings.TrimSpace(version), Candidates: candidates, Message: "Yaver source and its Git origin are ready on this box.",
 	}
 }
 

@@ -6,13 +6,16 @@
 //   - streamTaskOutput (quic.ts) for the raw runner stdout SSE lane
 //   - summarizeRawConsole + AnsiConsoleText for the foldable live console
 //   - MessageBubble for user/assistant rows
-//   - executeVibingSuggestion once, then continueTask for one conversation
+//   - existing task history as switchable topic cards; continueTask keeps each
+//     card in one runner conversation
 // The pane talks to the connected box exactly like the Tasks screen does;
 // finished consoles fold quietly while live output remains one tap away.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -56,6 +59,8 @@ type ChatRow =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
   | { kind: "system"; text: string };
+
+const visibleVibeText = (text: string) => text.replace(/<!--\s*YAVER_THREAD_TITLE:[\s\S]*?(?:-->|$)/gi, "").trimEnd();
 
 export function StudioChatPane({
   projectPath,
@@ -103,7 +108,6 @@ export function StudioChatPane({
   const [rows, setRows] = useState<ChatRow[]>([]);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [showTasks, setShowTasks] = useState(false);
   const [rawText, setRawText] = useState("");
   const [rawLive, setRawLive] = useState(false);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
@@ -115,20 +119,21 @@ export function StudioChatPane({
   const listScrollRef = useRef<ScrollView>(null);
   const consolePreferenceRef = useRef<boolean | null>(null);
   const projectPathRef = useRef(projectPath);
+  const draftingNewTopicRef = useRef(false);
 
   // Refresh the recent-task list when the pane mounts and after each send.
   const refreshTasks = useCallback(async () => {
     if (!connected) return;
     setLoadingTasks(true);
     try {
-      const list = await taskClient.listTasks();
+      const list = await taskClient.listVibeThreads({ projectName, projectPath });
       setTasks(list.slice(0, 12));
     } catch {
       // keep the last list; the surface is advisory
     } finally {
       setLoadingTasks(false);
     }
-  }, [connected, taskClient]);
+  }, [connected, projectName, projectPath, taskClient]);
 
   useEffect(() => {
     void refreshTasks();
@@ -158,6 +163,7 @@ export function StudioChatPane({
       (status) => {
         setRawLive(false);
         setActiveTask((prev) => prev?.id === taskId ? { ...prev, status: status as Task["status"] } : prev);
+        setTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, status: status as Task["status"] } : task));
         if (consolePreferenceRef.current === null) setConsoleExpanded(false);
         setLastRawVersion((v) => v + 1);
         void taskClient.getTask(taskId).then((task) => {
@@ -179,6 +185,7 @@ export function StudioChatPane({
           });
           setRawLive(true);
           setActiveTask((prev) => prev?.id === taskId ? { ...prev, status: "running" } : prev);
+          setTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, status: "running" } : task));
           if (consolePreferenceRef.current === null) setConsoleExpanded(true);
           setLastRawVersion((v) => v + 1);
         },
@@ -187,9 +194,12 @@ export function StudioChatPane({
     );
   }, [refreshTasks, taskClient]);
 
+  const runningTask = tasks.find((task) => task.status === "running" || task.status === "queued")
+    || (activeTask && (activeTask.status === "running" || activeTask.status === "queued") ? activeTask : undefined);
+
   const handleSend = useCallback(async () => {
     const text = composerText.trim();
-    if (!text || sending || !connected) return;
+    if (!text || sending || !connected || runningTask) return;
     setComposerText("");
     setSending(true);
     setSendError(null);
@@ -209,6 +219,7 @@ export function StudioChatPane({
         });
         const taskId = (result as any)?.taskId;
         if (taskId) {
+          draftingNewTopicRef.current = false;
           const now = Date.now();
           setActiveTask({ id: String(taskId), title: text, description: "", status: "queued", output: [], createdAt: now, updatedAt: now });
           subscribeTask(String(taskId), "queued");
@@ -231,10 +242,24 @@ export function StudioChatPane({
       setSending(false);
       void refreshTasks();
     }
-  }, [composerText, sending, connected, projectPath, projectName, runner, model, subscribeTask, refreshTasks, activeTask, taskClient]);
+  }, [composerText, sending, connected, runningTask, projectPath, projectName, runner, model, subscribeTask, refreshTasks, activeTask, taskClient]);
+
+  const resetConversation = useCallback((draftNewTopic = false) => {
+    draftingNewTopicRef.current = draftNewTopic;
+    streamAbortRef.current?.();
+    streamAbortRef.current = null;
+    setActiveTask(null);
+    setRows([]);
+    setRawText("");
+    setRawLive(false);
+    setSendError(null);
+    consolePreferenceRef.current = null;
+    setConsoleExpanded(false);
+  }, []);
 
   const handleTaskTap = useCallback(
     (task: Task) => {
+      draftingNewTopicRef.current = false;
       setActiveTask(task);
       setRows([]);
       void taskClient.getTask(task.id).then((hydrated) => setActiveTask(hydrated)).catch(() => {});
@@ -243,7 +268,31 @@ export function StudioChatPane({
     [subscribeTask, taskClient],
   );
 
-  const isRunning = activeTask?.status === "running" || activeTask?.status === "queued";
+  const removeTask = useCallback(async (task: Task) => {
+    try {
+      await taskClient.deleteTask(task.id);
+      if (activeTask?.id === task.id) resetConversation();
+      setTasks((prev) => prev.filter((item) => item.id !== task.id));
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "Could not remove topic");
+    }
+  }, [activeTask?.id, resetConversation, taskClient]);
+
+  const confirmRemoveTask = useCallback((task: Task) => {
+    const message = task.status === "running" || task.status === "queued"
+      ? "This also stops the coding turn that is still running."
+      : "This removes the conversation from your history.";
+    if (Platform.OS === "web" && typeof globalThis.confirm === "function") {
+      if (globalThis.confirm(`Remove “${task.title || "this topic"}”?\n\n${message}`)) void removeTask(task);
+      return;
+    }
+    Alert.alert("Remove topic?", message, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Remove", style: "destructive", onPress: () => { void removeTask(task); } },
+    ]);
+  }, [removeTask]);
+
+  const isRunning = !!runningTask;
   const isRenderable = activeTask?.status === "completed" || activeTask?.status === "review";
   const consoleStatus = activeTask?.status === "failed" || activeTask?.status === "stopped"
     ? `○ ${activeTask.status}`
@@ -258,18 +307,14 @@ export function StudioChatPane({
     return [...hydrated, ...rows];
   }, [activeTask?.turns, rows]);
 
-  const resetConversation = useCallback(() => {
-    streamAbortRef.current?.();
-    streamAbortRef.current = null;
-    setActiveTask(null);
-    setRows([]);
-    setRawText("");
-    setRawLive(false);
-    setSendError(null);
-    consolePreferenceRef.current = null;
-    setConsoleExpanded(false);
-  }, []);
-
+  // With one saved topic there is no picker: restore it directly as the chat.
+  // An explicit New action suppresses this auto-restore until the new prompt
+  // creates its task.
+  useEffect(() => {
+    if (tasks.length === 1 && !activeTask && !draftingNewTopicRef.current) {
+      handleTaskTap(tasks[0]);
+    }
+  }, [activeTask, handleTaskTap, tasks]);
   useEffect(() => {
     if (projectPathRef.current === projectPath) return;
     projectPathRef.current = projectPath;
@@ -277,12 +322,12 @@ export function StudioChatPane({
   }, [projectPath, resetConversation]);
 
   useEffect(() => {
-    onTaskStateChange?.(activeTask);
-  }, [activeTask, onTaskStateChange]);
+    onTaskStateChange?.(runningTask || activeTask);
+  }, [activeTask, onTaskStateChange, runningTask]);
 
   return (
     <View style={[styles.wrap, { backgroundColor: c.bg }]}>
-      {/* Header strip: box + project + task-list toggle */}
+      {/* Header strip: route context. Topics live as cards below on every size. */}
       {!compact ? <View style={[styles.header, { borderBottomColor: c.borderSubtle }]}>
         <View style={styles.headerChips}>
           <View style={[styles.chip, { backgroundColor: connected ? c.successBg : c.surfaceMuted, borderColor: connected ? c.successBorder : c.borderSubtle }]}>
@@ -300,56 +345,54 @@ export function StudioChatPane({
             </Pressable>
           ) : null}
         </View>
-        <View style={styles.headerActions}>
-          {activeTask ? (
-            <Pressable
-              onPress={resetConversation}
-              hitSlop={8}
-              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-              accessibilityRole="button"
-              accessibilityLabel="New conversation"
-            >
-              <Ionicons name="add-circle-outline" size={19} color={c.textSecondary} />
-            </Pressable>
-          ) : null}
-          <Pressable
-            onPress={() => setShowTasks((v) => !v)}
-            hitSlop={8}
-            style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-            accessibilityRole="button"
-            accessibilityLabel={showTasks ? "Hide task list" : "Show task list"}
-          >
-            <Ionicons name={showTasks ? "list" : "list-outline"} size={18} color={c.textSecondary} />
-          </Pressable>
-        </View>
       </View> : null}
 
-      {/* Task list (foldable, advisory) */}
-      {!compact && showTasks ? (
+      {/* One topic is just a chat. Topic cards earn their height only when
+          there is something to switch between. */}
+      {tasks.length > 1 ? <View style={[styles.topicRailWrap, { borderBottomColor: c.borderSubtle }]}>
         <ScrollView
-          style={[styles.taskList, { borderBottomColor: c.borderSubtle, backgroundColor: c.surfaceMuted }]}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator
+          horizontal
+          contentContainerStyle={styles.topicRail}
+          showsHorizontalScrollIndicator={false}
         >
-          {loadingTasks ? <ActivityIndicator size="small" color={c.textMuted} style={{ padding: 12 }} /> : null}
+          <Pressable
+            onPress={() => resetConversation(true)}
+            style={[styles.newTopicCard, { backgroundColor: c.accentSoft, borderColor: c.borderSubtle }]}
+            accessibilityRole="button"
+            accessibilityLabel="Start a new topic"
+          >
+            <Ionicons name="add" size={21} color={c.accent} />
+            <Text style={[styles.newTopicText, { color: c.accent }]}>New</Text>
+          </Pressable>
+          {loadingTasks && tasks.length === 0 ? <ActivityIndicator size="small" color={c.textMuted} style={{ width: 48 }} /> : null}
           {tasks.map((t) => (
             <Pressable
               key={t.id}
               onPress={() => handleTaskTap(t)}
-              style={[styles.taskRow, activeTask?.id === t.id && { backgroundColor: c.accentSoft }]}
+              style={[styles.topicCard, { backgroundColor: c.surface, borderColor: activeTask?.id === t.id ? c.accent : c.borderSubtle }]}
             >
-              <View style={[styles.taskDot, { backgroundColor: t.status === "running" || t.status === "queued" ? c.warn : t.status === "completed" ? c.success : c.textTertiary }]} />
-              <Text style={[styles.taskTitle, { color: c.textPrimary }]} numberOfLines={1}>
-                {t.title || "task"}
-              </Text>
-              <Text style={[styles.taskStatus, { color: c.textMuted }]}>{t.status}</Text>
+              <View style={styles.topicTopline}>
+                <View style={[styles.taskDot, { backgroundColor: t.status === "running" || t.status === "queued" ? c.warn : t.status === "completed" ? c.success : c.textTertiary }]} />
+                <Text style={[styles.taskStatus, { color: c.textMuted }]}>{t.status === "completed" ? "done" : t.status}</Text>
+                <Pressable onPress={(event) => { event.stopPropagation(); confirmRemoveTask(t); }} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Remove ${t.title || "topic"}`}>
+                  <Ionicons name="close" size={15} color={c.textTertiary} />
+                </Pressable>
+              </View>
+              <Text style={[styles.topicTitle, { color: c.textPrimary }]} numberOfLines={2}>{t.title || "New topic"}</Text>
             </Pressable>
           ))}
-          {tasks.length === 0 && !loadingTasks ? (
-            <Text style={[styles.taskEmpty, { color: c.textMuted }]}>No tasks yet — send a vibe prompt below.</Text>
-          ) : null}
         </ScrollView>
-      ) : null}
+      </View> : tasks.length === 1 ? <View style={[styles.singleTopicBar, { borderBottomColor: c.borderSubtle }]}>
+        <Pressable style={styles.singleTopicTitleButton} onPress={() => handleTaskTap(tasks[0])} accessibilityRole="button" accessibilityLabel={`Open ${tasks[0].title || "topic"}`}>
+          <Text style={[styles.singleTopicTitle, { color: c.textSecondary }]} numberOfLines={1}>{tasks[0].title || "Current topic"}</Text>
+        </Pressable>
+        <Pressable onPress={() => resetConversation(true)} style={styles.singleTopicAction} accessibilityRole="button" accessibilityLabel="Start a new topic">
+          <Ionicons name="add" size={18} color={c.accent} />
+        </Pressable>
+        <Pressable onPress={() => confirmRemoveTask(tasks[0])} style={styles.singleTopicAction} accessibilityRole="button" accessibilityLabel={`Remove ${tasks[0].title || "topic"}`}>
+          <Ionicons name="trash-outline" size={16} color={c.textTertiary} />
+        </Pressable>
+      </View> : null}
 
       {/* Conversation / live console */}
       <ScrollView
@@ -439,7 +482,7 @@ export function StudioChatPane({
               >
                 {/* re-render on rawVersion so streaming frames repaint */}
                 {rawText.trim() ? (
-                  <AnsiConsoleText key={lastRawVersion} text={summarizeRawConsole(rawText, isRunning)} fontSize={11} />
+                  <AnsiConsoleText key={lastRawVersion} text={visibleVibeText(summarizeRawConsole(rawText, isRunning))} fontSize={11} />
                 ) : (
                   <Text style={{ color: c.textTertiary, fontSize: 12 }}>
                     {isRunning ? "Waiting for runner output…" : "No console output was retained for this task."}
@@ -465,7 +508,7 @@ export function StudioChatPane({
           style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.borderSubtle }]}
           value={composerText}
           onChangeText={setComposerText}
-          placeholder={!connected ? "Connect a box first" : isRunning ? "Runner is coding…" : activeTask ? "Continue this task…" : "What should we change?"}
+          placeholder={!connected ? "Connect a box first" : isRunning ? runningTask?.id === activeTask?.id ? "Runner is coding…" : "Another topic is coding…" : activeTask ? "Continue this topic…" : "Start a new topic…"}
           placeholderTextColor={c.textTertiary}
           multiline
           editable={connected && !isRunning}
@@ -498,7 +541,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerChips: { flexDirection: "row", gap: 6, flex: 1, minWidth: 0 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 2 },
   chip: {
     flexDirection: "row",
     alignItems: "center",
@@ -511,23 +553,37 @@ const styles = StyleSheet.create({
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
   chipText: { fontSize: 12, fontWeight: "700", flexShrink: 1 },
-  iconBtn: { padding: 6 },
-  taskList: {
-    maxHeight: 180,
+  topicRailWrap: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    paddingVertical: 4,
+    minHeight: 100,
   },
-  taskRow: {
-    flexDirection: "row",
+  topicRail: { paddingHorizontal: 12, paddingVertical: 10, gap: 9 },
+  singleTopicBar: { minHeight: 40, paddingLeft: 12, paddingRight: 8, flexDirection: "row", alignItems: "center", borderBottomWidth: StyleSheet.hairlineWidth },
+  singleTopicTitleButton: { flex: 1, minWidth: 0, justifyContent: "center", minHeight: 38 },
+  singleTopicTitle: { fontSize: 11, fontWeight: "700" },
+  singleTopicAction: { width: 34, height: 34, alignItems: "center", justifyContent: "center", borderRadius: 10 },
+  newTopicCard: {
+    width: 72,
+    minHeight: 78,
+    borderRadius: 14,
+    borderWidth: 1,
     alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+    justifyContent: "center",
+    gap: 4,
   },
+  newTopicText: { fontSize: 12, fontWeight: "800" },
+  topicCard: {
+    width: 168,
+    minHeight: 78,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    padding: 10,
+    gap: 7,
+  },
+  topicTopline: { flexDirection: "row", alignItems: "center", gap: 6 },
   taskDot: { width: 7, height: 7, borderRadius: 4 },
-  taskTitle: { flex: 1, fontSize: 13, fontWeight: "600" },
-  taskStatus: { fontSize: 11, textTransform: "uppercase" },
-  taskEmpty: { padding: 14, fontSize: 13 },
+  taskStatus: { flex: 1, fontSize: 10, fontWeight: "700", textTransform: "uppercase" },
+  topicTitle: { fontSize: 13, lineHeight: 17, fontWeight: "700" },
   conversation: { flex: 1 },
   conversationContent: { padding: 12, gap: 8 },
   emptyHint: { fontSize: 13, textAlign: "center", paddingTop: 24, lineHeight: 20 },

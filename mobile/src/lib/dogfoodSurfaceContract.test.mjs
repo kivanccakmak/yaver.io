@@ -14,6 +14,7 @@ const gate = readFileSync(join(mobile, "src", "components", "AttachModeSection.t
 const launch = readFileSync(join(mobile, "app", "dogfood-launch.tsx"), "utf8");
 const bubble = readFileSync(join(mobile, "src", "components", "BrowserVibeBubble.tsx"), "utf8");
 const remoteRuntime = readFileSync(join(mobile, "app", "remote-runtime.tsx"), "utf8");
+const tasks = readFileSync(join(mobile, "app", "(tabs)", "tasks.tsx"), "utf8");
 
 test("More removes the old Vibing row and exposes contributor Dogfood to everyone", () => {
   assert.doesNotMatch(more, /accessibilityLabel="Open Vibing"|>Vibing<|navigate\("\/vibing"/);
@@ -53,6 +54,21 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
   assert.match(attached, /onMessage=/);
 });
 
+test("Dogfood launch keeps navigation in the floating Y control", () => {
+  assert.doesNotMatch(launch, /AppScreenHeader/,
+    "the launch surface must not duplicate the floating Y escape with a top navigation bar");
+  assert.match(launch, /<BrowserVibeBubble/);
+  assert.match(launch, /onExitPreview=\{\(\) => router\.back\(\)\}/);
+  assert.match(launch, /edges=\{\["top", "bottom"\]\}/,
+    "removing the header must not let launch content enter the status-bar safe area");
+});
+
+test("attached Dogfood does not offer its own Yaver dev server as a guest card", () => {
+  assert.match(tasks, /isAttachedDogfoodWebRuntime\(\)/);
+  assert.match(tasks, /isEffectivelyConnected\s*&&\s*!attachedDogfoodRuntime/);
+  assert.doesNotMatch(tasks, /isEffectivelyConnected\s*&&\s*<DevPreview/);
+});
+
 test("Dogfood entry is fail-closed until Expo and the browser lane are proved", () => {
   const attachClient = readFileSync(join(mobile, "src", "lib", "attachClient.ts"), "utf8");
   assert.match(attachClient, /prepareDogfoodMode/);
@@ -62,7 +78,7 @@ test("Dogfood entry is fail-closed until Expo and the browser lane are proved", 
   assert.match(attachClient, /DOGFOOD_PRIMARY_DISCONNECTED/);
   assert.match(attachClient, /resolveAgentPreviewUrl\(client\.baseUrl, bundlePath\)/,
     "the agent's relative browser path must retain the selected device's relay prefix");
-  assert.match(attachClient, /probeAgentPreviewRoute\(url, client\.getAuthHeaders\(\)\)/,
+  assert.match(attachClient, /waitForAgentPreviewRoute\(/,
     "Dogfood must probe the exact phone handoff URL instead of trusting only the box-local doctor");
   assert.match(attachClient, /DOGFOOD_RENDER_ROUTE_/,
     "a failed handoff route must stop entry with a stable code");

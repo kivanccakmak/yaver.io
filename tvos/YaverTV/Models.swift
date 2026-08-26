@@ -304,8 +304,12 @@ struct ProjectSummary: Decodable, Identifiable {
     var id: String { name }
 
     /// How this project should be previewed on the TV.
-    enum Kind { case android, web, unknown }
+    enum Kind { case android, web, tvOS, unknown }
     var kind: Kind {
+        let declaredSurfaces = Set((surfaces ?? []) + (testSurfaces ?? []))
+        if declaredSurfaces.contains("tv") || declaredSurfaces.contains("tvos-simulator") {
+            return .tvOS
+        }
         switch (framework ?? "").lowercased() {
         // RN/Expo takes the BROWSER lane, matching the agent's own default
         // (defaultStreamingSurface: RN → browser): RN-Web in headless Chromium,
@@ -395,6 +399,12 @@ struct ProjectPreviewCapabilities: Decodable {
     let hasPairedDevice: Bool
     let options: [ProjectPreviewOption]
     let reason: String?
+}
+
+struct RemoteRuntimeCommandEnvelope: Decodable {
+    let ok: Bool
+    let status: String?
+    let note: String?
 }
 
 /// An external MCP server the box exposes — name is the identity the task body

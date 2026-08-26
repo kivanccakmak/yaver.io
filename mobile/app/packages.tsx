@@ -195,7 +195,7 @@ export default function PackagesScreen() {
           })}
         </View>
 
-        {err && <Text style={{ color: "#f87171", fontSize: 13 }}>{err}</Text>}
+        {err && <Text style={{ color: c.error, fontSize: 13 }}>{err}</Text>}
 
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
           <Text style={[styles.label, { color: c.textMuted }]}>Packages</Text>
@@ -225,26 +225,26 @@ export default function PackagesScreen() {
               </Pressable>
               {p.tier === "acting" && (
                 <Pressable
-                  style={[styles.btn, { borderColor: "#fbbf2455" }]}
+                  style={[styles.btn, { borderColor: c.warn }]}
                   disabled={busy}
                   onPress={() => void runOnce(p.name, true)}
                 >
-                  <Text style={{ color: "#fbbf24", fontSize: 13 }}>Run (confirm)</Text>
+                  <Text style={{ color: c.warn, fontSize: 13 }}>Run (confirm)</Text>
                 </Pressable>
               )}
               <Pressable
-                style={[styles.btn, { borderColor: "#38bdf855" }]}
+                style={[styles.btn, { borderColor: c.info }]}
                 disabled={busy}
                 onPress={() => void runCheck(p.name)}
               >
-                <Text style={{ color: "#38bdf8", fontSize: 13 }}>Check</Text>
+                <Text style={{ color: c.info, fontSize: 13 }}>Check</Text>
               </Pressable>
               <Pressable
-                style={[styles.btn, { borderColor: "#a78bfa55" }]}
+                style={[styles.btn, { borderColor: c.accent }]}
                 disabled={busy}
                 onPress={() => void runHere(p.name)}
               >
-                <Text style={{ color: "#a78bfa", fontSize: 13 }}>Run here</Text>
+                <Text style={{ color: c.accent, fontSize: 13 }}>Run here</Text>
               </Pressable>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginLeft: "auto" }}>
                 <Text style={{ color: c.textMuted, fontSize: 12 }}>periodic</Text>
@@ -274,7 +274,7 @@ export default function PackagesScreen() {
                   </Text>
                 )}
                 {(run.notes ?? []).map((n, i) => (
-                  <Text key={i} style={{ color: "#fbbf24", fontSize: 12, marginTop: 2 }}>
+                  <Text key={i} style={{ color: c.warn, fontSize: 12, marginTop: 2 }}>
                     {n}
                   </Text>
                 ))}

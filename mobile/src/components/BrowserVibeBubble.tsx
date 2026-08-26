@@ -70,9 +70,7 @@ export function BrowserVibeBubble({
   } = useDevice();
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<VibeTab>("chat");
-  const [visibleMachineRole, setVisibleMachineRole] = useState<MachineRole>("runner");
-  const [machineChoicesOpen, setMachineChoicesOpen] = useState(false);
-  const [runnerChoicesOpen, setRunnerChoicesOpen] = useState(false);
+  const [machineChoicesOpen, setMachineChoicesOpen] = useState<MachineRole | null>(null);
   const [runners, setRunners] = useState<RunnerInfo[]>([]);
   const [runnersLoading, setRunnersLoading] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -93,9 +91,6 @@ export function BrowserVibeBubble({
   const renderDeviceId = machineRoles?.renderDeviceId || fallbackDeviceId;
   const codingDevice = devices.find((row) => row.id === codingDeviceId) || activeDevice;
   const renderDevice = devices.find((row) => row.id === renderDeviceId) || activeDevice;
-  const visibleDevice = visibleMachineRole === "runner" ? codingDevice : renderDevice;
-  const visibleDeviceId = visibleMachineRole === "runner" ? codingDeviceId : renderDeviceId;
-  const visibleDeviceConnected = !!visibleDeviceId && connectedDeviceIds.includes(visibleDeviceId);
   const codingConnected = !!codingDeviceId && connectedDeviceIds.includes(codingDeviceId);
   const renderConnected = !!renderDeviceId && connectedDeviceIds.includes(renderDeviceId);
   const codingClient = useMemo(
@@ -356,120 +351,117 @@ export function BrowserVibeBubble({
 
             <View style={[styles.tabBody, activeTab !== "settings" && styles.hidden]}>
               <ScrollView style={styles.settingsScroll} contentContainerStyle={styles.settingsContent} keyboardShouldPersistTaps="handled">
-                <View style={styles.settingsCard} testID="browser-vibe-machine-routing">
-                  <View style={styles.cardHeader}>
-                    <View style={styles.cardHeaderCopy}>
-                      <Text style={styles.cardTitle}>Device</Text>
-                      <Text style={styles.cardValue} numberOfLines={1}>{visibleDevice?.name || "Choose device"}</Text>
-                    </View>
-                    <Pressable
-                      onPress={() => setMachineChoicesOpen((value) => !value)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${machineChoicesOpen ? "Hide" : "Change"} ${visibleMachineRole} device`}
-                      accessibilityState={{ expanded: machineChoicesOpen }}
-                      style={({ pressed }) => [styles.changeButton, pressed && styles.pressed]}
-                    >
-                      <Text style={styles.changeButtonText}>{machineChoicesOpen ? "Done" : "Change"}</Text>
-                    </Pressable>
-                  </View>
-                  <View style={styles.roleTabs}>
-                    {(["runner", "render"] as const).map((role) => (
+                {(["runner", "render"] as const).map((role) => {
+                  const roleDevice = role === "runner" ? codingDevice : renderDevice;
+                  const roleDeviceId = role === "runner" ? codingDeviceId : renderDeviceId;
+                  const roleConnected = role === "runner" ? codingConnected : renderConnected;
+                  const choicesOpen = machineChoicesOpen === role;
+                  if (machineChoicesOpen && !choicesOpen) return null;
+                  return (
+                    <View key={role} style={styles.settingsCard} testID={`browser-vibe-${role}-machine`}>
                       <Pressable
-                        key={role}
-                        onPress={() => setVisibleMachineRole(role)}
-                        accessibilityRole="tab"
-                        accessibilityState={{ selected: visibleMachineRole === role }}
-                        style={[styles.roleTab, visibleMachineRole === role && styles.roleTabSelected]}
+                        onPress={() => setMachineChoicesOpen((current) => current === role ? null : role)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${choicesOpen ? "Hide" : "Choose"} ${role} settings`}
+                        accessibilityState={{ expanded: choicesOpen }}
+                        style={({ pressed }) => [styles.cardHeader, pressed && styles.pressed]}
                       >
-                        <Text style={[styles.roleTabText, visibleMachineRole === role && styles.roleTabTextSelected]}>
-                          {role === "runner" ? "Runner" : "Render"}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                  <View style={styles.currentRow}>
-                    <View style={[styles.machineDot, { backgroundColor: visibleDeviceConnected ? "#22c55e" : "#a7a7b0" }]} />
-                    <Text style={styles.currentMeta}>{visibleDeviceConnected ? "Connected" : "Offline"}</Text>
-                  </View>
-                  {machineChoicesOpen ? (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
-                      {devices.map((device) => (
-                        <Pressable
-                          key={`${visibleMachineRole}:${device.id}`}
-                          onPress={() => void saveMachineRole(visibleMachineRole, device.id)}
-                          disabled={isCoding}
-                          style={[styles.machineChoice, device.id === visibleDeviceId && styles.optionSelected]}
-                        >
-                          <View style={[styles.machineDot, { backgroundColor: connectedDeviceIds.includes(device.id) ? "#22c55e" : "#a7a7b0" }]} />
-                          <Text style={[styles.optionText, device.id === visibleDeviceId && styles.optionTextSelected]}>{device.name || device.id.slice(0, 8)}</Text>
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                  ) : null}
-                </View>
-
-                <View style={styles.settingsCard} testID="browser-vibe-runner-picker">
-                  <View style={styles.cardHeader}>
-                    <View style={styles.cardHeaderCopy}>
-                      <Text style={styles.cardTitle}>Runner</Text>
-                      <Text style={styles.cardValue} numberOfLines={2}>{runnerSummary || "Choose runner and model"}</Text>
-                    </View>
-                    <Pressable
-                      onPress={() => setRunnerChoicesOpen((value) => !value)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${runnerChoicesOpen ? "Hide" : "Change"} runner and model`}
-                      accessibilityState={{ expanded: runnerChoicesOpen }}
-                      style={({ pressed }) => [styles.changeButton, pressed && styles.pressed]}
-                    >
-                      <Text style={styles.changeButtonText}>{runnerChoicesOpen ? "Done" : "Change"}</Text>
-                    </Pressable>
-                  </View>
-                {runnerChoicesOpen && (runnersLoading ? <ActivityIndicator size="small" color="#a8a9ff" /> : (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
-                    {runners.map((runner) => {
-                      const ready = runner.installed && runner.ready !== false;
-                      const selected = runnerKey(runner.id) === selectedRunnerId;
-                      return (
-                        <View key={runner.id} style={[styles.option, selected && styles.optionSelected]}>
-                          <Pressable onPress={() => void chooseRunner(runner)} disabled={!ready} style={styles.optionChoice}>
-                            <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{runnerLabel(runner, runner.id)}</Text>
-                            {!ready ? <Text style={styles.optionMeta}>{runner.error || runner.warning || (runner.installed ? "sign-in or configuration required" : "not installed")}</Text> : null}
-                          </Pressable>
-                          {!ready ? (
-                            <Pressable
-                              onPress={() => void repairRunner(runner)}
-                              disabled={runnerSetupBusy !== null}
-                              accessibilityRole="button"
-                              accessibilityLabel={`${runner.installed ? "Configure" : "Install"} ${runnerLabel(runner, runner.id)}`}
-                              style={styles.repairButton}
-                            >
-                              {runnerSetupBusy === runnerKey(runner.id) ? <ActivityIndicator size="small" color="#fff" /> : (
-                                <Text style={styles.repairButtonText}>{runner.installed ? (runnerKey(runner.id) === "opencode" ? "Configure" : "Sign in") : "Install"}</Text>
-                              )}
-                            </Pressable>
-                          ) : null}
+                        <View style={styles.cardHeaderCopy}>
+                          <Text style={styles.cardTitle}>{role === "runner" ? "Runner" : "Render"}</Text>
+                          <Text style={styles.cardValue} numberOfLines={1}>{roleDevice?.name || "Choose device"}</Text>
                         </View>
-                      );
-                    })}
-                  </ScrollView>
-                ))}
-                {runnerChoicesOpen && (selectedRunner?.models?.length || 0) > 0 ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
-                    {selectedRunner!.models.map((model) => {
-                      const selected = model.id === selectedModelId;
-                      return (
-                        <Pressable key={model.id} onPress={() => void chooseModel(model.id)} style={[styles.modelOption, selected && styles.optionSelected]}>
-                          <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{model.name || model.id}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                ) : null}
+                        <View style={styles.changeButton}>
+                          <Text style={styles.changeButtonText}>{choicesOpen ? "Done" : "Change"}</Text>
+                        </View>
+                      </Pressable>
+                      <View style={styles.currentRow}>
+                        <View style={[styles.machineDot, { backgroundColor: roleConnected ? "#22c55e" : "#a7a7b0" }]} />
+                        <Text style={styles.currentMeta} numberOfLines={1}>
+                          {role === "runner"
+                            ? `${roleConnected ? "Connected" : "Offline"} · ${runnerSummary || "Choose coding agent"}`
+                            : roleConnected ? "Connected" : "Offline · tap to choose a connected machine"}
+                        </Text>
+                      </View>
+                      {choicesOpen ? (
+                        <>
+                          {role === "runner" ? <Text style={styles.menuLabel}>Machine</Text> : null}
+                          <View style={styles.machineList}>
+                            {devices.map((device) => (
+                              <Pressable
+                                key={`${role}:${device.id}`}
+                                onPress={() => void saveMachineRole(role, device.id)}
+                                disabled={isCoding}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Use ${device.name || device.id.slice(0, 8)} as ${role} machine`}
+                                accessibilityState={{ selected: device.id === roleDeviceId, disabled: isCoding }}
+                                style={[styles.machineChoice, device.id === roleDeviceId && styles.optionSelected]}
+                              >
+                                <View style={[styles.machineDot, { backgroundColor: connectedDeviceIds.includes(device.id) ? "#22c55e" : "#a7a7b0" }]} />
+                                <Text
+                                  style={[styles.machineChoiceText, device.id === roleDeviceId && styles.optionTextSelected]}
+                                  numberOfLines={2}
+                                >
+                                  {device.name || device.id.slice(0, 8)}
+                                </Text>
+                                <Text style={styles.machineChoiceState}>
+                                  {connectedDeviceIds.includes(device.id) ? "Connected" : "Offline"}
+                                </Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                        </>
+                      ) : null}
+                      {choicesOpen && role === "runner" ? (
+                        <>
+                          <Text style={styles.menuLabel}>Coding agent</Text>
+                          {runnersLoading ? <ActivityIndicator size="small" color="#a8a9ff" /> : (
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
+                              {runners.map((runner) => {
+                                const ready = runner.installed && runner.ready !== false;
+                                const selected = runnerKey(runner.id) === selectedRunnerId;
+                                return (
+                                  <View key={runner.id} style={[styles.option, selected && styles.optionSelected]}>
+                                    <Pressable onPress={() => void chooseRunner(runner)} disabled={!ready} style={styles.optionChoice}>
+                                      <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{runnerLabel(runner, runner.id)}</Text>
+                                      {!ready ? <Text style={styles.optionMeta}>{runner.error || runner.warning || (runner.installed ? "sign-in or configuration required" : "not installed")}</Text> : null}
+                                    </Pressable>
+                                    {!ready ? (
+                                      <Pressable
+                                        onPress={() => void repairRunner(runner)}
+                                        disabled={runnerSetupBusy !== null}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`${runner.installed ? "Configure" : "Install"} ${runnerLabel(runner, runner.id)}`}
+                                        style={styles.repairButton}
+                                      >
+                                        {runnerSetupBusy === runnerKey(runner.id) ? <ActivityIndicator size="small" color="#fff" /> : (
+                                          <Text style={styles.repairButtonText}>{runner.installed ? (runnerKey(runner.id) === "opencode" ? "Configure" : "Sign in") : "Install"}</Text>
+                                        )}
+                                      </Pressable>
+                                    ) : null}
+                                  </View>
+                                );
+                              })}
+                            </ScrollView>
+                          )}
+                          {(selectedRunner?.models?.length || 0) > 0 ? (
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
+                              {selectedRunner!.models.map((model) => {
+                                const selected = model.id === selectedModelId;
+                                return (
+                                  <Pressable key={model.id} onPress={() => void chooseModel(model.id)} style={[styles.modelOption, selected && styles.optionSelected]}>
+                                    <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{model.name || model.id}</Text>
+                                  </Pressable>
+                                );
+                              })}
+                            </ScrollView>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </View>
+                  );
+                })}
                 {selectionError ? <Text style={styles.selectionError}>{selectionError}</Text> : null}
                 {runnerSetupProgress ? <Text style={styles.setupProgress} numberOfLines={2}>{runnerSetupProgress}</Text> : null}
-                </View>
-
-                {!renderConnected ? <Text style={styles.selectionError}>Render machine disconnected · choose a connected renderer or exit preview to reconnect.</Text> : null}
               </ScrollView>
             </View>
             <View style={[styles.tabBody, activeTab !== "chat" && styles.hidden]}>
@@ -483,8 +475,8 @@ export function BrowserVibeBubble({
               </View> : noReadyRunner ? <View style={styles.failureCard} testID="browser-vibe-runner-failure">
                 <Ionicons name="warning-outline" size={22} color="#ffb36b" />
                 <Text style={styles.failureTitle}>Runner needs attention</Text>
-                <Text style={styles.failureDetail}>Choose a coding runner above, then install, sign in, or configure it without leaving the preview.</Text>
-                <Pressable onPress={() => setActiveTab("settings")} accessibilityRole="button" style={styles.failureAction}>
+                <Text style={styles.failureDetail}>Choose, install, sign in, or configure a coding runner without leaving the preview.</Text>
+                <Pressable onPress={() => { setActiveTab("settings"); setMachineChoicesOpen("runner"); }} accessibilityRole="button" style={styles.failureAction}>
                   <Text style={styles.failureActionText}>Open Runner Setup</Text>
                 </Pressable>
               </View> : (
@@ -605,14 +597,13 @@ const styles = StyleSheet.create({
   cardValue: { color: "#1d1d24", fontSize: 14, lineHeight: 19, fontWeight: "800", marginTop: 2 },
   changeButton: { minHeight: 34, paddingHorizontal: 10, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: "#f0efff" },
   changeButtonText: { color: "#6252e8", fontSize: 11, fontWeight: "800" },
-  roleTabs: { flexDirection: "row", padding: 3, gap: 4, borderRadius: 10, backgroundColor: "#f0f0f5" },
-  roleTab: { flex: 1, minHeight: 30, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-  roleTabSelected: { backgroundColor: "#fff", shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  roleTabText: { color: "#858590", fontSize: 11, fontWeight: "700" },
-  roleTabTextSelected: { color: "#6252e8" },
   currentRow: { minHeight: 18, flexDirection: "row", alignItems: "center", gap: 6 },
-  currentMeta: { color: "#777782", fontSize: 10, fontWeight: "600" },
-  machineChoice: { minHeight: 34, maxWidth: 180, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 9, borderRadius: 10, backgroundColor: "#f5f5f8", borderWidth: 1, borderColor: "#e6e6ec" },
+  currentMeta: { flex: 1, color: "#777782", fontSize: 10, fontWeight: "600" },
+  menuLabel: { color: "#898994", fontSize: 9, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 },
+  machineList: { width: "100%", gap: 7 },
+  machineChoice: { width: "100%", minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 11, paddingVertical: 8, borderRadius: 10, backgroundColor: "#f5f5f8", borderWidth: 1, borderColor: "#e6e6ec" },
+  machineChoiceText: { flex: 1, minWidth: 0, color: "#5e5e68", fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  machineChoiceState: { color: "#91919b", fontSize: 9, fontWeight: "700" },
   machineDot: { width: 7, height: 7, borderRadius: 4 },
   optionRow: { gap: 7, alignItems: "stretch" },
   option: { minHeight: 42, flexDirection: "row", alignItems: "center", paddingLeft: 11, borderRadius: 10, backgroundColor: "#fff", borderWidth: 1, borderColor: "#e3e3e9" },

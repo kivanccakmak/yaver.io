@@ -160,6 +160,13 @@ struct ProjectsView: View {
             DroidStreamView()
         case .web:
             WebPreviewStreamView(project: p, form: form)
+        case .tvOS:
+            RemoteRuntimeWebRTCView(
+                project: p,
+                form: .desktop,
+                forcedTargetID: "tvos-simulator",
+                launchGuest: true
+            )
         case .unknown:
             // Dead-end audit fix (2026-08-13): the old text said "Open it in
             // Session to run it" with NO button — a route with no tap. A

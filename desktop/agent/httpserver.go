@@ -1110,10 +1110,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/vibing/commit", s.authSDK(s.handleVibingCommit))
 	mux.HandleFunc("/vibing/deploy", s.authSDK(s.handleVibingDeploy))
 	mux.HandleFunc("/vibing/execute", s.authSDK(s.handleVibingExecute))
+	mux.HandleFunc("/vibing/tasks", s.authSDK(s.handleVibingTasks))
 	// SDK-accessible read-back + continue for vibing tasks. /tasks/{id}
 	// itself requires owner-auth, so without these endpoints the
 	// Feedback SDK chat surface couldn't poll its own task once
-	// /vibing/execute returned. Source-gated to "vibing" tasks only.
+	// /vibing/execute returned. Source-gated to feedback/vibing tasks only.
 	mux.HandleFunc("/vibing/task/", s.authSDK(s.handleVibingTaskByID))
 	mux.HandleFunc("/vibing/surprise", s.authSDK(s.handleVibingSurprise))
 	// Vibe Preview — live screenshot stream of a remote dev server, viewed
@@ -3938,16 +3939,17 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		// Echo the model + deviceName so mobile UIs can render the
 		// task's authoritative target instead of inferring from the
 		// focused-device picker state.
-		Model:      task.Model,
-		DeviceName: hostname,
-		SessionID:  task.SessionID,
-		Output:     output,
-		RawOutput:  rawOutput,
-		RawOffset:  rawOffset,
-		ResultText: task.ResultText,
-		Failure:    task.Failure,
-		CostUSD:    task.CostUSD,
-		Turns:      task.Turns,
+		Model:       task.Model,
+		ProjectName: task.ProjectName,
+		DeviceName:  hostname,
+		SessionID:   task.SessionID,
+		Output:      output,
+		RawOutput:   rawOutput,
+		RawOffset:   rawOffset,
+		ResultText:  task.ResultText,
+		Failure:     task.Failure,
+		CostUSD:     task.CostUSD,
+		Turns:       task.Turns,
 		PendingFollowUps: append([]PendingFollowUp{},
 			task.PendingFollowUps...),
 		Source:           task.Source,

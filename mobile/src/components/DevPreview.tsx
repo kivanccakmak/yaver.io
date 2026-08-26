@@ -1242,9 +1242,9 @@ export function DevPreview({
                           Alert.alert("Open App", "Open the app from your home screen.")
                         );
                       }}
-                      style={[styles.nativeBtn, { backgroundColor: "#1a1a2e", paddingHorizontal: 40, marginTop: 8 }]}
+                      style={[styles.nativeBtn, { backgroundColor: c.accentSoft, borderColor: c.accent, paddingHorizontal: 40, marginTop: 8 }]}
                     >
-                      <Text style={[styles.nativeBtnText, { color: "#818cf8" }]}>Open Dev Client</Text>
+                      <Text style={[styles.nativeBtnText, { color: c.accent }]}>Open Dev Client</Text>
                     </Pressable>
                   )}
 
@@ -1262,9 +1262,9 @@ export function DevPreview({
                       <Pressable
                         onPress={() => void handleReload("full")}
                         disabled={reloadLoading || nativeLoading}
-                        style={[styles.nativeBtn, { backgroundColor: "#1a1a2e", opacity: reloadLoading || nativeLoading ? 0.75 : 1 }]}
+                        style={[styles.nativeBtn, { backgroundColor: c.accentSoft, borderColor: c.accent, opacity: reloadLoading || nativeLoading ? 0.75 : 1 }]}
                       >
-                        <Text style={[styles.nativeBtnText, { color: "#818cf8" }]}>Full Reload</Text>
+                        <Text style={[styles.nativeBtnText, { color: c.accent }]}>Full Reload</Text>
                       </Pressable>
                     ) : null}
                     <Pressable onPress={handleStop} disabled={stopPhase === "stopping"} style={[styles.nativeBtn, { backgroundColor: "#2e1a1a" }]}>
@@ -1489,9 +1489,9 @@ export function DevPreview({
                                 <Pressable
                                   onPress={() => void runGapAIFix(gap)}
                                   disabled={gapFixRunning}
-                                  style={[styles.previewBtn, { borderColor: "#7c5cff", marginTop: 8 }]}
+                                  style={[styles.previewBtn, { borderColor: c.accent, backgroundColor: c.accentSoft, marginTop: 8 }]}
                                 >
-                                  <Text style={[styles.previewBtnText, { color: gapFixRunning ? "#9ca3af" : "#7c5cff" }]}>
+                                  <Text style={[styles.previewBtnText, { color: gapFixRunning ? c.textDisabled : c.accent }]}>
                                     {gapFixRunning ? "Sending to the runner…" : gapAIFixLabel(gap)}
                                   </Text>
                                 </Pressable>
@@ -1584,13 +1584,13 @@ export function DevPreview({
 	                                setPreviewFailed(true);
 	                              });
 	                            }}
-	                            style={[styles.previewBtn, { backgroundColor: "#2e1f3a" }]}
+	                            style={[styles.previewBtn, { backgroundColor: c.accentSoft, borderColor: c.accent }]}
 	                          >
-	                            <Text style={[styles.previewBtnText, { color: "#c084fc" }]}>Fix with AI</Text>
+	                            <Text style={[styles.previewBtnText, { color: c.accent }]}>Fix with AI</Text>
 	                          </Pressable>
 	                        ) : null}
-                        <Pressable onPress={() => void handleReload("full")} style={[styles.previewBtn, { backgroundColor: "#1a1a2e" }]}>
-                          <Text style={[styles.previewBtnText, { color: "#818cf8" }]}>Restart</Text>
+                        <Pressable onPress={() => void handleReload("full")} style={[styles.previewBtn, { backgroundColor: c.infoBg, borderColor: c.info }]}>
+                          <Text style={[styles.previewBtnText, { color: c.info }]}>Restart</Text>
                         </Pressable>
                       </View>
                     </>

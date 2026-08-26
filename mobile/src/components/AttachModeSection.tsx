@@ -95,6 +95,7 @@ export default function AttachModeSection({
   const [connectingPrimary, setConnectingPrimary] = useState(false);
   const [mayOffer, setMayOffer] = useState(true);
   const [nestingReason, setNestingReason] = useState<string | undefined>();
+  const [expandedStep, setExpandedStep] = useState<AttachStep["key"] | null>(null);
 
   // Nesting guard: an already-attached instance must not offer to attach again.
   useEffect(() => {
@@ -156,13 +157,26 @@ export default function AttachModeSection({
     if (!configLoaded || !targetConnected || !targetDevice?.id) return;
     let cancelled = false;
     void (async () => {
-      let status = await getDogfoodSourceStatus(targetDevice.id, checkoutDir.trim() || undefined);
+      const requestedPath = checkoutDir.trim();
+      const [requested, discovered] = await Promise.all([
+        getDogfoodSourceStatus(targetDevice.id, requestedPath || undefined),
+        requestedPath ? getDogfoodSourceStatus(targetDevice.id) : Promise.resolve(null),
+      ]);
+      let status = requested;
+      if (discovered) {
+        const candidates = [...(discovered.candidates || []), ...(requested.candidates || [])]
+          .filter((candidate, index, rows) => rows.findIndex((row) => row.path === candidate.path) === index);
+        if (!requested.ready && discovered.ready) {
+          status = { ...discovered, candidates };
+        } else {
+          status = { ...requested, candidates };
+        }
+      }
       // Cached test/validation worktrees are commonly detached. Prefer the
       // agent's normal named checkout when it can prove one, so a stale local
       // preference does not strand Dogfood on a disposable clone.
-      if (status.ready && status.branch === "HEAD" && status.suggestedPath && status.suggestedPath !== status.path) {
-        const suggested = await getDogfoodSourceStatus(targetDevice.id, status.suggestedPath);
-        if (suggested.ready && suggested.branch && suggested.branch !== "HEAD") status = suggested;
+      if (status.ready && status.branch === "HEAD" && discovered?.ready && discovered.branch && discovered.branch !== "HEAD") {
+        status = { ...discovered, candidates: status.candidates };
       }
       if (cancelled) return;
       setSourceStatus(status);
@@ -226,6 +240,7 @@ export default function AttachModeSection({
   const normalizedRunner = runner === "claude-code" ? "claude" : runner;
   const selectedRunnerRow = runnerRows.find((row) => (row.id === "claude-code" ? "claude" : row.id) === normalizedRunner);
   const selectedModel = targetDevice?.id ? primaryModelByDevice[targetDevice.id] || "" : "";
+  const checkoutCandidates = sourceStatus?.candidates || [];
 
   useEffect(() => {
     if (!laneOptions.some((option) => option.lane === lane && option.supported)) {
@@ -318,37 +333,87 @@ export default function AttachModeSection({
   }, [checkoutDir, gate.canAttach, lane, runner, targetDevice?.id, targetDevice?.name]);
 
   const runSourceFix = useCallback(async () => {
-    if (!targetDevice?.id || !sourceStatus || sourceBusy) return;
+    if (!targetDevice?.id || sourceBusy) return;
     setSourceBusy(true);
     setFailure(null);
-    setSourceProgress(sourceStatus.code === "DOGFOOD_GIT_NOT_INSTALLED" ? "Installing Git…" : "Cloning Yaver source…");
+    setSourceProgress("Looking for a Yaver checkout…");
     try {
-      const result = sourceStatus.code === "DOGFOOD_GIT_NOT_INSTALLED"
-        ? await installDogfoodGit(targetDevice.id, (line) => setSourceProgress(line.trim() || "Installing Git…"))
-        : await installDogfoodSource(targetDevice.id, runner);
-      if (!result.ok) {
-        setFailure({
-          code: sourceStatus.code,
-          error: result.error || "The source repair did not complete.",
-          remedy: sourceStatus.code === "DOGFOOD_GIT_NOT_INSTALLED"
-            ? "Open the Git configuration wizard or retry the install on this box."
-            : "Open the Git configuration wizard if GitHub access is required, then retry the clone.",
-        });
-        return;
-      }
-      const installedPath = (result as { path?: string }).path;
-      const status = await getDogfoodSourceStatus(targetDevice.id, installedPath);
+      let status = await getDogfoodSourceStatus(targetDevice.id);
       setSourceStatus(status);
       if (status.ready && status.path) {
         setCheckoutDir(status.path);
         await AsyncStorage.setItem(CHECKOUT_KEY, status.path);
         await verify(status.path);
+        return;
       }
+
+      if (status.code === "DOGFOOD_GIT_NOT_INSTALLED") {
+        setSourceProgress("Installing Git…");
+        const git = await installDogfoodGit(
+          targetDevice.id,
+          (line) => setSourceProgress(line.trim() || "Installing Git…"),
+        );
+        if (!git.ok) {
+          setFailure({
+            code: status.code,
+            error: git.error || "Git installation did not complete.",
+            remedy: "Open Git configuration on this box, or retry the install.",
+          });
+          return;
+        }
+        setSourceProgress("Looking for a Yaver checkout…");
+        status = await getDogfoodSourceStatus(targetDevice.id);
+        setSourceStatus(status);
+        if (status.ready && status.path) {
+          setCheckoutDir(status.path);
+          await AsyncStorage.setItem(CHECKOUT_KEY, status.path);
+          await verify(status.path);
+          return;
+        }
+      }
+
+      setSourceProgress("Cloning Yaver source…");
+      const result = await installDogfoodSource(targetDevice.id, runner);
+      if (!result.ok || !result.path) {
+        setFailure({
+          code: status.code || "DOGFOOD_SOURCE_CLONE_FAILED",
+          error: result.error || "The source repair did not complete.",
+          remedy: "Open Git configuration if GitHub access is required, then retry the clone.",
+        });
+        return;
+      }
+
+      const installed = await getDogfoodSourceStatus(targetDevice.id, result.path);
+      setSourceStatus(installed);
+      if (!installed.ready || !installed.path) {
+        setFailure({
+          code: installed.code,
+          error: installed.message,
+          remedy: installed.remedy || "Choose another Yaver checkout or open Git configuration.",
+        });
+        return;
+      }
+      setCheckoutDir(installed.path);
+      await AsyncStorage.setItem(CHECKOUT_KEY, installed.path);
+      await verify(installed.path);
+    } catch (error) {
+      setFailure({
+        code: "DOGFOOD_SOURCE_FIX_FAILED",
+        error: error instanceof Error ? error.message : String(error),
+        remedy: "Reconnect the box, then retry. Open Git configuration if cloning still fails.",
+      });
     } finally {
       setSourceBusy(false);
       setSourceProgress(null);
     }
-  }, [runner, sourceBusy, sourceStatus, targetDevice?.id, verify]);
+  }, [runner, sourceBusy, targetDevice?.id, verify]);
+
+  const toggleStep = useCallback((step: AttachStep) => {
+    setExpandedStep((current) => current === step.key ? null : step.key);
+    if (step.key === "checkout" && step.status !== "ok" && !sourceBusy) {
+      void runSourceFix();
+    }
+  }, [runSourceFix, sourceBusy]);
 
   if (!mayOffer) {
     return (
@@ -365,196 +430,234 @@ export default function AttachModeSection({
     <View>
       <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Dogfood Yaver</Text>
 
-      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Device</Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        {devices.map((device) => {
-          const selected = targetDevice?.id === device.id;
-          const connected = connectedDeviceIds.includes(device.id);
-          return (
-            <Pressable
-              key={device.id}
-              disabled={connectingPrimary}
-              onPress={() => {
-                setConnectingPrimary(true);
-                setFailure(null);
-                void selectDevice(device)
-                  .catch((err) => setFailure({
-                    error: err instanceof Error ? err.message : String(err),
-                    remedy: `Wake or repair ${device.name}, then retry.`,
-                  }))
-                  .finally(() => setConnectingPrimary(false));
-              }}
-              style={{
-                paddingHorizontal: 11,
-                paddingVertical: 8,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: selected ? c.accent : c.border,
-                backgroundColor: selected ? `${c.accent}22` : c.bg,
-                opacity: connected ? 1 : 0.65,
-              }}
-            >
-              <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: selected ? "700" : "500" }}>
-                {device.name}{connected ? "" : " · offline"}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      {!devices.length ? (
-        <Text style={{ color: c.warn, fontSize: 12 }}>Connect a same-account device to start Dogfood.</Text>
-      ) : null}
-
-      {/* The gate. One line per step, each with its fix. */}
-      <View style={{ marginTop: 12, gap: 8 }}>
+      {/* The default surface is only the answer: Box, Runner, Checkout. Each
+          inventory stays behind its own Change/Fix action. */}
+      <View style={{ marginTop: 12, gap: 4 }}>
         {gate.steps.map((step) => (
-          <StepRow key={step.key} c={c} step={step} />
+          <StepRow
+            key={step.key}
+            c={c}
+            step={step}
+            expanded={expandedStep === step.key}
+            busy={step.key === "checkout" && sourceBusy}
+            onPress={() => toggleStep(step)}
+          />
         ))}
       </View>
 
-      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 14, marginBottom: 6 }}>
-        Yaver checkout on the box
-      </Text>
-      {sourceStatus && !sourceStatus.ready ? (
-        <View style={{ borderWidth: 1, borderColor: c.warn, borderRadius: 10, padding: 10, marginBottom: 10 }}>
-          <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>{sourceStatus.message}</Text>
-          {sourceStatus.remedy ? (
-            <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 }}>{sourceStatus.remedy}</Text>
-          ) : null}
-          {sourceStatus.action ? (
-            <Pressable
-              disabled={sourceBusy}
-              onPress={() => void runSourceFix()}
-              style={{ marginTop: 9, alignSelf: "flex-start", paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, backgroundColor: c.accent }}
-            >
-              <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>
-                {sourceBusy ? (sourceProgress || "Working…") : sourceStatus.action.label}
-              </Text>
-            </Pressable>
-          ) : null}
-          {!sourceStatus.action && GIT_CONFIG_FAILURE_CODES.has(sourceStatus.code) && targetDevice?.id ? (
-            <Pressable
-              onPress={() => router.push({ pathname: "/(tabs)/settings" as any, params: { gitWizard: "1", deviceId: targetDevice.id } } as any)}
-              style={{ marginTop: 9, alignSelf: "flex-start", paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: c.accent }}
-            >
-              <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>Open Git configuration</Text>
-            </Pressable>
+      {expandedStep === "box" ? (
+        <View accessibilityLabel="Box choices" style={{ marginTop: 8, paddingLeft: 20 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {devices.map((device) => {
+              const selected = targetDevice?.id === device.id;
+              const connected = connectedDeviceIds.includes(device.id);
+              return (
+                <Pressable
+                  key={device.id}
+                  disabled={connectingPrimary}
+                  onPress={() => {
+                    setConnectingPrimary(true);
+                    setFailure(null);
+                    void selectDevice(device)
+                      .catch((err) => setFailure({
+                        error: err instanceof Error ? err.message : String(err),
+                        remedy: `Wake or repair ${device.name}, then retry.`,
+                      }))
+                      .finally(() => setConnectingPrimary(false));
+                  }}
+                  style={{
+                    paddingHorizontal: 11,
+                    paddingVertical: 8,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: selected ? c.accent : c.border,
+                    backgroundColor: selected ? `${c.accent}22` : c.bg,
+                    opacity: connected ? 1 : 0.65,
+                  }}
+                >
+                  <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: selected ? "700" : "500" }}>
+                    {device.name}{connected ? "" : " · offline"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {!devices.length ? (
+            <Text style={{ color: c.warn, fontSize: 12 }}>Connect a same-account device to start Dogfood.</Text>
           ) : null}
         </View>
       ) : null}
-      <TextInput
-        value={checkoutDir}
-        onChangeText={(t) => {
-          setCheckoutDir(t);
-          AsyncStorage.setItem(CHECKOUT_KEY, t).catch(() => {});
-        }}
-        placeholder="/root/Workspace/yaver.io"
-        placeholderTextColor={c.textMuted}
-        autoCapitalize="none"
-        autoCorrect={false}
-        spellCheck={false}
-        style={{
-          color: c.textPrimary,
-          borderColor: c.border,
-          backgroundColor: c.bg,
-          borderWidth: 1,
-          borderRadius: 8,
-          paddingHorizontal: 10,
-          paddingVertical: 10,
-          fontSize: 13,
-        }}
-      />
 
-      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Runner</Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        {(["claude-code", "codex", "opencode"] as const).map((r) => {
-          const on = runner === r;
-          return (
+      {expandedStep === "runner" ? (
+        <View accessibilityLabel="Runner choices" style={{ marginTop: 8, paddingLeft: 20 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {(["claude-code", "codex", "opencode"] as const).map((r) => {
+              const on = runner === r;
+              return (
+                <Pressable
+                  key={r}
+                  onPress={() => {
+                    setRunner(r);
+                    if (targetDevice?.id) void setPrimaryRunnerForDevice(targetDevice.id, r, null);
+                  }}
+                  style={({ pressed }) => [
+                    {
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: on ? c.accent : c.border,
+                      backgroundColor: on ? `${c.accent}22` : c.bg,
+                    },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: on ? "700" : "500" }}>{r}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {selectedRunnerRow?.models?.length ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+              {selectedRunnerRow.models.map((model) => {
+                const on = selectedModel === model.id || (!selectedModel && model.isDefault);
+                return (
+                  <Pressable
+                    key={model.id}
+                    onPress={() => targetDevice?.id && void setPrimaryRunnerForDevice(targetDevice.id, runner, model.id)}
+                    style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: on ? c.accent : c.border, backgroundColor: on ? `${c.accent}22` : c.bg }}
+                  >
+                    <Text style={{ color: c.textPrimary, fontSize: 11, fontWeight: on ? "700" : "500" }}>{model.name || model.id}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+          {verified === true && runnerCheck && runnerCheck.status !== "ok" ? (
             <Pressable
-              key={r}
-              onPress={() => {
-                setRunner(r);
-                if (targetDevice?.id) void setPrimaryRunnerForDevice(targetDevice.id, r, null);
-              }}
-              style={({ pressed }) => [
-                {
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                  borderRadius: 8,
-                  borderWidth: 1,
-                  borderColor: on ? c.accent : c.border,
-                  backgroundColor: on ? `${c.accent}22` : c.bg,
-                },
-                pressed && { opacity: 0.7 },
-              ]}
+              disabled={runnerSetupBusy}
+              onPress={() => void configureRunner()}
+              style={{ marginTop: 8, alignSelf: "flex-start", paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, backgroundColor: c.accentSoft }}
             >
-              <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: on ? "700" : "500" }}>{r}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      {selectedRunnerRow?.models?.length ? (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-          {selectedRunnerRow.models.map((model) => {
-            const on = selectedModel === model.id || (!selectedModel && model.isDefault);
-            return (
-              <Pressable
-                key={model.id}
-                onPress={() => targetDevice?.id && void setPrimaryRunnerForDevice(targetDevice.id, runner, model.id)}
-                style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: on ? c.accent : c.border, backgroundColor: on ? `${c.accent}22` : c.bg }}
-              >
-                <Text style={{ color: c.textPrimary, fontSize: 11, fontWeight: on ? "700" : "500" }}>{model.name || model.id}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      ) : null}
-      {verified === true && runnerCheck && runnerCheck.status !== "ok" ? (
-        <Pressable
-          disabled={runnerSetupBusy}
-          onPress={() => void configureRunner()}
-          style={{ marginTop: 8, alignSelf: "flex-start", paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, backgroundColor: c.accentSoft }}
-        >
-          <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>
-            {runnerSetupBusy ? "Installing…" : runnerCheck.status === "missing" ? `Install ${runner}` : `Configure ${runner}`}
-          </Text>
-        </Pressable>
-      ) : null}
-      {runnerSetupMessage ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>{runnerSetupMessage}</Text> : null}
-
-      <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Runtime</Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        {laneOptions.map((option) => {
-          const selected = lane === option.lane;
-          return (
-            <Pressable
-              key={option.lane}
-              disabled={!option.supported}
-              onPress={() => setLane(option.lane)}
-              accessibilityRole="radio"
-              accessibilityState={{ checked: selected, disabled: !option.supported }}
-              style={{
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: selected ? c.accent : c.border,
-                backgroundColor: selected ? `${c.accent}22` : c.bg,
-                opacity: option.supported ? 1 : 0.45,
-              }}
-            >
-              <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: selected ? "700" : "500" }}>
-                {option.label}{option.default ? " · default" : ""}
+              <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>
+                {runnerSetupBusy ? "Installing…" : runnerCheck.status === "missing" ? `Install ${runner}` : `Configure ${runner}`}
               </Text>
             </Pressable>
-          );
-        })}
-      </View>
-      {laneOptions.filter((option) => !option.supported).map((option) => (
-        <Text key={`${option.lane}-reason`} style={{ color: c.textMuted, fontSize: 10, lineHeight: 14, marginTop: 5 }}>
-          {option.label}: {option.reason}
-        </Text>
-      ))}
+          ) : null}
+          {runnerSetupMessage ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>{runnerSetupMessage}</Text> : null}
+
+          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Runtime</Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {laneOptions.map((option) => {
+              const selected = lane === option.lane;
+              return (
+                <Pressable
+                  key={option.lane}
+                  disabled={!option.supported}
+                  onPress={() => setLane(option.lane)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: selected, disabled: !option.supported }}
+                  style={{
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: selected ? c.accent : c.border,
+                    backgroundColor: selected ? `${c.accent}22` : c.bg,
+                    opacity: option.supported ? 1 : 0.45,
+                  }}
+                >
+                  <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: selected ? "700" : "500" }}>
+                    {option.label}{option.default ? " · default" : ""}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {laneOptions.filter((option) => !option.supported).map((option) => (
+            <Text key={`${option.lane}-reason`} style={{ color: c.textMuted, fontSize: 10, lineHeight: 14, marginTop: 5 }}>
+              {option.label}: {option.reason}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      {expandedStep === "checkout" ? (
+        <View accessibilityLabel="Yaver checkout choices" style={{ marginTop: 8, paddingLeft: 20 }}>
+          {sourceBusy ? (
+            <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 8 }}>{sourceProgress || "Working…"}</Text>
+          ) : null}
+          {checkoutCandidates.length ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+              {checkoutCandidates.map((candidate) => {
+                const selected = checkoutDir.trim() === candidate.path;
+                return (
+                  <Pressable
+                    key={candidate.path}
+                    onPress={() => {
+                      setCheckoutDir(candidate.path);
+                      void AsyncStorage.setItem(CHECKOUT_KEY, candidate.path);
+                      void verify(candidate.path);
+                    }}
+                    style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: selected ? c.accent : c.border, backgroundColor: selected ? `${c.accent}22` : c.bg }}
+                  >
+                    <Text style={{ color: c.textPrimary, fontSize: 11, fontWeight: selected ? "700" : "500" }}>{candidate.path}</Text>
+                    {candidate.branch ? <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }}>{candidate.branch}</Text> : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+          {sourceStatus && !sourceStatus.ready ? (
+            <View style={{ borderWidth: 1, borderColor: c.warn, borderRadius: 10, padding: 10, marginBottom: 10 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>{sourceStatus.message}</Text>
+              {sourceStatus.remedy ? (
+                <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4 }}>{sourceStatus.remedy}</Text>
+              ) : null}
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 9 }}>
+                <Pressable
+                  disabled={sourceBusy}
+                  onPress={() => void runSourceFix()}
+                  style={{ paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, backgroundColor: c.accent }}
+                >
+                  <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>{sourceBusy ? "Working…" : "Try checkout fix"}</Text>
+                </Pressable>
+                {GIT_CONFIG_FAILURE_CODES.has(sourceStatus.code) && targetDevice?.id ? (
+                  <Pressable
+                    onPress={() => router.push({ pathname: "/(tabs)/settings" as any, params: { gitWizard: "1", deviceId: targetDevice.id } } as any)}
+                    style={{ paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: c.accent }}
+                  >
+                    <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>Open Git configuration</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
+          <TextInput
+            value={checkoutDir}
+            onChangeText={(t) => {
+              setCheckoutDir(t);
+              AsyncStorage.setItem(CHECKOUT_KEY, t).catch(() => {});
+            }}
+            accessibilityLabel="Yaver checkout path"
+            placeholder="Path to yaver.io"
+            placeholderTextColor={c.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            style={{
+              color: c.textPrimary,
+              borderColor: c.border,
+              backgroundColor: c.bg,
+              borderWidth: 1,
+              borderRadius: 8,
+              paddingHorizontal: 10,
+              paddingVertical: 10,
+              fontSize: 13,
+            }}
+          />
+        </View>
+      ) : null}
 
       {failure ? (
         <View
@@ -600,9 +703,9 @@ export default function AttachModeSection({
                   }))
                   .finally(() => setFixing(false));
               }}
-              style={{ marginTop: 10, alignSelf: "flex-start", borderWidth: 1, borderColor: "#7c5cff", borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8 }}
+              style={{ marginTop: 10, alignSelf: "flex-start", borderWidth: 1, borderColor: c.accent, backgroundColor: c.accentSoft, borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8 }}
             >
-              <Text style={{ color: "#a78bfa", fontSize: 12, fontWeight: "700" }}>
+              <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>
                 {fixing ? "Starting AI fix…" : "Fix with AI"}
               </Text>
             </Pressable>
@@ -665,17 +768,47 @@ export default function AttachModeSection({
   );
 }
 
-function StepRow({ c, step }: { c: ThemeColors; step: AttachStep }) {
+function StepRow({
+  c,
+  step,
+  expanded,
+  busy,
+  onPress,
+}: {
+  c: ThemeColors;
+  step: AttachStep;
+  expanded: boolean;
+  busy: boolean;
+  onPress: () => void;
+}) {
   const tone =
     step.status === "ok" ? c.success : step.status === "blocked" ? c.error : c.textMuted;
   const glyph = step.status === "ok" ? "✓" : step.status === "blocked" ? "!" : "·";
+  const action = busy ? "Fixing…" : step.status === "ok" ? "Change" : "Fix";
   return (
-    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48 }}>
       <Text style={{ color: tone, fontSize: 12, width: 12, textAlign: "center" }}>{glyph}</Text>
       <View style={{ flex: 1 }}>
         <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>{step.label}</Text>
         <Text style={{ color: tone, fontSize: 11, lineHeight: 16 }}>{step.detail}</Text>
       </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${action} ${step.label}`}
+        accessibilityState={{ expanded, disabled: busy }}
+        disabled={busy}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          borderWidth: 1,
+          borderColor: c.border,
+          borderRadius: 8,
+          paddingHorizontal: 10,
+          paddingVertical: 7,
+          opacity: busy ? 0.55 : pressed ? 0.7 : 1,
+        })}
+      >
+        <Text style={{ color: c.accent, fontSize: 11, fontWeight: "700" }}>{action}</Text>
+      </Pressable>
     </View>
   );
 }

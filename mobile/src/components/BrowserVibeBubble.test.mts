@@ -34,14 +34,16 @@ test("the bubble separates Chat and Settings without unmounting the task", () =>
   assert.ok(source.includes('activeTab !== "chat" && styles.hidden'));
   assert.ok(chat.includes("taskClient.executeVibingSuggestion"));
   assert.ok(chat.includes("taskClient.continueTask(activeTask.id, text)"));
+  assert.ok(chat.includes("tasks.length > 1"), "topic cards still occupy an empty or single chat");
+  assert.ok(chat.includes("tasks.length === 1"), "one saved topic has no compact single-chat controls");
+  assert.ok(chat.includes("draftingNewTopicRef"), "the single topic auto-restore prevents creating a second topic");
 });
 
 test("browser Vibing mirrors feedback controls and remains mounted when minimized", () => {
   assert.ok(source.includes("KeyboardAvoidingView"), "composer can still be covered by the iOS keyboard");
   assert.ok(source.includes('accessibilityLabel="Minimize Vibing"'));
   assert.ok(source.includes('accessibilityLabel="Exit preview and return to Yaver"'));
-  assert.ok(source.includes('testID="browser-vibe-runner-picker"'));
-  assert.ok(source.includes('testID="browser-vibe-machine-routing"'));
+  assert.ok(source.includes('testID={`browser-vibe-${role}-machine`}'));
   assert.ok(source.includes("setPrimaryRunnerForDevice"), "runner/model picker does not persist its visible choice");
   assert.ok(source.includes('!open && styles.hidden'), "minimizing unmounts the live task instead of backgrounding it");
   assert.ok(source.includes('testID="browser-vibe-fast-reload"'), "fast reload is not beside the floating Vibing control");
@@ -59,13 +61,35 @@ test("browser Vibing mirrors feedback controls and remains mounted when minimize
   assert.ok(projects.includes("onExitPreview={() => setShowWebView(false)}"));
 });
 
-test("Settings uses two progressive-disclosure cards and Chat stays focused", () => {
+test("Settings gives runner and render machines direct cards and Chat stays focused", () => {
   assert.ok(source.includes("machineChoicesOpen"));
-  assert.ok(source.includes("runnerChoicesOpen"));
   assert.ok(source.includes('type MachineRole = "runner" | "render"'));
-  assert.ok(source.includes("visibleMachineRole"));
+  assert.ok(source.includes('testID={`browser-vibe-${role}-machine`}'));
+  assert.ok(source.includes('saveMachineRole(role, device.id)'));
+  assert.ok(source.includes('accessibilityLabel={`${choicesOpen ? "Hide" : "Choose"} ${role} settings`}'),
+    "the machine card itself is not the picker action");
+  assert.ok(source.includes('choicesOpen && role === "runner"'),
+    "the Runner card does not own runner and model selection");
+  assert.ok(source.includes("if (machineChoicesOpen && !choicesOpen) return null"),
+    "opening one settings card still leaves the other card crowding its editor");
+  assert.ok(!source.includes('testID="browser-vibe-runner-picker"'),
+    "runner selection remains a third card instead of living in Runner settings");
+  assert.ok(!source.includes("runnerChoicesOpen"), "runner selection still requires a second disclosure tap");
+  assert.ok(source.includes('setMachineChoicesOpen("runner")'),
+    "Open Runner Setup stops at Settings instead of opening the focused Runner card");
+  assert.ok(!source.includes("Render machine disconnected · choose a connected renderer"),
+    "render status still occupies a separate warning instead of its actionable card");
+  assert.ok(!source.includes("visibleMachineRole"), "Settings still requires switching a shared Device card between roles");
+  assert.ok(!source.includes("styles.roleTabs"), "Runner and Render are still nested tabs instead of direct cards");
   assert.ok(!source.includes("routeSummary"), "Chat repeats routing already available in Settings");
   assert.ok(!chat.includes("Type a vibe prompt"), "Chat repeats runner/model guidance already available in Settings");
+});
+
+test("runner and render machine choosers use the phone's vertical space", () => {
+  assert.ok(source.includes("<View style={styles.machineList}>"));
+  assert.match(source, /machineChoice:\s*\{\s*width:\s*"100%"/);
+  assert.ok(source.includes("machineChoiceState"));
+  assert.ok(source.includes("accessibilityState={{ selected: device.id === roleDeviceId, disabled: isCoding }}"));
 });
 
 test("coding and rendering machines are independent routes", () => {
@@ -73,7 +97,7 @@ test("coding and rendering machines are independent routes", () => {
   assert.ok(source.includes('machineRoles?.renderDeviceId'));
   assert.ok(source.includes('role === "runner" ? nextDeviceId'));
   assert.ok(source.includes('role === "render" ? nextDeviceId'));
-  assert.ok(source.includes("saveMachineRole(visibleMachineRole, device.id)"));
+  assert.ok(source.includes("saveMachineRole(role, device.id)"));
   assert.ok(source.includes('client={codingClient}'));
   assert.ok(preview.includes('connectionManager.renderClient()'));
   assert.ok(projects.includes('connectionManager.renderClient()'));

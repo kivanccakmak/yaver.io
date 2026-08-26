@@ -1645,8 +1645,96 @@ func (s *HTTPServer) buildAndLaunchRNInSimulator(ctx context.Context, session Re
 	switch session.TargetID {
 	case "android-emulator", "android-wear", "android-tv", "android-xr", "android-auto", remoteRuntimeRedroidTargetID:
 		return s.buildAndLaunchRNAndroid(ctx, session, workDir)
+	case "tvos-simulator":
+		return s.buildAndLaunchTVOSApp(ctx, session, workDir)
 	}
 	return s.buildAndLaunchRNiOS(ctx, session, workDir)
+}
+
+// buildAndLaunchTVOSApp is the native Dogfood lane for Apple TV. A tvOS
+// viewer must run Yaver's actual SwiftUI tvOS target on the render Mac, not an
+// iPhone RN build and not a browser-window substitute. The session has already
+// claimed and booted the exact simulator UDID, so build/install/launch stays on
+// that device and the existing WebRTC control lease owns all input.
+func (s *HTTPServer) buildAndLaunchTVOSApp(ctx context.Context, session RemoteRuntimeSession, workDir string) error {
+	udid := strings.TrimSpace(session.DeviceID)
+	if udid == "" {
+		return fmt.Errorf("tvOS session has no booted simulator device id")
+	}
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("tvOS simulator builds need macOS with Xcode")
+	}
+	workDir = filepath.Clean(strings.TrimSpace(workDir))
+	project := filepath.Join(workDir, "YaverTV.xcodeproj")
+	if _, err := os.Stat(project); err != nil {
+		if _, specErr := os.Stat(filepath.Join(workDir, "project.yml")); specErr != nil {
+			return fmt.Errorf("no YaverTV.xcodeproj or project.yml in %s", workDir)
+		}
+		if _, lookErr := exec.LookPath("xcodegen"); lookErr != nil {
+			return fmt.Errorf("YaverTV.xcodeproj is not generated and xcodegen is missing; install it with `brew install xcodegen`, then retry")
+		}
+		generate := exec.CommandContext(ctx, "xcodegen", "generate")
+		generate.Dir = workDir
+		hardenBuildProcessGroup(generate)
+		if out, genErr := generate.CombinedOutput(); genErr != nil {
+			return fmt.Errorf("xcodegen generate failed: %s", tailStr(string(out), 600))
+		}
+	}
+
+	derivedData := filepath.Join(os.TempDir(), "yaver-tvos-dogfood")
+	excludeFromSpotlight(derivedData)
+	emit := func(message string) {
+		if s != nil && s.devServerMgr != nil {
+			s.devServerMgr.EmitLog("[tvos-dogfood] " + message)
+		}
+	}
+	emit("building YaverTV for the claimed Apple TV Simulator — Debug, WebRTC control enabled")
+	args := tvOSSimulatorBuildArgs(project, udid, derivedData)
+	build := exec.CommandContext(ctx, "xcodebuild", args...)
+	build.Dir = workDir
+	hardenBuildProcessGroup(build)
+	if out, buildErr := build.CombinedOutput(); buildErr != nil {
+		return fmt.Errorf("tvOS simulator build failed: %s", tailStr(string(out), 800))
+	}
+
+	appPath := filepath.Join(derivedData, "Build", "Products", "Debug-appletvsimulator", "Yaver.app")
+	if _, err := os.Stat(appPath); err != nil {
+		return fmt.Errorf("tvOS build succeeded but %s was not produced", appPath)
+	}
+	emit("installing Yaver.app into the claimed Apple TV Simulator")
+	if out, err := exec.CommandContext(ctx, "xcrun", "simctl", "install", udid, appPath).CombinedOutput(); err != nil {
+		return fmt.Errorf("simctl install tvOS app failed: %s", tailStr(string(out), 600))
+	}
+	bundleID, err := bundleIDFromApp(appPath)
+	if err != nil {
+		return fmt.Errorf("read tvOS bundle id: %w", err)
+	}
+	if out, err := exec.CommandContext(ctx, "xcrun", "simctl", "launch", udid, bundleID).CombinedOutput(); err != nil {
+		return fmt.Errorf("simctl launch %s failed: %s", bundleID, tailStr(string(out), 600))
+	}
+	emit("launched " + bundleID + " in Apple TV Simulator; WebRTC stream and full remote control are live")
+	return nil
+}
+
+func tvOSSimulatorBuildArgs(project, udid, derivedData string) []string {
+	return []string{
+		"-project", project,
+		"-scheme", "YaverTV",
+		"-configuration", "Debug",
+		"-sdk", "appletvsimulator",
+		"-destination", "id=" + udid,
+		"-derivedDataPath", derivedData,
+		"-jobs", "2",
+		// Both packages are pinned public GitHub dependencies. Asking SwiftPM
+		// to consult the login keychain can block a headless agent forever in
+		// SecItemCopyMatching even though no credential is needed. The netrc
+		// provider is non-interactive; public fetch still works, and a private
+		// dependency fails with a named auth error instead of a hidden prompt.
+		"-packageAuthorizationProvider", "netrc",
+		"-onlyUsePackageVersionsFromResolvedFile",
+		"CODE_SIGNING_ALLOWED=NO",
+		"build",
+	}
 }
 
 // buildAndLaunchRNiOS builds the RN project into the session's booted Apple

@@ -302,7 +302,7 @@ export default function AttachScreen() {
 
       {fatal ? (
         <View style={styles.fatalScrim}>
-          <View style={[styles.fatal, { borderColor: c.errorBorder, backgroundColor: c.errorBg }]}>
+          <View style={[styles.fatal, { borderColor: c.errorBorder, backgroundColor: c.bgCard }]}>
             <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700", lineHeight: 18 }}>
               Dogfood render stopped
             </Text>
@@ -313,7 +313,7 @@ export default function AttachScreen() {
               {fatal.message}
             </Text>
             {fatal.remedy ? (
-              <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 6, lineHeight: 17 }}>
+              <Text style={{ color: c.textSecondary, fontSize: 12, marginTop: 6, lineHeight: 17 }}>
                 {fatal.remedy}
               </Text>
             ) : null}
@@ -350,9 +350,9 @@ export default function AttachScreen() {
                     }))
                     .finally(() => setFixing(false));
                 }}
-                style={({ pressed }) => [styles.fatalAction, { borderColor: "#7c5cff" }, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.fatalAction, { borderColor: c.accent, backgroundColor: c.accentSoft }, pressed && styles.pressed]}
               >
-                <Text style={{ color: "#a78bfa", fontSize: 12, fontWeight: "700" }}>
+                <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>
                   {fixing ? "Starting…" : "Fix with AI"}
                 </Text>
               </Pressable>

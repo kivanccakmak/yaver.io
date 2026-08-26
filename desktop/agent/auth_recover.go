@@ -554,6 +554,17 @@ func (s *HTTPServer) handleAuthRecover(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// Publish the state transition before returning the recovery
+		// credentials. The client is allowed to poll immediately; leaving
+		// this update to the waiter goroutine creates a race where the POST
+		// says awaiting_pair_submit but the first status response says started.
+		updateRecoverySession(recovery.ID, func(rs *recoverySession) {
+			rs.State = "awaiting_pair_submit"
+			rs.NextAction = "submit-pair-code"
+			rs.PairCode = session.Code
+		})
+		recovery.State = "awaiting_pair_submit"
+		recovery.NextAction = "submit-pair-code"
 		recovery.PairCode = session.Code
 		go completePairRecoveryInBackground(session, recovery, s)
 		resp := RecoveryResponse{

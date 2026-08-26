@@ -485,6 +485,28 @@ rm -rf /tmp/Yaver.xcarchive
 echo "Archiving... (derived data: $DERIVED — $CACHE_STATE)"
 ARCHIVE_LOG=/tmp/arch_full.log
 : > "$ARCHIVE_LOG"
+# Bound Xcode's compile fan-out on memory-constrained local release Macs. The
+# canonical TestFlight lane runs on an 8 GB machine as well as larger builders;
+# unconstrained xcodebuild can create enough concurrent Clang/Swift workers to
+# force sustained swap and amplify SSD pressure. Allow an explicit override,
+# while keeping a conservative default on machines with 8 GiB or less.
+XCODE_JOBS_ARGS=()
+XCODE_JOBS="${YAVER_IOS_XCODE_JOBS:-}"
+if [ -z "$XCODE_JOBS" ]; then
+  HOST_MEMORY_BYTES="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+  if [ "$HOST_MEMORY_BYTES" -gt 0 ] 2>/dev/null && \
+     [ "$HOST_MEMORY_BYTES" -le $((8 * 1024 * 1024 * 1024)) ]; then
+    XCODE_JOBS=2
+  fi
+fi
+if [ -n "$XCODE_JOBS" ]; then
+  if ! [[ "$XCODE_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: YAVER_IOS_XCODE_JOBS must be a positive integer; got '$XCODE_JOBS'." >&2
+    exit 1
+  fi
+  XCODE_JOBS_ARGS=(-jobs "$XCODE_JOBS")
+  echo "Xcode parallel jobs: $XCODE_JOBS"
+fi
 (
   set +e
   xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
@@ -494,6 +516,7 @@ ARCHIVE_LOG=/tmp/arch_full.log
     CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES \
     ENABLE_USER_SCRIPT_SANDBOXING=NO -allowProvisioningUpdates \
     ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} \
+    ${XCODE_JOBS_ARGS[@]+"${XCODE_JOBS_ARGS[@]}"} \
     -derivedDataPath "$DERIVED" 2>&1 | apple_redact_xcode_auth_output
   exit "${PIPESTATUS[0]}"
 ) >"$ARCHIVE_LOG" &

@@ -154,12 +154,13 @@ func TestDevServerProxyStartingVsAbsent(t *testing.T) {
 	}
 
 	t.Run("building session answers starting, not no-dev-server", func(t *testing.T) {
-		srv := &HTTPServer{devServerMgr: makeMgr(&devServerSession{
+		mgr := makeMgr(&devServerSession{
 			server: &stubDevServer{name: "expo", st: DevServerStatus{
 				Framework: "expo", Port: 8081, Building: true,
 				ServingLabel: "Starting expo preview…",
 			}},
-		})}
+		})
+		srv := &HTTPServer{devServerMgr: mgr}
 		rec := httptest.NewRecorder()
 		srv.handleDevServerProxy(rec, httptest.NewRequest("GET", "/dev/", nil))
 		if rec.Code != http.StatusServiceUnavailable {
@@ -174,6 +175,17 @@ func TestDevServerProxyStartingVsAbsent(t *testing.T) {
 		}
 		if rec.Header().Get("X-Yaver-DevServer") != "starting" {
 			t.Errorf("expected X-Yaver-DevServer=starting, got %q", rec.Header().Get("X-Yaver-DevServer"))
+		}
+
+		// The sibling route must speak the identical grammar. Dogfood can be
+		// handed /dev-web/ by a status response, and treating this cold-start
+		// window as a terminal 503 caused the real TestFlight failure on
+		// 2026-08-26.
+		webRec := httptest.NewRecorder()
+		srv.handleDevWebProxy(webRec, httptest.NewRequest("GET", "/dev-web/", nil))
+		if webRec.Code != http.StatusServiceUnavailable || webRec.Header().Get("X-Yaver-DevServer") != "starting" {
+			t.Fatalf("cold-start /dev-web/ must match /dev/ starting contract, got status=%d header=%q body=%s",
+				webRec.Code, webRec.Header().Get("X-Yaver-DevServer"), webRec.Body.String())
 		}
 	})
 

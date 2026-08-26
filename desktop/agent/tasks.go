@@ -1608,6 +1608,8 @@ type TaskInfo struct {
 	// guess from whatever picker state was current, which produced
 	// "Claude Code · GPT-5.4" mislabels on cross-device tasks.
 	Model string `json:"model,omitempty"`
+	// ProjectName scopes Vibing topic cards without exposing an absolute path.
+	ProjectName string `json:"projectName,omitempty"`
 	// DeviceName is the agent's hostname at the time the task was
 	// created. Mobile clients render this on the per-task header and
 	// in the task list card; without it, the focused-device name
@@ -1843,6 +1845,11 @@ func NewTaskManager(workDir string, store taskStore, runner RunnerConfig) *TaskM
 
 // fireTaskDone calls the OnTaskDone callback if set (non-blocking).
 func (tm *TaskManager) fireTaskDone(task *Task) {
+	if finalizeVibingThreadTitle(task) {
+		// fireTaskDone is called while the task-manager lock is held. Persist the
+		// generated display title before callbacks copy the terminal task.
+		tm.persist()
+	}
 	// Runner/render split converge hook: a task reaching a RENDERABLE
 	// terminal state (completed/review) with a push policy commits/pushes
 	// per that policy (task_ensure_clone.go) — the push is what lets the
@@ -5111,6 +5118,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			Description:      t.Description,
 			Status:           t.Status,
 			RunnerID:         t.RunnerID,
+			ProjectName:      t.ProjectName,
 			Transport:        t.Transport,
 			SessionID:        t.SessionID,
 			ProjectSessionID: t.ProjectSessionID,

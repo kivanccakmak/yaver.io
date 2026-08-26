@@ -343,6 +343,18 @@ struct VibingView: View {
         case .web:
             RemoteRuntimeWebRTCView(project: target, form: form)
                 .accessibilityIdentifier("vibing.live-preview")
+        case .tvOS:
+            // Dogfooding the TV app means the real native tvOS target runs on
+            // the selected render Mac. This surface may only view/control that
+            // simulator through the authenticated WebRTC session; it must not
+            // silently fall back to a browser-window or phone simulator.
+            RemoteRuntimeWebRTCView(
+                project: target,
+                form: .desktop,
+                forcedTargetID: "tvos-simulator",
+                launchGuest: true
+            )
+            .accessibilityIdentifier("vibing.dogfood-tvos-webrtc")
         case .android:
             DroidStreamView()
                 .accessibilityIdentifier("vibing.live-preview")

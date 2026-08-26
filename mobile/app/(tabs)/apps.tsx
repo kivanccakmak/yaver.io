@@ -3635,13 +3635,13 @@ export default function AppsScreen() {
                               "Fix browser preview",
                             ).then((sent) => { if (sent) setShowWebView(false); });
                           }}
-                          style={[s.previewBtn, { backgroundColor: "#2e1f3a" }]}
+                          style={[s.previewBtn, { backgroundColor: c.accentSoft, borderColor: c.accent }]}
                         >
-                          <Text style={[s.previewBtnText, { color: "#c084fc" }]}>Fix with AI</Text>
+                          <Text style={[s.previewBtnText, { color: c.accent }]}>Fix with AI</Text>
                         </Pressable>
                       ) : null}
-                      <Pressable onPress={() => void handleReload("full")} style={[s.previewBtn, { backgroundColor: "#1a1a2e" }]}>
-                        <Text style={[s.previewBtnText, { color: "#818cf8" }]}>Restart</Text>
+                      <Pressable onPress={() => void handleReload("full")} style={[s.previewBtn, { backgroundColor: c.infoBg, borderColor: c.info }]}>
+                        <Text style={[s.previewBtnText, { color: c.info }]}>Restart</Text>
                       </Pressable>
                     </View>
                   </>

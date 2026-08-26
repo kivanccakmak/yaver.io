@@ -65,6 +65,18 @@ func TestSurfaceFilter_MobileKeepsEverything(t *testing.T) {
 	}
 }
 
+func TestSurfaceFilter_TVForcesWebRTC(t *testing.T) {
+	got := optionIDs(FilterPreviewCapabilitiesForSurface(expoCaps(), PreviewSurfaceTV))
+	if !got[PreviewOptionRemoteRuntime] {
+		t.Fatal("tvOS lost its authenticated WebRTC remote-runtime lane")
+	}
+	for _, id := range []string{PreviewOptionDevServer, PreviewOptionHermes, PreviewOptionOpenNative, PreviewOptionWirePush} {
+		if got[id] {
+			t.Errorf("tvOS was offered forbidden non-WebRTC lane %q", id)
+		}
+	}
+}
+
 // An UNKNOWN surface must lose nothing. A new client getting a shorter list
 // looks like a product with less in it, rather than a table with a missing row.
 func TestSurfaceFilter_UnknownSurfaceFiltersNothing(t *testing.T) {

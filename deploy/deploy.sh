@@ -167,13 +167,17 @@ run_shell() {
 case "$target" in
   all)
     require_deploy_boundary
-    if ! command -v yaver >/dev/null 2>&1; then
-      echo "ERROR: yaver CLI is required for deploy target 'all'." >&2
+    if ! command -v go >/dev/null 2>&1; then
+      echo "ERROR: Go is required to run the repository's full release controller." >&2
       exit 2
     fi
-    # Let the CLI own version bumps, clean-tree checks, logging, and release
-    # commits. It already knows how to coalesce the full stack safely.
-    run yaver deploy all ${pass_args[@]+"${pass_args[@]}"}
+    # Release from the checked-out controller source. A globally installed
+    # wrapper can truthfully print the same semantic version while still
+    # containing an older repository detector; on 2026-08-25 that stale
+    # detector classified yaver.io as a generic app and attempted Convex with
+    # no production deployment configuration. The source being released must
+    # own its own target detection, version bumps, uploads, commit, and push.
+    (cd "$ROOT/desktop/agent" && go run . deploy all ${pass_args[@]+"${pass_args[@]}"})
     ;;
   backend|convex)
     require_deploy_boundary

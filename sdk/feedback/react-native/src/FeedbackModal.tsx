@@ -925,6 +925,7 @@ export const FeedbackModal: React.FC = () => {
     taskId: string;
     initialPrompt: string;
     project?: string;
+    projectPath?: string;
     runner?: string;
     model?: string;
   } | null>(null);
@@ -993,6 +994,7 @@ export const FeedbackModal: React.FC = () => {
         taskId: result.taskId,
         initialPrompt: promptText,
         project: identity.projectName,
+        projectPath: identity.projectPath,
         runner: preferredRunner ?? undefined,
         model: preferredModel ?? undefined,
       });
@@ -1042,10 +1044,15 @@ export const FeedbackModal: React.FC = () => {
               initialTaskId={activeVibe.taskId}
               initialUserPrompt={activeVibe.initialPrompt}
               project={activeVibe.project}
+              projectPath={activeVibe.projectPath}
               runner={activeVibe.runner}
               model={activeVibe.model}
               voiceInputEnabled={YaverFeedback.getConfig()?.voiceInputEnabled === true}
               onClose={() => setActiveVibe(null)}
+              onNewTopic={() => {
+                setActiveVibe(null);
+                setShowVibeInput(true);
+              }}
               onMinimize={handleClose}
               codingMachine={YaverFeedback.getMachineRouting().codingDeviceId}
               renderMachine={YaverFeedback.getMachineRouting().renderDeviceId}

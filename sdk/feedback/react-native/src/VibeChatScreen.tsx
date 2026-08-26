@@ -19,6 +19,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -54,6 +55,7 @@ interface Props {
   /** Optional context forwarded to the voice stream so the agent runs
    *  the task against the right project / runner / model. */
   project?: string;
+  projectPath?: string;
   model?: string;
   runner?: string;
   /** Show the optional voice/STT controls. Defaults to keyboard-only. */
@@ -63,6 +65,14 @@ interface Props {
   onMinimize?: () => void;
   codingMachine?: string;
   renderMachine?: string;
+  /** Return to the SDK prompt composer to create a separate task/topic. */
+  onNewTopic?: () => void;
+}
+
+interface VibeThreadCard {
+  id: string;
+  title: string;
+  status: string;
 }
 
 export function VibeChatScreen({
@@ -72,12 +82,14 @@ export function VibeChatScreen({
   onClose,
   onReload,
   project,
+  projectPath,
   model,
   runner,
   voiceInputEnabled = false,
   onMinimize,
   codingMachine,
   renderMachine,
+  onNewTopic,
 }: Props) {
   const [activeTab, setActiveTab] = useState<'chat' | 'settings'>('chat');
   const [taskId, setTaskId] = useState(initialTaskId);
@@ -96,13 +108,28 @@ export function VibeChatScreen({
     },
   ]);
   const [streamBuffer, setStreamBuffer] = useState('');
+  const [streamEpoch, setStreamEpoch] = useState(0);
   const [status, setStatus] = useState<'running' | 'done' | 'failed'>('running');
   const [followUp, setFollowUp] = useState('');
   const [isResuming, setIsResuming] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
   const [reloadQueued, setReloadQueued] = useState(false);
+  const [threads, setThreads] = useState<VibeThreadCard[]>(() => [{
+    id: initialTaskId,
+    title: initialUserPrompt || 'New topic',
+    status: 'running',
+  }]);
   const scrollRef = useRef<ScrollView | null>(null);
   const abortRef = useRef<(() => void) | null>(null);
+
+  const refreshThreads = useCallback(async () => {
+    try {
+      const list = await client.listVibeThreads({ projectName: project, projectPath });
+      setThreads(list.slice(0, 12));
+    } catch { /* history is advisory; keep the active conversation usable */ }
+  }, [client, project, projectPath]);
+
+  useEffect(() => { void refreshThreads(); }, [refreshThreads]);
 
   // ── Voice vibe coding ──────────────────────────────────────────────
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -125,6 +152,7 @@ export function VibeChatScreen({
       taskId,
       (line) => {
         if (!live) return;
+        if (line.includes('YAVER_THREAD_TITLE')) return;
         // Filter our internal error sentinel from the SSE helper.
         if (line.startsWith('__error__:')) {
           setStatus('failed');
@@ -137,7 +165,7 @@ export function VibeChatScreen({
       },
       (terminal) => {
         if (!live) return;
-        setStatus(terminal === 'completed' ? 'done' : 'failed');
+        setStatus(terminal === 'completed' || terminal === 'review' ? 'done' : 'failed');
         // Move the buffered stream into a real assistant turn so the
         // user sees a stable render and can scroll back, then clear
         // the buffer for any follow-up.
@@ -154,6 +182,8 @@ export function VibeChatScreen({
           return next;
         });
         setStreamBuffer('');
+        setThreads((prev) => prev.map((thread) => thread.id === taskId ? { ...thread, status: terminal } : thread));
+        void refreshThreads();
       },
     );
     abortRef.current = close;
@@ -161,7 +191,45 @@ export function VibeChatScreen({
       live = false;
       try { close(); } catch { /* ignore */ }
     };
-  }, [client, taskId]);
+  }, [client, refreshThreads, streamEpoch, taskId]);
+
+  const selectThread = useCallback(async (thread: VibeThreadCard) => {
+    abortRef.current?.();
+    try {
+      const task = await client.getVibeThread(thread.id);
+      setTaskId(task.id);
+      setStatus(task.status === 'running' || task.status === 'queued' ? 'running' : task.status === 'completed' || task.status === 'review' ? 'done' : 'failed');
+      setStreamBuffer('');
+      setTurns((task.turns || []).filter((turn) => turn.role === 'user' || turn.role === 'assistant').map((turn, index) => ({
+        id: `${task.id}-${index}`,
+        role: turn.role,
+        text: turn.content,
+        timestamp: turn.timestamp ? new Date(turn.timestamp).getTime() : Date.now() + index,
+      })));
+    } catch (error) {
+      setTurns((prev) => [...prev, { id: `thread-error-${Date.now()}`, role: 'status', text: error instanceof Error ? error.message : 'Could not open topic', timestamp: Date.now() }]);
+    }
+  }, [client]);
+
+  const removeThread = useCallback((thread: VibeThreadCard) => {
+    const message = thread.status === 'running' || thread.status === 'queued'
+      ? 'This also stops the coding turn that is still running.'
+      : 'This removes the conversation from your history.';
+    Alert.alert('Remove topic?', message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => {
+        void client.deleteVibeThread(thread.id).then(() => {
+          setThreads((prev) => prev.filter((item) => item.id !== thread.id));
+          if (thread.id === taskId) onNewTopic?.();
+        }).catch((error) => {
+          setTurns((prev) => [...prev, { id: `delete-error-${Date.now()}`, role: 'status', text: error instanceof Error ? error.message : 'Could not remove topic', timestamp: Date.now() }]);
+        });
+      } },
+    ]);
+  }, [client, onNewTopic, taskId]);
+
+  const runningThread = threads.find((thread) => thread.status === 'running' || thread.status === 'queued');
+  const codingLocked = status === 'running' || !!runningThread;
 
   // Auto-scroll the transcript when new content lands.
   useEffect(() => {
@@ -173,7 +241,7 @@ export function VibeChatScreen({
 
   const handleSendFollowUp = useCallback(async () => {
     const text = followUp.trim();
-    if (!text || isResuming) return;
+    if (!text || isResuming || codingLocked) return;
     setIsResuming(true);
     // Add user turn immediately for snappy UX.
     setTurns((prev) => [
@@ -183,17 +251,13 @@ export function VibeChatScreen({
     ]);
     setFollowUp('');
     setStatus('running');
+    setThreads((prev) => prev.map((thread) => thread.id === taskId ? { ...thread, status: 'running' } : thread));
     setStreamBuffer('');
     try {
       await client.resumeTask({ taskId, userPrompt: text });
-      // resumeTask reuses the same taskId, so the SSE subscription
-      // above will pick up the new output stream automatically. To
-      // force a fresh subscription we momentarily flip taskId to a
-      // sentinel and back; cleaner than tearing down + re-attaching
-      // the SSE manually.
-      const same = taskId;
-      setTaskId(`${same}#`);
-      setTimeout(() => setTaskId(same), 0);
+      // resumeTask reuses the same task id; advance the subscription epoch so
+      // the existing SSE path reconnects without inventing an invalid id.
+      setStreamEpoch((value) => value + 1);
     } catch (e) {
       setStatus('failed');
       setTurns((prev) => [
@@ -208,7 +272,7 @@ export function VibeChatScreen({
     } finally {
       setIsResuming(false);
     }
-  }, [client, followUp, isResuming, taskId]);
+  }, [client, codingLocked, followUp, isResuming, taskId]);
 
   const handleReload = useCallback(async () => {
     if (isReloading || !onReload) return;
@@ -419,6 +483,31 @@ export function VibeChatScreen({
         ))}
       </View>
 
+      {activeTab === 'chat' && threads.length > 1 ? <View style={styles.topicRailWrap}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.topicRail}>
+          <TouchableOpacity style={styles.newTopicCard} onPress={onNewTopic} accessibilityLabel="Start a new topic">
+            <Text style={styles.newTopicPlus}>＋</Text>
+            <Text style={styles.newTopicText}>New</Text>
+          </TouchableOpacity>
+          {threads.map((thread) => (
+            <TouchableOpacity key={thread.id} style={[styles.topicCard, thread.id === taskId && styles.topicCardSelected]} onPress={() => { void selectThread(thread); }} accessibilityLabel={`Open ${thread.title}`}>
+              <View style={styles.topicCardTopline}>
+                <View style={[styles.topicDot, (thread.status === 'running' || thread.status === 'queued') && styles.topicDotLive]} />
+                <Text style={styles.topicStatus}>{thread.status === 'completed' ? 'done' : thread.status}</Text>
+                <TouchableOpacity onPress={() => removeThread(thread)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} accessibilityLabel={`Remove ${thread.title}`}><Text style={styles.topicRemove}>×</Text></TouchableOpacity>
+              </View>
+              <Text style={styles.topicTitle} numberOfLines={2}>{thread.title}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View> : activeTab === 'chat' && threads.length === 1 ? <View style={styles.singleTopicBar}>
+        <TouchableOpacity style={styles.singleTopicTitleButton} onPress={() => { void selectThread(threads[0]); }} accessibilityLabel={`Open ${threads[0].title}`}>
+          <Text style={styles.singleTopicTitle} numberOfLines={1}>{threads[0].title || 'Current topic'}</Text>
+        </TouchableOpacity>
+        {onNewTopic ? <TouchableOpacity style={styles.singleTopicAction} onPress={onNewTopic} accessibilityLabel="Start a new topic"><Text style={styles.singleTopicActionText}>＋</Text></TouchableOpacity> : null}
+        <TouchableOpacity style={styles.singleTopicAction} onPress={() => removeThread(threads[0])} accessibilityLabel={`Remove ${threads[0].title}`}><Text style={styles.singleTopicRemove}>×</Text></TouchableOpacity>
+      </View> : null}
+
       <ScrollView
         ref={scrollRef}
         style={[styles.transcript, activeTab !== 'chat' && styles.hidden]}
@@ -486,9 +575,9 @@ export function VibeChatScreen({
           style={styles.input}
           value={followUp}
           onChangeText={setFollowUp}
-          placeholder={status === 'running' ? 'wait for the agent…' : 'follow up…'}
+          placeholder={codingLocked ? runningThread?.id !== taskId ? 'another topic is coding…' : 'wait for the agent…' : 'follow up…'}
           placeholderTextColor="#666"
-          editable={status !== 'running' && !isResuming}
+          editable={!codingLocked && !isResuming}
           multiline
         />
         <View style={styles.actions}>
@@ -545,10 +634,10 @@ export function VibeChatScreen({
             style={[
               styles.actionBtn,
               styles.sendBtn,
-              (isResuming || status === 'running' || !followUp.trim()) && styles.actionBtnDisabled,
+              (isResuming || codingLocked || !followUp.trim()) && styles.actionBtnDisabled,
             ]}
             onPress={handleSendFollowUp}
-            disabled={isResuming || status === 'running' || !followUp.trim()}
+            disabled={isResuming || codingLocked || !followUp.trim()}
           >
             <Text style={styles.actionText}>
               {isResuming ? '…' : '↑ send'}
@@ -581,6 +670,25 @@ const styles = StyleSheet.create({
   tabSelected: { backgroundColor: '#fff' },
   tabText: { color: '#858590', fontSize: 12, fontWeight: '700' },
   tabTextSelected: { color: '#6252e8' },
+  topicRailWrap: { minHeight: 102, borderBottomWidth: 1, borderBottomColor: '#e5e5ec' },
+  topicRail: { paddingHorizontal: 12, paddingVertical: 10, gap: 9 },
+  singleTopicBar: { minHeight: 40, paddingLeft: 12, paddingRight: 8, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e5e5ec' },
+  singleTopicTitleButton: { flex: 1, minWidth: 0, minHeight: 38, justifyContent: 'center' },
+  singleTopicTitle: { color: '#656570', fontSize: 11, fontWeight: '700' },
+  singleTopicAction: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
+  singleTopicActionText: { color: '#6252e8', fontSize: 20, lineHeight: 22 },
+  singleTopicRemove: { color: '#9a9aa5', fontSize: 20, lineHeight: 22 },
+  newTopicCard: { width: 72, minHeight: 80, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ebe8ff', borderWidth: 1, borderColor: '#d9d3ff' },
+  newTopicPlus: { color: '#6252e8', fontSize: 22, lineHeight: 24 },
+  newTopicText: { color: '#6252e8', fontSize: 12, fontWeight: '800' },
+  topicCard: { width: 172, minHeight: 80, borderRadius: 14, padding: 10, gap: 7, backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#e1e1e8' },
+  topicCardSelected: { borderColor: '#7568f8', backgroundColor: '#faf9ff' },
+  topicCardTopline: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  topicDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#9ca3af' },
+  topicDotLive: { backgroundColor: '#f59e0b' },
+  topicStatus: { flex: 1, color: '#858590', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+  topicRemove: { color: '#9a9aa5', fontSize: 18, lineHeight: 18 },
+  topicTitle: { color: '#24242b', fontSize: 13, lineHeight: 17, fontWeight: '700' },
   transcript: { flex: 1 },
   transcriptContent: { padding: 12, paddingBottom: 24 },
   turn: {

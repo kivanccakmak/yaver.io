@@ -182,7 +182,7 @@ function BuildItem({ build, onRefresh, style }: { build: BuildSummary; onRefresh
         <View style={styles.progressRow}>
           <View style={[styles.progressBar, { backgroundColor: c.border }]}>
             <View
-              style={[styles.progressFill, { width: `${progress.percent}%`, backgroundColor: "#6366f1" }]}
+              style={[styles.progressFill, { width: `${progress.percent}%`, backgroundColor: c.accent }]}
             />
           </View>
           <Text style={[styles.progressText, { color: c.textMuted }]}>{progress.percent}%</Text>
@@ -192,23 +192,23 @@ function BuildItem({ build, onRefresh, style }: { build: BuildSummary; onRefresh
       <View style={styles.actions}>
         {build.status === "completed" && build.artifactName && (
           <Pressable
-            style={[styles.actionBtn, { backgroundColor: "#6366f122" }]}
+            style={[styles.actionBtn, { backgroundColor: c.accentSoft }]}
             onPress={handleDownload}
             disabled={downloading}
           >
             {downloading ? (
-              <ActivityIndicator size="small" color="#818cf8" />
+              <ActivityIndicator size="small" color={c.accent} />
             ) : (
-              <Text style={[styles.actionText, { color: "#818cf8" }]}>Download</Text>
+              <Text style={[styles.actionText, { color: c.accent }]}>Download</Text>
             )}
           </Pressable>
         )}
         {showInstall && (
           <Pressable
-            style={[styles.actionBtn, { backgroundColor: "#22c55e22" }]}
+            style={[styles.actionBtn, { backgroundColor: c.successBg }]}
             onPress={handleInstall}
           >
-            <Text style={[styles.actionText, { color: "#4ade80" }]}>Install</Text>
+            <Text style={[styles.actionText, { color: c.success }]}>Install</Text>
           </Pressable>
         )}
       </View>
@@ -462,7 +462,7 @@ export default function BuildsScreen() {
                       <Text style={[styles.repoName, { color: isRunning ? c.textPrimary : c.textSecondary }]}>{p.name}</Text>
                       {p.framework && (
                         <View style={[styles.frameworkChip, isRunning && { backgroundColor: "#22c55e22", borderColor: "#22c55e44" }]}>
-                          <Text style={[styles.frameworkChipText, isRunning && { color: "#22c55e" }]}>{p.framework}</Text>
+                          <Text style={[styles.frameworkChipText, { color: isRunning ? c.success : c.accent }]}>{p.framework}</Text>
                         </View>
                       )}
                     </View>
@@ -518,12 +518,12 @@ export default function BuildsScreen() {
                       style={[
                         styles.publishProjectChip,
                         {
-                          backgroundColor: active ? "#6366f122" : c.bgCard,
-                          borderColor: active ? "#818cf8" : c.border,
+                          backgroundColor: active ? c.accentSoft : c.bgCard,
+                          borderColor: active ? c.accent : c.border,
                         },
                       ]}
                     >
-                      <Text style={{ color: active ? "#818cf8" : c.textSecondary, fontSize: 12, fontWeight: "600" }}>
+                      <Text style={{ color: active ? c.accent : c.textSecondary, fontSize: 12, fontWeight: "600" }}>
                         {project.name}
                       </Text>
                     </Pressable>
@@ -550,12 +550,12 @@ export default function BuildsScreen() {
                         key={target.id}
                         onPress={() => handlePublish(target.id)}
                         disabled={publishBusy === target.id}
-                        style={[styles.actionBtn, { backgroundColor: "#6366f122" }]}
+                        style={[styles.actionBtn, { backgroundColor: c.accentSoft }]}
                       >
                         {publishBusy === target.id ? (
-                          <ActivityIndicator size="small" color="#818cf8" />
+                          <ActivityIndicator size="small" color={c.accent} />
                         ) : (
-                          <Text style={[styles.actionText, { color: "#818cf8" }]}>{target.label || target.id}</Text>
+                          <Text style={[styles.actionText, { color: c.accent }]}>{target.label || target.id}</Text>
                         )}
                       </Pressable>
                     ))}
@@ -873,5 +873,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     paddingVertical: 1,
   },
-  frameworkChipText: { color: "#818cf8", fontSize: 10, fontWeight: "600" },
+  frameworkChipText: { fontSize: 10, fontWeight: "600" },
 });

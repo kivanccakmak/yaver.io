@@ -141,9 +141,9 @@ func (s *HTTPServer) vibingifyFeedbackTaskBody(
 	if s.devServerMgr != nil {
 		target = s.devServerMgr.PreferredTarget()
 	}
-	if ctx := vibingExecutionContext(resolvedPath, info.Framework, target, isDirectConnection(r)); ctx != "" && briefing != nil {
-		briefing.WriteString(ctx)
-		briefing.WriteString("\n\nUser request:\n")
+	if briefing != nil {
+		ctx := vibingExecutionContext(resolvedPath, info.Framework, target, isDirectConnection(r))
+		briefing.WriteString(vibingThreadBriefing(ctx))
 	}
 
 	// Pick a runner that's ready. Source-of-truth order:

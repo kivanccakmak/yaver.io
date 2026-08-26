@@ -3,7 +3,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { AppScreenHeader } from "../src/components/AppScreenHeader";
 import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
 import LaneStartupStatus from "../src/components/LaneStartupStatus";
 import { AnsiConsoleText } from "../src/components/AnsiConsoleText";
@@ -208,8 +207,7 @@ export default function DogfoodLaunchScreen() {
   }, [deviceId, lane, launch, workDir]);
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: c.bg }]} edges={["bottom"]}>
-      <AppScreenHeader title={`Starting Dogfood · ${lane === "webrtc" ? "WebRTC" : lane === "hermes" ? "Hermes" : "Browser"}`} onBack={() => router.back()} />
+    <SafeAreaView style={[styles.root, { backgroundColor: c.bg }]} edges={["top", "bottom"]}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
           {running ? <ActivityIndicator size="large" color={c.accent} /> : null}
@@ -219,7 +217,10 @@ export default function DogfoodLaunchScreen() {
           <Text style={[styles.meta, { color: c.textMuted }]}>{deviceName} · {runner}</Text>
 
           <LaneStartupStatus
-            startedAt={startedAt}
+            // Once the controller has reached a terminal state, the failure
+            // card is the truth. Continuing the startup clock made a finished
+            // HTTP failure degrade into "this may be stuck" minutes later.
+            startedAt={running ? startedAt : null}
             lastOutputAt={lastOutputAt}
             now={now}
             lines={lines}
@@ -265,9 +266,9 @@ export default function DogfoodLaunchScreen() {
                       .then(({ taskId }) => append(`Fix task ${taskId} started`))
                       .finally(() => setFixing(false));
                   }}
-                  style={[styles.action, { backgroundColor: "#2e1f3a" }]}
+                  style={[styles.action, { backgroundColor: c.accentSoft, borderColor: c.accent }]}
                 >
-                  <Text style={{ color: "#c084fc", fontWeight: "700" }}>{fixing ? "Starting…" : "Fix with AI"}</Text>
+                  <Text style={{ color: c.accent, fontWeight: "700" }}>{fixing ? "Starting…" : "Fix with AI"}</Text>
                 </Pressable>
               ) : null}
             </View>

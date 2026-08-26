@@ -121,16 +121,20 @@ export const lightTokens = {
   surfaceMuted: "#EFEFF3",
   textPrimary: "#0A0A0F",
   textSecondary: "#5A5A66",
-  textTertiary: "#9A9AA5",
+  // Muted copy still carries remedies, timestamps, and compact labels. The old
+  // #9A9AA5 was only 2.6:1 on the app background, so light mode made useful
+  // guidance look disabled. Keep the hierarchy through weight and the pale
+  // surfaces; keep the text itself readable (>= 4.5:1 here and on white).
+  textTertiary: "#6F6F7C",
   textDisabled: "#C7C7D1",
   brandPrimary: "#6E56F6",
   brandPrimarySoft: "rgba(110, 86, 246, 0.12)",
   brandPrimaryHover: "#5B45E0",
-  statusSuccess: "#16A34A",
+  statusSuccess: "#15803D",
   statusSuccessSoft: "rgba(22, 163, 74, 0.12)",
   statusInfo: "#2563EB",
   statusInfoSoft: "rgba(37, 99, 235, 0.12)",
-  statusWarning: "#D97706",
+  statusWarning: "#B45309",
   statusWarningSoft: "rgba(217, 119, 6, 0.12)",
   statusError: "#DC2626",
   statusErrorSoft: "rgba(220, 38, 38, 0.12)",

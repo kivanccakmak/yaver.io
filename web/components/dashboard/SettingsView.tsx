@@ -12,6 +12,8 @@ import VisionSettingsCard from "./VisionSettingsCard";
 import OpenCodeSettingsView from "./OpenCodeSettingsView";
 import { ManagedCloudPanel } from "./ManagedCloudPanel";
 import { agentClient } from "@/lib/agent-client";
+import type { DogfoodSourceStatus, RemoteRuntimeSession } from "@/lib/agent-client";
+import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { HIDE_PAID_UI } from "@/lib/launchFlags";
 import { useAutoRenderVibing } from "@/lib/autoRenderVibing";
 import {
@@ -39,6 +41,112 @@ interface SettingsViewProps {
   } | null;
   onLogout: () => void;
   onOpenTwoFactor: () => void;
+}
+
+function DogfoodCard({ devices }: { devices: Device[] }) {
+  const [source, setSource] = useState<DogfoodSourceStatus | null>(null);
+  const [method, setMethod] = useState<"browser" | "webrtc">("browser");
+  const [runner, setRunner] = useState("measuring…");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [browserURL, setBrowserURL] = useState<string | null>(null);
+  const [session, setSession] = useState<RemoteRuntimeSession | null>(null);
+
+  const surface: "web" | "desktop-gui" = typeof window !== "undefined" &&
+    (window as unknown as { yaver?: { surface?: string } }).yaver?.surface === "desktop-gui"
+      ? "desktop-gui"
+      : "web";
+  const renderID = agentClient.renderRouteDeviceId ?? agentClient.connectedDeviceId;
+  const box = devices.find((device) => device.id === renderID);
+
+  const refresh = useCallback(async () => {
+    if (!agentClient.isConnected) {
+      setSource(null);
+      setMessage("Connect a render box to measure Dogfood readiness.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const [nextSource, runners] = await Promise.all([
+        agentClient.getDogfoodSourceStatus(),
+        agentClient.getRunners(),
+      ]);
+      setSource(nextSource);
+      const preferred = runners.find((row) => row.isDefault && row.ready !== false)
+        ?? runners.find((row) => row.ready !== false && row.installed);
+      setRunner(preferred ? `${preferred.name}${preferred.models?.find((model) => model.isDefault)?.name ? ` · ${preferred.models.find((model) => model.isDefault)!.name}` : ""}` : "No ready runner");
+      setMessage(nextSource.message);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Dogfood readiness probe failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh, renderID]);
+
+  const start = async () => {
+    if (!source?.ready || !source.path) {
+      setMessage(source?.remedy || "Yaver source is not ready on the render box.");
+      return;
+    }
+    setBusy(true);
+    setMessage("Preparing the checkout against canonical main…");
+    try {
+      await agentClient.prepareDogfoodCheckout(source.path);
+      const caps = await agentClient.getProjectPreviewCapabilities(source.path, "expo", surface, true);
+      const required = method === "browser" ? "dev-server" : "remote-runtime";
+      const option = caps.options.find((row) => row.id === required);
+      if (!caps.selfDevelopment || !option?.supported) {
+        throw new Error(option?.reason || caps.reason || `${method} Dogfood is unavailable on this box.`);
+      }
+      if (method === "browser") {
+        await agentClient.prepareRemoteRuntimeBrowserLane(source.path, "expo");
+        const url = agentClient.devWebPreviewUrl;
+        if (!url) throw new Error("The browser lane started but no same-owner preview URL was produced.");
+        setSession(null);
+        setBrowserURL(url);
+        setMessage("Browser lane live. Authorization remains in headers; no credential is placed in this URL.");
+      } else {
+        const runtime = await agentClient.getRemoteRuntimeCapabilities(source.path, "expo", true);
+        const target = runtime.targets.find((row) => row.id === "browser-window" && row.enabled)
+          ?? runtime.targets.find((row) => row.enabled);
+        if (!target) throw new Error(runtime.targets[0]?.reason || "No measured WebRTC target is available.");
+        const next = await agentClient.startRemoteRuntimeSession(source.path, "expo", target.id, "direct-webrtc");
+        setBrowserURL(null);
+        setSession(next);
+        setMessage(`WebRTC live on ${target.label}. The agent retains the same owner/access-graph checks.`);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Dogfood could not start.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card mb-6 border-sky-500/20" data-testid="dogfood-section">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium uppercase tracking-wider text-sky-400/80">Dogfood</h3>
+          <p className="mt-1 text-xs text-surface-500">Yaver rendering Yaver · measured on the selected render box</p>
+        </div>
+        <button onClick={() => void refresh()} disabled={busy} className="rounded-md border border-surface-700 px-2.5 py-1 text-xs text-surface-300 disabled:opacity-40">Refresh</button>
+      </div>
+      <div className="grid gap-2 text-xs sm:grid-cols-2">
+        <div className="rounded-md border border-surface-800 p-2"><span className="text-surface-500">Box</span><div className="mt-1 truncate text-surface-200">{box?.alias || box?.name || (renderID ? `${renderID.slice(0, 8)}…` : "Not connected")}</div></div>
+        <div className="rounded-md border border-surface-800 p-2"><span className="text-surface-500">Runner · model</span><div className="mt-1 truncate text-surface-200">{runner}</div></div>
+        <div className="rounded-md border border-surface-800 p-2"><span className="text-surface-500">Checkout</span><div className="mt-1 truncate text-surface-200">{source?.ready ? `${source.branch || "ready"} · canonical origin verified` : source?.code || "Not measured"}</div></div>
+        <label className="rounded-md border border-surface-800 p-2"><span className="text-surface-500">Method</span><select value={method} onChange={(event) => setMethod(event.target.value as "browser" | "webrtc")} className="mt-1 w-full bg-transparent text-surface-200"><option value="browser">Browser lane</option><option value="webrtc">WebRTC</option></select></label>
+      </div>
+      {message ? <p className="mt-3 text-xs text-surface-400">{message}</p> : null}
+      <button onClick={() => void start()} disabled={busy || !source?.ready} className="mt-3 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">{busy ? "Working…" : "Start Dogfood"}</button>
+      {browserURL ? <iframe src={browserURL} title="Yaver Dogfood browser lane" className="mt-4 h-[520px] w-full rounded-md border border-surface-800 bg-white" /> : null}
+      {session ? <div className="mt-4"><RemoteRuntimeViewer session={session} onSessionChange={setSession} onClose={() => setSession(null)} /></div> : null}
+      <p className="mt-3 text-[11px] text-surface-600">Bearer auth · same-owner/access-graph routing · origin allowlist · no token in URLs · relay is transport, never authority</p>
+    </div>
+  );
 }
 
 function AuthProviderIcon({
@@ -1062,44 +1170,7 @@ export default function SettingsView({ user, onLogout, onOpenTwoFactor }: Settin
         <span aria-hidden>🚪</span> Sign Out
       </button>
 
-      {/* Dogfood — develop Yaver from a remote machine */}
-      <div className="card mb-6 border-sky-500/20" data-testid="dogfood-section">
-        <h3 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-sky-400/80">
-          <span aria-hidden>🐶</span> Dogfood
-        </h3>
-        <p className="mb-3 text-xs text-surface-500">
-          Develop Yaver itself from any paired machine. Each box you connect that has{" "}
-          <span className="font-mono text-surface-300">~/Workspace/yaver.io</span> checked out becomes
-          a remote dev surface — you can run the agent's Go tests, ship CLI / web / docs commits,
-          and even reload Yaver from inside Yaver via the Feedback SDK.
-        </p>
-        <ol className="mb-4 list-decimal space-y-1 pl-5 text-xs text-surface-400">
-          <li>
-            On the remote machine:{" "}
-            <code className="font-mono text-surface-300">git clone https://github.com/kivanccakmak/yaver.io.git ~/Workspace/yaver.io</code>
-          </li>
-          <li>
-            Open the Webview tab → pick <span className="font-mono text-surface-300">yaver.io</span> →
-            the Web App preview will auto-build a static bundle and render the dashboard inside the
-            iframe (Yaver-in-Yaver).
-          </li>
-          <li>
-            Push commits with{" "}
-            <code className="font-mono text-surface-300">yaver vibing</code> from the dashboard, or
-            tail tests via the agent's <code className="font-mono text-surface-300">go test</code>{" "}
-            integration.
-          </li>
-        </ol>
-        <a
-          href="https://yaver.io/docs/yaver-protocol#dogfooding-yaver-from-yaver"
-          target="_blank"
-          rel="noreferrer"
-          className="inline-block rounded-md border border-sky-500/30 px-3 py-1.5 text-xs text-sky-700 dark:text-sky-300 transition-colors hover:bg-sky-500/10"
-          data-testid="dogfood-docs-link"
-        >
-          Dogfooding docs →
-        </a>
-      </div>
+      <DogfoodCard devices={ownedDevices} />
 
       {/* Delete Account */}
       <div className="card mb-6 border-red-500/20">

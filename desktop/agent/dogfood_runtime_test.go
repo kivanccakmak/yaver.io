@@ -54,6 +54,37 @@ func TestDogfoodSourceStatusProvesSourceAndCanonicalOrigin(t *testing.T) {
 	}
 }
 
+func TestDogfoodSourceStatusReturnsAllCheckoutsAndSelectsBestDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := filepath.Join(home, "Workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, namedCheckout, _ := setupDogfoodRepos(t)
+	_, validationCheckout, _ := setupDogfoodRepos(t)
+	namedPath := filepath.Join(workspace, "yaver.io")
+	validationPath := filepath.Join(workspace, "yaver-validation")
+	if err := os.Rename(namedCheckout, namedPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(validationCheckout, validationPath); err != nil {
+		t.Fatal(err)
+	}
+
+	status := dogfoodSourceStatus("")
+	if !status.Ready || status.Path != namedPath {
+		t.Fatalf("named checkout was not selected as the default: %+v", status)
+	}
+	if len(status.Candidates) != 2 {
+		t.Fatalf("candidate inventory = %+v, want both Yaver checkouts", status.Candidates)
+	}
+	if status.Candidates[0].Path != namedPath || status.Candidates[1].Path != validationPath {
+		t.Fatalf("candidate order = %+v, want named checkout before validation checkout", status.Candidates)
+	}
+}
+
 func TestDogfoodSourceStatusAcceptsContributorForkWithCanonicalUpstream(t *testing.T) {
 	_, local, origin := setupDogfoodRepos(t)
 	syncGitCmd(t, local, "remote", "set-url", "origin", "https://github.com/contributor/yaver.io.git")
@@ -142,11 +173,6 @@ func TestPrepareDogfoodCheckoutAbortsAndRoutesConflictToAI(t *testing.T) {
 
 func TestPrepareDogfoodCheckoutStagesMarkerFreeAIResolutionOnRetry(t *testing.T) {
 	seed, local, _ := setupDogfoodRepos(t)
-	syncWrite(t, filepath.Join(seed, "shared.txt"), "base\n")
-	syncGitCmd(t, seed, "add", "shared.txt")
-	syncGitCmd(t, seed, "commit", "-m", "shared base")
-	syncGitCmd(t, seed, "push")
-	syncGitCmd(t, local, "pull", "--ff-only")
 
 	// Local work remains uncommitted, exactly like the Dogfood checkout that
 	// triggered the real incident. origin/main changes the same file, so Git's
@@ -186,11 +212,6 @@ func TestPrepareDogfoodCheckoutStagesMarkerFreeAIResolutionOnRetry(t *testing.T)
 
 func TestRecoverResolvedDogfoodIndexFailsClosedWithMarkers(t *testing.T) {
 	seed, local, _ := setupDogfoodRepos(t)
-	syncWrite(t, filepath.Join(seed, "shared.txt"), "base\n")
-	syncGitCmd(t, seed, "add", "shared.txt")
-	syncGitCmd(t, seed, "commit", "-m", "shared base")
-	syncGitCmd(t, seed, "push")
-	syncGitCmd(t, local, "pull", "--ff-only")
 	syncWrite(t, filepath.Join(local, "shared.txt"), "local work\n")
 	syncWrite(t, filepath.Join(seed, "shared.txt"), "remote work\n")
 	syncGitCmd(t, seed, "add", "shared.txt")

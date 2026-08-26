@@ -711,7 +711,7 @@ export function FeedbackOverlay() {
               onPress={handleReload}
               disabled={sending || !isConnected}
             >
-              <Text style={[styles.cardIcon, { color: "#fbbf24" }]}>{"\u21BB"}</Text>
+              <Text style={[styles.cardIcon, { color: c.warn }]}>{"\u21BB"}</Text>
               <Text style={[styles.cardLabel, { color: c.textSecondary }]}>Hot Reload</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -719,7 +719,7 @@ export function FeedbackOverlay() {
               onPress={handleBuild}
               disabled={sending || !isConnected}
             >
-              <Text style={[styles.cardIcon, { color: "#60a5fa" }]}>{"\u2692"}</Text>
+              <Text style={[styles.cardIcon, { color: c.info }]}>{"\u2692"}</Text>
               <Text style={[styles.cardLabel, { color: c.textSecondary }]}>Build</Text>
               <Text style={[styles.cardLabel, { fontSize: 8, color: "#555" }]}>+ Deploy</Text>
             </TouchableOpacity>
@@ -728,7 +728,7 @@ export function FeedbackOverlay() {
               onPress={handleBugReport}
               disabled={sending || !isConnected}
             >
-              <Text style={[styles.cardIcon, { color: "#f87171" }]}>{"\uD83D\uDC1B"}</Text>
+              <Text style={[styles.cardIcon, { color: c.error }]}>{"\uD83D\uDC1B"}</Text>
               <Text style={[styles.cardLabel, { color: c.textSecondary }]}>Report Bug</Text>
             </TouchableOpacity>
           </View>
@@ -754,7 +754,7 @@ export function FeedbackOverlay() {
               }}
               disabled={sending || !isConnected}
             >
-              <Text style={[styles.cardIcon, { color: "#a78bfa" }]}>{"\u25B6"}</Text>
+              <Text style={[styles.cardIcon, { color: c.accent }]}>{"\u25B6"}</Text>
               <Text style={[styles.cardLabel, { color: c.textSecondary }]}>Test App</Text>
             </TouchableOpacity>
           </View>
@@ -765,7 +765,7 @@ export function FeedbackOverlay() {
               <Text style={[styles.actionText, { color: c.textMuted }]}>clear</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.actionBtn, { backgroundColor: c.bgInput, borderColor: c.border }]} onPress={handleDisable}>
-              <Text style={[styles.actionText, { color: "#f87171" }]}>quit</Text>
+              <Text style={[styles.actionText, { color: c.error }]}>quit</Text>
             </TouchableOpacity>
           </View>
         </View>

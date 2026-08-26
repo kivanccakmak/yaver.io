@@ -14,7 +14,7 @@ import { appLog } from "./logger";
 import { describeDevReloadResult, devReloadReachedTarget, type AttachSessionResult, type RunnerInfo } from "./quic";
 import { doctorBrowserLane, type BrowserLaneProbeResult } from "./browserLaneDoctor";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "./projectPreviewRuntime";
-import { probeAgentPreviewRoute, resolveAgentPreviewUrl } from "./agentPreviewUrl";
+import { resolveAgentPreviewUrl, waitForAgentPreviewRoute } from "./agentPreviewUrl";
 
 export type { AttachSessionResult };
 
@@ -242,9 +242,28 @@ export async function prepareDogfoodMode(
     // credential into the URL.
     const url = resolveAgentPreviewUrl(client.baseUrl, bundlePath);
 
-    onProgress?.("Verifying the phone’s Dogfood route…");
-    const routeProbe = await probeAgentPreviewRoute(url, client.getAuthHeaders());
+    onProgress?.("Compiling Yaver’s Dogfood web route…");
+    const routeProbe = await waitForAgentPreviewRoute(
+      url,
+      client.getAuthHeaders(),
+      (probe, elapsedMs, attempt) => {
+        // Narrate the wait without flooding the console. The old flow turned
+        // the very first startup 503 into a terminal "machine disconnected"
+        // error at ~3 seconds even though Expo became healthy moments later.
+        if (attempt === 1 || attempt % 6 === 0) {
+          const state = probe.status > 0 ? `HTTP ${probe.status}` : "transport reconnecting";
+          onLog?.(`[route] Expo is still starting (${state}, ${Math.ceil(elapsedMs / 1000)}s elapsed)`);
+        }
+      },
+    );
     if (!routeProbe.ok) {
+      if (routeProbe.timedOut) {
+        return fail(
+          "DOGFOOD_RENDER_ROUTE_TIMEOUT",
+          `Expo did not make the phone’s Dogfood route ready within two minutes (last response HTTP ${routeProbe.status || "transport failure"}).`,
+          "Read the live console for the named Expo failure, then retry. The selected machine is connected; Dogfood remains off until its route serves successfully.",
+        );
+      }
       const suffix = routeProbe.status > 0 ? `HTTP_${routeProbe.status}` : "TRANSPORT";
       const detail = routeProbe.status > 0
         ? `The exact Dogfood URL returned HTTP ${routeProbe.status} before the WebView opened.`
@@ -254,7 +273,9 @@ export async function prepareDogfoodMode(
         detail,
         routeProbe.status === 404
           ? "Update Yaver so the relay keeps the selected device prefix, then retry Dogfood mode."
-          : "Reconnect the selected machine and retry. Dogfood remains off until the phone route answers successfully.",
+          : routeProbe.status === 401 || routeProbe.status === 403
+            ? "Refresh the Dogfood authorization and retry; the preview route rejected this session."
+            : "Retry after fixing the named route failure. Dogfood remains off until the phone route answers successfully.",
       );
     }
     onLog?.(`[route] phone handoff HTTP ${routeProbe.status} (${routeProbe.contentType})`);

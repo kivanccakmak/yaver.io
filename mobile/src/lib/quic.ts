@@ -134,6 +134,7 @@ export interface YaverAgentProviderDefault {
 export interface YaverAgentSetRequest {
   provider: YaverAgentProviderId;
   model?: string;
+  projectName?: string;
   baseUrl?: string;
   /** "" clears the stored key; omit to leave existing untouched. */
   apiKey?: string;
@@ -537,6 +538,7 @@ export interface Task {
    *  different device than the user is currently focused on doesn't
    *  show the wrong model label in its history card. */
   model?: string;
+  projectName?: string;
   source?: string;        // Task origin: "mobile", "mcp", "cli", "vibing", "vibing-cache", "todolist"
   workDir?: string;       // Per-task working directory reported by the agent.
   /** Phone-local checkout slug for boxless coding tasks. Never an absolute path. */
@@ -2967,6 +2969,8 @@ export class QuicClient {
         status: t.status,
         runnerId: t.runnerId || undefined,
         model: typeof t.model === "string" && t.model.trim() ? t.model.trim() : undefined,
+        source: t.source || undefined,
+        projectName: t.projectName || undefined,
         output: typeof t.output === "string" && t.output
           ? t.output.split("\n")
           : Array.isArray(t.output) ? t.output : [],
@@ -3028,6 +3032,7 @@ export class QuicClient {
       status: t.status,
       runnerId: t.runnerId || undefined,
       model: typeof t.model === "string" && t.model.trim() ? t.model.trim() : undefined,
+      projectName: t.projectName || undefined,
       mode: t.mode || undefined,
       source: t.source || undefined,
       output: typeof t.output === "string" && t.output
@@ -3058,6 +3063,35 @@ export class QuicClient {
       tmuxPaneId: t.tmuxPaneId || undefined,
       isAdopted: t.isAdopted || false,
     };
+  }
+
+  /** Recent Vibing/feedback conversations for one project. These are the same
+   * task records used by Tasks; the SDK-safe view merely filters the list. */
+  async listVibeThreads(opts?: { projectName?: string; projectPath?: string }): Promise<Task[]> {
+    this.assertConnected();
+    const params = new URLSearchParams();
+    if (opts?.projectName) params.set("projectName", opts.projectName);
+    if (opts?.projectPath) params.set("projectPath", opts.projectPath);
+    const query = params.toString();
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/vibing/tasks${query ? `?${query}` : ""}`, {
+      headers: this.authHeaders,
+    });
+    if (!res.ok) throw new Error(`Failed to list vibe topics: ${res.status}`);
+    const data = await res.json();
+    return (data.tasks || []).map((t: any) => ({
+      id: t.id,
+      title: t.title || "New topic",
+      description: t.description || "",
+      status: t.status,
+      runnerId: t.runnerId || undefined,
+      model: t.model || undefined,
+      projectName: t.projectName || undefined,
+      source: t.source || undefined,
+      output: [],
+      turnCount: typeof t.turnCount === "number" ? t.turnCount : undefined,
+      createdAt: t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+      updatedAt: t.finishedAt ? new Date(t.finishedAt).getTime() : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
+    }));
   }
 
   /** Stop a running task (kills the process). */
@@ -7531,6 +7565,7 @@ export class QuicClient {
     baseRemote?: string;
     baseRef?: string;
     gitVersion?: string;
+    candidates?: { path: string; branch?: string }[];
     message: string;
     remedy?: string;
     action?: { label: string; method: string; path: string; body?: Record<string, unknown> };
@@ -7553,6 +7588,11 @@ export class QuicClient {
         baseRemote: data?.baseRemote,
         baseRef: data?.baseRef,
         gitVersion: data?.gitVersion,
+        candidates: Array.isArray(data?.candidates)
+          ? data.candidates
+              .filter((candidate: any) => typeof candidate?.path === "string" && candidate.path.trim())
+              .map((candidate: any) => ({ path: candidate.path, branch: candidate.branch }))
+          : [],
         message: String(data?.message || data?.error || "Could not inspect Yaver source on this box."),
         remedy: data?.remedy,
         action: data?.action,

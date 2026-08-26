@@ -702,9 +702,20 @@ export class YaverFeedback {
     title?: string;
     output?: string;
     resultText?: string;
+    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }>;
   }> {
     const client = await YaverFeedback.getClient();
     return client.getTask(taskId);
+  }
+
+  static async listVibeThreads(): Promise<Array<{ id: string; title: string; status: string; createdAt?: string; turnCount?: number }>> {
+    const client = await YaverFeedback.getClient();
+    return client.listVibeThreads(YaverFeedback.projectIdentity());
+  }
+
+  static async deleteVibeThread(taskId: string): Promise<void> {
+    const client = await YaverFeedback.getClient();
+    return client.deleteVibeThread(taskId);
   }
 
   /** Append a follow-up message to an existing vibing task. */
@@ -999,6 +1010,7 @@ export class YaverFeedback {
     }
 
     let busy = false;
+    let vibingCoding = false;
 
     const setStatus = (message: string, progress?: number) => {
       status.textContent = message;
@@ -1895,6 +1907,15 @@ export class YaverFeedback {
           <div class="yvr-fb-vibe-block yvr-fb-chat">
             <div id="yaver-fb-vibe-gate" class="yvr-fb-vibe-gate" style="display:none;"></div>
             <button id="yaver-fb-vibe-repair" class="yvr-fb-action yvr-fb-action-secondary" type="button" style="display:none;">Continue Setup</button>
+            <div class="yvr-fb-topic-rail" aria-label="Vibing topics">
+              <button id="yaver-fb-topic-new" class="yvr-fb-topic-card yvr-fb-topic-new" type="button"><span>＋</span><strong>New</strong></button>
+              <div id="yaver-fb-topic-cards" class="yvr-fb-topic-cards"></div>
+            </div>
+            <div id="yaver-fb-topic-single" class="yvr-fb-topic-single" style="display:none;">
+              <button id="yaver-fb-topic-single-open" class="yvr-fb-topic-single-open" type="button"><span id="yaver-fb-topic-single-title"></span></button>
+              <button id="yaver-fb-topic-single-new" class="yvr-fb-topic-single-action" type="button" aria-label="Start a new topic">＋</button>
+              <button id="yaver-fb-topic-single-remove" class="yvr-fb-topic-single-action yvr-fb-topic-single-remove" type="button" aria-label="Remove current topic">×</button>
+            </div>
             <div id="yaver-fb-chat-transcript" class="yvr-fb-chat-transcript" aria-live="polite"></div>
             <p id="yaver-fb-chat-status" class="yvr-fb-chat-status"></p>
             <div class="yvr-fb-chat-composer">
@@ -1902,7 +1923,6 @@ export class YaverFeedback {
               <div class="yvr-fb-chat-actions">
                 <button id="yaver-fb-vibe-engine" class="yvr-fb-action yvr-fb-action-secondary" type="button" style="display:none;" title="Switch STT/TTS engine">🔒 Local</button>
                 <button id="yaver-fb-vibe-mic" class="yvr-fb-action yvr-fb-action-secondary" type="button" style="display:none;" title="Vibe code by voice">🎙 Speak</button>
-                <button id="yaver-fb-vibe-reset" class="yvr-fb-action yvr-fb-action-secondary" type="button" style="display:none;">New session</button>
                 <button id="yaver-fb-vibe" class="yvr-fb-action yvr-fb-action-vibe" type="button">Send</button>
               </div>
             </div>
@@ -2220,9 +2240,10 @@ export class YaverFeedback {
 
       const setActionsBusy = (value: boolean) => {
         busy = value;
-        [screenshotBtn, commitBtn, deployBtn, vibeBtn, vibeRepairBtn, machinePill].forEach(
+        [screenshotBtn, commitBtn, deployBtn, vibeRepairBtn, machinePill].forEach(
           (el) => ((el as HTMLButtonElement).disabled = value),
         );
+        vibeBtn.disabled = value || vibingCoding;
         // Reload buttons are re-rendered per dev-server state, so drive them
         // by query rather than by a captured reference that goes stale.
         reloadTools.querySelectorAll<HTMLButtonElement>('button').forEach((el) => {
@@ -2231,7 +2252,7 @@ export class YaverFeedback {
         runnerActions.querySelectorAll<HTMLButtonElement>('[data-runner], [data-git-action]').forEach((el) => {
           el.disabled = value;
         });
-        vibePrompt.disabled = value;
+        vibePrompt.disabled = value || vibingCoding;
       };
 
       vibeRepairBtn.onclick = async () => {
@@ -2436,7 +2457,7 @@ export class YaverFeedback {
 
       // ── Chat state for multi-turn vibing ──────────────────────────
       //
-      // Each vibing session = one agent task. The first Send creates
+      // Each topic card = one existing agent task. The first Send creates
       // the task via /vibing/execute; subsequent Sends append to it
       // via /tasks/{id}/continue. We poll the task's growing output
       // every 1.5 s and append the new bytes to the agent bubble for
@@ -2448,8 +2469,16 @@ export class YaverFeedback {
       // and any output beyond that becomes the (N+1)-th agent bubble.
       const transcriptEl = overlay.querySelector<HTMLDivElement>('#yaver-fb-chat-transcript')!;
       const chatStatus = overlay.querySelector<HTMLParagraphElement>('#yaver-fb-chat-status')!;
-      const resetBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-vibe-reset')!;
+      const topicRail = overlay.querySelector<HTMLDivElement>('.yvr-fb-topic-rail')!;
+      const newTopicBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-topic-new')!;
+      const topicCards = overlay.querySelector<HTMLDivElement>('#yaver-fb-topic-cards')!;
+      const singleTopic = overlay.querySelector<HTMLDivElement>('#yaver-fb-topic-single')!;
+      const singleTopicOpen = overlay.querySelector<HTMLButtonElement>('#yaver-fb-topic-single-open')!;
+      const singleTopicTitle = overlay.querySelector<HTMLSpanElement>('#yaver-fb-topic-single-title')!;
+      const singleTopicNew = overlay.querySelector<HTMLButtonElement>('#yaver-fb-topic-single-new')!;
+      const singleTopicRemove = overlay.querySelector<HTMLButtonElement>('#yaver-fb-topic-single-remove')!;
       let currentTaskId: string | null = null;
+      let threads: Array<{ id: string; title: string; status: string }> = [];
       let outputCheckpoints: number[] = [0];
       let agentBubbles: HTMLDivElement[] = [];
       let pollHandle: number | null = null;
@@ -2457,6 +2486,12 @@ export class YaverFeedback {
 
       const setChatStatus = (text: string) => {
         chatStatus.textContent = text;
+      };
+      const setVibingCoding = (value: boolean) => {
+        vibingCoding = value;
+        vibeBtn.disabled = busy || value;
+        vibePrompt.disabled = busy || value;
+        if (value) vibePrompt.placeholder = currentTaskId && threads.some((thread) => thread.id === currentTaskId && (thread.status === 'running' || thread.status === 'queued')) ? 'Agent is coding…' : 'Another topic is coding…';
       };
       const appendUserBubble = (text: string) => {
         const el = document.createElement('div');
@@ -2496,16 +2531,18 @@ export class YaverFeedback {
             // appending only the new delta) so partial UTF-8 chars
             // and ANSI escapes don't visually corrupt mid-stream.
             const turnStart = outputCheckpoints[outputCheckpoints.length - 1] || 0;
-            const turnText = fullOutput.slice(turnStart);
+            const turnText = fullOutput.slice(turnStart).replace(/<!--\s*YAVER_THREAD_TITLE:[\s\S]*?(?:-->|$)/gi, '').trimEnd();
             const bubble = agentBubbles[agentBubbles.length - 1];
             if (bubble) bubble.textContent = turnText;
             lastSeenOutputLen = fullOutput.length;
             transcriptEl.scrollTop = transcriptEl.scrollHeight;
           }
-          if (task.status === 'completed' || task.status === 'failed' || task.status === 'stopped') {
+          if (task.status === 'completed' || task.status === 'review' || task.status === 'failed' || task.status === 'stopped') {
             stopPolling();
+            setVibingCoding(false);
+            void refreshThreads();
             setChatStatus(
-              task.status === 'completed'
+              task.status === 'completed' || task.status === 'review'
                 ? 'Agent finished. Send another message to continue.'
                 : task.status === 'failed'
                   ? 'Agent task failed — see transcript for details.'
@@ -2539,13 +2576,93 @@ export class YaverFeedback {
         lastSeenOutputLen = 0;
         transcriptEl.innerHTML = '';
         setChatStatus('');
-        resetBtn.style.display = 'none';
         vibePrompt.placeholder = 'Vibe with the agent — describe a change, ask a question, request a deploy…';
+        renderThreads();
       };
 
-      resetBtn.onclick = () => {
+      newTopicBtn.onclick = () => {
         if (busy) return;
         resetChat();
+      };
+      singleTopicNew.onclick = newTopicBtn.onclick;
+
+      const removeThread = async (thread: { id: string; title: string; status: string }) => {
+        const live = thread.status === 'running' || thread.status === 'queued';
+        const extra = live ? ' This also stops the coding turn.' : '';
+        if (!window.confirm(`Remove “${thread.title || 'this topic'}”?${extra}`)) return;
+        try {
+          await YaverFeedback.deleteVibeThread(thread.id);
+          if (currentTaskId === thread.id) resetChat();
+          await refreshThreads();
+        } catch (error) {
+          setChatStatus(error instanceof Error ? error.message : 'Could not remove topic.');
+        }
+      };
+
+      const openThread = async (thread: { id: string; title: string; status: string }) => {
+        stopPolling();
+        currentTaskId = thread.id;
+        outputCheckpoints = [0];
+        agentBubbles = [];
+        lastSeenOutputLen = 0;
+        transcriptEl.innerHTML = '';
+        try {
+          const task = await YaverFeedback.getTask(thread.id);
+          for (const turn of task.turns || []) {
+            if (turn.role === 'user') appendUserBubble(turn.content);
+            if (turn.role === 'assistant') {
+              const bubble = appendAgentBubble();
+              bubble.textContent = turn.content;
+            }
+          }
+          lastSeenOutputLen = task.output?.length || 0;
+          outputCheckpoints = [lastSeenOutputLen];
+          const taskLive = task.status === 'running' || task.status === 'queued';
+          setVibingCoding(threads.some((item) => item.id !== thread.id && (item.status === 'running' || item.status === 'queued')) || taskLive);
+          vibePrompt.placeholder = taskLive ? 'Agent is coding…' : 'Send a follow-up…';
+          if (taskLive) startPolling();
+          else setChatStatus('Continue this topic or start a new one.');
+          renderThreads();
+        } catch (error) {
+          setChatStatus(error instanceof Error ? error.message : 'Could not open topic.');
+        }
+      };
+
+      const renderThreads = () => {
+        topicRail.style.display = threads.length > 1 ? 'flex' : 'none';
+        singleTopic.style.display = threads.length === 1 ? 'flex' : 'none';
+        if (threads.length === 1) {
+          const thread = threads[0];
+          singleTopicTitle.textContent = thread.title || 'Current topic';
+          singleTopicOpen.onclick = () => { void openThread(thread); };
+          singleTopicRemove.onclick = () => { void removeThread(thread); };
+        }
+        topicCards.innerHTML = '';
+        for (const thread of threads) {
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = `yvr-fb-topic-card${thread.id === currentTaskId ? ' yvr-fb-topic-card-active' : ''}`;
+          const live = thread.status === 'running' || thread.status === 'queued';
+          card.innerHTML = `<span class="yvr-fb-topic-meta"><i class="${live ? 'is-live' : ''}"></i><span>${escapeHtml(thread.status === 'completed' ? 'done' : thread.status)}</span><span class="yvr-fb-topic-remove" role="button" aria-label="Remove ${escapeHtml(thread.title)}">×</span></span><strong>${escapeHtml(thread.title || 'New topic')}</strong>`;
+          card.onclick = async (event) => {
+            const target = event.target as HTMLElement;
+            if (target.closest('.yvr-fb-topic-remove')) {
+              event.stopPropagation();
+              await removeThread(thread);
+              return;
+            }
+            await openThread(thread);
+          };
+          topicCards.appendChild(card);
+        }
+      };
+
+      const refreshThreads = async () => {
+        try {
+          threads = await YaverFeedback.listVibeThreads();
+          setVibingCoding(threads.some((thread) => thread.status === 'running' || thread.status === 'queued'));
+          renderThreads();
+        } catch { /* topic history is advisory */ }
       };
 
       // ── Voice vibe coding (STT/TTS via the agent's /voice/stream) ──
@@ -2683,15 +2800,16 @@ export class YaverFeedback {
               model: selectedModelId || undefined,
             });
             currentTaskId = result.taskId;
+            setVibingCoding(true);
             appendUserBubble(promptText);
             appendAgentBubble();
             outputCheckpoints.push(0);
             lastSeenOutputLen = 0;
             vibePrompt.value = '';
-            resetBtn.style.display = '';
             vibePrompt.placeholder = 'Send a follow-up…';
             setChatStatus(`Task ${result.taskId.slice(0, 8)} running…`);
             startPolling();
+            void refreshThreads();
           } else {
             // Follow-up turn — checkpoint output length, mark the
             // composer empty, append a fresh agent bubble for the
@@ -2704,6 +2822,9 @@ export class YaverFeedback {
             appendUserBubble(promptText);
             appendAgentBubble();
             vibePrompt.value = '';
+            threads = threads.map((thread) => thread.id === currentTaskId ? { ...thread, status: 'running' } : thread);
+            setVibingCoding(true);
+            renderThreads();
             await YaverFeedback.continueVibing(currentTaskId, promptText);
             setChatStatus('Agent thinking…');
             startPolling();
@@ -2718,6 +2839,7 @@ export class YaverFeedback {
       void refreshMachinePill();
       void refreshRunnerActions();
       void refreshVibingGate();
+      void refreshThreads();
     };
 
     /**
@@ -3880,6 +4002,27 @@ export class YaverFeedback {
        * line-prefixed. The transcript is the scroll viewport — it
        * caps at 50vh so the composer stays visible. */
       .yvr-fb-chat { display: grid; gap: 10px; }
+      .yvr-fb-topic-rail { display: flex; gap: 9px; overflow-x: auto; padding: 2px 1px 8px; scrollbar-width: none; }
+      .yvr-fb-topic-rail::-webkit-scrollbar { display: none; }
+      .yvr-fb-topic-single { min-height: 40px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid rgba(130,130,145,.18); padding: 0 4px 0 10px; }
+      .yvr-fb-topic-single-open { min-width: 0; flex: 1; border: 0; background: transparent; text-align: left; color: #656570; font-family: inherit; font-size: 11px; line-height: 1.3; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+      .yvr-fb-topic-single-open span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: block; }
+      .yvr-fb-topic-single-action { width: 34px; height: 34px; border: 0; border-radius: 10px; background: transparent; color: #6252e8; font-size: 20px; cursor: pointer; }
+      .yvr-fb-topic-single-remove { color: #9a9aa5; }
+      .yvr-fb-topic-cards { display: flex; gap: 9px; }
+      .yvr-fb-topic-card {
+        flex: 0 0 168px; min-height: 80px; padding: 10px; border-radius: 14px;
+        border: 1.5px solid rgba(148, 163, 184, 0.25); background: rgba(255,255,255,.05);
+        color: inherit; text-align: left; display: grid; align-content: space-between; gap: 7px; cursor: pointer;
+      }
+      .yvr-fb-topic-card-active { border-color: #7568f8; background: rgba(117,104,248,.11); }
+      .yvr-fb-topic-card strong { font-size: 13px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .yvr-fb-topic-new { flex-basis: 72px; place-content: center; place-items: center; color: #8b7cf8; text-align: center; }
+      .yvr-fb-topic-new span { font-size: 22px; line-height: 1; }
+      .yvr-fb-topic-meta { display: flex; align-items: center; gap: 6px; color: #92929e; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+      .yvr-fb-topic-meta i { width: 7px; height: 7px; border-radius: 50%; background: #8b8b96; }
+      .yvr-fb-topic-meta i.is-live { background: #f59e0b; }
+      .yvr-fb-topic-remove { margin-left: auto; font-size: 17px; line-height: 1; padding: 2px; }
       .yvr-fb-chat-transcript {
         display: flex; flex-direction: column; gap: 8px;
         max-height: min(50vh, 440px); overflow-y: auto;

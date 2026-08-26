@@ -62,6 +62,7 @@ import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
 import { rerenderActivePreviewSurface } from "../../src/lib/feedbackTrigger";
+import { isAttachedDogfoodWebRuntime } from "../../src/lib/dogfoodRenderBridge";
 import { publishAutoRenderVibing, subscribeAutoRenderVibing } from "../../src/lib/autoRenderVibing";
 import { mustUseNativePreview } from "../../src/lib/devLane";
 import { parseReloadIntent } from "../../src/lib/reloadIntent";
@@ -1984,6 +1985,10 @@ export default function TasksScreen() {
   const insets = useSafeAreaInsets();
   const taskRouter = useRouter();
   const layout = useResponsiveLayout();
+  // Browser Dogfood is already the Yaver dev server rendered inside the
+  // native host. Showing that same server as a DevPreview card here creates a
+  // confusing Yaver-inside-Yaver control that can stop its own host surface.
+  const attachedDogfoodRuntime = Platform.OS === "web" && isAttachedDogfoodWebRuntime();
   // Follow-up composer height cap. RN 0.81.5's Modal cannot compile
   // softwareKeyboardLayoutMode (see the note above the task-detail Modal),
   // so on Android behavior="height" shrank the sheet until the Send button
@@ -7002,7 +7007,9 @@ export default function TasksScreen() {
         />
 
         {/* Dev server preview banner */}
-        {isEffectivelyConnected && <View style={{ marginTop: 12 }}><DevPreview /></View>}
+        {isEffectivelyConnected && !attachedDogfoodRuntime ? (
+          <View style={{ marginTop: 12 }}><DevPreview /></View>
+        ) : null}
 
         {/* Project chip + Todo queue bar */}
         {isEffectivelyConnected && (projectName || todoTotal > 0) && (
@@ -8970,7 +8977,7 @@ export default function TasksScreen() {
                     reliably present a second native Modal on top (it mounts invisibly —
                     "Open in Yaver" looked like it did nothing). The prop makes DevPreview
                     render its preview as an in-modal overlay instead. */}
-                {isEffectivelyConnected && <DevPreview hostedInModal />}
+                {isEffectivelyConnected && !attachedDogfoodRuntime ? <DevPreview hostedInModal /> : null}
 
                 {/* opencode Chat|Terminal toggle — opencode tasks stream raw
                     runner stdout (ANSI + TUI) that the chat bubbles flatten,

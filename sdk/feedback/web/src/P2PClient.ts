@@ -640,6 +640,7 @@ export class P2PClient {
     title?: string;
     output?: string;
     resultText?: string;
+    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }>;
   }> {
     const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}`, {
       headers: this.authHeaders(),
@@ -668,6 +669,34 @@ export class P2PClient {
       return data.task;
     }
     return data;
+  }
+
+  /** Recent topic cards backed by existing feedback/vibing tasks. */
+  async listVibeThreads(opts?: { projectName?: string; projectPath?: string }): Promise<Array<{
+    id: string;
+    title: string;
+    status: string;
+    createdAt?: string;
+    turnCount?: number;
+  }>> {
+    const params = new URLSearchParams();
+    if (opts?.projectName) params.set('projectName', opts.projectName);
+    if (opts?.projectPath) params.set('projectPath', opts.projectPath);
+    const query = params.toString();
+    const resp = await fetch(`${this.baseUrl}/vibing/tasks${query ? `?${query}` : ''}`, {
+      headers: this.authHeaders(),
+    });
+    if (!resp.ok) throw new Error(`[P2PClient] listVibeThreads failed (${resp.status})`);
+    const data = await resp.json().catch(() => ({}));
+    return Array.isArray(data?.tasks) ? data.tasks : [];
+  }
+
+  async deleteVibeThread(taskId: string): Promise<void> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}`, {
+      method: 'DELETE',
+      headers: this.authHeaders(),
+    });
+    if (!resp.ok) throw new Error(`[P2PClient] deleteVibeThread failed (${resp.status})`);
   }
 
   /** Append a follow-up turn to an existing vibing task. Same agent,

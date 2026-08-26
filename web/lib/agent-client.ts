@@ -868,6 +868,31 @@ export interface RemoteRuntimeSession {
   };
 }
 
+export interface DogfoodSourceStatus {
+  ok: boolean;
+  ready: boolean;
+  code: string;
+  path?: string;
+  branch?: string;
+  message: string;
+  remedy?: string;
+}
+
+export interface ProjectPreviewCapability {
+  id: string;
+  label: string;
+  supported: boolean;
+  primary?: boolean;
+  reason?: string;
+}
+
+export interface ProjectPreviewCapabilities {
+  framework: string;
+  selfDevelopment: boolean;
+  options: ProjectPreviewCapability[];
+  reason?: string;
+}
+
 export interface RemoteRuntimeStopResult {
   ok: boolean;
   type?: "stopped" | string;
@@ -5302,6 +5327,45 @@ export class AgentClient {
     const res = await fetch(`${this.baseUrl}/projects/actions?query=${encodeURIComponent(query)}`, { headers: this.authHeaders });
     if (!res.ok) throw new Error("Failed to get project actions");
     return res.json();
+  }
+
+  async getDogfoodSourceStatus(workDir?: string): Promise<DogfoodSourceStatus> {
+    this.assertConnected();
+    const query = workDir ? `?workDir=${encodeURIComponent(workDir)}` : "";
+    const res = await fetch(`${this.devBaseUrl}/dogfood/source/status${query}`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Dogfood source probe failed: HTTP ${res.status}`);
+    return data as DogfoodSourceStatus;
+  }
+
+  async prepareDogfoodCheckout(workDir: string): Promise<{ ok: boolean; code?: string; error?: string; remedy?: string }> {
+    this.assertConnected();
+    const res = await fetch(`${this.devBaseUrl}/attach/prepare`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ workDir }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || data?.remedy || `Dogfood checkout preparation failed: HTTP ${res.status}`);
+    return data;
+  }
+
+  async getProjectPreviewCapabilities(
+    workDir: string,
+    framework: string,
+    surface: "web" | "desktop-gui",
+    probe = true,
+  ): Promise<ProjectPreviewCapabilities> {
+    this.assertConnected();
+    const params = new URLSearchParams({ workDir, framework, surface, probe: probe ? "true" : "false" });
+    const res = await this.fetchWithTimeout(
+      `${this.devBaseUrl}/project/preview-capabilities?${params.toString()}`,
+      { headers: this.authHeaders },
+      90_000,
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Dogfood method probe failed: HTTP ${res.status}`);
+    return data as ProjectPreviewCapabilities;
   }
 
   async getRemoteRuntimeCapabilities(workDir: string, framework: string, refresh = false): Promise<RemoteRuntimeCapabilities> {

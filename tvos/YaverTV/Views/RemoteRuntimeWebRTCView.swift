@@ -128,6 +128,20 @@ struct RemoteRuntimeWebRTCView: View {
 
     let project: ProjectSummary
     let form: PreviewForm
+    let forcedTargetID: String?
+    let launchGuest: Bool
+
+    init(
+        project: ProjectSummary,
+        form: PreviewForm,
+        forcedTargetID: String? = nil,
+        launchGuest: Bool = false
+    ) {
+        self.project = project
+        self.form = form
+        self.forcedTargetID = forcedTargetID
+        self.launchGuest = launchGuest
+    }
 
     @StateObject private var runtime = TVRemoteRuntimeController()
     @State private var cursor = CGPoint(x: 0.5, y: 0.5)
@@ -220,7 +234,13 @@ struct RemoteRuntimeWebRTCView: View {
                 runtime.fail("No reachable render machine is selected.")
                 return
             }
-            await runtime.start(client: client, project: project, preferAuthenticatedFrames: form == .phone)
+            await runtime.start(
+                client: client,
+                project: project,
+                preferAuthenticatedFrames: form == .phone,
+                forcedTargetID: forcedTargetID,
+                launchGuest: launchGuest
+            )
             // Vibing's primary action is the next prompt. Giving the viewport
             // default focus trapped every arrow in soft-pointer movement and
             // made the visible Runner/Model controls unreachable. App control
@@ -1020,7 +1040,13 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         }
     }
 
-    func start(client: AgentClient, project: ProjectSummary, preferAuthenticatedFrames: Bool = false) async {
+    func start(
+        client: AgentClient,
+        project: ProjectSummary,
+        preferAuthenticatedFrames: Bool = false,
+        forcedTargetID: String? = nil,
+        launchGuest: Bool = false
+    ) async {
         stop(closeSession: true)
         let thisGeneration = UUID()
         generation = thisGeneration
@@ -1043,7 +1069,9 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
 
         do {
             status = "Starting \(project.name)…"
-            try await prepareBrowserLaneIfNeeded(client: client, project: project)
+            if forcedTargetID == nil {
+                try await prepareBrowserLaneIfNeeded(client: client, project: project)
+            }
             guard generation == thisGeneration else { return }
 
             status = "Finding an interactive target…"
@@ -1051,7 +1079,11 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             guard capabilities.remoteRuntimeEligible else {
                 throw AgentError(message: "This project does not expose an interactive remote runtime.")
             }
-            guard let target = preferredTarget(in: capabilities.targets) else {
+            guard let target = preferredTarget(in: capabilities.targets, forcedTargetID: forcedTargetID) else {
+                if let forcedTargetID {
+                    let known = capabilities.targets.first(where: { $0.id == forcedTargetID })
+                    throw AgentError(message: known?.reason ?? "The selected render box did not expose the required \(forcedTargetID) target.")
+                }
                 let reason = capabilities.targets.first?.reason ?? "No compatible phone, simulator, device, or browser target is available on this machine."
                 throw AgentError(message: reason)
             }
@@ -1065,7 +1097,10 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             status = "Looking for a live session on this machine…"
             var created: RemoteRuntimeSession
             let live = (try? await client.listRemoteRuntimeSessions(project: project.path)) ?? []
-            if let existing = live.first(where: { $0.status != "closed" && $0.status != "error" }) {
+            if let existing = live.first(where: {
+                $0.status != "closed" && $0.status != "error" &&
+                    (forcedTargetID == nil || $0.targetId == forcedTargetID)
+            }) {
                 status = "Rejoining the live \(project.name) session…"
                 created = existing
             } else {
@@ -1088,6 +1123,15 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
             }
             session = created
             if let note = created.note { controlNote = note }
+            if launchGuest {
+                status = "Building and launching \(project.name) in the Apple TV Simulator…"
+                _ = try await client.sendRemoteRuntimeCommand(
+                    sessionId: created.id,
+                    command: "run-guest",
+                    source: "tvos-dogfood",
+                    workDir: project.path
+                )
+            }
             if preferAuthenticatedFrames {
                 // Phone previews must not put an H.264 surface on screen before
                 // it has produced usable app pixels. The authenticated frame
@@ -1388,8 +1432,11 @@ private final class TVRemoteRuntimeController: NSObject, ObservableObject {
         }
     }
 
-    private func preferredTarget(in targets: [RemoteRuntimeTarget]) -> RemoteRuntimeTarget? {
+    private func preferredTarget(in targets: [RemoteRuntimeTarget], forcedTargetID: String? = nil) -> RemoteRuntimeTarget? {
         let enabled = targets.filter(\.enabled)
+        if let forcedTargetID {
+            return enabled.first(where: { $0.id == forcedTargetID })
+        }
         return enabled.first(where: { $0.id == "browser-window" })
             ?? enabled.first(where: { $0.id == "ios-simulator" || $0.id == "android-emulator" })
             ?? enabled.first

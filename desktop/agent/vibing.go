@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1502,10 +1503,7 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 	// surface is ever sent. Before the split, `prompt` was both, so every vibe
 	// task in the list read "Yaver mobile execution context: - Project
 	// framework: …" instead of "make the header sticky".
-	runnerBriefing := ""
-	if ctx := vibingExecutionContext(req.ProjectPath, info.Framework, target, isDirectConnection(r)); ctx != "" {
-		runnerBriefing = ctx + "\n\nUser request:\n"
-	}
+	runnerBriefing := vibingThreadBriefing(vibingExecutionContext(req.ProjectPath, info.Framework, target, isDirectConnection(r)))
 
 	// Pick a runner that's actually ready instead of blindly trusting
 	// the configured primary. Real symptom: yaver-test-ephemeral has
@@ -1545,7 +1543,7 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	taskOpts := TaskCreateOptions{WorkDir: req.ProjectPath}
+	taskOpts := TaskCreateOptions{WorkDir: req.ProjectPath, ProjectName: req.ProjectName}
 	meta := taskPlacementRequestFromTaskBody(taskPlacementRequestInput{
 		KindHint:       "vibe",
 		Title:          firstNonEmpty(req.Prompt, "Vibing request"),
@@ -1660,14 +1658,14 @@ func pickReadyVibingRunner(s *HTTPServer) string {
 // (which can call /vibing/execute) used to be unable to read its
 // own task back — leaving the chat UI's poll loop hanging on an
 // empty bubble forever. This endpoint accepts owner-minted SDK tokens
-// the same way /vibing/execute does, but only returns tasks whose
-// Source == "vibing" so non-vibing tasks (shell, code-cli, etc.)
-// stay owner-only.
+// the same way /vibing/execute does, but only returns feedback/vibing
+// tasks so unrelated owner history (shell, code-cli, etc.) stays owner-only.
 //
 // Routes handled:
 //
 //	GET  /vibing/task/<id>           → task info (status + output blob)
 //	POST /vibing/task/<id>/continue  → append a follow-up turn
+//	DELETE /vibing/task/<id>         → remove the topic (and stop it if live)
 //
 // The reply shape mirrors the corresponding /tasks/{id} reply
 // (`{ ok: true, task: TaskInfo }`) so the SDK can share the
@@ -1693,22 +1691,26 @@ func (s *HTTPServer) handleVibingTaskByID(w http.ResponseWriter, r *http.Request
 	// Tripwire: never serve non-vibing tasks through this endpoint
 	// even if the SDK guesses an unrelated task ID. Source is set by
 	// CreateTask and is immutable for the task's lifetime.
-	if !strings.EqualFold(strings.TrimSpace(task.Source), "vibing") {
+	if !isFeedbackOrVibingSource(task.Source) {
 		jsonError(w, http.StatusNotFound, "task not found")
 		return
 	}
 
 	switch action {
 	case "":
-		if r.Method != http.MethodGet {
-			jsonError(w, http.StatusMethodNotAllowed, "use GET")
-			return
+		switch r.Method {
+		case http.MethodGet:
+			info := s.taskInfoFromTask(task, r)
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "task": info})
+		case http.MethodDelete:
+			if err := s.taskMgr.DeleteTask(taskID); err != nil {
+				jsonError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true})
+		default:
+			jsonError(w, http.StatusMethodNotAllowed, "use GET or DELETE")
 		}
-		info := s.taskInfoFromTask(task, r)
-		jsonReply(w, http.StatusOK, map[string]interface{}{
-			"ok":   true,
-			"task": info,
-		})
 	case "continue":
 		if r.Method != http.MethodPost {
 			jsonError(w, http.StatusMethodNotAllowed, "use POST")
@@ -1739,4 +1741,47 @@ func (s *HTTPServer) handleVibingTaskByID(w http.ResponseWriter, r *http.Request
 	default:
 		jsonError(w, http.StatusNotFound, "unknown action")
 	}
+}
+
+// handleVibingTasks returns only feedback/vibing conversations. Project
+// filters are applied before serialization so an embedded SDK never receives
+// unrelated owner task history or absolute work directories.
+func (s *HTTPServer) handleVibingTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "use GET")
+		return
+	}
+	projectName := strings.TrimSpace(r.URL.Query().Get("projectName"))
+	projectPath := strings.TrimSpace(r.URL.Query().Get("projectPath"))
+	s.taskMgr.mu.RLock()
+	tasks := make([]*Task, 0, len(s.taskMgr.tasks))
+	for _, task := range s.taskMgr.tasks {
+		if task == nil || task.DeletedAt != nil || !isFeedbackOrVibingSource(task.Source) {
+			continue
+		}
+		if projectName != "" || projectPath != "" {
+			nameMatch := projectName != "" && strings.TrimSpace(task.ProjectName) != "" && strings.EqualFold(strings.TrimSpace(task.ProjectName), projectName)
+			pathMatch := projectPath != "" && strings.TrimSpace(task.WorkDir) != "" && filepath.Clean(strings.TrimSpace(task.WorkDir)) == filepath.Clean(projectPath)
+			if !nameMatch && !pathMatch {
+				continue
+			}
+		}
+		tasks = append(tasks, task)
+	}
+	s.taskMgr.mu.RUnlock()
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt.After(tasks[j].CreatedAt) })
+	if len(tasks) > 12 {
+		tasks = tasks[:12]
+	}
+	infos := make([]TaskInfo, 0, len(tasks))
+	for _, task := range tasks {
+		info := s.taskInfoFromTask(task, r)
+		info.Output = ""
+		info.RawOutput = ""
+		info.ResultText = ""
+		info.TurnCount = len(info.Turns)
+		info.Turns = nil
+		infos = append(infos, info)
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{"ok": true, "tasks": infos})
 }

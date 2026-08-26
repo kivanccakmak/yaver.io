@@ -1464,6 +1464,56 @@ export class P2PClient {
     return { taskId: json.taskId, raw: json };
   }
 
+  /** Existing task history, filtered by the agent to Vibing/feedback topics. */
+  async listVibeThreads(input?: { projectName?: string; projectPath?: string }): Promise<Array<{
+    id: string;
+    title: string;
+    status: string;
+    createdAt?: string;
+    projectName?: string;
+    turnCount?: number;
+  }>> {
+    const params = new URLSearchParams();
+    if (input?.projectName) params.set('projectName', input.projectName);
+    if (input?.projectPath) params.set('projectPath', input.projectPath);
+    const query = params.toString();
+    const resp = await fetch(`${this.baseUrl}/vibing/tasks${query ? `?${query}` : ''}`, {
+      headers: this.authHeaders(),
+    });
+    if (!resp.ok) throw new Error(`listVibeThreads HTTP ${resp.status}`);
+    const json = (await resp.json().catch(() => ({}))) as { tasks?: Array<any> };
+    return (json.tasks || []).map((task) => ({
+      id: String(task.id),
+      title: String(task.title || 'New topic'),
+      status: String(task.status || 'completed'),
+      createdAt: task.createdAt,
+      projectName: task.projectName,
+      turnCount: task.turnCount,
+    }));
+  }
+
+  async getVibeThread(taskId: string): Promise<{
+    id: string;
+    title: string;
+    status: string;
+    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }>;
+  }> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}`, {
+      headers: this.authHeaders(),
+    });
+    if (!resp.ok) throw new Error(`getVibeThread HTTP ${resp.status}`);
+    const json = (await resp.json().catch(() => ({}))) as { task?: any };
+    return json.task || json as any;
+  }
+
+  async deleteVibeThread(taskId: string): Promise<void> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}`, {
+      method: 'DELETE',
+      headers: this.authHeaders(),
+    });
+    if (!resp.ok) throw new Error(`deleteVibeThread HTTP ${resp.status}`);
+  }
+
   /**
    * Subscribe to a task's live stdout/stderr stream. Returns an abort
    * function — call it to detach. The agent emits NDJSON lines on
