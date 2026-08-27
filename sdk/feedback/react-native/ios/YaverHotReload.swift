@@ -18,6 +18,8 @@ class YaverHotReload: NSObject {
   static let bundleDir = "yaver-hot-reload"
   static let bundleFile = "main.jsbundle"
   static let reloadNotification = Notification.Name("YaverHotReloadBundle")
+  static let dogfoodShortcutType = "io.yaver.feedback.dogfood"
+  static let dogfoodShortcutPendingKey = "yaverDogfoodShortcutPending"
 
   // `requiresMainQueueSetup` is an RCTBridgeModule protocol method,
   // not an NSObject method — so it must not be marked `override`.
@@ -99,6 +101,41 @@ class YaverHotReload: NSObject {
     let dir = YaverHotReload.savedBundlePath().deletingLastPathComponent()
     try? FileManager.default.removeItem(at: dir)
     resolve(true)
+  }
+
+  /** Dynamic (ACL-backed) Home Screen quick action. Never put this in
+   * Info.plist: static shortcuts are visible before account authorization. */
+  @objc func setDogfoodShortcut(_ enabled: Bool,
+                                label: String,
+                                resolver resolve: @escaping RCTPromiseResolveBlock,
+                                rejecter reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      var items = UIApplication.shared.shortcutItems ?? []
+      items.removeAll { $0.type == YaverHotReload.dogfoodShortcutType }
+      if enabled {
+        items.append(UIApplicationShortcutItem(
+          type: YaverHotReload.dogfoodShortcutType,
+          localizedTitle: label.isEmpty ? "Dogfood" : label,
+          localizedSubtitle: nil,
+          icon: UIApplicationShortcutIcon(type: .play),
+          userInfo: nil
+        ))
+      }
+      UIApplication.shared.shortcutItems = items
+      resolve(enabled)
+    }
+  }
+
+  @objc func consumeDogfoodShortcut(_ resolve: RCTPromiseResolveBlock,
+                                     rejecter reject: RCTPromiseRejectBlock) {
+    let defaults = UserDefaults.standard
+    let pending = defaults.bool(forKey: YaverHotReload.dogfoodShortcutPendingKey)
+    if pending { defaults.removeObject(forKey: YaverHotReload.dogfoodShortcutPendingKey) }
+    resolve(pending)
+  }
+
+  @objc static func markDogfoodShortcutPending() {
+    UserDefaults.standard.set(true, forKey: dogfoodShortcutPendingKey)
   }
 
   // MARK: - Static helpers

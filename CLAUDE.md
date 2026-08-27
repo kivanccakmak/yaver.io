@@ -607,7 +607,7 @@ changing those.
   `scripts/deploy-playstore.sh`, `scripts/deploy-convex.sh`, or `npm publish`
   directly unless you are editing/testing those scripts. Use:
   `./deploy/deploy.sh all`, `backend`, `cloudflare`, `ios`, `android`, `npm`,
-  or `mcp`.
+  `feedback-sdk`, or `mcp`.
 
   Deploy is owner-only. MCP deploy tools are hidden and denied for non-owner
   accounts, and `deploy/deploy.sh` refuses group/other-writable repo or script
@@ -618,6 +618,7 @@ changing those.
   |---|---|---|
   | Full Yaver stack | `./deploy/deploy.sh all` | none; run locally unless explicitly told otherwise |
   | npm (`yaver-cli`) | `./deploy/deploy.sh npm` | `release-cli.yml` after the local command tags/pushes |
+  | React Native feedback SDK | `./deploy/deploy.sh feedback-sdk` | none; local npm owner credentials required |
   | TestFlight (iOS) | `./deploy/deploy.sh ios` | local-only by design |
   | Google Play internal | `./deploy/deploy.sh android` | `release-mobile.yml` (android job) |
   | Convex backend | `./deploy/deploy.sh backend` | `release-backend.yml` (manual; production environment) |

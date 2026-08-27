@@ -2,7 +2,12 @@ package io.yaver.feedback;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
+import android.graphics.drawable.Icon;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -25,6 +30,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.Executors;
+import java.util.Collections;
 
 /**
  * Hot reload native module for the Yaver Feedback SDK (Android).
@@ -45,6 +51,8 @@ public class YaverHotReloadModule extends ReactContextBaseJavaModule {
     private static final String PREFS_KEY_BOOT_ATTEMPTS = "boot_attempts";
     private static final String PREFS_KEY_BUNDLE_MTIME = "bundle_mtime";
     private static final int MAX_BOOT_ATTEMPTS = 3;
+    private static final String DOGFOOD_SHORTCUT_ID = "io.yaver.feedback.dogfood";
+    private static final String DOGFOOD_SHORTCUT_EXTRA = "io.yaver.feedback.DOGFOOD";
 
     public YaverHotReloadModule(ReactApplicationContext context) {
         super(context);
@@ -151,6 +159,57 @@ public class YaverHotReloadModule extends ReactContextBaseJavaModule {
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         prefs.edit().remove(PREFS_KEY_BUNDLE).apply();
         promise.resolve(true);
+    }
+
+    /** Dynamic shortcut: only JS, after backend ACL resolution, may add it. */
+    @ReactMethod
+    public void setDogfoodShortcut(boolean enabled, String label, Promise promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) {
+                promise.resolve(false);
+                return;
+            }
+            Context context = getReactApplicationContext();
+            ShortcutManager manager = context.getSystemService(ShortcutManager.class);
+            if (manager == null) {
+                promise.resolve(false);
+                return;
+            }
+            manager.removeDynamicShortcuts(Collections.singletonList(DOGFOOD_SHORTCUT_ID));
+            if (enabled) {
+                Intent intent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+                if (intent == null) throw new IllegalStateException("App launch intent unavailable");
+                intent.setAction(DOGFOOD_SHORTCUT_EXTRA);
+                intent.putExtra(DOGFOOD_SHORTCUT_EXTRA, true);
+                ShortcutInfo shortcut = new ShortcutInfo.Builder(context, DOGFOOD_SHORTCUT_ID)
+                        .setShortLabel(label == null || label.trim().isEmpty() ? "Dogfood" : label)
+                        .setLongLabel(label == null || label.trim().isEmpty() ? "Dogfood" : label)
+                        .setIcon(Icon.createWithResource(context, android.R.drawable.ic_media_play))
+                        .setIntent(intent)
+                        .build();
+                manager.addDynamicShortcuts(Collections.singletonList(shortcut));
+            }
+            promise.resolve(enabled);
+        } catch (Exception error) {
+            promise.reject("DOGFOOD_SHORTCUT_FAILED", error.getMessage(), error);
+        }
+    }
+
+    @ReactMethod
+    public void consumeDogfoodShortcut(Promise promise) {
+        Activity activity = getCurrentActivity();
+        if (activity == null || activity.getIntent() == null) {
+            promise.resolve(false);
+            return;
+        }
+        Intent intent = activity.getIntent();
+        boolean pending = DOGFOOD_SHORTCUT_EXTRA.equals(intent.getAction())
+                || intent.getBooleanExtra(DOGFOOD_SHORTCUT_EXTRA, false);
+        if (pending) {
+            intent.removeExtra(DOGFOOD_SHORTCUT_EXTRA);
+            intent.setAction(Intent.ACTION_MAIN);
+        }
+        promise.resolve(pending);
     }
 
     /**

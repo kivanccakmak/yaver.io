@@ -1,6 +1,9 @@
 export interface DogfoodAccessSnapshot {
   appId: string;
-  ownerAuthenticated: boolean;
+  /** A Yaver session exists locally; not itself an authorization decision. */
+  yaverAuthenticated: boolean;
+  /** Backend-confirmed owner/maintainer of this exact appId. */
+  ownerAuthorized: boolean;
   installationId?: string;
   deviceState: 'unknown' | 'unregistered' | 'pending' | 'active' | 'cancelled' | 'revoked' | 'superseded';
   /** True only for a backend-approved device key or an authenticated owner. */
@@ -20,7 +23,7 @@ export interface SDKDogfoodConfig {
   accountIds?: string[];
   /** The third-party app's currently authenticated account ID. */
   currentAccountId?: string;
-  /** Account-free installation identity resolved by YaverDeviceDogfood. */
+  /** Account-bound installation identity resolved by YaverDeviceDogfood. */
   appId?: string;
   installationId?: string;
   installationStatus?: 'pending' | 'active' | 'cancelled' | 'revoked' | 'superseded';
@@ -38,6 +41,9 @@ export interface SDKDogfoodConfig {
   canShow?: (access: DogfoodAccessSnapshot) => boolean | Promise<boolean>;
   /** Optional callback alternative to onDogfoodFlowState(). */
   onStateChange?: (state: DogfoodFlowSnapshot) => void;
+  /** ACL-backed Home Screen/App Shortcut. Dynamic and absent until Yaver
+   * owner auth or this installation's approved key authorizes it. */
+  appShortcut?: boolean | { label?: string };
 }
 
 export interface SDKDogfoodStatus {

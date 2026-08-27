@@ -14,6 +14,7 @@ import {
   setStrictNativeAuth,
   getToken,
   getSelectedDeviceId,
+  getDogfoodAccountAccess,
   listReachableDevices,
   clearToken,
   clearSelectedDeviceId,
@@ -188,6 +189,10 @@ let crashReportInFlight = false;
 let dogfoodOnboarding: DogfoodOnboardingOptions | null = null;
 let dogfoodFlowState: DogfoodFlowState = { phase: 'idle' };
 const dogfoodFlowListeners = new Set<(state: DogfoodFlowState) => void>();
+let dogfoodShortcutAppStateSubscription: { remove: () => void } | null = null;
+let dogfoodActivationSubscription: { remove: () => void } | null = null;
+let dogfoodShortcutLaunchInFlight = false;
+let lastDogfoodActivationUrl = '';
 
 function publishDogfoodFlow(state: DogfoodFlowState): void {
   dogfoodFlowState = state;
@@ -195,6 +200,36 @@ function publishDogfoodFlow(state: DogfoodFlowState): void {
   dogfoodFlowListeners.forEach((listener) => {
     try { listener(state); } catch { /* host callbacks never break the SDK */ }
   });
+}
+
+async function consumeNativeDogfoodShortcut(): Promise<void> {
+  if (dogfoodShortcutLaunchInFlight || !config?.dogfood?.appShortcut) return;
+  const native = (NativeModules as any)?.YaverHotReload;
+  if (typeof native?.consumeDogfoodShortcut !== 'function') return;
+  try {
+    if (!(await native.consumeDogfoodShortcut())) return;
+    dogfoodShortcutLaunchInFlight = true;
+    // Let FeedbackModal/AuthOverlay effects mount after a cold launch.
+    const timer = setTimeout(() => {
+      void YaverFeedback.openDogfood().finally(() => { dogfoodShortcutLaunchInFlight = false; });
+    }, 350);
+    unrefTimer(timer);
+  } catch {
+    dogfoodShortcutLaunchInFlight = false;
+  }
+}
+
+function handleDogfoodActivationUrl(url?: string | null): void {
+  if (!url || url === lastDogfoodActivationUrl || !config?.dogfood) return;
+  try {
+    const parsed = new URL(url);
+    if (!parsed.protocol.startsWith('yaver-dogfood-') || parsed.hostname !== 'activate') return;
+  } catch {
+    return;
+  }
+  lastDogfoodActivationUrl = url;
+  const timer = setTimeout(() => { void YaverFeedback.openDogfood(); }, 350);
+  unrefTimer(timer);
 }
 
 /** Resolve the user's relay password by validating their auth token
@@ -453,6 +488,31 @@ export class YaverFeedback {
     // the caller is responsible for providing authToken themselves.
     if (config.autoLogin !== false && enabled) {
       void YaverFeedback.hydrateSession();
+    }
+
+    if (config.dogfood?.appShortcut) {
+      void YaverFeedback.syncDogfoodAppShortcut();
+      void consumeNativeDogfoodShortcut();
+      try {
+        const { AppState } = require('react-native');
+        dogfoodShortcutAppStateSubscription?.remove();
+        dogfoodShortcutAppStateSubscription = AppState.addEventListener('change', (state: string) => {
+          if (state === 'active') {
+            void YaverFeedback.syncDogfoodAppShortcut();
+            void consumeNativeDogfoodShortcut();
+          }
+        });
+      } catch { /* native shortcut unavailable on web/test runtimes */ }
+    }
+    if (config.dogfood) {
+      try {
+        const { Linking } = require('react-native');
+        dogfoodActivationSubscription?.remove();
+        dogfoodActivationSubscription = Linking.addEventListener('url', ({ url }: { url: string }) => {
+          handleDogfoodActivationUrl(url);
+        });
+        void Linking.getInitialURL().then(handleDogfoodActivationUrl).catch(() => {});
+      } catch { /* linking unavailable in non-native test runtimes */ }
     }
 
     // Create P2P client if we have a URL
@@ -744,6 +804,7 @@ export class YaverFeedback {
     if (config.autoStartBlackBox !== false && !BlackBox.isStreaming) {
       YaverFeedback.scheduleBlackBoxAutoStart();
     }
+    await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
   }
 
   /** Returns true once the SDK has a session token it can use. */
@@ -855,16 +916,11 @@ export class YaverFeedback {
       secureStore: overrides?.secureStore,
     };
     if (configured?.canShow) {
-      // Visibility is advisory and must never put a backend round-trip in
-      // front of the action. Hosts that want full installation status call
-      // getDogfoodAccess() explicitly; the callback gets the cheap auth view.
-      const ownerAuthenticated = YaverFeedback.isAuthed() || Boolean(await getToken());
-      const access: DogfoodAccessSnapshot = {
-        appId,
-        ownerAuthenticated,
-        deviceState: 'unknown',
-        authorized: ownerAuthenticated,
-      };
+      // This hook is presentation policy, but it still receives the complete
+      // backend-authoritative snapshot. Passing an owner-only approximation
+      // here made legitimate approved testers fail custom `access.authorized`
+      // gates even though their exact phone key was active.
+      const access = await YaverFeedback.getDogfoodAccess();
       try {
         if (!(await configured.canShow(access))) {
           const state: DogfoodFlowState = { phase: 'denied', appId };
@@ -904,14 +960,46 @@ export class YaverFeedback {
     } catch {
       // UI status must degrade to unknown; openDogfood still offers owner OAuth.
     }
-    const ownerAuthenticated = YaverFeedback.isAuthed() || Boolean(await getToken());
+    const token = config?.authToken || await getToken();
+    const account = token
+      ? await getDogfoodAccountAccess(appId, token, installationId)
+      : { authenticated: false, ownerAuthorized: false, installationAuthorized: false };
+    const yaverAuthenticated = account.authenticated;
+    const ownerAuthorized = account.ownerAuthorized;
     return {
       appId,
-      ownerAuthenticated,
+      yaverAuthenticated,
+      ownerAuthorized,
       installationId,
       deviceState,
-      authorized: ownerAuthenticated || deviceState === 'active',
+      authorized: yaverAuthenticated && account.installationAuthorized && deviceState === 'active',
     };
+  }
+
+  /** Add/remove the platform Home Screen shortcut from backend-authoritative
+   * owner/device ACL state. Static plist shortcuts are intentionally avoided:
+   * an unauthorized install must never advertise a hidden developer action. */
+  static async syncDogfoodAppShortcut(): Promise<boolean> {
+    const shortcut = config?.dogfood?.appShortcut;
+    const native = (NativeModules as any)?.YaverHotReload;
+    if (!shortcut || typeof native?.setDogfoodShortcut !== 'function') return false;
+    const access = await YaverFeedback.getDogfoodAccess();
+    let visible = access.authorized;
+    if (visible && config?.dogfood?.canShow) {
+      try {
+        visible = await config.dogfood.canShow(access);
+      } catch {
+        visible = false;
+      }
+    }
+    const label = typeof shortcut === 'object' && shortcut.label
+      ? shortcut.label
+      : `Dogfood ${config?.dogfood?.label || config?.projectName || ''}`.trim();
+    // Product contract: both a valid full Yaver account AND this phone's
+    // backend-approved app installation are required. Neither factor alone
+    // advertises the developer surface.
+    await native.setDogfoodShortcut(visible, label || 'Dogfood');
+    return visible;
   }
 
   /** Backwards-compatible entry point for existing integrations. */
@@ -938,21 +1026,14 @@ export class YaverFeedback {
       return state;
     }
     await YaverFeedback.hydrateSession();
-    if (!YaverFeedback.isAuthed()) {
-      // An approved installation is the account-free lane: prove possession
-      // with the private key in SecureStore, mint a narrow session, and reuse
-      // the backend-pinned target machine. A new/pending installation is also
-      // registered here so an owner can approve it from Yaver mobile/MCP.
-      try {
-        const enrolled = await YaverFeedback.enableDeviceDogfood(dogfoodOnboarding);
-        if (enrolled.session?.targetDeviceId && config) {
-          await YaverFeedback.setPreferredDevice(enrolled.session.targetDeviceId);
-        }
-      } catch {
-        // Owner OAuth remains the visible recovery route.
-      }
-    }
-    if (!YaverFeedback.isAuthed()) {
+    const token = config?.authToken || await getToken();
+    const account = token
+      ? await getDogfoodAccountAccess(appId, token)
+      : { authenticated: false, ownerAuthorized: false, installationAuthorized: false };
+    // A device key is a second factor for this installation, never a
+    // replacement for a real Yaver account. Narrow installation sessions and
+    // stale/invalid cached tokens both return authenticated=false here.
+    if (!account.authenticated) {
       const state: DogfoodFlowState = { phase: 'auth-required', appId };
       publishDogfoodFlow(state);
       YaverFeedback.showLogin();
@@ -1080,6 +1161,7 @@ export class YaverFeedback {
     p2pClient = null;
     renderP2PClient = null;
     p2pAuthToken = null;
+    await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
   }
 
   /**
@@ -1341,16 +1423,16 @@ export class YaverFeedback {
     return resolveSDKDogfood(config?.dogfood);
   }
 
-  /** One-call, account-free Dogfood bootstrap for third-party apps. On first
-   * launch it creates/proves the installation key and returns pending; after
-   * owner approval the same call obtains a short-lived scoped Yaver session
-   * and enables Dogfood UX without the host app implementing OAuth. */
+  /** One-call account-bound Dogfood bootstrap for third-party apps. The host
+   * app needs no auth backend of its own: SDK OAuth supplies the full Yaver
+   * account, then this creates/proves the installation key. Owner approval
+   * binds that account + appId + phone key before a scoped session is minted. */
   static async enableDeviceDogfood(options: DeviceDogfoodOptions): Promise<{
     status: DeviceDogfoodState;
     installationId: string;
     session: DeviceDogfoodSession | null;
   }> {
-    const client = new YaverDeviceDogfood(options);
+    const client = new YaverDeviceDogfood({ ...options, authToken: options.authToken || config?.authToken });
     let status = await client.status();
     if (status === 'unregistered' || status === 'pending' || status === 'cancelled' || status === 'revoked' || status === 'superseded') {
       const enrolled = status === 'unregistered' || status === 'pending'
@@ -1370,14 +1452,15 @@ export class YaverFeedback {
         installationStatus: status === 'active' && session ? 'active' : status === 'unregistered' ? 'pending' : status,
         label: options.label,
       };
-      // A normal Yaver OAuth session remains authoritative for the runtime
-      // wizard. Only account-free hosts adopt the narrow installation token.
-      if (session && !config.authToken) await YaverFeedback.setAuthToken(session.token);
+      // A normal full Yaver OAuth session remains authoritative for the
+      // runtime wizard. The narrow installation token is intentionally never
+      // promoted into account auth.
     }
     try {
       const { DeviceEventEmitter } = require('react-native');
       DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: !!session, status });
     } catch { /* noop */ }
+    await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
     return { status, installationId: info.installationId, session };
   }
 
@@ -1932,6 +2015,11 @@ export class YaverFeedback {
     // init() stacked a second one on top.
     commandUnsubscribe?.();
     commandUnsubscribe = null;
+    dogfoodShortcutAppStateSubscription?.remove();
+    dogfoodShortcutAppStateSubscription = null;
+    dogfoodActivationSubscription?.remove();
+    dogfoodActivationSubscription = null;
+    lastDogfoodActivationUrl = '';
     // Before `enabled = false` / `config = null` below, so an in-flight retry
     // can't fire against a torn-down config.
     YaverFeedback.cancelBlackBoxAutoStart();

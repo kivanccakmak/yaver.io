@@ -159,6 +159,7 @@ export async function clearQuickIconColorPreset(): Promise<void> {
 
 const PREFERRED_RUNNER_KEY = 'yaver_feedback_preferred_runner';
 const PREFERRED_MODEL_KEY = 'yaver_feedback_preferred_model';
+const PREFERRED_DOGFOOD_LANE_PREFIX = 'yaver_feedback_dogfood_lane_';
 
 export async function getPreferredRunner(): Promise<string | null> {
   if (!AsyncStorage) return null;
@@ -201,6 +202,25 @@ export async function setPreferredModel(model: string | null): Promise<void> {
       return;
     }
     await AsyncStorage.setItem(PREFERRED_MODEL_KEY, model.trim());
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function getPreferredDogfoodLane(appId: string): Promise<'browser' | 'hermes' | 'webrtc' | null> {
+  if (!AsyncStorage || !appId) return null;
+  try {
+    const value = await AsyncStorage.getItem(`${PREFERRED_DOGFOOD_LANE_PREFIX}${appId}`);
+    return value === 'browser' || value === 'hermes' || value === 'webrtc' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setPreferredDogfoodLane(appId: string, lane: 'browser' | 'hermes' | 'webrtc'): Promise<void> {
+  if (!AsyncStorage || !appId) return;
+  try {
+    await AsyncStorage.setItem(`${PREFERRED_DOGFOOD_LANE_PREFIX}${appId}`, lane);
   } catch {
     /* best-effort */
   }

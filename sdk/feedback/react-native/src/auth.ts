@@ -202,6 +202,35 @@ export async function clearSelectedDeviceId(): Promise<void> {
   }
 }
 
+/** Verify that this full Yaver session owns the exact registered Dogfood app.
+ * Any login is not enough, and installation-scoped SDK tokens return false. */
+export async function getDogfoodAccountAccess(appId: string, token: string, installationId?: string): Promise<{
+  authenticated: boolean;
+  ownerAuthorized: boolean;
+  installationAuthorized: boolean;
+}> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    const query = new URLSearchParams({ appId });
+    if (installationId) query.set('installationId', installationId);
+    const response = await fetch(`${convexSiteUrl}/dogfood/access?${query.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) return { authenticated: false, ownerAuthorized: false, installationAuthorized: false };
+    const result = await response.json();
+    return {
+      authenticated: result?.authenticated === true,
+      ownerAuthorized: result?.ownerAuthorized === true,
+      installationAuthorized: result?.installationAuthorized === true,
+    };
+  } catch {
+    return { authenticated: false, ownerAuthorized: false, installationAuthorized: false };
+  }
+}
+
 // ─── Token validation ──────────────────────────────────────────────────
 
 export async function validateToken(token: string): Promise<User | null> {

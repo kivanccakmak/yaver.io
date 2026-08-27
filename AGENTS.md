@@ -67,7 +67,8 @@ steps.
   Do not call `scripts/deploy-web.sh`, `scripts/deploy-testflight.sh`,
   `scripts/deploy-playstore.sh`, `scripts/deploy-convex.sh`, or npm publish
   directly unless you are editing/testing those scripts. Targets:
-  `all`, `backend`, `cloudflare`, `ios`, `android`, `npm`, `mcp`. This wrapper
+  `all`, `backend`, `cloudflare`, `ios`, `android`, `npm`, `feedback-sdk`,
+  `mcp`. This wrapper
   is the canonical human/agent/MCP entrypoint and performs owner/permission
   checks before delegating to the maintained deploy scripts.
 - **Deploy is owner-only:** MCP deploy tools are hidden/denied for non-owner

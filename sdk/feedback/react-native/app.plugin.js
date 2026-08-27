@@ -20,6 +20,7 @@ const {
   withXcodeProject,
   withAppDelegate,
   withMainApplication,
+  withMainActivity,
   withDangerousMod,
   createRunOncePlugin,
 } = require(configPluginsPath);
@@ -37,6 +38,14 @@ function withYaverFeedbackIOS(config) {
     if (!config.modResults.NSMicrophoneUsageDescription) {
       config.modResults.NSMicrophoneUsageDescription =
         "Used for voice annotations in feedback reports during development";
+    }
+    const bundleId = config.ios?.bundleIdentifier;
+    if (bundleId) {
+      const scheme = `yaver-dogfood-${bundleId.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
+      const urlTypes = config.modResults.CFBundleURLTypes || [];
+      const exists = urlTypes.some((entry) => Array.isArray(entry.CFBundleURLSchemes) && entry.CFBundleURLSchemes.includes(scheme));
+      if (!exists) urlTypes.push({ CFBundleURLName: `${bundleId}.yaver-dogfood`, CFBundleURLSchemes: [scheme] });
+      config.modResults.CFBundleURLTypes = urlTypes;
     }
     return config;
   });
@@ -75,6 +84,28 @@ function withYaverFeedbackAndroid(config) {
       );
       if (!exists) {
         permissions.push({ $: { "android:name": perm } });
+      }
+    }
+
+    const packageName = config.android?.package;
+    const mainActivity = manifest.application?.[0]?.activity?.find((activity) =>
+      activity.$?.["android:name"]?.endsWith("MainActivity")
+    );
+    if (packageName && mainActivity) {
+      const scheme = `yaver-dogfood-${packageName.toLowerCase().replace(/[^a-z0-9.-]/g, "-")}`;
+      mainActivity["intent-filter"] = mainActivity["intent-filter"] || [];
+      const exists = mainActivity["intent-filter"].some((filter) =>
+        filter.data?.some((data) => data.$?.["android:scheme"] === scheme)
+      );
+      if (!exists) {
+        mainActivity["intent-filter"].push({
+          action: [{ $: { "android:name": "android.intent.action.VIEW" } }],
+          category: [
+            { $: { "android:name": "android.intent.category.DEFAULT" } },
+            { $: { "android:name": "android.intent.category.BROWSABLE" } },
+          ],
+          data: [{ $: { "android:scheme": scheme, "android:host": "activate" } }],
+        });
       }
     }
 
@@ -183,8 +214,10 @@ function withYaverAppDelegateHook(config) {
   return withAppDelegate(config, (config) => {
     const contents = config.modResults.contents;
 
-    // Only patch if not already patched
+    // Existing consumers may already have the hot-reload hook from an older
+    // SDK. Still apply newer, independently-versioned native contracts.
     if (contents.includes("YaverHotReload")) {
+      config.modResults.contents = patchDogfoodAppShortcut(contents);
       return config;
     }
 
@@ -326,9 +359,52 @@ function withYaverAppDelegateHook(config) {
       patched = patched.replace("return setupYaverHotReload()", "setupYaverHotReload()");
     }
 
-    config.modResults.contents = patched;
+    config.modResults.contents = patchDogfoodAppShortcut(patched);
     return config;
   });
+}
+
+/** Wire the dynamic iOS Home Screen shortcut into the SDK native module.
+ * The shortcut itself is created at runtime only after backend ACL success;
+ * this hook merely consumes a user-selected action on warm/cold launch. */
+function patchDogfoodAppShortcut(contents) {
+  if (contents.includes("Yaver Feedback SDK Dogfood Shortcut")) return contents;
+  let patched = contents;
+
+  // Cold launch: UIKit supplies the shortcut in launchOptions before RN/JS.
+  const setupAnchor = "    setupYaverHotReload()";
+  if (patched.includes(setupAnchor)) {
+    patched = patched.replace(
+      setupAnchor,
+      `    if let yaverShortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem,
+       yaverShortcut.type == YaverHotReload.dogfoodShortcutType {
+      YaverHotReload.markDogfoodShortcutPending()
+    }
+${setupAnchor}`
+    );
+  }
+
+  const classCloseIndex = findAppDelegateClassClose(patched);
+  if (classCloseIndex > 0) {
+    const handler = `
+  // MARK: - Yaver Feedback SDK Dogfood Shortcut
+
+  public override func application(
+    _ application: UIApplication,
+    performActionFor shortcutItem: UIApplicationShortcutItem,
+    completionHandler: @escaping (Bool) -> Void
+  ) {
+    if shortcutItem.type == YaverHotReload.dogfoodShortcutType {
+      YaverHotReload.markDogfoodShortcutPending()
+      completionHandler(true)
+      return
+    }
+    super.application(application, performActionFor: shortcutItem, completionHandler: completionHandler)
+  }
+`;
+    patched = patched.slice(0, classCloseIndex) + handler + patched.slice(classCloseIndex);
+  }
+  return patched;
 }
 
 // Locate the closing brace of `class AppDelegate: ...` in an Expo
@@ -401,6 +477,33 @@ function withYaverAndroidHotReload(config) {
       config.modResults.language === "kt"
         ? patchMainApplicationKotlin(config.modResults.contents)
         : patchMainApplicationJava(config.modResults.contents);
+    return config;
+  });
+
+  // ReactActivity forwards warm-launch intents to RN but does not update
+  // Activity.getIntent(). The native module consumes the explicit shortcut
+  // extra from getIntent(), so retain the latest intent for warm launches.
+  config = withMainActivity(config, (config) => {
+    let contents = config.modResults.contents;
+    if (contents.includes("yaverDogfoodShortcutIntent")) return config;
+    const classClose = contents.lastIndexOf("}");
+    if (classClose < 0) return config;
+    const method = config.modResults.language === "kt"
+      ? `
+  // Yaver Feedback SDK: retain dynamic Dogfood shortcut warm-launch intent.
+  override fun onNewIntent(yaverDogfoodShortcutIntent: android.content.Intent) {
+    setIntent(yaverDogfoodShortcutIntent)
+    super.onNewIntent(yaverDogfoodShortcutIntent)
+  }
+`
+      : `
+  // Yaver Feedback SDK: retain dynamic Dogfood shortcut warm-launch intent.
+  @Override public void onNewIntent(android.content.Intent yaverDogfoodShortcutIntent) {
+    setIntent(yaverDogfoodShortcutIntent);
+    super.onNewIntent(yaverDogfoodShortcutIntent);
+  }
+`;
+    config.modResults.contents = contents.slice(0, classClose) + method + contents.slice(classClose);
     return config;
   });
 
@@ -614,8 +717,14 @@ function withYaverFeedback(config, props) {
   return config;
 }
 
-module.exports = createRunOncePlugin(
+const yaverFeedbackPlugin = createRunOncePlugin(
   withYaverFeedback,
   pkg.name,
   pkg.version
 );
+
+// Pure transforms are exposed for contract tests only. Keeping the test at the
+// config-plugin seam catches template drift before a consumer discovers it in
+// an archive build.
+yaverFeedbackPlugin.__test = { patchDogfoodAppShortcut, findAppDelegateClassClose };
+module.exports = yaverFeedbackPlugin;

@@ -15,6 +15,9 @@ export interface DeviceDogfoodOptions {
   appId: string;
   label?: string;
   backendUrl?: string;
+  /** Full Yaver OAuth token. Required for enrollment; never persisted with the
+   * installation private key. The backend binds its user to this key. */
+  authToken?: string;
   /** Advanced bare-RN integration. Expo apps use SecureStore automatically. */
   secureStore?: SecureStoreLike;
 }
@@ -79,8 +82,9 @@ function sessionMessage(appId: string, installationId: string, challenge: string
   return new TextEncoder().encode(`yaver-dogfood-session-v1\n${appId}\n${installationId}\n${challenge}`);
 }
 
-/** Account-free third-party Dogfood enrollment. The UUID is a public lookup
- * handle; possession is proven by the private key retained in this app. */
+/** Account-bound third-party Dogfood enrollment. The installation ID is a
+ * public lookup handle; possession is proven by the private key retained in
+ * this app, while enrollment is bound to the signed-in Yaver account. */
 export class YaverDeviceDogfood {
   private readonly backendUrl: string;
   private readonly store: SecureStoreLike;
@@ -118,9 +122,10 @@ export class YaverDeviceDogfood {
   }
 
   async enroll(platform = 'unknown'): Promise<{ status: DeviceDogfoodState; installationId: string }> {
+    if (!this.options.authToken) throw new Error('Sign in to Yaver before registering this device for Dogfood.');
     const identity = await this.identity();
     const started = await responseJSON(await fetch(`${this.backendUrl}/dogfood/enroll/start`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.options.authToken}` },
       body: JSON.stringify({ appId: this.options.appId, installationId: identity.installationId, registrationSlot: identity.registrationSlot, publicKey: identity.publicKey, platform, label: this.options.label }),
     }));
     if (started.status === 'active') return { status: 'active', installationId: identity.installationId };

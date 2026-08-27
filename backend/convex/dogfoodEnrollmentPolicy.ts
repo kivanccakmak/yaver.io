@@ -17,3 +17,29 @@ export function dogfoodGenerationsToSupersede<T extends { id: string; appId: str
     .filter((row) => row.id !== next.id && row.appId === next.appId && row.registrationSlot === next.registrationSlot && row.status === "active")
     .map((row) => row.id);
 }
+
+/** The shortcut is deliberately two-factor: a full Yaver session must match
+ * the account bound during enrollment, and the exact app/installation key must
+ * still be active. App ownership is reported separately; it never substitutes
+ * for registering the phone. */
+export function dogfoodInstallationAuthorized(input: {
+  appEnabled: boolean;
+  appOwnerUserId: string;
+  sessionUserId: string;
+  installationStatus?: DogfoodInstallationStatus;
+  testerUserId?: string;
+}): boolean {
+  return input.appEnabled
+    && input.installationStatus === "active"
+    && !!input.testerUserId
+    && input.testerUserId === input.sessionUserId;
+}
+
+export function dogfoodControlActionMessage(input: {
+  deviceId: string;
+  installationDocId: string;
+  action: DogfoodInstallationAction;
+  signedAt: number;
+}): string {
+  return `yaver-dogfood-control-action-v1\n${input.deviceId}\n${input.installationDocId}\n${input.action}\n${input.signedAt}`;
+}

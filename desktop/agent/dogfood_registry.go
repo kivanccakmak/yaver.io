@@ -18,8 +18,44 @@ type DogfoodApp struct {
 	Label          string   `json:"label"`
 	ProjectSlug    string   `json:"projectSlug,omitempty"`
 	TargetDeviceID string   `json:"targetDeviceId,omitempty"`
+	ActivationURL  string   `json:"activationUrl,omitempty"`
 	AllowedScopes  []string `json:"allowedScopes"`
 	Enabled        bool     `json:"enabled"`
+}
+
+type DogfoodAppPatch struct {
+	ProjectSlug    *string
+	TargetDeviceID *string
+	ActivationURL  *string
+	AllowedScopes  *[]string
+	Enabled        *bool
+}
+
+func mergeDogfoodAppPatch(appID, label string, existing []DogfoodApp, patch DogfoodAppPatch) DogfoodApp {
+	result := DogfoodApp{AppID: appID, Label: label, AllowedScopes: []string{"feedback", "blackbox"}, Enabled: true}
+	for _, app := range existing {
+		if app.AppID == appID {
+			result = app
+			result.Label = label
+			break
+		}
+	}
+	if patch.ProjectSlug != nil {
+		result.ProjectSlug = *patch.ProjectSlug
+	}
+	if patch.TargetDeviceID != nil {
+		result.TargetDeviceID = *patch.TargetDeviceID
+	}
+	if patch.ActivationURL != nil {
+		result.ActivationURL = *patch.ActivationURL
+	}
+	if patch.AllowedScopes != nil {
+		result.AllowedScopes = *patch.AllowedScopes
+	}
+	if patch.Enabled != nil {
+		result.Enabled = *patch.Enabled
+	}
+	return result
 }
 
 type DogfoodInstallation struct {
@@ -30,6 +66,10 @@ type DogfoodInstallation struct {
 	Label           string `json:"label,omitempty"`
 	Status          string `json:"status"`
 	ProofVerifiedAt int64  `json:"proofVerifiedAt,omitempty"`
+	Tester          *struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	} `json:"tester,omitempty"`
 }
 
 func dogfoodRegistryJSON(method, path string, payload interface{}, out interface{}) error {
@@ -164,7 +204,7 @@ func splitNonEmpty(value string) []string {
 }
 
 func printDogfoodRegistryUsage() {
-	fmt.Print(`Manage account-free third-party Dogfood installations.
+	fmt.Print(`Manage Yaver-account-bound third-party Dogfood installations.
 
   yaver dogfood apps
   yaver dogfood app-set --app io.example.app --label Example --project example

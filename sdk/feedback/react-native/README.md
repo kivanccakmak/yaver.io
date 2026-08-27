@@ -113,31 +113,46 @@ still require the user's normal Yaver authentication.
 
 ### Device-enrolled Dogfood for apps without their own OAuth/backend
 
-Mount `FeedbackModal`, then call the reusable wizard from the host app's
-Settings button:
+Mount `FeedbackModal` once and configure the ACL-backed dynamic app shortcut.
+No permanent Settings row or shake gesture is required:
 
 ```tsx
-YaverFeedback.beginDogfoodOnboarding({
-  appId: 'io.example.app',
-  label: 'Example',
+YaverFeedback.init({
+  enabled: true,
+  trigger: 'manual',
+  quickIcon: 'off',
+  disableShakeGesture: true,
+  bundleId: 'io.example.app',
   projectName: 'example',
-  framework: 'expo',
+  dogfood: {
+    label: 'Example',
+    framework: 'expo',
+    appShortcut: { label: 'Dogfood Example' },
+    // Optional host presentation ACL. Backend account + phone-key approval
+    // remains mandatory even when this returns true.
+    canShow: (access) => appUser.isAdmin && access.authorized,
+  },
 });
 ```
 
-The wizard runs Yaver OAuth first, then machine, coding runner/model, project,
-and Browser/Hermes/WebRTC selection. It renders raw build logs and exposes the
-ready preview. The app also creates a random installation ID and an Ed25519 key
-inside SecureStore. The ID is a public handle, not a credential: enrollment
-and each short session require a server challenge signed by the private key.
-An owner approves, cancels, or revokes the installation from Yaver Settings or
-MCP. Re-registering rotates the key/ID, preserves only the logical local slot,
-and supersedes that slot's prior active generation without disabling another
-phone.
+For first-time setup, a signed-in user opens the app from Yaver's Dogfood app
+catalog. The public deep link contains no token. The SDK runs stateful Yaver
+OAuth, machine, coding runner/model, project, and Browser/Hermes/WebRTC setup.
+After the owner approves that exact account + app ID + phone key, iOS and
+Android add the long-press shortcut. Signing out, revocation, or host ACL denial
+removes it on the next foreground sync.
+
+The app creates a random installation ID and Ed25519 key inside SecureStore.
+The ID is a public handle, not a credential: enrollment and each short session
+require a server challenge signed by the private key. An owner approves,
+cancels, or revokes from Yaver mobile, CLI, or MCP. Re-registering rotates the
+key/ID, preserves only the logical local slot, and atomically supersedes that
+slot's prior active generation when the replacement is approved, without
+disabling another phone.
 
 Install `expo-secure-store` and `expo-crypto` in Expo hosts. Bare React Native
 hosts may provide a `secureStore` implementation. Runtime/build controls still
-require full Yaver OAuth; the account-free installation token defaults to
+require full Yaver OAuth; the account-bound installation token defaults to
 `feedback` + `blackbox` and cannot be rotated into a long-lived owner token.
 
 ### Embeddable Dogfood runtime

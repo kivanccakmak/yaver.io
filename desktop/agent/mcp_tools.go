@@ -3406,12 +3406,13 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, sdkTokenTools...)
 
-	// Third-party apps can enroll with a generated installation key even when
-	// they have no backend/OAuth. MCP manages public app policy and owner
+	// Third-party apps can enroll with a generated installation key without
+	// implementing their own backend/OAuth; a full Yaver account is still
+	// required and bound to that key. MCP manages public app policy and owner
 	// approval only; private keys and raw installation sessions never cross it.
 	dogfoodRegistryTools := []map[string]interface{}{
 		{
-			"name": "dogfood_app_list", "description": "List third-party apps enabled for account-free device Dogfood enrollment.",
+			"name": "dogfood_app_list", "description": "List third-party apps enabled for Yaver-account-bound device Dogfood enrollment.",
 			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "additionalProperties": false},
 		},
 		{
@@ -3419,6 +3420,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			"inputSchema": map[string]interface{}{"type": "object", "required": []string{"appId", "label"}, "properties": map[string]interface{}{
 				"appId": map[string]interface{}{"type": "string"}, "label": map[string]interface{}{"type": "string"},
 				"projectSlug": map[string]interface{}{"type": "string"}, "targetDeviceId": map[string]interface{}{"type": "string"},
+				"activationUrl": map[string]interface{}{"type": "string", "description": "Public SDK activation URL. Must match the appId-derived yaver-dogfood scheme."},
 				"allowedScopes": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
 				"enabled":       map[string]interface{}{"type": "boolean"},
 			}, "additionalProperties": false},

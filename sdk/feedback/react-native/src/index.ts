@@ -114,6 +114,8 @@ export {
   getQuickIconDisabled,
   setQuickIconDisabled,
   clearQuickIconDisabled,
+  getPreferredDogfoodLane,
+  setPreferredDogfoodLane,
 } from './preferences';
 export {
   configureAuthEndpoints,
@@ -125,6 +127,7 @@ export {
   getUser,
   saveUser,
   getSelectedDeviceId,
+  getDogfoodAccountAccess,
   saveSelectedDeviceId,
   clearSelectedDeviceId,
   validateToken,

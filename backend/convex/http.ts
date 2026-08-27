@@ -8004,11 +8004,27 @@ http.route({ path: "/dogfood/apps", method: "POST", handler: httpAction(async (c
       sessionTokenHash, appId: String(body.appId || ""), label: String(body.label || ""),
       projectSlug: typeof body.projectSlug === "string" ? body.projectSlug : undefined,
       targetDeviceId: typeof body.targetDeviceId === "string" ? body.targetDeviceId : undefined,
+      activationUrl: typeof body.activationUrl === "string" ? body.activationUrl : undefined,
       allowedScopes: Array.isArray(body.allowedScopes) ? body.allowedScopes.map(String) : undefined,
       enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
     });
     return jsonResponse({ app });
   } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid request", 400); }
+}) });
+
+http.route({ path: "/dogfood/catalog", method: "GET", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  return jsonResponse({ apps: await ctx.runQuery(api.auth.listDogfoodCatalog, { sessionTokenHash }) });
+}) });
+
+http.route({ path: "/dogfood/access", method: "GET", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return jsonResponse({ authorized: false });
+  const url = new URL(request.url);
+  const appId = url.searchParams.get("appId") || "";
+  const installationId = url.searchParams.get("installationId") || undefined;
+  return jsonResponse(await ctx.runQuery(api.auth.getDogfoodAppAccess, { sessionTokenHash, appId, installationId }));
 }) });
 
 http.route({ path: "/dogfood/installations", method: "GET", handler: httpAction(async (ctx, request) => {
@@ -8026,15 +8042,21 @@ http.route({ path: "/dogfood/installations/action", method: "POST", handler: htt
     const result = await ctx.runMutation(api.auth.setDogfoodInstallationStatus, {
       sessionTokenHash, installationDocId: body.installationId,
       action: body.action,
+      controlDeviceId: typeof body.controlDeviceId === "string" ? body.controlDeviceId : undefined,
+      signedAt: typeof body.signedAt === "number" ? body.signedAt : undefined,
+      signature: typeof body.signature === "string" ? body.signature : undefined,
     });
     return jsonResponse(result);
   } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid request", 400); }
 }) });
 
 http.route({ path: "/dogfood/enroll/start", method: "POST", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("A Yaver account is required", 401);
   try {
     const body = await request.json();
     return jsonResponse(await ctx.runMutation(api.auth.startDogfoodEnrollment, {
+      sessionTokenHash,
       appId: String(body.appId || ""), installationId: String(body.installationId || ""),
       registrationSlot: String(body.registrationSlot || ""), publicKey: String(body.publicKey || ""),
       platform: String(body.platform || "unknown"), label: typeof body.label === "string" ? body.label : undefined,
@@ -8080,7 +8102,7 @@ http.route({ path: "/dogfood/session", method: "POST", handler: httpAction(async
   } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid proof", 400); }
 }) });
 
-for (const path of ["/dogfood/control-devices", "/dogfood/apps", "/dogfood/installations", "/dogfood/installations/action", "/dogfood/enroll/start", "/dogfood/enroll/prove", "/dogfood/enroll/status", "/dogfood/session/challenge", "/dogfood/session"]) {
+for (const path of ["/dogfood/control-devices", "/dogfood/apps", "/dogfood/catalog", "/dogfood/access", "/dogfood/installations", "/dogfood/installations/action", "/dogfood/enroll/start", "/dogfood/enroll/prove", "/dogfood/enroll/status", "/dogfood/session/challenge", "/dogfood/session"]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => new Response(null, {
     status: 204,
     headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type, Cache-Control" },

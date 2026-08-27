@@ -14,6 +14,13 @@ export interface DogfoodAppRow {
   targetDeviceId?: string;
   allowedScopes: string[];
   enabled: boolean;
+  activationUrl?: string;
+}
+
+export interface DogfoodCatalogRow {
+  appId: string;
+  label: string;
+  activationUrl: string;
 }
 
 export interface DogfoodInstallationRow {
@@ -26,6 +33,7 @@ export interface DogfoodInstallationRow {
   proofVerifiedAt?: number;
   approvedAt?: number;
   lastSeenAt?: number;
+  tester?: { name: string; email: string };
 }
 
 interface ControlIdentity { deviceId: string; publicKey: string; secretKey: string }
@@ -81,6 +89,10 @@ export async function listDogfoodApps(token: string): Promise<DogfoodAppRow[]> {
   return (await request(token, "/dogfood/apps")).apps || [];
 }
 
+export async function listDogfoodCatalog(token: string): Promise<DogfoodCatalogRow[]> {
+  return (await request(token, "/dogfood/catalog")).apps || [];
+}
+
 export async function saveDogfoodApp(token: string, app: { appId: string; label: string; projectSlug?: string; targetDeviceId?: string; allowedScopes?: string[]; enabled?: boolean }): Promise<DogfoodAppRow> {
   return (await request(token, "/dogfood/apps", { method: "POST", body: JSON.stringify(app) })).app;
 }
@@ -91,5 +103,12 @@ export async function listDogfoodInstallations(token: string, appId?: string): P
 }
 
 export async function setDogfoodInstallationAction(token: string, installationId: string, action: "approve" | "cancel" | "revoke"): Promise<{ status: string; superseded?: number }> {
-  return request(token, "/dogfood/installations/action", { method: "POST", body: JSON.stringify({ installationId, action }) });
+  const identity = await getOrCreateDogfoodControlIdentity();
+  const signedAt = Date.now();
+  const message = new TextEncoder().encode(`yaver-dogfood-control-action-v1\n${identity.deviceId}\n${installationId}\n${action}\n${signedAt}`);
+  const signature = encodeBase64(nacl.sign.detached(message, decodeBase64(identity.secretKey)));
+  return request(token, "/dogfood/installations/action", {
+    method: "POST",
+    body: JSON.stringify({ installationId, action, controlDeviceId: identity.deviceId, signedAt, signature }),
+  });
 }

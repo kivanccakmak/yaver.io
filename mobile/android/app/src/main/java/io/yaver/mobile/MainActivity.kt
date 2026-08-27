@@ -5,6 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -47,6 +51,24 @@ class MainActivity : ReactActivity() {
     SplashScreenManager.registerOnActivity(this)
     // @generated end expo-splashscreen
     super.onCreate(null)
+    installDogfoodShortcut()
+  }
+
+  /** Home-screen long-press entry. This is dynamic so a future account policy
+   * can remove it without shipping a new manifest; Yaver itself always exposes
+   * Dogfood after the first launch. Third-party SDK shortcuts remain ACL-bound. */
+  private fun installDogfoodShortcut() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return
+    val manager = getSystemService(ShortcutManager::class.java) ?: return
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("yaver://dogfood"), this, MainActivity::class.java)
+      .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    val shortcut = ShortcutInfo.Builder(this, DOGFOOD_SHORTCUT_ID)
+      .setShortLabel("Dogfood")
+      .setLongLabel("Open Yaver Dogfood")
+      .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
+      .setIntent(intent)
+      .build()
+    manager.addDynamicShortcuts(listOf(shortcut))
   }
 
   override fun onStart() {
@@ -132,5 +154,6 @@ class MainActivity : ReactActivity() {
     private const val TAG = "YaverMainActivity"
     private const val ACTION_RELOAD = "io.yaver.mobile.BUNDLE_RELOAD"
     private const val EXTRA_MODULE_NAME = "moduleName"
+    private const val DOGFOOD_SHORTCUT_ID = "io.yaver.mobile.dogfood"
   }
 }

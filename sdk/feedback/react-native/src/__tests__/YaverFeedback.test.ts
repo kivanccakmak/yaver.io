@@ -1,4 +1,4 @@
-import { DeviceEventEmitter } from 'react-native';
+import { DeviceEventEmitter, NativeModules } from 'react-native';
 import { YaverFeedback } from '../YaverFeedback';
 
 // Mock react-native: DeviceEventEmitter for event dispatch + Platform so
@@ -9,6 +9,13 @@ jest.mock('react-native', () => ({
     addListener: jest.fn(() => ({ remove: jest.fn() })),
   },
   Platform: { OS: 'ios' },
+  NativeModules: {
+    YaverHotReload: {
+      setDogfoodShortcut: jest.fn(async () => true),
+      consumeDogfoodShortcut: jest.fn(async () => false),
+    },
+  },
+  AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
 }));
 
 // Mock Discovery
@@ -23,6 +30,11 @@ jest.mock('../auth', () => ({
   setStrictNativeAuth: jest.fn(),
   getToken: jest.fn(async () => null),
   getSelectedDeviceId: jest.fn(async () => null),
+  getDogfoodAccountAccess: jest.fn(async (_appId: string, token: string) => ({
+    authenticated: token === 'owner-token',
+    ownerAuthorized: token === 'owner-token',
+    installationAuthorized: token === 'owner-token',
+  })),
   saveSelectedDeviceId: jest.fn(async () => {}),
   clearToken: jest.fn(async () => {}),
   clearSelectedDeviceId: jest.fn(async () => {}),
@@ -49,6 +61,7 @@ beforeEach(() => {
   // YaverFeedback uses module-level variables (config, enabled, p2pClient).
   // We reset them by calling init with a known state or relying on isInitialized checks.
   // For a clean slate, we re-init with enabled=false then verify.
+  jest.restoreAllMocks();
   jest.clearAllMocks();
 });
 
@@ -99,6 +112,56 @@ describe('YaverFeedback', () => {
       const state = await YaverFeedback.openDogfood();
       expect(state).toEqual({ phase: 'denied', appId: 'io.example.app' });
       expect(DeviceEventEmitter.emit).not.toHaveBeenCalledWith('yaverFeedback:startLogin');
+    });
+
+    it('adds the app shortcut only for a signed-in and approved phone', async () => {
+      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
+      YaverFeedback.getConfig()!.dogfood!.appShortcut = { label: 'Dogfood Example' };
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: true,
+        ownerAuthorized: false,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: true,
+      });
+      await YaverFeedback.syncDogfoodAppShortcut();
+      expect((NativeModules as any).YaverHotReload.setDogfoodShortcut)
+        .toHaveBeenCalledWith(true, 'Dogfood Example');
+    });
+
+    it('removes the shortcut when the phone is approved but Yaver is signed out', async () => {
+      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
+      YaverFeedback.getConfig()!.dogfood!.appShortcut = true;
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: false,
+        ownerAuthorized: false,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: false,
+      });
+      await YaverFeedback.syncDogfoodAppShortcut();
+      expect((NativeModules as any).YaverHotReload.setDogfoodShortcut)
+        .toHaveBeenCalledWith(false, 'Dogfood');
+    });
+
+    it('applies the host presentation ACL after backend device authorization', async () => {
+      YaverFeedback.init({
+        bundleId: 'io.example.app',
+        dogfood: { appShortcut: true, canShow: async () => false },
+      });
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: true,
+        ownerAuthorized: false,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: true,
+      });
+      await YaverFeedback.syncDogfoodAppShortcut();
+      expect((NativeModules as any).YaverHotReload.setDogfoodShortcut)
+        .toHaveBeenCalledWith(false, 'Dogfood');
     });
   });
 

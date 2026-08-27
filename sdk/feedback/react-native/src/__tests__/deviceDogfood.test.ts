@@ -23,7 +23,7 @@ describe('YaverDeviceDogfood', () => {
 
   test('keeps identity stable and proves possession rather than trusting the UUID', async () => {
     const store = new MemorySecureStore();
-    const client = new YaverDeviceDogfood({ appId: 'io.example.test', secureStore: store, backendUrl: 'https://dogfood.test' });
+    const client = new YaverDeviceDogfood({ appId: 'io.example.test', authToken: 'full-yaver-token', secureStore: store, backendUrl: 'https://dogfood.test' });
     const first = await client.enrollmentInfo();
     const second = await client.enrollmentInfo();
     expect(second).toEqual(first);
@@ -45,7 +45,7 @@ describe('YaverDeviceDogfood', () => {
 
   test('re-register rotates key and installation while preserving only the logical slot', async () => {
     const store = new MemorySecureStore();
-    const client = new YaverDeviceDogfood({ appId: 'io.example.test', secureStore: store, backendUrl: 'https://dogfood.test' });
+    const client = new YaverDeviceDogfood({ appId: 'io.example.test', authToken: 'full-yaver-token', secureStore: store, backendUrl: 'https://dogfood.test' });
     const before = await client.enrollmentInfo();
     jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       if (String(input).endsWith('/dogfood/enroll/start')) return response({ status: 'pending', challenge: 'rotate-nonce' });

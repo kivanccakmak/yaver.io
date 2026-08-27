@@ -8,7 +8,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import AttachModeSection from "../../src/components/AttachModeSection";
@@ -17,11 +17,13 @@ import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
 import { useAuth } from "../../src/context/AuthContext";
 import {
   listDogfoodApps,
+  listDogfoodCatalog,
   listDogfoodInstallations,
   registerThisDogfoodControlDevice,
   saveDogfoodApp,
   setDogfoodInstallationAction,
   type DogfoodAppRow,
+  type DogfoodCatalogRow,
   type DogfoodInstallationRow,
 } from "../../src/lib/dogfoodRegistry";
 
@@ -31,6 +33,7 @@ export default function DogfoodScreen() {
   const tabletContent = useTabletContentStyle("regular");
   const { token } = useAuth();
   const [apps, setApps] = useState<DogfoodAppRow[]>([]);
+  const [catalog, setCatalog] = useState<DogfoodCatalogRow[]>([]);
   const [installations, setInstallations] = useState<DogfoodInstallationRow[]>([]);
   const [appId, setAppId] = useState("");
   const [appLabel, setAppLabel] = useState("");
@@ -40,11 +43,12 @@ export default function DogfoodScreen() {
 
   const refresh = useCallback(async () => {
     if (!token) return;
-    const [nextApps, nextInstallations] = await Promise.all([
-      listDogfoodApps(token), listDogfoodInstallations(token),
+    const [nextApps, nextInstallations, nextCatalog] = await Promise.all([
+      listDogfoodApps(token), listDogfoodInstallations(token), listDogfoodCatalog(token),
     ]);
     setApps(nextApps);
     setInstallations(nextInstallations);
+    setCatalog(nextCatalog);
   }, [token]);
 
   useEffect(() => { void refresh().catch(() => {}); }, [refresh]);
@@ -99,6 +103,25 @@ export default function DogfoodScreen() {
           {deviceStatus ? <Text style={{ color: c.textSecondary, marginTop: 9 }}>{deviceStatus}</Text> : null}
         </View>
 
+        {catalog.length ? <View style={card}>
+          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>Dogfood apps on this phone</Text>
+          <Text style={{ color: c.textSecondary, marginTop: 6, lineHeight: 19 }}>
+            Setup opens the selected app, completes Yaver sign-in there, and registers that app installation for owner approval. No token is placed in the link.
+          </Text>
+          {catalog.map((app) => <View key={app.appId} style={{ borderTopColor: c.border, borderTopWidth: 1, marginTop: 14, paddingTop: 12 }}>
+            <Text style={{ color: c.textPrimary, fontWeight: "700" }}>{app.label}</Text>
+            <Text style={{ color: c.textSecondary, marginTop: 3 }}>{app.appId}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Set up ${app.label} Dogfood on this phone`}
+              style={button}
+              onPress={() => void Linking.openURL(app.activationUrl).catch(() => Alert.alert("App unavailable", `Install ${app.label} on this phone, then try again.`))}
+            >
+              <Text style={{ color: "white", fontWeight: "700" }}>Set up on this phone</Text>
+            </Pressable>
+          </View>)}
+        </View> : null}
+
         <View style={card}>
           <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>Third-party Dogfood apps</Text>
           <Text style={{ color: c.textSecondary, marginTop: 6, lineHeight: 19 }}>
@@ -121,6 +144,7 @@ export default function DogfoodScreen() {
           {installations.map((row) => <View key={row._id} style={{ borderTopColor: c.border, borderTopWidth: 1, marginTop: 12, paddingTop: 12 }}>
             <Text style={{ color: c.textPrimary, fontWeight: "600" }}>{row.label || row.platform} · {row.appId}</Text>
             <Text style={{ color: c.textSecondary, marginTop: 3 }}>{row.status}{row.proofVerifiedAt ? " · key verified" : " · awaiting key proof"}</Text>
+            {row.tester ? <Text style={{ color: c.textSecondary, marginTop: 3 }}>{row.tester.name} · {row.tester.email}</Text> : null}
             {row.status === "pending" && row.proofVerifiedAt ? <Pressable accessibilityRole="button" accessibilityLabel={`Approve ${row.label || row.platform}`} style={button} onPress={() => void act(row, "approve")}><Text style={{ color: "white", fontWeight: "700" }}>Approve</Text></Pressable> : null}
             {row.status === "pending" ? <Pressable accessibilityRole="button" accessibilityLabel={`Cancel ${row.label || row.platform}`} onPress={() => void act(row, "cancel")} style={{ paddingVertical: 10 }}><Text style={{ color: c.error }}>Cancel enrollment</Text></Pressable> : null}
             {row.status === "active" ? <Pressable accessibilityRole="button" accessibilityLabel={`Revoke ${row.label || row.platform}`} onPress={() => void act(row, "revoke")} style={{ paddingVertical: 10 }}><Text style={{ color: c.error }}>Revoke</Text></Pressable> : null}

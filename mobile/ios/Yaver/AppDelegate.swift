@@ -11,6 +11,7 @@ public class AppDelegate: ExpoAppDelegate {
   var reactNativeFactory: RCTReactNativeFactory?
   private var isReloading = false
   private let carVoiceShortcutType = "io.yaver.mobile.carVoice"
+  private let dogfoodShortcutType = "io.yaver.mobile.dogfood"
 
   public override func application(
     _ application: UIApplication,
@@ -1080,13 +1081,20 @@ public class AppDelegate: ExpoAppDelegate {
     performActionFor shortcutItem: UIApplicationShortcutItem,
     completionHandler: @escaping (Bool) -> Void
   ) {
-    guard shortcutItem.type == carVoiceShortcutType,
-          let url = URL(string: "yaver://car-voice-coding?autostart=1")
-    else {
+    let url: URL?
+    switch shortcutItem.type {
+    case carVoiceShortcutType:
+      UserDefaults.standard.set(true, forKey: "yaverPendingCarVoiceLaunch")
+      url = URL(string: "yaver://car-voice-coding?autostart=1")
+    case dogfoodShortcutType:
+      url = URL(string: "yaver://dogfood")
+    default:
+      url = nil
+    }
+    guard let url else {
       completionHandler(false)
       return
     }
-    UserDefaults.standard.set(true, forKey: "yaverPendingCarVoiceLaunch")
     _ = RCTLinkingManager.application(application, open: url, options: [:])
     completionHandler(true)
   }

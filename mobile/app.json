@@ -2,7 +2,7 @@
   "expo": {
     "name": "Yaver",
     "slug": "yaver",
-    "version": "1.18.169",
+    "version": "1.18.170",
     "newArchEnabled": true,
     "orientation": "default",
     "scheme": "yaver",
@@ -33,6 +33,12 @@
           }
         ],
         "UIApplicationShortcutItems": [
+          {
+            "UIApplicationShortcutItemType": "io.yaver.mobile.dogfood",
+            "UIApplicationShortcutItemTitle": "Dogfood",
+            "UIApplicationShortcutItemSubtitle": "Open Yaver Dogfood",
+            "UIApplicationShortcutItemIconType": "UIApplicationShortcutIconTypeCompose"
+          },
           {
             "UIApplicationShortcutItemType": "io.yaver.mobile.carVoice",
             "UIApplicationShortcutItemTitle": "Car Voice Runtime",

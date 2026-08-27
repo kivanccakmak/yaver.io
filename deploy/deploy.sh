@@ -90,6 +90,7 @@ Targets:
   android-auto Android Auto Play AAB upload
   npm          CLI npm release via `yaver deploy npm`
   cli          Alias for npm
+  feedback-sdk Publish the React Native feedback SDK to npm
   desktop      Signed macOS/Windows + Linux GUI release via protected gui/v* tag
   gui          Alias for desktop
   desktop-mas  Build + locally verify the sandboxed macOS App Store package
@@ -235,6 +236,10 @@ case "$target" in
     else
       (cd "$ROOT/desktop/agent" && go run . deploy npm)
     fi
+    ;;
+  feedback-sdk|feedback-rn)
+    require_deploy_boundary
+    run "$ROOT/scripts/publish-feedback-rn.sh"
     ;;
   desktop|gui)
     require_deploy_boundary

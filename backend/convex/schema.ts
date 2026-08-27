@@ -2674,6 +2674,8 @@ export default defineSchema({
     label: v.string(),
     projectSlug: v.optional(v.string()),
     targetDeviceId: v.optional(v.string()),
+    /** Public app deep link that starts SDK OAuth/enrollment; carries no token. */
+    activationUrl: v.optional(v.string()),
     allowedScopes: v.array(v.string()),
     enabled: v.boolean(),
     createdAt: v.number(),
@@ -2689,6 +2691,9 @@ export default defineSchema({
   // atomically marks the prior active generation for that slot superseded.
   dogfoodInstallations: defineTable({
     userId: v.id("users"),
+    // Full Yaver account that proved this installation during enrollment.
+    // `userId` above remains the app owner whose target/scopes are delegated.
+    testerUserId: v.optional(v.id("users")),
     appId: v.string(),
     installationId: v.string(),
     registrationSlot: v.string(),
@@ -2709,7 +2714,10 @@ export default defineSchema({
     sessionChallengeExpiresAt: v.optional(v.number()),
     sessionVersion: v.number(),
     approvedAt: v.optional(v.number()),
+    /** Present when the owner acted from a registered Yaver mobile control device. */
+    approvedByControlDeviceId: v.optional(v.string()),
     revokedAt: v.optional(v.number()),
+    revokedByControlDeviceId: v.optional(v.string()),
     supersededBy: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),

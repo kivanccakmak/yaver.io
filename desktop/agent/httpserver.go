@@ -13803,25 +13803,32 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 
 	case "dogfood_app_set":
 		var args struct {
-			AppID          string   `json:"appId"`
-			Label          string   `json:"label"`
-			ProjectSlug    string   `json:"projectSlug"`
-			TargetDeviceID string   `json:"targetDeviceId"`
-			AllowedScopes  []string `json:"allowedScopes"`
-			Enabled        *bool    `json:"enabled"`
+			AppID          string    `json:"appId"`
+			Label          string    `json:"label"`
+			ProjectSlug    *string   `json:"projectSlug"`
+			TargetDeviceID *string   `json:"targetDeviceId"`
+			ActivationURL  *string   `json:"activationUrl"`
+			AllowedScopes  *[]string `json:"allowedScopes"`
+			Enabled        *bool     `json:"enabled"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return mcpToolError("invalid arguments: " + err.Error())
 		}
-		enabled := true
-		if args.Enabled != nil {
-			enabled = *args.Enabled
+		if strings.TrimSpace(args.AppID) == "" || strings.TrimSpace(args.Label) == "" {
+			return mcpToolError("appId and label are required")
 		}
-		scopes := args.AllowedScopes
-		if len(scopes) == 0 {
-			scopes = []string{"feedback", "blackbox"}
+		// MCP updates are partial. Preserve omitted policy fields so adding the
+		// activation URL cannot silently detach the configured machine/project or
+		// re-enable an app an owner intentionally disabled.
+		existingApps, err := listDogfoodRegistryApps()
+		if err != nil {
+			return mcpToolError(err.Error())
 		}
-		app, err := saveDogfoodRegistryApp(DogfoodApp{AppID: args.AppID, Label: args.Label, ProjectSlug: args.ProjectSlug, TargetDeviceID: args.TargetDeviceID, AllowedScopes: scopes, Enabled: enabled})
+		appInput := mergeDogfoodAppPatch(args.AppID, args.Label, existingApps, DogfoodAppPatch{
+			ProjectSlug: args.ProjectSlug, TargetDeviceID: args.TargetDeviceID,
+			ActivationURL: args.ActivationURL, AllowedScopes: args.AllowedScopes, Enabled: args.Enabled,
+		})
+		app, err := saveDogfoodRegistryApp(appInput)
 		if err != nil {
 			return mcpToolError(err.Error())
 		}
