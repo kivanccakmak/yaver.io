@@ -71,8 +71,11 @@ test("SFMG browser Dogfood remains visible through fast and full reload", async 
     await expect(page).toHaveURL(/\/settings/);
     await expect(page.getByText(/Sound Effects|Ses Efektleri/i)).toBeVisible();
     await expect(page.getByText(/Notifications|Bildirimler/i)).toBeVisible();
-    await expect(page.getByText(/Dogfood SFMG/i)).toBeVisible();
+    await expect(page.getByText('Dogfood SFMG', { exact: true }).last()).toBeVisible();
     await expect(page.getByText(/Sign Out|Çıkış/i)).toBeVisible();
+    await page.getByText('Dogfood SFMG', { exact: true }).last().click();
+    await expect(page.getByText('Sign in to send feedback')).toBeVisible();
+    await expect(page.getByText('Continue with Apple')).toBeVisible();
     await page.screenshot({ path: "test-results/sfmg-settings-dogfood.png", fullPage: true });
   } finally {
     await context.close();

@@ -96,6 +96,13 @@ export class ShakeDetector {
    * want the extra native surface get the Dev-menu path only.
    */
   private subscribeAccelerometer(onShake: () => void): void {
+    // expo-sensors exposes an Accelerometer facade on web, but browsers have
+    // no native shake gesture and some versions construct a NativeEventEmitter
+    // backed by a module without addListener/removeListeners. Subscribing then
+    // crashes the host app's React commit phase. Preserve the SDK's explicit
+    // controls on web and skip only this impossible sensor transport.
+    if (Platform.OS === 'web') return;
+
     let Accelerometer: {
       setUpdateInterval: (ms: number) => void;
       addListener: (cb: (d: { x: number; y: number; z: number }) => void) => {
@@ -116,24 +123,30 @@ export class ShakeDetector {
       // Some platforms reject zero-value intervals; fall through with defaults
     }
 
-    this.accelSub = Accelerometer.addListener(({ x, y, z }) => {
-      // Magnitude of acceleration vector (in g). Subtract 1 so a stationary
-      // device reports ~0 rather than the 1g of gravity.
-      const mag = Math.sqrt(x * x + y * y + z * z);
-      if (mag - 1 < ACCEL_THRESHOLD_G - 1) return;
+    try {
+      this.accelSub = Accelerometer.addListener(({ x, y, z }) => {
+        // Magnitude of acceleration vector (in g). Subtract 1 so a stationary
+        // device reports ~0 rather than the 1g of gravity.
+        const mag = Math.sqrt(x * x + y * y + z * z);
+        if (mag - 1 < ACCEL_THRESHOLD_G - 1) return;
 
-      const now = Date.now();
-      this.peakTimestamps.push(now);
-      // Drop peaks that fell out of the rolling window.
-      while (
-        this.peakTimestamps.length > 0 &&
-        now - this.peakTimestamps[0] > ACCEL_WINDOW_MS
-      ) {
-        this.peakTimestamps.shift();
-      }
-      if (this.peakTimestamps.length >= ACCEL_MIN_HITS) {
-        this.fire(onShake);
-      }
-    });
+        const now = Date.now();
+        this.peakTimestamps.push(now);
+        // Drop peaks that fell out of the rolling window.
+        while (
+          this.peakTimestamps.length > 0 &&
+          now - this.peakTimestamps[0] > ACCEL_WINDOW_MS
+        ) {
+          this.peakTimestamps.shift();
+        }
+        if (this.peakTimestamps.length >= ACCEL_MIN_HITS) {
+          this.fire(onShake);
+        }
+      });
+    } catch {
+      // A host may include expo-sensors without linking its native module.
+      // Optional shake support must never take down the host application.
+      this.accelSub = null;
+    }
   }
 }
