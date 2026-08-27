@@ -13,6 +13,15 @@ import {
   verifyEmailHtml,
 } from "./email";
 import { base32Decode, matchingTOTPStep } from "./totp";
+import * as ed from "@noble/ed25519";
+import { dogfoodActionAllowed } from "./dogfoodEnrollmentPolicy";
+
+ed.etc.sha512Async = async (...messages: Uint8Array[]) => {
+  const joined = ed.etc.concatBytes(...messages);
+  const copy = new Uint8Array(joined.length);
+  copy.set(joined);
+  return new Uint8Array(await crypto.subtle.digest("SHA-512", copy));
+};
 
 type OAuthProvider =
   | "google"
@@ -620,6 +629,38 @@ export async function validateSessionInternal(
   if (!user) return null;
 
   return { user, sessionId: session._id, scope: session.scope ?? "full" };
+}
+
+/**
+ * Resolve a live SDK credential, including the online Dogfood-installation
+ * binding. Keep every backend consumer on this helper: reading sdkTokens
+ * directly would make a revoked installation valid on whichever route forgot
+ * to repeat the device-status check.
+ */
+export async function validateSdkTokenRowInternal(
+  ctx: QueryCtx | MutationCtx,
+  tokenHash: string,
+) {
+  const sdkToken = await ctx.db
+    .query("sdkTokens")
+    .withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash))
+    .unique();
+  if (!sdkToken || sdkToken.expiresAt < Date.now() || sdkToken.delegatedGuestUserId) return null;
+
+  if (sdkToken.dogfoodInstallationId) {
+    const installation = await ctx.db
+      .query("dogfoodInstallations")
+      .withIndex("by_app_installation", (q) => q
+        .eq("appId", sdkToken.dogfoodAppId ?? "")
+        .eq("installationId", sdkToken.dogfoodInstallationId!))
+      .unique();
+    if (!installation || installation.status !== "active") return null;
+    if (installation.userId !== sdkToken.userId) return null;
+    if (installation.sessionVersion !== sdkToken.dogfoodSessionVersion) return null;
+  }
+
+  if (sdkToken.replacedAt && Date.now() - sdkToken.replacedAt > 5 * 60 * 1000) return null;
+  return sdkToken;
 }
 
 // ── Mutations ────────────────────────────────────────────────────────
@@ -1820,6 +1861,30 @@ export const deleteAccount = mutation({
 
 /** Default scopes for SDK tokens — feedback-related only, no task execution. */
 const DEFAULT_SDK_SCOPES = ["feedback", "blackbox", "voice", "builds"];
+const DOGFOOD_DEFAULT_SCOPES = ["feedback", "blackbox"];
+const DOGFOOD_ALLOWED_SCOPES = new Set(["feedback", "blackbox", "voice", "builds", "spatial"]);
+const DOGFOOD_CHALLENGE_MS = 10 * 60 * 1000;
+
+function dogfoodBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function verifyDogfoodSignature(publicKey: string, signature: string, message: string): Promise<boolean> {
+  try {
+    return await ed.verifyAsync(dogfoodBytes(signature), new TextEncoder().encode(message), dogfoodBytes(publicKey));
+  } catch {
+    return false;
+  }
+}
+
+function dogfoodEnrollmentMessage(appId: string, installationId: string, challenge: string): string {
+  return `yaver-dogfood-enroll-v1\n${appId}\n${installationId}\n${challenge}`;
+}
+
+function dogfoodSessionMessage(appId: string, installationId: string, challenge: string): string {
+  return `yaver-dogfood-session-v1\n${appId}\n${installationId}\n${challenge}`;
+}
 
 /**
  * Create an SDK token for the Feedback SDK.
@@ -1870,22 +1935,8 @@ export const validateSdkToken = query({
     tokenHash: v.string(),
   },
   handler: async (ctx, args) => {
-    const sdkToken = await ctx.db
-      .query("sdkTokens")
-      .withIndex("by_tokenHash", (q) => q.eq("tokenHash", args.tokenHash))
-      .unique();
-
+    const sdkToken = await validateSdkTokenRowInternal(ctx, args.tokenHash);
     if (!sdkToken) return null;
-    if (sdkToken.expiresAt < Date.now()) return null;
-    // Historical delegated SDK credentials represented non-owner access.
-    // They stay invalid even while their tombstone fields remain in schema.
-    if (sdkToken.delegatedGuestUserId) return null;
-
-    // Rotation grace: replaced tokens valid for 5 minutes
-    if (sdkToken.replacedAt) {
-      const gracePeriod = 5 * 60 * 1000;
-      if (Date.now() - sdkToken.replacedAt > gracePeriod) return null;
-    }
 
     const user = await ctx.db.get(sdkToken.userId);
     if (!user) return null;
@@ -1900,6 +1951,8 @@ export const validateSdkToken = query({
       sourceSurface: sdkToken.sourceSurface,
       targetDeviceId: sdkToken.targetDeviceId,
       allowedProjects: sdkToken.allowedProjects ?? [],
+      dogfoodAppId: sdkToken.dogfoodAppId,
+      dogfoodInstallationId: sdkToken.dogfoodInstallationId,
     };
   },
 });
@@ -1922,6 +1975,9 @@ export const rotateSdkToken = mutation({
     if (current.expiresAt < Date.now()) throw new Error("Token expired");
     if (current.replacedAt) throw new Error("Token already rotated");
     if (current.delegatedGuestUserId) throw new Error("Legacy delegated SDK tokens are invalid; create an owner SDK token");
+    if (current.dogfoodInstallationId) {
+      throw new Error("Dogfood session tokens cannot be rotated; exchange a fresh device session");
+    }
 
     // Create new token inheriting scopes and allowedCIDRs
     const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000;
@@ -2001,6 +2057,253 @@ export const revokeSdkToken = mutation({
   },
 });
 
+// ── Third-party Dogfood enrollment ──────────────────────────────────
+
+export const registerDogfoodControlDevice = mutation({
+  args: {
+    sessionTokenHash: v.string(), deviceId: v.string(), publicKey: v.string(),
+    platform: v.string(), label: v.optional(v.string()), signedAt: v.number(), signature: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session || (session.scope && session.scope !== "full")) throw new Error("Unauthorized");
+    if (!/^[a-zA-Z0-9_-]{16,128}$/.test(args.deviceId)) throw new Error("Invalid control device id");
+    if (dogfoodBytes(args.publicKey).length !== 32) throw new Error("Invalid Ed25519 public key");
+    if (Math.abs(Date.now() - args.signedAt) > DOGFOOD_CHALLENGE_MS) throw new Error("Control device proof expired");
+    const proofMessage = `yaver-dogfood-control-v1\n${args.deviceId}\n${args.publicKey}\n${args.signedAt}`;
+    if (!(await verifyDogfoodSignature(args.publicKey, args.signature, proofMessage))) throw new Error("Invalid control device proof");
+    const rows = await ctx.db.query("dogfoodControlDevices")
+      .withIndex("by_user_device", (q) => q.eq("userId", session.user._id).eq("deviceId", args.deviceId)).collect();
+    const active = rows.find((row) => row.status === "active");
+    if (active?.publicKey === args.publicKey) return { id: active._id, generation: active.generation, status: "active" };
+    const now = Date.now();
+    for (const row of rows) {
+      if (row.status === "active") await ctx.db.patch(row._id, { status: "superseded", supersededAt: now, updatedAt: now });
+    }
+    const generation = Math.max(0, ...rows.map((row) => row.generation)) + 1;
+    const id = await ctx.db.insert("dogfoodControlDevices", {
+      userId: session.user._id, deviceId: args.deviceId, publicKey: args.publicKey,
+      platform: args.platform.slice(0, 32), label: args.label?.trim().slice(0, 80),
+      generation, status: "active", createdAt: now, updatedAt: now,
+    });
+    return { id, generation, status: "active" };
+  },
+});
+
+export const listDogfoodControlDevices = query({
+  args: { sessionTokenHash: v.string() },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session) return [];
+    return await ctx.db.query("dogfoodControlDevices").withIndex("by_user", (q) => q.eq("userId", session.user._id)).collect();
+  },
+});
+
+export const upsertDogfoodApp = mutation({
+  args: {
+    sessionTokenHash: v.string(),
+    appId: v.string(),
+    label: v.string(),
+    projectSlug: v.optional(v.string()),
+    targetDeviceId: v.optional(v.string()),
+    allowedScopes: v.optional(v.array(v.string())),
+    enabled: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session || (session.scope && session.scope !== "full")) throw new Error("Unauthorized");
+    const appId = args.appId.trim();
+    const label = args.label.trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,127}$/.test(appId)) throw new Error("Invalid appId");
+    if (!label || label.length > 80) throw new Error("Invalid label");
+    const scopes = (args.allowedScopes ?? DOGFOOD_DEFAULT_SCOPES)
+      .map((scope) => scope.trim())
+      .filter((scope, index, all) => DOGFOOD_ALLOWED_SCOPES.has(scope) && all.indexOf(scope) === index);
+    if (scopes.length === 0) throw new Error("At least one valid scope is required");
+    const existing = await ctx.db.query("dogfoodApps")
+      .withIndex("by_user_app", (q) => q.eq("userId", session.user._id).eq("appId", appId)).unique();
+    const now = Date.now();
+    const values = {
+      label,
+      projectSlug: args.projectSlug?.trim() || undefined,
+      targetDeviceId: args.targetDeviceId?.trim() || undefined,
+      allowedScopes: scopes,
+      enabled: args.enabled ?? true,
+      updatedAt: now,
+    };
+    if (existing) {
+      await ctx.db.patch(existing._id, values);
+      return { id: existing._id, appId, ...values };
+    }
+    // appId is the public tenant routing identifier. Refuse an ambiguous
+    // duplicate rather than enrolling a tester into the wrong owner account.
+    const claimed = await ctx.db.query("dogfoodApps").withIndex("by_app", (q) => q.eq("appId", appId)).first();
+    if (claimed) throw new Error("appId is already registered");
+    const id = await ctx.db.insert("dogfoodApps", { userId: session.user._id, appId, createdAt: now, ...values });
+    return { id, appId, ...values };
+  },
+});
+
+export const listDogfoodApps = query({
+  args: { sessionTokenHash: v.string() },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session) return [];
+    return await ctx.db.query("dogfoodApps").withIndex("by_user", (q) => q.eq("userId", session.user._id)).collect();
+  },
+});
+
+export const startDogfoodEnrollment = mutation({
+  args: {
+    appId: v.string(), installationId: v.string(), registrationSlot: v.string(),
+    publicKey: v.string(), platform: v.string(), label: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const app = await ctx.db.query("dogfoodApps").withIndex("by_app", (q) => q.eq("appId", args.appId)).unique();
+    if (!app || !app.enabled) throw new Error("Dogfood is not enabled for this app");
+    if (!/^[a-zA-Z0-9_-]{16,128}$/.test(args.installationId)) throw new Error("Invalid installationId");
+    if (!/^[a-zA-Z0-9_-]{16,128}$/.test(args.registrationSlot)) throw new Error("Invalid registrationSlot");
+    if (dogfoodBytes(args.publicKey).length !== 32) throw new Error("Invalid Ed25519 public key");
+    const existing = await ctx.db.query("dogfoodInstallations")
+      .withIndex("by_app_installation", (q) => q.eq("appId", args.appId).eq("installationId", args.installationId)).unique();
+    const now = Date.now();
+    const challenge = randomHex(32);
+    if (existing) {
+      if (existing.publicKey !== args.publicKey || existing.registrationSlot !== args.registrationSlot) {
+        throw new Error("Installation identity conflict; re-register with a new installationId");
+      }
+      if (existing.status === "active") return { status: "active", installationId: existing.installationId };
+      if (existing.status !== "pending") throw new Error(`Installation is ${existing.status}; re-register with a new installationId`);
+      await ctx.db.patch(existing._id, { proofChallenge: challenge, proofChallengeExpiresAt: now + DOGFOOD_CHALLENGE_MS, updatedAt: now });
+      return { status: "pending", installationId: existing.installationId, challenge };
+    }
+    await ctx.db.insert("dogfoodInstallations", {
+      userId: app.userId, appId: args.appId, installationId: args.installationId,
+      registrationSlot: args.registrationSlot, publicKey: args.publicKey,
+      platform: args.platform.slice(0, 32), label: args.label?.trim().slice(0, 80),
+      status: "pending", proofChallenge: challenge,
+      proofChallengeExpiresAt: now + DOGFOOD_CHALLENGE_MS,
+      sessionVersion: 0, createdAt: now, updatedAt: now,
+    });
+    return { status: "pending", installationId: args.installationId, challenge };
+  },
+});
+
+export const proveDogfoodEnrollment = mutation({
+  args: { appId: v.string(), installationId: v.string(), signature: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.query("dogfoodInstallations")
+      .withIndex("by_app_installation", (q) => q.eq("appId", args.appId).eq("installationId", args.installationId)).unique();
+    if (!row || row.status !== "pending") throw new Error("Pending installation not found");
+    if (row.proofChallengeExpiresAt < Date.now()) throw new Error("Enrollment challenge expired");
+    const valid = await verifyDogfoodSignature(row.publicKey, args.signature,
+      dogfoodEnrollmentMessage(row.appId, row.installationId, row.proofChallenge));
+    if (!valid) throw new Error("Invalid installation proof");
+    const now = Date.now();
+    await ctx.db.patch(row._id, { proofVerifiedAt: now, updatedAt: now });
+    return { status: "pending", proofVerified: true };
+  },
+});
+
+export const dogfoodInstallationStatus = query({
+  args: { appId: v.string(), installationId: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.query("dogfoodInstallations")
+      .withIndex("by_app_installation", (q) => q.eq("appId", args.appId).eq("installationId", args.installationId)).unique();
+    if (!row) return null;
+    return { status: row.status, proofVerified: !!row.proofVerifiedAt, approvedAt: row.approvedAt };
+  },
+});
+
+export const listDogfoodInstallations = query({
+  args: { sessionTokenHash: v.string(), appId: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session) return [];
+    const rows = args.appId
+      ? await ctx.db.query("dogfoodInstallations").withIndex("by_user_app", (q) => q.eq("userId", session.user._id).eq("appId", args.appId!)).collect()
+      : await ctx.db.query("dogfoodInstallations").withIndex("by_user", (q) => q.eq("userId", session.user._id)).collect();
+    return rows.map(({ proofChallenge: _proof, sessionChallenge: _session, ...row }) => row);
+  },
+});
+
+export const setDogfoodInstallationStatus = mutation({
+  args: {
+    sessionTokenHash: v.string(), installationDocId: v.id("dogfoodInstallations"),
+    action: v.union(v.literal("approve"), v.literal("cancel"), v.literal("revoke")),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session || (session.scope && session.scope !== "full")) throw new Error("Unauthorized");
+    const row = await ctx.db.get(args.installationDocId);
+    if (!row || row.userId !== session.user._id) throw new Error("Installation not found");
+    const now = Date.now();
+    if (args.action === "approve") {
+      if (!dogfoodActionAllowed(row.status, "approve", !!row.proofVerifiedAt)) throw new Error("A verified pending installation is required");
+      const prior = await ctx.db.query("dogfoodInstallations")
+        .withIndex("by_user_app_slot", (q) => q.eq("userId", row.userId).eq("appId", row.appId).eq("registrationSlot", row.registrationSlot)).collect();
+      for (const candidate of prior) {
+        if (candidate._id !== row._id && candidate.status === "active") {
+          await ctx.db.patch(candidate._id, { status: "superseded", supersededBy: row.installationId, revokedAt: now, updatedAt: now });
+        }
+      }
+      await ctx.db.patch(row._id, { status: "active", approvedAt: now, updatedAt: now });
+      return { status: "active", superseded: prior.filter((item) => item._id !== row._id && item.status === "active").length };
+    }
+    if (args.action === "cancel") {
+      if (!dogfoodActionAllowed(row.status, "cancel", !!row.proofVerifiedAt)) throw new Error("Only pending enrollment can be cancelled");
+      await ctx.db.patch(row._id, { status: "cancelled", revokedAt: now, updatedAt: now });
+      return { status: "cancelled" };
+    }
+    if (row.status === "revoked" || row.status === "superseded") return { status: row.status };
+    if (!dogfoodActionAllowed(row.status, "revoke", !!row.proofVerifiedAt)) throw new Error("Only an active installation can be revoked");
+    await ctx.db.patch(row._id, { status: "revoked", revokedAt: now, updatedAt: now });
+    return { status: "revoked" };
+  },
+});
+
+export const startDogfoodSessionChallenge = mutation({
+  args: { appId: v.string(), installationId: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.query("dogfoodInstallations")
+      .withIndex("by_app_installation", (q) => q.eq("appId", args.appId).eq("installationId", args.installationId)).unique();
+    if (!row || row.status !== "active") throw new Error("Installation is not active");
+    const challenge = randomHex(32);
+    await ctx.db.patch(row._id, { sessionChallenge: challenge, sessionChallengeExpiresAt: Date.now() + DOGFOOD_CHALLENGE_MS });
+    return { challenge };
+  },
+});
+
+export const activateDogfoodSession = mutation({
+  args: { appId: v.string(), installationId: v.string(), signature: v.string(), tokenHash: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.query("dogfoodInstallations")
+      .withIndex("by_app_installation", (q) => q.eq("appId", args.appId).eq("installationId", args.installationId)).unique();
+    if (!row || row.status !== "active" || !row.sessionChallenge || !row.sessionChallengeExpiresAt) throw new Error("Session challenge required");
+    if (row.sessionChallengeExpiresAt < Date.now()) throw new Error("Session challenge expired");
+    const valid = await verifyDogfoodSignature(row.publicKey, args.signature,
+      dogfoodSessionMessage(row.appId, row.installationId, row.sessionChallenge));
+    if (!valid) throw new Error("Invalid installation proof");
+    const app = await ctx.db.query("dogfoodApps").withIndex("by_user_app", (q) => q.eq("userId", row.userId).eq("appId", row.appId)).unique();
+    if (!app || !app.enabled) throw new Error("Dogfood is disabled for this app");
+    const now = Date.now();
+    const sessionVersion = row.sessionVersion + 1;
+    const expiresAt = now + 24 * 60 * 60 * 1000;
+    await ctx.db.insert("sdkTokens", {
+      tokenHash: args.tokenHash, userId: row.userId, label: `${app.label} · ${row.label || row.platform}`,
+      scopes: app.allowedScopes, sourceSurface: "dogfood-installation",
+      targetDeviceId: app.targetDeviceId, allowedProjects: app.projectSlug ? [app.projectSlug] : [],
+      dogfoodAppId: row.appId, dogfoodInstallationId: row.installationId,
+      dogfoodSessionVersion: sessionVersion, expiresAt, createdAt: now,
+    });
+    await ctx.db.patch(row._id, {
+      sessionVersion, sessionChallenge: undefined, sessionChallengeExpiresAt: undefined,
+      lastSeenAt: now, updatedAt: now,
+    });
+    return { expiresAt, scopes: app.allowedScopes, projectSlug: app.projectSlug, targetDeviceId: app.targetDeviceId };
+  },
+});
+
 // ── Security Events ─────────────────────────────────────────────────
 
 /**
@@ -2020,11 +2323,8 @@ export const reportSecurityEvent = mutation({
       userId = session.user._id;
     } else {
       // Try SDK token
-      const sdkToken = await ctx.db
-        .query("sdkTokens")
-        .withIndex("by_tokenHash", (q) => q.eq("tokenHash", args.tokenHash))
-        .unique();
-      if (sdkToken && sdkToken.expiresAt >= Date.now()) {
+      const sdkToken = await validateSdkTokenRowInternal(ctx, args.tokenHash);
+      if (sdkToken) {
         userId = sdkToken.userId;
       }
     }

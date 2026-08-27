@@ -7963,6 +7963,130 @@ http.route({
   }),
 });
 
+// ── Third-party Dogfood enrollment ─────────────────────────────────
+
+async function sessionHashFromRequest(request: Request): Promise<string | null> {
+  const header = request.headers.get("Authorization");
+  return header?.startsWith("Bearer ") ? sha256Hex(header.slice(7)) : null;
+}
+
+http.route({ path: "/dogfood/control-devices", method: "GET", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  return jsonResponse({ devices: await ctx.runQuery(api.auth.listDogfoodControlDevices, { sessionTokenHash }) });
+}) });
+
+http.route({ path: "/dogfood/control-devices", method: "POST", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  try {
+    const body = await request.json();
+    return jsonResponse(await ctx.runMutation(api.auth.registerDogfoodControlDevice, {
+      sessionTokenHash, deviceId: String(body.deviceId || ""), publicKey: String(body.publicKey || ""),
+      platform: String(body.platform || "unknown"), label: typeof body.label === "string" ? body.label : undefined,
+      signedAt: Number(body.signedAt || 0), signature: String(body.signature || ""),
+    }));
+  } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid request", 400); }
+}) });
+
+http.route({ path: "/dogfood/apps", method: "GET", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  return jsonResponse({ apps: await ctx.runQuery(api.auth.listDogfoodApps, { sessionTokenHash }) });
+}) });
+
+http.route({ path: "/dogfood/apps", method: "POST", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  try {
+    const body = await request.json();
+    const app = await ctx.runMutation(api.auth.upsertDogfoodApp, {
+      sessionTokenHash, appId: String(body.appId || ""), label: String(body.label || ""),
+      projectSlug: typeof body.projectSlug === "string" ? body.projectSlug : undefined,
+      targetDeviceId: typeof body.targetDeviceId === "string" ? body.targetDeviceId : undefined,
+      allowedScopes: Array.isArray(body.allowedScopes) ? body.allowedScopes.map(String) : undefined,
+      enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+    });
+    return jsonResponse({ app });
+  } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid request", 400); }
+}) });
+
+http.route({ path: "/dogfood/installations", method: "GET", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  const appId = new URL(request.url).searchParams.get("appId") || undefined;
+  return jsonResponse({ installations: await ctx.runQuery(api.auth.listDogfoodInstallations, { sessionTokenHash, appId }) });
+}) });
+
+http.route({ path: "/dogfood/installations/action", method: "POST", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  try {
+    const body = await request.json();
+    const result = await ctx.runMutation(api.auth.setDogfoodInstallationStatus, {
+      sessionTokenHash, installationDocId: body.installationId,
+      action: body.action,
+    });
+    return jsonResponse(result);
+  } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid request", 400); }
+}) });
+
+http.route({ path: "/dogfood/enroll/start", method: "POST", handler: httpAction(async (ctx, request) => {
+  try {
+    const body = await request.json();
+    return jsonResponse(await ctx.runMutation(api.auth.startDogfoodEnrollment, {
+      appId: String(body.appId || ""), installationId: String(body.installationId || ""),
+      registrationSlot: String(body.registrationSlot || ""), publicKey: String(body.publicKey || ""),
+      platform: String(body.platform || "unknown"), label: typeof body.label === "string" ? body.label : undefined,
+    }));
+  } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid request", 400); }
+}) });
+
+http.route({ path: "/dogfood/enroll/prove", method: "POST", handler: httpAction(async (ctx, request) => {
+  try {
+    const body = await request.json();
+    return jsonResponse(await ctx.runMutation(api.auth.proveDogfoodEnrollment, {
+      appId: String(body.appId || ""), installationId: String(body.installationId || ""), signature: String(body.signature || ""),
+    }));
+  } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid proof", 400); }
+}) });
+
+http.route({ path: "/dogfood/enroll/status", method: "GET", handler: httpAction(async (ctx, request) => {
+  const url = new URL(request.url);
+  const result = await ctx.runQuery(api.auth.dogfoodInstallationStatus, {
+    appId: url.searchParams.get("appId") || "", installationId: url.searchParams.get("installationId") || "",
+  });
+  return result ? jsonResponse(result) : errorResponse("Installation not found", 404);
+}) });
+
+http.route({ path: "/dogfood/session/challenge", method: "POST", handler: httpAction(async (ctx, request) => {
+  try {
+    const body = await request.json();
+    return jsonResponse(await ctx.runMutation(api.auth.startDogfoodSessionChallenge, {
+      appId: String(body.appId || ""), installationId: String(body.installationId || ""),
+    }));
+  } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid request", 400); }
+}) });
+
+http.route({ path: "/dogfood/session", method: "POST", handler: httpAction(async (ctx, request) => {
+  try {
+    const body = await request.json();
+    const raw = randomHex(32);
+    const result = await ctx.runMutation(api.auth.activateDogfoodSession, {
+      appId: String(body.appId || ""), installationId: String(body.installationId || ""),
+      signature: String(body.signature || ""), tokenHash: await sha256Hex(raw),
+    });
+    return jsonResponse({ token: raw, ...result });
+  } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid proof", 400); }
+}) });
+
+for (const path of ["/dogfood/control-devices", "/dogfood/apps", "/dogfood/installations", "/dogfood/installations/action", "/dogfood/enroll/start", "/dogfood/enroll/prove", "/dogfood/enroll/status", "/dogfood/session/challenge", "/dogfood/session"]) {
+  http.route({ path, method: "OPTIONS", handler: httpAction(async () => new Response(null, {
+    status: 204,
+    headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type, Cache-Control" },
+  })) });
+}
+
 // ── SDK Tokens ──────────────────────────────────────────────────────
 
 /**

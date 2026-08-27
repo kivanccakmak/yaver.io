@@ -2,9 +2,13 @@ export interface SDKDogfoodConfig {
   /** Explicit opt-in. Omitted/false keeps the normal Feedback SDK. */
   enabled?: boolean;
   /** App-account IDs allowed to enter Dogfood. Public identifiers, not secrets. */
-  accountIds: string[];
+  accountIds?: string[];
   /** The third-party app's currently authenticated account ID. */
   currentAccountId?: string;
+  /** Account-free installation identity resolved by YaverDeviceDogfood. */
+  appId?: string;
+  installationId?: string;
+  installationStatus?: 'pending' | 'active' | 'cancelled' | 'revoked' | 'superseded';
   /** Called after the user confirms Exit Dogfood mode. */
   onExit?: () => void | Promise<void>;
   /** Optional app label shown beside Dogfood mode. */
@@ -13,7 +17,7 @@ export interface SDKDogfoodConfig {
 
 export interface SDKDogfoodStatus {
   active: boolean;
-  code: 'SDK_DOGFOOD_ACTIVE' | 'SDK_DOGFOOD_DISABLED' | 'SDK_DOGFOOD_ACCOUNT_REQUIRED' | 'SDK_DOGFOOD_ACCOUNT_NOT_ALLOWED';
+  code: 'SDK_DOGFOOD_ACTIVE' | 'SDK_DOGFOOD_DISABLED' | 'SDK_DOGFOOD_ACCOUNT_REQUIRED' | 'SDK_DOGFOOD_ACCOUNT_NOT_ALLOWED' | 'SDK_DOGFOOD_INSTALLATION_REQUIRED' | 'SDK_DOGFOOD_INSTALLATION_NOT_ACTIVE';
   accountId?: string;
   label: string;
 }
@@ -23,6 +27,11 @@ export interface SDKDogfoodStatus {
 export function resolveSDKDogfood(config?: SDKDogfoodConfig | null): SDKDogfoodStatus {
   const label = String(config?.label || 'Dogfood').trim() || 'Dogfood';
   if (config?.enabled !== true) return { active: false, code: 'SDK_DOGFOOD_DISABLED', label };
+  if (config.appId) {
+    if (!config.installationId) return { active: false, code: 'SDK_DOGFOOD_INSTALLATION_REQUIRED', label };
+    if (config.installationStatus !== 'active') return { active: false, code: 'SDK_DOGFOOD_INSTALLATION_NOT_ACTIVE', label };
+    return { active: true, code: 'SDK_DOGFOOD_ACTIVE', accountId: config.installationId, label };
+  }
   const accountId = String(config.currentAccountId || '').trim();
   if (!accountId) return { active: false, code: 'SDK_DOGFOOD_ACCOUNT_REQUIRED', label };
   const allowed = new Set((config.accountIds || []).map((id) => String(id).trim()).filter(Boolean));

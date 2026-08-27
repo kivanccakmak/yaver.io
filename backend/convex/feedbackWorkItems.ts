@@ -8,7 +8,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { validateSessionInternal } from "./auth";
+import { validateSessionInternal, validateSdkTokenRowInternal } from "./auth";
 import { normalizeRelayBranch, normalizeRelayRepoUrl, parseRelaySourceProviderTarget, relaySourceSlug } from "./relaySourceIntents";
 
 const kinds = new Set(["bug", "idea", "task", "question", "other"]);
@@ -132,12 +132,8 @@ async function sdkContext(ctx: any, sdkTokenHash: string): Promise<{
   sourceSurface?: string;
   label?: string;
 }> {
-  const row = await ctx.db
-    .query("sdkTokens")
-    .withIndex("by_tokenHash", (q: any) => q.eq("tokenHash", sdkTokenHash))
-    .unique();
-  if (!row || row.expiresAt < Date.now()) throw new Error("Unauthorized");
-  if (row.replacedAt && Date.now() - row.replacedAt > 5 * 60_000) throw new Error("Unauthorized");
+  const row = await validateSdkTokenRowInternal(ctx, sdkTokenHash);
+  if (!row) throw new Error("Unauthorized");
   const scopes = Array.isArray(row.scopes) ? row.scopes.map((s: unknown) => String(s)) : [];
   if (!scopes.includes("feedback")) throw new Error("SDK token lacks feedback scope");
   if (row.delegatedGuestUserId) {

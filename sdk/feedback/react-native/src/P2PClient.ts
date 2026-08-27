@@ -483,6 +483,24 @@ export class P2PClient {
     return Array.isArray(data.runners) ? (data.runners as RunnerAuthStatusRow[]) : [];
   }
 
+  /** Discovered runnable projects on the selected owner machine. Paths stay
+   * on that machine/transport; they are never registered in Yaver's backend. */
+  async listDogfoodProjects(): Promise<Array<{
+    name: string;
+    path: string;
+    framework?: string;
+    frameworks?: string[];
+    surfaces?: string[];
+  }>> {
+    const resp = await fetch(`${this.baseUrl}/projects`, { headers: this.authHeaders() });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new Error(`listDogfoodProjects HTTP ${resp.status}: ${body}`);
+    }
+    const data = await resp.json().catch(() => ({} as Record<string, unknown>));
+    return Array.isArray(data.projects) ? data.projects : [];
+  }
+
   async getOpenCodeConfig(): Promise<OpenCodeConfigSummary | null> {
     const resp = await fetch(`${this.baseUrl}/runner/opencode/config`, {
       headers: this.authHeaders(),

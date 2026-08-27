@@ -751,6 +751,8 @@ func main() {
 		runSandbox(os.Args[2:])
 	case "sdk-token":
 		runSdkToken(os.Args[2:])
+	case "dogfood":
+		runDogfoodRegistry(os.Args[2:])
 	case "forgot-password":
 		runForgotPassword(os.Args[2:])
 	case "change-password":
@@ -979,6 +981,7 @@ Usage:
   yaver feedback show <id>  Show feedback details + transcript
   yaver feedback fix <id>   Create AI task from feedback report
   yaver sdk add <core|feedback>  Inject the Yaver SDK into this project
+  yaver dogfood apps|app-set|installations|approve|cancel|revoke  Manage account-free third-party app testing
   yaver ci add <hermes|feedback|push-to-device|publish-runner>  Scaffold a GitHub Actions workflow
   yaver ci list             List available CI targets
   yaver cloud buy      Open the hosted cloud checkout flow

@@ -2080,6 +2080,18 @@ export default function SettingsScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Dogfood apps</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Manage third-party Dogfood apps and devices"
+            onPress={() => router.push("/(tabs)/dogfood" as any)}
+            style={({ pressed }) => [styles.card, { backgroundColor: c.bgCard, borderColor: c.border, paddingHorizontal: 16, paddingVertical: 14, opacity: pressed ? 0.72 : 1 }]}
+          >
+            <Text style={[styles.aboutLabel, { color: c.textPrimary, fontWeight: "700" }]}>Third-party app testing</Text>
+            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }}>Register this device, enable apps without OAuth, and approve or revoke installations</Text>
+          </Pressable>
+        </View>
         {/* Machine + voice controls */}
         {/* Per-machine coding agent preference lives before toolchain sync:
             choose the default runner for the connected box and drive remote

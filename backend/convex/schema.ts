@@ -2651,6 +2651,13 @@ export default defineSchema({
     sourceSurface: v.optional(v.string()), // e.g. "feedback-sdk"
     targetDeviceId: v.optional(v.string()), // host device this token may hit
     allowedProjects: v.optional(v.array(v.string())), // owner service-token repo/project allowlist
+    // Device-enrolled third-party Dogfood session. These are public
+    // identifiers, never private key material. Validation re-reads the
+    // installation row so revoke/supersede takes effect immediately instead
+    // of waiting for the bearer token to expire.
+    dogfoodAppId: v.optional(v.string()),
+    dogfoodInstallationId: v.optional(v.string()),
+    dogfoodSessionVersion: v.optional(v.number()),
     replacedBy: v.optional(v.string()),  // tokenHash of replacement (rotation)
     replacedAt: v.optional(v.number()),  // when replaced (5min grace period)
     expiresAt: v.number(),        // 1 year from creation (or custom)
@@ -2658,6 +2665,79 @@ export default defineSchema({
   })
     .index("by_tokenHash", ["tokenHash"])
     .index("by_userId", ["userId"]),
+
+  // Owner-created public registry for third-party applications that may use
+  // Yaver's backend without implementing their own account/OAuth backend.
+  dogfoodApps: defineTable({
+    userId: v.id("users"),
+    appId: v.string(),
+    label: v.string(),
+    projectSlug: v.optional(v.string()),
+    targetDeviceId: v.optional(v.string()),
+    allowedScopes: v.array(v.string()),
+    enabled: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_app", ["userId", "appId"])
+    .index("by_app", ["appId"]),
+
+  // One row per app installation/key generation. The private Ed25519 key
+  // stays in the originating app's Keychain/Keystore. Re-registration keeps
+  // registrationSlot stable and creates a new row/key generation; activation
+  // atomically marks the prior active generation for that slot superseded.
+  dogfoodInstallations: defineTable({
+    userId: v.id("users"),
+    appId: v.string(),
+    installationId: v.string(),
+    registrationSlot: v.string(),
+    publicKey: v.string(),
+    platform: v.string(),
+    label: v.optional(v.string()),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("active"),
+      v.literal("cancelled"),
+      v.literal("revoked"),
+      v.literal("superseded"),
+    ),
+    proofChallenge: v.string(),
+    proofChallengeExpiresAt: v.number(),
+    proofVerifiedAt: v.optional(v.number()),
+    sessionChallenge: v.optional(v.string()),
+    sessionChallengeExpiresAt: v.optional(v.number()),
+    sessionVersion: v.number(),
+    approvedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+    supersededBy: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastSeenAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_app", ["userId", "appId"])
+    .index("by_app_installation", ["appId", "installationId"])
+    .index("by_user_app_slot", ["userId", "appId", "registrationSlot"]),
+
+  // Yaver control surfaces register their own signing identity separately
+  // from third-party app installations. This lets the backend name which
+  // owner device approved/revoked an install without ever sharing either
+  // private key across iOS application sandboxes.
+  dogfoodControlDevices: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    publicKey: v.string(),
+    platform: v.string(),
+    label: v.optional(v.string()),
+    generation: v.number(),
+    status: v.union(v.literal("active"), v.literal("superseded"), v.literal("revoked")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    supersededAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_device", ["userId", "deviceId"]),
 
   // Yaver-owned WhatsApp command intake. Privacy contract: these rows are
   // routing metadata and receipts only. Raw WhatsApp message text, task

@@ -19,4 +19,16 @@ describe('resolveSDKDogfood', () => {
       accountId: 'acct-1',
     });
   });
+
+  it('supports a key-enrolled installation without an app account', () => {
+    expect(resolveSDKDogfood({ enabled: true, appId: 'io.example', installationStatus: 'active' }).code)
+      .toBe('SDK_DOGFOOD_INSTALLATION_REQUIRED');
+    expect(resolveSDKDogfood({ enabled: true, appId: 'io.example', installationId: 'install-1', installationStatus: 'pending' }).code)
+      .toBe('SDK_DOGFOOD_INSTALLATION_NOT_ACTIVE');
+    expect(resolveSDKDogfood({ enabled: true, appId: 'io.example', installationId: 'install-1', installationStatus: 'active' })).toMatchObject({
+      active: true,
+      code: 'SDK_DOGFOOD_ACTIVE',
+      accountId: 'install-1',
+    });
+  });
 });

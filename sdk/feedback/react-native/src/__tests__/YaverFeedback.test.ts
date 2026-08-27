@@ -1,3 +1,4 @@
+import { DeviceEventEmitter } from 'react-native';
 import { YaverFeedback } from '../YaverFeedback';
 
 // Mock react-native: DeviceEventEmitter for event dispatch + Platform so
@@ -51,6 +52,20 @@ beforeEach(() => {
 });
 
 describe('YaverFeedback', () => {
+  describe('Dogfood onboarding', () => {
+    it('starts with Yaver OAuth when the host has no session', () => {
+      YaverFeedback.init({ enabled: true });
+      YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app', label: 'Example' });
+      expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('yaverFeedback:startLogin');
+    });
+
+    it('asks for a machine after an existing OAuth session', () => {
+      YaverFeedback.init({ enabled: true, authToken: 'owner-token' });
+      YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app', label: 'Example' });
+      expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('yaverFeedback:startMachinePicker');
+    });
+  });
+
   describe('init()', () => {
     it('sets config correctly with defaults', () => {
       YaverFeedback.init({

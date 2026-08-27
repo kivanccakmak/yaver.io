@@ -4,6 +4,7 @@ import {
   DeviceEventEmitter,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -49,6 +50,14 @@ import {
   setPreferredModel,
   setPreferredRunner,
 } from './preferences';
+import {
+  DogfoodController,
+  defaultDogfoodLane,
+  dogfoodLaneOptions,
+  type DogfoodLane,
+  type DogfoodSnapshot,
+} from './DogfoodRuntime';
+import { createP2PDogfoodDriver } from './P2PDogfoodDriver';
 
 /**
  * Simplified feedback modal — launch scope is 3 actions:
@@ -101,6 +110,14 @@ type ProviderEditorState = {
   name: string;
   baseUrl: string;
   apiKey: string;
+};
+
+type DogfoodProjectChoice = {
+  name: string;
+  path: string;
+  framework?: string;
+  frameworks?: string[];
+  surfaces?: string[];
 };
 
 const PRIMARY_RUNNER_IDS = ['claude', 'codex', 'opencode'] as const;
@@ -269,7 +286,83 @@ export const FeedbackModal: React.FC = () => {
   const [preferredModel, setPreferredModelState] = useState('');
   const [activeTab, setActiveTab] = useState<'chat' | 'settings'>('chat');
   const [showOpenCodeConfig, setShowOpenCodeConfig] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const [dogfoodEnrollment, setDogfoodEnrollment] = useState<{
+    status: string;
+    installationId?: string;
+    error?: string;
+  } | null>(null);
+  const [dogfoodProjects, setDogfoodProjects] = useState<DogfoodProjectChoice[]>([]);
+  const [dogfoodProject, setDogfoodProject] = useState<DogfoodProjectChoice | null>(null);
+  const [dogfoodLane, setDogfoodLane] = useState<DogfoodLane>('browser');
+  const [dogfoodNativeAvailable, setDogfoodNativeAvailable] = useState(false);
+  const [dogfoodRuntime, setDogfoodRuntime] = useState<DogfoodSnapshot | null>(null);
+  const [dogfoodSetupLoading, setDogfoodSetupLoading] = useState(false);
+  const dogfoodControllerRef = useRef<DogfoodController | null>(null);
   const mountedRef = useRef(true);
+
+  const loadDogfoodOnboarding = useCallback(async () => {
+    const onboarding = YaverFeedback.getDogfoodOnboarding();
+    if (!onboarding) return;
+    setDogfoodSetupLoading(true);
+    setDogfoodEnrollment({ status: 'checking' });
+    try {
+      const enrolled = await YaverFeedback.enableDeviceDogfood(onboarding);
+      if (!mountedRef.current) return;
+      setDogfoodEnrollment({ status: enrolled.status, installationId: enrolled.installationId });
+      if (enrolled.status !== 'active') return;
+      let client = YaverFeedback.getP2PClient();
+      if (!client && await YaverFeedback.reconnect()) client = YaverFeedback.getP2PClient();
+      if (!client) throw new Error('The selected Yaver machine is not reachable yet.');
+      const projects = await client.listDogfoodProjects();
+      if (!mountedRef.current) return;
+      setDogfoodProjects(projects);
+      const hint = String(onboarding.projectName || '').trim().toLowerCase();
+      const preferred = projects.find((item) => item.name.toLowerCase() === hint)
+        || projects.find((item) => hint && item.name.toLowerCase().includes(hint))
+        || projects[0]
+        || null;
+      setDogfoodProject((current) => current && projects.some((item) => item.path === current.path) ? current : preferred);
+      if (preferred) setDogfoodLane(defaultDogfoodLane(preferred.framework || onboarding.framework || 'expo'));
+    } catch (cause) {
+      if (mountedRef.current) setDogfoodEnrollment({ status: 'failed', error: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      if (mountedRef.current) setDogfoodSetupLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDogfoodNativeAvailable(false);
+    const client = YaverFeedback.getP2PClient();
+    if (!client || !dogfoodProject) return () => { cancelled = true; };
+    const framework = dogfoodProject.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo';
+    void client.getDogfoodRemoteRuntimeCapabilities(dogfoodProject.path, framework)
+      .then((value) => {
+        if (!cancelled) setDogfoodNativeAvailable(value.targets.some((target) => target.enabled && target.id !== 'browser-window'));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [dogfoodProject]);
+
+  const startDogfoodRuntime = useCallback(async () => {
+    const client = YaverFeedback.getP2PClient();
+    const onboarding = YaverFeedback.getDogfoodOnboarding();
+    if (!client || !dogfoodProject || !onboarding) return;
+    await dogfoodControllerRef.current?.stop().catch(() => {});
+    const framework = dogfoodProject.framework || onboarding.framework || 'expo';
+    const controller = new DogfoodController({
+      name: dogfoodProject.name,
+      workDir: dogfoodProject.path,
+      framework,
+      lane: dogfoodLane,
+    }, createP2PDogfoodDriver(client), {
+      onChange: (snapshot) => { if (mountedRef.current) setDogfoodRuntime(snapshot); },
+    });
+    dogfoodControllerRef.current = controller;
+    setDogfoodRuntime(controller.snapshot());
+    await controller.trigger().catch(() => {});
+  }, [dogfoodLane, dogfoodProject]);
 
   /**
    * Ask the machine what its dev server is doing, so the reload actions can
@@ -459,6 +552,7 @@ export const FeedbackModal: React.FC = () => {
     mountedRef.current = true;
     const sub = DeviceEventEmitter.addListener('yaverFeedback:startReport', () => {
       if (YaverFeedback.isEnabled()) {
+        const onboarding = YaverFeedback.getDogfoodOnboarding();
         const directDogfood = YaverFeedback.getDogfoodStatus().active;
         setDogfoodActive(directDogfood);
         setVisible(true);
@@ -468,6 +562,10 @@ export const FeedbackModal: React.FC = () => {
         setAction('idle');
         setShowVibeInput(directDogfood);
         setVibePrompt('');
+        if (onboarding) {
+          setActiveTab('settings');
+          void loadDogfoodOnboarding();
+        }
         // Re-read the "user hid the quick icon" flag on every open so
         // the re-enable row reflects the latest preference (the user
         // might have hidden or shown it between opens).
@@ -487,10 +585,10 @@ export const FeedbackModal: React.FC = () => {
     });
     const dogfoodSub = DeviceEventEmitter.addListener(
       'yaverFeedback:dogfoodChanged',
-      (payload: { active?: boolean }) => {
+      (payload: { active?: boolean; exited?: boolean }) => {
         if (!mountedRef.current) return;
         setDogfoodActive(payload?.active === true);
-        if (payload?.active !== true) setVisible(false);
+        if (payload?.exited === true) setVisible(false);
       },
     );
     // Agent streams build / compile progress through the BlackBox
@@ -520,7 +618,7 @@ export const FeedbackModal: React.FC = () => {
       dogfoodSub.remove();
       statusSub.remove();
     };
-  }, [loadRunnerStatuses, loadSelectedMachine]);
+  }, [loadDogfoodOnboarding, loadRunnerStatuses, loadSelectedMachine]);
 
   useEffect(() => {
     if (!visible) return;
@@ -557,6 +655,12 @@ export const FeedbackModal: React.FC = () => {
     };
   }, [visible]);
 
+  useEffect(() => {
+    if (!visible || !showVibeInput) return;
+    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), keyboardInset > 0 ? 120 : 40);
+    return () => clearTimeout(timer);
+  }, [keyboardInset, showVibeInput, visible]);
+
   const closeSoon = useCallback((delayMs = 1200) => {
     setTimeout(() => {
       if (mountedRef.current) setVisible(false);
@@ -572,6 +676,9 @@ export const FeedbackModal: React.FC = () => {
     setShowVibeInput(false);
     setVibePrompt('');
     setRunnerStatusError(null);
+    void dogfoodControllerRef.current?.stop().catch(() => {});
+    dogfoodControllerRef.current = null;
+    YaverFeedback.clearDogfoodOnboarding();
   }, []);
 
   // Helper: run a P2P call; on network failure, ask YaverFeedback to
@@ -1109,6 +1216,7 @@ export const FeedbackModal: React.FC = () => {
               }}
             >
               <ScrollView
+                ref={scrollRef}
                 style={styles.scroll}
                 contentContainerStyle={[
                   styles.scrollContent,
@@ -1118,9 +1226,13 @@ export const FeedbackModal: React.FC = () => {
                 ]}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                contentInsetAdjustmentBehavior="always"
+                automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
               >
               <View style={styles.header}>
-                <Text style={styles.title}>{dogfoodActive ? 'Dogfood with Yaver' : 'Send Feedback'}</Text>
+                <Text style={styles.title}>
+                  {dogfoodActive ? `${YaverFeedback.getDogfoodStatus().label || 'App'} Developer Mode` : 'Send Feedback'}
+                </Text>
                 <Pressable
                   onPress={handleClose}
                   hitSlop={12}
@@ -1147,7 +1259,99 @@ export const FeedbackModal: React.FC = () => {
               </View>
 
               <View style={[styles.tabContent, activeTab !== 'settings' && styles.hidden]}>
-              {!dogfoodActive ? <>
+              <>
+              {YaverFeedback.getDogfoodOnboarding() ? (
+                <View style={styles.dogfoodWizard}>
+                  <Text style={styles.dogfoodWizardTitle}>Dogfood this app</Text>
+                  <Text style={styles.dogfoodWizardHint}>
+                    OAuth ✓ · machine {machineCard.device ? '✓' : 'required'} · installation {dogfoodEnrollment?.status || 'checking'}
+                  </Text>
+                  {dogfoodEnrollment?.installationId ? (
+                    <Text selectable style={styles.dogfoodInstallationId}>
+                      This device · {dogfoodEnrollment.installationId}
+                    </Text>
+                  ) : null}
+                  {dogfoodEnrollment?.status !== 'active' ? (
+                    <View style={styles.dogfoodPendingBox}>
+                      <Text style={styles.dogfoodPendingText}>
+                        {dogfoodEnrollment?.error
+                          || 'Approve this installation from Yaver → Settings → Third-party app testing. A UUID alone never grants access.'}
+                      </Text>
+                      <Pressable
+                        onPress={() => void loadDogfoodOnboarding()}
+                        style={({ pressed }) => [styles.runnerRefreshBtn, pressed && styles.buttonPressed]}
+                      >
+                        <Text style={styles.runnerRefreshBtnText}>{dogfoodSetupLoading ? 'Checking…' : 'Check approval'}</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <>
+                      <Text style={styles.dogfoodStepLabel}>Project on selected machine</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dogfoodChoiceRow}>
+                        {dogfoodProjects.map((project) => (
+                          <Pressable
+                            key={project.path}
+                            onPress={() => {
+                              setDogfoodProject(project);
+                              setDogfoodLane(defaultDogfoodLane(project.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo'));
+                              setDogfoodRuntime(null);
+                            }}
+                            style={[styles.dogfoodChoice, dogfoodProject?.path === project.path && styles.dogfoodChoiceSelected]}
+                          >
+                            <Text style={[styles.dogfoodChoiceText, dogfoodProject?.path === project.path && styles.dogfoodChoiceTextSelected]}>{project.name}</Text>
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                      <Text style={styles.dogfoodStepLabel}>Runtime lane</Text>
+                      <View style={styles.dogfoodChoiceRow}>
+                        {dogfoodLaneOptions(
+                          dogfoodProject?.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo',
+                          { nativeRuntimeAvailable: dogfoodNativeAvailable },
+                        ).map((option) => (
+                          <Pressable
+                            key={option.lane}
+                            onPress={() => option.supported && setDogfoodLane(option.lane)}
+                            style={[
+                              styles.dogfoodChoice,
+                              dogfoodLane === option.lane && styles.dogfoodChoiceSelected,
+                              !option.supported && styles.actionBtnDisabled,
+                            ]}
+                            accessibilityState={{ disabled: !option.supported, selected: dogfoodLane === option.lane }}
+                          >
+                            <Text style={[styles.dogfoodChoiceText, dogfoodLane === option.lane && styles.dogfoodChoiceTextSelected]}>{option.label}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                      <Text style={styles.dogfoodWizardHint}>
+                        Runner: {[preferredRunner || 'automatic', preferredModel].filter(Boolean).join(' · ')}. Change it under Coding Agents below.
+                      </Text>
+                      <ActionRow
+                        label={dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase) ? dogfoodRuntime.message : 'Start Dogfood'}
+                        tint="#818cf8"
+                        onPress={() => void startDogfoodRuntime()}
+                        disabled={!dogfoodProject || !!(dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase))}
+                        busy={!!dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase)}
+                      />
+                      {dogfoodRuntime ? (
+                        <View style={styles.dogfoodConsole}>
+                          <Text style={styles.dogfoodConsoleStatus}>{dogfoodRuntime.message}</Text>
+                          {dogfoodRuntime.logs.slice(-80).map((line, index) => (
+                            <Text key={`${line.at}-${index}`} selectable style={styles.dogfoodConsoleLine}>{line.text}</Text>
+                          ))}
+                          {dogfoodRuntime.failure ? (
+                            <Text style={styles.dogfoodConsoleError}>{dogfoodRuntime.failure.error}{'\n'}{dogfoodRuntime.failure.remedy}</Text>
+                          ) : null}
+                          {dogfoodRuntime.result?.url ? (
+                            <Pressable onPress={() => void Linking.openURL(dogfoodRuntime.result!.url!)} style={styles.dogfoodOpenPreview}>
+                              <Text style={styles.dogfoodOpenPreviewText}>Open dogfooded app</Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      ) : null}
+                    </>
+                  )}
+                </View>
+              ) : null}
               <Pressable
                 onPress={() => {
                   if (!YaverFeedback.isAuthed()) {
@@ -1409,13 +1613,7 @@ export const FeedbackModal: React.FC = () => {
                   </Text>
                 </View>
               ))}
-              </> : (
-                <View style={styles.quickIconNote}>
-                  <Text style={styles.quickIconNoteText}>
-                    Direct Dogfood mode is active for this approved app account. Describe the change, follow it live, then re-render from the task.
-                  </Text>
-                </View>
-              )}
+              </>
               </View>
 
               <View style={[styles.tabContent, activeTab !== 'chat' && styles.hidden]}>
@@ -1587,6 +1785,24 @@ const ActionRow: React.FC<ActionRowProps> = ({
 );
 
 const styles = StyleSheet.create({
+  dogfoodWizard: { gap: 10, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(129,140,248,0.38)', backgroundColor: 'rgba(129,140,248,0.08)', padding: 13 },
+  dogfoodWizardTitle: { color: '#222229', fontSize: 17, fontWeight: '800' },
+  dogfoodWizardHint: { color: '#6f6f7b', fontSize: 12, lineHeight: 17 },
+  dogfoodInstallationId: { color: '#6555df', fontSize: 11, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) },
+  dogfoodPendingBox: { gap: 9, borderRadius: 11, padding: 10, backgroundColor: 'rgba(245,158,11,0.10)' },
+  dogfoodPendingText: { color: '#8a5a10', fontSize: 12, lineHeight: 17 },
+  dogfoodStepLabel: { color: '#555561', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.7 },
+  dogfoodChoiceRow: { flexDirection: 'row', gap: 7 },
+  dogfoodChoice: { borderRadius: 9, borderWidth: 1, borderColor: '#d8d8e3', backgroundColor: '#fff', paddingHorizontal: 10, paddingVertical: 8 },
+  dogfoodChoiceSelected: { borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.18)' },
+  dogfoodChoiceText: { color: '#666671', fontSize: 12, fontWeight: '700' },
+  dogfoodChoiceTextSelected: { color: '#5645d8' },
+  dogfoodConsole: { maxHeight: 260, gap: 4, borderRadius: 11, padding: 10, backgroundColor: '#15151b' },
+  dogfoodConsoleStatus: { color: '#a5b4fc', fontSize: 12, fontWeight: '800' },
+  dogfoodConsoleLine: { color: '#d1d5db', fontSize: 10, lineHeight: 14, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) },
+  dogfoodConsoleError: { color: '#fca5a5', fontSize: 11, lineHeight: 16, marginTop: 5 },
+  dogfoodOpenPreview: { alignSelf: 'flex-start', borderRadius: 9, paddingHorizontal: 11, paddingVertical: 8, marginTop: 6, backgroundColor: '#6555df' },
+  dogfoodOpenPreviewText: { color: '#fff', fontSize: 12, fontWeight: '800' },
   reloadRow: {
     gap: 4,
   },

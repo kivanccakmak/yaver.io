@@ -2350,6 +2350,24 @@ func (s *HTTPServer) authSDK(next http.HandlerFunc) http.HandlerFunc {
 		// Check cache
 		if cached, ok := s.tokenCache.Load(token); ok {
 			info := cached.(*cachedTokenInfo)
+			// Normal SDK tokens are long-lived and cached. Device Dogfood
+			// sessions are different: their installation can be revoked or
+			// superseded from Yaver Mobile at any moment, so a cached success
+			// must never outlive the backend lifecycle row. Revalidate these on
+			// every operation; backend-backed Dogfood intentionally fails closed
+			// while offline.
+			if info.isSdk && info.sourceSurface == "dogfood-installation" {
+				fresh, err := ValidateSdkTokenFull(s.convexURL, token)
+				if err != nil {
+					s.tokenCache.Delete(token)
+					jsonError(w, http.StatusForbidden, "Dogfood installation was revoked, superseded, or expired")
+					return
+				}
+				info.scopes = fresh.Scopes
+				info.allowedCIDRs = fresh.AllowedCIDRs
+				info.targetDeviceID = fresh.TargetDeviceID
+				info.allowedProjects = fresh.AllowedProjects
+			}
 			if info.userID != s.ownerUserID {
 				jsonError(w, http.StatusForbidden, "token belongs to a different user")
 				return
@@ -13772,6 +13790,72 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		}
 		octx := OpsContext{Ctx: context.Background(), Server: s, Caller: "owner"}
 		body, _ := json.MarshalIndent(buildOpsExecutionPlan(octx, req), "", "  ")
+		return mcpToolResult(string(body))
+
+	// --- Third-party Dogfood registry MCP ---
+	case "dogfood_app_list":
+		apps, err := listDogfoodRegistryApps()
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		body, _ := json.MarshalIndent(map[string]interface{}{"apps": apps}, "", "  ")
+		return mcpToolResult(string(body))
+
+	case "dogfood_app_set":
+		var args struct {
+			AppID          string   `json:"appId"`
+			Label          string   `json:"label"`
+			ProjectSlug    string   `json:"projectSlug"`
+			TargetDeviceID string   `json:"targetDeviceId"`
+			AllowedScopes  []string `json:"allowedScopes"`
+			Enabled        *bool    `json:"enabled"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return mcpToolError("invalid arguments: " + err.Error())
+		}
+		enabled := true
+		if args.Enabled != nil {
+			enabled = *args.Enabled
+		}
+		scopes := args.AllowedScopes
+		if len(scopes) == 0 {
+			scopes = []string{"feedback", "blackbox"}
+		}
+		app, err := saveDogfoodRegistryApp(DogfoodApp{AppID: args.AppID, Label: args.Label, ProjectSlug: args.ProjectSlug, TargetDeviceID: args.TargetDeviceID, AllowedScopes: scopes, Enabled: enabled})
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		body, _ := json.MarshalIndent(app, "", "  ")
+		return mcpToolResult(string(body))
+
+	case "dogfood_installation_list":
+		var args struct {
+			AppID string `json:"appId"`
+		}
+		_ = json.Unmarshal(call.Arguments, &args)
+		installations, err := listDogfoodRegistryInstallations(args.AppID)
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		body, _ := json.MarshalIndent(map[string]interface{}{"installations": installations}, "", "  ")
+		return mcpToolResult(string(body))
+
+	case "dogfood_installation_action":
+		var args struct {
+			InstallationID string `json:"installationId"`
+			Action         string `json:"action"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return mcpToolError("invalid arguments: " + err.Error())
+		}
+		if args.InstallationID == "" || (args.Action != "approve" && args.Action != "cancel" && args.Action != "revoke") {
+			return mcpToolError("installationId and action=approve|cancel|revoke are required")
+		}
+		result, err := setDogfoodRegistryInstallation(args.InstallationID, args.Action)
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		body, _ := json.MarshalIndent(result, "", "  ")
 		return mcpToolResult(string(body))
 
 	// --- SDK-token MCP ---

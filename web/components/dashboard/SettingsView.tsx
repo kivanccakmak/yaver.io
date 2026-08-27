@@ -43,6 +43,78 @@ interface SettingsViewProps {
   onOpenTwoFactor: () => void;
 }
 
+type ThirdPartyDogfoodApp = { _id: string; appId: string; label: string; allowedScopes: string[]; enabled: boolean };
+type ThirdPartyDogfoodInstallation = { _id: string; appId: string; installationId: string; label?: string; platform: string; status: string; proofVerifiedAt?: number };
+
+function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
+  const [apps, setApps] = useState<ThirdPartyDogfoodApp[]>([]);
+  const [installations, setInstallations] = useState<ThirdPartyDogfoodInstallation[]>([]);
+  const [appId, setAppId] = useState("");
+  const [label, setLabel] = useState("");
+  const [projectSlug, setProjectSlug] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const call = useCallback(async (path: string, init?: RequestInit) => {
+    if (!token) throw new Error("Sign in to manage Dogfood apps.");
+    const response = await fetch(`${CONVEX_URL}${path}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init?.headers || {}) },
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body?.error || `Dogfood request failed (HTTP ${response.status})`);
+    return body;
+  }, [token]);
+
+  const refresh = useCallback(async () => {
+    if (!token) return;
+    const [appResult, installationResult] = await Promise.all([call("/dogfood/apps"), call("/dogfood/installations")]);
+    setApps(appResult.apps || []);
+    setInstallations(installationResult.installations || []);
+  }, [call, token]);
+
+  useEffect(() => { void refresh().catch((error) => setMessage(error instanceof Error ? error.message : "Dogfood registry unavailable.")); }, [refresh]);
+
+  const save = async () => {
+    setBusy(true); setMessage(null);
+    try {
+      await call("/dogfood/apps", { method: "POST", body: JSON.stringify({ appId: appId.trim(), label: label.trim(), projectSlug: projectSlug.trim() || undefined, allowedScopes: ["feedback", "blackbox"], enabled: true }) });
+      setAppId(""); setLabel(""); setProjectSlug("");
+      await refresh();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not enable app."); }
+    finally { setBusy(false); }
+  };
+
+  const act = async (installationId: string, action: "approve" | "cancel" | "revoke") => {
+    setBusy(true); setMessage(null);
+    try {
+      await call("/dogfood/installations/action", { method: "POST", body: JSON.stringify({ installationId, action }) });
+      await refresh();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update installation."); }
+    finally { setBusy(false); }
+  };
+
+  return <div className="card mb-6 border-violet-500/20" data-testid="third-party-dogfood-section">
+    <h3 className="text-sm font-medium uppercase tracking-wider text-violet-400/80">Third-party Dogfood apps</h3>
+    <p className="mt-1 text-xs text-surface-500">Device-key enrollment for apps that do not have their own backend or OAuth yet.</p>
+    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+      <input aria-label="Dogfood app id" value={appId} onChange={(event) => setAppId(event.target.value)} placeholder="io.example.app" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
+      <input aria-label="Dogfood app label" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="App name" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
+      <input aria-label="Dogfood project slug" value={projectSlug} onChange={(event) => setProjectSlug(event.target.value)} placeholder="Project slug (optional)" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
+    </div>
+    <button onClick={() => void save()} disabled={busy || !appId.trim() || !label.trim()} className="mt-2 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">Enable app</button>
+    {apps.length ? <div className="mt-3 space-y-2">{apps.map((app) => <div key={app._id} className="rounded-md border border-surface-800 p-2 text-xs"><span className="font-medium text-surface-200">{app.label}</span><span className="ml-2 text-surface-500">{app.appId} · {app.allowedScopes.join(", ")}</span></div>)}</div> : null}
+    {installations.length ? <div className="mt-3 space-y-2">{installations.map((row) => <div key={row._id} className="rounded-md border border-surface-800 p-2 text-xs">
+      <div><span className="font-medium text-surface-200">{row.label || row.platform}</span><span className="ml-2 text-surface-500">{row.appId} · {row.status}{row.proofVerifiedAt ? " · key verified" : ""}</span></div>
+      {row.status === "pending" && row.proofVerifiedAt ? <button onClick={() => void act(row._id, "approve")} disabled={busy} className="mt-2 rounded bg-emerald-700 px-2 py-1 text-white">Approve</button> : null}
+      {row.status === "pending" ? <button onClick={() => void act(row._id, "cancel")} disabled={busy} className="ml-2 mt-2 text-red-400">Cancel</button> : null}
+      {row.status === "active" ? <button onClick={() => void act(row._id, "revoke")} disabled={busy} className="mt-2 text-red-400">Revoke</button> : null}
+    </div>)}</div> : null}
+    {message ? <p className="mt-3 text-xs text-surface-400">{message}</p> : null}
+    <p className="mt-3 text-[11px] text-surface-600">UUID is a public handle, never a credential · approval requires a verified Ed25519 key proof · re-registration supersedes only the same installation slot</p>
+  </div>;
+}
+
 function DogfoodCard({ devices }: { devices: Device[] }) {
   const [source, setSource] = useState<DogfoodSourceStatus | null>(null);
   const [method, setMethod] = useState<"browser" | "webrtc">("browser");
@@ -1170,6 +1242,7 @@ export default function SettingsView({ user, onLogout, onOpenTwoFactor }: Settin
         <span aria-hidden>🚪</span> Sign Out
       </button>
 
+      <ThirdPartyDogfoodCard token={token} />
       <DogfoodCard devices={ownedDevices} />
 
       {/* Delete Account */}

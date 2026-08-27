@@ -82,3 +82,26 @@ says no” failure. Browser is similarly limited to browser-capable stacks.
 The remaining closed-loop proof is the release operation itself: archive and
 upload one iOS build through `./deploy/deploy.sh ios`, then exercise Browser,
 Hermes, and WebRTC from that TestFlight build against a same-account device.
+
+## 2026-08-27: third-party installation identity
+
+The runtime now has a backend-authoritative installation layer for apps that do
+not own an OAuth/backend stack. The UUID is generated per installation and is
+never authority by itself. SecureStore retains an Ed25519 private key; Convex
+stores only its public key and verifies enrollment/session challenges. Approved
+sessions last 24 hours, are project/device/scope bounded, and are revalidated
+online by both Convex and the Go agent so revoke/supersede applies on the next
+operation even when the agent cached the bearer.
+
+The audit found and closed two bypasses before release: generic token rotation
+could have dropped the device binding and extended a dogfood session to one
+year, and the feedback-work queue read `sdkTokens` directly instead of applying
+the live installation gate. Dogfood tokens can no longer use generic rotation;
+all backend SDK consumers share `validateSdkTokenRowInternal`.
+
+Yaver mobile/web, CLI, and MCP now manage apps and installation lifecycle. The
+React Native host wizard sequences OAuth → machine → runner/model → discovered
+project → Browser/Hermes/WebRTC → raw logs. SFMG consumes that direct wizard.
+Talos keeps the library as an internal implementation detail and adds the same
+SecureStore registration to its existing Talos-branded, admin-gated Developer
+Mode rather than exposing a second product identity.

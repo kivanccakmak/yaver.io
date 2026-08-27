@@ -29,6 +29,7 @@
  */
 
 export { YaverFeedback } from './YaverFeedback';
+export type { DogfoodOnboardingOptions } from './YaverFeedback';
 export { captureStoreScreenshots } from './storeShots';
 export type {
   CaptureStoreScreenshotsOptions,
@@ -81,6 +82,8 @@ export { YaverModeBadge, hideYaverModeBadge, showYaverModeBadge, isYaverModeBadg
 export type { YaverModeBadgeProps } from './YaverModeBadge';
 export { resolveSDKDogfood } from './dogfoodPolicy';
 export type { SDKDogfoodConfig, SDKDogfoodStatus } from './dogfoodPolicy';
+export { YaverDeviceDogfood } from './deviceDogfood';
+export type { DeviceDogfoodOptions, DeviceDogfoodSession, DeviceDogfoodState } from './deviceDogfood';
 export {
   DogfoodController,
   DogfoodRuntimeError,

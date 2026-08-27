@@ -27,6 +27,14 @@ import {
   QuickIconColorPreset,
 } from './preferences';
 import { resolveSDKDogfood, type SDKDogfoodStatus } from './dogfoodPolicy';
+import { YaverDeviceDogfood, type DeviceDogfoodOptions, type DeviceDogfoodSession, type DeviceDogfoodState } from './deviceDogfood';
+
+export interface DogfoodOnboardingOptions extends DeviceDogfoodOptions {
+  /** Hint used to preselect the matching project returned by the owner machine. */
+  projectName?: string;
+  /** Framework fallback when the machine has not classified the project yet. */
+  framework?: string;
+}
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   const maybeNodeTimer = timer as unknown as { unref?: () => void };
@@ -170,6 +178,7 @@ let p2pRelayPassword: string = '';
 let autoStartTimer: ReturnType<typeof setTimeout> | null = null;
 let reportLaunchInFlight = false;
 let crashReportInFlight = false;
+let dogfoodOnboarding: DogfoodOnboardingOptions | null = null;
 
 /** Resolve the user's relay password by validating their auth token
  *  against Convex. Used whenever we (re)build the P2PClient so a
@@ -798,6 +807,27 @@ export class YaverFeedback {
     DeviceEventEmitter.emit('yaverFeedback:startMachinePicker');
   }
 
+  /** Begin the reusable host-app Dogfood wizard. Owner OAuth and machine
+   * selection intentionally happen before installation enrollment/runtime
+   * controls because starting builds or runners is owner-level authority. */
+  static beginDogfoodOnboarding(options: DogfoodOnboardingOptions): void {
+    dogfoodOnboarding = options;
+    if (!config) YaverFeedback.init({ autoLogin: true } as FeedbackConfig);
+    if (!YaverFeedback.isAuthed()) {
+      YaverFeedback.showLogin();
+      return;
+    }
+    YaverFeedback.showMachinePicker();
+  }
+
+  static getDogfoodOnboarding(): DogfoodOnboardingOptions | null {
+    return dogfoodOnboarding;
+  }
+
+  static clearDogfoodOnboarding(): void {
+    dogfoodOnboarding = null;
+  }
+
   /**
    * Update the selected remote device. Resets the cached agent URL so the
    * next `startReport()` (or FloatingButton press) rediscovers against the
@@ -1148,6 +1178,45 @@ export class YaverFeedback {
     return resolveSDKDogfood(config?.dogfood);
   }
 
+  /** One-call, account-free Dogfood bootstrap for third-party apps. On first
+   * launch it creates/proves the installation key and returns pending; after
+   * owner approval the same call obtains a short-lived scoped Yaver session
+   * and enables Dogfood UX without the host app implementing OAuth. */
+  static async enableDeviceDogfood(options: DeviceDogfoodOptions): Promise<{
+    status: DeviceDogfoodState;
+    installationId: string;
+    session: DeviceDogfoodSession | null;
+  }> {
+    const client = new YaverDeviceDogfood(options);
+    let status = await client.status();
+    if (status === 'unregistered' || status === 'pending' || status === 'cancelled' || status === 'revoked' || status === 'superseded') {
+      const enrolled = status === 'unregistered' || status === 'pending'
+        ? await client.enroll(Platform.OS)
+        : await client.reRegister(Platform.OS);
+      status = enrolled.status;
+    }
+    const info = await client.enrollmentInfo();
+    const session = status === 'active' ? await client.session() : null;
+    if (!config) YaverFeedback.init({ autoLogin: false } as FeedbackConfig);
+    if (config) {
+      config.dogfood = {
+        enabled: status === 'active' && !!session,
+        appId: options.appId,
+        installationId: info.installationId,
+        installationStatus: status === 'active' && session ? 'active' : status === 'unregistered' ? 'pending' : status,
+        label: options.label,
+      };
+      // A normal Yaver OAuth session remains authoritative for the runtime
+      // wizard. Only account-free hosts adopt the narrow installation token.
+      if (session && !config.authToken) await YaverFeedback.setAuthToken(session.token);
+    }
+    try {
+      const { DeviceEventEmitter } = require('react-native');
+      DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: !!session, status });
+    } catch { /* noop */ }
+    return { status, installationId: info.installationId, session };
+  }
+
   /** Confirmed by the Y badge/UI before this is called. Reverts this SDK to
    * normal Feedback mode for the remainder of the app run. */
   static async exitDogfoodMode(): Promise<void> {
@@ -1157,7 +1226,7 @@ export class YaverFeedback {
     await cfg.onExit?.();
     try {
       const { DeviceEventEmitter } = require('react-native');
-      DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: false });
+      DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: false, exited: true });
     } catch { /* noop */ }
   }
 

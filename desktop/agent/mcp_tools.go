@@ -3406,6 +3406,37 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 	}
 	tools = append(tools, sdkTokenTools...)
 
+	// Third-party apps can enroll with a generated installation key even when
+	// they have no backend/OAuth. MCP manages public app policy and owner
+	// approval only; private keys and raw installation sessions never cross it.
+	dogfoodRegistryTools := []map[string]interface{}{
+		{
+			"name": "dogfood_app_list", "description": "List third-party apps enabled for account-free device Dogfood enrollment.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}, "additionalProperties": false},
+		},
+		{
+			"name": "dogfood_app_set", "description": "Create or update a third-party Dogfood app. Defaults to feedback+blackbox; grant builds/reload only with explicit owner intent.",
+			"inputSchema": map[string]interface{}{"type": "object", "required": []string{"appId", "label"}, "properties": map[string]interface{}{
+				"appId": map[string]interface{}{"type": "string"}, "label": map[string]interface{}{"type": "string"},
+				"projectSlug": map[string]interface{}{"type": "string"}, "targetDeviceId": map[string]interface{}{"type": "string"},
+				"allowedScopes": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+				"enabled":       map[string]interface{}{"type": "boolean"},
+			}, "additionalProperties": false},
+		},
+		{
+			"name": "dogfood_installation_list", "description": "List pending, active, revoked, cancelled, and superseded third-party app installations. Public identity metadata only.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"appId": map[string]interface{}{"type": "string"}}, "additionalProperties": false},
+		},
+		{
+			"name": "dogfood_installation_action", "description": "Approve a key-verified pending installation, cancel a pending enrollment, or revoke an active installation. Re-registration approval supersedes the prior key generation for the same slot.",
+			"inputSchema": map[string]interface{}{"type": "object", "required": []string{"installationId", "action"}, "properties": map[string]interface{}{
+				"installationId": map[string]interface{}{"type": "string", "description": "Backend installation document id from dogfood_installation_list."},
+				"action":         map[string]interface{}{"type": "string", "enum": []string{"approve", "cancel", "revoke"}},
+			}, "additionalProperties": false},
+		},
+	}
+	tools = append(tools, dogfoodRegistryTools...)
+
 	// --- Feedback SDK (MCP) ---
 	// Covers the "attach a bug report from an agent" path. CLI already
 	// has `yaver feedback list/show/fix/delete` — this MCP parity

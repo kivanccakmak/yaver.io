@@ -111,6 +111,35 @@ small `Y` identifies Dogfood mode; tapping it offers a confirmed exit back to
 Feedback mode. This allowlist controls SDK presentation only—tasks and reloads
 still require the user's normal Yaver authentication.
 
+### Device-enrolled Dogfood for apps without their own OAuth/backend
+
+Mount `FeedbackModal`, then call the reusable wizard from the host app's
+Settings button:
+
+```tsx
+YaverFeedback.beginDogfoodOnboarding({
+  appId: 'io.example.app',
+  label: 'Example',
+  projectName: 'example',
+  framework: 'expo',
+});
+```
+
+The wizard runs Yaver OAuth first, then machine, coding runner/model, project,
+and Browser/Hermes/WebRTC selection. It renders raw build logs and exposes the
+ready preview. The app also creates a random installation ID and an Ed25519 key
+inside SecureStore. The ID is a public handle, not a credential: enrollment
+and each short session require a server challenge signed by the private key.
+An owner approves, cancels, or revokes the installation from Yaver Settings or
+MCP. Re-registering rotates the key/ID, preserves only the logical local slot,
+and supersedes that slot's prior active generation without disabling another
+phone.
+
+Install `expo-secure-store` and `expo-crypto` in Expo hosts. Bare React Native
+hosts may provide a `secureStore` implementation. Runtime/build controls still
+require full Yaver OAuth; the account-free installation token defaults to
+`feedback` + `blackbox` and cannot be rotated into a long-lived owner token.
+
 ### Embeddable Dogfood runtime
 
 App owners can also embed the actual source → dev-server → render lifecycle.

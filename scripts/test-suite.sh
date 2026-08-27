@@ -615,6 +615,7 @@ run_unit_tests() {
               convex/accessSigPolicy.test.mts \
               convex/billingWebhook.test.mts \
               convex/credentialHandoffDevices.test.mts \
+              convex/dogfoodEnrollmentPolicy.test.mts \
               convex/relayPoolPolicy.test.mts \
               convex/settingsSecretPolicy.test.mts \
               convex/taskPlacementPolicy.test.mts \

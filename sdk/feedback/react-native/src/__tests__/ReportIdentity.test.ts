@@ -26,7 +26,21 @@ function mockExpoConstants(expoConfig: unknown, extra: Record<string, unknown> =
   mockExpoModule.default = { expoConfig, ...extra };
 }
 
+function loadResolve(): typeof import('../P2PClient').resolveReportIdentity {
+  let resolve!: typeof import('../P2PClient').resolveReportIdentity;
+  jest.isolateModules(() => {
+    jest.doMock('react-native', () => mockReactNative);
+    jest.doMock('expo-constants', () => mockExpoModule, { virtual: true });
+    resolve = require('../P2PClient').resolveReportIdentity;
+  });
+  return resolve;
+}
+
 beforeEach(() => {
+  // P2PClient is imported by many suites with different virtual RN/Expo
+  // modules. Re-evaluate it against this suite's mutable modules every time;
+  // an order-dependent green test is not an identity-routing guard.
+  jest.resetModules();
   mockReactNative.Platform.OS = 'ios';
   mockReactNative.NativeModules = {};
   mockExpoModule.default = {};
@@ -35,7 +49,7 @@ beforeEach(() => {
 describe('resolveReportIdentity', () => {
   it('resolves app name and bundle id from the Expo config', () => {
     mockExpoConstants(EXPO_CONFIG);
-    const { resolveReportIdentity: resolve } = require('../P2PClient');
+    const resolve = loadResolve();
 
     const identity = resolve();
 
@@ -51,7 +65,7 @@ describe('resolveReportIdentity', () => {
 
   it('never reports a project path', () => {
     mockExpoConstants(EXPO_CONFIG);
-    const { resolveReportIdentity: resolve } = require('../P2PClient');
+    const resolve = loadResolve();
 
     // The agent ignores client-supplied paths on feedback reports (an
     // untrusted guest could otherwise aim the fix task's CWD at ~/.ssh).
@@ -61,7 +75,7 @@ describe('resolveReportIdentity', () => {
 
   it('prefers the native runtime version over the manifest version', () => {
     mockExpoConstants(EXPO_CONFIG, { nativeAppVersion: '1.9.158', nativeBuildVersion: '428' });
-    const { resolveReportIdentity: resolve } = require('../P2PClient');
+    const resolve = loadResolve();
 
     const identity = resolve();
     // A stale manifest shouldn't misreport which build is actually running.
@@ -71,7 +85,7 @@ describe('resolveReportIdentity', () => {
 
   it('falls back to the manifest version when no native version is exposed', () => {
     mockExpoConstants(EXPO_CONFIG);
-    const { resolveReportIdentity: resolve } = require('../P2PClient');
+    const resolve = loadResolve();
 
     const identity = resolve();
     expect(identity.app.version).toBe('1.9.157');
@@ -97,7 +111,7 @@ describe('resolveReportIdentity', () => {
 
     it("never reports the host's bundle id as the guest's", () => {
       mockContainer({ inheritedGuestProjectName: 'talos / mobile' });
-      const { resolveReportIdentity: resolve } = require('../P2PClient');
+      const resolve = loadResolve();
 
       const identity = resolve();
 
@@ -111,7 +125,7 @@ describe('resolveReportIdentity', () => {
 
     it('reports the guest project Yaver pinned', () => {
       mockContainer({ inheritedGuestProjectName: 'talos / mobile' });
-      const { resolveReportIdentity: resolve } = require('../P2PClient');
+      const resolve = loadResolve();
 
       const identity = resolve();
       expect(identity.appName).toBe('talos / mobile');
@@ -120,7 +134,7 @@ describe('resolveReportIdentity', () => {
 
     it("lets the app's own declaration win over the pinned project", () => {
       mockContainer({ inheritedGuestProjectName: 'something-else' });
-      const { resolveReportIdentity: resolve } = require('../P2PClient');
+      const resolve = loadResolve();
 
       // A bundle knows its own identity; nothing ambient should override it.
       const identity = resolve({ projectName: 'Talos', bundleId: 'works.talos.mobile' });
@@ -130,7 +144,7 @@ describe('resolveReportIdentity', () => {
 
     it('reports nothing rather than something wrong when no project is pinned', () => {
       mockContainer({});
-      const { resolveReportIdentity: resolve } = require('../P2PClient');
+      const resolve = loadResolve();
 
       // Better for the agent to reject/fall back than to confidently edit
       // the wrong repo.
@@ -143,7 +157,7 @@ describe('resolveReportIdentity', () => {
 
   it('lets an explicit declaration override the ambient identity', () => {
     mockExpoConstants(EXPO_CONFIG);
-    const { resolveReportIdentity: resolve } = require('../P2PClient');
+    const resolve = loadResolve();
 
     const identity = resolve({ projectName: 'Override', bundleId: 'com.override.app' });
     expect(identity.appName).toBe('Override');
@@ -152,7 +166,7 @@ describe('resolveReportIdentity', () => {
 
   it('passes declared surfaces stacks and voice metadata through', () => {
     mockExpoConstants(EXPO_CONFIG);
-    const { resolveReportIdentity: resolve } = require('../P2PClient');
+    const resolve = loadResolve();
 
     const identity = resolve({
       projectName: 'Omni',
@@ -188,7 +202,7 @@ describe('resolveReportIdentity', () => {
     // Bare RN with no expo-constants and no native modules. The report must
     // still upload — the agent just resolves it by its own means.
     mockExpoModule.default = {};
-    const { resolveReportIdentity: resolve } = require('../P2PClient');
+    const resolve = loadResolve();
 
     const identity = resolve();
     expect(identity.project).toBeUndefined();
