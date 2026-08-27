@@ -510,6 +510,7 @@ fi
 (
   set +e
   xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
+    -destination 'generic/platform=iOS' \
     -archivePath /tmp/Yaver.xcarchive archive \
     DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
     MARKETING_VERSION="$APP_MARKETING_VERSION" CURRENT_PROJECT_VERSION="$NEW_BUILD" \
