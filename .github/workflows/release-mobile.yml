@@ -65,7 +65,10 @@ jobs:
     # the opt-in.
     needs: validate
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_testflight == 'true' }}
-    runs-on: macos-15
+    # Apple raised the upload floor to the iOS 26 SDK. macos-15 currently
+    # carries Xcode 16 / iOS 18.5 and can archive successfully only to fail
+    # during export after the expensive build. Pin the matching GitHub image.
+    runs-on: macos-26
     env:
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
@@ -73,6 +76,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20.19.4"
+
+      - name: Verify App Store SDK floor
+        run: |
+          . scripts/apple-xcode-auth.sh
+          apple_require_store_sdk iphoneos 26
 
       - name: Install dependencies
         run: cd mobile && npm ci --legacy-peer-deps

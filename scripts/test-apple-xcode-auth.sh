@@ -122,6 +122,10 @@ grep -q -- "-destination 'generic/platform=iOS'" "$testflight_script" || \
   fail "iOS archive must target a generic iOS device, never the CI runner's My Mac destination"
 grep -q -- "-destination 'generic/platform=iOS'" "$ROOT/.github/workflows/release-mobile.yml" || \
   fail "Release Mobile CI must target generic iOS before automatic provisioning"
+grep -q 'runs-on: macos-26' "$ROOT/.github/workflows/release-mobile.yml" || \
+  fail "Release Mobile CI must use a runner with Apple's required iOS 26 SDK"
+grep -q 'apple_require_store_sdk iphoneos 26' "$ROOT/.github/workflows/release-mobile.yml" || \
+  fail "Release Mobile CI must reject a stale Store SDK before dependency install and archive"
 grep -q 'APPLE_XCODE_AUTH_MODE.*api-key' "$testflight_script" || \
   fail "iOS API-key deploys must avoid the expirable Xcode account upload session"
 grep -q 'EXPORT_DESTINATION="export"' "$testflight_script" || \
