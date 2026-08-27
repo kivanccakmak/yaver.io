@@ -437,7 +437,8 @@ func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, swe
 		}
 		commitMsg = "chore(release): " + strings.Join(parts, " + ")
 	}
-	if err := ctx.runCmd(repoRoot, "git", "commit", "-m", commitMsg); err != nil {
+	commitArgs := releaseCommitArgs(commitMsg)
+	if err := ctx.runCmd(repoRoot, commitArgs[0], commitArgs[1:]...); err != nil {
 		return fmt.Errorf("git commit: %w", err)
 	}
 
@@ -457,6 +458,13 @@ func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, swe
 	fmt.Printf("  %s release-cli.yml dispatched — CI is building binaries + publishing the npm wrapper\n", ctx.prefix)
 	fmt.Printf("  %s monitor: gh run list -w release-cli.yml -L 1\n", ctx.prefix)
 	return nil
+}
+
+// Release commits land on a branch protected by GitHub's verified-signature
+// rule. An explicit -S is required because a clean release clone may not carry
+// the source checkout's repository-local commit.gpgsign setting.
+func releaseCommitArgs(message string) []string {
+	return []string{"git", "commit", "-S", "-m", message}
 }
 
 func releaseCLIWorkflowArgs() []string {

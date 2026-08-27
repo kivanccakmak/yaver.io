@@ -13,6 +13,13 @@ func TestReleaseCLIUsesProtectedWorkflowDispatch(t *testing.T) {
 	}
 }
 
+func TestReleaseCLICommitIsExplicitlySigned(t *testing.T) {
+	want := []string{"git", "commit", "-S", "-m", "cli 1.2.3: release"}
+	if got := releaseCommitArgs("cli 1.2.3: release"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("release commit = %q, want %q", got, want)
+	}
+}
+
 func TestYaverReleaseRemoteAcceptsCanonicalOrigin(t *testing.T) {
 	repo := t.TempDir()
 	run := func(args ...string) {
