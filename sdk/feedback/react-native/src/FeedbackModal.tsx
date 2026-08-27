@@ -551,8 +551,12 @@ export const FeedbackModal: React.FC = () => {
   useEffect(() => {
     mountedRef.current = true;
     const sub = DeviceEventEmitter.addListener('yaverFeedback:startReport', () => {
-      if (YaverFeedback.isEnabled()) {
-        const onboarding = YaverFeedback.getDogfoodOnboarding();
+      const onboarding = YaverFeedback.getDogfoodOnboarding();
+      // Explicit Dogfood remains usable when passive capture/shake is off.
+      // The host still owns visibility; server OAuth/device signatures own
+      // authority. Keeping this event path independent avoids toggling the
+      // user's feedback preference merely to open Developer Mode.
+      if (YaverFeedback.isEnabled() || onboarding) {
         const directDogfood = YaverFeedback.getDogfoodStatus().active;
         setDogfoodActive(directDogfood);
         setVisible(true);

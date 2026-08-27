@@ -56,13 +56,22 @@ export const AuthOverlay: React.FC = () => {
   const handleLoggedIn = async (newToken: string) => {
     setToken(newToken);
     await YaverFeedback.setAuthToken(newToken);
-    openPicker();
+    if (YaverFeedback.getDogfoodOnboarding()) {
+      closeAll();
+      await YaverFeedback.continueDogfoodOnboarding();
+    } else {
+      openPicker();
+    }
   };
 
   const handleDevicePicked = async (device: RemoteDevice) => {
     await YaverFeedback.setPreferredDevice(device.deviceId);
     closeAll();
-    DeviceEventEmitter.emit('yaverFeedback:startReport');
+    if (YaverFeedback.getDogfoodOnboarding()) {
+      await YaverFeedback.continueDogfoodOnboarding();
+    } else {
+      DeviceEventEmitter.emit('yaverFeedback:startReport');
+    }
   };
 
   return (

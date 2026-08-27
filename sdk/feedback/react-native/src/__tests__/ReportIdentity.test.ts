@@ -29,8 +29,11 @@ function mockExpoConstants(expoConfig: unknown, extra: Record<string, unknown> =
 function loadResolve(): typeof import('../P2PClient').resolveReportIdentity {
   let resolve!: typeof import('../P2PClient').resolveReportIdentity;
   jest.isolateModules(() => {
-    jest.doMock('react-native', () => mockReactNative);
-    jest.doMock('expo-constants', () => mockExpoModule, { virtual: true });
+    // setMock pins the exact mutable objects for this isolated registry. A
+    // doMock factory could be replaced by another suite's virtual Expo mock
+    // when Jest reordered this run, producing an intermittent false red.
+    jest.setMock('react-native', mockReactNative);
+    jest.setMock('expo-constants', mockExpoModule);
     resolve = require('../P2PClient').resolveReportIdentity;
   });
   return resolve;

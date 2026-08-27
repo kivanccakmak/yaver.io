@@ -1,3 +1,18 @@
+export interface DogfoodAccessSnapshot {
+  appId: string;
+  ownerAuthenticated: boolean;
+  installationId?: string;
+  deviceState: 'unknown' | 'unregistered' | 'pending' | 'active' | 'cancelled' | 'revoked' | 'superseded';
+  /** True only for a backend-approved device key or an authenticated owner. */
+  authorized: boolean;
+}
+
+export interface DogfoodFlowSnapshot {
+  phase: 'idle' | 'denied' | 'auth-required' | 'machine-required' | 'opening' | 'error';
+  appId?: string;
+  error?: string;
+}
+
 export interface SDKDogfoodConfig {
   /** Explicit opt-in. Omitted/false keeps the normal Feedback SDK. */
   enabled?: boolean;
@@ -13,6 +28,16 @@ export interface SDKDogfoodConfig {
   onExit?: () => void | Promise<void>;
   /** Optional app label shown beside Dogfood mode. */
   label?: string;
+  /** Project/framework hints used by the zero-orchestration onboarding UI. */
+  projectName?: string;
+  framework?: string;
+  /** Advanced override for staging/self-hosted enrollment. */
+  backendUrl?: string;
+  /** Presentation-only ACL hook, e.g. `() => user.isAdmin`. Server-side OAuth
+   * or device-signature verification remains the authority boundary. */
+  canShow?: (access: DogfoodAccessSnapshot) => boolean | Promise<boolean>;
+  /** Optional callback alternative to onDogfoodFlowState(). */
+  onStateChange?: (state: DogfoodFlowSnapshot) => void;
 }
 
 export interface SDKDogfoodStatus {

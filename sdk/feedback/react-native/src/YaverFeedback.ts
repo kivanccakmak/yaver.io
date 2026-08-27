@@ -26,7 +26,7 @@ import {
   setQuickIconColorPreset,
   QuickIconColorPreset,
 } from './preferences';
-import { resolveSDKDogfood, type SDKDogfoodStatus } from './dogfoodPolicy';
+import { resolveSDKDogfood, type SDKDogfoodStatus, type DogfoodAccessSnapshot } from './dogfoodPolicy';
 import { YaverDeviceDogfood, type DeviceDogfoodOptions, type DeviceDogfoodSession, type DeviceDogfoodState } from './deviceDogfood';
 
 export interface DogfoodOnboardingOptions extends DeviceDogfoodOptions {
@@ -34,6 +34,13 @@ export interface DogfoodOnboardingOptions extends DeviceDogfoodOptions {
   projectName?: string;
   /** Framework fallback when the machine has not classified the project yet. */
   framework?: string;
+}
+
+export type DogfoodFlowPhase = 'idle' | 'denied' | 'auth-required' | 'machine-required' | 'opening' | 'error';
+export interface DogfoodFlowState {
+  phase: DogfoodFlowPhase;
+  appId?: string;
+  error?: string;
 }
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
@@ -179,6 +186,16 @@ let autoStartTimer: ReturnType<typeof setTimeout> | null = null;
 let reportLaunchInFlight = false;
 let crashReportInFlight = false;
 let dogfoodOnboarding: DogfoodOnboardingOptions | null = null;
+let dogfoodFlowState: DogfoodFlowState = { phase: 'idle' };
+const dogfoodFlowListeners = new Set<(state: DogfoodFlowState) => void>();
+
+function publishDogfoodFlow(state: DogfoodFlowState): void {
+  dogfoodFlowState = state;
+  try { config?.dogfood?.onStateChange?.(state); } catch { /* host callback */ }
+  dogfoodFlowListeners.forEach((listener) => {
+    try { listener(state); } catch { /* host callbacks never break the SDK */ }
+  });
+}
 
 /** Resolve the user's relay password by validating their auth token
  *  against Convex. Used whenever we (re)build the P2PClient so a
@@ -634,7 +651,7 @@ export class YaverFeedback {
    * Sets config.agentUrl and creates P2PClient on success.
    */
   static async discoverAgent(): Promise<void> {
-    if (!config || !enabled) return;
+    if (!config || (!enabled && !dogfoodOnboarding)) return;
     if (config.agentUrl) return; // already have a URL
     if (!config.authToken) return; // need auth before discovery can succeed
 
@@ -663,7 +680,7 @@ export class YaverFeedback {
    * Returns true when a new URL was adopted.
    */
   static async reconnect(): Promise<boolean> {
-    if (!config || !enabled) return false;
+    if (!config || (!enabled && !dogfoodOnboarding)) return false;
     if (!config.authToken || !config.convexUrl) return false;
     try {
       const result = await YaverDiscovery.refreshFromConvex({
@@ -807,17 +824,161 @@ export class YaverFeedback {
     DeviceEventEmitter.emit('yaverFeedback:startMachinePicker');
   }
 
-  /** Begin the reusable host-app Dogfood wizard. Owner OAuth and machine
-   * selection intentionally happen before installation enrollment/runtime
-   * controls because starting builds or runners is owner-level authority. */
-  static beginDogfoodOnboarding(options: DogfoodOnboardingOptions): void {
+  /** Configure Dogfood once during host init. Hosts still decide whether and
+   * where to render an affordance; `openDogfood()` owns all flow mechanics. */
+  static configureDogfood(options: DogfoodOnboardingOptions): void {
     dogfoodOnboarding = options;
-    if (!config) YaverFeedback.init({ autoLogin: true } as FeedbackConfig);
-    if (!YaverFeedback.isAuthed()) {
-      YaverFeedback.showLogin();
-      return;
+  }
+
+  /**
+   * Open Dogfood using config.dogfood + the normal app identity. Cached OAuth,
+   * machine, runner and model choices are reused. The corresponding picker is
+   * shown only when a required choice is missing.
+   */
+  static async openDogfood(overrides?: Partial<DogfoodOnboardingOptions>): Promise<DogfoodFlowState> {
+    if (!config && overrides?.appId) {
+      return YaverFeedback.beginDogfoodOnboarding(overrides as DogfoodOnboardingOptions);
     }
-    YaverFeedback.showMachinePicker();
+    const configured = config?.dogfood;
+    const appId = overrides?.appId || configured?.appId || config?.bundleId;
+    if (!appId) {
+      const state: DogfoodFlowState = { phase: 'error', error: 'Dogfood requires an appId or FeedbackConfig.bundleId.' };
+      publishDogfoodFlow(state);
+      return state;
+    }
+    dogfoodOnboarding = {
+      appId,
+      label: overrides?.label || configured?.label || config?.projectName || appId,
+      projectName: overrides?.projectName || configured?.projectName || config?.projectName,
+      framework: overrides?.framework || configured?.framework,
+      backendUrl: overrides?.backendUrl || configured?.backendUrl,
+      secureStore: overrides?.secureStore,
+    };
+    if (configured?.canShow) {
+      // Visibility is advisory and must never put a backend round-trip in
+      // front of the action. Hosts that want full installation status call
+      // getDogfoodAccess() explicitly; the callback gets the cheap auth view.
+      const ownerAuthenticated = YaverFeedback.isAuthed() || Boolean(await getToken());
+      const access: DogfoodAccessSnapshot = {
+        appId,
+        ownerAuthenticated,
+        deviceState: 'unknown',
+        authorized: ownerAuthenticated,
+      };
+      try {
+        if (!(await configured.canShow(access))) {
+          const state: DogfoodFlowState = { phase: 'denied', appId };
+          publishDogfoodFlow(state);
+          return state;
+        }
+      } catch (cause) {
+        const state: DogfoodFlowState = {
+          phase: 'error',
+          appId,
+          error: cause instanceof Error ? cause.message : String(cause),
+        };
+        publishDogfoodFlow(state);
+        return state;
+      }
+    }
+    return YaverFeedback.continueDogfoodOnboarding();
+  }
+
+  /** Resolve the host-facing ACL snapshot without granting authority. This is
+   * the one endpoint custom Settings screens need for visibility/status UI. */
+  static async getDogfoodAccess(): Promise<DogfoodAccessSnapshot> {
+    const configured = config?.dogfood;
+    const appId = dogfoodOnboarding?.appId || configured?.appId || config?.bundleId;
+    if (!appId) throw new Error('Dogfood requires an appId or FeedbackConfig.bundleId.');
+    let installationId: string | undefined;
+    let deviceState: DogfoodAccessSnapshot['deviceState'] = 'unknown';
+    try {
+      const device = new YaverDeviceDogfood({
+        appId,
+        label: dogfoodOnboarding?.label || configured?.label || config?.projectName,
+        backendUrl: dogfoodOnboarding?.backendUrl || configured?.backendUrl,
+        secureStore: dogfoodOnboarding?.secureStore,
+      });
+      installationId = (await device.enrollmentInfo()).installationId;
+      deviceState = await device.status();
+    } catch {
+      // UI status must degrade to unknown; openDogfood still offers owner OAuth.
+    }
+    const ownerAuthenticated = YaverFeedback.isAuthed() || Boolean(await getToken());
+    return {
+      appId,
+      ownerAuthenticated,
+      installationId,
+      deviceState,
+      authorized: ownerAuthenticated || deviceState === 'active',
+    };
+  }
+
+  /** Backwards-compatible entry point for existing integrations. */
+  static async beginDogfoodOnboarding(options: DogfoodOnboardingOptions): Promise<DogfoodFlowState> {
+    YaverFeedback.configureDogfood(options);
+    if (!config) {
+      YaverFeedback.init({
+        autoLogin: true,
+        enabled: true,
+        projectName: options.projectName || options.label,
+        bundleId: options.appId,
+      } as FeedbackConfig);
+    }
+    return YaverFeedback.continueDogfoodOnboarding();
+  }
+
+  /** Continue after OAuth or machine selection. Public so custom host UI can
+   * hand control back without recreating the SDK state machine. */
+  static async continueDogfoodOnboarding(): Promise<DogfoodFlowState> {
+    const appId = dogfoodOnboarding?.appId;
+    if (!dogfoodOnboarding || !appId) {
+      const state: DogfoodFlowState = { phase: 'error', error: 'Dogfood is not configured.' };
+      publishDogfoodFlow(state);
+      return state;
+    }
+    await YaverFeedback.hydrateSession();
+    if (!YaverFeedback.isAuthed()) {
+      // An approved installation is the account-free lane: prove possession
+      // with the private key in SecureStore, mint a narrow session, and reuse
+      // the backend-pinned target machine. A new/pending installation is also
+      // registered here so an owner can approve it from Yaver mobile/MCP.
+      try {
+        const enrolled = await YaverFeedback.enableDeviceDogfood(dogfoodOnboarding);
+        if (enrolled.session?.targetDeviceId && config) {
+          await YaverFeedback.setPreferredDevice(enrolled.session.targetDeviceId);
+        }
+      } catch {
+        // Owner OAuth remains the visible recovery route.
+      }
+    }
+    if (!YaverFeedback.isAuthed()) {
+      const state: DogfoodFlowState = { phase: 'auth-required', appId };
+      publishDogfoodFlow(state);
+      YaverFeedback.showLogin();
+      return state;
+    }
+    if (!config?.preferredDeviceId) {
+      const state: DogfoodFlowState = { phase: 'machine-required', appId };
+      publishDogfoodFlow(state);
+      YaverFeedback.showMachinePicker();
+      return state;
+    }
+    const state: DogfoodFlowState = { phase: 'opening', appId };
+    publishDogfoodFlow(state);
+    const { DeviceEventEmitter } = require('react-native');
+    DeviceEventEmitter.emit('yaverFeedback:startReport');
+    return state;
+  }
+
+  static getDogfoodFlowState(): DogfoodFlowState {
+    return dogfoodFlowState;
+  }
+
+  static onDogfoodFlowState(listener: (state: DogfoodFlowState) => void): () => void {
+    dogfoodFlowListeners.add(listener);
+    listener(dogfoodFlowState);
+    return () => dogfoodFlowListeners.delete(listener);
   }
 
   static getDogfoodOnboarding(): DogfoodOnboardingOptions | null {
@@ -826,6 +987,7 @@ export class YaverFeedback {
 
   static clearDogfoodOnboarding(): void {
     dogfoodOnboarding = null;
+    publishDogfoodFlow({ phase: 'idle' });
   }
 
   /**
@@ -847,6 +1009,7 @@ export class YaverFeedback {
     p2pClient = null;
     renderP2PClient = null;
     p2pAuthToken = null;
+    await import('./auth').then(({ saveSelectedDeviceId }) => saveSelectedDeviceId(deviceId));
     await YaverFeedback.discoverAgent();
   }
 
@@ -1200,6 +1363,7 @@ export class YaverFeedback {
     if (!config) YaverFeedback.init({ autoLogin: false } as FeedbackConfig);
     if (config) {
       config.dogfood = {
+        ...config.dogfood,
         enabled: status === 'active' && !!session,
         appId: options.appId,
         installationId: info.installationId,

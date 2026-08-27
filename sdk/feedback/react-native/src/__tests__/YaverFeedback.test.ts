@@ -23,6 +23,7 @@ jest.mock('../auth', () => ({
   setStrictNativeAuth: jest.fn(),
   getToken: jest.fn(async () => null),
   getSelectedDeviceId: jest.fn(async () => null),
+  saveSelectedDeviceId: jest.fn(async () => {}),
   clearToken: jest.fn(async () => {}),
   clearSelectedDeviceId: jest.fn(async () => {}),
   listReachableDevices: jest.fn(async () => ({
@@ -53,16 +54,51 @@ beforeEach(() => {
 
 describe('YaverFeedback', () => {
   describe('Dogfood onboarding', () => {
-    it('starts with Yaver OAuth when the host has no session', () => {
+    it('starts with Yaver OAuth when the host has no session', async () => {
       YaverFeedback.init({ enabled: true });
-      YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app', label: 'Example' });
+      await YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app', label: 'Example' });
       expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('yaverFeedback:startLogin');
     });
 
-    it('asks for a machine after an existing OAuth session', () => {
+    it('asks for a machine after an existing OAuth session', async () => {
       YaverFeedback.init({ enabled: true, authToken: 'owner-token' });
-      YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app', label: 'Example' });
+      await YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app', label: 'Example' });
       expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('yaverFeedback:startMachinePicker');
+    });
+
+    it('reuses the configured app identity and selected machine', async () => {
+      YaverFeedback.init({
+        enabled: true,
+        authToken: 'owner-token',
+        preferredDeviceId: 'device-1',
+        projectName: 'Example',
+        bundleId: 'io.example.app',
+        dogfood: { framework: 'expo' },
+      });
+      const state = await YaverFeedback.openDogfood();
+      expect(state).toEqual({ phase: 'opening', appId: 'io.example.app' });
+      expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('yaverFeedback:startReport');
+      expect(DeviceEventEmitter.emit).not.toHaveBeenCalledWith('yaverFeedback:startMachinePicker');
+    });
+
+    it('publishes flow state for custom host UI', async () => {
+      YaverFeedback.init({ enabled: true });
+      const states: string[] = [];
+      const unsubscribe = YaverFeedback.onDogfoodFlowState((state) => states.push(state.phase));
+      await YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app' });
+      unsubscribe();
+      expect(states[states.length - 1]).toBe('auth-required');
+    });
+
+    it('lets a host ACL hide its affordance without opening auth UI', async () => {
+      YaverFeedback.init({
+        enabled: true,
+        bundleId: 'io.example.app',
+        dogfood: { canShow: () => false },
+      });
+      const state = await YaverFeedback.openDogfood();
+      expect(state).toEqual({ phase: 'denied', appId: 'io.example.app' });
+      expect(DeviceEventEmitter.emit).not.toHaveBeenCalledWith('yaverFeedback:startLogin');
     });
   });
 
