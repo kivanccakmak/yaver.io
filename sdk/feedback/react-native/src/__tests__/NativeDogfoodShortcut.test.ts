@@ -2,7 +2,10 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 const plugin = require('../../app.plugin.js') as {
-  __test: { patchDogfoodAppShortcut(contents: string): string };
+  __test: {
+    patchDogfoodAppShortcut(contents: string): string;
+    patchDogfoodSceneDelegate(contents: string): string;
+  };
 };
 
 describe('native Dogfood shortcut contract', () => {
@@ -23,6 +26,25 @@ public class AppDelegate: ExpoAppDelegate {
     expect(once).toContain('performActionFor shortcutItem');
     expect(once).toContain('markDogfoodShortcutPending()');
     expect(plugin.__test.patchDogfoodAppShortcut(once)).toBe(once);
+  });
+
+  it('patches cold and warm scene-lifecycle delivery idempotently', () => {
+    const source = `
+final class TalosSceneDelegate: UIResponder, UIWindowSceneDelegate {
+  func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions
+  ) {
+    guard scene is UIWindowScene else { return }
+  }
+}
+`;
+    const once = plugin.__test.patchDogfoodSceneDelegate(source);
+    expect(once).toContain('connectionOptions.shortcutItem');
+    expect(once).toContain('func windowScene(');
+    expect(once).toContain('markDogfoodShortcutPending()');
+    expect(plugin.__test.patchDogfoodSceneDelegate(once)).toBe(once);
   });
 
   it('uses dynamic native shortcuts on both platforms', () => {

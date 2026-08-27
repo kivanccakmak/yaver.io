@@ -407,6 +407,88 @@ ${setupAnchor}`
   return patched;
 }
 
+/** Scene-based iOS apps receive Home Screen quick actions through their
+ * UIWindowSceneDelegate, not AppDelegate. A CarPlay scene manifest is enough
+ * to opt an otherwise ordinary Expo app into that lifecycle, so patch the
+ * phone scene delegate when a host has one. */
+function withYaverSceneDelegateShortcut(config) {
+  return withDangerousMod(config, [
+    "ios",
+    (config) => {
+      const appName = config.modRequest.projectName;
+      if (!appName) return config;
+      const sourceDir = path.join(config.modRequest.platformProjectRoot, appName);
+      if (!fs.existsSync(sourceDir)) return config;
+
+      for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith("SceneDelegate.swift")) continue;
+        const sourcePath = path.join(sourceDir, entry.name);
+        const source = fs.readFileSync(sourcePath, "utf8");
+        if (!source.includes("UIWindowSceneDelegate")) continue;
+        const patched = patchDogfoodSceneDelegate(source);
+        if (patched !== source) fs.writeFileSync(sourcePath, patched);
+      }
+      return config;
+    },
+  ]);
+}
+
+function patchDogfoodSceneDelegate(contents) {
+  if (contents.includes("Yaver Feedback SDK Dogfood Scene Shortcut")) return contents;
+
+  let patched = insertAtEndOfMethod(
+    contents,
+    "options connectionOptions: UIScene.ConnectionOptions",
+    `
+    // Yaver Feedback SDK Dogfood Scene Shortcut: cold launch.
+    if let yaverShortcut = connectionOptions.shortcutItem,
+       yaverShortcut.type == YaverHotReload.dogfoodShortcutType {
+      YaverHotReload.markDogfoodShortcutPending()
+    }
+`
+  );
+
+  // A custom scene delegate may already forward quick actions to the patched
+  // AppDelegate. Keep that host-owned behavior instead of declaring a second
+  // method with the same Swift selector.
+  if (patched.includes("performActionFor shortcutItem")) return patched;
+
+  const classCloseIndex = findWindowSceneDelegateClassClose(patched);
+  if (classCloseIndex < 0) return patched;
+  const handler = `
+  // MARK: - Yaver Feedback SDK Dogfood Scene Shortcut
+
+  func windowScene(
+    _ windowScene: UIWindowScene,
+    performActionFor shortcutItem: UIApplicationShortcutItem,
+    completionHandler: @escaping (Bool) -> Void
+  ) {
+    guard shortcutItem.type == YaverHotReload.dogfoodShortcutType else {
+      completionHandler(false)
+      return
+    }
+    YaverHotReload.markDogfoodShortcutPending()
+    completionHandler(true)
+  }
+`;
+  return patched.slice(0, classCloseIndex) + handler + patched.slice(classCloseIndex);
+}
+
+function findWindowSceneDelegateClassClose(contents) {
+  const headerMatch = contents.match(/class\s+\w+\s*:[^{]*UIWindowSceneDelegate[^{]*\{/);
+  if (!headerMatch) return -1;
+  const bodyStart = headerMatch.index + headerMatch[0].length - 1;
+  let depth = 0;
+  for (let i = bodyStart; i < contents.length; i++) {
+    if (contents[i] === "{") depth++;
+    else if (contents[i] === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 // Locate the closing brace of `class AppDelegate: ...` in an Expo
 // Swift AppDelegate file. Returns the index of the matching `}` for
 // the AppDelegate class's opening `{`, or -1 if not found. We need
@@ -711,6 +793,7 @@ function withYaverFeedback(config, props) {
   if (enableHotReload) {
     config = withYaverHotReloadNativeModule(config);
     config = withYaverAppDelegateHook(config);
+    config = withYaverSceneDelegateShortcut(config);
     config = withYaverAndroidHotReload(config);
   }
 
@@ -726,5 +809,10 @@ const yaverFeedbackPlugin = createRunOncePlugin(
 // Pure transforms are exposed for contract tests only. Keeping the test at the
 // config-plugin seam catches template drift before a consumer discovers it in
 // an archive build.
-yaverFeedbackPlugin.__test = { patchDogfoodAppShortcut, findAppDelegateClassClose };
+yaverFeedbackPlugin.__test = {
+  patchDogfoodAppShortcut,
+  patchDogfoodSceneDelegate,
+  findAppDelegateClassClose,
+  findWindowSceneDelegateClassClose,
+};
 module.exports = yaverFeedbackPlugin;
