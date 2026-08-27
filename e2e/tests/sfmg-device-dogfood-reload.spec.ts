@@ -75,6 +75,14 @@ test("SFMG browser Dogfood remains visible through fast and full reload", async 
     await expect(dogfoodAction).toHaveCount(1);
     await expect(dogfoodAction).toBeVisible();
     await expect(page.getByText(/Sign Out|Çıkış/i)).toBeVisible();
+
+    // Dogfood is an account/device onboarding path, not the shake/debug
+    // capture toggle. Turning Feedback SDK off must not unmount the event
+    // consumer and turn this visible action into a silent no-op.
+    const feedbackRow = page.getByText('Feedback SDK', { exact: true }).locator('..').locator('..');
+    const feedbackToggle = feedbackRow.getByRole('switch');
+    if (await feedbackToggle.isChecked()) await feedbackToggle.click();
+    await expect(feedbackToggle).not.toBeChecked();
     await dogfoodAction.click();
     await expect(page.getByText('Sign in to send feedback')).toBeVisible();
     await expect(page.getByText('Continue with Apple')).toBeVisible();
