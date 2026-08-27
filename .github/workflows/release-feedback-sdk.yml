@@ -1,0 +1,36 @@
+name: Release Feedback SDK
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-feedback-sdk
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: sdk/feedback/react-native/package-lock.json
+
+      - name: Require npm publish credentials
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "ERROR: NPM_TOKEN is not configured for this repository or production environment." >&2
+            exit 2
+          fi
+
+      - name: Publish React Native feedback SDK
+        run: ./deploy/deploy.sh feedback-sdk
