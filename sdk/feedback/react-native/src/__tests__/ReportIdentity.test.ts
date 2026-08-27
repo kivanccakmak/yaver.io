@@ -10,9 +10,6 @@ const mockReactNative = {
 };
 const mockExpoModule: { default: Record<string, unknown> } = { default: {} };
 
-jest.mock('react-native', () => mockReactNative);
-jest.mock('expo-constants', () => mockExpoModule, { virtual: true });
-
 /** Mirrors mobile/app.json in the Talos repo — the SDK's first external consumer. */
 const EXPO_CONFIG = {
   name: 'Talos',
@@ -29,11 +26,13 @@ function mockExpoConstants(expoConfig: unknown, extra: Record<string, unknown> =
 function loadResolve(): typeof import('../P2PClient').resolveReportIdentity {
   let resolve!: typeof import('../P2PClient').resolveReportIdentity;
   jest.isolateModules(() => {
-    // setMock pins the exact mutable objects for this isolated registry. A
-    // doMock factory could be replaced by another suite's virtual Expo mock
-    // when Jest reordered this run, producing an intermittent false red.
-    jest.setMock('react-native', mockReactNative);
-    jest.setMock('expo-constants', mockExpoModule);
+    // Configure the mocks inside the isolated registry. Top-level virtual
+    // mocks are sticky across Jest's worker registry and lost to the real
+    // expo-constants package after a clean npm ci, making this suite depend on
+    // file order. doMock is non-hoisted and binds these exact mutable objects
+    // immediately before P2PClient is evaluated.
+    jest.doMock('react-native', () => mockReactNative);
+    jest.doMock('expo-constants', () => mockExpoModule);
     resolve = require('../P2PClient').resolveReportIdentity;
   });
   return resolve;
