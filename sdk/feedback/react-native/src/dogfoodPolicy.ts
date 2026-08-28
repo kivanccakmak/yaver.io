@@ -4,9 +4,12 @@ export interface DogfoodAccessSnapshot {
   yaverAuthenticated: boolean;
   /** Backend-confirmed owner/maintainer of this exact appId. */
   ownerAuthorized: boolean;
+  /** Backend-confirmed app assignment for this Yaver account. App owners are
+   * assigned implicitly; other accounts require an active owner grant. */
+  accountAuthorized: boolean;
   installationId?: string;
   deviceState: 'unknown' | 'unregistered' | 'pending' | 'active' | 'cancelled' | 'revoked' | 'superseded';
-  /** True only for a backend-approved device key or an authenticated owner. */
+  /** True only for an assigned account and this backend-approved device key. */
   authorized: boolean;
 }
 
@@ -44,6 +47,16 @@ export interface SDKDogfoodConfig {
   /** ACL-backed Home Screen/App Shortcut. Dynamic and absent until Yaver
    * owner auth or this installation's approved key authorizes it. */
   appShortcut?: boolean | { label?: string };
+  /** Smart in-app quick controls. On supported standalone iOS/Android builds,
+   * a three-finger hold opens a two-action card with no persistent overlay.
+   * Unsupported/accessibility-conflicted devices may show a minimized,
+   * draggable Y fallback. Yaver host/container mode suppresses both. */
+  controlGesture?: boolean | {
+    /** Hold duration, clamped to 650–2000 ms. Default 900 ms. */
+    durationMs?: number;
+    /** Default `minimized-y`; use `none` when Settings is the only fallback. */
+    fallback?: 'minimized-y' | 'none';
+  };
 }
 
 export interface SDKDogfoodStatus {

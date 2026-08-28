@@ -207,6 +207,7 @@ export async function clearSelectedDeviceId(): Promise<void> {
 export async function getDogfoodAccountAccess(appId: string, token: string, installationId?: string): Promise<{
   authenticated: boolean;
   ownerAuthorized: boolean;
+  accountAuthorized: boolean;
   installationAuthorized: boolean;
 }> {
   try {
@@ -219,15 +220,16 @@ export async function getDogfoodAccountAccess(appId: string, token: string, inst
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    if (!response.ok) return { authenticated: false, ownerAuthorized: false, installationAuthorized: false };
+    if (!response.ok) return { authenticated: false, ownerAuthorized: false, accountAuthorized: false, installationAuthorized: false };
     const result = await response.json();
     return {
       authenticated: result?.authenticated === true,
       ownerAuthorized: result?.ownerAuthorized === true,
+      accountAuthorized: result?.accountAuthorized === true,
       installationAuthorized: result?.installationAuthorized === true,
     };
   } catch {
-    return { authenticated: false, ownerAuthorized: false, installationAuthorized: false };
+    return { authenticated: false, ownerAuthorized: false, accountAuthorized: false, installationAuthorized: false };
   }
 }
 

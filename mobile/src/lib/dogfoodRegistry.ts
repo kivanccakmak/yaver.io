@@ -36,6 +36,15 @@ export interface DogfoodInstallationRow {
   tester?: { name: string; email: string };
 }
 
+export interface DogfoodTesterRow {
+  _id: string;
+  appId: string;
+  testerEmail: string;
+  status: "active" | "revoked";
+  testerUserId?: string;
+  tester?: { name?: string; email: string };
+}
+
 interface ControlIdentity { deviceId: string; publicKey: string; secretKey: string }
 
 async function readIdentity(): Promise<string | null> {
@@ -95,6 +104,17 @@ export async function listDogfoodCatalog(token: string): Promise<DogfoodCatalogR
 
 export async function saveDogfoodApp(token: string, app: { appId: string; label: string; projectSlug?: string; targetDeviceId?: string; allowedScopes?: string[]; enabled?: boolean }): Promise<DogfoodAppRow> {
   return (await request(token, "/dogfood/apps", { method: "POST", body: JSON.stringify(app) })).app;
+}
+
+export async function listDogfoodTesters(token: string, appId?: string): Promise<DogfoodTesterRow[]> {
+  const query = appId ? `?appId=${encodeURIComponent(appId)}` : "";
+  return (await request(token, `/dogfood/testers${query}`)).testers || [];
+}
+
+export async function setDogfoodTester(token: string, appId: string, testerEmail: string, enabled: boolean): Promise<{ status: string; revokedInstallations?: number }> {
+  return request(token, "/dogfood/testers", {
+    method: "POST", body: JSON.stringify({ appId, testerEmail, enabled }),
+  });
 }
 
 export async function listDogfoodInstallations(token: string, appId?: string): Promise<DogfoodInstallationRow[]> {

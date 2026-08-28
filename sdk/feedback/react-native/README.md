@@ -113,8 +113,9 @@ still require the user's normal Yaver authentication.
 
 ### Device-enrolled Dogfood for apps without their own OAuth/backend
 
-Mount `FeedbackModal` once and configure the ACL-backed dynamic app shortcut.
-No permanent Settings row or shake gesture is required:
+Mount `FeedbackModal` once and configure the ACL-backed dynamic app shortcut
+plus smart quick controls. Keep a native Settings/Profile row as the universal
+enrollment and recovery route; no shake gesture or permanent overlay is needed:
 
 ```tsx
 YaverFeedback.init({
@@ -128,6 +129,10 @@ YaverFeedback.init({
     label: 'Example',
     framework: 'expo',
     appShortcut: { label: 'Dogfood Example' },
+    controlGesture: {
+      durationMs: 900,
+      fallback: 'minimized-y',
+    },
     // Optional host presentation ACL. Backend account + phone-key approval
     // remains mandatory even when this returns true.
     canShow: (access) => appUser.isAdmin && access.authorized,
@@ -141,6 +146,15 @@ OAuth, machine, coding runner/model, project, and Browser/Hermes/WebRTC setup.
 After the owner approves that exact account + app ID + phone key, iOS and
 Android add the long-press shortcut. Signing out, revocation, or host ACL denial
 removes it on the next foreground sync.
+
+On an authorized standalone iOS/Android target, a three-finger hold opens one
+compact card with exactly `Fast Reload` and `Chat`; nothing is rendered while
+the card is closed. The native observer does not consume ordinary app touches.
+If the native module is absent or VoiceOver/TalkBack owns multi-touch, the SDK
+shows a 34-point draggable Y that opens the same card. Inside Yaver's own
+container both are suppressed: the host already renders preview/lane controls
+beside its chat/vibing surface. Tablets follow the same host-vs-standalone rule
+as phones; viewport size never decides ownership.
 
 The app creates a random installation ID and Ed25519 key inside SecureStore.
 The ID is a public handle, not a credential: enrollment and each short session
@@ -753,11 +767,11 @@ YaverFeedback.init({
 
 When a third-party app is loaded through Yaver's Hermes-push flow (so the
 Yaver mobile app is the runtime container for your app), the SDK detects
-that situation via the `YaverInfo` native module and **automatically
-no-ops `YaverFeedback.init()`** — no ShakeDetector, no FeedbackModal, no
-BlackBox stream from inside the guest. The user only ever sees Yaver's
-native shake overlay ("Reload" + "Back to Yaver") and uses Yaver's
-built-in feedback flow instead.
+that situation via the `YaverInfo` native module and suppresses guest-owned
+triggers and overlays: no three-finger listener, minimized Y, shake detector,
+or duplicate quick controls. Yaver owns the workspace, with the app preview
+(Browser/WebRTC/Hermes lane) beside the chat/vibing surface on wider screens
+and in a responsive stacked layout on phones.
 
 Standalone installs (TestFlight / App Store / Play from your own dev
 account) are unaffected — the SDK behaves exactly as it did before.

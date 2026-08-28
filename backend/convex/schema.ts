@@ -2685,6 +2685,25 @@ export default defineSchema({
     .index("by_user_app", ["userId", "appId"])
     .index("by_app", ["appId"]),
 
+  // Owner-managed account allowlist for each Dogfood app. Email assignments
+  // may be created before the tester signs up; the first matching full Yaver
+  // session binds testerUserId. Revoking an assignment also revokes that
+  // tester's pending/active app installations.
+  dogfoodAppTesters: defineTable({
+    ownerUserId: v.id("users"),
+    appId: v.string(),
+    testerEmail: v.string(),
+    testerUserId: v.optional(v.id("users")),
+    status: v.union(v.literal("active"), v.literal("revoked")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner", ["ownerUserId"])
+    .index("by_owner_app", ["ownerUserId", "appId"])
+    .index("by_app_email", ["appId", "testerEmail"])
+    .index("by_email", ["testerEmail"])
+    .index("by_tester", ["testerUserId"]),
+
   // One row per app installation/key generation. The private Ed25519 key
   // stays in the originating app's Keychain/Keystore. Re-registration keeps
   // registrationSlot stable and creates a new row/key generation; activation

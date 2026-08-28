@@ -1,6 +1,39 @@
 export type DogfoodInstallationStatus = "pending" | "active" | "cancelled" | "revoked" | "superseded";
 export type DogfoodInstallationAction = "approve" | "cancel" | "revoke";
 
+export type DogfoodTesterAssignment = {
+  status: "active" | "revoked";
+  testerEmail: string;
+  testerUserId?: string;
+};
+
+export function normalizeDogfoodTesterEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/** An assignment that has resolved to one account id stays bound to it even
+ * if the email is later reused by another account. */
+export function dogfoodTesterBinding(existingUserId?: string, matchedUserId?: string): string | undefined {
+  return existingUserId || matchedUserId;
+}
+
+/** App owners can always enroll their own exact installation. Everyone else
+ * must be explicitly assigned to the app by email or resolved Yaver user id. */
+export function dogfoodTesterAssigned(input: {
+  appOwnerUserId: string;
+  sessionUserId: string;
+  sessionEmail: string;
+  assignments: DogfoodTesterAssignment[];
+}): boolean {
+  if (input.appOwnerUserId === input.sessionUserId) return true;
+  const email = normalizeDogfoodTesterEmail(input.sessionEmail);
+  return input.assignments.some((assignment) => assignment.status === "active" && (
+    assignment.testerUserId
+      ? assignment.testerUserId === input.sessionUserId
+      : normalizeDogfoodTesterEmail(assignment.testerEmail) === email
+  ));
+}
+
 /** Fail-closed lifecycle shared by the mutation and dependency-free tests. */
 export function dogfoodActionAllowed(status: DogfoodInstallationStatus, action: DogfoodInstallationAction, proofVerified: boolean): boolean {
   if (action === "approve") return status === "pending" && proofVerified;
@@ -28,8 +61,10 @@ export function dogfoodInstallationAuthorized(input: {
   sessionUserId: string;
   installationStatus?: DogfoodInstallationStatus;
   testerUserId?: string;
+  testerAssigned?: boolean;
 }): boolean {
   return input.appEnabled
+    && (input.appOwnerUserId === input.sessionUserId || input.testerAssigned === true)
     && input.installationStatus === "active"
     && !!input.testerUserId
     && input.testerUserId === input.sessionUserId;

@@ -14,6 +14,10 @@ jest.mock('react-native', () => ({
       setDogfoodShortcut: jest.fn(async () => true),
       consumeDogfoodShortcut: jest.fn(async () => false),
     },
+    YaverDogfoodGesture: {
+      getCapability: jest.fn(async () => ({ supported: true, enabled: false, reason: 'supported', platform: 'ios' })),
+      setEnabled: jest.fn(async (next: boolean) => ({ supported: true, enabled: next, reason: 'supported', platform: 'ios' })),
+    },
   },
   AppState: { addEventListener: jest.fn(() => ({ remove: jest.fn() })) },
 }));
@@ -33,6 +37,7 @@ jest.mock('../auth', () => ({
   getDogfoodAccountAccess: jest.fn(async (_appId: string, token: string) => ({
     authenticated: token === 'owner-token',
     ownerAuthorized: token === 'owner-token',
+    accountAuthorized: token === 'owner-token',
     installationAuthorized: token === 'owner-token',
   })),
   saveSelectedDeviceId: jest.fn(async () => {}),
@@ -121,6 +126,7 @@ describe('YaverFeedback', () => {
         appId: 'io.example.app',
         yaverAuthenticated: true,
         ownerAuthorized: false,
+        accountAuthorized: true,
         installationId: 'phone-1',
         deviceState: 'active',
         authorized: true,
@@ -137,6 +143,7 @@ describe('YaverFeedback', () => {
         appId: 'io.example.app',
         yaverAuthenticated: false,
         ownerAuthorized: false,
+        accountAuthorized: true,
         installationId: 'phone-1',
         deviceState: 'active',
         authorized: false,
@@ -155,6 +162,7 @@ describe('YaverFeedback', () => {
         appId: 'io.example.app',
         yaverAuthenticated: true,
         ownerAuthorized: false,
+        accountAuthorized: true,
         installationId: 'phone-1',
         deviceState: 'active',
         authorized: true,
@@ -162,6 +170,55 @@ describe('YaverFeedback', () => {
       await YaverFeedback.syncDogfoodAppShortcut();
       expect((NativeModules as any).YaverHotReload.setDogfoodShortcut)
         .toHaveBeenCalledWith(false, 'Dogfood');
+    });
+
+    it('uses the invisible three-finger hold when the authorized phone supports it', async () => {
+      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
+      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: true,
+        ownerAuthorized: false,
+        accountAuthorized: true,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: true,
+      });
+      const state = await YaverFeedback.syncDogfoodControlGesture();
+      expect(state).toMatchObject({ gestureSupported: true, gestureEnabled: true, fallbackVisible: false });
+      expect((NativeModules as any).YaverDogfoodGesture.setEnabled).toHaveBeenCalledWith(true, 900);
+    });
+
+    it('falls back to the minimized Y when accessibility owns multi-touch', async () => {
+      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
+      YaverFeedback.getConfig()!.dogfood!.controlGesture = { durationMs: 1200 };
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: true,
+        ownerAuthorized: false,
+        accountAuthorized: true,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: true,
+      });
+      (NativeModules as any).YaverDogfoodGesture.getCapability.mockResolvedValueOnce({
+        supported: false,
+        enabled: false,
+        reason: 'accessibility-touch-exploration',
+        platform: 'ios',
+      });
+      const state = await YaverFeedback.syncDogfoodControlGesture();
+      expect(state).toMatchObject({ gestureSupported: false, gestureEnabled: false, fallbackVisible: true });
+      expect((NativeModules as any).YaverDogfoodGesture.setEnabled).toHaveBeenCalledWith(false, 1200);
+    });
+
+    it('suppresses guest controls inside the Yaver split-view container', async () => {
+      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
+      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      (NativeModules as any).YaverInfo = { isYaver: true };
+      const state = await YaverFeedback.syncDogfoodControlGesture();
+      delete (NativeModules as any).YaverInfo;
+      expect(state).toMatchObject({ gestureEnabled: false, fallbackVisible: false, reason: 'yaver-host-owns-controls' });
     });
   });
 

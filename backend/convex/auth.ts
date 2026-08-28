@@ -14,7 +14,14 @@ import {
 } from "./email";
 import { base32Decode, matchingTOTPStep } from "./totp";
 import * as ed from "@noble/ed25519";
-import { dogfoodActionAllowed, dogfoodControlActionMessage, dogfoodInstallationAuthorized } from "./dogfoodEnrollmentPolicy";
+import {
+  dogfoodActionAllowed,
+  dogfoodControlActionMessage,
+  dogfoodInstallationAuthorized,
+  dogfoodTesterAssigned,
+  dogfoodTesterBinding,
+  normalizeDogfoodTesterEmail,
+} from "./dogfoodEnrollmentPolicy";
 
 ed.etc.sha512Async = async (...messages: Uint8Array[]) => {
   const joined = ed.etc.concatBytes(...messages);
@@ -2059,6 +2066,33 @@ export const revokeSdkToken = mutation({
 
 // ── Third-party Dogfood enrollment ──────────────────────────────────
 
+async function dogfoodAssignmentsForTester(ctx: any, appId: string, tester: any) {
+  const email = normalizeDogfoodTesterEmail(tester.email || "");
+  const byEmail = email
+    ? await ctx.db.query("dogfoodAppTesters").withIndex("by_app_email", (q: any) => q.eq("appId", appId).eq("testerEmail", email)).collect()
+    : [];
+  const byUser = await ctx.db.query("dogfoodAppTesters").withIndex("by_tester", (q: any) => q.eq("testerUserId", tester._id)).collect();
+  const rows = [...byEmail, ...byUser.filter((row: any) => row.appId === appId)];
+  return rows.filter((row, index) => rows.findIndex((candidate) => candidate._id === row._id) === index);
+}
+
+async function dogfoodTesterCanUseApp(ctx: any, app: any, tester: any) {
+  const assignments = await dogfoodAssignmentsForTester(ctx, app.appId, tester);
+  return {
+    assignments,
+    allowed: dogfoodTesterAssigned({
+      appOwnerUserId: String(app.userId),
+      sessionUserId: String(tester._id),
+      sessionEmail: tester.email || "",
+      assignments: assignments.map((row: any) => ({
+        status: row.status,
+        testerEmail: row.testerEmail,
+        testerUserId: row.testerUserId ? String(row.testerUserId) : undefined,
+      })),
+    }),
+  };
+}
+
 export const registerDogfoodControlDevice = mutation({
   args: {
     sessionTokenHash: v.string(), deviceId: v.string(), publicKey: v.string(),
@@ -2164,16 +2198,108 @@ export const listDogfoodApps = query({
   },
 });
 
+export const listDogfoodAppTesters = query({
+  args: { sessionTokenHash: v.string(), appId: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session || (session.scope && session.scope !== "full")) return [];
+    const rows = args.appId
+      ? await ctx.db.query("dogfoodAppTesters").withIndex("by_owner_app", (q) => q.eq("ownerUserId", session.user._id).eq("appId", args.appId!)).collect()
+      : await ctx.db.query("dogfoodAppTesters").withIndex("by_owner", (q) => q.eq("ownerUserId", session.user._id)).collect();
+    return await Promise.all(rows.map(async (row) => {
+      const tester = row.testerUserId ? await ctx.db.get(row.testerUserId) : null;
+      return {
+        ...row,
+        tester: tester ? { name: tester.fullName, email: tester.email } : { email: row.testerEmail },
+      };
+    }));
+  },
+});
+
+export const setDogfoodAppTester = mutation({
+  args: {
+    sessionTokenHash: v.string(), appId: v.string(), testerEmail: v.string(), enabled: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session || (session.scope && session.scope !== "full")) throw new Error("Unauthorized");
+    const appId = args.appId.trim();
+    const app = await ctx.db.query("dogfoodApps")
+      .withIndex("by_user_app", (q) => q.eq("userId", session.user._id).eq("appId", appId)).unique();
+    if (!app) throw new Error("Dogfood app not found");
+    const testerEmail = normalizeDogfoodTesterEmail(args.testerEmail);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(testerEmail) || testerEmail.length > 254) throw new Error("Valid tester email required");
+    const tester = await ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", testerEmail)).first();
+    const existing = await ctx.db.query("dogfoodAppTesters")
+      .withIndex("by_app_email", (q) => q.eq("appId", appId).eq("testerEmail", testerEmail)).first();
+    const now = Date.now();
+    if (args.enabled) {
+      // Once an email assignment has resolved to an account id, restoring it
+      // must not silently rebind it to a later account that happens to own the
+      // same email. The owner can create a fresh assignment only after the old
+      // identity is deliberately removed through a future audited workflow.
+      const boundTesterUserId = dogfoodTesterBinding(
+        existing?.testerUserId ? String(existing.testerUserId) : undefined,
+        tester?._id ? String(tester._id) : undefined,
+      );
+      const values = {
+        testerUserId: boundTesterUserId ? boundTesterUserId as Id<"users"> : undefined,
+        status: "active" as const,
+        updatedAt: now,
+      };
+      if (existing) {
+        if (existing.ownerUserId !== session.user._id) throw new Error("Tester assignment belongs to another app owner");
+        await ctx.db.patch(existing._id, values);
+        return { id: existing._id, appId, testerEmail, ...values };
+      }
+      const id = await ctx.db.insert("dogfoodAppTesters", {
+        ownerUserId: session.user._id, appId, testerEmail, ...values, createdAt: now,
+      });
+      return { id, appId, testerEmail, ...values };
+    }
+    if (!existing || existing.ownerUserId !== session.user._id) throw new Error("Tester assignment not found");
+    await ctx.db.patch(existing._id, { status: "revoked", updatedAt: now });
+    const testerUserId = existing.testerUserId ?? tester?._id;
+    let revokedInstallations = 0;
+    if (testerUserId) {
+      const installations = await ctx.db.query("dogfoodInstallations")
+        .withIndex("by_user_app", (q) => q.eq("userId", session.user._id).eq("appId", appId)).collect();
+      for (const installation of installations) {
+        if (installation.testerUserId !== testerUserId) continue;
+        if (installation.status === "pending") {
+          await ctx.db.patch(installation._id, { status: "cancelled", revokedAt: now, updatedAt: now });
+          revokedInstallations += 1;
+        } else if (installation.status === "active") {
+          await ctx.db.patch(installation._id, { status: "revoked", revokedAt: now, updatedAt: now });
+          revokedInstallations += 1;
+        }
+      }
+    }
+    return { id: existing._id, appId, testerEmail, status: "revoked", revokedInstallations };
+  },
+});
+
 export const listDogfoodCatalog = query({
   args: { sessionTokenHash: v.string() },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.sessionTokenHash);
     if (!session || (session.scope && session.scope !== "full")) return [];
-    const rows = await ctx.db.query("dogfoodApps").collect();
-    return rows.filter((row) => row.enabled && !!row.activationUrl).map((row) => ({
-      appId: row.appId,
-      label: row.label,
-      activationUrl: row.activationUrl,
+    const owned = await ctx.db.query("dogfoodApps").withIndex("by_user", (q) => q.eq("userId", session.user._id)).collect();
+    const assignedByUser = await ctx.db.query("dogfoodAppTesters").withIndex("by_tester", (q) => q.eq("testerUserId", session.user._id)).collect();
+    const email = normalizeDogfoodTesterEmail(session.user.email || "");
+    const assignedByEmail = email
+      ? await ctx.db.query("dogfoodAppTesters").withIndex("by_email", (q) => q.eq("testerEmail", email)).collect()
+      : [];
+    const appIds = new Set([
+      ...owned.map((row) => row.appId),
+      ...assignedByUser.filter((row) => row.status === "active").map((row) => row.appId),
+      ...assignedByEmail.filter((row) => row.status === "active" && (!row.testerUserId || row.testerUserId === session.user._id)).map((row) => row.appId),
+    ]);
+    const rows = await Promise.all([...appIds].map((appId) => ctx.db.query("dogfoodApps").withIndex("by_app", (q) => q.eq("appId", appId)).unique()));
+    return rows.filter((row) => !!row?.enabled && !!row.activationUrl).map((row) => ({
+      appId: row!.appId,
+      label: row!.label,
+      activationUrl: row!.activationUrl!,
     }));
   },
 });
@@ -2197,16 +2323,21 @@ export const getDogfoodAppAccess = query({
           .withIndex("by_app_installation", (q) => q.eq("appId", args.appId.trim()).eq("installationId", args.installationId!))
           .unique()
       : null;
+    const testerAccess = app
+      ? await dogfoodTesterCanUseApp(ctx, app, session.user)
+      : { allowed: false, assignments: [] };
     const installationAuthorized = !!app && dogfoodInstallationAuthorized({
       appEnabled: app.enabled,
       appOwnerUserId: String(app.userId),
       sessionUserId: String(session.user._id),
       installationStatus: installation?.status,
       testerUserId: installation?.testerUserId ? String(installation.testerUserId) : undefined,
+      testerAssigned: testerAccess.allowed,
     });
     return {
       authenticated: true,
       ownerAuthorized: !!app?.enabled && app.userId === session.user._id,
+      accountAuthorized: !!app?.enabled && testerAccess.allowed,
       installationAuthorized,
       label: app?.label,
     };
@@ -2224,6 +2355,13 @@ export const startDogfoodEnrollment = mutation({
     if (!tester || (tester.scope && tester.scope !== "full")) throw new Error("A full Yaver account is required");
     const app = await ctx.db.query("dogfoodApps").withIndex("by_app", (q) => q.eq("appId", args.appId)).unique();
     if (!app || !app.enabled) throw new Error("Dogfood is not enabled for this app");
+    const testerAccess = await dogfoodTesterCanUseApp(ctx, app, tester.user);
+    if (!testerAccess.allowed) throw new Error("The app owner has not enabled Dogfood for this Yaver account");
+    for (const assignment of testerAccess.assignments) {
+      if (assignment.status === "active" && !assignment.testerUserId) {
+        await ctx.db.patch(assignment._id, { testerUserId: tester.user._id, updatedAt: Date.now() });
+      }
+    }
     if (!/^[a-zA-Z0-9_-]{16,128}$/.test(args.installationId)) throw new Error("Invalid installationId");
     if (!/^[a-zA-Z0-9_-]{16,128}$/.test(args.registrationSlot)) throw new Error("Invalid registrationSlot");
     if (dogfoodBytes(args.publicKey).length !== 32) throw new Error("Invalid Ed25519 public key");
@@ -2331,6 +2469,11 @@ export const setDogfoodInstallationStatus = mutation({
     }
     if (args.action === "approve") {
       if (!dogfoodActionAllowed(row.status, "approve", !!row.proofVerifiedAt)) throw new Error("A verified pending installation is required");
+      const app = await ctx.db.query("dogfoodApps").withIndex("by_app", (q) => q.eq("appId", row.appId)).unique();
+      const tester = row.testerUserId ? await ctx.db.get(row.testerUserId) : null;
+      if (!app || !tester || !(await dogfoodTesterCanUseApp(ctx, app, tester)).allowed) {
+        throw new Error("Enable this tester for the app before approving the installation");
+      }
       const prior = await ctx.db.query("dogfoodInstallations")
         .withIndex("by_user_app_slot", (q) => q.eq("userId", row.userId).eq("appId", row.appId).eq("registrationSlot", row.registrationSlot)).collect();
       for (const candidate of prior) {
@@ -2359,6 +2502,11 @@ export const startDogfoodSessionChallenge = mutation({
     const row = await ctx.db.query("dogfoodInstallations")
       .withIndex("by_app_installation", (q) => q.eq("appId", args.appId).eq("installationId", args.installationId)).unique();
     if (!row || row.status !== "active") throw new Error("Installation is not active");
+    const app = await ctx.db.query("dogfoodApps").withIndex("by_app", (q) => q.eq("appId", row.appId)).unique();
+    const tester = row.testerUserId ? await ctx.db.get(row.testerUserId) : null;
+    if (!app || !app.enabled || !tester || !(await dogfoodTesterCanUseApp(ctx, app, tester)).allowed) {
+      throw new Error("Dogfood access is no longer enabled for this account");
+    }
     const challenge = randomHex(32);
     await ctx.db.patch(row._id, { sessionChallenge: challenge, sessionChallengeExpiresAt: Date.now() + DOGFOOD_CHALLENGE_MS });
     return { challenge };
@@ -2377,6 +2525,10 @@ export const activateDogfoodSession = mutation({
     if (!valid) throw new Error("Invalid installation proof");
     const app = await ctx.db.query("dogfoodApps").withIndex("by_user_app", (q) => q.eq("userId", row.userId).eq("appId", row.appId)).unique();
     if (!app || !app.enabled) throw new Error("Dogfood is disabled for this app");
+    const tester = row.testerUserId ? await ctx.db.get(row.testerUserId) : null;
+    if (!tester || !(await dogfoodTesterCanUseApp(ctx, app, tester)).allowed) {
+      throw new Error("Dogfood access is no longer enabled for this account");
+    }
     const now = Date.now();
     const sessionVersion = row.sessionVersion + 1;
     const expiresAt = now + 24 * 60 * 60 * 1000;

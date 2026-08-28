@@ -72,6 +72,18 @@ type DogfoodInstallation struct {
 	} `json:"tester,omitempty"`
 }
 
+type DogfoodTester struct {
+	ID           string `json:"_id"`
+	AppID        string `json:"appId"`
+	TesterEmail  string `json:"testerEmail"`
+	TesterUserID string `json:"testerUserId,omitempty"`
+	Status       string `json:"status"`
+	Tester       *struct {
+		Name  string `json:"name,omitempty"`
+		Email string `json:"email"`
+	} `json:"tester,omitempty"`
+}
+
 func dogfoodRegistryJSON(method, path string, payload interface{}, out interface{}) error {
 	cfg, err := LoadConfig()
 	if err != nil || cfg == nil || cfg.AuthToken == "" {
@@ -127,6 +139,26 @@ func saveDogfoodRegistryApp(app DogfoodApp) (DogfoodApp, error) {
 	return response.App, err
 }
 
+func listDogfoodRegistryTesters(appID string) ([]DogfoodTester, error) {
+	path := "/dogfood/testers"
+	if appID != "" {
+		path += "?appId=" + url.QueryEscape(appID)
+	}
+	var response struct {
+		Testers []DogfoodTester `json:"testers"`
+	}
+	err := dogfoodRegistryJSON(http.MethodGet, path, nil, &response)
+	return response.Testers, err
+}
+
+func setDogfoodRegistryTester(appID, email string, enabled bool) (map[string]interface{}, error) {
+	var response map[string]interface{}
+	err := dogfoodRegistryJSON(http.MethodPost, "/dogfood/testers", map[string]interface{}{
+		"appId": appID, "testerEmail": email, "enabled": enabled,
+	}, &response)
+	return response, err
+}
+
 func listDogfoodRegistryInstallations(appID string) ([]DogfoodInstallation, error) {
 	path := "/dogfood/installations"
 	if appID != "" {
@@ -174,6 +206,22 @@ func runDogfoodRegistry(args []string) {
 		appID := fs.String("app", "", "Filter by app id")
 		_ = fs.Parse(args[1:])
 		result, err = listDogfoodRegistryInstallations(*appID)
+	case "testers":
+		fs := flag.NewFlagSet("dogfood testers", flag.ExitOnError)
+		appID := fs.String("app", "", "Filter by app id")
+		_ = fs.Parse(args[1:])
+		result, err = listDogfoodRegistryTesters(*appID)
+	case "tester-set":
+		fs := flag.NewFlagSet("dogfood tester-set", flag.ExitOnError)
+		appID := fs.String("app", "", "Public app id")
+		email := fs.String("email", "", "Yaver account email")
+		revoke := fs.Bool("revoke", false, "Revoke access and disable pending/active installations")
+		_ = fs.Parse(args[1:])
+		if strings.TrimSpace(*appID) == "" || strings.TrimSpace(*email) == "" {
+			fmt.Fprintln(os.Stderr, "--app and --email are required")
+			os.Exit(2)
+		}
+		result, err = setDogfoodRegistryTester(strings.TrimSpace(*appID), strings.TrimSpace(*email), !*revoke)
 	case "approve", "cancel", "revoke":
 		if len(args) != 2 {
 			fmt.Fprintf(os.Stderr, "usage: yaver dogfood %s <installation-doc-id>\n", args[0])
@@ -208,6 +256,8 @@ func printDogfoodRegistryUsage() {
 
   yaver dogfood apps
   yaver dogfood app-set --app io.example.app --label Example --project example
+  yaver dogfood testers [--app io.example.app]
+  yaver dogfood tester-set --app io.example.app --email tester@example.com [--revoke]
   yaver dogfood installations [--app io.example.app]
   yaver dogfood approve|cancel|revoke <installation-doc-id>
 `)

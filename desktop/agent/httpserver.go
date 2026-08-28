@@ -13847,6 +13847,37 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		body, _ := json.MarshalIndent(map[string]interface{}{"installations": installations}, "", "  ")
 		return mcpToolResult(string(body))
 
+	case "dogfood_tester_list":
+		var args struct {
+			AppID string `json:"appId"`
+		}
+		_ = json.Unmarshal(call.Arguments, &args)
+		testers, err := listDogfoodRegistryTesters(args.AppID)
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		body, _ := json.MarshalIndent(map[string]interface{}{"testers": testers}, "", "  ")
+		return mcpToolResult(string(body))
+
+	case "dogfood_tester_set":
+		var args struct {
+			AppID   string `json:"appId"`
+			Email   string `json:"email"`
+			Enabled *bool  `json:"enabled"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return mcpToolError("invalid arguments: " + err.Error())
+		}
+		if strings.TrimSpace(args.AppID) == "" || strings.TrimSpace(args.Email) == "" || args.Enabled == nil {
+			return mcpToolError("appId, email, and enabled are required")
+		}
+		result, err := setDogfoodRegistryTester(strings.TrimSpace(args.AppID), strings.TrimSpace(args.Email), *args.Enabled)
+		if err != nil {
+			return mcpToolError(err.Error())
+		}
+		body, _ := json.MarshalIndent(result, "", "  ")
+		return mcpToolResult(string(body))
+
 	case "dogfood_installation_action":
 		var args struct {
 			InstallationID string `json:"installationId"`

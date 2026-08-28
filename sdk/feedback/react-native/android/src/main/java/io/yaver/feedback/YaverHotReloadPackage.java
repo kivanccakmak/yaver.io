@@ -22,6 +22,7 @@ public class YaverHotReloadPackage implements ReactPackage {
     public List<NativeModule> createNativeModules(@NonNull ReactApplicationContext reactContext) {
         List<NativeModule> modules = new ArrayList<>();
         modules.add(new YaverHotReloadModule(reactContext));
+        modules.add(new YaverDogfoodGestureModule(reactContext));
         return modules;
     }
 

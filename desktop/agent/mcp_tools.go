@@ -3430,6 +3430,16 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"appId": map[string]interface{}{"type": "string"}}, "additionalProperties": false},
 		},
 		{
+			"name": "dogfood_tester_list", "description": "List the Yaver accounts an app owner has allowed to request Dogfood enrollment. Optionally filter by app.",
+			"inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"appId": map[string]interface{}{"type": "string"}}, "additionalProperties": false},
+		},
+		{
+			"name": "dogfood_tester_set", "description": "Allow or revoke a Yaver account by email for one app. Revoking also disables that account's pending and active installations.",
+			"inputSchema": map[string]interface{}{"type": "object", "required": []string{"appId", "email", "enabled"}, "properties": map[string]interface{}{
+				"appId": map[string]interface{}{"type": "string"}, "email": map[string]interface{}{"type": "string"}, "enabled": map[string]interface{}{"type": "boolean"},
+			}, "additionalProperties": false},
+		},
+		{
 			"name": "dogfood_installation_action", "description": "Approve a key-verified pending installation, cancel a pending enrollment, or revoke an active installation. Re-registration approval supersedes the prior key generation for the same slot.",
 			"inputSchema": map[string]interface{}{"type": "object", "required": []string{"installationId", "action"}, "properties": map[string]interface{}{
 				"installationId": map[string]interface{}{"type": "string", "description": "Backend installation document id from dogfood_installation_list."},

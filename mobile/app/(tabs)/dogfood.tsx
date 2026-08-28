@@ -19,12 +19,15 @@ import {
   listDogfoodApps,
   listDogfoodCatalog,
   listDogfoodInstallations,
+  listDogfoodTesters,
   registerThisDogfoodControlDevice,
   saveDogfoodApp,
+  setDogfoodTester,
   setDogfoodInstallationAction,
   type DogfoodAppRow,
   type DogfoodCatalogRow,
   type DogfoodInstallationRow,
+  type DogfoodTesterRow,
 } from "../../src/lib/dogfoodRegistry";
 
 export default function DogfoodScreen() {
@@ -35,20 +38,25 @@ export default function DogfoodScreen() {
   const [apps, setApps] = useState<DogfoodAppRow[]>([]);
   const [catalog, setCatalog] = useState<DogfoodCatalogRow[]>([]);
   const [installations, setInstallations] = useState<DogfoodInstallationRow[]>([]);
+  const [testers, setTesters] = useState<DogfoodTesterRow[]>([]);
   const [appId, setAppId] = useState("");
   const [appLabel, setAppLabel] = useState("");
   const [projectSlug, setProjectSlug] = useState("");
+  const [testerAppId, setTesterAppId] = useState("");
+  const [testerEmail, setTesterEmail] = useState("");
   const [deviceStatus, setDeviceStatus] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!token) return;
-    const [nextApps, nextInstallations, nextCatalog] = await Promise.all([
-      listDogfoodApps(token), listDogfoodInstallations(token), listDogfoodCatalog(token),
+    const [nextApps, nextInstallations, nextCatalog, nextTesters] = await Promise.all([
+      listDogfoodApps(token), listDogfoodInstallations(token), listDogfoodCatalog(token), listDogfoodTesters(token),
     ]);
     setApps(nextApps);
+    setTesterAppId((current) => current && nextApps.some((app) => app.appId === current) ? current : nextApps[0]?.appId || "");
     setInstallations(nextInstallations);
     setCatalog(nextCatalog);
+    setTesters(nextTesters);
   }, [token]);
 
   useEffect(() => { void refresh().catch(() => {}); }, [refresh]);
@@ -82,6 +90,18 @@ export default function DogfoodScreen() {
     try { await setDogfoodInstallationAction(token, row._id, action); await refresh(); }
     catch (error) { Alert.alert("Dogfood device wasn't updated", error instanceof Error ? error.message : "Try again."); }
     finally { setBusy(false); }
+  };
+
+  const updateTester = async (email: string, enabled: boolean, app = testerAppId) => {
+    if (!token || busy || !app) return;
+    setBusy(true);
+    try {
+      await setDogfoodTester(token, app, email, enabled);
+      if (enabled) setTesterEmail("");
+      await refresh();
+    } catch (error) {
+      Alert.alert("Dogfood access wasn't updated", error instanceof Error ? error.message : "Try again.");
+    } finally { setBusy(false); }
   };
 
   const card = { backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 14 } as const;
@@ -138,6 +158,33 @@ export default function DogfoodScreen() {
             <Text style={{ color: c.textSecondary, marginTop: 3 }}>{app.appId} · {app.allowedScopes.join(", ")}</Text>
           </View>)}
         </View>
+
+        {apps.length ? <View style={card}>
+          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>Who can Dogfood</Text>
+          <Text style={{ color: c.textSecondary, marginTop: 6, lineHeight: 19 }}>
+            Choose an app and allow a Yaver account by email. Revoking access also cancels or revokes that account's app installations.
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+            {apps.map((app) => <Pressable
+              key={app.appId}
+              accessibilityRole="button"
+              accessibilityLabel={`Manage ${app.label} Dogfood testers`}
+              onPress={() => setTesterAppId(app.appId)}
+              style={{ borderColor: testerAppId === app.appId ? c.accent : c.border, borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 }}
+            ><Text style={{ color: testerAppId === app.appId ? c.accent : c.textSecondary, fontWeight: "600" }}>{app.label}</Text></Pressable>)}
+          </View>
+          <TextInput accessibilityLabel="Dogfood tester email" value={testerEmail} onChangeText={setTesterEmail} placeholder="tester@example.com" placeholderTextColor={c.textMuted} autoCapitalize="none" keyboardType="email-address" style={input} />
+          <Pressable accessibilityRole="button" accessibilityLabel="Allow Dogfood tester" style={button} onPress={() => void updateTester(testerEmail.trim(), true)} disabled={busy || !testerAppId || !testerEmail.trim()}>
+            <Text style={{ color: "white", fontWeight: "700" }}>Allow account</Text>
+          </Pressable>
+          {testers.filter((row) => row.appId === testerAppId).map((row) => <View key={row._id} style={{ borderTopColor: c.border, borderTopWidth: 1, marginTop: 12, paddingTop: 12 }}>
+            <Text style={{ color: c.textPrimary, fontWeight: "600" }}>{row.tester?.name || row.testerEmail}</Text>
+            <Text style={{ color: c.textSecondary, marginTop: 3 }}>{row.testerEmail} · {row.status}{row.testerUserId ? " · Yaver account linked" : " · activates after sign-in"}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel={`${row.status === "active" ? "Revoke" : "Restore"} ${row.testerEmail}`} onPress={() => void updateTester(row.testerEmail, row.status !== "active", row.appId)} style={{ paddingVertical: 10 }}>
+              <Text style={{ color: row.status === "active" ? c.error : c.accent }}>{row.status === "active" ? "Revoke access" : "Restore access"}</Text>
+            </Pressable>
+          </View>)}
+        </View> : null}
 
         {installations.length ? <View style={card}>
           <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>App installations</Text>

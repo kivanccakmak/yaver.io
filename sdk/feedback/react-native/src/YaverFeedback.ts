@@ -44,6 +44,16 @@ export interface DogfoodFlowState {
   error?: string;
 }
 
+export interface DogfoodControlTriggerState {
+  configured: boolean;
+  authorized: boolean;
+  gestureSupported: boolean;
+  gestureEnabled: boolean;
+  fallbackVisible: boolean;
+  reason: string;
+  platform?: string;
+}
+
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   const maybeNodeTimer = timer as unknown as { unref?: () => void };
   if (typeof maybeNodeTimer.unref === 'function') {
@@ -490,19 +500,29 @@ export class YaverFeedback {
       void YaverFeedback.hydrateSession();
     }
 
-    if (config.dogfood?.appShortcut) {
-      void YaverFeedback.syncDogfoodAppShortcut();
-      void consumeNativeDogfoodShortcut();
+    if (config.dogfood?.appShortcut || config.dogfood?.controlGesture) {
+      if (config.dogfood?.appShortcut) {
+        void YaverFeedback.syncDogfoodAppShortcut();
+        void consumeNativeDogfoodShortcut();
+      }
+      if (config.dogfood?.controlGesture) {
+        void YaverFeedback.syncDogfoodControlGesture();
+      }
       try {
         const { AppState } = require('react-native');
         dogfoodShortcutAppStateSubscription?.remove();
         dogfoodShortcutAppStateSubscription = AppState.addEventListener('change', (state: string) => {
           if (state === 'active') {
-            void YaverFeedback.syncDogfoodAppShortcut();
-            void consumeNativeDogfoodShortcut();
+            if (config?.dogfood?.appShortcut) {
+              void YaverFeedback.syncDogfoodAppShortcut();
+              void consumeNativeDogfoodShortcut();
+            }
+            if (config?.dogfood?.controlGesture) {
+              void YaverFeedback.syncDogfoodControlGesture();
+            }
           }
         });
-      } catch { /* native shortcut unavailable on web/test runtimes */ }
+      } catch { /* native quick controls unavailable on web/test runtimes */ }
     }
     if (config.dogfood) {
       try {
@@ -805,6 +825,7 @@ export class YaverFeedback {
       YaverFeedback.scheduleBlackBoxAutoStart();
     }
     await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
+    await YaverFeedback.syncDogfoodControlGesture().catch(() => undefined);
   }
 
   /** Returns true once the SDK has a session token it can use. */
@@ -963,13 +984,14 @@ export class YaverFeedback {
     const token = config?.authToken || await getToken();
     const account = token
       ? await getDogfoodAccountAccess(appId, token, installationId)
-      : { authenticated: false, ownerAuthorized: false, installationAuthorized: false };
+      : { authenticated: false, ownerAuthorized: false, accountAuthorized: false, installationAuthorized: false };
     const yaverAuthenticated = account.authenticated;
     const ownerAuthorized = account.ownerAuthorized;
     return {
       appId,
       yaverAuthenticated,
       ownerAuthorized,
+      accountAuthorized: account.accountAuthorized,
       installationId,
       deviceState,
       authorized: yaverAuthenticated && account.installationAuthorized && deviceState === 'active',
@@ -1002,6 +1024,128 @@ export class YaverFeedback {
     return visible;
   }
 
+  /** Capability-gated in-app Dogfood controls. A supported standalone native
+   * app gets a passive three-finger hold and no persistent pixels. Missing
+   * native support or accessibility touch exploration gets the minimized Y
+   * fallback. Yaver's own container always owns its split preview/chat UI, so
+   * both guest affordances are suppressed there. */
+  static async syncDogfoodControlGesture(): Promise<DogfoodControlTriggerState> {
+    const configured = config?.dogfood?.controlGesture;
+    const native = (NativeModules as any)?.YaverDogfoodGesture;
+    const base: DogfoodControlTriggerState = {
+      configured: Boolean(configured),
+      authorized: false,
+      gestureSupported: false,
+      gestureEnabled: false,
+      fallbackVisible: false,
+      reason: configured ? 'native-module-unavailable' : 'not-configured',
+      platform: Platform.OS,
+    };
+    if (!configured) {
+      if (typeof native?.setEnabled === 'function') {
+        await native.setEnabled(false, 900).catch(() => undefined);
+      }
+      return base;
+    }
+    if (IS_HOST_MODE || isRunningInsideYaverHost()) {
+      if (typeof native?.setEnabled === 'function') {
+        await native.setEnabled(false, 900).catch(() => undefined);
+      }
+      return { ...base, reason: 'yaver-host-owns-controls' };
+    }
+
+    const access = await YaverFeedback.getDogfoodAccess();
+    let authorized = access.authorized;
+    if (authorized && config?.dogfood?.canShow) {
+      try {
+        authorized = await config.dogfood.canShow(access);
+      } catch {
+        authorized = false;
+      }
+    }
+    const options = typeof configured === 'object' ? configured : {};
+    const durationMs = Math.min(2000, Math.max(650, options.durationMs ?? 900));
+    const allowFallback = options.fallback !== 'none';
+    if (!authorized) {
+      if (typeof native?.setEnabled === 'function') {
+        await native.setEnabled(false, durationMs).catch(() => undefined);
+      }
+      return { ...base, reason: 'installation-not-authorized' };
+    }
+
+    if (typeof native?.getCapability !== 'function' || typeof native?.setEnabled !== 'function') {
+      return {
+        ...base,
+        authorized: true,
+        fallbackVisible: allowFallback,
+      };
+    }
+    try {
+      const capability = await native.getCapability();
+      const gestureSupported = capability?.supported === true;
+      const applied = await native.setEnabled(gestureSupported, durationMs);
+      return {
+        configured: true,
+        authorized: true,
+        gestureSupported,
+        gestureEnabled: gestureSupported && applied?.enabled === true,
+        fallbackVisible: allowFallback && !gestureSupported,
+        reason: String(applied?.reason || capability?.reason || (gestureSupported ? 'supported' : 'unsupported')),
+        platform: String(applied?.platform || capability?.platform || Platform.OS),
+      };
+    } catch {
+      await native.setEnabled(false, durationMs).catch(() => undefined);
+      return {
+        ...base,
+        authorized: true,
+        fallbackVisible: allowFallback,
+        reason: 'native-capability-check-failed',
+      };
+    }
+  }
+
+  /** One-tap fast reload for the compact Dogfood card. It preserves the same
+   * selected render machine and bearer-authenticated P2P route as the full
+   * Feedback modal, and names missing auth/machine state instead of no-oping. */
+  static async requestDogfoodFastReload(): Promise<string> {
+    await YaverFeedback.hydrateSession();
+    if (!config?.authToken) {
+      YaverFeedback.showLogin();
+      throw new Error('Sign in to Yaver before requesting Fast Reload.');
+    }
+    if (!config.preferredDeviceId) {
+      YaverFeedback.showMachinePicker();
+      throw new Error('Choose a render machine before requesting Fast Reload.');
+    }
+    const selected = await YaverFeedback.getSelectedRemoteDevice();
+    if (!selected) {
+      YaverFeedback.showMachinePicker();
+      throw new Error('The selected render machine is no longer available.');
+    }
+    if (selected.needsAuth) {
+      YaverFeedback.showMachinePicker();
+      throw new Error('The selected render machine needs pairing again.');
+    }
+    if (!selected.isOnline) {
+      throw new Error('The selected render machine is offline.');
+    }
+    let client = YaverFeedback.getRenderP2PClient();
+    if (!client && await YaverFeedback.reconnect()) {
+      client = YaverFeedback.getRenderP2PClient();
+    }
+    if (!client) throw new Error('The render machine is not connected yet.');
+    try {
+      const ack = await client.reloadWithMode('fast');
+      return ack.message;
+    } catch (firstError) {
+      if (await YaverFeedback.reconnect()) {
+        const retry = YaverFeedback.getRenderP2PClient();
+        if (retry) return (await retry.reloadWithMode('fast')).message;
+      }
+      throw firstError;
+    }
+  }
+
   /** Backwards-compatible entry point for existing integrations. */
   static async beginDogfoodOnboarding(options: DogfoodOnboardingOptions): Promise<DogfoodFlowState> {
     YaverFeedback.configureDogfood(options);
@@ -1029,7 +1173,7 @@ export class YaverFeedback {
     const token = config?.authToken || await getToken();
     const account = token
       ? await getDogfoodAccountAccess(appId, token)
-      : { authenticated: false, ownerAuthorized: false, installationAuthorized: false };
+      : { authenticated: false, ownerAuthorized: false, accountAuthorized: false, installationAuthorized: false };
     // A device key is a second factor for this installation, never a
     // replacement for a real Yaver account. Narrow installation sessions and
     // stale/invalid cached tokens both return authenticated=false here.
@@ -1037,6 +1181,15 @@ export class YaverFeedback {
       const state: DogfoodFlowState = { phase: 'auth-required', appId };
       publishDogfoodFlow(state);
       YaverFeedback.showLogin();
+      return state;
+    }
+    if (!account.accountAuthorized) {
+      const state: DogfoodFlowState = {
+        phase: 'denied',
+        appId,
+        error: 'The app owner has not enabled Dogfood for this Yaver account.',
+      };
+      publishDogfoodFlow(state);
       return state;
     }
     if (!config?.preferredDeviceId) {
@@ -1162,6 +1315,7 @@ export class YaverFeedback {
     renderP2PClient = null;
     p2pAuthToken = null;
     await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
+    await YaverFeedback.syncDogfoodControlGesture().catch(() => undefined);
   }
 
   /**
@@ -1461,6 +1615,7 @@ export class YaverFeedback {
       DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: !!session, status });
     } catch { /* noop */ }
     await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
+    await YaverFeedback.syncDogfoodControlGesture().catch(() => undefined);
     return { status, installationId: info.installationId, session };
   }
 
@@ -1475,6 +1630,7 @@ export class YaverFeedback {
       const { DeviceEventEmitter } = require('react-native');
       DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: false, exited: true });
     } catch { /* noop */ }
+    await YaverFeedback.syncDogfoodControlGesture().catch(() => undefined);
   }
 
   /** Returns the resolved relay password the SDK is currently using.
@@ -2019,6 +2175,12 @@ export class YaverFeedback {
     dogfoodShortcutAppStateSubscription = null;
     dogfoodActivationSubscription?.remove();
     dogfoodActivationSubscription = null;
+    try {
+      const native = (NativeModules as any)?.YaverDogfoodGesture;
+      if (typeof native?.setEnabled === 'function') {
+        void native.setEnabled(false, 900).catch(() => undefined);
+      }
+    } catch { /* native trigger teardown is best-effort */ }
     lastDogfoodActivationUrl = '';
     // Before `enabled = false` / `config = null` below, so an in-flight retry
     // can't fire against a torn-down config.

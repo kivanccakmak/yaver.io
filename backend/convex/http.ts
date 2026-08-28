@@ -8018,6 +8018,27 @@ http.route({ path: "/dogfood/catalog", method: "GET", handler: httpAction(async 
   return jsonResponse({ apps: await ctx.runQuery(api.auth.listDogfoodCatalog, { sessionTokenHash }) });
 }) });
 
+http.route({ path: "/dogfood/testers", method: "GET", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  const appId = new URL(request.url).searchParams.get("appId") || undefined;
+  return jsonResponse({ testers: await ctx.runQuery(api.auth.listDogfoodAppTesters, { sessionTokenHash, appId }) });
+}) });
+
+http.route({ path: "/dogfood/testers", method: "POST", handler: httpAction(async (ctx, request) => {
+  const sessionTokenHash = await sessionHashFromRequest(request);
+  if (!sessionTokenHash) return errorResponse("Unauthorized", 401);
+  try {
+    const body = await request.json();
+    return jsonResponse(await ctx.runMutation(api.auth.setDogfoodAppTester, {
+      sessionTokenHash,
+      appId: String(body.appId || ""),
+      testerEmail: String(body.testerEmail || body.email || ""),
+      enabled: body.enabled !== false,
+    }));
+  } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid request", 400); }
+}) });
+
 http.route({ path: "/dogfood/access", method: "GET", handler: httpAction(async (ctx, request) => {
   const sessionTokenHash = await sessionHashFromRequest(request);
   if (!sessionTokenHash) return jsonResponse({ authorized: false });
@@ -8102,7 +8123,7 @@ http.route({ path: "/dogfood/session", method: "POST", handler: httpAction(async
   } catch (error) { return errorResponse(error instanceof Error ? error.message : "Invalid proof", 400); }
 }) });
 
-for (const path of ["/dogfood/control-devices", "/dogfood/apps", "/dogfood/catalog", "/dogfood/access", "/dogfood/installations", "/dogfood/installations/action", "/dogfood/enroll/start", "/dogfood/enroll/prove", "/dogfood/enroll/status", "/dogfood/session/challenge", "/dogfood/session"]) {
+for (const path of ["/dogfood/control-devices", "/dogfood/apps", "/dogfood/catalog", "/dogfood/testers", "/dogfood/access", "/dogfood/installations", "/dogfood/installations/action", "/dogfood/enroll/start", "/dogfood/enroll/prove", "/dogfood/enroll/status", "/dogfood/session/challenge", "/dogfood/session"]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => new Response(null, {
     status: 204,
     headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type, Cache-Control" },

@@ -29,7 +29,12 @@
  */
 
 export { YaverFeedback } from './YaverFeedback';
-export type { DogfoodOnboardingOptions, DogfoodFlowPhase, DogfoodFlowState } from './YaverFeedback';
+export type {
+  DogfoodOnboardingOptions,
+  DogfoodFlowPhase,
+  DogfoodFlowState,
+  DogfoodControlTriggerState,
+} from './YaverFeedback';
 export { captureStoreScreenshots } from './storeShots';
 export type {
   CaptureStoreScreenshotsOptions,
@@ -107,6 +112,7 @@ export type {
   DogfoodSnapshot,
 } from './DogfoodRuntime';
 export { FeedbackModal } from './FeedbackModal';
+export { DogfoodQuickControls } from './DogfoodQuickControls';
 export { QuickActionIcon } from './QuickActionIcon';
 export type { QuickActionIconProps } from './QuickActionIcon';
 export { FixReport } from './FixReport';

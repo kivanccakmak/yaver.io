@@ -137,7 +137,12 @@ function withYaverHotReloadNativeModule(config) {
         appName
       );
 
-      const filesToCopy = ["YaverHotReload.swift", "YaverHotReload.m"];
+      const filesToCopy = [
+        "YaverHotReload.swift",
+        "YaverHotReload.m",
+        "YaverDogfoodGesture.swift",
+        "YaverDogfoodGesture.m",
+      ];
       for (const fileName of filesToCopy) {
         const src = path.join(sdkIosDir, fileName);
         const dst = path.join(targetDir, fileName);
@@ -175,7 +180,12 @@ function withYaverHotReloadNativeModule(config) {
     const target = proj.getFirstTarget();
     if (!target || !target.uuid) return config;
 
-    const filesToAdd = ["YaverHotReload.swift", "YaverHotReload.m"];
+    const filesToAdd = [
+      "YaverHotReload.swift",
+      "YaverHotReload.m",
+      "YaverDogfoodGesture.swift",
+      "YaverDogfoodGesture.m",
+    ];
     for (const fileName of filesToAdd) {
       const relPath = `${appName}/${fileName}`;
       // addSourceFile registers PBXFileReference + PBXBuildFile, adds

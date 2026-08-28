@@ -44,14 +44,18 @@ interface SettingsViewProps {
 }
 
 type ThirdPartyDogfoodApp = { _id: string; appId: string; label: string; allowedScopes: string[]; enabled: boolean };
-type ThirdPartyDogfoodInstallation = { _id: string; appId: string; installationId: string; label?: string; platform: string; status: string; proofVerifiedAt?: number };
+type ThirdPartyDogfoodInstallation = { _id: string; appId: string; installationId: string; label?: string; platform: string; status: string; proofVerifiedAt?: number; tester?: { name?: string; email: string } };
+type ThirdPartyDogfoodTester = { _id: string; appId: string; testerEmail: string; testerUserId?: string; status: "active" | "revoked"; tester?: { name?: string; email: string } };
 
 function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
   const [apps, setApps] = useState<ThirdPartyDogfoodApp[]>([]);
   const [installations, setInstallations] = useState<ThirdPartyDogfoodInstallation[]>([]);
+  const [testers, setTesters] = useState<ThirdPartyDogfoodTester[]>([]);
   const [appId, setAppId] = useState("");
   const [label, setLabel] = useState("");
   const [projectSlug, setProjectSlug] = useState("");
+  const [testerAppId, setTesterAppId] = useState("");
+  const [testerEmail, setTesterEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -68,9 +72,11 @@ function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
 
   const refresh = useCallback(async () => {
     if (!token) return;
-    const [appResult, installationResult] = await Promise.all([call("/dogfood/apps"), call("/dogfood/installations")]);
+    const [appResult, installationResult, testerResult] = await Promise.all([call("/dogfood/apps"), call("/dogfood/installations"), call("/dogfood/testers")]);
     setApps(appResult.apps || []);
+    setTesterAppId((current) => current && (appResult.apps || []).some((app: ThirdPartyDogfoodApp) => app.appId === current) ? current : appResult.apps?.[0]?.appId || "");
     setInstallations(installationResult.installations || []);
+    setTesters(testerResult.testers || []);
   }, [call, token]);
 
   useEffect(() => { void refresh().catch((error) => setMessage(error instanceof Error ? error.message : "Dogfood registry unavailable.")); }, [refresh]);
@@ -94,6 +100,18 @@ function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
     finally { setBusy(false); }
   };
 
+  const setTester = async (email: string, enabled: boolean, targetAppId = testerAppId) => {
+    if (!targetAppId) return;
+    setBusy(true); setMessage(null);
+    try {
+      const result = await call("/dogfood/testers", { method: "POST", body: JSON.stringify({ appId: targetAppId, testerEmail: email, enabled }) });
+      setMessage(enabled ? `${email} can request ${targetAppId} Dogfood.` : `${email} revoked${result.revokedInstallations ? ` · ${result.revokedInstallations} installation(s) disabled` : ""}.`);
+      if (enabled) setTesterEmail("");
+      await refresh();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update tester access."); }
+    finally { setBusy(false); }
+  };
+
   return <div className="card mb-6 border-violet-500/20" data-testid="third-party-dogfood-section">
     <h3 className="text-sm font-medium uppercase tracking-wider text-violet-400/80">Third-party Dogfood apps</h3>
     <p className="mt-1 text-xs text-surface-500">Device-key enrollment for apps that do not have their own backend or OAuth yet.</p>
@@ -104,8 +122,23 @@ function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
     </div>
     <button onClick={() => void save()} disabled={busy || !appId.trim() || !label.trim()} className="mt-2 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">Enable app</button>
     {apps.length ? <div className="mt-3 space-y-2">{apps.map((app) => <div key={app._id} className="rounded-md border border-surface-800 p-2 text-xs"><span className="font-medium text-surface-200">{app.label}</span><span className="ml-2 text-surface-500">{app.appId} · {app.allowedScopes.join(", ")}</span></div>)}</div> : null}
+    {apps.length ? <div className="mt-4 rounded-md border border-surface-800 p-3">
+      <div className="text-xs font-semibold text-surface-200">Who can Dogfood</div>
+      <p className="mt-1 text-[11px] text-surface-500">Allow a Yaver account by email for one app. Revoking access also disables that account&apos;s pending and active installations.</p>
+      <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
+        <select aria-label="Dogfood tester app" value={testerAppId} onChange={(event) => setTesterAppId(event.target.value)} className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs">
+          {apps.map((app) => <option key={app.appId} value={app.appId}>{app.label}</option>)}
+        </select>
+        <input aria-label="Dogfood tester email" type="email" value={testerEmail} onChange={(event) => setTesterEmail(event.target.value)} placeholder="tester@example.com" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
+        <button onClick={() => void setTester(testerEmail.trim(), true)} disabled={busy || !testerAppId || !testerEmail.trim()} className="rounded-md bg-violet-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">Allow</button>
+      </div>
+      <div className="mt-2 space-y-2">{testers.filter((row) => row.appId === testerAppId).map((row) => <div key={row._id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-surface-800 px-2 py-2 text-xs">
+        <div><span className="font-medium text-surface-200">{row.tester?.name || row.testerEmail}</span><span className="ml-2 text-surface-500">{row.testerEmail} · {row.status}{row.testerUserId ? " · linked" : " · activates after sign-in"}</span></div>
+        <button onClick={() => void setTester(row.testerEmail, row.status !== "active", row.appId)} disabled={busy} className={row.status === "active" ? "text-red-400" : "text-violet-400"}>{row.status === "active" ? "Revoke" : "Restore"}</button>
+      </div>)}</div>
+    </div> : null}
     {installations.length ? <div className="mt-3 space-y-2">{installations.map((row) => <div key={row._id} className="rounded-md border border-surface-800 p-2 text-xs">
-      <div><span className="font-medium text-surface-200">{row.label || row.platform}</span><span className="ml-2 text-surface-500">{row.appId} · {row.status}{row.proofVerifiedAt ? " · key verified" : ""}</span></div>
+      <div><span className="font-medium text-surface-200">{row.label || row.platform}</span><span className="ml-2 text-surface-500">{row.appId} · {row.status}{row.proofVerifiedAt ? " · key verified" : ""}{row.tester?.email ? ` · ${row.tester.email}` : ""}</span></div>
       {row.status === "pending" && row.proofVerifiedAt ? <button onClick={() => void act(row._id, "approve")} disabled={busy} className="mt-2 rounded bg-emerald-700 px-2 py-1 text-white">Approve</button> : null}
       {row.status === "pending" ? <button onClick={() => void act(row._id, "cancel")} disabled={busy} className="ml-2 mt-2 text-red-400">Cancel</button> : null}
       {row.status === "active" ? <button onClick={() => void act(row._id, "revoke")} disabled={busy} className="mt-2 text-red-400">Revoke</button> : null}

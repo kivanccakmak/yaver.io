@@ -38,6 +38,7 @@ import { AuthOverlay } from './AuthOverlay';
 import { QuickActionIcon } from './QuickActionIcon';
 import { YaverModeBadge } from './YaverModeBadge';
 import { VibeChatScreen } from './VibeChatScreen';
+import { DogfoodQuickControls } from './DogfoodQuickControls';
 import { DeployPanel } from './DeployPanel';
 import { listReachableDevices, RemoteDevice } from './auth';
 import { reloadActions } from './reloadActions';
@@ -1160,6 +1161,7 @@ export const FeedbackModal: React.FC = () => {
     return (
       <>
         <AuthOverlay />
+        <DogfoodQuickControls />
         <QuickActionIcon />
         <YaverModeBadgeGate />
         <Modal
@@ -1201,6 +1203,7 @@ export const FeedbackModal: React.FC = () => {
   return (
     <>
       <AuthOverlay />
+      <DogfoodQuickControls />
       <QuickActionIcon />
       <YaverModeBadgeGate />
       {visible && (

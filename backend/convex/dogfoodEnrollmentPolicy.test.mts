@@ -7,6 +7,9 @@ import {
   dogfoodGenerationsToSupersede,
   dogfoodInstallationAuthorized,
   dogfoodControlActionMessage,
+  dogfoodTesterAssigned,
+  dogfoodTesterBinding,
+  normalizeDogfoodTesterEmail,
 } from "./dogfoodEnrollmentPolicy.ts";
 
 test("approval requires a pending installation with verified key proof", () => {
@@ -55,7 +58,46 @@ test("an approved tester is authorized without owning the app", () => {
     sessionUserId: "cousin",
     installationStatus: "active",
     testerUserId: "cousin",
+    testerAssigned: true,
   }), true);
+});
+
+test("owner-managed app assignment accepts exact account or an unbound normalized email", () => {
+  assert.equal(normalizeDogfoodTesterEmail(" Serhat@Example.COM "), "serhat@example.com");
+  assert.equal(dogfoodTesterAssigned({
+    appOwnerUserId: "owner",
+    sessionUserId: "cousin",
+    sessionEmail: "serhat@example.com",
+    assignments: [{ status: "active", testerEmail: "serhat@example.com" }],
+  }), true);
+  assert.equal(dogfoodTesterAssigned({
+    appOwnerUserId: "owner",
+    sessionUserId: "owner",
+    sessionEmail: "owner@example.com",
+    assignments: [],
+  }), true);
+});
+
+test("a bound assignment cannot be reused by a later account with the same email", () => {
+  assert.equal(dogfoodTesterAssigned({
+    appOwnerUserId: "owner",
+    sessionUserId: "attacker",
+    sessionEmail: "serhat@example.com",
+    assignments: [{ status: "active", testerEmail: "serhat@example.com", testerUserId: "cousin" }],
+  }), false);
+  assert.equal(dogfoodTesterBinding("cousin", "attacker"), "cousin");
+  assert.equal(dogfoodTesterBinding(undefined, "cousin"), "cousin");
+});
+
+test("revoked or absent assignment cannot authorize an otherwise active installation", () => {
+  assert.equal(dogfoodInstallationAuthorized({
+    appEnabled: true,
+    appOwnerUserId: "owner",
+    sessionUserId: "cousin",
+    installationStatus: "active",
+    testerUserId: "cousin",
+    testerAssigned: false,
+  }), false);
 });
 
 test("owner status never replaces exact-phone enrollment", () => {
@@ -73,6 +115,7 @@ test("another account cannot reuse an approved phone key", () => {
     sessionUserId: "attacker",
     installationStatus: "active",
     testerUserId: "cousin",
+    testerAssigned: true,
   }), false);
 });
 
