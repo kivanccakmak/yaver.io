@@ -192,6 +192,12 @@ export default function DogfoodScreen() {
             <Text style={{ color: c.textPrimary, fontWeight: "600" }}>{row.label || row.platform} · {row.appId}</Text>
             <Text style={{ color: c.textSecondary, marginTop: 3 }}>{row.status}{row.proofVerifiedAt ? " · key verified" : " · awaiting key proof"}</Text>
             {row.tester ? <Text style={{ color: c.textSecondary, marginTop: 3 }}>{row.tester.name} · {row.tester.email}</Text> : null}
+            {row.status === "active" ? <Text style={{ color: c.textSecondary, marginTop: 3 }}>
+              {row.gestureSupported === true
+                ? `Three-finger supported · ${row.controlPresentation === "auto" ? "gesture mode" : "Y mode"}`
+                : row.gestureSupported === false ? "Y mode · gesture unavailable" : "Control capability not reported yet"}
+              {row.controlOnboardingSeenAt ? " · onboarded" : " · onboarding pending"}
+            </Text> : null}
             {row.status === "pending" && row.proofVerifiedAt ? <Pressable accessibilityRole="button" accessibilityLabel={`Approve ${row.label || row.platform}`} style={button} onPress={() => void act(row, "approve")}><Text style={{ color: "white", fontWeight: "700" }}>Approve</Text></Pressable> : null}
             {row.status === "pending" ? <Pressable accessibilityRole="button" accessibilityLabel={`Cancel ${row.label || row.platform}`} onPress={() => void act(row, "cancel")} style={{ paddingVertical: 10 }}><Text style={{ color: c.error }}>Cancel enrollment</Text></Pressable> : null}
             {row.status === "active" ? <Pressable accessibilityRole="button" accessibilityLabel={`Revoke ${row.label || row.platform}`} onPress={() => void act(row, "revoke")} style={{ paddingVertical: 10 }}><Text style={{ color: c.error }}>Revoke</Text></Pressable> : null}

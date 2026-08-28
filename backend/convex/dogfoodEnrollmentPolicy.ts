@@ -78,3 +78,14 @@ export function dogfoodControlActionMessage(input: {
 }): string {
   return `yaver-dogfood-control-action-v1\n${input.deviceId}\n${input.installationDocId}\n${input.action}\n${input.signedAt}`;
 }
+
+/** First-run completion is monotonic. A later preference change can switch
+ * between Y and gesture, but it must never make an already-onboarded tester
+ * look new again. */
+export function dogfoodControlOnboardingSeenAt(
+  existing: number | undefined,
+  requestedSeen: boolean,
+  now: number,
+): number | undefined {
+  return existing || (requestedSeen ? now : undefined);
+}

@@ -1,46 +1,81 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   DeviceEventEmitter,
-  Dimensions,
+  Keyboard,
   Modal,
   PanResponder,
   Pressable,
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { YaverFeedback, type DogfoodControlTriggerState } from './YaverFeedback';
+import {
+  getDogfoodControlPosition,
+  setDogfoodControlPosition,
+  type DogfoodControlEdge,
+  type DogfoodControlPresentation,
+} from './preferences';
 
-const FALLBACK_SIZE = 34;
+const FALLBACK_SIZE = 36;
+const DOCK_VISIBLE = 21;
+const SAFE_TOP = 64;
+const SAFE_BOTTOM = 92;
 const EMPTY_STATE: DogfoodControlTriggerState = {
   configured: false,
   authorized: false,
   gestureSupported: false,
   gestureEnabled: false,
   fallbackVisible: false,
+  presentation: 'auto',
+  onboardingSeen: false,
   reason: 'not-configured',
 };
 
+function preferenceScope(state: DogfoodControlTriggerState): string | undefined {
+  return state.appId && state.installationId ? `${state.appId}:${state.installationId}` : undefined;
+}
+
 /**
- * Zero-chrome Dogfood entry surface.
- *
- * Supported native targets render nothing until the passive three-finger hold
- * fires. Unsupported/accessibility-conflicted targets render only a minimized,
- * draggable Y. Both open this same two-action card; neither opens the legacy
- * full feedback action grid.
+ * The standalone SDK's only persistent chrome. A newly authorized tester sees
+ * this edge-docked Y until first-run onboarding is completed in Convex. After
+ * that, capable devices default to a passive three-finger hold; unsupported
+ * devices keep the Y. Both entry points open exactly the same compact card.
  */
 export const DogfoodQuickControls: React.FC = () => {
-  const { width, height } = Dimensions.get('window');
-  const start = { x: Math.max(width - FALLBACK_SIZE - 8, 0), y: Math.max(Math.floor(height * 0.42), 70) };
-  const pan = useRef(new Animated.ValueXY(start)).current;
-  const lastPosition = useRef(start);
-  const dragStart = useRef(start);
+  const { width, height } = useWindowDimensions();
+  const orientation = width > height ? 'landscape' : 'portrait';
+  const defaultPosition = useMemo(() => ({
+    x: Math.max(width - DOCK_VISIBLE, 0),
+    y: Math.max(Math.round(height * 0.45), SAFE_TOP),
+  }), [height, width]);
+  const pan = useRef(new Animated.ValueXY(defaultPosition)).current;
+  const opacity = useRef(new Animated.Value(0.72)).current;
+  const lastPosition = useRef(defaultPosition);
+  const dragStart = useRef(defaultPosition);
   const dragged = useRef(false);
+  const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [dockEdge, setDockEdge] = useState<DogfoodControlEdge>('right');
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [state, setState] = useState<DogfoodControlTriggerState>(EMPTY_STATE);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<'reload' | 'chat' | null>(null);
+  const [showControlSettings, setShowControlSettings] = useState(false);
+  const [busy, setBusy] = useState<'reload' | 'chat' | 'preference' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const scheduleFade = useCallback(() => {
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    fadeTimer.current = setTimeout(() => {
+      Animated.timing(opacity, { toValue: 0.42, duration: 260, useNativeDriver: true }).start();
+    }, 1800);
+  }, [opacity]);
+
+  const wakeControl = useCallback(() => {
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    Animated.timing(opacity, { toValue: 1, duration: 100, useNativeDriver: true }).start();
+  }, [opacity]);
 
   const refresh = useCallback(async () => {
     try {
@@ -54,6 +89,7 @@ export const DogfoodQuickControls: React.FC = () => {
     void refresh();
     const trigger = DeviceEventEmitter.addListener('yaverDogfoodControlGesture', () => {
       setMessage(null);
+      setShowControlSettings(false);
       setOpen(true);
     });
     const capability = DeviceEventEmitter.addListener('yaverDogfoodControlCapability', () => {
@@ -65,10 +101,41 @@ export const DogfoodQuickControls: React.FC = () => {
     };
   }, [refresh]);
 
-  const panResponder = useRef(PanResponder.create({
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const saved = await getDogfoodControlPosition(orientation, preferenceScope(state));
+      if (cancelled) return;
+      const edge = saved?.edge || 'right';
+      const minY = SAFE_TOP;
+      const maxY = Math.max(minY, height - FALLBACK_SIZE - SAFE_BOTTOM);
+      const y = saved
+        ? minY + (maxY - minY) * saved.yRatio
+        : Math.max(minY, Math.min(maxY, Math.round(height * 0.45)));
+      const next = { x: edge === 'left' ? -FALLBACK_SIZE + DOCK_VISIBLE : width - DOCK_VISIBLE, y };
+      setDockEdge(edge);
+      lastPosition.current = next;
+      pan.setValue(next);
+      scheduleFade();
+    })();
+    return () => { cancelled = true; };
+  }, [height, orientation, pan, scheduleFade, state.appId, state.installationId, width]);
+
+  useEffect(() => () => {
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+  }, []);
+
+  const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3,
     onPanResponderGrant: () => {
+      wakeControl();
       dragged.current = false;
       dragStart.current = lastPosition.current;
       pan.setOffset(lastPosition.current);
@@ -80,14 +147,36 @@ export const DogfoodQuickControls: React.FC = () => {
     },
     onPanResponderRelease: (_, gesture) => {
       pan.flattenOffset();
-      const next = {
-        x: Math.max(0, Math.min(width - FALLBACK_SIZE, dragStart.current.x + gesture.dx)),
-        y: Math.max(0, Math.min(height - FALLBACK_SIZE, dragStart.current.y + gesture.dy)),
-      };
+      const minY = SAFE_TOP;
+      const maxY = Math.max(minY, height - FALLBACK_SIZE - SAFE_BOTTOM);
+      const rawX = dragStart.current.x + gesture.dx;
+      const y = Math.max(minY, Math.min(maxY, dragStart.current.y + gesture.dy));
+      const edge: DogfoodControlEdge = rawX + FALLBACK_SIZE / 2 < width / 2 ? 'left' : 'right';
+      const x = edge === 'left' ? -FALLBACK_SIZE + DOCK_VISIBLE : width - DOCK_VISIBLE;
+      const next = { x, y };
+      const yRatio = maxY === minY ? 0.5 : (y - minY) / (maxY - minY);
+      setDockEdge(edge);
       lastPosition.current = next;
-      Animated.spring(pan, { toValue: next, useNativeDriver: false, friction: 7 }).start();
+      Animated.spring(pan, { toValue: next, useNativeDriver: false, friction: 7 }).start(scheduleFade);
+      void setDogfoodControlPosition(orientation, { edge, yRatio }, preferenceScope(state));
     },
-  })).current;
+    onPanResponderTerminate: scheduleFade,
+  }), [height, orientation, pan, scheduleFade, state.appId, state.installationId, wakeControl, width]);
+
+  const choosePresentation = useCallback(async (presentation: DogfoodControlPresentation) => {
+    if (busy) return;
+    setBusy('preference');
+    setMessage(null);
+    try {
+      const next = await YaverFeedback.setDogfoodControlPresentation(presentation);
+      setState(next);
+      setShowControlSettings(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }, [busy]);
 
   const fastReload = useCallback(async () => {
     if (busy) return;
@@ -117,32 +206,53 @@ export const DogfoodQuickControls: React.FC = () => {
     setBusy(null);
   }, [busy]);
 
+  const openSessionSetup = useCallback(async () => {
+    if (busy) return;
+    setOpen(false);
+    setShowControlSettings(false);
+    const result = await YaverFeedback.openDogfood();
+    if (result.phase === 'denied' || result.phase === 'error') {
+      setMessage(result.error || 'Dogfood session settings are not available on this installation.');
+      setOpen(true);
+      setShowControlSettings(true);
+    }
+  }, [busy]);
+
   if (!state.configured || !state.authorized) return null;
+  const onboarding = !state.onboardingSeen;
 
   return (
     <>
-      {state.fallbackVisible ? (
+      {state.fallbackVisible && !keyboardVisible && !open ? (
         <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFill, styles.layer]}>
           <Animated.View
             {...panResponder.panHandlers}
-            style={[styles.fallbackPosition, { transform: [{ translateX: pan.x }, { translateY: pan.y }] }]}
+            style={[
+              styles.fallbackPosition,
+              { opacity, transform: [{ translateX: pan.x }, { translateY: pan.y }] },
+            ]}
           >
             <Pressable
               testID="yaver-dogfood-minimized-control"
               accessibilityRole="button"
               accessibilityLabel="Open Dogfood controls"
-              hitSlop={8}
+              hitSlop={10}
+              onPressIn={wakeControl}
               onPress={() => {
                 if (dragged.current) {
                   dragged.current = false;
                   return;
                 }
                 setMessage(null);
+                setShowControlSettings(false);
                 setOpen(true);
               }}
               style={({ pressed }) => [styles.fallback, pressed && styles.pressed]}
             >
-              <Text style={styles.fallbackText}>y</Text>
+              <Text style={[
+                styles.fallbackText,
+                dockEdge === 'right' ? styles.rightDockText : styles.leftDockText,
+              ]}>y</Text>
             </Pressable>
           </Animated.View>
         </Animated.View>
@@ -151,29 +261,91 @@ export const DogfoodQuickControls: React.FC = () => {
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
           <Pressable style={styles.card} onPress={(event) => event.stopPropagation()}>
-            <Text style={styles.title}>Dogfood</Text>
-            <View style={styles.actions}>
-              <Pressable
-                testID="yaver-dogfood-fast-reload"
-                accessibilityRole="button"
-                disabled={busy !== null}
-                onPress={() => void fastReload()}
-                style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-              >
-                <Text style={styles.actionTitle}>{busy === 'reload' ? 'Reloading…' : 'Fast Reload'}</Text>
-                <Text style={styles.actionHint}>Refresh the selected render target</Text>
-              </Pressable>
-              <Pressable
-                testID="yaver-dogfood-chat"
-                accessibilityRole="button"
-                disabled={busy !== null}
-                onPress={() => void openChat()}
-                style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-              >
-                <Text style={styles.actionTitle}>{busy === 'chat' ? 'Opening…' : 'Chat'}</Text>
-                <Text style={styles.actionHint}>Open the current Yaver vibing session</Text>
-              </Pressable>
-            </View>
+            {onboarding ? (
+              <>
+                <Text style={styles.title}>Dogfood ready</Text>
+                <Text style={styles.explanation}>
+                  {state.gestureSupported
+                    ? 'Dogfood starts with the edge Y so you always know how to return. You can switch to a three-finger hold later from Controls.'
+                    : 'This device cannot reliably use the three-finger hold, so the edge Y stays available.'}
+                </Text>
+                <ModeButton
+                  title={busy === 'preference' ? 'Saving…' : 'Continue with Y'}
+                  hint="Open Fast Reload and Chat from the edge"
+                  disabled={busy !== null}
+                  onPress={() => void choosePresentation('minimized-y')}
+                />
+              </>
+            ) : showControlSettings ? (
+              <>
+                <Text style={styles.title}>Dogfood settings</Text>
+                {state.gestureSupported ? (
+                  <Text style={styles.supported}>Three-finger hold supported on this device</Text>
+                ) : null}
+                <View style={styles.stackedActions}>
+                  {state.gestureSupported ? (
+                    <>
+                      <ModeButton
+                        title="Three-finger hold"
+                        hint="No persistent Y over the app"
+                        selected={state.presentation === 'auto'}
+                        disabled={busy !== null}
+                        onPress={() => void choosePresentation('auto')}
+                      />
+                      <ModeButton
+                        title="Always show Y"
+                        hint="Keep the draggable edge control"
+                        selected={state.presentation === 'minimized-y'}
+                        disabled={busy !== null}
+                        onPress={() => void choosePresentation('minimized-y')}
+                      />
+                    </>
+                  ) : null}
+                  <ModeButton
+                    title="Session setup"
+                    hint="Change machine, coding agent, model, or runtime lane"
+                    disabled={busy !== null}
+                    onPress={() => void openSessionSetup()}
+                  />
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.titleRow}>
+                  <Text style={styles.title}>Dogfood</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Dogfood settings"
+                    onPress={() => setShowControlSettings(true)}
+                    style={styles.settingsButton}
+                  >
+                    <Text style={styles.settingsText}>Settings</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.actions}>
+                  <Pressable
+                    testID="yaver-dogfood-fast-reload"
+                    accessibilityRole="button"
+                    disabled={busy !== null}
+                    onPress={() => void fastReload()}
+                    style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
+                  >
+                    <Text style={styles.actionTitle}>{busy === 'reload' ? 'Reloading…' : 'Fast Reload'}</Text>
+                    <Text style={styles.actionHint}>Refresh the selected render target</Text>
+                  </Pressable>
+                  <Pressable
+                    testID="yaver-dogfood-chat"
+                    accessibilityRole="button"
+                    disabled={busy !== null}
+                    onPress={() => void openChat()}
+                    style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
+                  >
+                    <Text style={styles.actionTitle}>{busy === 'chat' ? 'Opening…' : 'Chat'}</Text>
+                    <Text style={styles.actionHint}>Open the current Yaver vibing session</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
             {message ? <Text style={styles.message}>{message}</Text> : null}
           </Pressable>
         </Pressable>
@@ -182,6 +354,27 @@ export const DogfoodQuickControls: React.FC = () => {
   );
 };
 
+const ModeButton: React.FC<{
+  title: string;
+  hint: string;
+  selected?: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+}> = ({ title, hint, selected, disabled, onPress }) => (
+  <Pressable
+    accessibilityRole="button"
+    disabled={disabled}
+    onPress={onPress}
+    style={({ pressed }) => [styles.modeAction, selected && styles.modeSelected, pressed && styles.actionPressed]}
+  >
+    {typeof selected === 'boolean' ? <View style={[styles.radio, selected && styles.radioSelected]} /> : null}
+    <View style={styles.modeCopy}>
+      <Text style={styles.actionTitle}>{title}</Text>
+      <Text style={styles.actionHint}>{hint}</Text>
+    </View>
+  </Pressable>
+);
+
 const styles = StyleSheet.create({
   layer: { zIndex: 9997 },
   fallbackPosition: { position: 'absolute', left: 0, top: 0 },
@@ -189,8 +382,6 @@ const styles = StyleSheet.create({
     width: FALLBACK_SIZE,
     height: FALLBACK_SIZE,
     borderRadius: FALLBACK_SIZE / 2,
-    alignItems: 'center',
-    justifyContent: 'center',
     backgroundColor: '#f97316',
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.92)',
@@ -199,8 +390,11 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
     elevation: 6,
+    overflow: 'hidden',
   },
-  fallbackText: { color: '#111827', fontSize: 17, lineHeight: 20, fontWeight: '800' },
+  fallbackText: { position: 'absolute', top: 7, color: '#111827', fontSize: 17, lineHeight: 20, fontWeight: '800' },
+  rightDockText: { left: 6 },
+  leftDockText: { right: 6 },
   pressed: { opacity: 0.78 },
   backdrop: {
     flex: 1,
@@ -221,8 +415,14 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 12,
   },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   title: { color: '#f9fafb', fontSize: 16, fontWeight: '700', marginBottom: 12 },
+  explanation: { color: '#cbd5e1', fontSize: 13, lineHeight: 19, marginBottom: 14 },
+  supported: { color: '#9ca3af', fontSize: 12, lineHeight: 17, marginBottom: 14 },
+  settingsButton: { paddingVertical: 5, paddingHorizontal: 8, marginTop: -6 },
+  settingsText: { color: '#fdba74', fontSize: 12, fontWeight: '700' },
   actions: { flexDirection: 'row', gap: 10 },
+  stackedActions: { gap: 9 },
   action: {
     flex: 1,
     minHeight: 92,
@@ -233,6 +433,20 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#4b5563',
   },
+  modeAction: {
+    minHeight: 62,
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1f2937',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#4b5563',
+  },
+  modeSelected: { borderColor: '#f97316', backgroundColor: '#292524' },
+  radio: { width: 15, height: 15, borderRadius: 8, borderWidth: 1.5, borderColor: '#64748b', marginRight: 11 },
+  radioSelected: { borderWidth: 4, borderColor: '#f97316', backgroundColor: '#111827' },
+  modeCopy: { flex: 1, gap: 3 },
   actionPressed: { backgroundColor: '#374151' },
   actionTitle: { color: '#f9fafb', fontSize: 15, fontWeight: '700' },
   actionHint: { color: '#9ca3af', fontSize: 11, lineHeight: 15 },

@@ -1,5 +1,6 @@
 import { DeviceEventEmitter, NativeModules } from 'react-native';
 import { YaverFeedback } from '../YaverFeedback';
+import { setDogfoodControlPreference } from '../auth';
 
 // Mock react-native: DeviceEventEmitter for event dispatch + Platform so
 // ShakeDetector.start() can branch on iOS without hitting a real RN runtime.
@@ -40,6 +41,7 @@ jest.mock('../auth', () => ({
     accountAuthorized: token === 'owner-token',
     installationAuthorized: token === 'owner-token',
   })),
+  setDogfoodControlPreference: jest.fn(async () => true),
   saveSelectedDeviceId: jest.fn(async () => {}),
   clearToken: jest.fn(async () => {}),
   clearSelectedDeviceId: jest.fn(async () => {}),
@@ -172,7 +174,7 @@ describe('YaverFeedback', () => {
         .toHaveBeenCalledWith(false, 'Dogfood');
     });
 
-    it('uses the invisible three-finger hold when the authorized phone supports it', async () => {
+    it('keeps the Y visible until the authorized phone has completed onboarding', async () => {
       YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
       YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
       jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
@@ -185,8 +187,92 @@ describe('YaverFeedback', () => {
         authorized: true,
       });
       const state = await YaverFeedback.syncDogfoodControlGesture();
-      expect(state).toMatchObject({ gestureSupported: true, gestureEnabled: true, fallbackVisible: false });
+      expect(state).toMatchObject({
+        onboardingSeen: false,
+        presentation: 'minimized-y',
+        gestureSupported: true,
+        gestureEnabled: false,
+        fallbackVisible: true,
+      });
+      expect((NativeModules as any).YaverDogfoodGesture.setEnabled).toHaveBeenCalledWith(false, 900);
+    });
+
+    it('uses the invisible three-finger hold only after onboarding selects it', async () => {
+      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
+      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: true,
+        ownerAuthorized: false,
+        accountAuthorized: true,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: true,
+        controlPresentation: 'auto',
+        controlOnboardingSeen: true,
+      });
+      const state = await YaverFeedback.syncDogfoodControlGesture();
+      expect(state).toMatchObject({
+        onboardingSeen: true,
+        presentation: 'auto',
+        gestureSupported: true,
+        gestureEnabled: true,
+        fallbackVisible: false,
+      });
       expect((NativeModules as any).YaverDogfoodGesture.setEnabled).toHaveBeenCalledWith(true, 900);
+    });
+
+    it('keeps the Y when native capability reports support but enabling the gesture fails', async () => {
+      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
+      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: true,
+        ownerAuthorized: false,
+        accountAuthorized: true,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: true,
+        controlPresentation: 'auto',
+        controlOnboardingSeen: true,
+      });
+      (NativeModules as any).YaverDogfoodGesture.setEnabled.mockResolvedValueOnce({
+        supported: true,
+        enabled: false,
+        reason: 'supported',
+        platform: 'ios',
+      });
+      const state = await YaverFeedback.syncDogfoodControlGesture();
+      expect(state).toMatchObject({
+        gestureSupported: true,
+        gestureEnabled: false,
+        fallbackVisible: true,
+        reason: 'gesture-enable-failed',
+      });
+    });
+
+    it('persists first-run completion for the exact account app installation', async () => {
+      YaverFeedback.init({ authToken: 'owner-token', bundleId: 'io.example.app', dogfood: {} });
+      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: true,
+        ownerAuthorized: true,
+        accountAuthorized: true,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: true,
+        controlOnboardingSeen: false,
+      });
+      const state = await YaverFeedback.setDogfoodControlPresentation('minimized-y');
+      expect(state).toMatchObject({ onboardingSeen: true, presentation: 'minimized-y', fallbackVisible: true });
+      expect(setDogfoodControlPreference).toHaveBeenCalledWith(expect.objectContaining({
+        appId: 'io.example.app',
+        installationId: 'phone-1',
+        token: 'owner-token',
+        presentation: 'minimized-y',
+        controlOnboardingSeen: true,
+      }));
     });
 
     it('falls back to the minimized Y when accessibility owns multi-touch', async () => {

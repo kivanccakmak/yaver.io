@@ -7,6 +7,7 @@ import {
   dogfoodGenerationsToSupersede,
   dogfoodInstallationAuthorized,
   dogfoodControlActionMessage,
+  dogfoodControlOnboardingSeenAt,
   dogfoodTesterAssigned,
   dogfoodTesterBinding,
   normalizeDogfoodTesterEmail,
@@ -126,4 +127,19 @@ test("control-device action proof binds phone, installation, action, and time", 
     action: "approve",
     signedAt: 1234,
   }), "yaver-dogfood-control-action-v1\nmobile_1234567890abcdef\ninstall-doc\napprove\n1234");
+});
+
+test("Dogfood onboarding completion is monotonic while presentation remains changeable", () => {
+  assert.equal(dogfoodControlOnboardingSeenAt(undefined, false, 100), undefined);
+  assert.equal(dogfoodControlOnboardingSeenAt(undefined, true, 100), 100);
+  assert.equal(dogfoodControlOnboardingSeenAt(100, false, 200), 100);
+  assert.equal(dogfoodControlOnboardingSeenAt(100, true, 200), 100);
+});
+
+test("control preferences are scoped to a full session and active exact installation", () => {
+  const auth = readFileSync(join(import.meta.dirname, "auth.ts"), "utf8");
+  const http = readFileSync(join(import.meta.dirname, "http.ts"), "utf8");
+  assert.match(auth, /row\.testerUserId !== session\.user\._id/);
+  assert.match(auth, /row\.status !== "active"/);
+  assert.match(http, /path: "\/dogfood\/control-preference"/);
 });

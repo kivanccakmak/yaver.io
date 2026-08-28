@@ -209,6 +209,10 @@ export async function getDogfoodAccountAccess(appId: string, token: string, inst
   ownerAuthorized: boolean;
   accountAuthorized: boolean;
   installationAuthorized: boolean;
+  controlPresentation?: 'auto' | 'minimized-y';
+  gestureSupported?: boolean;
+  gestureCapabilityReason?: string;
+  controlOnboardingSeen?: boolean;
 }> {
   try {
     const controller = new AbortController();
@@ -227,9 +231,54 @@ export async function getDogfoodAccountAccess(appId: string, token: string, inst
       ownerAuthorized: result?.ownerAuthorized === true,
       accountAuthorized: result?.accountAuthorized === true,
       installationAuthorized: result?.installationAuthorized === true,
+      controlPresentation: result?.controlPresentation === 'minimized-y' ? 'minimized-y'
+        : result?.controlPresentation === 'auto' ? 'auto' : undefined,
+      gestureSupported: typeof result?.gestureSupported === 'boolean' ? result.gestureSupported : undefined,
+      gestureCapabilityReason: typeof result?.gestureCapabilityReason === 'string'
+        ? result.gestureCapabilityReason
+        : undefined,
+      controlOnboardingSeen: result?.controlOnboardingSeen === true,
     };
   } catch {
     return { authenticated: false, ownerAuthorized: false, accountAuthorized: false, installationAuthorized: false };
+  }
+}
+
+export async function setDogfoodControlPreference(input: {
+  appId: string;
+  installationId: string;
+  token: string;
+  presentation: 'auto' | 'minimized-y';
+  gestureSupported: boolean;
+  gestureCapabilityReason: string;
+  gesturePlatform: string;
+  controlOnboardingSeen?: boolean;
+}): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const response = await fetch(`${convexSiteUrl}/dogfood/control-preference`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${input.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        appId: input.appId,
+        installationId: input.installationId,
+        presentation: input.presentation,
+        gestureSupported: input.gestureSupported,
+        gestureCapabilityReason: input.gestureCapabilityReason,
+        gesturePlatform: input.gesturePlatform,
+        controlOnboardingSeen: input.controlOnboardingSeen === true,
+      }),
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

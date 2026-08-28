@@ -83,6 +83,16 @@ class YaverDogfoodGesture: RCTEventEmitter, UIGestureRecognizerDelegate {
     UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning
   }
 
+  private func simulatorInputConflict() -> Bool {
+    #if targetEnvironment(simulator)
+      // Simulator's Option-key multi-touch synthesizes two pointers only.
+      // Treat it as unsupported so the SDK exposes the tappable Y fallback.
+      return true
+    #else
+      return false
+    #endif
+  }
+
   private func keyWindow() -> UIWindow? {
     if #available(iOS 13.0, *) {
       return UIApplication.shared.connectedScenes
@@ -94,12 +104,15 @@ class YaverDogfoodGesture: RCTEventEmitter, UIGestureRecognizerDelegate {
   }
 
   private func status() -> [String: Any] {
-    let conflict = accessibilityConflict()
+    let accessibility = accessibilityConflict()
+    let simulator = simulatorInputConflict()
     let windowAvailable = keyWindow() != nil
     return [
-      "supported": !conflict,
-      "enabled": requestedEnabled && !conflict && recognizer != nil,
-      "reason": conflict ? "accessibility-touch-exploration" : (windowAvailable ? "supported" : "window-unavailable"),
+      "supported": !accessibility && !simulator,
+      "enabled": requestedEnabled && !accessibility && !simulator && recognizer != nil,
+      "reason": accessibility
+        ? "accessibility-touch-exploration"
+        : (simulator ? "simulator-three-finger-input-unavailable" : (windowAvailable ? "supported" : "window-unavailable")),
       "platform": "ios",
     ]
   }
@@ -112,7 +125,7 @@ class YaverDogfoodGesture: RCTEventEmitter, UIGestureRecognizerDelegate {
   }
 
   private func reconcile() {
-    guard requestedEnabled, !accessibilityConflict(), let window = keyWindow() else {
+    guard requestedEnabled, !accessibilityConflict(), !simulatorInputConflict(), let window = keyWindow() else {
       detach()
       return
     }

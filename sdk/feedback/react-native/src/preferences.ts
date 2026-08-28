@@ -26,6 +26,95 @@ try {
 
 const QUICK_ICON_DISABLED_KEY = 'yaver_feedback_quickicon_disabled';
 const QUICK_ICON_COLOR_KEY = 'yaver_feedback_quickicon_color';
+const DOGFOOD_CONTROL_PRESENTATION_KEY = 'yaver_dogfood_control_presentation';
+const DOGFOOD_CONTROL_POSITION_PREFIX = 'yaver_dogfood_control_position_';
+const DOGFOOD_CONTROL_ONBOARDING_PREFIX = 'yaver_dogfood_control_onboarding_';
+
+export type DogfoodControlPresentation = 'auto' | 'minimized-y';
+export type DogfoodControlEdge = 'left' | 'right';
+export interface DogfoodControlPosition {
+  edge: DogfoodControlEdge;
+  /** 0–1 within the safe vertical travel area. */
+  yRatio: number;
+}
+
+function dogfoodPreferenceKey(base: string, scope?: string): string {
+  const normalized = String(scope || 'legacy').trim() || 'legacy';
+  return `${base}_${encodeURIComponent(normalized)}`;
+}
+
+export async function getDogfoodControlPresentation(scope?: string): Promise<DogfoodControlPresentation | null> {
+  if (!AsyncStorage) return null;
+  try {
+    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_CONTROL_PRESENTATION_KEY, scope));
+    return value === 'auto' || value === 'minimized-y' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setDogfoodControlPresentation(value: DogfoodControlPresentation, scope?: string): Promise<void> {
+  if (!AsyncStorage) return;
+  try {
+    await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_CONTROL_PRESENTATION_KEY, scope), value);
+  } catch {
+    // best-effort
+  }
+}
+
+export async function getDogfoodControlPosition(
+  orientation: 'portrait' | 'landscape',
+  scope?: string,
+): Promise<DogfoodControlPosition | null> {
+  if (!AsyncStorage) return null;
+  try {
+    const raw = await AsyncStorage.getItem(
+      dogfoodPreferenceKey(`${DOGFOOD_CONTROL_POSITION_PREFIX}${orientation}`, scope),
+    );
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DogfoodControlPosition>;
+    if ((parsed.edge !== 'left' && parsed.edge !== 'right') || typeof parsed.yRatio !== 'number') return null;
+    return { edge: parsed.edge, yRatio: Math.max(0, Math.min(1, parsed.yRatio)) };
+  } catch {
+    return null;
+  }
+}
+
+export async function setDogfoodControlPosition(
+  orientation: 'portrait' | 'landscape',
+  position: DogfoodControlPosition,
+  scope?: string,
+): Promise<void> {
+  if (!AsyncStorage) return;
+  try {
+    await AsyncStorage.setItem(
+      dogfoodPreferenceKey(`${DOGFOOD_CONTROL_POSITION_PREFIX}${orientation}`, scope),
+      JSON.stringify(position),
+    );
+  } catch {
+    // best-effort
+  }
+}
+
+export async function getDogfoodControlOnboardingSeen(scope?: string): Promise<boolean> {
+  if (!AsyncStorage) return false;
+  try {
+    return await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_CONTROL_ONBOARDING_PREFIX, scope)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function setDogfoodControlOnboardingSeen(seen: boolean, scope?: string): Promise<void> {
+  if (!AsyncStorage) return;
+  try {
+    const key = dogfoodPreferenceKey(DOGFOOD_CONTROL_ONBOARDING_PREFIX, scope);
+    if (seen) await AsyncStorage.setItem(key, '1');
+    else await AsyncStorage.removeItem(key);
+  } catch {
+    // best-effort startup cache; Convex remains authoritative.
+  }
+}
 
 export type QuickIconColorPreset =
   | 'orange'

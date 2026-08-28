@@ -33,6 +33,12 @@ export interface DogfoodInstallationRow {
   proofVerifiedAt?: number;
   approvedAt?: number;
   lastSeenAt?: number;
+  controlPresentation?: "auto" | "minimized-y";
+  gestureSupported?: boolean;
+  gestureCapabilityReason?: string;
+  gesturePlatform?: string;
+  gestureCheckedAt?: number;
+  controlOnboardingSeenAt?: number;
   tester?: { name: string; email: string };
 }
 

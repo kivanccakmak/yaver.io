@@ -2741,6 +2741,14 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     lastSeenAt: v.optional(v.number()),
+    /** Per-installation SDK presentation preference. This never grants
+     * Dogfood authority; it only selects gesture-only vs minimized-Y entry. */
+    controlPresentation: v.optional(v.union(v.literal("auto"), v.literal("minimized-y"))),
+    gestureSupported: v.optional(v.boolean()),
+    gestureCapabilityReason: v.optional(v.string()),
+    gesturePlatform: v.optional(v.string()),
+    gestureCheckedAt: v.optional(v.number()),
+    controlOnboardingSeenAt: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
     .index("by_user_app", ["userId", "appId"])

@@ -115,7 +115,7 @@ still require the user's normal Yaver authentication.
 
 Mount `FeedbackModal` once and configure the ACL-backed dynamic app shortcut
 plus smart quick controls. Keep a native Settings/Profile row as the universal
-enrollment and recovery route; no shake gesture or permanent overlay is needed:
+enrollment and recovery route; no shake gesture is needed:
 
 ```tsx
 YaverFeedback.init({
@@ -147,11 +147,21 @@ After the owner approves that exact account + app ID + phone key, iOS and
 Android add the long-press shortcut. Signing out, revocation, or host ACL denial
 removes it on the next foreground sync.
 
-On an authorized standalone iOS/Android target, a three-finger hold opens one
-compact card with exactly `Fast Reload` and `Chat`; nothing is rendered while
-the card is closed. The native observer does not consume ordinary app touches.
-If the native module is absent or VoiceOver/TalkBack owns multi-touch, the SDK
-shows a 34-point draggable Y that opens the same card. Inside Yaver's own
+Every newly authorized standalone installation starts with a partially
+edge-docked, fading Y, even when the phone supports three-finger input. Its
+one-time `Dogfood ready` card explains the entry point and records
+`controlOnboardingSeenAt` in Convex for the exact Yaver user + app +
+installation. After Continue, Settings in the compact card can switch between
+`Always show Y` and a three-finger hold; that preference is stored in the same
+Convex row and cached locally for cold start. Settings also reopens the session
+setup for machine, coding runner/model, and Browser/Hermes/WebRTC lane changes.
+
+In three-finger mode, a hold opens one compact card whose primary actions are
+exactly `Fast Reload` and `Chat`; nothing is rendered while the card is closed.
+The native observer does not consume ordinary app touches. If the native module
+is absent, the iOS Simulator cannot supply genuine three-finger input, or
+VoiceOver/TalkBack owns multi-touch, the SDK keeps the draggable Y and omits the
+irrelevant mode preference. Inside Yaver's own
 container both are suppressed: the host already renders preview/lane controls
 beside its chat/vibing surface. Tablets follow the same host-vs-standalone rule
 as phones; viewport size never decides ownership.

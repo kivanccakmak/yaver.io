@@ -17,6 +17,7 @@ import * as ed from "@noble/ed25519";
 import {
   dogfoodActionAllowed,
   dogfoodControlActionMessage,
+  dogfoodControlOnboardingSeenAt,
   dogfoodInstallationAuthorized,
   dogfoodTesterAssigned,
   dogfoodTesterBinding,
@@ -2340,7 +2341,58 @@ export const getDogfoodAppAccess = query({
       accountAuthorized: !!app?.enabled && testerAccess.allowed,
       installationAuthorized,
       label: app?.label,
+      controlPresentation: installation?.testerUserId === session.user._id
+        ? installation.controlPresentation
+        : undefined,
+      gestureSupported: installation?.testerUserId === session.user._id
+        ? installation.gestureSupported
+        : undefined,
+      gestureCapabilityReason: installation?.testerUserId === session.user._id
+        ? installation.gestureCapabilityReason
+        : undefined,
+      controlOnboardingSeen: installation?.testerUserId === session.user._id
+        ? !!installation.controlOnboardingSeenAt
+        : false,
     };
+  },
+});
+
+/** Persist presentation/capability against this exact tester installation.
+ * Capability is advisory inventory for Settings; ACL decisions never read it. */
+export const setDogfoodControlPreference = mutation({
+  args: {
+    sessionTokenHash: v.string(),
+    appId: v.string(),
+    installationId: v.string(),
+    presentation: v.union(v.literal("auto"), v.literal("minimized-y")),
+    gestureSupported: v.boolean(),
+    gestureCapabilityReason: v.string(),
+    gesturePlatform: v.string(),
+    controlOnboardingSeen: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const session = await validateSessionInternal(ctx, args.sessionTokenHash);
+    if (!session || (session.scope && session.scope !== "full")) throw new Error("Unauthorized");
+    const row = await ctx.db.query("dogfoodInstallations")
+      .withIndex("by_app_installation", (q) => q.eq("appId", args.appId.trim()).eq("installationId", args.installationId.trim()))
+      .unique();
+    if (!row || row.testerUserId !== session.user._id) throw new Error("Installation not found");
+    if (row.status !== "active") throw new Error(`Installation is ${row.status}`);
+    const now = Date.now();
+    await ctx.db.patch(row._id, {
+      controlPresentation: args.presentation,
+      gestureSupported: args.gestureSupported,
+      gestureCapabilityReason: args.gestureCapabilityReason.trim().slice(0, 80),
+      gesturePlatform: args.gesturePlatform.trim().slice(0, 32),
+      gestureCheckedAt: now,
+      controlOnboardingSeenAt: dogfoodControlOnboardingSeenAt(
+        row.controlOnboardingSeenAt,
+        args.controlOnboardingSeen === true,
+        now,
+      ),
+      updatedAt: now,
+    });
+    return { ok: true, presentation: args.presentation };
   },
 });
 

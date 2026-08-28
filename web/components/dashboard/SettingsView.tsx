@@ -44,7 +44,7 @@ interface SettingsViewProps {
 }
 
 type ThirdPartyDogfoodApp = { _id: string; appId: string; label: string; allowedScopes: string[]; enabled: boolean };
-type ThirdPartyDogfoodInstallation = { _id: string; appId: string; installationId: string; label?: string; platform: string; status: string; proofVerifiedAt?: number; tester?: { name?: string; email: string } };
+type ThirdPartyDogfoodInstallation = { _id: string; appId: string; installationId: string; label?: string; platform: string; status: string; proofVerifiedAt?: number; tester?: { name?: string; email: string }; controlPresentation?: "auto" | "minimized-y"; gestureSupported?: boolean; gestureCapabilityReason?: string; controlOnboardingSeenAt?: number };
 type ThirdPartyDogfoodTester = { _id: string; appId: string; testerEmail: string; testerUserId?: string; status: "active" | "revoked"; tester?: { name?: string; email: string } };
 
 function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
@@ -139,6 +139,12 @@ function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
     </div> : null}
     {installations.length ? <div className="mt-3 space-y-2">{installations.map((row) => <div key={row._id} className="rounded-md border border-surface-800 p-2 text-xs">
       <div><span className="font-medium text-surface-200">{row.label || row.platform}</span><span className="ml-2 text-surface-500">{row.appId} · {row.status}{row.proofVerifiedAt ? " · key verified" : ""}{row.tester?.email ? ` · ${row.tester.email}` : ""}</span></div>
+      {row.status === "active" ? <div className="mt-1 text-surface-500">
+        {row.gestureSupported === true
+          ? `Three-finger supported · ${row.controlPresentation === "auto" ? "gesture mode" : "Y mode"}`
+          : row.gestureSupported === false ? "Y mode · gesture unavailable" : "Control capability not reported yet"}
+        {row.controlOnboardingSeenAt ? " · onboarded" : " · onboarding pending"}
+      </div> : null}
       {row.status === "pending" && row.proofVerifiedAt ? <button onClick={() => void act(row._id, "approve")} disabled={busy} className="mt-2 rounded bg-emerald-700 px-2 py-1 text-white">Approve</button> : null}
       {row.status === "pending" ? <button onClick={() => void act(row._id, "cancel")} disabled={busy} className="ml-2 mt-2 text-red-400">Cancel</button> : null}
       {row.status === "active" ? <button onClick={() => void act(row._id, "revoke")} disabled={busy} className="mt-2 text-red-400">Revoke</button> : null}

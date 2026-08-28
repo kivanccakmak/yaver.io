@@ -15,6 +15,7 @@ import {
   getToken,
   getSelectedDeviceId,
   getDogfoodAccountAccess,
+  setDogfoodControlPreference,
   listReachableDevices,
   clearToken,
   clearSelectedDeviceId,
@@ -25,6 +26,11 @@ import {
   getQuickIconColorPreset,
   setQuickIconDisabled,
   setQuickIconColorPreset,
+  getDogfoodControlPresentation,
+  setDogfoodControlPresentation as cacheDogfoodControlPresentation,
+  getDogfoodControlOnboardingSeen,
+  setDogfoodControlOnboardingSeen,
+  type DogfoodControlPresentation,
   QuickIconColorPreset,
 } from './preferences';
 import { resolveSDKDogfood, type SDKDogfoodStatus, type DogfoodAccessSnapshot } from './dogfoodPolicy';
@@ -47,11 +53,22 @@ export interface DogfoodFlowState {
 export interface DogfoodControlTriggerState {
   configured: boolean;
   authorized: boolean;
+  appId?: string;
+  installationId?: string;
   gestureSupported: boolean;
   gestureEnabled: boolean;
   fallbackVisible: boolean;
+  presentation: DogfoodControlPresentation;
+  onboardingSeen: boolean;
   reason: string;
   platform?: string;
+}
+
+interface DogfoodControlSyncOptions {
+  presentation?: DogfoodControlPresentation;
+  onboardingSeen?: boolean;
+  /** User-initiated changes fail visibly when Convex cannot persist them. */
+  requirePersistence?: boolean;
 }
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
@@ -203,6 +220,11 @@ let dogfoodShortcutAppStateSubscription: { remove: () => void } | null = null;
 let dogfoodActivationSubscription: { remove: () => void } | null = null;
 let dogfoodShortcutLaunchInFlight = false;
 let lastDogfoodActivationUrl = '';
+
+function dogfoodControlPreferenceScope(appId?: string, installationId?: string): string | undefined {
+  if (!appId || !installationId) return undefined;
+  return `${appId}:${installationId}`;
+}
 
 function publishDogfoodFlow(state: DogfoodFlowState): void {
   dogfoodFlowState = state;
@@ -995,6 +1017,10 @@ export class YaverFeedback {
       installationId,
       deviceState,
       authorized: yaverAuthenticated && account.installationAuthorized && deviceState === 'active',
+      controlPresentation: account.controlPresentation,
+      gestureSupported: account.gestureSupported,
+      gestureCapabilityReason: account.gestureCapabilityReason,
+      controlOnboardingSeen: account.controlOnboardingSeen,
     };
   }
 
@@ -1024,12 +1050,14 @@ export class YaverFeedback {
     return visible;
   }
 
-  /** Capability-gated in-app Dogfood controls. A supported standalone native
-   * app gets a passive three-finger hold and no persistent pixels. Missing
-   * native support or accessibility touch exploration gets the minimized Y
-   * fallback. Yaver's own container always owns its split preview/chat UI, so
-   * both guest affordances are suppressed there. */
-  static async syncDogfoodControlGesture(): Promise<DogfoodControlTriggerState> {
+  /** Capability-gated in-app Dogfood controls. Every new exact installation
+   * starts with Y until Convex records onboarding. A supported standalone app
+   * can then select a passive three-finger hold and no persistent pixels;
+   * missing native support or accessibility touch exploration keeps Y. Yaver's
+   * own container suppresses both because its split preview/chat UI owns them. */
+  static async syncDogfoodControlGesture(
+    syncOptions: DogfoodControlSyncOptions = {},
+  ): Promise<DogfoodControlTriggerState> {
     const configured = config?.dogfood?.controlGesture;
     const native = (NativeModules as any)?.YaverDogfoodGesture;
     const base: DogfoodControlTriggerState = {
@@ -1038,6 +1066,8 @@ export class YaverFeedback {
       gestureSupported: false,
       gestureEnabled: false,
       fallbackVisible: false,
+      presentation: syncOptions.presentation || 'auto',
+      onboardingSeen: syncOptions.onboardingSeen === true,
       reason: configured ? 'native-module-unavailable' : 'not-configured',
       platform: Platform.OS,
     };
@@ -1070,38 +1100,150 @@ export class YaverFeedback {
       if (typeof native?.setEnabled === 'function') {
         await native.setEnabled(false, durationMs).catch(() => undefined);
       }
-      return { ...base, reason: 'installation-not-authorized' };
+      return { ...base, appId: access.appId, installationId: access.installationId, reason: 'installation-not-authorized' };
     }
 
+    const preferenceScope = dogfoodControlPreferenceScope(access.appId, access.installationId);
+    const cachedPresentation = await getDogfoodControlPresentation(preferenceScope);
+    const cachedOnboardingSeen = await getDogfoodControlOnboardingSeen(preferenceScope);
+    const onboardingSeen = syncOptions.onboardingSeen
+      ?? access.controlOnboardingSeen
+      ?? cachedOnboardingSeen;
+    // A newly authorized tester must never be left staring at an invisible
+    // feature. Until the exact installation has completed onboarding in
+    // Convex, the edge-docked Y wins even when the gesture is supported.
+    const preferredPresentation = syncOptions.presentation
+      || access.controlPresentation
+      || cachedPresentation
+      || options.defaultPresentation
+      || 'auto';
+    const presentation: DogfoodControlPresentation = onboardingSeen
+      ? preferredPresentation
+      : 'minimized-y';
+
     if (typeof native?.getCapability !== 'function' || typeof native?.setEnabled !== 'function') {
-      return {
+      const result: DogfoodControlTriggerState = {
         ...base,
         authorized: true,
+        appId: access.appId,
+        installationId: access.installationId,
+        presentation: 'minimized-y',
+        onboardingSeen,
         fallbackVisible: allowFallback,
       };
+      if (syncOptions.requirePersistence) {
+        const token = config?.authToken || await getToken();
+        if (!token || !access.installationId) {
+          throw new Error('A full Yaver session is required to save Dogfood settings.');
+        }
+        const persisted = await setDogfoodControlPreference({
+          appId: access.appId,
+          installationId: access.installationId,
+          token,
+          presentation: 'minimized-y',
+          gestureSupported: false,
+          gestureCapabilityReason: 'native-module-unavailable',
+          gesturePlatform: Platform.OS,
+          controlOnboardingSeen: onboardingSeen,
+        });
+        if (!persisted) throw new Error('Could not save this Dogfood control preference to Yaver.');
+        await cacheDogfoodControlPresentation('minimized-y', preferenceScope);
+        if (onboardingSeen) await setDogfoodControlOnboardingSeen(true, preferenceScope);
+      }
+      return result;
     }
     try {
       const capability = await native.getCapability();
       const gestureSupported = capability?.supported === true;
-      const applied = await native.setEnabled(gestureSupported, durationMs);
-      return {
+      const shouldEnableGesture = gestureSupported && onboardingSeen && presentation === 'auto';
+      const applied = await native.setEnabled(shouldEnableGesture, durationMs);
+      const gestureEnabled = shouldEnableGesture && applied?.enabled === true;
+      const gestureEnableFailed = shouldEnableGesture && !gestureEnabled;
+      const result: DogfoodControlTriggerState = {
         configured: true,
         authorized: true,
+        appId: access.appId,
+        installationId: access.installationId,
         gestureSupported,
-        gestureEnabled: gestureSupported && applied?.enabled === true,
-        fallbackVisible: allowFallback && !gestureSupported,
-        reason: String(applied?.reason || capability?.reason || (gestureSupported ? 'supported' : 'unsupported')),
+        gestureEnabled,
+        fallbackVisible: allowFallback && (!gestureSupported || presentation === 'minimized-y' || gestureEnableFailed),
+        presentation,
+        onboardingSeen,
+        reason: gestureEnableFailed
+          ? 'gesture-enable-failed'
+          : String(applied?.reason || capability?.reason || (gestureSupported ? 'supported' : 'unsupported')),
         platform: String(applied?.platform || capability?.platform || Platform.OS),
       };
-    } catch {
+      const token = config?.authToken || await getToken();
+      if (syncOptions.requirePersistence && (!token || !access.installationId)) {
+        await native.setEnabled(false, durationMs).catch(() => undefined);
+        throw new Error('A full Yaver session is required to save Dogfood settings.');
+      }
+      if (token && access.installationId) {
+        const needsPersistence =
+          access.controlPresentation !== presentation
+          || access.gestureSupported !== gestureSupported
+          || access.gestureCapabilityReason !== result.reason
+          || (syncOptions.onboardingSeen === true && access.controlOnboardingSeen !== true);
+        if (needsPersistence) {
+          const persisted = await setDogfoodControlPreference({
+            appId: access.appId,
+            installationId: access.installationId,
+            token,
+            presentation,
+            gestureSupported,
+            gestureCapabilityReason: result.reason,
+            gesturePlatform: result.platform || Platform.OS,
+            controlOnboardingSeen: onboardingSeen,
+          });
+          if (!persisted && syncOptions.requirePersistence) {
+            await native.setEnabled(false, durationMs).catch(() => undefined);
+            throw new Error('Could not save this Dogfood control preference to Yaver.');
+          }
+          if (persisted) {
+            await cacheDogfoodControlPresentation(presentation, preferenceScope);
+            if (onboardingSeen) await setDogfoodControlOnboardingSeen(true, preferenceScope);
+          }
+        } else {
+          await cacheDogfoodControlPresentation(presentation, preferenceScope);
+          if (onboardingSeen) await setDogfoodControlOnboardingSeen(true, preferenceScope);
+        }
+      }
+      return result;
+    } catch (error) {
       await native.setEnabled(false, durationMs).catch(() => undefined);
+      if (syncOptions.requirePersistence) {
+        throw error instanceof Error
+          ? error
+          : new Error('Could not save this Dogfood control preference to Yaver.');
+      }
       return {
         ...base,
         authorized: true,
+        appId: access.appId,
+        installationId: access.installationId,
+        presentation: 'minimized-y',
+        onboardingSeen,
         fallbackVisible: allowFallback,
         reason: 'native-capability-check-failed',
       };
     }
+  }
+
+  /** Complete first-run onboarding or change the later control preference.
+   * Convex is authoritative and keyed by full Yaver user + app + installation;
+   * the local value is only a cold-start cache. */
+  static async setDogfoodControlPresentation(
+    presentation: DogfoodControlPresentation,
+  ): Promise<DogfoodControlTriggerState> {
+    if (presentation !== 'auto' && presentation !== 'minimized-y') {
+      throw new Error('Invalid Dogfood control presentation.');
+    }
+    return YaverFeedback.syncDogfoodControlGesture({
+      presentation,
+      onboardingSeen: true,
+      requirePersistence: true,
+    });
   }
 
   /** One-tap fast reload for the compact Dogfood card. It preserves the same

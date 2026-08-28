@@ -11,6 +11,11 @@ export interface DogfoodAccessSnapshot {
   deviceState: 'unknown' | 'unregistered' | 'pending' | 'active' | 'cancelled' | 'revoked' | 'superseded';
   /** True only for an assigned account and this backend-approved device key. */
   authorized: boolean;
+  /** OAuth-backed preference scoped to this user + app + installation. */
+  controlPresentation?: 'auto' | 'minimized-y';
+  gestureSupported?: boolean;
+  gestureCapabilityReason?: string;
+  controlOnboardingSeen?: boolean;
 }
 
 export interface DogfoodFlowSnapshot {
@@ -56,6 +61,9 @@ export interface SDKDogfoodConfig {
     durationMs?: number;
     /** Default `minimized-y`; use `none` when Settings is the only fallback. */
     fallback?: 'minimized-y' | 'none';
+    /** Initial user-facing presentation before their persisted SDK preference
+     * exists. `auto` keeps pixels clear when the gesture works. */
+    defaultPresentation?: 'auto' | 'minimized-y';
   };
 }
 
