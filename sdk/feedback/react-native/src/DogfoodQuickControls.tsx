@@ -95,9 +95,16 @@ export const DogfoodQuickControls: React.FC = () => {
     const capability = DeviceEventEmitter.addListener('yaverDogfoodControlCapability', () => {
       void refresh();
     });
+    // Enrollment approval and Exit Dogfood both change SDK mode while this
+    // component remains mounted. Refresh React state immediately; native
+    // setEnabled() alone cannot make the fallback Y appear or disappear.
+    const mode = DeviceEventEmitter.addListener('yaverFeedback:dogfoodChanged', () => {
+      void refresh();
+    });
     return () => {
       trigger.remove();
       capability.remove();
+      mode.remove();
     };
   }, [refresh]);
 

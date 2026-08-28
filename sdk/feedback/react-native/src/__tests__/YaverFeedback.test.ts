@@ -72,6 +72,27 @@ beforeEach(() => {
   jest.clearAllMocks();
 });
 
+function activeDogfood(controlGesture: true | { durationMs: number } = true) {
+  return {
+    enabled: true,
+    appId: 'io.example.app',
+    installationId: 'phone-1',
+    installationStatus: 'active' as const,
+    controlGesture,
+  };
+}
+
+function initActiveDogfood(options: { authToken?: string; controlGesture?: true | { durationMs: number } } = {}) {
+  const controlGesture = options.controlGesture ?? true;
+  YaverFeedback.init({
+    authToken: options.authToken,
+    bundleId: 'io.example.app',
+    dogfood: { controlGesture },
+  });
+  Object.assign(YaverFeedback.getConfig()!.dogfood!, activeDogfood(controlGesture));
+  jest.clearAllMocks();
+}
+
 describe('YaverFeedback', () => {
   describe('Dogfood onboarding', () => {
     it('starts with Yaver OAuth when the host has no session', async () => {
@@ -187,8 +208,7 @@ describe('YaverFeedback', () => {
     });
 
     it('keeps the Y visible until the authorized phone has completed onboarding', async () => {
-      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
-      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      initActiveDogfood();
       jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
         appId: 'io.example.app',
         yaverAuthenticated: true,
@@ -210,8 +230,7 @@ describe('YaverFeedback', () => {
     });
 
     it('uses the invisible three-finger hold only after onboarding selects it', async () => {
-      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
-      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      initActiveDogfood();
       jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
         appId: 'io.example.app',
         yaverAuthenticated: true,
@@ -235,8 +254,7 @@ describe('YaverFeedback', () => {
     });
 
     it('keeps the Y when native capability reports support but enabling the gesture fails', async () => {
-      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
-      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      initActiveDogfood();
       jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
         appId: 'io.example.app',
         yaverAuthenticated: true,
@@ -264,8 +282,7 @@ describe('YaverFeedback', () => {
     });
 
     it('persists first-run completion for the exact account app installation', async () => {
-      YaverFeedback.init({ authToken: 'owner-token', bundleId: 'io.example.app', dogfood: {} });
-      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      initActiveDogfood({ authToken: 'owner-token' });
       jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
         appId: 'io.example.app',
         yaverAuthenticated: true,
@@ -288,8 +305,7 @@ describe('YaverFeedback', () => {
     });
 
     it('falls back to the minimized Y when accessibility owns multi-touch', async () => {
-      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
-      YaverFeedback.getConfig()!.dogfood!.controlGesture = { durationMs: 1200 };
+      initActiveDogfood({ controlGesture: { durationMs: 1200 } });
       jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
         appId: 'io.example.app',
         yaverAuthenticated: true,
@@ -311,12 +327,24 @@ describe('YaverFeedback', () => {
     });
 
     it('suppresses guest controls inside the Yaver split-view container', async () => {
-      YaverFeedback.init({ bundleId: 'io.example.app', dogfood: {} });
-      YaverFeedback.getConfig()!.dogfood!.controlGesture = true;
+      initActiveDogfood();
       (NativeModules as any).YaverInfo = { isYaver: true };
       const state = await YaverFeedback.syncDogfoodControlGesture();
       delete (NativeModules as any).YaverInfo;
       expect(state).toMatchObject({ gestureEnabled: false, fallbackVisible: false, reason: 'yaver-host-owns-controls' });
+    });
+
+    it('removes the gesture and fallback Y when Dogfood exits', async () => {
+      initActiveDogfood();
+      await YaverFeedback.exitDogfoodMode();
+      const state = await YaverFeedback.syncDogfoodControlGesture();
+      expect(state).toMatchObject({
+        authorized: false,
+        gestureEnabled: false,
+        fallbackVisible: false,
+        reason: 'dogfood-session-inactive',
+      });
+      expect((NativeModules as any).YaverDogfoodGesture.setEnabled).toHaveBeenCalledWith(false, 900);
     });
   });
 

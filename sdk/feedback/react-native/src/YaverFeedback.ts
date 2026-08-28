@@ -1077,6 +1077,16 @@ export class YaverFeedback {
       }
       return base;
     }
+    // Backend approval makes the installation eligible; it does not mean the
+    // tester is currently in Dogfood. Keep all in-app controls absent until
+    // enableDeviceDogfood() has minted a live scoped session, and make Exit
+    // Dogfood actually remove both the gesture and fallback Y.
+    if (!YaverFeedback.getDogfoodStatus().active) {
+      if (typeof native?.setEnabled === 'function') {
+        await native.setEnabled(false, 900).catch(() => undefined);
+      }
+      return { ...base, reason: 'dogfood-session-inactive' };
+    }
     if (IS_HOST_MODE || isRunningInsideYaverHost()) {
       if (typeof native?.setEnabled === 'function') {
         await native.setEnabled(false, 900).catch(() => undefined);
