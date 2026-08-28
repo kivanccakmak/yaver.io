@@ -230,7 +230,13 @@ if ! command -v pod >/dev/null 2>&1; then
   echo "       Install CocoaPods, then rerun the deploy; the locked install resumes automatically." >&2
   exit 1
 fi
-(cd "$ROOT/mobile/ios" && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install)
+# CocoaPods resolves a few locked pods from Git hosts. A one-off network timeout
+# used to abort the entire release after npm/prebuild had completed, even though
+# retrying the same install immediately reused every downloaded artifact and
+# succeeded. Keep deterministic pod errors fail-fast, but make transient fetch
+# failures self-healing and preserve the useful error when retries are exhausted.
+LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
+  bash "$ROOT/scripts/pod-install-with-retry.sh" "$ROOT/mobile/ios"
 "$ROOT/scripts/check-no-native-payment-sdks.sh" ios
 hydrate_native_dependency_artifacts
 
