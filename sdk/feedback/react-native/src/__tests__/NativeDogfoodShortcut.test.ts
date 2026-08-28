@@ -3,12 +3,37 @@ import { join } from 'path';
 
 const plugin = require('../../app.plugin.js') as {
   __test: {
+    patchHotReloadBootConfirmation(contents: string): string;
     patchDogfoodAppShortcut(contents: string): string;
     patchDogfoodSceneDelegate(contents: string): string;
   };
 };
 
 describe('native Dogfood shortcut contract', () => {
+  it('never treats process uptime as a successful React render', () => {
+    const staleHook = `
+    // Crash-revert safety net: clear the boot-attempt counter once
+    // RN renders its first frame, OR after 10 s of uptime — whichever
+    // fires first. If neither fires (bundle crashes before render),
+    // YaverHotReload.bundleURL() will eventually revert to the
+    // TestFlight-installed bundle after 3 failed boots. See
+    // YaverHotReload.swift for the full state machine.
+    NotificationCenter.default.addObserver(
+      forName: NSNotification.Name(rawValue: "RCTContentDidAppearNotification"),
+      object: nil,
+      queue: .main
+    ) { _ in YaverHotReload.markBootSuccessful() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+      YaverHotReload.markBootSuccessful()
+    }
+`;
+    const patched = plugin.__test.patchHotReloadBootConfirmation(staleHook);
+    expect(patched).toContain('RCTContentDidAppearNotification');
+    expect(patched).toContain('only a real first React frame confirms boot');
+    expect(patched).not.toContain('asyncAfter(deadline: .now() + 10)');
+    expect(plugin.__test.patchHotReloadBootConfirmation(patched)).toBe(patched);
+  });
+
   it('patches cold and warm iOS shortcut delivery idempotently', () => {
     const source = `
 public class AppDelegate: ExpoAppDelegate {

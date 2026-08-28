@@ -227,7 +227,9 @@ function withYaverAppDelegateHook(config) {
     // Existing consumers may already have the hot-reload hook from an older
     // SDK. Still apply newer, independently-versioned native contracts.
     if (contents.includes("YaverHotReload")) {
-      config.modResults.contents = patchDogfoodAppShortcut(contents);
+      config.modResults.contents = patchDogfoodAppShortcut(
+        patchHotReloadBootConfirmation(contents)
+      );
       return config;
     }
 
@@ -273,20 +275,14 @@ function withYaverAppDelegateHook(config) {
       name: Notification.Name("YaverHotReloadBundle"),
       object: nil
     )
-    // Crash-revert safety net: clear the boot-attempt counter once
-    // RN renders its first frame, OR after 10 s of uptime — whichever
-    // fires first. If neither fires (bundle crashes before render),
-    // YaverHotReload.bundleURL() will eventually revert to the
-    // TestFlight-installed bundle after 3 failed boots. See
-    // YaverHotReload.swift for the full state machine.
+    // Crash-revert safety net: only a real first React frame confirms boot.
+    // Uptime is not success: JS can fail while the native process remains
+    // alive on its launch screen indefinitely.
     NotificationCenter.default.addObserver(
       forName: NSNotification.Name(rawValue: "RCTContentDidAppearNotification"),
       object: nil,
       queue: .main
     ) { _ in YaverHotReload.markBootSuccessful() }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-      YaverHotReload.markBootSuccessful()
-    }
   }
 
   @objc private func yaverHandleHotReload(_ notification: Notification) {
@@ -372,6 +368,23 @@ function withYaverAppDelegateHook(config) {
     config.modResults.contents = patchDogfoodAppShortcut(patched);
     return config;
   });
+}
+
+/** Upgrade an already-generated AppDelegate from the pre-0.9.10 boot guard.
+ * Older plugins treated ten seconds of process uptime as a successful React
+ * boot. A JS exception can leave that process alive on the native splash, so
+ * the timer reset the crash counter forever and prevented bundle rollback. */
+function patchHotReloadBootConfirmation(contents) {
+  let patched = contents;
+  patched = patched.replace(
+    /    \/\/ Crash-revert safety net: clear the boot-attempt counter once\n    \/\/ RN renders its first frame, OR after 10 s of uptime — whichever\n    \/\/ fires first\. If neither fires \(bundle crashes before render\),\n    \/\/ YaverHotReload\.bundleURL\(\) will eventually revert to the\n    \/\/ TestFlight-installed bundle after 3 failed boots\. See\n    \/\/ YaverHotReload\.swift for the full state machine\./,
+    `    // Crash-revert safety net: only a real first React frame confirms boot.\n    // Uptime is not success: JS can fail while the native process remains\n    // alive on its launch screen indefinitely.`
+  );
+  patched = patched.replace(
+    /    DispatchQueue\.main\.asyncAfter\(deadline: \.now\(\) \+ 10\) \{\n      YaverHotReload\.markBootSuccessful\(\)\n    \}\n?/g,
+    ""
+  );
+  return patched;
 }
 
 /** Wire the dynamic iOS Home Screen shortcut into the SDK native module.
@@ -820,6 +833,7 @@ const yaverFeedbackPlugin = createRunOncePlugin(
 // config-plugin seam catches template drift before a consumer discovers it in
 // an archive build.
 yaverFeedbackPlugin.__test = {
+  patchHotReloadBootConfirmation,
   patchDogfoodAppShortcut,
   patchDogfoodSceneDelegate,
   findAppDelegateClassClose,

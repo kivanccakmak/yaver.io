@@ -157,8 +157,8 @@ class YaverHotReload: NSObject {
   /// bricks the app — user has to delete + reinstall from TestFlight.
   ///
   /// Guard: on each cold-start bundleURL() call, increment a boot
-  /// counter. Reset it on first successful render (RCTContentDidAppear)
-  /// or after 10 s of uptime. If the counter hits kMaxBootAttempts
+  /// counter. Reset it only on first successful render
+  /// (RCTContentDidAppear). If the counter hits kMaxBootAttempts
   /// without being reset, the bundle has crashed every boot so far —
   /// delete it and return nil so the app falls back to the
   /// TestFlight-installed bundle.
@@ -198,8 +198,7 @@ class YaverHotReload: NSObject {
   }
 
   /// Clear the boot-attempt counter. Call this from AppDelegate after
-  /// first successful RN render (RCTContentDidAppearNotification) or
-  /// after a short uptime safety timer — whichever fires first.
+  /// first successful RN render (RCTContentDidAppearNotification).
   @objc static func markBootSuccessful() {
     let defaults = UserDefaults.standard
     if defaults.integer(forKey: kKeyBootAttempts) > 0 {
