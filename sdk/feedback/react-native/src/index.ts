@@ -111,6 +111,12 @@ export type {
   DogfoodRunContext,
   DogfoodSnapshot,
 } from './DogfoodRuntime';
+export { DogfoodLanePicker, DogfoodLiveConsole, DogfoodStatusRail } from './DogfoodSessionUi';
+export type {
+  DogfoodStatusStep,
+  DogfoodStatusTone,
+  DogfoodUiColors,
+} from './DogfoodSessionUi';
 export { FeedbackModal } from './FeedbackModal';
 export { DogfoodQuickControls } from './DogfoodQuickControls';
 export { QuickActionIcon } from './QuickActionIcon';

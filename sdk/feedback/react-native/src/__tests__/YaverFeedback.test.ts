@@ -1,6 +1,6 @@
 import { DeviceEventEmitter, NativeModules } from 'react-native';
 import { YaverFeedback } from '../YaverFeedback';
-import { setDogfoodControlPreference } from '../auth';
+import { getDogfoodAccountAccess, setDogfoodControlPreference } from '../auth';
 
 // Mock react-native: DeviceEventEmitter for event dispatch + Platform so
 // ShakeDetector.start() can branch on iOS without hitting a real RN runtime.
@@ -108,6 +108,18 @@ describe('YaverFeedback', () => {
       await YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app' });
       unsubscribe();
       expect(states[states.length - 1]).toBe('auth-required');
+    });
+
+    it('returns a visible structured error when access verification fails', async () => {
+      YaverFeedback.init({ enabled: true, authToken: 'owner-token' });
+      (getDogfoodAccountAccess as jest.Mock).mockRejectedValueOnce(new Error('Access service unavailable'));
+      const state = await YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app' });
+      expect(state).toEqual({
+        phase: 'error',
+        appId: 'io.example.app',
+        error: 'Access service unavailable',
+      });
+      expect(DeviceEventEmitter.emit).not.toHaveBeenCalledWith('yaverFeedback:startReport');
     });
 
     it('lets a host ACL hide its affordance without opening auth UI', async () => {

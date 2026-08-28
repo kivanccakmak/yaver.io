@@ -39,6 +39,10 @@ import {
   dogfoodLaneOptions,
   type DogfoodLane,
 } from "../../../sdk/feedback/react-native/src/DogfoodRuntime";
+import {
+  DogfoodLanePicker,
+  DogfoodStatusRail,
+} from "../../../sdk/feedback/react-native/src/DogfoodSessionUi";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 
@@ -432,17 +436,27 @@ export default function AttachModeSection({
 
       {/* The default surface is only the answer: Box, Runner, Checkout. Each
           inventory stays behind its own Change/Fix action. */}
-      <View style={{ marginTop: 12, gap: 4 }}>
-        {gate.steps.map((step) => (
-          <StepRow
-            key={step.key}
-            c={c}
-            step={step}
-            expanded={expandedStep === step.key}
-            busy={step.key === "checkout" && sourceBusy}
-            onPress={() => toggleStep(step)}
-          />
-        ))}
+      <View style={{ marginTop: 12 }}>
+        <DogfoodStatusRail
+          colors={{
+            background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
+            accent: c.accent, accentSoft: c.accentSoft, ready: c.success,
+            attention: c.warn, blocked: c.error, console: "#0b0f14",
+          }}
+          steps={gate.steps.map((step) => {
+            const busy = step.key === "checkout" && sourceBusy;
+            return {
+              key: step.key,
+              label: step.label,
+              detail: step.detail,
+              tone: step.status === "ok" ? "ready" : step.status === "blocked" ? "blocked" : "pending",
+              actionLabel: busy ? "Fixing…" : step.status === "ok" ? "Change" : "Fix",
+              actionDisabled: busy,
+              expanded: expandedStep === step.key,
+              onAction: () => toggleStep(step),
+            } as const;
+          })}
+        />
       </View>
 
       {expandedStep === "box" ? (
@@ -547,38 +561,16 @@ export default function AttachModeSection({
           {runnerSetupMessage ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>{runnerSetupMessage}</Text> : null}
 
           <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Runtime</Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {laneOptions.map((option) => {
-              const selected = lane === option.lane;
-              return (
-                <Pressable
-                  key={option.lane}
-                  disabled={!option.supported}
-                  onPress={() => setLane(option.lane)}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: selected, disabled: !option.supported }}
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 8,
-                    borderRadius: 8,
-                    borderWidth: 1,
-                    borderColor: selected ? c.accent : c.border,
-                    backgroundColor: selected ? `${c.accent}22` : c.bg,
-                    opacity: option.supported ? 1 : 0.45,
-                  }}
-                >
-                  <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: selected ? "700" : "500" }}>
-                    {option.label}{option.default ? " · default" : ""}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-          {laneOptions.filter((option) => !option.supported).map((option) => (
-            <Text key={`${option.lane}-reason`} style={{ color: c.textMuted, fontSize: 10, lineHeight: 14, marginTop: 5 }}>
-              {option.label}: {option.reason}
-            </Text>
-          ))}
+          <DogfoodLanePicker
+            options={laneOptions}
+            selected={lane}
+            onSelect={setLane}
+            colors={{
+              background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
+              accent: c.accent, accentSoft: c.accentSoft, ready: c.success,
+              attention: c.warn, blocked: c.error, console: "#0b0f14",
+            }}
+          />
         </View>
       ) : null}
 
@@ -764,51 +756,6 @@ export default function AttachModeSection({
           if (targetDevice?.id) void loadBoxReadiness(targetDevice.id).then(setMeasuredReadiness);
         }}
       />
-    </View>
-  );
-}
-
-function StepRow({
-  c,
-  step,
-  expanded,
-  busy,
-  onPress,
-}: {
-  c: ThemeColors;
-  step: AttachStep;
-  expanded: boolean;
-  busy: boolean;
-  onPress: () => void;
-}) {
-  const tone =
-    step.status === "ok" ? c.success : step.status === "blocked" ? c.error : c.textMuted;
-  const glyph = step.status === "ok" ? "✓" : step.status === "blocked" ? "!" : "·";
-  const action = busy ? "Fixing…" : step.status === "ok" ? "Change" : "Fix";
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: 48 }}>
-      <Text style={{ color: tone, fontSize: 12, width: 12, textAlign: "center" }}>{glyph}</Text>
-      <View style={{ flex: 1 }}>
-        <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>{step.label}</Text>
-        <Text style={{ color: tone, fontSize: 11, lineHeight: 16 }}>{step.detail}</Text>
-      </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${action} ${step.label}`}
-        accessibilityState={{ expanded, disabled: busy }}
-        disabled={busy}
-        onPress={onPress}
-        style={({ pressed }) => ({
-          borderWidth: 1,
-          borderColor: c.border,
-          borderRadius: 8,
-          paddingHorizontal: 10,
-          paddingVertical: 7,
-          opacity: busy ? 0.55 : pressed ? 0.7 : 1,
-        })}
-      >
-        <Text style={{ color: c.accent, fontSize: 11, fontWeight: "700" }}>{action}</Text>
-      </Pressable>
     </View>
   );
 }

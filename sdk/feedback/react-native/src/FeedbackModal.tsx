@@ -61,6 +61,7 @@ import {
   type DogfoodSnapshot,
 } from './DogfoodRuntime';
 import { createP2PDogfoodDriver } from './P2PDogfoodDriver';
+import { DogfoodLanePicker, DogfoodLiveConsole, DogfoodStatusRail } from './DogfoodSessionUi';
 
 /**
  * Simplified feedback modal — launch scope is 3 actions:
@@ -1150,7 +1151,45 @@ export const FeedbackModal: React.FC = () => {
     && (selectedDogfoodRunner.ready || selectedDogfoodRunner.authConfigured);
   const dogfoodModelReady = !selectedDogfoodRunner?.models?.length
     || !!preferredModel && selectedDogfoodRunner.models.some((model) => model.id === preferredModel);
-  const dogfoodStartBlocked = !dogfoodProject || !dogfoodRunnerReady || !dogfoodModelReady;
+  const dogfoodLaneChoices = dogfoodLaneOptions(
+    dogfoodProject?.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo',
+    { nativeRuntimeAvailable: dogfoodNativeAvailable },
+  );
+  const dogfoodLaneReady = dogfoodLaneChoices.some((option) => option.lane === dogfoodLane && option.supported);
+  const dogfoodReadinessSteps = [
+    {
+      key: 'oauth', label: 'Yaver OAuth',
+      detail: YaverFeedback.isAuthed() ? 'Signed in · session saved' : 'Sign in required',
+      tone: YaverFeedback.isAuthed() ? 'ready' as const : 'attention' as const,
+    },
+    {
+      key: 'machine', label: 'Remote PC',
+      detail: machineCard.device ? machineCard.title : 'Choose a reachable development machine',
+      tone: machineCard.device && machineCard.status === 'live' ? 'ready' as const : 'attention' as const,
+    },
+    {
+      key: 'installation', label: 'This installation',
+      detail: dogfoodEnrollment?.status === 'active' ? 'Device key approved' : dogfoodEnrollment?.status || 'Checking device key',
+      tone: dogfoodEnrollment?.status === 'active' ? 'ready' as const
+        : dogfoodEnrollment?.status === 'failed' ? 'blocked' as const : 'pending' as const,
+    },
+    {
+      key: 'runner', label: 'Runner',
+      detail: dogfoodRunnerReady ? selectedDogfoodRunner?.name || preferredRunner || 'Ready' : 'Choose or configure a coding runner',
+      tone: dogfoodRunnerReady ? 'ready' as const : 'attention' as const,
+    },
+    {
+      key: 'model', label: 'Model',
+      detail: dogfoodModelReady ? preferredModel || 'Runner default' : 'Choose a model',
+      tone: dogfoodModelReady ? 'ready' as const : 'attention' as const,
+    },
+    {
+      key: 'lane', label: 'Runtime lane',
+      detail: dogfoodLaneChoices.find((option) => option.lane === dogfoodLane)?.label || dogfoodLane,
+      tone: dogfoodLaneReady ? 'ready' as const : 'blocked' as const,
+    },
+  ];
+  const dogfoodStartBlocked = !dogfoodProject || !dogfoodRunnerReady || !dogfoodModelReady || !dogfoodLaneReady;
 
   // Once the user fires off a vibe task, swap the entire modal body
   // for the live chat screen. The chat manages its own SSE
@@ -1292,6 +1331,7 @@ export const FeedbackModal: React.FC = () => {
                   <Text style={styles.dogfoodWizardHint}>
                     OAuth ✓ · machine {machineCard.device ? '✓' : 'required'} · installation {dogfoodEnrollment?.status || 'checking'}
                   </Text>
+                  <DogfoodStatusRail steps={dogfoodReadinessSteps} />
                   {dogfoodEnrollment?.installationId ? (
                     <Text selectable style={styles.dogfoodInstallationId}>
                       This device · {dogfoodEnrollment.installationId}
@@ -1375,30 +1415,15 @@ export const FeedbackModal: React.FC = () => {
                         </>
                       ) : null}
                       <Text style={styles.dogfoodStepLabel}>Runtime lane</Text>
-                      <View style={styles.dogfoodChoiceRow}>
-                        {dogfoodLaneOptions(
-                          dogfoodProject?.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo',
-                          { nativeRuntimeAvailable: dogfoodNativeAvailable },
-                        ).map((option) => (
-                          <Pressable
-                            key={option.lane}
-                            onPress={() => {
-                              if (!option.supported) return;
-                              setDogfoodLane(option.lane);
-                              const appId = YaverFeedback.getDogfoodOnboarding()?.appId;
-                              if (appId) void setPreferredDogfoodLane(appId, option.lane);
-                            }}
-                            style={[
-                              styles.dogfoodChoice,
-                              dogfoodLane === option.lane && styles.dogfoodChoiceSelected,
-                              !option.supported && styles.actionBtnDisabled,
-                            ]}
-                            accessibilityState={{ disabled: !option.supported, selected: dogfoodLane === option.lane }}
-                          >
-                            <Text style={[styles.dogfoodChoiceText, dogfoodLane === option.lane && styles.dogfoodChoiceTextSelected]}>{option.label}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
+                      <DogfoodLanePicker
+                        options={dogfoodLaneChoices}
+                        selected={dogfoodLane}
+                        onSelect={(lane) => {
+                          setDogfoodLane(lane);
+                          const appId = YaverFeedback.getDogfoodOnboarding()?.appId;
+                          if (appId) void setPreferredDogfoodLane(appId, lane);
+                        }}
+                      />
                       <Text style={styles.dogfoodWizardHint}>
                         {[preferredRunner || 'Choose a coding agent', preferredModel].filter(Boolean).join(' · ')}
                       </Text>
@@ -1410,20 +1435,20 @@ export const FeedbackModal: React.FC = () => {
                         busy={!!dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase)}
                       />
                       {dogfoodRuntime ? (
-                        <View style={styles.dogfoodConsole}>
-                          <Text style={styles.dogfoodConsoleStatus}>{dogfoodRuntime.message}</Text>
-                          {dogfoodRuntime.logs.slice(-80).map((line, index) => (
-                            <Text key={`${line.at}-${index}`} selectable style={styles.dogfoodConsoleLine}>{line.text}</Text>
-                          ))}
-                          {dogfoodRuntime.failure ? (
-                            <Text style={styles.dogfoodConsoleError}>{dogfoodRuntime.failure.error}{'\n'}{dogfoodRuntime.failure.remedy}</Text>
-                          ) : null}
+                        <>
+                          <DogfoodLiveConsole
+                            lane={dogfoodRuntime.project.lane}
+                            phase={dogfoodRuntime.phase}
+                            message={dogfoodRuntime.message}
+                            logs={dogfoodRuntime.logs}
+                            failure={dogfoodRuntime.failure}
+                          />
                           {dogfoodRuntime.result?.url ? (
                             <Pressable onPress={() => void Linking.openURL(dogfoodRuntime.result!.url!)} style={styles.dogfoodOpenPreview}>
                               <Text style={styles.dogfoodOpenPreviewText}>Open dogfooded app</Text>
                             </Pressable>
                           ) : null}
-                        </View>
+                        </>
                       ) : null}
                     </>
                   )}

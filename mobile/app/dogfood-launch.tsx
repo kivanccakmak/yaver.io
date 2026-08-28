@@ -20,6 +20,7 @@ import {
   type DogfoodFailure,
   type DogfoodLane,
 } from "../../sdk/feedback/react-native/src/DogfoodRuntime";
+import { DogfoodLiveConsole } from "../../sdk/feedback/react-native/src/DogfoodSessionUi";
 
 type Failure = DogfoodFailure;
 
@@ -231,20 +232,20 @@ export default function DogfoodLaunchScreen() {
             stallHint="still waiting on the box"
           />
 
-          {lines.length ? (
-            <View style={[styles.console, { backgroundColor: "#0b0f14", borderColor: c.border }]}>
-              <Text style={[styles.consoleLabel, { color: c.textMuted }]}>Live console</Text>
-              <AnsiConsoleText text={lines.slice(-24).join("\n")} fontSize={10} />
-            </View>
-          ) : null}
-
-          {failure ? (
-            <View style={[styles.failure, { borderColor: c.errorBorder, backgroundColor: c.errorBg }]}>
-              <Text style={[styles.code, { color: c.textMuted }]}>{failure.code}</Text>
-              <Text style={[styles.failureText, { color: c.textPrimary }]}>{failure.error}</Text>
-              <Text style={[styles.remedy, { color: c.textMuted }]}>{failure.remedy}</Text>
-            </View>
-          ) : null}
+          <DogfoodLiveConsole
+            lane={lane}
+            phase={failure ? "failed" : running ? "starting" : "ready"}
+            message={phase}
+            logs={lines.map((text, index) => ({ text, at: index, stream: "system" as const }))}
+            failure={failure || undefined}
+            maxLines={24}
+            colors={{
+              background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
+              accent: c.accent, accentSoft: c.accentSoft, ready: c.success,
+              attention: c.warn, blocked: c.error, console: "#0b0f14",
+            }}
+            renderText={(text) => <AnsiConsoleText text={text} fontSize={10} />}
+          />
 
           {!running && failure ? (
             <View style={styles.actions}>
@@ -297,12 +298,6 @@ const styles = StyleSheet.create({
   card: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, padding: 18, alignItems: "center" },
   title: { marginTop: 12, fontSize: 17, fontWeight: "800", textAlign: "center" },
   meta: { marginTop: 5, fontSize: 11 },
-  console: { width: "100%", maxHeight: 260, overflow: "hidden", marginTop: 14, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 10 },
-  consoleLabel: { fontSize: 10, fontWeight: "700", marginBottom: 7, textTransform: "uppercase", letterSpacing: 0.5 },
-  failure: { width: "100%", marginTop: 16, borderWidth: 1, borderRadius: 12, padding: 12 },
-  code: { fontSize: 10, marginBottom: 5 },
-  failureText: { fontSize: 12, lineHeight: 17, fontWeight: "600" },
-  remedy: { marginTop: 5, fontSize: 11, lineHeight: 16 },
   actions: { width: "100%", flexDirection: "row", gap: 8, marginTop: 12 },
   action: { flex: 1, minHeight: 42, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
 });

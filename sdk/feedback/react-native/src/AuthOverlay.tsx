@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { DeviceEventEmitter, Modal } from 'react-native';
+import { Alert, DeviceEventEmitter, Modal } from 'react-native';
 import { YaverLoginScreen } from './LoginScreen';
 import { YaverMachinePickerScreen } from './MachinePickerScreen';
 import { YaverFeedback } from './YaverFeedback';
@@ -30,6 +30,23 @@ export const AuthOverlay: React.FC = () => {
     setPickerVisible(false);
   }, []);
 
+  const continueDogfood = useCallback(async () => {
+    try {
+      const state = await YaverFeedback.continueDogfoodOnboarding();
+      if (state.phase === 'denied' || state.phase === 'error') {
+        Alert.alert(
+          'Dogfood unavailable',
+          state.error || 'This Yaver account or device is not enabled for this app.',
+        );
+      }
+    } catch (cause) {
+      Alert.alert(
+        'Dogfood unavailable',
+        cause instanceof Error ? cause.message : 'Yaver could not continue Dogfood setup.',
+      );
+    }
+  }, []);
+
   useEffect(() => {
     let mounted = true;
     void getToken().then((cached) => {
@@ -58,7 +75,7 @@ export const AuthOverlay: React.FC = () => {
     await YaverFeedback.setAuthToken(newToken);
     if (YaverFeedback.getDogfoodOnboarding()) {
       closeAll();
-      await YaverFeedback.continueDogfoodOnboarding();
+      await continueDogfood();
     } else {
       openPicker();
     }
@@ -68,7 +85,7 @@ export const AuthOverlay: React.FC = () => {
     await YaverFeedback.setPreferredDevice(device.deviceId);
     closeAll();
     if (YaverFeedback.getDogfoodOnboarding()) {
-      await YaverFeedback.continueDogfoodOnboarding();
+      await continueDogfood();
     } else {
       DeviceEventEmitter.emit('yaverFeedback:startReport');
     }

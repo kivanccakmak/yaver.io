@@ -1311,11 +1311,28 @@ export class YaverFeedback {
       publishDogfoodFlow(state);
       return state;
     }
-    await YaverFeedback.hydrateSession();
-    const token = config?.authToken || await getToken();
-    const account = token
-      ? await getDogfoodAccountAccess(appId, token)
-      : { authenticated: false, ownerAuthorized: false, accountAuthorized: false, installationAuthorized: false };
+    let token: string | null;
+    let account: Awaited<ReturnType<typeof getDogfoodAccountAccess>> | {
+      authenticated: false;
+      ownerAuthorized: false;
+      accountAuthorized: false;
+      installationAuthorized: false;
+    };
+    try {
+      await YaverFeedback.hydrateSession();
+      token = config?.authToken || await getToken();
+      account = token
+        ? await getDogfoodAccountAccess(appId, token)
+        : { authenticated: false, ownerAuthorized: false, accountAuthorized: false, installationAuthorized: false };
+    } catch (cause) {
+      const state: DogfoodFlowState = {
+        phase: 'error',
+        appId,
+        error: cause instanceof Error ? cause.message : 'Yaver could not verify Dogfood access.',
+      };
+      publishDogfoodFlow(state);
+      return state;
+    }
     // A device key is a second factor for this installation, never a
     // replacement for a real Yaver account. Narrow installation sessions and
     // stale/invalid cached tokens both return authenticated=false here.

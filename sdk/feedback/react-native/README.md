@@ -138,11 +138,19 @@ YaverFeedback.init({
     canShow: (access) => appUser.isAdmin && access.authorized,
   },
 });
+
+// The host owns only placement of the entry point. The SDK owns OAuth,
+// continuation, machine/project/runner/model/lane selection and live logs.
+const onDogfoodPress = () => YaverFeedback.openDogfood();
 ```
 
 For first-time setup, a signed-in user opens the app from Yaver's Dogfood app
 catalog. The public deep link contains no token. The SDK runs stateful Yaver
 OAuth, machine, coding runner/model, project, and Browser/Hermes/WebRTC setup.
+OAuth returns directly to that setup in the currently running app; it does not
+restart the host. A valid cached Yaver session and prior selections skip steps
+that are already satisfied. Expo and React Native projects default to the
+Browser lane, while every selection remains changeable from Session setup.
 After the owner approves that exact account + app ID + phone key, iOS and
 Android add the long-press shortcut. Signing out, revocation, or host ACL denial
 removes it on the next foreground sync.
