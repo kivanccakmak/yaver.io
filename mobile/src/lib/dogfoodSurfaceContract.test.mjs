@@ -15,6 +15,13 @@ const launch = readFileSync(join(mobile, "app", "dogfood-launch.tsx"), "utf8");
 const bubble = readFileSync(join(mobile, "src", "components", "BrowserVibeBubble.tsx"), "utf8");
 const remoteRuntime = readFileSync(join(mobile, "app", "remote-runtime.tsx"), "utf8");
 const tasks = readFileSync(join(mobile, "app", "(tabs)", "tasks.tsx"), "utf8");
+const metro = readFileSync(join(mobile, "metro.config.js"), "utf8");
+
+test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", () => {
+  assert.match(metro, /resolver\.nodeModulesPaths/,
+    "CI installs mobile/node_modules only, so sibling SDK source must resolve React from that workspace");
+  assert.match(metro, /mobileNodeModules/);
+});
 
 test("More removes the old Vibing row and exposes contributor Dogfood to everyone", () => {
   assert.doesNotMatch(more, /accessibilityLabel="Open Vibing"|>Vibing<|navigate\("\/vibing"/);
@@ -89,7 +96,8 @@ test("Dogfood entry is fail-closed until Expo and the browser lane are proved", 
 test("Dogfood exposes the shared three-lane matrix with browser as the default", () => {
   assert.match(gate, /dogfoodLaneOptions\("expo"/);
   assert.match(gate, /useState<DogfoodLane>\("browser"\)/);
-  assert.match(gate, /option\.label/);
+  assert.match(gate, /<DogfoodLanePicker/,
+    "lane labels now belong to the shared SDK picker rather than the Yaver host");
   assert.match(launch, /lane === "hermes"/);
   assert.match(launch, /startDogfoodHermesLane/);
   assert.match(launch, /lane === "webrtc"/);
