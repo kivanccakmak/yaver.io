@@ -1,6 +1,7 @@
 # Yaver
 
-> Yaver is a peer-to-peer tool that lets developers use any AI coding agent
+> Yaver is a self-hostable remote AI runner, peer-to-peer coding-agent control,
+> real-device UI testing tool, and app development loop. It lets developers use any AI coding agent
 > (Claude Code, Codex, Aider, Ollama, …) from their phone, web browser,
 > watch, TV, car, AR/VR surface, or another terminal, connecting directly to
 > their development machine.
@@ -208,6 +209,8 @@ yaver init                         # one-time wizard; sets a bootstrap secret
   https://yaver.io/auth/device
 - Deep docs: https://yaver.io/docs/developers
 - FAQ: https://yaver.io/faq
+- Run AI coding agents from your phone: https://yaver.io/remote-ai-coding-agent
+- Company and founder: https://yaver.io/about
 - Blog (releases, announcements): https://yaver.io/blog
 - Sitemap: https://yaver.io/sitemap.xml
-- Open source: https://github.com/kivanccakmak/yaver.io (FSL-1.1-Apache-2.0 core, Apache-2.0 SDKs)
+- Open source: https://github.com/yaver-io/yaver.io (FSL-1.1-Apache-2.0 core, Apache-2.0 SDKs)

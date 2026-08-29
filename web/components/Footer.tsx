@@ -16,6 +16,10 @@ export default function Footer() {
           <a href="https://simkab.com" target="_blank" rel="noopener noreferrer" className="hover:text-surface-400">SIMKAB ELEKTRIK</a>.
           All rights reserved.
           {" "}&middot;{" "}
+          <a href="/remote-ai-coding-agent" className="hover:text-surface-400">Remote AI coding</a>
+          {" "}&middot;{" "}
+          <a href="/about" className="hover:text-surface-400">About</a>
+          {" "}&middot;{" "}
           <a href="mailto:kivanc.cakmak@simkab.com" className="hover:text-surface-400">kivanc.cakmak@simkab.com</a>
         </p>
       </div>

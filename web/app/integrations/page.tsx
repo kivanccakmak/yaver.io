@@ -369,7 +369,7 @@ export default function IntegrationsPage() {
           </p>
           <div className="flex items-center justify-center gap-4">
             <Link
-              href="https://github.com/kivanccakmak/yaver.io"
+              href="https://github.com/yaver-io/yaver.io"
               target="_blank"
               rel="noopener noreferrer"
               className="btn-primary px-5 py-2 text-sm"

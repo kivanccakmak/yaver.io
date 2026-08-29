@@ -143,10 +143,11 @@ export default function HomePage() {
     url: "https://yaver.io",
     logo: "https://yaver.io/icon-512.png",
     sameAs: [
-      "https://github.com/kivanccakmak/yaver.io",
+      "https://github.com/yaver-io/yaver.io",
       "https://www.npmjs.com/package/yaver-cli",
     ],
     email: "kivanc.cakmak@simkab.com",
+    founder: { "@type": "Person", name: "Kıvanç Çakmak" },
     description: LANDING_TAGLINE,
   };
 

@@ -9,6 +9,7 @@
     "deploy": "npx @opennextjs/cloudflare build && npx wrangler deploy",
     "start": "next start",
     "test:security": "node --experimental-strip-types scripts/security-oauth-test.mjs",
+    "test:discovery": "node scripts/check-public-discovery.mjs",
     "test:totp": "node --experimental-strip-types lib/totpSecurityParity.test.ts"
   },
   "dependencies": {
