@@ -107,13 +107,8 @@ struct TVSettingsView: View {
                             .padding(.horizontal, 8)
                     }
 
+                    registrationSection
                     accountSection
-                    NavigationLink(destination: SecureHandoffView()) {
-                        Label("Secure credential handoff", systemImage: "qrcode.viewfinder")
-                            .font(.system(size: 20, weight: .semibold)).frame(maxWidth: .infinity, alignment: .leading).padding(22)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("settings.secure-handoff")
                 }
                 .padding(40)
             }
@@ -157,12 +152,69 @@ struct TVSettingsView: View {
         .accessibilityIdentifier("settings.account-actions")
     }
 
+    private var registrationSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Registration & approvals")
+                .font(.system(size: 24, weight: .bold))
+            Text("Keep Apple TV focused. Use QR-first sign-in and secure handoff here; heavier third-party app management stays in the web UI and desktop app.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 760, alignment: .leading)
+            settingRow(
+                icon: "iphone.and.arrow.forward",
+                title: "Phone-approved sign-in",
+                detail: "At TV sign-in, show the QR on this screen and approve it from your signed-in phone."
+            ) {
+                Text("QR at sign-in")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            NavigationLink(destination: SecureHandoffView()) {
+                HStack(spacing: 20) {
+                    Image(systemName: "qrcode.viewfinder")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(.blue)
+                        .frame(width: 48, height: 48)
+                        .background(Color.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Secure credential handoff")
+                            .font(.system(size: 22, weight: .semibold))
+                        Text("Show or scan the encrypted QR to move credentials onto this Apple TV without typing.")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 30)
+                    Text("Open")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 18)
+                .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("settings.secure-handoff")
+            settingRow(
+                icon: "rectangle.3.group.bubble.left",
+                title: "Developer app management",
+                detail: "Register apps, testers, and install approvals from the shared web UI or desktop GUI; tvOS stays uncluttered."
+            ) {
+                Text("Web / desktop")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(24)
+        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+        .accessibilityIdentifier("settings.registration-approvals")
+    }
+
     private var intro: some View {
         HStack(alignment: .top, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Defaults")
                     .font(.system(size: 30, weight: .bold))
-                Text("Chat uses these silently. Vibing shows the latest project first, but waits for you to open it.")
+                Text("Chat uses these silently. Vibing shows the latest project first, but waits for you to open it. Registration and approvals live one level deeper.")
                     .font(.system(size: 16))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

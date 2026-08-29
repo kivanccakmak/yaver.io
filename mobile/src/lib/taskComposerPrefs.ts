@@ -68,9 +68,9 @@ export async function saveKeepLastProjectEnabled(enabled: boolean): Promise<void
 export async function loadTextCorrectionEnabled(): Promise<boolean> {
   try {
     const raw = await AsyncStorage.getItem(TASK_TEXT_CORRECTION_KEY);
-    return raw === "1";
+    return raw === null ? true : raw === "1";
   } catch {
-    return false;
+    return true;
   }
 }
 

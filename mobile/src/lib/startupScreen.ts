@@ -1,10 +1,7 @@
 // startupScreen.ts — which tab the app opens on.
 //
-// Defaults to Projects: Yaver is overwhelmingly used for mobile app
-// development, and the first thing a user wants after opening the app is the
-// thing they are building. Tasks is the right default for someone driving
-// long-running agent work, which is why this is a preference rather than a
-// constant.
+// Defaults to Chat so opening Yaver lands on the primary conversation surface.
+// Projects remains available as a user preference.
 //
 // Stored locally with AsyncStorage so the very first render can read it
 // synchronously-ish without waiting on the network — an opening screen that
@@ -27,7 +24,7 @@ export const STARTUP_SCREEN_ROUTES: Record<StartupScreen, string> = {
   tasks: "tasks",
 };
 
-export const DEFAULT_STARTUP_SCREEN: StartupScreen = "projects";
+export const DEFAULT_STARTUP_SCREEN: StartupScreen = "tasks";
 
 export function isStartupScreen(v: unknown): v is StartupScreen {
   return v === "projects" || v === "tasks";

@@ -4009,7 +4009,7 @@ export default function SettingsScreen() {
                     }}
                   >
                     <Text style={{ color: active ? c.accent : c.textSecondary, fontWeight: "600" }}>
-                      {opt === "projects" ? "Projects" : "Tasks"}
+                      {opt === "projects" ? "Projects" : "Chat"}
                     </Text>
                   </Pressable>
                 );

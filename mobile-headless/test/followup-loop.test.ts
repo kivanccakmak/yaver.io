@@ -42,7 +42,7 @@ async function api(path: string, init: RequestInit = {}) {
 }
 
 test.if(live)(
-  "a finished task takes the fork path, and the plan says to carry the conversation",
+  "a finished task continues in place, and the plan keeps the same conversation",
   async () => {
     // 1. Create a real task on a real runner.
     const created = await api("/tasks", {
@@ -79,28 +79,24 @@ test.if(live)(
       status,
     });
 
-    // This is the assertion that matters. A real, just-finished task forks —
-    // so the UI MUST carry the conversation across, or the user watches their
-    // chat get replaced by an empty one.
-    expect(plan.action).toBe("fork-silent");
-    expect(plan.carriesConversation).toBe(true);
-    expect(plan.forkRunner).toBe(RUNNER);
+    // This is the assertion that matters. A real, just-finished task keeps the
+    // same task/session identity, so a human reply stays in the same chat.
+    expect(plan.action).toBe("continue");
 
-    // 4. Drive the fork the way the screen does, and prove the child is real
-    //    and distinct — the "it shows a new task" half of the report.
-    const forked = await api(`/tasks/${taskId}/fork`, {
+    // 4. Drive the continuation the way the screen does, and prove the parent
+    //    task survives as the same identity.
+    const continued = await api(`/tasks/${taskId}/continue`, {
       method: "POST",
-      body: JSON.stringify({ runner: plan.forkRunner, input: "FOLLOWUP-PROBE" }),
+      body: JSON.stringify({ input: "FOLLOWUP-PROBE" }),
     });
-    expect(forked.status).toBeLessThan(400);
-    const childId = forked.body?.taskId || forked.body?.id;
-    expect(childId).toBeTruthy();
-    expect(childId).not.toBe(taskId);
+    expect(continued.status).toBeLessThan(400);
 
-    // 5. The parent must survive. Forking is non-destructive; if the parent
-    //    were consumed, "carry the conversation" would be unimplementable.
+    // 5. The parent must survive. Continuation is in-place; if the task id
+    //    changed here, the follow-up bug would be back under a new name.
     const parentAfter = await api(`/tasks/${taskId}`);
     expect(parentAfter.status).toBeLessThan(400);
+    const parentAfterId = parentAfter.body?.task?.id || parentAfter.body?.id || parentAfter.body?.taskId;
+    expect(parentAfterId).toBe(taskId);
   },
   300_000,
 );
@@ -142,14 +138,13 @@ test.if(live)("a running task continues in place rather than forking", async () 
     status,
   });
   expect(plan.action).toBe("continue");
-  expect(plan.carriesConversation).toBe(false);
 
   await api(`/tasks/${taskId}/stop`, { method: "POST" }).catch(() => {});
 }, 120_000);
 
 test("plan logic is exercised even without a live agent", () => {
   expect(planFollowUp({ status: "completed", parentRunner: "codex", desiredRunner: "codex" }).action)
-    .toBe("fork-silent");
+    .toBe("continue");
   expect(planFollowUp({ status: "running", parentRunner: "codex", desiredRunner: "codex" }).action)
     .toBe("continue");
 });

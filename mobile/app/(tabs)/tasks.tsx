@@ -151,6 +151,7 @@ import {
   saveLastTaskProject,
   saveLastTaskProjectToConvex,
   saveMCPServersToConvex,
+  saveTextCorrectionEnabled,
   saveUseLatestMCPEnabled,
 } from "../../src/lib/taskComposerPrefs";
 import { visibleProjectPickerRows } from "../../src/lib/projectPickerRows";
@@ -2106,10 +2107,9 @@ export default function TasksScreen() {
   // While a cross-machine pick is in flight, the MCP restore effect must not
   // overwrite the just-made selection with the previous device's Convex row.
   const suppressMcpRestoreRef = useRef(false);
-  // Opt-in text correction for task inputs. Off by default: commands and paths
-  // are not prose, and autocorrect silently mangling either is worse than none.
-  // Persisted per-device in AsyncStorage like keepLastProject.
-  const [textCorrectionEnabled, setTextCorrectionEnabled] = useState(false);
+  // Chat is prose-first, so correction defaults on. Users working with paths or
+  // commands can disable it; the explicit choice persists per device.
+  const [textCorrectionEnabled, setTextCorrectionEnabled] = useState(true);
   const selectedComposerProject = useMemo(
     () => composerProjects.find((project) => project.path === selectedProjectPath) || null,
     [composerProjects, selectedProjectPath],
@@ -2616,10 +2616,14 @@ export default function TasksScreen() {
           ) : null}
           <Text style={[s.agentPickerSection, { color: c.textMuted, marginLeft: 0, marginTop: 18 }]}>TEXT CORRECTION</Text>
           <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 10 }}>
-            Autocorrect/autocap for task inputs — off by default so commands and paths are never silently rewritten.
+            Autocorrect, spellcheck, and sentence capitalization for chat inputs.
           </Text>
           <Pressable
-            onPress={() => setTextCorrectionEnabled((prev) => !prev)}
+            onPress={() => setTextCorrectionEnabled((prev) => {
+              const next = !prev;
+              void saveTextCorrectionEnabled(next);
+              return next;
+            })}
             style={[
               s.projectPickerRow,
               { borderColor: textCorrectionEnabled ? c.accent : c.border, backgroundColor: textCorrectionEnabled ? withAlpha(c.accent, "1f") : c.bg },
@@ -4479,20 +4483,18 @@ export default function TasksScreen() {
   // target: which text field to write into ("task" = new task, "followup" = follow-up input)
   const recordingTargetRef = useRef<"task" | "followup">("task");
 
-  // Sticky input mode. Rule (from the user, 2026-07-20): the initial mode is
-  // voice/STT unless the user changes it, and a follow-up should default to
+  // Sticky input mode. The initial mode is keyboard text, and a follow-up defaults to
   // whatever method the user submitted the PRIOR message with. So this starts
-  // at "voice", every submit records how it was actually sent (inputFromSpeech),
+  // text; every submit records how it was actually sent (inputFromSpeech),
   // and opening the follow-up composer re-arms dictation when the last send was
   // voice. A ref, not state — it must be read synchronously inside the open
   // handler without forcing a re-render.
-  const lastSubmitModeRef = useRef<"voice" | "text">("voice");
+  const lastSubmitModeRef = useRef<"voice" | "text">("text");
 
   // Open the follow-up composer, honouring the sticky mode: re-arm dictation
   // when the previous message went out by voice. startRecording is deferred a
-  // tick so the expanded composer is mounted first (mirrors
-  // openCreateTaskDictating), otherwise the recording UI attaches to a view
-  // that is about to unmount.
+  // tick so the expanded composer is mounted first; otherwise the recording
+  // UI attaches to a view that is about to unmount.
   const openFollowUpComposer = () => {
     setFollowUpExpanded(true);
     if (lastSubmitModeRef.current === "voice") {
@@ -6580,29 +6582,6 @@ export default function TasksScreen() {
     }
   }, [multiTargetMode, activeDevice, isEffectivelyConnected]);
 
-  // The mic FAB: open the composer AND start dictating in one tap.
-  //
-  // Deliberately reuses startRecording("task") rather than inventing a second
-  // capture path — that function already streams whisper partials into the
-  // very input the user is about to send, which IS the requested behaviour:
-  // watch the words land, correct them, press send. A parallel implementation
-  // would drift from it.
-  //
-  // Recording starts only once the composer is actually up. When
-  // multiTargetMode has no connection, openCreateTask opens the target wizard
-  // instead, and a mic that was already hot behind a modal would record the
-  // user picking a machine — five minutes of audio they never asked for.
-  const openCreateTaskDictating = useCallback(() => {
-    openCreateTask();
-    const composerWillOpen = !(multiTargetMode && (!activeDevice || !isEffectivelyConnected));
-    if (!composerWillOpen) return;
-    // One frame, so the modal is mounted before the mic opens; otherwise the
-    // first partials land in an input nobody is looking at yet.
-    requestAnimationFrame(() => {
-      void startRecording("task");
-    });
-  }, [openCreateTask, multiTargetMode, activeDevice, isEffectivelyConnected]);
-
   // Transient zero-device state for a user who HAS had devices (VPN flap,
   // network drop, token drift). Kept OUT of NoMachineEmpty: with an empty
   // roster its "Choose machine" picker would open onto nothing, so the only
@@ -7326,11 +7305,11 @@ export default function TasksScreen() {
               pressed && s.fabPressed,
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Dictate a new task"
+            accessibilityLabel="Start a new chat"
             testID="new-task-button"
-            onPress={openCreateTaskDictating}
+            onPress={openCreateTask}
           >
-            <Ionicons name="mic" size={26} color="#ffffff" />
+            <Ionicons name="chatbubble-outline" size={26} color="#ffffff" />
           </Pressable>
         )}
 
@@ -7954,6 +7933,7 @@ export default function TasksScreen() {
                     onChangeText={(t) => { newTaskTextRef.current = t; setNewTaskText(t); setTaskSubmitError(null); setInputFromSpeech(false); }}
                     multiline numberOfLines={4} textAlignVertical="top" autoFocus
                     autoCorrect={textCorrectionEnabled}
+                    spellCheck={textCorrectionEnabled}
                     autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
                   />
                   {isTranscribing && (
@@ -9368,6 +9348,7 @@ export default function TasksScreen() {
                       onChangeText={(t) => { followUpTextRef.current = t; setFollowUpText(t); setInputFromSpeech(false); }}
                       multiline numberOfLines={4} textAlignVertical="top" autoFocus
                       autoCorrect={textCorrectionEnabled}
+                      spellCheck={textCorrectionEnabled}
                       autoCapitalize={textCorrectionEnabled ? "sentences" : "none"}
                     />
                     {isTranscribing && (

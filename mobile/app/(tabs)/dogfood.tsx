@@ -30,6 +30,44 @@ import {
   type DogfoodTesterRow,
 } from "../../src/lib/dogfoodRegistry";
 
+function ExpandableCard({
+  title,
+  subtitle,
+  countLabel,
+  defaultOpen = false,
+  c,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  countLabel?: string;
+  defaultOpen?: boolean;
+  c: ReturnType<typeof useColors>;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <View style={{ backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 14 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${open ? "Hide" : "Show"} ${title}`}
+        onPress={() => setOpen((value) => !value)}
+        style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>{title}</Text>
+          <Text style={{ color: c.textSecondary, marginTop: 6, lineHeight: 19 }}>{subtitle}</Text>
+        </View>
+        <View style={{ alignItems: "flex-end", gap: 6 }}>
+          {countLabel ? <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>{countLabel}</Text> : null}
+          <Text style={{ color: c.textMuted, fontSize: 12 }}>{open ? "Hide" : "Manage"}</Text>
+        </View>
+      </Pressable>
+      {open ? <View style={{ marginTop: 14 }}>{children}</View> : null}
+    </View>
+  );
+}
+
 export default function DogfoodScreen() {
   const router = useRouter();
   const c = useColors();
@@ -46,6 +84,9 @@ export default function DogfoodScreen() {
   const [testerEmail, setTesterEmail] = useState("");
   const [deviceStatus, setDeviceStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const pendingInstallations = installations.filter((row) => row.status === "pending");
+  const activeInstallations = installations.filter((row) => row.status === "active");
+  const activeTesters = testers.filter((row) => row.status === "active");
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -113,68 +154,105 @@ export default function DogfoodScreen() {
       <AppScreenHeader title="Develop Yaver" onBack={() => router.navigate("/(tabs)/more" as any)} />
       <ScrollView contentContainerStyle={[{ padding: 16, paddingBottom: 40 }, tabletContent]}>
         <View style={card}>
-          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>This device</Text>
+          <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: "800" }}>Developer management</Text>
           <Text style={{ color: c.textSecondary, marginTop: 6, lineHeight: 19 }}>
-            Register this Yaver installation as an approval device. Its private key stays in this device's secure storage; only the public key reaches Yaver.
+            Keep phone UI light. Register this phone as the approval device, then handle app access, installs, and QR handoff from focused management sections.
           </Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="Register this device for Dogfood apps" style={button} onPress={() => void registerDevice()} disabled={busy}>
-            <Text style={{ color: "white", fontWeight: "700" }}>{busy ? "Working…" : "Register this device"}</Text>
-          </Pressable>
-          {deviceStatus ? <Text style={{ color: c.textSecondary, marginTop: 9 }}>{deviceStatus}</Text> : null}
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+            <View style={{ borderColor: c.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, minWidth: 112 }}>
+              <Text style={{ color: c.accent, fontSize: 18, fontWeight: "800" }}>{apps.length}</Text>
+              <Text style={{ color: c.textMuted, marginTop: 2, fontSize: 12 }}>Apps</Text>
+            </View>
+            <View style={{ borderColor: c.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, minWidth: 112 }}>
+              <Text style={{ color: c.accent, fontSize: 18, fontWeight: "800" }}>{activeTesters.length}</Text>
+              <Text style={{ color: c.textMuted, marginTop: 2, fontSize: 12 }}>Trusted accounts</Text>
+            </View>
+            <View style={{ borderColor: c.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, minWidth: 112 }}>
+              <Text style={{ color: c.accent, fontSize: 18, fontWeight: "800" }}>{pendingInstallations.length}</Text>
+              <Text style={{ color: c.textMuted, marginTop: 2, fontSize: 12 }}>Pending installs</Text>
+            </View>
+          </View>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Scan a device or TV QR" style={button} onPress={() => router.push({ pathname: "/approve-device", params: { scan: "1" } })}>
+              <Text style={{ color: "white", fontWeight: "700" }}>Scan approval QR</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Claim a Yaver device by QR" style={[button, { backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1 }]} onPress={() => router.push("/provision-add")}>
+              <Text style={{ color: c.textPrimary, fontWeight: "700" }}>Register device</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Open secure handoff" style={[button, { backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1 }]} onPress={() => router.push("/secure-handoff")}>
+              <Text style={{ color: c.textPrimary, fontWeight: "700" }}>Secure handoff</Text>
+            </Pressable>
+          </View>
+          {deviceStatus ? <Text style={{ color: c.textSecondary, marginTop: 10 }}>{deviceStatus}</Text> : null}
         </View>
 
-        {catalog.length ? <View style={card}>
-          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>Dogfood apps on this phone</Text>
-          <Text style={{ color: c.textSecondary, marginTop: 6, lineHeight: 19 }}>
-            Setup opens the selected app, completes Yaver sign-in there, and registers that app installation for owner approval. No token is placed in the link.
-          </Text>
+        <ExpandableCard
+          title="This phone"
+          subtitle="Register this installation as the approval device. The private key stays on-device; only the public key reaches Yaver."
+          countLabel={deviceStatus ? "Ready" : "Setup"}
+          defaultOpen
+          c={c}
+        >
+          <Pressable accessibilityRole="button" accessibilityLabel="Register this device for developer management" style={button} onPress={() => void registerDevice()} disabled={busy}>
+            <Text style={{ color: "white", fontWeight: "700" }}>{busy ? "Working…" : "Register this phone"}</Text>
+          </Pressable>
+        </ExpandableCard>
+
+        {catalog.length ? <ExpandableCard
+          title="Set up apps on this phone"
+          subtitle="Open a supported app, complete Yaver sign-in there, and register that installation for owner approval. No token is placed in the link."
+          countLabel={`${catalog.length} ready`}
+          c={c}
+        >
           {catalog.map((app) => <View key={app.appId} style={{ borderTopColor: c.border, borderTopWidth: 1, marginTop: 14, paddingTop: 12 }}>
             <Text style={{ color: c.textPrimary, fontWeight: "700" }}>{app.label}</Text>
             <Text style={{ color: c.textSecondary, marginTop: 3 }}>{app.appId}</Text>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Set up ${app.label} Dogfood on this phone`}
+              accessibilityLabel={`Set up ${app.label} on this phone`}
               style={button}
               onPress={() => void Linking.openURL(app.activationUrl).catch(() => Alert.alert("App unavailable", `Install ${app.label} on this phone, then try again.`))}
             >
               <Text style={{ color: "white", fontWeight: "700" }}>Set up on this phone</Text>
             </Pressable>
           </View>)}
-        </View> : null}
+        </ExpandableCard> : null}
 
-        <View style={card}>
-          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>Third-party Dogfood apps</Text>
-          <Text style={{ color: c.textSecondary, marginTop: 6, lineHeight: 19 }}>
-            Enable an app that has no OAuth or backend yet. Feedback and BlackBox are the safe defaults; reload/build access is never granted implicitly.
-          </Text>
+        <ExpandableCard
+          title="Third-party apps"
+          subtitle="Create a generic app record for a developer app that has no OAuth or backend yet. Feedback and BlackBox stay the default scopes."
+          countLabel={`${apps.length} apps`}
+          c={c}
+        >
           <TextInput accessibilityLabel="Dogfood app id" value={appId} onChangeText={setAppId} placeholder="App ID, e.g. io.example.app" placeholderTextColor={c.textMuted} autoCapitalize="none" style={input} />
           <TextInput accessibilityLabel="Dogfood app label" value={appLabel} onChangeText={setAppLabel} placeholder="App name" placeholderTextColor={c.textMuted} style={input} />
           <TextInput accessibilityLabel="Dogfood project slug" value={projectSlug} onChangeText={setProjectSlug} placeholder="Project slug (optional)" placeholderTextColor={c.textMuted} autoCapitalize="none" style={input} />
-          <Pressable accessibilityRole="button" accessibilityLabel="Enable Dogfood app" style={button} onPress={() => void createApp()} disabled={busy || !appId.trim() || !appLabel.trim()}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Enable third-party app" style={button} onPress={() => void createApp()} disabled={busy || !appId.trim() || !appLabel.trim()}>
             <Text style={{ color: "white", fontWeight: "700" }}>Enable app</Text>
           </Pressable>
           {apps.map((app) => <View key={app._id} style={{ borderTopColor: c.border, borderTopWidth: 1, marginTop: 14, paddingTop: 12 }}>
             <Text style={{ color: c.textPrimary, fontWeight: "700" }}>{app.label}</Text>
             <Text style={{ color: c.textSecondary, marginTop: 3 }}>{app.appId} · {app.allowedScopes.join(", ")}</Text>
           </View>)}
-        </View>
+        </ExpandableCard>
 
-        {apps.length ? <View style={card}>
-          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>Who can Dogfood</Text>
-          <Text style={{ color: c.textSecondary, marginTop: 6, lineHeight: 19 }}>
-            Choose an app and allow a Yaver account by email. Revoking access also cancels or revokes that account's app installations.
-          </Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+        {apps.length ? <ExpandableCard
+          title="Trusted accounts"
+          subtitle="Allow a Yaver account by email for one app. Revoking access also cancels or revokes that account's installations."
+          countLabel={`${activeTesters.length} active`}
+          c={c}
+        >
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 2 }}>
             {apps.map((app) => <Pressable
               key={app.appId}
               accessibilityRole="button"
-              accessibilityLabel={`Manage ${app.label} Dogfood testers`}
+              accessibilityLabel={`Manage trusted accounts for ${app.label}`}
               onPress={() => setTesterAppId(app.appId)}
               style={{ borderColor: testerAppId === app.appId ? c.accent : c.border, borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 }}
             ><Text style={{ color: testerAppId === app.appId ? c.accent : c.textSecondary, fontWeight: "600" }}>{app.label}</Text></Pressable>)}
           </View>
           <TextInput accessibilityLabel="Dogfood tester email" value={testerEmail} onChangeText={setTesterEmail} placeholder="tester@example.com" placeholderTextColor={c.textMuted} autoCapitalize="none" keyboardType="email-address" style={input} />
-          <Pressable accessibilityRole="button" accessibilityLabel="Allow Dogfood tester" style={button} onPress={() => void updateTester(testerEmail.trim(), true)} disabled={busy || !testerAppId || !testerEmail.trim()}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Allow trusted account" style={button} onPress={() => void updateTester(testerEmail.trim(), true)} disabled={busy || !testerAppId || !testerEmail.trim()}>
             <Text style={{ color: "white", fontWeight: "700" }}>Allow account</Text>
           </Pressable>
           {testers.filter((row) => row.appId === testerAppId).map((row) => <View key={row._id} style={{ borderTopColor: c.border, borderTopWidth: 1, marginTop: 12, paddingTop: 12 }}>
@@ -184,10 +262,14 @@ export default function DogfoodScreen() {
               <Text style={{ color: row.status === "active" ? c.error : c.accent }}>{row.status === "active" ? "Revoke access" : "Restore access"}</Text>
             </Pressable>
           </View>)}
-        </View> : null}
+        </ExpandableCard> : null}
 
-        {installations.length ? <View style={card}>
-          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "700" }}>App installations</Text>
+        {installations.length ? <ExpandableCard
+          title="Install approvals"
+          subtitle="Approve verified requests, cancel enrollment, or revoke active access. Gesture and onboarding details stay here instead of on the landing view."
+          countLabel={`${pendingInstallations.length} pending · ${activeInstallations.length} active`}
+          c={c}
+        >
           {installations.map((row) => <View key={row._id} style={{ borderTopColor: c.border, borderTopWidth: 1, marginTop: 12, paddingTop: 12 }}>
             <Text style={{ color: c.textPrimary, fontWeight: "600" }}>{row.label || row.platform} · {row.appId}</Text>
             <Text style={{ color: c.textSecondary, marginTop: 3 }}>{row.status}{row.proofVerifiedAt ? " · key verified" : " · awaiting key proof"}</Text>
@@ -202,7 +284,7 @@ export default function DogfoodScreen() {
             {row.status === "pending" ? <Pressable accessibilityRole="button" accessibilityLabel={`Cancel ${row.label || row.platform}`} onPress={() => void act(row, "cancel")} style={{ paddingVertical: 10 }}><Text style={{ color: c.error }}>Cancel enrollment</Text></Pressable> : null}
             {row.status === "active" ? <Pressable accessibilityRole="button" accessibilityLabel={`Revoke ${row.label || row.platform}`} onPress={() => void act(row, "revoke")} style={{ paddingVertical: 10 }}><Text style={{ color: c.error }}>Revoke</Text></Pressable> : null}
           </View>)}
-        </View> : null}
+        </ExpandableCard> : null}
         <AttachModeSection c={c} />
       </ScrollView>
     </View>

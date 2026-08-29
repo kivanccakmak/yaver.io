@@ -58,6 +58,9 @@ function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
   const [testerEmail, setTesterEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const pendingInstallations = useMemo(() => installations.filter((row) => row.status === "pending"), [installations]);
+  const activeInstallations = useMemo(() => installations.filter((row) => row.status === "active"), [installations]);
+  const activeTesters = useMemo(() => testers.filter((row) => row.status === "active"), [testers]);
 
   const call = useCallback(async (path: string, init?: RequestInit) => {
     if (!token) throw new Error("Sign in to manage Dogfood apps.");
@@ -113,18 +116,44 @@ function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
   };
 
   return <div className="card mb-6 border-violet-500/20" data-testid="third-party-dogfood-section">
-    <h3 className="text-sm font-medium uppercase tracking-wider text-violet-400/80">Third-party Dogfood apps</h3>
-    <p className="mt-1 text-xs text-surface-500">Device-key enrollment for apps that do not have their own backend or OAuth yet.</p>
-    <div className="mt-3 grid gap-2 sm:grid-cols-3">
-      <input aria-label="Dogfood app id" value={appId} onChange={(event) => setAppId(event.target.value)} placeholder="io.example.app" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
-      <input aria-label="Dogfood app label" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="App name" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
-      <input aria-label="Dogfood project slug" value={projectSlug} onChange={(event) => setProjectSlug(event.target.value)} placeholder="Project slug (optional)" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
+    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+      <div>
+        <h3 className="text-sm font-medium uppercase tracking-wider text-violet-400/80">Developer management</h3>
+        <p className="mt-1 max-w-2xl text-xs text-surface-500">Generic app registration, trusted-account approvals, and QR-based device handoff for third-party developer builds. Web UI and desktop GUI share this exact control surface.</p>
+      </div>
+      <div className="flex flex-wrap gap-2 text-[11px]">
+        <a href="/add-device" className="rounded-md border border-surface-700 px-3 py-2 text-surface-200 hover:bg-surface-800">Register device QR</a>
+        <a href="/dashboard?tab=settings" className="rounded-md border border-surface-700 px-3 py-2 text-surface-200 hover:bg-surface-800">Desktop GUI same UI</a>
+      </div>
     </div>
-    <button onClick={() => void save()} disabled={busy || !appId.trim() || !label.trim()} className="mt-2 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">Enable app</button>
-    {apps.length ? <div className="mt-3 space-y-2">{apps.map((app) => <div key={app._id} className="rounded-md border border-surface-800 p-2 text-xs"><span className="font-medium text-surface-200">{app.label}</span><span className="ml-2 text-surface-500">{app.appId} · {app.allowedScopes.join(", ")}</span></div>)}</div> : null}
-    {apps.length ? <div className="mt-4 rounded-md border border-surface-800 p-3">
-      <div className="text-xs font-semibold text-surface-200">Who can Dogfood</div>
-      <p className="mt-1 text-[11px] text-surface-500">Allow a Yaver account by email for one app. Revoking access also disables that account&apos;s pending and active installations.</p>
+    <div className="mt-4 grid gap-2 sm:grid-cols-3">
+      <div className="rounded-lg border border-surface-800 bg-surface-900/60 px-3 py-3">
+        <div className="text-lg font-semibold text-violet-300">{apps.length}</div>
+        <div className="mt-1 text-[11px] uppercase tracking-[0.16em] text-surface-500">Apps</div>
+      </div>
+      <div className="rounded-lg border border-surface-800 bg-surface-900/60 px-3 py-3">
+        <div className="text-lg font-semibold text-violet-300">{activeTesters.length}</div>
+        <div className="mt-1 text-[11px] uppercase tracking-[0.16em] text-surface-500">Trusted accounts</div>
+      </div>
+      <div className="rounded-lg border border-surface-800 bg-surface-900/60 px-3 py-3">
+        <div className="text-lg font-semibold text-violet-300">{pendingInstallations.length}</div>
+        <div className="mt-1 text-[11px] uppercase tracking-[0.16em] text-surface-500">Pending installs</div>
+      </div>
+    </div>
+    <details className="mt-4 rounded-md border border-surface-800 p-3" open>
+      <summary className="cursor-pointer text-sm font-semibold text-surface-200">Third-party apps</summary>
+      <p className="mt-2 text-[11px] text-surface-500">Create a generic app record when the app has no OAuth or backend yet. Feedback and BlackBox remain the default scopes.</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <input aria-label="Dogfood app id" value={appId} onChange={(event) => setAppId(event.target.value)} placeholder="io.example.app" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
+        <input aria-label="Dogfood app label" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="App name" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
+        <input aria-label="Dogfood project slug" value={projectSlug} onChange={(event) => setProjectSlug(event.target.value)} placeholder="Project slug (optional)" className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs" />
+      </div>
+      <button onClick={() => void save()} disabled={busy || !appId.trim() || !label.trim()} className="mt-2 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">Enable app</button>
+      {apps.length ? <div className="mt-3 space-y-2">{apps.map((app) => <div key={app._id} className="rounded-md border border-surface-800 p-2 text-xs"><span className="font-medium text-surface-200">{app.label}</span><span className="ml-2 text-surface-500">{app.appId} · {app.allowedScopes.join(", ")}</span></div>)}</div> : null}
+    </details>
+    {apps.length ? <details className="mt-3 rounded-md border border-surface-800 p-3">
+      <summary className="cursor-pointer text-sm font-semibold text-surface-200">Trusted accounts</summary>
+      <p className="mt-2 text-[11px] text-surface-500">Allow a Yaver account by email for one app. Revoking access also disables that account&apos;s pending and active installations.</p>
       <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
         <select aria-label="Dogfood tester app" value={testerAppId} onChange={(event) => setTesterAppId(event.target.value)} className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs">
           {apps.map((app) => <option key={app.appId} value={app.appId}>{app.label}</option>)}
@@ -136,21 +165,28 @@ function ThirdPartyDogfoodCard({ token }: { token: string | null }) {
         <div><span className="font-medium text-surface-200">{row.tester?.name || row.testerEmail}</span><span className="ml-2 text-surface-500">{row.testerEmail} · {row.status}{row.testerUserId ? " · linked" : " · activates after sign-in"}</span></div>
         <button onClick={() => void setTester(row.testerEmail, row.status !== "active", row.appId)} disabled={busy} className={row.status === "active" ? "text-red-400" : "text-violet-400"}>{row.status === "active" ? "Revoke" : "Restore"}</button>
       </div>)}</div>
-    </div> : null}
-    {installations.length ? <div className="mt-3 space-y-2">{installations.map((row) => <div key={row._id} className="rounded-md border border-surface-800 p-2 text-xs">
-      <div><span className="font-medium text-surface-200">{row.label || row.platform}</span><span className="ml-2 text-surface-500">{row.appId} · {row.status}{row.proofVerifiedAt ? " · key verified" : ""}{row.tester?.email ? ` · ${row.tester.email}` : ""}</span></div>
-      {row.status === "active" ? <div className="mt-1 text-surface-500">
-        {row.gestureSupported === true
-          ? `Three-finger supported · ${row.controlPresentation === "auto" ? "gesture mode" : "Y mode"}`
-          : row.gestureSupported === false ? "Y mode · gesture unavailable" : "Control capability not reported yet"}
-        {row.controlOnboardingSeenAt ? " · onboarded" : " · onboarding pending"}
-      </div> : null}
-      {row.status === "pending" && row.proofVerifiedAt ? <button onClick={() => void act(row._id, "approve")} disabled={busy} className="mt-2 rounded bg-emerald-700 px-2 py-1 text-white">Approve</button> : null}
-      {row.status === "pending" ? <button onClick={() => void act(row._id, "cancel")} disabled={busy} className="ml-2 mt-2 text-red-400">Cancel</button> : null}
-      {row.status === "active" ? <button onClick={() => void act(row._id, "revoke")} disabled={busy} className="mt-2 text-red-400">Revoke</button> : null}
-    </div>)}</div> : null}
+    </details> : null}
+    {installations.length ? <details className="mt-3 rounded-md border border-surface-800 p-3">
+      <summary className="cursor-pointer text-sm font-semibold text-surface-200">Install approvals</summary>
+      <p className="mt-2 text-[11px] text-surface-500">Approve verified requests, cancel enrollment, or revoke active access. Gesture and onboarding detail stays here instead of on the landing surface.</p>
+      <div className="mt-3 space-y-2">{installations.map((row) => <div key={row._id} className="rounded-md border border-surface-800 p-2 text-xs">
+        <div><span className="font-medium text-surface-200">{row.label || row.platform}</span><span className="ml-2 text-surface-500">{row.appId} · {row.status}{row.proofVerifiedAt ? " · key verified" : ""}{row.tester?.email ? ` · ${row.tester.email}` : ""}</span></div>
+        {row.status === "active" ? <div className="mt-1 text-surface-500">
+          {row.gestureSupported === true
+            ? `Three-finger supported · ${row.controlPresentation === "auto" ? "gesture mode" : "Y mode"}`
+            : row.gestureSupported === false ? "Y mode · gesture unavailable" : "Control capability not reported yet"}
+          {row.controlOnboardingSeenAt ? " · onboarded" : " · onboarding pending"}
+        </div> : null}
+        <div className="mt-2 flex flex-wrap gap-2">
+          {row.status === "pending" && row.proofVerifiedAt ? <button onClick={() => void act(row._id, "approve")} disabled={busy} className="rounded bg-emerald-700 px-2 py-1 text-white">Approve</button> : null}
+          {row.status === "pending" ? <button onClick={() => void act(row._id, "cancel")} disabled={busy} className="text-red-400">Cancel</button> : null}
+          {row.status === "active" ? <button onClick={() => void act(row._id, "revoke")} disabled={busy} className="text-red-400">Revoke</button> : null}
+        </div>
+      </div>)}</div>
+    </details> : null}
     {message ? <p className="mt-3 text-xs text-surface-400">{message}</p> : null}
     <p className="mt-3 text-[11px] text-surface-600">UUID is a public handle, never a credential · approval requires a verified Ed25519 key proof · re-registration supersedes only the same installation slot</p>
+    {activeInstallations.length ? <p className="mt-1 text-[11px] text-surface-600">{activeInstallations.length} installation(s) currently active across approved developer apps.</p> : null}
   </div>;
 }
 

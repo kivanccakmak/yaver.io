@@ -367,7 +367,7 @@ export default function TabLayout() {
     return unsubscribe;
   }, [isConnected, devices]);
 
-  // Startup tab preference. Defaults to Projects (see startupScreen.ts).
+  // Startup tab preference. Defaults to Chat (see startupScreen.ts).
   // MUST stay ABOVE the auth gate below: these are the last hooks in the
   // component, and the `if (!isAuthenticated) return <Redirect/>` gate would
   // otherwise SKIP them on sign-out — dropping the render's hook count and
@@ -472,8 +472,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="tasks"
         options={{
-          title: "Tasks",
-          tabBarIcon: ({ focused }) => <TabIcon label="Tasks" focused={focused} rail={useLeftRail} />,
+          title: "Chat",
+          tabBarIcon: ({ focused }) => <TabIcon label="Chat" focused={focused} rail={useLeftRail} />,
         }}
       />
       <Tabs.Screen

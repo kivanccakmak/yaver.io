@@ -57,6 +57,7 @@ import { connectionManager } from "../lib/connectionManager";
 import { reconcilePreviewDevStatus } from "../lib/previewDevStatus";
 import { setActivePreviewLane, subscribeBrowserRender, subscribeBrowserShake } from "../lib/feedbackTrigger";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { monoFamily } from "../theme/tokens";
 import { BrowserVibeBubble } from "./BrowserVibeBubble";
 import { DevServerStopDialog, type DevServerStopPhase } from "./DevServerStopDialog";
@@ -180,6 +181,7 @@ export function DevPreview({
 } = {}) {
   const { colors: c, isDark } = useTheme();
   const layout = useResponsiveLayout();
+  const insets = useSafeAreaInsets();
   useDevice();
   // Rendering may intentionally happen on a different machine from coding.
   // The connection manager falls back to the focused machine when no split
@@ -960,6 +962,7 @@ export function DevPreview({
     : nativeLoading
       ? "Building…"
       : "Open";
+  const showBrowserEscapeBar = !mustUseNativePreview && !paneMode;
 
   return (
     <>
@@ -1278,6 +1281,48 @@ export function DevPreview({
             /* Web mode: load app in WebView, with a progress/failure overlay
                that stays until REAL content is confirmed (see webContentLoaded). */
             <>
+              {showBrowserEscapeBar ? (
+                <View pointerEvents="box-none" style={styles.browserEscapeLayer}>
+                  <View style={[styles.browserEscapeRow, { top: Math.max(insets.top + 8, 12) }]}>
+                    <Pressable
+                      onPress={() => setShowPreview(false)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Back from browser preview"
+                      style={[styles.browserEscapeBtn, { backgroundColor: "rgba(9,9,11,0.88)", borderColor: "#3f3f46" }]}
+                    >
+                      <Text style={[styles.browserEscapeText, { color: "#f4f4f5" }]}>Back</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => void handleReload("fast")}
+                      disabled={reloadLoading || nativeLoading}
+                      accessibilityRole="button"
+                      accessibilityLabel="Fast reload browser preview"
+                      style={[
+                        styles.browserEscapeBtn,
+                        { backgroundColor: "rgba(6,78,59,0.92)", borderColor: "#14532d", opacity: reloadLoading || nativeLoading ? 0.6 : 1 },
+                      ]}
+                    >
+                      <Text style={[styles.browserEscapeText, { color: "#86efac" }]}>
+                        {reloadLoading ? "Reloading…" : "Reload"}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleStop}
+                      disabled={stopPhase === "stopping"}
+                      accessibilityRole="button"
+                      accessibilityLabel="Stop browser preview"
+                      style={[
+                        styles.browserEscapeBtn,
+                        { backgroundColor: "rgba(69,10,10,0.92)", borderColor: "#7f1d1d", opacity: stopPhase === "stopping" ? 0.6 : 1 },
+                      ]}
+                    >
+                      <Text style={[styles.browserEscapeText, { color: "#fca5a5" }]}>
+                        {stopPhase === "stopping" ? "Stopping…" : "Stop"}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
               {!bundleUrl ? (
                 /* No address yet (or no web target at all) — mounting a
                    WebView on uri:"" issues no request, so nothing could ever
@@ -2048,6 +2093,31 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 10,
     padding: 24,
+  },
+  browserEscapeLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 30,
+  },
+  browserEscapeRow: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  browserEscapeBtn: {
+    minHeight: 38,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  browserEscapeText: {
+    fontSize: 13,
+    fontWeight: "700",
   },
   previewUnverifiedNotice: {
     position: "absolute", left: 12, right: 12, bottom: 12, zIndex: 20,
