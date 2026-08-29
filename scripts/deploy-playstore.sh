@@ -8,20 +8,10 @@ REPO_ROOT="$(cd ../.. && pwd)"
 source "$REPO_ROOT/scripts/lib/android-sdk.sh"
 yaver_resolve_android_sdk
 
-# `expo prebuild --clean` regenerates gradle.properties from Expo's
-# template, wiping any heap bump we made by hand. Without an 8g heap
-# the dex merge step OOMs ~9 min into bundleRelease. Force the bump
-# both as an env var (so this run is safe even if gradle.properties
-# stayed default) and back into gradle.properties (so subsequent
-# `gradle` invocations from outside this script also see it).
+# Release assembly needs more heap than the low-memory validation lane. Keep
+# that override process-local: mutating tracked gradle.properties leaves a
+# release checkout dirty and silently raises memory use for later validation.
 export GRADLE_OPTS="${GRADLE_OPTS:-} -Xmx8g -XX:MaxMetaspaceSize=1g"
-if grep -q '^org.gradle.jvmargs=' gradle.properties 2>/dev/null; then
-  if ! grep -qE '^org\.gradle\.jvmargs=.*-Xmx(8|16|32)g' gradle.properties; then
-    sed -i.bak 's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError/' gradle.properties
-    rm -f gradle.properties.bak
-    echo "Bumped gradle.properties JVM heap to 8g."
-  fi
-fi
 
 # Android signing creds + Play service account path. ~/.androidplay/yaver.env
 # is gitignored — pre-seed it with the exports the build/upload need
@@ -201,11 +191,12 @@ fi
 # bundleRelease with the same lint skip CI uses (release-mobile.yml): local
 # lintVital* is slow AND downloads ~200 MB of lint jars — neither is needed to
 # produce the AAB. YAVER_PLAYSTORE_ABI (e.g. arm64-v8a) restricts the build to
-# one ABI via AGP's android.injected.build.abi — a 4x smaller native footprint
-# for a disk-constrained machine doing an internal-test build; the CI build
-# keeps all ABIs.
+# one ABI via React Native's supported architecture property — a 4x smaller
+# native footprint for a disk-constrained machine doing an internal-test build;
+# the CI build keeps all ABIs. Do not use android.injected.build.abi here: AGP
+# adds android:testOnly="true" to that bundle and Google Play rejects it.
 "$GRADLE" bundleRelease \
-  ${YAVER_PLAYSTORE_ABI:+-Pandroid.injected.build.abi="$YAVER_PLAYSTORE_ABI"} \
+  ${YAVER_PLAYSTORE_ABI:+-PreactNativeArchitectures="$YAVER_PLAYSTORE_ABI"} \
   -x lint -x lintVitalRelease -x lintVitalAnalyzeRelease
 
 PAYMENT_DEP_REPORT="$(mktemp -t yaver-android-release-deps.XXXXXX)"
@@ -218,6 +209,13 @@ fi
 rm -f "$PAYMENT_DEP_REPORT"
 
 AAB_PATH="app/build/outputs/bundle/release/app-release.aab"
+
+MERGED_MANIFEST="app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
+if [ -f "$MERGED_MANIFEST" ] && grep -q 'android:testOnly="true"' "$MERGED_MANIFEST"; then
+  echo "ERROR: release bundle is marked android:testOnly=true; Google Play will reject it." >&2
+  echo "Use reactNativeArchitectures for ABI restriction, never android.injected.build.abi." >&2
+  exit 1
+fi
 
 if [ ! -f "$AAB_PATH" ]; then
   echo "ERROR: AAB not found at $AAB_PATH"

@@ -27,6 +27,17 @@ if [ "$GRADLE_MAJOR" -lt 8 ] || { [ "$GRADLE_MAJOR" -eq 8 ] && [ "$GRADLE_MINOR"
 fi
 
 grep -q 'yaver_resolve_android_sdk' "$DEPLOY"
+grep -q 'export GRADLE_OPTS=.*-Xmx8g' "$DEPLOY"
+if grep -q 'sed .*org\\.gradle\\.jvmargs' "$DEPLOY"; then
+  echo "Play deploy must keep its larger heap process-local" >&2
+  exit 1
+fi
+grep -q 'PreactNativeArchitectures=' "$DEPLOY"
+if grep -q 'Pandroid\.injected\.build\.abi=' "$DEPLOY"; then
+  echo "Play deploy must not use android.injected.build.abi; it marks release bundles testOnly" >&2
+  exit 1
+fi
+grep -q 'android:testOnly="true"' "$DEPLOY"
 grep -q 'yaver_resolve_android_sdk' "$TV_DEPLOY"
 grep -q 'yaver_resolve_android_sdk' "$WEAR_DEPLOY"
 grep -q 'yaver_android_sdk_is_usable' "$ANDROID_SDK_HELPER"
