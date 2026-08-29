@@ -59,8 +59,12 @@ type repoRef struct {
 // the pieces each provider API needs. Returns an error if the caller supplied
 // nothing usable.
 func parseRepoRef(host, fullName string) (*repoRef, error) {
+	host = strings.TrimSpace(host)
 	if host == "" {
 		return nil, fmt.Errorf("host is required")
+	}
+	if strings.ContainsAny(host, "/?#@ \\") || strings.Contains(host, "://") {
+		return nil, fmt.Errorf("host must be a bare provider hostname")
 	}
 	ref := &repoRef{Host: host}
 	fullName = strings.Trim(strings.TrimSpace(fullName), "/")
@@ -69,11 +73,33 @@ func parseRepoRef(host, fullName string) (*repoRef, error) {
 	}
 	ref.Full = fullName
 	parts := strings.Split(fullName, "/")
-	if len(parts) >= 2 {
-		ref.Owner = parts[0]
-		ref.Repo = parts[len(parts)-1]
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("repo must include its owner or group")
 	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return nil, fmt.Errorf("repo contains an invalid path segment")
+		}
+	}
+	ref.Owner = parts[0]
+	ref.Repo = parts[len(parts)-1]
 	return ref, nil
+}
+
+func escapedPathSegments(value string) string {
+	parts := strings.Split(strings.Trim(value, "/"), "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return strings.Join(parts, "/")
+}
+
+func (ref *repoRef) githubRepoSlug() (string, error) {
+	parts := strings.Split(ref.Full, "/")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("GitHub repo must be owner/repo, got %q", ref.Full)
+	}
+	return escapedPathSegments(ref.Full), nil
 }
 
 // githubAPI builds a request against api.github.com with the provider token.
@@ -115,15 +141,19 @@ func (ref *repoRef) gitlabAPI(method, path string) (*http.Request, error) {
 }
 
 func (ref *repoRef) do(req *http.Request) ([]byte, int, error) {
+	const maxProviderResponseBytes = 4 << 20
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponseBytes+1))
 	if err != nil {
 		return nil, resp.StatusCode, err
+	}
+	if len(body) > maxProviderResponseBytes {
+		return nil, resp.StatusCode, fmt.Errorf("provider response exceeds %d MiB browse limit", maxProviderResponseBytes>>20)
 	}
 	if resp.StatusCode >= 300 {
 		return body, resp.StatusCode, fmt.Errorf("provider API returned %d: %s", resp.StatusCode, truncateForBrowse(string(body), 300))
@@ -178,7 +208,11 @@ func (s *HTTPServer) handleGitProviderRepoBranches(w http.ResponseWriter, r *htt
 }
 
 func (ref *repoRef) listGitHubBranches() ([]browseBranch, error) {
-	req, err := ref.githubAPI("GET", "/repos/"+ref.Full+"/branches?per_page=100")
+	slug, err := ref.githubRepoSlug()
+	if err != nil {
+		return nil, err
+	}
+	req, err := ref.githubAPI("GET", "/repos/"+slug+"/branches?per_page=100")
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +312,11 @@ func (s *HTTPServer) handleGitProviderRepoCommits(w http.ResponseWriter, r *http
 }
 
 func (ref *repoRef) listGitHubCommits(branch string, perPage int) ([]browseCommit, error) {
-	p := "/repos/" + ref.Full + "/commits?per_page=" + fmt.Sprint(perPage)
+	slug, err := ref.githubRepoSlug()
+	if err != nil {
+		return nil, err
+	}
+	p := "/repos/" + slug + "/commits?per_page=" + fmt.Sprint(perPage)
 	if branch != "" {
 		p += "&sha=" + url.QueryEscape(branch)
 	}
@@ -414,9 +452,13 @@ func (s *HTTPServer) handleGitProviderRepoTrees(w http.ResponseWriter, r *http.R
 }
 
 func (ref *repoRef) listGitHubTree(branch, path string) ([]browseEntry, error) {
-	p := "/repos/" + ref.Full + "/contents/"
+	slug, err := ref.githubRepoSlug()
+	if err != nil {
+		return nil, err
+	}
+	p := "/repos/" + slug + "/contents/"
 	if path != "" {
-		p += url.PathEscape(strings.TrimPrefix(path, "/"))
+		p += escapedPathSegments(path)
 	}
 	if branch != "" {
 		p += "?ref=" + url.QueryEscape(branch)
@@ -439,7 +481,11 @@ func (ref *repoRef) listGitHubTree(branch, path string) ([]browseEntry, error) {
 		Path string `json:"path"`
 		Size int64  `json:"size"`
 	}
-	if strings.TrimSpace(string(body))[0] == '{' {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return nil, fmt.Errorf("provider returned an empty tree response")
+	}
+	if trimmed[0] == '{' {
 		if err := json.Unmarshal(body, &obj); err != nil {
 			return nil, err
 		}
@@ -540,7 +586,11 @@ func (s *HTTPServer) handleGitProviderRepoFile(w http.ResponseWriter, r *http.Re
 }
 
 func (ref *repoRef) getGitHubFile(branch, path string) (string, string, error) {
-	p := "/repos/" + ref.Full + "/contents/" + url.PathEscape(strings.TrimPrefix(path, "/"))
+	slug, err := ref.githubRepoSlug()
+	if err != nil {
+		return "", "", err
+	}
+	p := "/repos/" + slug + "/contents/" + escapedPathSegments(path)
 	if branch != "" {
 		p += "?ref=" + url.QueryEscape(branch)
 	}
@@ -691,7 +741,11 @@ func (s *HTTPServer) handleGitProviderRepoReadme(w http.ResponseWriter, r *http.
 }
 
 func (ref *repoRef) getGitHubReadme(branch string) (string, string, error) {
-	p := "/repos/" + ref.Full + "/readme"
+	slug, err := ref.githubRepoSlug()
+	if err != nil {
+		return "", "", err
+	}
+	p := "/repos/" + slug + "/readme"
 	if branch != "" {
 		p += "?ref=" + url.QueryEscape(branch)
 	}
@@ -786,7 +840,11 @@ func (s *HTTPServer) handleGitProviderRepoAudit(w http.ResponseWriter, r *http.R
 }
 
 func (ref *repoRef) auditGitHub() (map[string]interface{}, error) {
-	req, err := ref.githubAPI("GET", "/repos/"+ref.Full)
+	slug, err := ref.githubRepoSlug()
+	if err != nil {
+		return nil, err
+	}
+	req, err := ref.githubAPI("GET", "/repos/"+slug)
 	if err != nil {
 		return nil, err
 	}
