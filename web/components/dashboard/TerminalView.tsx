@@ -34,7 +34,6 @@ export default function TerminalView({
   launch,
   tmuxSession,
   tmuxTaskId,
-  onRunnerNeedsAuth,
   onCloseTerminal,
   onTmuxClosed,
 }: {
@@ -56,8 +55,6 @@ export default function TerminalView({
   const [attempt, setAttempt] = useState(0);
   const [dictating, setDictating] = useState(false);
   const [runningRunner, setRunningRunner] = useState<string | null>(null);
-  const [checkingRunner, setCheckingRunner] = useState<string | null>(null);
-  const [runnerLaunchError, setRunnerLaunchError] = useState<string>("");
   const [closeBusy, setCloseBusy] = useState(false);
   const [closeError, setCloseError] = useState<string>("");
   const [sttAvailable] = useState<boolean>(
@@ -112,30 +109,13 @@ export default function TerminalView({
         setRunningRunner(null);
         return;
       }
-      setRunnerLaunchError("");
-      if (l.id === "claude" || l.id === "codex") {
-        setCheckingRunner(l.id);
-        try {
-          const result = await agentClient.testRunner(l.id, { timeoutMs: 20_000 });
-          if (!result.ok) {
-            if (result.needsAuth && result.supportsBrowserAuth) {
-              onRunnerNeedsAuth?.(l.id);
-              return;
-            }
-            setRunnerLaunchError(result.error || `${l.label} did not pass its preflight.`);
-            return;
-          }
-        } catch (err) {
-          setRunnerLaunchError(err instanceof Error ? err.message : String(err));
-          return;
-        } finally {
-          setCheckingRunner(null);
-        }
-      }
+      // This tap already expresses the one permitted action: launch this
+      // runner. Do not spend a second generation on a hidden test first; the
+      // runner's own terminal output is the operation-level readiness signal.
       sendToPty(`${l.command}\n`);
       setRunningRunner(l.id);
     },
-    [onRunnerNeedsAuth, runningRunner, sendToPty, status],
+    [runningRunner, sendToPty, status],
   );
 
   // Optional browser dictation → typed at the prompt (no auto-Enter).
@@ -371,7 +351,7 @@ export default function TerminalView({
             <button
               key={l.id}
               title={active ? `Exit ${l.label} (sends /exit)` : l.hint}
-              disabled={status !== "open" || checkingRunner === l.id}
+              disabled={status !== "open"}
               onClick={() => { void toggleRunner(l); }}
               className={`shrink-0 rounded border px-2.5 py-1 text-xs font-semibold disabled:opacity-40 ${
                 active
@@ -379,7 +359,7 @@ export default function TerminalView({
                   : "border-violet-400/50 bg-violet-500/15 text-violet-700 dark:text-violet-200 hover:bg-violet-500/25"
               }`}
             >
-              {checkingRunner === l.id ? `… ${l.label}` : active ? `■ ${l.label}` : `▷ ${l.label}`}
+              {active ? `■ ${l.label}` : `▷ ${l.label}`}
             </button>
           );
         })}
@@ -424,11 +404,6 @@ export default function TerminalView({
         ) : null}
         {closeError ? (
           <span className="shrink-0 text-xs text-rose-300">{closeError}</span>
-        ) : null}
-        {runnerLaunchError ? (
-          <span className="shrink-0 max-w-[22rem] truncate text-xs text-rose-300" title={runnerLaunchError}>
-            {runnerLaunchError}
-          </span>
         ) : null}
       </div>
       <div className="relative flex-1 overflow-hidden">

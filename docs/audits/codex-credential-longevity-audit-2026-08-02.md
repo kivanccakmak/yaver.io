@@ -148,8 +148,9 @@ same refresh token. Whichever refreshes first consumes it; the other gets `inval
 and prints the account-mismatch line. Then you re-auth that one, and the *first* box
 becomes the loser. **That is the "signs out again, and again" oscillation.**
 
-The same race exists *within* one box: Yaver runs concurrent tasks and warm sessions, and
-nothing serialises refresh. Codex guards its own (`Skipping token refresh because auth
+The same race historically existed *within* one box when Yaver could run concurrent
+tasks and a startup warm session. Startup warm sessions were removed on 2026-08-29;
+explicit concurrent tasks can still contend. Codex guards its own (`Skipping token refresh because auth
 changed after guarded reload`), which limits but does not eliminate it across processes.
 
 ### 5b. Yaver can mark a healthy runner signed-out from ordinary task output

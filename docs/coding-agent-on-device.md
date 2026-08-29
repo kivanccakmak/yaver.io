@@ -3,8 +3,9 @@
 > Design + spike notes. Code is the source of truth; when this drifts, fix it
 > in the same change (see CLAUDE.md). Status as of 2026-06-08:
 > **Built (Go, tested):** proot shim with credential binds (`sandbox_proot.go`),
-> runner-spawn wiring across the console PTY + all four task paths (warmup /
-> version-check / task / fork) so claude/codex/opencode resolve in the rootfs,
+> runner-spawn wiring across the console PTY + explicit task/fork paths (startup
+> warmup was removed because boot must never spend tokens) so
+> claude/codex/opencode resolve in the rootfs,
 > cross-compile script. **Built (TS, tsx-tested):** the subscription transport
 > (`claudeSubscription.ts` + store), the unifying `codingSession.ts` policy
 > (engine×target, incl. Android in-app Hermes), `localBox.ts` (synthetic "This
@@ -211,7 +212,7 @@ git/tsc/tests, stream tokens over HTTPS. I/O + light CPU. The opposite of the
 | `desktop/agent/sandbox_proot.go` | proot wrap (env-gated) + pure argv builder + **credential binds** | **built + tested** |
 | `desktop/agent/sandbox_proot_test.go` | unit tests incl. cred-bind + env round-trip | **built** |
 | `desktop/agent/console_terminal.go` | `sandboxWrapCmd` before PTY start | **hooked** |
-| `desktop/agent/tasks.go` | `sandboxWrapCmd` at warmup / version-check / task / fork spawns; `CheckRunner` skips host `LookPath` under the sandbox | **hooked** |
+| `desktop/agent/tasks.go` | `sandboxWrapCmd` at version-check / explicit task / fork spawns; `CheckRunner` skips host `LookPath` under the sandbox | **hooked** |
 | `scripts/build-android-sandbox.sh` | cross-compile `libyaver.so`, fetch proot, bake rootfs | scaffolded (PROOT_SRC TODO) |
 | `mobile/src/lib/codingSession.ts` (+ `.test.mts`) | unifying engine×target policy (sandbox / remote / hermes-only-remote / Android in-app Hermes) | **built + tested** |
 | `mobile/src/lib/localBox.ts` (+ `.test.mts`) | synthetic "This phone" device + loopback reachability probe | **built + tested** |

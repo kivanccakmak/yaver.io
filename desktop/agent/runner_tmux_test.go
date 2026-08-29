@@ -176,7 +176,7 @@ func TestBuildAutomaticTmuxRunnerCreatesExactTaskSession(t *testing.T) {
 	}
 	if strings.Contains(cmd.Args[2], `tmux kill-session -t "$SESSION"`) ||
 		!strings.Contains(cmd.Args[2], `tmux pipe-pane -t "$TARGET"`) {
-		t.Fatal("completion, failure, and stop must preserve the task-owned tmux session and pane")
+		t.Fatal("the wrapper must preserve the task-owned seat between review turns; the task lifecycle owns terminal cleanup")
 	}
 	if strings.Contains(cmd.Args[2], `tmux kill-session -t "$SESSION" 2>/dev/null || true
   tmux new-session`) {
@@ -198,6 +198,61 @@ func TestBuildAutomaticTmuxRunnerCreatesExactTaskSession(t *testing.T) {
 		if !seen {
 			t.Errorf("automatic wrapper env missing %q: %v", kv, env)
 		}
+	}
+}
+
+func TestCompleteTaskClosesExactTaskOwnedTmuxSeat(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	taskID := "complete-seat-" + shortTaskKey(t.Name())
+	session := automaticTaskTmuxSessionName(taskID, "codex")
+	t.Logf("test tmux session: %s", session)
+	_ = exec.Command(tmuxCmdName(), "kill-session", "-t", session).Run()
+	t.Cleanup(func() { _ = exec.Command(tmuxCmdName(), "kill-session", "-t", session).Run() })
+	if out, err := exec.Command(tmuxCmdName(), "new-session", "-d", "-s", session, "sleep", "60").CombinedOutput(); err != nil {
+		t.Fatalf("create task-owned session: %v: %s", err, out)
+	}
+
+	manager := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	manager.mu.Lock()
+	manager.tasks[taskID] = &Task{
+		ID: taskID, RunnerID: "codex", Status: TaskStatusReview,
+		TmuxSession: session,
+	}
+	manager.mu.Unlock()
+
+	// A review task keeps its seat until the user makes this explicit gesture.
+	if !tmuxSessionExists(session) {
+		t.Fatal("review task lost its reusable tmux seat before completion")
+	}
+	if err := manager.CompleteTask(taskID); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+	if tmuxSessionExists(session) {
+		t.Fatalf("completed task left its tmux session alive: %s", session)
+	}
+	manager.mu.RLock()
+	status := manager.tasks[taskID].Status
+	manager.mu.RUnlock()
+	if status != TaskStatusFinished {
+		t.Fatalf("completed task status = %s, want %s", status, TaskStatusFinished)
+	}
+}
+
+func TestUntrackedRunnerPanesBecomeTasksWithoutDuplicatingOwnedSeats(t *testing.T) {
+	manager := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	manager.mu.Lock()
+	manager.tasks["owned"] = &Task{ID: "owned", TmuxPaneID: "%2", Status: TaskStatusReview}
+	manager.mu.Unlock()
+	panes := []VibePane{
+		{PaneID: "%1", SessionName: "external", Agent: "codex", AgentConfirmed: true},
+		{PaneID: "%2", SessionName: "owned", Agent: "claude", AgentConfirmed: true},
+		{PaneID: "%3", SessionName: "shell", Agent: "shell", AgentConfirmed: false},
+	}
+	got := untrackedRunnerPanes(manager, panes)
+	if len(got) != 1 || got[0].PaneID != "%1" {
+		t.Fatalf("untracked runner panes = %+v, want only %%1", got)
 	}
 }
 

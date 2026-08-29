@@ -333,35 +333,6 @@ func TmuxInstallHint() string {
 	return "install tmux for your platform (https://github.com/tmux/tmux/wiki/Installing)"
 }
 
-// BootstrapDefaultSession creates a detached `yaver` tmux session if no
-// sessions currently exist. Lets a fresh `yaver serve` produce a working
-// /spatial layout immediately — the trio user shouldn't have to ssh in
-// and type `tmux new -s yaver` before their first vibe attempt.
-//
-// No-ops if any session already exists. cwd is the user's home dir so
-// the session starts in a sensible place.
-func (m *TmuxManager) BootstrapDefaultSession() error {
-	sessions, err := m.ListTmuxSessions()
-	if err != nil {
-		return fmt.Errorf("list sessions to check bootstrap: %w", err)
-	}
-	if len(sessions) > 0 {
-		// User already has tmux sessions running; don't auto-create.
-		return nil
-	}
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		home = "/tmp"
-	}
-	// tmux new-session -d (detached) -s yaver -c $HOME
-	cmd := exec.Command(tmuxCmdName(), "new-session", "-d", "-s", "yaver", "-c", home)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("tmux new-session: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 // ListTmuxSessions returns all tmux sessions with metadata about their
 // relationship to Yaver (adopted, forked-by-yaver, or unrelated).
 func (m *TmuxManager) ListTmuxSessions() ([]TmuxSession, error) {
@@ -447,6 +418,50 @@ func (m *TmuxManager) ListTmuxSessions() ([]TmuxSession, error) {
 // polling its output. The tmux session continues running as-is.
 func (m *TmuxManager) AdoptSession(sessionName string) (*Task, error) {
 	return m.AdoptTarget(sessionName, "")
+}
+
+// ReconcileUntrackedRunnerPanes makes the Tasks ledger the complete inventory
+// of live AI runner seats. It never starts a runner and never types into a
+// pane; it only adopts a process that ListVibePanes positively observed.
+// Running this outside request handlers keeps process-tree inspection out of
+// GET /tasks' critical path.
+func (m *TmuxManager) ReconcileUntrackedRunnerPanes(ctx context.Context) int {
+	panes, err := ListVibePanes(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("[tmux] runner-seat reconciliation failed: %v", err)
+		}
+		return 0
+	}
+	adopted := 0
+	for _, pane := range untrackedRunnerPanes(m.taskMgr, panes) {
+		if ctx.Err() != nil {
+			break
+		}
+		if _, err := m.AdoptTarget(pane.SessionName, pane.PaneID); err != nil {
+			log.Printf("[tmux] reconcile pane %s in %q failed: %v", pane.PaneID, pane.SessionName, err)
+			continue
+		}
+		adopted++
+	}
+	if adopted > 0 {
+		log.Printf("[tmux] reconciled %d previously untracked runner seat(s) into Tasks", adopted)
+	}
+	return adopted
+}
+
+func untrackedRunnerPanes(taskMgr *TaskManager, panes []VibePane) []VibePane {
+	result := make([]VibePane, 0)
+	for _, pane := range panes {
+		if !pane.AgentConfirmed || normalizeRunnerID(pane.Agent) == "" || normalizeRunnerID(pane.Agent) == "unknown" {
+			continue
+		}
+		if paneTaskID(taskMgr, pane.PaneID) != "" {
+			continue
+		}
+		result = append(result, pane)
+	}
+	return result
 }
 
 // AdoptTarget adopts ONE PANE as a Yaver task. With an empty paneID it adopts

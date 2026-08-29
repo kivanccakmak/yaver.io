@@ -528,7 +528,8 @@ func paneTaskID(taskMgr *TaskManager, paneID string) string {
 	taskMgr.mu.RLock()
 	defer taskMgr.mu.RUnlock()
 	for id, t := range taskMgr.tasks {
-		if t != nil && t.TmuxPaneID == paneID {
+		if t != nil && t.DeletedAt == nil && t.TmuxPaneID == paneID &&
+			(t.Status == TaskStatusQueued || t.Status == TaskStatusRunning || t.Status == TaskStatusReview) {
 			return id
 		}
 	}

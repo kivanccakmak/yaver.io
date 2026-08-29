@@ -833,14 +833,6 @@ func (tm *TaskManager) GetOwnRunnerProcesses() []RunnerProcess {
 	defer tm.mu.RUnlock()
 	var procs []RunnerProcess
 
-	// Warm session process
-	if tm.warmPID > 0 {
-		procs = append(procs, RunnerProcess{
-			PID:     tm.warmPID,
-			Command: fmt.Sprintf("warm session (id=%s)", tm.warmSessionID),
-		})
-	}
-
 	// Task processes
 	for _, t := range tm.tasks {
 		if t.cmd != nil && t.cmd.Process != nil && (t.Status == TaskStatusRunning || t.Status == TaskStatusQueued) {
@@ -1800,11 +1792,6 @@ type TaskManager struct {
 	OwnerEmail   string // for dev logging
 	ownerIsOwner bool   // server-computed ownerAllowlist gate for preview-only runners
 
-	// Warm session: forked at startup, reused for all tasks
-	warmSessionID string    // Claude session ID from warmup
-	warmCreatedAt time.Time // when the warm session was established
-	warmPID       int       // PID of the warmup process (0 if not running)
-	warmReady     bool      // true once warmup completed successfully
 }
 
 // NewTaskManager creates a new TaskManager. If store is non-nil, previously
@@ -1863,91 +1850,6 @@ func (tm *TaskManager) fireTaskDone(task *Task) {
 		t := *task
 		go tm.OnTaskDone(&t)
 	}
-}
-
-// WarmUp forks the runner at startup to establish a session.
-// This avoids cold-start delays and keeps us in one session for rate limiting.
-func (tm *TaskManager) WarmUp() {
-	if !tm.runner.ResumeSupported {
-		log.Printf("[warmup] Skipping — resume not supported for %s", tm.runner.Name)
-		return
-	}
-	if err := tm.CheckRunner(); err != nil {
-		log.Printf("[warmup] Runner not available: %v — skipping warmup", err)
-		return
-	}
-
-	log.Printf("[warmup] Forking %s to establish warm session...", tm.runner.Name)
-
-	warmPrompt := "You are a warm session. Reply with just: ready"
-	args := tm.buildArgs(warmPrompt)
-
-	cmd := exec.CommandContext(context.Background(), tm.runner.Command, args...)
-	cmd.Dir = tm.workDir
-
-	// Set PATH
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		existingPath := os.Getenv("PATH")
-		extraPaths := filepath.Join(home, ".local", "bin") + ":" +
-			"/opt/homebrew/bin" + ":" +
-			"/usr/local/bin"
-		cmd.Env = append(os.Environ(), "PATH="+extraPaths+":"+existingPath)
-	}
-
-	// On Android, run the runner inside the proot rootfs (no-op elsewhere).
-	cmd = sandboxWrapCmd(cmd)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("[warmup] Failed to create stdout pipe: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("[warmup] Failed to start: %v", err)
-		return
-	}
-
-	tm.mu.Lock()
-	tm.warmPID = cmd.Process.Pid
-	tm.mu.Unlock()
-
-	log.Printf("[warmup] %s started (PID %d)", tm.runner.Name, cmd.Process.Pid)
-
-	// Read output to get session ID
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			if len(line) == 0 {
-				continue
-			}
-			var event ClaudeEvent
-			if json.Unmarshal(line, &event) == nil && event.SessionID != "" {
-				tm.mu.Lock()
-				tm.warmSessionID = event.SessionID
-				tm.warmCreatedAt = time.Now()
-				tm.mu.Unlock()
-				log.Printf("[warmup] Got session ID: %s", event.SessionID)
-			}
-		}
-	}()
-
-	// Wait for process to finish
-	go func() {
-		err := cmd.Wait()
-		tm.mu.Lock()
-		if tm.warmSessionID != "" {
-			tm.warmReady = true
-			log.Printf("[warmup] Session ready (id=%s)", tm.warmSessionID)
-		} else {
-			log.Printf("[warmup] Process exited without session ID: %v", err)
-		}
-		tm.warmPID = 0
-		tm.mu.Unlock()
-	}()
 }
 
 // forkedPidsFile returns the path to the file tracking PIDs forked by the agent.
@@ -2020,32 +1922,14 @@ func clearForkedPIDs() {
 	}
 }
 
-// Shutdown stops all running tasks and kills the warm session process.
+// Shutdown stops all running tasks.
 func (tm *TaskManager) Shutdown() {
 	stopped := tm.StopAllTasks()
 	if stopped > 0 {
 		log.Printf("[shutdown] Stopped %d running task(s)", stopped)
 	}
 
-	tm.mu.Lock()
-	pid := tm.warmPID
-	tm.mu.Unlock()
-
-	if pid > 0 {
-		if proc, err := os.FindProcess(pid); err == nil {
-			log.Printf("[shutdown] Killing warm session (PID %d)", pid)
-			_ = proc.Kill()
-		}
-	}
-
 	clearForkedPIDs()
-}
-
-// GetWarmSessionID returns the warm session ID if available.
-func (tm *TaskManager) GetWarmSessionID() string {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-	return tm.warmSessionID
 }
 
 // persist saves the current task map to disk if a store is configured.
@@ -3226,9 +3110,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	args = append(args, nativeSystemPromptArgs(runner.RunnerID, systemFrame)...)
 
 	// Recurring-schedule resume: when the scheduler re-fires a schedule with
-	// resume enabled, pick up the prior session on this first spawn. Takes
-	// precedence over (and suppresses) the warm-session resume below so the
-	// schedule's own session wins over the global warm one.
+	// resume enabled, pick up the prior session on this first spawn.
 	resumedForSchedule := false
 	if task.ResumeLast {
 		if newArgs, ok := resumeTransform(runner, args, prompt, taskDirForArgs, task.SessionID); ok {
@@ -3236,32 +3118,6 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			resumedForSchedule = true
 			log.Printf("[task %s] Recurring schedule: resuming prior %s session (id=%q)", task.ID, runner.RunnerID, task.SessionID)
 		}
-	}
-
-	// Use warm session if available (resume = same rate-limit bucket).
-	// Expire warm sessions after 1 hour — Claude Code purges them and resume
-	// will fail with "No conversation found with session ID".
-	const warmSessionMaxAge = 1 * time.Hour
-	tm.mu.RLock()
-	warmSID := tm.warmSessionID
-	warmAge := time.Since(tm.warmCreatedAt)
-	tm.mu.RUnlock()
-	if warmSID != "" && warmAge > warmSessionMaxAge {
-		log.Printf("[task %s] Warm session %s expired (age=%v) — skipping resume", task.ID, warmSID, warmAge.Round(time.Second))
-		tm.mu.Lock()
-		tm.warmSessionID = ""
-		tm.mu.Unlock()
-		warmSID = ""
-	}
-	if !resumedForSchedule && warmSID != "" && runner.ResumeSupported && len(runner.ResumeArgs) > 0 {
-		for _, ra := range runner.ResumeArgs {
-			args = append(args, strings.ReplaceAll(ra, "{sessionId}", warmSID))
-		}
-		// Claude Code 2.1.80+ requires --fork-session with --session-id when resuming
-		if runner.RunnerID == "claude" {
-			args = append(args, "--fork-session", "--session-id", uuid.New().String())
-		}
-		log.Printf("[task %s] Resuming warm session %s (age=%v)", task.ID, warmSID, warmAge.Round(time.Second))
 	}
 
 	// Override model if specified on the task (e.g. "opus", "sonnet",
@@ -3882,8 +3738,12 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		tm.maybeProposeSchedule(task)
 		// Save session file for recent history (non-blocking)
 		go saveSessionFile(task, task.runner.Name, tm.effectiveTaskWorkDir(task))
+		terminalStatus := task.Status
 		tm.mu.Unlock()
 		close(task.doneCh)
+		if terminalStatus != TaskStatusReview {
+			tm.closeTaskOwnedTmuxSeat(task.ID)
+		}
 	}()
 
 	return nil
@@ -4340,17 +4200,6 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 			}
 
 		case "result":
-			// If Claude reports a session-related error, invalidate the warm session
-			// so retries don't hit the same stale session.
-			for _, e := range event.Errors {
-				if strings.Contains(e, "No conversation found with session ID") {
-					log.Printf("[task %s] Warm session invalid: %s — clearing for retries", task.ID, e)
-					tm.mu.Lock()
-					tm.warmSessionID = ""
-					tm.mu.Unlock()
-					break
-				}
-			}
 			// Final result — extract clean text and cost.
 			if len(event.RawResult) > 0 {
 				var resultStr string
@@ -4470,8 +4319,47 @@ func (tm *TaskManager) StopTask(id string) error {
 	tm.persist()
 	tm.fireTaskDone(task)
 	tm.mu.Unlock()
+	tm.closeTaskOwnedTmuxSeat(id)
 
 	return nil
+}
+
+// closeTaskOwnedTmuxSeat gracefully exits a runner when it is still present,
+// then removes the exact tmux session Yaver created for this task. Review is
+// the only idle state allowed to retain this seat for a follow-up; completed,
+// failed, stopped, and deleted tasks must not leave hidden runner sessions.
+// User-owned/adopted tmux sessions are deliberately excluded.
+func (tm *TaskManager) closeTaskOwnedTmuxSeat(id string) {
+	tm.mu.RLock()
+	task, ok := tm.tasks[id]
+	if !ok || task == nil || task.IsAdopted {
+		tm.mu.RUnlock()
+		return
+	}
+	session := strings.TrimSpace(task.TmuxSession)
+	runnerID := normalizeRunnerID(task.RunnerID)
+	paneID := strings.TrimSpace(task.TmuxPaneID)
+	isOwned := session != "" && session == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
+	tm.mu.RUnlock()
+	if !isOwned || !tmuxSessionExists(session) {
+		return
+	}
+
+	target := session
+	if paneID != "" && tmuxTargetExists(paneID) {
+		target = paneID
+	}
+	if exitCmd := tmuxRunnerExitCommand(target, runnerID); exitCmd != "" {
+		if err := sendTmuxLine(target, exitCmd); err != nil {
+			log.Printf("[task %s] graceful runner exit in %s failed: %v", id, target, err)
+		} else {
+			waitForTmuxRunnerExit(target, 4*time.Second)
+		}
+	}
+	log.Printf("[task %s] Closing task-owned tmux session %q", id, session)
+	if out, err := exec.Command(tmuxCmdName(), "kill-session", "-t", session).CombinedOutput(); err != nil && tmuxSessionExists(session) {
+		log.Printf("[task %s] Task-owned tmux cleanup failed: %v: %s", id, err, strings.TrimSpace(string(out)))
+	}
 }
 
 // GracefulStopTask sends the runner's exit command via stdin, waits for graceful exit,
@@ -4544,7 +4432,6 @@ func (tm *TaskManager) DeleteTask(id string) error {
 	isAdoptedTmux := task.IsAdopted && task.TmuxSession != "" && tm.TmuxMgr != nil
 	taskOwnedTmux := !task.IsAdopted && task.TmuxSession != "" &&
 		task.TmuxSession == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
-	taskOwnedTmuxName := task.TmuxSession
 	tm.mu.RUnlock()
 
 	// Auto-stop running tasks before deleting
@@ -4567,14 +4454,11 @@ func (tm *TaskManager) DeleteTask(id string) error {
 			log.Printf("[task %s] Timed out waiting for process exit during delete", id)
 		}
 	}
-	// Successful turns deliberately leave their task-owned seat alive for the
-	// next follow-up. Deleting the task is the explicit lifecycle boundary that
-	// removes that exact session; adopted/user-owned sessions are never touched.
-	if taskOwnedTmux && tmuxSessionExists(taskOwnedTmuxName) {
-		log.Printf("[task %s] Removing task-owned tmux session %q during delete", id, taskOwnedTmuxName)
-		if err := exec.Command(tmuxCmdName(), "kill-session", "-t", taskOwnedTmuxName).Run(); err != nil {
-			log.Printf("[task %s] Task-owned tmux cleanup failed: %v", id, err)
-		}
+	// Review tasks deliberately retain their exact task-owned seat for a
+	// follow-up. Delete is also a lifecycle boundary, so remove it here even
+	// when the task is no longer running.
+	if taskOwnedTmux {
+		tm.closeTaskOwnedTmuxSeat(id)
 	}
 
 	tm.mu.Lock()
@@ -5000,8 +4884,12 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 		tm.persist()
 		tm.fireTaskDone(task)
 		go saveSessionFile(task, task.runner.Name, tm.effectiveTaskWorkDir(task))
+		terminalStatus := task.Status
 		tm.mu.Unlock()
 		close(task.doneCh)
+		if terminalStatus != TaskStatusReview {
+			tm.closeTaskOwnedTmuxSeat(task.ID)
+		}
 	}()
 
 	return nil
@@ -5267,6 +5155,9 @@ func (tm *TaskManager) CompleteTask(id string) error {
 		return fmt.Errorf("task %s not found", id)
 	}
 	isRunning := task.Status == TaskStatusRunning || task.Status == TaskStatusQueued
+	isAdoptedTmux := task.IsAdopted && task.TmuxSession != "" && tm.TmuxMgr != nil
+	isTaskOwnedTmux := !task.IsAdopted && task.TmuxSession != "" &&
+		task.TmuxSession == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
 	doneCh := task.doneCh
 	tm.mu.RUnlock()
 
@@ -5274,7 +5165,15 @@ func (tm *TaskManager) CompleteTask(id string) error {
 	// from mobile doesn't leave the runner eating tokens after the
 	// status flips. Mirrors DeleteTask's auto-stop pattern.
 	if isRunning {
-		if err := tm.StopTask(id); err != nil {
+		var err error
+		if isAdoptedTmux {
+			err = tm.TmuxMgr.CloseAdoptedTask(id)
+		} else if isTaskOwnedTmux {
+			tm.closeTaskOwnedTmuxSeat(id)
+		} else {
+			err = tm.GracefulStopTask(id)
+		}
+		if err != nil {
 			log.Printf("[task %s] Stop failed during complete: %v", id, err)
 		}
 		if doneCh != nil {
@@ -5282,6 +5181,15 @@ func (tm *TaskManager) CompleteTask(id string) error {
 			case <-doneCh:
 			case <-time.After(3 * time.Second):
 				log.Printf("[task %s] Timed out waiting for process exit during complete", id)
+			}
+		}
+	}
+	if isTaskOwnedTmux {
+		tm.closeTaskOwnedTmuxSeat(id)
+	} else if !isRunning {
+		if isAdoptedTmux {
+			if err := tm.TmuxMgr.CloseAdoptedTask(id); err != nil {
+				log.Printf("[task %s] Adopted tmux close failed during complete: %v", id, err)
 			}
 		}
 	}

@@ -3271,10 +3271,10 @@ func runServe(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Initialize tmux manager if tmux is available. Make first-launch
-	// seamless: bootstrap a default `yaver` session when none exist,
-	// so the /spatial 3-pane layout has something to attach to on the
-	// trio user's first connection.
+	// Initialize tmux manager if tmux is available. Sessions are created only
+	// for an explicit user task or an explicit attach/adopt action. Agent boot
+	// must never create a shell or runner seat: an unowned session is invisible
+	// work from the Tasks surface and, for runners, can spend tokens.
 	//
 	// tmux is a hard dependency of the runner surface, not a garnish, so a box
 	// that lacks it gets it installed here rather than a hint it may never
@@ -3302,11 +3302,24 @@ func runServe(args []string) {
 	if taskMgr.TmuxMgr != nil {
 		log.Println("Tmux: available — session adoption enabled")
 		taskMgr.TmuxMgr.ReAdoptOnStartup()
-		if err := taskMgr.TmuxMgr.BootstrapDefaultSession(); err != nil {
-			log.Printf("Tmux: bootstrap default session failed (non-fatal): %v", err)
-		} else if sessions, _ := taskMgr.TmuxMgr.ListTmuxSessions(); len(sessions) == 1 && sessions[0].Name == "yaver" {
-			log.Println("Tmux: bootstrapped fresh 'yaver' session — /spatial will attach to it")
-		}
+		// A runner started outside Yaver is still a live token-spending seat. Keep
+		// the Tasks ledger complete without creating or prompting any runner.
+		// Reconciliation is background-only so process inspection cannot delay
+		// task listing or creation.
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			for {
+				probeCtx, cancelProbe := context.WithTimeout(ctx, 8*time.Second)
+				taskMgr.TmuxMgr.ReconcileUntrackedRunnerPanes(probeCtx)
+				cancelProbe()
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
 	} else {
 		// Say what actually breaks. The old wording named only /spatial and the
 		// Terminal tab, so an operator whose autorun never started had no way to
@@ -3363,9 +3376,6 @@ func runServe(args []string) {
 			}
 		}
 	}()
-
-	// Warm up the runner — fork Claude at startup to establish a session
-	go taskMgr.WarmUp()
 
 	// Initialize ACL manager for MCP peer communication
 	var aclMgr *ACLManager

@@ -718,25 +718,11 @@ export default function PhoneProjectsScreen() {
     const inferredProvider = effectiveModel.includes("/") ? effectiveModel.split("/", 1)[0] : undefined;
     try {
       setWorkspaceStatusLoading(true);
-      const probe = await quicClient.agentRequest(
-        selectedRunnerDevice.id,
-        "/agent/runners/test",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runner, model: effectiveModel, timeoutMs: 75000 }),
-        },
-        80000,
-      );
-      const probeResult = await probe.json().catch(() => ({}));
-      if (!probe.ok || probeResult?.ok !== true) {
-        if (probeResult?.needsAuth) configureWorkspaceRunner(runner);
-        Alert.alert(
-          "Runner isn't operational yet",
-          probeResult?.error || `${runner} could not answer through ${effectiveModel || "the selected model"} on ${selectedRunnerDevice.name}.`,
-        );
-        return false;
-      }
+      // Persisting a preference is not permission to start a runner. The old
+      // preflight called the generation-test endpoint here, opening a real model
+      // session and spent tokens just for tapping Next. Readiness is shown by
+      // the status row; the explicit Test action remains available to users
+      // who intentionally want a generation probe.
       await setPrimaryDevice(selectedRunnerDevice.id);
       await setPrimaryRunnerForDevice(
         selectedRunnerDevice.id,
@@ -758,7 +744,6 @@ export default function PhoneProjectsScreen() {
       setWorkspaceStatusLoading(false);
     }
   }, [
-    configureWorkspaceRunner,
     primaryModeByDevice,
     primaryModelByDevice,
     primaryProviderByDevice,

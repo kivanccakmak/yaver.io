@@ -7,13 +7,18 @@ should be the default.
 **Scope:** analysis only — nothing implemented. Claims are `file:line` from the tree or
 measured; anything unverified is labelled.
 
+> **Superseded 2026-08-29:** startup warm sessions and their shared-session
+> resume machinery were removed. Agent boot never launches a runner or emits a
+> prompt. Conversation continuity now belongs to an explicit task: follow-ups
+> resume that task's captured runner session and reuse its exact tmux seat.
+
 ---
 
 ## 0. The short answer
 
 Three things, in order of how much they should change your plan:
 
-1. **This is already built, and switched off by one boolean.** The warm-session /
+1. **Historical finding (removed 2026-08-29):** the warm-session /
    resume machinery exists end to end — `WarmUp()`, `warmSessionID`, `resumeTransform`,
    a per-runner argv table — and `ResumeSupported` is assigned **`false` in the only two
    places it is ever assigned** (`tasks.go:121`, `main.go:9376`). `WarmUp()` is called
@@ -129,7 +134,9 @@ tasks.go:1456    if !tm.runner.ResumeSupported { log "Skipping — resume not su
 tasks.go:2764    if !resumedForSchedule && warmSID != "" && runner.ResumeSupported && …
 ```
 
-No runner anywhere sets it `true`. So:
+At the time of this audit no runner set it `true`. The entire warm-session path
+described below was deleted on 2026-08-29 because even dormant startup runner
+machinery violates the explicit-task boundary. Historically:
 
 - `WarmUp()` never establishes a warm session (its whole body is unreachable),
 - the shared-session branch at `2764` can never fire,
