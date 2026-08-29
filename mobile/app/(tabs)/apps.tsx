@@ -85,6 +85,7 @@ import {
 } from "../../src/lib/previewDevStatus";
 import { DevServerStopDialog, type DevServerStopPhase } from "../../src/components/DevServerStopDialog";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "../../src/lib/projectPreviewRuntime";
+import { attachedDogfoodCheckout, dogfoodGuestProjectName, isPathInsideAttachedDogfoodCheckout } from "../../src/lib/dogfoodRenderBridge";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -551,6 +552,10 @@ export default function AppsScreen() {
   const selectedTarget = mobileWorkers.find((d) => d.id === selectedTargetId) || null;
   const isDirectConnection = previewClient.connectionMode === "direct";
   const router = useRouter();
+  // The outer Dogfood host injects the checkout path that the agent already
+  // verified as Yaver. Hide only that directory tree from the inner Projects
+  // inventory; other projects remain launchable while Yaver is dogfooding.
+  const dogfoodCheckout = attachedDogfoodCheckout();
   const [remotelessPhoneProjects, setRemotelessPhoneProjects] = useState<PhoneProject[]>([]);
   const [remotelessProviderProjects, setRemotelessProviderProjects] = useState<ProviderProject[]>([]);
   const [remotelessLoading, setRemotelessLoading] = useState(false);
@@ -1017,8 +1022,11 @@ export default function AppsScreen() {
           } catch {}
         }
         const merged = mergeProjectRows(projectRows, reposData.repos);
-        setProjects(merged);
-        setProjectsDiscovering(!!projectsData.discovery?.discovering && merged.length === 0);
+        const launchableProjects = dogfoodCheckout
+          ? merged.filter((project) => !isPathInsideAttachedDogfoodCheckout(project.path, dogfoodCheckout))
+          : merged;
+        setProjects(launchableProjects);
+        setProjectsDiscovering(!!projectsData.discovery?.discovering && launchableProjects.length === 0);
         setMobileDiscovery(projectsData.discovery ?? null);
         setRepos([]);
       } catch {}
@@ -1033,7 +1041,7 @@ export default function AppsScreen() {
     // on a Remote Box switch — without it the closure keeps using the
     // same `mounted` flag and the user has to wait up to 15s for the
     // next interval tick to fetch the new box's data.
-  }, [devStatusPollEnabled, projectsDiscovering, activeDevice?.id]);
+  }, [devStatusPollEnabled, dogfoodCheckout, projectsDiscovering, activeDevice?.id]);
 
   // SSE auto-reload
   // Shake -> feedback SDK, for the BROWSER lane.
@@ -2488,6 +2496,9 @@ export default function AppsScreen() {
 
   const currentProject = projects.find((project) => project.path === devStatus?.workDir) ?? null;
   const runningProject = currentProject?.name ?? devStatus?.workDir?.split("/").pop() ?? devStatus?.framework ?? "App";
+  const guestProjectName = dogfoodGuestProjectName(devStatus?.workDir, currentProject?.name || runningProject, devStatus?.framework || "Preview");
+  const devServerBelongsToAttachedDogfoodCheckout = !!devStatus?.workDir &&
+    isPathInsideAttachedDogfoodCheckout(devStatus.workDir, dogfoodCheckout);
   const runningSecondClassGuidance = secondClassGuidance(devStatus?.framework, isDirectConnection);
   const devServerBuilding = devStatus?.building === true;
   const devServerBusy = nativeLoading || devServerBuilding;
@@ -2497,7 +2508,7 @@ export default function AppsScreen() {
       <RemoteBoxBanner />
       <View style={s.container}>
         {/* Running app — green card */}
-        {devStatus && (
+        {devStatus && !devServerBelongsToAttachedDogfoodCheckout && (
           <View
             style={[
               s.card,
@@ -3686,7 +3697,7 @@ export default function AppsScreen() {
               )}
               <BrowserVibeBubble
                 projectPath={devStatus?.workDir}
-                projectName={(runningProject || devStatus?.framework || "Preview").split(" / ")[0]}
+                projectName={guestProjectName}
                 onExitPreview={() => setShowWebView(false)}
                 onReload={handleReload}
               />

@@ -1,8 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   KeyboardAvoidingView,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -22,6 +24,51 @@ import { StudioChatPane } from "./studio/StudioChatPane";
 type ReloadKind = "fast" | "full";
 type VibeTab = "chat" | "settings";
 type MachineRole = "runner" | "render";
+type CodingProbeState = "idle" | "checking" | "reachable" | "unreachable";
+
+const FLOATING_DOCK_WIDTH = 180;
+const FLOATING_DOCK_HEIGHT = 56;
+const FLOATING_DOCK_EDGE_GAP = 8;
+const FLOATING_DOCK_DRAG_THRESHOLD = 6;
+
+type FloatingDockPosition = { x: number; y: number };
+type FloatingDockViewport = {
+  width: number;
+  height: number;
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+};
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+/** Keep the entire Dogfood dock reachable after a drag, rotation, or resize. */
+export function clampFloatingDockPosition(
+  position: FloatingDockPosition,
+  viewport: FloatingDockViewport,
+): FloatingDockPosition {
+  const minX = viewport.left + FLOATING_DOCK_EDGE_GAP;
+  const minY = viewport.top + FLOATING_DOCK_EDGE_GAP;
+  const maxX = Math.max(minX, viewport.width - viewport.right - FLOATING_DOCK_WIDTH - FLOATING_DOCK_EDGE_GAP);
+  const maxY = Math.max(minY, viewport.height - viewport.bottom - FLOATING_DOCK_HEIGHT - FLOATING_DOCK_EDGE_GAP);
+  return {
+    x: clamp(position.x, minX, maxX),
+    y: clamp(position.y, minY, maxY),
+  };
+}
+
+function initialFloatingDockPosition(viewport: FloatingDockViewport): FloatingDockPosition {
+  // Start just above the common bottom-navigation lane and on the left, away
+  // from the guest screen's primary FAB (normally bottom-right). The dock is
+  // still freely movable because no fixed default can know a guest app's UI.
+  return clampFloatingDockPosition({
+    x: viewport.left + 16,
+    y: viewport.height - viewport.bottom - FLOATING_DOCK_HEIGHT - 84,
+  }, viewport);
+}
 
 function runnerKey(id: string | undefined): string {
   return id === "claude-code" ? "claude" : (id || "").trim();
@@ -67,6 +114,7 @@ export function BrowserVibeBubble({
     machineRoles,
     setMachineRolesFavorite,
     setPrimaryRunnerForDevice,
+    retryConnection,
   } = useDevice();
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<VibeTab>("chat");
@@ -85,6 +133,70 @@ export function BrowserVibeBubble({
   const [showOpenCodeConfig, setShowOpenCodeConfig] = useState(false);
   const [runnerSetupBusy, setRunnerSetupBusy] = useState<string | null>(null);
   const [runnerSetupProgress, setRunnerSetupProgress] = useState<string | null>(null);
+  const [codingProbeState, setCodingProbeState] = useState<CodingProbeState>("idle");
+  const [codingProbeError, setCodingProbeError] = useState<string | null>(null);
+  const [dockViewportSize, setDockViewportSize] = useState({ width: 0, height: 0 });
+  const [dockReady, setDockReady] = useState(false);
+  const dockPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const dockPointRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
+  const dockDragOriginRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
+  const dockWasPositionedRef = useRef(false);
+  const dockViewportRef = useRef<FloatingDockViewport>({
+    width: 0,
+    height: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  });
+
+  useEffect(() => {
+    if (dockViewportSize.width <= 0 || dockViewportSize.height <= 0) return;
+    const viewport: FloatingDockViewport = {
+      ...dockViewportSize,
+      top: insets.top,
+      right: insets.right,
+      bottom: insets.bottom,
+      left: insets.left,
+    };
+    dockViewportRef.current = viewport;
+    const next = dockWasPositionedRef.current
+      ? clampFloatingDockPosition(dockPointRef.current, viewport)
+      : initialFloatingDockPosition(viewport);
+    dockWasPositionedRef.current = true;
+    dockPointRef.current = next;
+    dockPosition.setValue(next);
+    setDockReady(true);
+  }, [dockPosition, dockViewportSize, insets.bottom, insets.left, insets.right, insets.top]);
+
+  const dockPanResponder = useMemo(() => PanResponder.create({
+    // A tap remains a tap on either Pressable. Only a deliberate move claims
+    // the responder, at which point both controls travel as one compact dock.
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_, gesture) =>
+      Math.abs(gesture.dx) > FLOATING_DOCK_DRAG_THRESHOLD || Math.abs(gesture.dy) > FLOATING_DOCK_DRAG_THRESHOLD,
+    onPanResponderGrant: () => {
+      dockDragOriginRef.current = dockPointRef.current;
+    },
+    onPanResponderMove: (_, gesture) => {
+      const next = clampFloatingDockPosition({
+        x: dockDragOriginRef.current.x + gesture.dx,
+        y: dockDragOriginRef.current.y + gesture.dy,
+      }, dockViewportRef.current);
+      dockPointRef.current = next;
+      dockPosition.setValue(next);
+    },
+    onPanResponderRelease: () => {
+      const next = clampFloatingDockPosition(dockPointRef.current, dockViewportRef.current);
+      dockPointRef.current = next;
+      dockPosition.setValue(next);
+    },
+    onPanResponderTerminate: () => {
+      const next = clampFloatingDockPosition(dockPointRef.current, dockViewportRef.current);
+      dockPointRef.current = next;
+      dockPosition.setValue(next);
+    },
+  }), [dockPosition]);
 
   const fallbackDeviceId = activeDevice?.id || "";
   const codingDeviceId = machineRoles?.runnerDeviceId || fallbackDeviceId;
@@ -101,11 +213,21 @@ export function BrowserVibeBubble({
   const savedModel = codingDeviceId ? primaryModelByDevice[codingDeviceId] || "" : "";
 
   const loadRunners = useCallback(async () => {
-    if (!codingConnected) return;
+    if (!codingDeviceId) {
+      setCodingProbeState("unreachable");
+      setCodingProbeError("No coding machine is selected.");
+      return;
+    }
+    setCodingProbeState("checking");
     setRunnersLoading(true);
     setSelectionError(null);
     try {
       const rows = (await codingClient.getRunners()).filter((row) => ["claude", "codex", "opencode"].includes(runnerKey(row.id)));
+      // This API response is the operation Vibing needs. It is stronger
+      // evidence than a pooled-client badge that can lag during an RN-web
+      // relay reconnect.
+      setCodingProbeState("reachable");
+      setCodingProbeError(null);
       setRunners(rows);
       const preferred = rows.find((row) => runnerKey(row.id) === savedRunner);
       const preferredReady = preferred?.installed && preferred.ready !== false ? preferred : undefined;
@@ -122,18 +244,26 @@ export function BrowserVibeBubble({
         setSelectedModelId(model?.id || "");
       }
     } catch (error) {
-      setSelectionError(error instanceof Error ? error.message : "Could not read runner choices");
+      const message = error instanceof Error ? error.message : "Could not read runner choices";
+      setCodingProbeState("unreachable");
+      setCodingProbeError(message);
+      setSelectionError(message);
       setSelectedRunnerId(savedRunner);
       setSelectedModelId(savedModel);
     } finally {
       setRunnersLoading(false);
     }
-  }, [codingClient, codingConnected, savedModel, savedRunner]);
+  }, [codingClient, codingDeviceId, savedModel, savedRunner]);
+
+  useEffect(() => {
+    setCodingProbeState(codingConnected ? "reachable" : "idle");
+    setCodingProbeError(null);
+  }, [codingConnected, codingDeviceId]);
 
   useEffect(() => {
     if (!open) return;
     void loadRunners();
-  }, [open, loadRunners]);
+  }, [codingConnected, open, loadRunners]);
 
   useEffect(() => {
     if (!selectedRunnerId && savedRunner) setSelectedRunnerId(savedRunner);
@@ -144,6 +274,18 @@ export function BrowserVibeBubble({
     () => runners.find((row) => runnerKey(row.id) === selectedRunnerId),
     [runners, selectedRunnerId],
   );
+  const codingAvailable = codingConnected || codingProbeState === "reachable";
+  const renderAvailable = renderConnected || (renderDeviceId === codingDeviceId && codingAvailable);
+
+  const retryCodingConnection = useCallback(() => {
+    setCodingProbeState("checking");
+    setCodingProbeError(null);
+    // Preserve the last good SFMG preview. Re-open both the global reachability
+    // sweep and this exact pooled client, then probe the API in place.
+    retryConnection();
+    codingClient.triggerReconnect();
+    void loadRunners();
+  }, [codingClient, loadRunners, retryConnection]);
 
   const chooseRunner = useCallback(async (runner: RunnerInfo) => {
     if (!codingDeviceId || !runner.installed || runner.ready === false || activeTask?.status === "running" || activeTask?.status === "queued") return;
@@ -232,7 +374,7 @@ export function BrowserVibeBubble({
 
   const repairRunner = useCallback(async (runner: RunnerInfo) => {
     const id = runnerKey(runner.id);
-    if (runnerSetupBusy || !codingConnected) return;
+    if (runnerSetupBusy || !codingAvailable) return;
     if (runner.installed) {
       if (id === "opencode") setShowOpenCodeConfig(true);
       else setRunnerAuthFor(id);
@@ -259,7 +401,7 @@ export function BrowserVibeBubble({
     } finally {
       setRunnerSetupBusy(null);
     }
-  }, [codingClient, codingConnected, loadRunners, runnerSetupBusy]);
+  }, [codingAvailable, codingClient, loadRunners, runnerSetupBusy]);
 
   const saveMachineRole = useCallback(async (role: "runner" | "render", nextDeviceId: string) => {
     if (isCoding) return;
@@ -284,11 +426,21 @@ export function BrowserVibeBubble({
     }
   }, [codingDeviceId, devices, fallbackDeviceId, isCoding, projectName, renderDeviceId, setMachineRolesFavorite]);
 
-  const disconnected = !codingConnected;
+  // Do not turn an inventory transition into a machine verdict. Only show the
+  // recovery card after the actual Vibing API probe failed.
+  const disconnected = !codingAvailable && codingProbeState === "unreachable";
   const noReadyRunner = !runnersLoading && runners.length > 0 && !runners.some((runner) => runner.installed && runner.ready !== false);
 
   return (
-    <View pointerEvents="box-none" style={styles.layer} testID="browser-vibe-overlay">
+    <View
+      pointerEvents="box-none"
+      style={styles.layer}
+      testID="browser-vibe-overlay"
+      onLayout={(event) => {
+        const { width, height } = event.nativeEvent.layout;
+        setDockViewportSize((current) => current.width === width && current.height === height ? current : { width, height });
+      }}
+    >
       <KeyboardAvoidingView
         pointerEvents={open ? "box-none" : "none"}
         style={styles.keyboardLayer}
@@ -354,7 +506,7 @@ export function BrowserVibeBubble({
                 {(["runner", "render"] as const).map((role) => {
                   const roleDevice = role === "runner" ? codingDevice : renderDevice;
                   const roleDeviceId = role === "runner" ? codingDeviceId : renderDeviceId;
-                  const roleConnected = role === "runner" ? codingConnected : renderConnected;
+                  const roleConnected = role === "runner" ? codingAvailable : renderAvailable;
                   const choicesOpen = machineChoicesOpen === role;
                   if (machineChoicesOpen && !choicesOpen) return null;
                   return (
@@ -467,10 +619,12 @@ export function BrowserVibeBubble({
             <View style={[styles.tabBody, activeTab !== "chat" && styles.hidden]}>
               {disconnected ? <View style={styles.failureCard} testID="browser-vibe-machine-failure">
                 <Ionicons name="cloud-offline-outline" size={22} color="#ffb36b" />
-                <Text style={styles.failureTitle}>Machine disconnected</Text>
-                <Text style={styles.failureDetail}>The preview stays available, but Yaver cannot send prompts or reload it until the machine reconnects.</Text>
-                <Pressable onPress={onExitPreview} accessibilityRole="button" style={styles.failureAction}>
-                  <Text style={styles.failureActionText}>Exit Preview &amp; Reconnect</Text>
+                <Text style={styles.failureTitle}>Can’t reach coding machine</Text>
+                <Text style={styles.failureDetail}>
+                  {codingProbeError || `The ${projectName || "guest"} preview stays available while Yaver reconnects the coding lane.`}
+                </Text>
+                <Pressable onPress={retryCodingConnection} accessibilityRole="button" style={styles.failureAction}>
+                  <Text style={styles.failureActionText}>Retry Connection</Text>
                 </Pressable>
               </View> : noReadyRunner ? <View style={styles.failureCard} testID="browser-vibe-runner-failure">
                 <Ionicons name="warning-outline" size={22} color="#ffb36b" />
@@ -489,7 +643,7 @@ export function BrowserVibeBubble({
                 runner={selectedRunnerId || savedRunner || undefined}
                 model={selectedModelId || savedModel || undefined}
                 client={codingClient}
-                clientConnected={codingConnected}
+                clientConnected={codingAvailable}
                 codingMachineName={codingDevice?.name}
                 onTaskStateChange={setActiveTask}
               />
@@ -513,38 +667,50 @@ export function BrowserVibeBubble({
         onClose={() => { setShowOpenCodeConfig(false); void loadRunners(); }}
       />
 
-      <Pressable
-        onPress={() => void reload("fast")}
-        disabled={busy || !renderConnected}
-        accessibilityRole="button"
-        accessibilityLabel={isCoding ? "Queue fast reload after coding" : "Fast reload preview"}
-        testID="browser-vibe-fast-reload"
-        style={({ pressed }) => [
-          styles.reloadBubble,
-          { bottom: Math.max(insets.bottom + 14, 18) },
-          (busy || !renderConnected) && styles.disabled,
-          pressed && styles.pressed,
+      <Animated.View
+        {...dockPanResponder.panHandlers}
+        pointerEvents="box-none"
+        testID="browser-vibe-dock"
+        accessibilityLabel="Dogfood controls"
+        accessibilityHint="Drag to move Fast Reload and Vibing together"
+        style={[
+          styles.floatingDock,
+          { opacity: dockReady ? 1 : 0, transform: [{ translateX: dockPosition.x }, { translateY: dockPosition.y }] },
         ]}
       >
-        {busy ? <ActivityIndicator size="small" color="#6f58f5" /> : <Ionicons name="reload-outline" size={18} color="#6f58f5" />}
-        <Text style={styles.reloadBubbleText}>Fast Reload</Text>
-      </Pressable>
+        <Pressable
+          onPress={() => void reload("fast")}
+          disabled={busy || !renderAvailable}
+          accessibilityRole="button"
+          accessibilityLabel={isCoding ? "Queue fast reload after coding" : "Fast reload preview"}
+          accessibilityHint="Drag to move the Dogfood controls"
+          testID="browser-vibe-fast-reload"
+          style={({ pressed }) => [
+            styles.reloadBubble,
+            (busy || !renderAvailable) && styles.disabled,
+            pressed && styles.pressed,
+          ]}
+        >
+          {busy ? <ActivityIndicator size="small" color="#6f58f5" /> : <Ionicons name="reload-outline" size={18} color="#6f58f5" />}
+          <Text style={styles.reloadBubbleText}>Fast Reload</Text>
+        </Pressable>
 
-      <Pressable
-        onPress={() => setOpen((value) => !value)}
-        accessibilityRole="button"
-        accessibilityLabel={open ? "Minimize Vibing" : "Open Vibing"}
-        accessibilityState={{ expanded: open }}
-        testID="browser-vibe-bubble"
-        style={({ pressed }) => [
-          styles.bubble,
-          { bottom: Math.max(insets.bottom + 14, 18) },
-          pressed && styles.pressed,
-        ]}
-      >
-        <Text style={styles.bubbleText}>{open ? "−" : "Y"}</Text>
-        {!open ? <View style={styles.liveDot} /> : null}
-      </Pressable>
+        <Pressable
+          onPress={() => setOpen((value) => !value)}
+          accessibilityRole="button"
+          accessibilityLabel={open ? "Minimize Vibing" : "Open Vibing"}
+          accessibilityHint="Drag to move the Dogfood controls"
+          accessibilityState={{ expanded: open }}
+          testID="browser-vibe-bubble"
+          style={({ pressed }) => [
+            styles.bubble,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.bubbleText}>{open ? "−" : "Y"}</Text>
+          {!open ? <View style={styles.liveDot} /> : null}
+        </Pressable>
+      </Animated.View>
     </View>
   );
 }
@@ -623,10 +789,18 @@ const styles = StyleSheet.create({
   failureAction: { marginTop: 5, minHeight: 42, paddingHorizontal: 16, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#6f58f5" },
   failureActionText: { color: "#fff", fontSize: 12, fontWeight: "800" },
   reloadNotice: { color: "#6555df", fontSize: 11, paddingHorizontal: 14, paddingTop: 6 },
-  reloadBubble: {
+  floatingDock: {
     position: "absolute",
-    right: 80,
-    minWidth: 116,
+    left: 0,
+    top: 0,
+    width: FLOATING_DOCK_WIDTH,
+    height: FLOATING_DOCK_HEIGHT,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  reloadBubble: {
+    width: 116,
     height: 56,
     paddingHorizontal: 14,
     borderRadius: 18,
@@ -645,8 +819,6 @@ const styles = StyleSheet.create({
   },
   reloadBubbleText: { color: "#5e4ce6", fontSize: 12, fontWeight: "800" },
   bubble: {
-    position: "absolute",
-    right: 16,
     width: 56,
     height: 56,
     borderRadius: 18,

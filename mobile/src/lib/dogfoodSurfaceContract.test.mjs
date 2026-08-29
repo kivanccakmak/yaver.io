@@ -16,6 +16,7 @@ const bubble = readFileSync(join(mobile, "src", "components", "BrowserVibeBubble
 const remoteRuntime = readFileSync(join(mobile, "app", "remote-runtime.tsx"), "utf8");
 const tasks = readFileSync(join(mobile, "app", "(tabs)", "tasks.tsx"), "utf8");
 const metro = readFileSync(join(mobile, "metro.config.js"), "utf8");
+const projects = readFileSync(join(mobile, "app", "(tabs)", "apps.tsx"), "utf8");
 
 test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", () => {
   assert.match(metro, /resolver\.nodeModulesPaths/,
@@ -74,6 +75,25 @@ test("attached Dogfood does not offer its own Yaver dev server as a guest card",
   assert.match(tasks, /isAttachedDogfoodWebRuntime\(\)/);
   assert.match(tasks, /isEffectivelyConnected\s*&&\s*!attachedDogfoodRuntime/);
   assert.doesNotMatch(tasks, /isEffectivelyConnected\s*&&\s*<DevPreview/);
+});
+
+test("attached Dogfood hides only its Yaver checkout and leaves other projects launchable", () => {
+  assert.match(attached, /DOGFOOD_CHECKOUT_KEY/,
+    "the outer host does not tell the inner app which verified checkout is Yaver");
+  assert.match(projects, /attachedDogfoodCheckout\(\)/);
+  assert.match(projects, /isPathInsideAttachedDogfoodCheckout/);
+  assert.match(projects, /merged\.filter/,
+    "the attached Yaver checkout is removed from the launchable Projects inventory");
+  assert.match(projects, /!devServerBelongsToAttachedDogfoodCheckout/,
+    "the running Yaver server must not crowd the Projects screen in Dogfood mode");
+  assert.doesNotMatch(projects, /project\.name.*[Yy]aver/,
+    "Dogfood filtering must use the verified path boundary, not a project-name guess");
+});
+
+test("Dogfood passes the active guest identity into Vibing", () => {
+  assert.match(projects, /const guestProjectName = dogfoodGuestProjectName\(devStatus\?\.workDir,/);
+  assert.match(projects, /<BrowserVibeBubble[\s\S]{0,180}projectPath=\{devStatus\?\.workDir\}[\s\S]{0,120}projectName=\{guestProjectName\}/);
+  assert.doesNotMatch(bubble, /The SFMG preview stays available/);
 });
 
 test("Dogfood entry is fail-closed until Expo and the browser lane are proved", () => {

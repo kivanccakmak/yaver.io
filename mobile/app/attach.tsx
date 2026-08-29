@@ -45,7 +45,7 @@ import {
   subscribeBrowserRender,
 } from "../src/lib/feedbackTrigger";
 import { appLog } from "../src/lib/logger";
-import { parseDogfoodRenderMessage } from "../src/lib/dogfoodRenderBridge";
+import { DOGFOOD_CHECKOUT_KEY, parseDogfoodRenderMessage } from "../src/lib/dogfoodRenderBridge";
 import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
 
 function elapsedLabel(sinceMs: number): string {
@@ -212,6 +212,7 @@ export default function AttachScreen() {
   // capability is an HttpOnly cookie this JS cannot read, which is the point.
   const injectedBeforeLoad = `(function(){try{
     window.localStorage.setItem(${JSON.stringify(ATTACH_SENTINEL_KEY)}, "1");
+    window.localStorage.setItem(${JSON.stringify(DOGFOOD_CHECKOUT_KEY)}, ${JSON.stringify(params.workDir || "")});
   }catch(e){}})(); true;`;
 
   return (

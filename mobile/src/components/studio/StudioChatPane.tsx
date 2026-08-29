@@ -28,6 +28,8 @@ import { summarizeRawConsole } from "../../_core/ansi";
 import { AnsiConsoleText } from "../AnsiConsoleText";
 import { MessageBubble } from "../MessageBubble";
 import { quicClient, type QuicClient, type Task } from "../../lib/quic";
+import { classifyStreamEnd, planStreamRecovery } from "../../lib/taskStreamRecovery";
+import { beginTaskTurn, mergeTaskSnapshot, taskStatusIsTerminal, withObservedTaskStatus } from "../../lib/studioTaskState";
 import { useColors } from "../../context/ThemeContext";
 import { useDevice } from "../../context/DeviceContext";
 
@@ -114,8 +116,14 @@ export function StudioChatPane({
   const [previewLogsExpanded, setPreviewLogsExpanded] = useState(false);
   const [lastRawVersion, setLastRawVersion] = useState(0);
   const [loadingTasks, setLoadingTasks] = useState(false);
+  const [streamHealth, setStreamHealth] = useState<{ kind: "reattaching" | "lost"; message: string } | null>(null);
 
   const streamAbortRef = useRef<null | (() => void)>(null);
+  const streamRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streamAttemptRef = useRef(0);
+  const rawCursorRef = useRef(0);
+  const streamGenerationRef = useRef(0);
+  const subscribeTaskRef = useRef<(taskId: string, status?: Task["status"], resume?: boolean) => void>(() => {});
   const listScrollRef = useRef<ScrollView>(null);
   const consolePreferenceRef = useRef<boolean | null>(null);
   const projectPathRef = useRef(projectPath);
@@ -123,17 +131,28 @@ export function StudioChatPane({
 
   // Refresh the recent-task list when the pane mounts and after each send.
   const refreshTasks = useCallback(async () => {
-    if (!connected) return;
     setLoadingTasks(true);
     try {
       const list = await taskClient.listVibeThreads({ projectName, projectPath });
-      setTasks(list.slice(0, 12));
+      const recent = list.slice(0, 12);
+      setTasks((current) => recent.map((snapshot) => {
+        const existing = current.find((task) => task.id === snapshot.id);
+        return existing ? mergeTaskSnapshot(existing, snapshot) : snapshot;
+      }));
+      // The list endpoint is an independent authoritative status probe. This
+      // closes the task even if the terminal SSE frame was lost while the
+      // browser/relay lane reconnected.
+      setActiveTask((current) => {
+        if (!current) return current;
+        const snapshot = recent.find((task) => task.id === current.id);
+        return snapshot ? mergeTaskSnapshot(current, snapshot) : current;
+      });
     } catch {
       // keep the last list; the surface is advisory
     } finally {
       setLoadingTasks(false);
     }
-  }, [connected, projectName, projectPath, taskClient]);
+  }, [projectName, projectPath, taskClient]);
 
   useEffect(() => {
     void refreshTasks();
@@ -143,16 +162,28 @@ export function StudioChatPane({
   useEffect(() => {
     return () => {
       streamAbortRef.current?.();
+      if (streamRetryTimerRef.current) clearTimeout(streamRetryTimerRef.current);
     };
   }, []);
 
-  const subscribeTask = useCallback((taskId: string, status?: Task["status"]) => {
+  const subscribeTask = useCallback((taskId: string, status?: Task["status"], resume = false) => {
+    if (streamRetryTimerRef.current) {
+      clearTimeout(streamRetryTimerRef.current);
+      streamRetryTimerRef.current = null;
+    }
     streamAbortRef.current?.();
-    setRawText("");
-    setRawLive(false);
-    setLastRawVersion((v) => v + 1);
-    consolePreferenceRef.current = null;
-    setConsoleExpanded(status === "running" || status === "queued");
+    if (!resume) {
+      streamGenerationRef.current += 1;
+      streamAttemptRef.current = 0;
+      rawCursorRef.current = 0;
+      setRawText("");
+      setRawLive(false);
+      setLastRawVersion((v) => v + 1);
+      setStreamHealth(null);
+      consolePreferenceRef.current = null;
+      setConsoleExpanded(status === "running" || status === "queued");
+    }
+    const generation = streamGenerationRef.current;
     // Seed with the retained tail (rawSince=0 → raw_replay full=true) so a
     // just-finished task paints its console immediately.
     streamAbortRef.current = taskClient.streamTaskOutput(
@@ -161,13 +192,16 @@ export function StudioChatPane({
         // groomed transcript already lives in the task; we show raw only
       },
       (status) => {
+        if (generation !== streamGenerationRef.current) return;
         setRawLive(false);
-        setActiveTask((prev) => prev?.id === taskId ? { ...prev, status: status as Task["status"] } : prev);
-        setTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, status: status as Task["status"] } : task));
+        setStreamHealth(null);
+        setActiveTask((prev) => prev?.id === taskId ? withObservedTaskStatus(prev, status as Task["status"]) : prev);
+        setTasks((prev) => prev.map((task) => task.id === taskId ? withObservedTaskStatus(task, status as Task["status"]) : task));
         if (consolePreferenceRef.current === null) setConsoleExpanded(false);
         setLastRawVersion((v) => v + 1);
         void taskClient.getTask(taskId).then((task) => {
-          setActiveTask(task);
+          if (generation !== streamGenerationRef.current) return;
+          setActiveTask((current) => current?.id === task.id ? mergeTaskSnapshot(current, task) : task);
           setRows([]);
         }).catch(() => {});
         void refreshTasks();
@@ -177,25 +211,90 @@ export function StudioChatPane({
         if (evt.type === "runtime_render_requested") return;
       },
       {
-        rawSince: 0,
+        rawSince: resume ? rawCursorRef.current : 0,
         onRaw: (text, _offset, full) => {
+          if (generation !== streamGenerationRef.current) return;
+          if (_offset > 0) rawCursorRef.current = _offset;
           setRawText((prev) => {
             const next = full ? text : prev + text;
             return next.length > 512 * 1024 ? next.slice(next.length - 512 * 1024) : next;
           });
-          setRawLive(true);
-          setActiveTask((prev) => prev?.id === taskId ? { ...prev, status: "running" } : prev);
-          setTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, status: "running" } : task));
-          if (consolePreferenceRef.current === null) setConsoleExpanded(true);
+          // `raw_replay` is retained history, not proof that the runner is
+          // currently coding. It used to resurrect completed SFMG topics as
+          // running every time Vibing reopened. Only a live raw frame may
+          // advance queued→running, and terminal state still wins.
+          if (!full) {
+            streamAttemptRef.current = 0;
+            setStreamHealth(null);
+            setRawLive(true);
+            setActiveTask((prev) => prev?.id === taskId ? withObservedTaskStatus(prev, "running") : prev);
+            setTasks((prev) => prev.map((task) => task.id === taskId ? withObservedTaskStatus(task, "running") : task));
+            if (consolePreferenceRef.current === null) setConsoleExpanded(true);
+          }
           setLastRawVersion((v) => v + 1);
         },
-        onEnd: () => setRawLive(false),
+        onEnd: (info) => {
+          if (generation !== streamGenerationRef.current || info.cancelled) return;
+          setRawLive(false);
+          void taskClient.getTask(taskId).then((snapshot) => {
+            if (generation !== streamGenerationRef.current) return;
+            setActiveTask((current) => current?.id === snapshot.id ? mergeTaskSnapshot(current, snapshot) : snapshot);
+            setTasks((current) => current.map((task) => task.id === snapshot.id ? mergeTaskSnapshot(task, snapshot) : task));
+            if (taskStatusIsTerminal(snapshot.status)) {
+              setStreamHealth(null);
+              return;
+            }
+            const plan = planStreamRecovery({
+              end: classifyStreamEnd(info),
+              attempt: streamAttemptRef.current,
+              cause: info.error,
+            });
+            if (plan.action === "idle") return;
+            if (plan.action === "give-up") {
+              setStreamHealth({ kind: "lost", message: plan.message });
+              return;
+            }
+            setStreamHealth({ kind: "reattaching", message: plan.message });
+            streamAttemptRef.current += 1;
+            streamRetryTimerRef.current = setTimeout(
+              () => subscribeTaskRef.current(taskId, snapshot.status, true),
+              plan.delayMs,
+            );
+          }).catch(() => {
+            if (generation !== streamGenerationRef.current) return;
+            const plan = planStreamRecovery({
+              end: classifyStreamEnd(info),
+              attempt: streamAttemptRef.current,
+              cause: info.error,
+            });
+            if (plan.action === "reattach") {
+              setStreamHealth({ kind: "reattaching", message: plan.message });
+              streamAttemptRef.current += 1;
+              streamRetryTimerRef.current = setTimeout(
+                () => subscribeTaskRef.current(taskId, status, true),
+                plan.delayMs,
+              );
+            } else if (plan.action === "give-up") {
+              setStreamHealth({ kind: "lost", message: plan.message });
+            }
+          });
+        },
       },
     );
   }, [refreshTasks, taskClient]);
+  subscribeTaskRef.current = subscribeTask;
 
   const runningTask = tasks.find((task) => task.status === "running" || task.status === "queued")
     || (activeTask && (activeTask.status === "running" || activeTask.status === "queued") ? activeTask : undefined);
+
+  // Status reconciliation is deliberately independent from the SSE stream.
+  // A stream can stay half-open and never deliver `done`; the cheap list probe
+  // keeps the UI from claiming the runner is coding forever.
+  useEffect(() => {
+    if (!runningTask) return;
+    const timer = setInterval(() => void refreshTasks(), 3000);
+    return () => clearInterval(timer);
+  }, [refreshTasks, runningTask?.id]);
 
   const handleSend = useCallback(async () => {
     const text = composerText.trim();
@@ -209,7 +308,8 @@ export function StudioChatPane({
         // A chat stays one task. Creating a fresh /vibing/execute task for every
         // message made the Studio look conversational while discarding context.
         await taskClient.continueTask(activeTask.id, text);
-        setActiveTask((prev) => prev ? { ...prev, status: "running" } : prev);
+        setActiveTask((prev) => prev ? beginTaskTurn(prev) : prev);
+        setTasks((prev) => prev.map((task) => task.id === activeTask.id ? beginTaskTurn(task) : task));
         subscribeTask(activeTask.id, "running");
       } else {
         const result = await taskClient.executeVibingSuggestion(text, projectPath || "", {
@@ -499,6 +599,24 @@ export function StudioChatPane({
             <Text style={{ color: c.textMuted, fontSize: 13 }}>Sending…</Text>
           </View>
         ) : null}
+        {streamHealth ? (
+          <View style={[styles.streamHealth, { borderColor: streamHealth.kind === "lost" ? c.error : c.border, backgroundColor: c.surfaceMuted }]}>
+            <Text style={{ color: streamHealth.kind === "lost" ? c.error : c.textSecondary, fontSize: 12, lineHeight: 17, flex: 1 }}>{streamHealth.message}</Text>
+            {streamHealth.kind === "lost" && activeTask ? (
+              <Pressable
+                onPress={() => {
+                  streamAttemptRef.current = 0;
+                  setStreamHealth(null);
+                  subscribeTask(activeTask.id, activeTask.status, true);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Reattach live output"
+              >
+                <Text style={{ color: c.accent, fontWeight: "800", fontSize: 12 }}>Reattach</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         {sendError ? <MessageBubble variant="error" content={sendError} /> : null}
       </ScrollView>
 
@@ -603,6 +721,7 @@ const styles = StyleSheet.create({
   consoleBody: { maxHeight: 280, padding: 10 },
   previewLogBody: { maxHeight: 220, padding: 10, borderTopWidth: StyleSheet.hairlineWidth },
   sendingRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6 },
+  streamHealth: { flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderRadius: 10, padding: 10 },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",
