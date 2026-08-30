@@ -176,6 +176,12 @@
         }
       ],
       [
+        "react-native-vision-camera",
+        {
+          "enableFrameProcessors": false
+        }
+      ],
+      [
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "Yaver provides location access to apps you run for testing."

@@ -225,6 +225,11 @@ node "$ROOT/scripts/restore-ios-splash-storyboard.js"
 # Reapply config-plugin Podfile repairs directly before CocoaPods regenerates
 # Pods, including Sentry's private module path required by Xcode's ObjC scanner.
 node "$ROOT/mobile/plugins/withSentryXcode16Compat.js" "$ROOT/mobile/ios/Podfile"
+# Yaver does not use VisionCamera frame processors. A warm CocoaPods cache hid
+# the missing optional react-native-worklets-core pod until 2026-08-30; a clean
+# deploy then failed before archiving. Keep the generated Podfile aligned with
+# app.json even when the project already exists and Expo prebuild is skipped.
+node "$ROOT/scripts/configure-vision-camera-podfile.js" "$ROOT/mobile/ios/Podfile"
 if ! command -v pod >/dev/null 2>&1; then
   echo "ERROR: CocoaPods is required to regenerate the validated iOS Pods project." >&2
   echo "       Install CocoaPods, then rerun the deploy; the locked install resumes automatically." >&2
