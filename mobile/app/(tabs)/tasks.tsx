@@ -1572,6 +1572,13 @@ function extractTaskErrorMessage(task: Task): string {
   return out.slice(-6).join("\n");
 }
 
+// A recoverable tmux task stays in Review after a failed turn so its session
+// cannot disappear from Active. The structured failure is therefore the
+// authoritative failure signal; status alone is only the lifecycle bucket.
+function taskHasUnresolvedFailure(task: Task): boolean {
+  return task.status === "failed" || Boolean(task.failure);
+}
+
 // Build the rows shown in the AgentContextPanel below the chat. All
 // fields are best-effort — we render whatever we have access to from
 // the local state. Branch and full workDir aren't on the Task type
@@ -8694,7 +8701,7 @@ export default function TasksScreen() {
                   onBack={() => { setSelectedTask(null); setFollowUpText(""); }}
                   onOpenLogs={() => setShowLogs(true)}
                   primaryAction={
-                    selectedTask.status === "failed" ? "retry"
+                    taskHasUnresolvedFailure(selectedTask) ? "retry"
                       : selectedTask.status === "review" ? "complete"
                       : isRunning && selectedTask.isAdopted ? "detach"
                       : isRunning ? "stop"
@@ -8891,7 +8898,7 @@ export default function TasksScreen() {
                     model error (e.g. "gpt-5.4 not supported with a ChatGPT
                     account") just reproduces — this opens the Agent & Model
                     picker seeded to the task's runner and re-runs on close. */}
-                {selectedTask.status === "failed" ? (
+                {taskHasUnresolvedFailure(selectedTask) ? (
                   <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
                     <View style={{ flexDirection: "row", gap: 8 }}>
                       <Pressable
@@ -9007,7 +9014,7 @@ export default function TasksScreen() {
                             TaskHeader, so we only keep the one
                             spinner-with-elapsed line below. */}
                         {isRunning && <PhaseStatusLine task={selectedTask} />}
-                        {selectedTask.status === "failed" && (() => {
+                        {taskHasUnresolvedFailure(selectedTask) && (() => {
                           const errMsg = extractTaskErrorMessage(selectedTask);
                           return (
                             <ErrorMessage
@@ -9148,7 +9155,7 @@ export default function TasksScreen() {
                             modeByDevice: primaryModeByDevice,
                             providerByDevice: primaryProviderByDevice,
                           })}
-                          defaultExpanded={selectedTask.status === "failed"}
+                          defaultExpanded={taskHasUnresolvedFailure(selectedTask)}
                         />
                         <LiveConsoleSection
                           key={selectedTask.id}

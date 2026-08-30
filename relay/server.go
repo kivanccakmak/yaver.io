@@ -2269,8 +2269,8 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	//          don't trigger Data stall on big (8 MB+) responses.
 	//   '{'  → legacy JSON envelope (TunnelResponse). Old agents only
 	//          know this shape; backwards compat keeps them working.
-	var first [1]byte
-	if _, err := io.ReadFull(stream, first[:]); err != nil {
+	first, err := s.readTunnelFirstByte(tunnel, stream, forwardPath)
+	if err != nil {
 		log.Printf("[RELAY] read first byte from %s failed: %v", tunnel.deviceID[:8], err)
 		http.Error(w, "tunnel read error", http.StatusBadGateway)
 		return
@@ -2281,7 +2281,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		bytesIn += r.ContentLength
 	}
 
-	if first[0] == streamWireMagic {
+	if first == streamWireMagic {
 		// New streaming wire format. Don't buffer; let the reader
 		// flush chunks straight to the client.
 		//
@@ -2332,7 +2332,7 @@ func (s *RelayServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tunnel read error", http.StatusBadGateway)
 		return
 	}
-	respData := append(first[:1:1], rest...)
+	respData := append([]byte{first}, rest...)
 
 	var tunnelResp TunnelResponse
 	if err := json.Unmarshal(respData, &tunnelResp); err != nil {

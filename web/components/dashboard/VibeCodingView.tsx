@@ -2200,7 +2200,7 @@ export default function VibeCodingView({
   }, [providerRepos, providerSearch]);
 
   const activeFailureDiagnosis = useMemo(() => {
-    if (activeTask?.status !== "failed") return null;
+    if (activeTask?.status !== "failed" && !activeTask?.failure) return null;
     const structured = runnerFailureFromTaskFailure(activeTask.failure as any);
     if (structured) return structured;
     return diagnoseRunnerFailure({
@@ -3574,7 +3574,7 @@ export default function VibeCodingView({
                     // as broken. Demote it while the task is alive; surface
                     // EVERYTHING once it has actually failed, so the auth
                     // classifier and the user still get the full picture.
-                    const terminallyFailed = activeTask?.status === "failed";
+                    const terminallyFailed = activeTask?.status === "failed" || Boolean(activeTask?.failure);
                     const { visible, noise } = partitionRunnerOutput(liveOutput, terminallyFailed);
                     const note = describeSidecarNoise(noise);
                     return (

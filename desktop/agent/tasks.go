@@ -1547,11 +1547,33 @@ func taskAwaitsManualCompletion(task *Task) bool {
 	}
 }
 
+// taskOwnsRecoverableTmuxSeat reports whether Yaver created the exact tmux
+// session recorded on this task. A runner turn ending (successfully or not)
+// does not resolve the user's task and must not erase this seat; only explicit
+// Complete, Stop, and Delete lifecycle actions tear it down.
+func taskOwnsRecoverableTmuxSeat(task *Task) bool {
+	if task == nil || task.IsAdopted {
+		return false
+	}
+	session := strings.TrimSpace(task.TmuxSession)
+	return session != "" && session == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
+}
+
 func taskSuccessStatus(task *Task) TaskStatus {
-	if taskAwaitsManualCompletion(task) {
+	if taskAwaitsManualCompletion(task) || taskOwnsRecoverableTmuxSeat(task) {
 		return TaskStatusReview
 	}
 	return TaskStatusFinished
+}
+
+// taskUnresolvedStatus keeps a recoverable runner/tmux conversation visible in
+// Active + Review even when its last turn failed. task.Failure still carries
+// the named failure; status describes the unresolved lifecycle.
+func taskUnresolvedStatus(task *Task, status TaskStatus) TaskStatus {
+	if taskOwnsRecoverableTmuxSeat(task) && (status == TaskStatusFailed || status == TaskStatusFinished) {
+		return TaskStatusReview
+	}
+	return status
 }
 
 type TaskCreditEstimate struct {
@@ -1795,13 +1817,16 @@ type TaskManager struct {
 }
 
 // NewTaskManager creates a new TaskManager. If store is non-nil, previously
-// persisted tasks are loaded from disk (running/queued ones become stopped).
+// persisted tasks are loaded from disk. Direct-exec running tasks become a
+// named restart failure; tmux-backed tasks stay pending until the tmux startup
+// reconciler probes their exact seat.
 func NewTaskManager(workDir string, store taskStore, runner RunnerConfig) *TaskManager {
 	tasks := make(map[string]*Task)
 	if store != nil {
 		tasks = store.Load()
 	}
-	// Mark orphaned "running" tasks as failed — they have no live process after restart.
+	// Mark orphaned direct-exec tasks as failed. A task-owned tmux runner can
+	// outlive this process, so do not overwrite its state before reconciliation.
 	now := time.Now()
 	for _, t := range tasks {
 		if strings.TrimSpace(t.YaverSessionID) == "" {
@@ -1813,7 +1838,7 @@ func NewTaskManager(workDir string, store taskStore, runner RunnerConfig) *TaskM
 		if t.LastActiveAt.IsZero() {
 			t.LastActiveAt = t.SessionStartedAt
 		}
-		if t.Status == TaskStatusRunning {
+		if t.Status == TaskStatusRunning && !t.IsAdopted && !taskOwnsRecoverableTmuxSeat(t) {
 			log.Printf("[task %s] Marking orphaned task as failed (was running before restart)", t.ID)
 			t.Status = TaskStatusFailed
 			t.FinishedAt = &now
@@ -3460,6 +3485,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			task.ResultText = reason
 			nowT := time.Now()
 			task.FinishedAt = &nowT
+			task.Failure = diagnoseTaskFailure(task, nowT)
+			task.Status = taskUnresolvedStatus(task, task.Status)
 			tm.persist()
 		}
 		tm.mu.Unlock()
@@ -3530,6 +3557,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 						task.Status = TaskStatusFailed
 						finishNow := time.Now()
 						task.FinishedAt = &finishNow
+						task.Failure = diagnoseTaskFailure(task, finishNow)
+						task.Status = taskUnresolvedStatus(task, task.Status)
 						tm.persist()
 						tm.mu.Unlock()
 						close(task.doneCh)
@@ -3646,6 +3675,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			// death politely must not be believed about everything else.
 			ObserveRunnerAuthFromOutput(task.RunnerID, task.Output+"\n"+task.ResultText, string(task.Status))
 			task.Failure = diagnoseTaskFailure(task, finishNow)
+			task.Status = taskUnresolvedStatus(task, task.Status)
 			// Save assistant response as conversation turn
 			if task.ResultText != "" {
 				task.Turns = append(task.Turns, ConversationTurn{
@@ -3705,6 +3735,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					task.ResultText = err.Error()
 					now := time.Now()
 					task.FinishedAt = &now
+					task.Failure = diagnoseTaskFailure(task, now)
+					task.Status = taskUnresolvedStatus(task, task.Status)
 					tm.persist()
 					tm.fireTaskDone(task)
 					tm.mu.Unlock()
@@ -3738,12 +3770,8 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		tm.maybeProposeSchedule(task)
 		// Save session file for recent history (non-blocking)
 		go saveSessionFile(task, task.runner.Name, tm.effectiveTaskWorkDir(task))
-		terminalStatus := task.Status
 		tm.mu.Unlock()
 		close(task.doneCh)
-		if terminalStatus != TaskStatusReview {
-			tm.closeTaskOwnedTmuxSeat(task.ID)
-		}
 	}()
 
 	return nil
@@ -4325,10 +4353,10 @@ func (tm *TaskManager) StopTask(id string) error {
 }
 
 // closeTaskOwnedTmuxSeat gracefully exits a runner when it is still present,
-// then removes the exact tmux session Yaver created for this task. Review is
-// the only idle state allowed to retain this seat for a follow-up; completed,
-// failed, stopped, and deleted tasks must not leave hidden runner sessions.
-// User-owned/adopted tmux sessions are deliberately excluded.
+// then removes the exact tmux session Yaver created for this task. This is an
+// explicit lifecycle operation used by Complete, Stop, and Delete; automatic
+// runner success/failure never calls it. User-owned/adopted tmux sessions are
+// deliberately excluded.
 func (tm *TaskManager) closeTaskOwnedTmuxSeat(id string) {
 	tm.mu.RLock()
 	task, ok := tm.tasks[id]
@@ -4339,7 +4367,7 @@ func (tm *TaskManager) closeTaskOwnedTmuxSeat(id string) {
 	session := strings.TrimSpace(task.TmuxSession)
 	runnerID := normalizeRunnerID(task.RunnerID)
 	paneID := strings.TrimSpace(task.TmuxPaneID)
-	isOwned := session != "" && session == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
+	isOwned := taskOwnsRecoverableTmuxSeat(task)
 	tm.mu.RUnlock()
 	if !isOwned || !tmuxSessionExists(session) {
 		return
@@ -4833,6 +4861,8 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 			now := time.Now()
 			task.FinishedAt = &now
 			task.LastActiveAt = now
+			task.Failure = diagnoseTaskFailure(task, now)
+			task.Status = taskUnresolvedStatus(task, task.Status)
 			// Save the latest result as a conversation turn
 			if task.ResultText != "" {
 				task.Turns = append(task.Turns, ConversationTurn{
@@ -4873,6 +4903,8 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 					task.ResultText = err.Error()
 					now := time.Now()
 					task.FinishedAt = &now
+					task.Failure = diagnoseTaskFailure(task, now)
+					task.Status = taskUnresolvedStatus(task, task.Status)
 					tm.persist()
 					tm.fireTaskDone(task)
 					tm.mu.Unlock()
@@ -4884,12 +4916,8 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 		tm.persist()
 		tm.fireTaskDone(task)
 		go saveSessionFile(task, task.runner.Name, tm.effectiveTaskWorkDir(task))
-		terminalStatus := task.Status
 		tm.mu.Unlock()
 		close(task.doneCh)
-		if terminalStatus != TaskStatusReview {
-			tm.closeTaskOwnedTmuxSeat(task.ID)
-		}
 	}()
 
 	return nil

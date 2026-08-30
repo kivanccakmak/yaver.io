@@ -202,9 +202,9 @@ TARGET=
 cleanup() {
   if [ -n "${TAIL_PID:-}" ]; then kill "$TAIL_PID" 2>/dev/null || true; fi
   if [ "$CREATE_SESSION" = "1" ]; then
-    # Completion, failure and Stop end a runner TURN, not the task-owned
-    # terminal. Keep the exact session/window/pane and its scrollback until
-    # DELETE /tasks/{id}; DeleteTask is the one explicit teardown path.
+    # A runner turn ending does not end the user's task. Keep the exact
+    # session/window/pane and its scrollback until an explicit Complete, Stop,
+    # or Delete lifecycle action tears the task-owned seat down.
     tmux pipe-pane -t "$TARGET" 2>/dev/null || true
   else
     tmux kill-window -t "$SESSION:$WIN" 2>/dev/null || true

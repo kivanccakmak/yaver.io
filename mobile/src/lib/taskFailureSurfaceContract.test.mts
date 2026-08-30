@@ -7,6 +7,8 @@ test("phone Tasks consumes the agent's structured task failure", () => {
   assert.match(src, /structured\s*=\s*task\.failure/);
   assert.match(src, /structured\?\.title/);
   assert.match(src, /structured\?\.remedy/);
+  assert.match(src, /taskHasUnresolvedFailure\(selectedTask\)/,
+    "review tasks with a retained tmux seat must still render their failure and retry route");
 });
 
 test("mobile task wire type carries structured task failure", () => {

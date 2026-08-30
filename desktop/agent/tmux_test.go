@@ -852,6 +852,16 @@ func TestStoreAdoptedTaskPersistence(t *testing.T) {
 			CreatedAt: now,
 			StartedAt: &now,
 		},
+		"t3": {
+			ID:          "t3",
+			Title:       "task-owned tmux",
+			Status:      TaskStatusRunning,
+			Source:      "mobile",
+			RunnerID:    "codex",
+			TmuxSession: automaticTaskTmuxSessionName("t3", "codex"),
+			CreatedAt:   now,
+			StartedAt:   &now,
+		},
 	}
 
 	store.Save(tasks)
@@ -877,6 +887,15 @@ func TestStoreAdoptedTaskPersistence(t *testing.T) {
 	}
 	if failure := loaded["t2"].Failure; failure == nil || failure.Code != ReasonTaskInterruptedByAgentRestart {
 		t.Fatalf("normal task: expected restart diagnosis, got %#v", failure)
+	}
+
+	// A task-owned tmux seat may outlive the agent and must reach the startup
+	// operation probe before its persisted Running state is changed.
+	if loaded["t3"].Status != TaskStatusRunning {
+		t.Errorf("task-owned tmux: expected status=running pending reconciliation, got %s", loaded["t3"].Status)
+	}
+	if loaded["t3"].Failure != nil {
+		t.Fatalf("task-owned tmux: invented restart failure before probing seat: %#v", loaded["t3"].Failure)
 	}
 }
 

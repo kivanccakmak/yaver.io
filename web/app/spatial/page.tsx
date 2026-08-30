@@ -498,7 +498,7 @@ function TerminalPane({ task, cfg }: { task: Task; cfg: BridgeConfig }) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<any>(null);
   const writtenLinesRef = useRef<number>(0);
-  const failureLine = task.status === "failed" ? compactTaskFailure(task) : "";
+  const failureLine = task.status === "failed" || task.failure ? compactTaskFailure(task) : "";
 
   useEffect(() => {
     let term: any;

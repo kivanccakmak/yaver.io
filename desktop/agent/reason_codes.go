@@ -96,6 +96,10 @@ const (
 	// every surface saw only `stopped` with no reason even though the task had
 	// already edited the project. The in-place route is the task's Retry action.
 	ReasonTaskInterruptedByAgentRestart = "task.interrupted_by_agent_restart"
+	// ReasonTaskRunnerSeatLost means a persisted task named an exact Yaver-owned
+	// tmux seat, but the operation-level startup probe could not find it. This is
+	// not completion and not user-requested Stop; partial edits may remain.
+	ReasonTaskRunnerSeatLost = "task.runner_seat_lost"
 	// ReasonPreviewSessionActive is "a preview of this project is already
 	// running on this box, held by another surface". One session per project is
 	// a real constraint — one headless Chrome per project, one capture loop —

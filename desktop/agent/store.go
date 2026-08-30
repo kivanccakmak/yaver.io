@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -159,9 +160,10 @@ func (s *TaskStore) SaveRecords(records []persistedTask) {
 }
 
 // Load reads persisted tasks from disk and returns them as a map.
-// Running/queued tasks from a previous session are marked as failed with a
-// structured restart diagnosis since the underlying processes no longer
-// exist. A bare "stopped" incorrectly describes an agent crash as user intent.
+// Running/queued direct-exec tasks from a previous session are marked as failed
+// with a structured restart diagnosis since their underlying process no longer
+// exists. Task-owned and adopted tmux seats are preserved for the startup tmux
+// reconciler, which probes the real pane before deciding their state.
 func (s *TaskStore) Load() map[string]*Task {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -183,12 +185,12 @@ func (s *TaskStore) Load() map[string]*Task {
 		status := r.Status
 		finishedAt := r.FinishedAt
 		failure := r.Failure
-		// Tasks that were running or queued when we last exited can never be
-		// resumed — mark them as a named failure so every surface can explain
-		// that the agent restarted and offer the task's existing Retry route.
-		// Exception: adopted tmux tasks are left as-is; TmuxManager.ReAdoptOnStartup()
-		// will check if the session still exists and either re-adopt or mark stopped.
-		if (status == TaskStatusRunning || status == TaskStatusQueued) && !r.IsAdopted {
+		// Direct child processes cannot survive their owning agent. tmux seats can,
+		// so leave both adopted and exact task-owned seats for the operation-level
+		// startup probe instead of producing a false restart failure first.
+		persistedOwnsTmuxSeat := !r.IsAdopted && strings.TrimSpace(r.TmuxSession) != "" &&
+			r.TmuxSession == automaticTaskTmuxSessionName(r.ID, r.RunnerID)
+		if (status == TaskStatusRunning || status == TaskStatusQueued) && !r.IsAdopted && !persistedOwnsTmuxSeat {
 			status = TaskStatusFailed
 			if finishedAt == nil {
 				now := time.Now()

@@ -85,6 +85,70 @@ func TestAutomaticTaskTmuxSessionNamesRunner(t *testing.T) {
 	}
 }
 
+func TestTaskOwnedTmuxTurnStaysUnresolvedUntilExplicitLifecycleAction(t *testing.T) {
+	task := &Task{
+		ID:          "recoverable-turn",
+		Source:      "cli",
+		RunnerID:    "codex",
+		TmuxSession: automaticTaskTmuxSessionName("recoverable-turn", "codex"),
+	}
+	if got := taskSuccessStatus(task); got != TaskStatusReview {
+		t.Fatalf("successful task-owned turn status = %s, want review", got)
+	}
+	if got := taskUnresolvedStatus(task, TaskStatusFailed); got != TaskStatusReview {
+		t.Fatalf("failed task-owned turn status = %s, want review", got)
+	}
+
+	// A direct subprocess has no recoverable seat, so its failure remains a
+	// failure and does not get hidden in Review.
+	direct := &Task{ID: "direct", RunnerID: "codex"}
+	if got := taskUnresolvedStatus(direct, TaskStatusFailed); got != TaskStatusFailed {
+		t.Fatalf("direct task failure status = %s, want failed", got)
+	}
+}
+
+func TestStartupRecoversIdleTaskOwnedTmuxSeatAsReview(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	taskID := "startup-seat-" + shortTaskKey(t.Name())
+	session := automaticTaskTmuxSessionName(taskID, "codex")
+	t.Logf("test tmux session: %s", session)
+	_ = exec.Command(tmuxCmdName(), "kill-session", "-t", session).Run()
+	t.Cleanup(func() { _ = exec.Command(tmuxCmdName(), "kill-session", "-t", session).Run() })
+	if out, err := exec.Command(tmuxCmdName(), "new-session", "-d", "-s", session).CombinedOutput(); err != nil {
+		t.Fatalf("create idle task-owned session: %v: %s", err, out)
+	}
+	pane := getActivePaneIdentity(session)
+	if pane.PaneID == "" {
+		t.Fatal("task-owned session has no pane")
+	}
+
+	manager := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	manager.mu.Lock()
+	manager.tasks[taskID] = &Task{
+		ID: taskID, RunnerID: "codex", Status: TaskStatusRunning,
+		TmuxSession: session, TmuxSessionID: pane.SessionID, TmuxPaneID: pane.PaneID,
+	}
+	manager.mu.Unlock()
+	tmuxManager := NewTmuxManager(manager)
+	if tmuxManager == nil {
+		t.Fatal("tmux manager unavailable")
+	}
+	defer tmuxManager.Shutdown()
+	tmuxManager.ReAdoptOnStartup()
+
+	manager.mu.RLock()
+	status := manager.tasks[taskID].Status
+	manager.mu.RUnlock()
+	if status != TaskStatusReview {
+		t.Fatalf("recovered idle task-owned seat status = %s, want review", status)
+	}
+	if !tmuxSessionExists(session) {
+		t.Fatal("startup reconciliation destroyed the recoverable tmux seat")
+	}
+}
+
 func TestTaskTmuxExplicitOptOut(t *testing.T) {
 	t.Setenv(taskTmuxEnvVar, "0")
 	if taskTmuxEnabled("codex") {

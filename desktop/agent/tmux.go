@@ -984,11 +984,24 @@ func (m *TmuxManager) pollTmuxOutput(ctx context.Context, taskID, key, target st
 		case <-ticker.C:
 			// Check whether the pane (or legacy session) still exists
 			if !tmuxTargetExists(target) {
-				log.Printf("[tmux] Target %q disappeared — marking task %s as finished", target, taskID)
+				log.Printf("[tmux] Target %q disappeared — reconciling task %s", target, taskID)
 				m.taskMgr.mu.Lock()
 				if task, ok := m.taskMgr.tasks[taskID]; ok {
-					task.Status = TaskStatusFinished
 					now := time.Now()
+					if taskOwnsRecoverableTmuxSeat(task) {
+						task.Status = TaskStatusFailed
+						task.Failure = &TaskFailureDiagnosis{
+							Kind:       "runner_session",
+							Code:       ReasonTaskRunnerSeatLost,
+							Title:      "Runner session disappeared",
+							Reason:     "The task-owned tmux pane disappeared without an explicit Complete, Stop, or Delete action.",
+							Remedy:     "Review any partial project edits, then retry the task to open a new runner seat.",
+							Probe:      "task_owned_tmux_poll",
+							DetectedAt: now,
+						}
+					} else {
+						task.Status = TaskStatusFinished
+					}
 					task.FinishedAt = &now
 					if task.doneCh != nil {
 						select {
@@ -1054,17 +1067,20 @@ func (m *TmuxManager) pollTmuxOutput(ctx context.Context, taskID, key, target st
 	}
 }
 
-// ReAdoptOnStartup checks persisted adopted tasks and restarts polling for
-// sessions that are still alive. Called during agent startup.
+// ReAdoptOnStartup reconciles persisted tmux tasks against their real pane and
+// restarts polling for live runners. This includes Yaver-owned task seats: the
+// tmux server and runner can survive an agent restart, so declaring them failed
+// from the persisted status alone is a false negative.
 func (m *TmuxManager) ReAdoptOnStartup() {
 	m.taskMgr.mu.Lock()
 	defer m.taskMgr.mu.Unlock()
 
 	for _, task := range m.taskMgr.tasks {
-		if !task.IsAdopted || task.TmuxSession == "" {
+		owned := taskOwnsRecoverableTmuxSeat(task)
+		if (!task.IsAdopted && !owned) || task.TmuxSession == "" {
 			continue
 		}
-		if task.Status != TaskStatusRunning {
+		if task.Status != TaskStatusRunning && task.Status != TaskStatusQueued {
 			continue
 		}
 
@@ -1075,6 +1091,14 @@ func (m *TmuxManager) ReAdoptOnStartup() {
 			// is a different agent, and the task would then poll and type into
 			// it under the old title.
 			pane, ok := paneIdentityByID(task.TmuxSession, task.TmuxPaneID)
+			if !ok && owned {
+				// A task-owned session has exactly one pane. The agent may have
+				// restarted in the short interval before its pane id was persisted,
+				// so resolving that sole pane is safe; adopted multi-pane sessions
+				// must never take this fallback.
+				pane = getActivePaneIdentity(task.TmuxSession)
+				ok = pane.PaneID != ""
+			}
 			if !ok {
 				// The recorded pane is gone. Its session lives, but this task's
 				// seat does not, so do not adopt a neighbour in its place.
@@ -1090,25 +1114,60 @@ func (m *TmuxManager) ReAdoptOnStartup() {
 			task.TmuxWindowName = pane.WindowName
 			task.TmuxPaneIndex = pane.PaneIndex
 			task.TmuxPaneID = pane.PaneID
+
+			if owned {
+				probeCtx, cancelProbe := context.WithTimeout(context.Background(), vibeDefaultDeadline)
+				_, runnerAlive := detectPaneAgent(probeCtx, pane.PanePID)
+				cancelProbe()
+				if !runnerAlive {
+					// The turn ended while the agent was away, but the reusable shell,
+					// scrollback and task identity remain. It needs review or another
+					// prompt, not an invented completion/failure.
+					task.Status = TaskStatusReview
+					now := time.Now()
+					task.FinishedAt = &now
+					log.Printf("[tmux] Recovered idle task-owned seat %s in %q as review", task.TmuxPaneID, task.TmuxSession)
+					continue
+				}
+				task.Status = TaskStatusRunning
+			}
 			// Re-create channels and restart polling
 			task.outputCh = make(chan string, 512)
 			task.doneCh = make(chan struct{})
 
 			key := adoptionKey(task.TmuxSession, task.TmuxPaneID)
 			m.mu.Lock()
-			m.adopted[key] = task.ID
+			if task.IsAdopted {
+				m.adopted[key] = task.ID
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			m.pollStop[key] = cancel
 			m.mu.Unlock()
 
 			go m.pollTmuxOutput(ctx, task.ID, key, adoptionPollTarget(key, task.TmuxSession))
-			log.Printf("[tmux] Re-adopted pane %s of session %q for task %s on startup", task.TmuxPaneID, task.TmuxSession, task.ID)
+			log.Printf("[tmux] Recovered live pane %s of session %q for task %s on startup", task.TmuxPaneID, task.TmuxSession, task.ID)
 		} else {
-			// Session gone — mark task as stopped
-			task.Status = TaskStatusStopped
+			// An absent adopted seat was user-owned and is now stopped. An absent
+			// task-owned seat is an interruption, never an implicit completion.
+			if owned {
+				task.Status = TaskStatusFailed
+			} else {
+				task.Status = TaskStatusStopped
+			}
 			now := time.Now()
 			task.FinishedAt = &now
-			log.Printf("[tmux] Session %q no longer exists — marking task %s as stopped", task.TmuxSession, task.ID)
+			if owned {
+				task.Failure = &TaskFailureDiagnosis{
+					Kind:       "runner_session",
+					Code:       ReasonTaskRunnerSeatLost,
+					Title:      "Runner session disappeared",
+					Reason:     "The Yaver agent restarted and the task-owned tmux seat was no longer present.",
+					Remedy:     "Review any partial project edits, then retry the task to open a new runner seat.",
+					Probe:      "task_owned_tmux_on_startup",
+					DetectedAt: now,
+				}
+			}
+			log.Printf("[tmux] Session %q no longer exists — reconciled task %s as %s", task.TmuxSession, task.ID, task.Status)
 		}
 	}
 	m.taskMgr.persist()

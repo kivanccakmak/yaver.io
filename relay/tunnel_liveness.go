@@ -35,6 +35,8 @@ import (
 	"io"
 	"log"
 	"time"
+
+	"github.com/quic-go/quic-go"
 )
 
 const (
@@ -46,7 +48,56 @@ const (
 	// Consecutive failures before eviction. Two filters a single flake while
 	// still recovering the tunnel inside ~1 minute.
 	tunnelProbeFailuresBeforeEvict = 2
+	// A proxied /health is itself a liveness probe. Healthy agents answer in
+	// milliseconds, so let a real client request evict a zombie immediately
+	// instead of waiting for the next periodic watcher tick. This adds zero
+	// background packets and therefore zero steady-state relay bandwidth cost.
+	tunnelClientHealthTimeout = 3 * time.Second
 )
+
+func isTunnelClientHealthPath(path string) bool {
+	return path == "/health"
+}
+
+// evictTunnelIfCurrent removes and closes only the connection we actually
+// observed failing. The identity check prevents an old request from evicting a
+// fresh same-device reconnect that won the registration race meanwhile.
+func (s *RelayServer) evictTunnelIfCurrent(t *agentTunnel, reason string) bool {
+	if s == nil || t == nil || t.conn == nil {
+		return false
+	}
+	s.mu.Lock()
+	cur, ok := s.tunnels[t.deviceID]
+	if ok && cur.conn == t.conn {
+		delete(s.tunnels, t.deviceID)
+	} else {
+		ok = false
+	}
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	_ = t.conn.CloseWithError(0, reason)
+	return true
+}
+
+func (s *RelayServer) readTunnelFirstByteWithin(t *agentTunnel, stream quic.Stream, path string, timeout time.Duration) (byte, error) {
+	if isTunnelClientHealthPath(path) {
+		_ = stream.SetReadDeadline(time.Now().Add(timeout))
+	}
+	var first [1]byte
+	if _, err := io.ReadFull(stream, first[:]); err != nil {
+		if isTunnelClientHealthPath(path) {
+			s.evictTunnelIfCurrent(t, "client health probe not forwarding")
+		}
+		return 0, err
+	}
+	return first[0], nil
+}
+
+func (s *RelayServer) readTunnelFirstByte(t *agentTunnel, stream quic.Stream, path string) (byte, error) {
+	return s.readTunnelFirstByteWithin(t, stream, path, tunnelClientHealthTimeout)
+}
 
 // watchTunnelLiveness probes a tunnel until it dies or stops forwarding.
 func (s *RelayServer) watchTunnelLiveness(t *agentTunnel) {
@@ -65,15 +116,10 @@ func (s *RelayServer) watchTunnelLiveness(t *agentTunnel) {
 			}
 			log.Printf("[RELAY] tunnel %s registered but not forwarding (%v) — evicting so the agent redials",
 				shortID(t.deviceID), err)
-			s.mu.Lock()
-			if cur, ok := s.tunnels[t.deviceID]; ok && cur.conn == t.conn {
-				delete(s.tunnels, t.deviceID)
-			}
-			s.mu.Unlock()
 			// Closing the connection is the part that actually heals it: the
 			// agent's AcceptStream returns, its serve loop exits, and it redials
 			// into a registration slot we have just freed.
-			t.conn.CloseWithError(0, "tunnel not forwarding")
+			s.evictTunnelIfCurrent(t, "tunnel not forwarding")
 			return
 		}
 		fails = 0
