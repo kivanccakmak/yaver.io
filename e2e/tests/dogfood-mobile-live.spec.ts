@@ -7,7 +7,7 @@ const convexSite = process.env.E2E_CONVEX_URL ||
   process.env.NEXT_PUBLIC_CONVEX_SITE_URL ||
   "https://perceptive-minnow-557.eu-west-1.convex.site";
 
-test("RN-web keeps Dogfood choices collapsed until their summary row is changed", async ({ browser }) => {
+test("RN-web shows only Remote box, Runner, and Checkout until one is opened", async ({ browser }) => {
   test.skip(!mobileURL || !token, "needs MOBILE_WEB_URL + YAVER_TEST_TOKEN");
 
   // A viewport resize is not a mobile device. Own a genuine touch/mobile/UA
@@ -56,15 +56,16 @@ test("RN-web keeps Dogfood choices collapsed until their summary row is changed"
     const viewportVerdict = viewportMatchesSurface("mobile", { ...viewport, ...contextSignals });
     expect(viewportVerdict.ok, viewportVerdict.reason).toBe(true);
 
-    await expect(page.getByText("Box", { exact: true })).toBeVisible();
+    await expect(page.getByText("Remote box", { exact: true })).toBeVisible();
     await expect(page.getByText("Runner", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Yaver checkout", { exact: true })).toBeVisible();
+    await expect(page.getByText("Checkout", { exact: true })).toBeVisible();
+    await expect(page.getByText("Developer management", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel("Box choices")).toHaveCount(0);
     await expect(page.getByLabel("Runner choices")).toHaveCount(0);
     await expect(page.getByLabel("Yaver checkout choices")).toHaveCount(0);
     await expect(page.getByText("Runtime", { exact: true })).toHaveCount(0);
 
-    await page.getByRole("button", { name: /(?:Change|Fix) Runner/ }).click();
+    await page.getByRole("button", { name: /(?:Change|Set up) Runner/ }).click();
     await expect(page.getByLabel("Runner choices")).toBeVisible();
     await expect(page.getByText("Runtime", { exact: true })).toBeVisible();
     await expect(page.getByText(/Browser lane/).first()).toBeVisible();

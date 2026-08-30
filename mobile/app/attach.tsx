@@ -46,6 +46,13 @@ import {
 } from "../src/lib/feedbackTrigger";
 import { appLog } from "../src/lib/logger";
 import { DOGFOOD_CHECKOUT_KEY, parseDogfoodRenderMessage } from "../src/lib/dogfoodRenderBridge";
+import {
+  DOGFOOD_EXCEPTION_CAPTURE_SCRIPT,
+  dogfoodExceptionFixPrompt,
+  parseDogfoodGuestException,
+  type DogfoodGuestException,
+} from "../src/lib/dogfoodExceptionBridge";
+import { openTaskBus } from "../src/lib/runningTasksBus";
 import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
 
 function elapsedLabel(sinceMs: number): string {
@@ -74,6 +81,7 @@ export default function AttachScreen() {
   const [, forceTick] = useState(0);
   const [lastEvent, setLastEvent] = useState<{ label: string; at: number } | null>(null);
   const [fatal, setFatal] = useState<{ code: string; message: string; remedy?: string } | null>(null);
+  const [guestException, setGuestException] = useState<DogfoodGuestException | null>(null);
   const [fixing, setFixing] = useState(false);
   const [fixTaskId, setFixTaskId] = useState<string | null>(null);
   const reloadInFlight = useRef(false);
@@ -83,6 +91,8 @@ export default function AttachScreen() {
     reloadInFlight.current = true;
     appLog("info", `dogfood: refreshing attached surface (${source})`);
     setFatal(null);
+    setGuestException(null);
+    setFixTaskId(null);
     setLoading(true);
     setLastEvent({
       label: source === "manual" ? "Re-rendering Yaver" : "Refreshing after task completion",
@@ -98,6 +108,37 @@ export default function AttachScreen() {
   const deviceName = params.deviceName || activeDevice?.name || "the box";
   const sessionId = params.sessionId || "";
   const attachedUrl = params.url || "";
+
+  const startGuestExceptionFix = useCallback(async () => {
+    if (!guestException || fixing || !deviceId) return;
+    setFixing(true);
+    try {
+      const prompt = dogfoodExceptionFixPrompt({
+        exception: guestException,
+        checkout: params.workDir || "",
+        previewUrl: attachedUrl,
+        deviceName,
+      });
+      const { taskId } = await requestDogfoodFixWithAI(
+        deviceId,
+        params.workDir || "",
+        params.runner || "",
+        prompt,
+      );
+      setFixTaskId(taskId);
+      setLastEvent({ label: "Exception sent to the coding runner", at: Date.now() });
+      router.navigate("/(tabs)/tasks" as any);
+      openTaskBus.publish(taskId);
+    } catch (err) {
+      setFatal({
+        code: "DOGFOOD_AI_FIX_START_FAILED",
+        message: err instanceof Error ? err.message : String(err),
+        remedy: "Reconnect the coding box, then retry Fix exception. The captured stack remains available on this preview.",
+      });
+    } finally {
+      setFixing(false);
+    }
+  }, [attachedUrl, deviceId, deviceName, fixing, guestException, params.runner, params.workDir]);
 
   useEffect(() => {
     if (attachedUrl) return;
@@ -210,7 +251,8 @@ export default function AttachScreen() {
   // The sentinel tells the INNER Yaver what it is, so it refuses to offer
   // Attach Mode again (an infinite mirror). It carries no authority — the real
   // capability is an HttpOnly cookie this JS cannot read, which is the point.
-  const injectedBeforeLoad = `(function(){try{
+  const injectedBeforeLoad = `${DOGFOOD_EXCEPTION_CAPTURE_SCRIPT}
+  (function(){try{
     window.localStorage.setItem(${JSON.stringify(ATTACH_SENTINEL_KEY)}, "1");
     window.localStorage.setItem(${JSON.stringify(DOGFOOD_CHECKOUT_KEY)}, ${JSON.stringify(params.workDir || "")});
   }catch(e){}})(); true;`;
@@ -236,6 +278,14 @@ export default function AttachScreen() {
               setLastEvent((event) => event ? { label: "Yaver re-rendered", at: Date.now() } : null);
             }}
             onMessage={(event) => {
+              const exception = parseDogfoodGuestException(event.nativeEvent.data);
+              if (exception) {
+                setLoading(false);
+                reloadInFlight.current = false;
+                setGuestException(exception);
+                setLastEvent({ label: "Preview exception captured", at: Date.now() });
+                return;
+              }
               const message = parseDogfoodRenderMessage(event.nativeEvent.data);
               if (message) reloadDogfoodSurface(message.source);
             }}
@@ -291,7 +341,25 @@ export default function AttachScreen() {
           reloadDogfoodSurface("manual");
           return true;
         }}
+        onFixException={guestException ? startGuestExceptionFix : undefined}
+        exceptionFixBusy={fixing}
       />
+
+      {guestException ? (
+        <View pointerEvents="none" style={styles.exceptionScrim}>
+          <View style={[styles.exceptionCard, { borderColor: c.errorBorder, backgroundColor: c.bgCard }]}>
+            <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "800" }}>Preview hit an exception</Text>
+            <Text style={{ color: c.error, fontSize: 10, fontWeight: "800", marginTop: 4 }}>{guestException.code}</Text>
+            <Text numberOfLines={3} style={{ color: c.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 6 }}>
+              {guestException.message}
+            </Text>
+            <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 7 }}>
+              Fast Reload retries the render. Fix sends this URL and stack trace to the selected runner.
+            </Text>
+            {fixTaskId ? <Text style={{ color: c.success, fontSize: 11, marginTop: 6 }}>Fix task {fixTaskId} started</Text> : null}
+          </View>
+        </View>
+      ) : null}
 
       {lastEvent ? (
         <View pointerEvents="none" style={[styles.quietStatus, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -395,6 +463,22 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.28)",
     zIndex: 25,
     elevation: 25,
+  },
+  exceptionScrim: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    backgroundColor: "rgba(8,8,12,0.52)",
+    zIndex: 25,
+    elevation: 25,
+  },
+  exceptionCard: {
+    width: "100%",
+    maxWidth: 390,
+    padding: 16,
+    borderWidth: 1,
+    borderRadius: 16,
   },
   fatal: {
     width: "100%",

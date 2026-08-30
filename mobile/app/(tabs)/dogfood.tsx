@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import AttachModeSection from "../../src/components/AttachModeSection";
 import { useColors } from "../../src/context/ThemeContext";
@@ -68,7 +68,7 @@ function ExpandableCard({
   );
 }
 
-export default function DogfoodScreen() {
+function DeveloperManagementScreen() {
   const router = useRouter();
   const c = useColors();
   const tabletContent = useTabletContentStyle("regular");
@@ -151,7 +151,7 @@ export default function DogfoodScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <AppScreenHeader title="Develop Yaver" onBack={() => router.navigate("/(tabs)/more" as any)} />
+      <AppScreenHeader title="Developer management" onBack={() => router.navigate("/(tabs)/settings" as any)} />
       <ScrollView contentContainerStyle={[{ padding: 16, paddingBottom: 40 }, tabletContent]}>
         <View style={card}>
           <Text style={{ color: c.textPrimary, fontSize: 20, fontWeight: "800" }}>Developer management</Text>
@@ -285,6 +285,28 @@ export default function DogfoodScreen() {
             {row.status === "active" ? <Pressable accessibilityRole="button" accessibilityLabel={`Revoke ${row.label || row.platform}`} onPress={() => void act(row, "revoke")} style={{ paddingVertical: 10 }}><Text style={{ color: c.error }}>Revoke</Text></Pressable> : null}
           </View>)}
         </ExpandableCard> : null}
+      </ScrollView>
+    </View>
+  );
+}
+
+/**
+ * Keep the contributor entry surface intentionally tiny. App registration,
+ * tester access, and installation approvals are a separate Settings layer;
+ * none of that inventory belongs in the box/runner/checkout decision.
+ */
+export default function DogfoodScreen() {
+  const router = useRouter();
+  const c = useColors();
+  const tabletContent = useTabletContentStyle("regular");
+  const { management } = useLocalSearchParams<{ management?: string }>();
+
+  if (management === "1") return <DeveloperManagementScreen />;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: c.bg }}>
+      <AppScreenHeader title="Develop Yaver" onBack={() => router.navigate("/(tabs)/more" as any)} />
+      <ScrollView contentContainerStyle={[{ padding: 16, paddingBottom: 40 }, tabletContent]}>
         <AttachModeSection c={c} />
       </ScrollView>
     </View>

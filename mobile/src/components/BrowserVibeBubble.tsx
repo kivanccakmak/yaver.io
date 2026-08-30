@@ -27,6 +27,7 @@ type MachineRole = "runner" | "render";
 type CodingProbeState = "idle" | "checking" | "reachable" | "unreachable";
 
 const FLOATING_DOCK_WIDTH = 180;
+const FLOATING_DOCK_EXCEPTION_WIDTH = 296;
 const FLOATING_DOCK_HEIGHT = 56;
 const FLOATING_DOCK_EDGE_GAP = 8;
 const FLOATING_DOCK_DRAG_THRESHOLD = 6;
@@ -49,10 +50,11 @@ function clamp(value: number, min: number, max: number): number {
 export function clampFloatingDockPosition(
   position: FloatingDockPosition,
   viewport: FloatingDockViewport,
+  dockWidth = FLOATING_DOCK_WIDTH,
 ): FloatingDockPosition {
   const minX = viewport.left + FLOATING_DOCK_EDGE_GAP;
   const minY = viewport.top + FLOATING_DOCK_EDGE_GAP;
-  const maxX = Math.max(minX, viewport.width - viewport.right - FLOATING_DOCK_WIDTH - FLOATING_DOCK_EDGE_GAP);
+  const maxX = Math.max(minX, viewport.width - viewport.right - dockWidth - FLOATING_DOCK_EDGE_GAP);
   const maxY = Math.max(minY, viewport.height - viewport.bottom - FLOATING_DOCK_HEIGHT - FLOATING_DOCK_EDGE_GAP);
   return {
     x: clamp(position.x, minX, maxX),
@@ -60,14 +62,14 @@ export function clampFloatingDockPosition(
   };
 }
 
-function initialFloatingDockPosition(viewport: FloatingDockViewport): FloatingDockPosition {
+function initialFloatingDockPosition(viewport: FloatingDockViewport, dockWidth: number): FloatingDockPosition {
   // Start just above the common bottom-navigation lane and on the left, away
   // from the guest screen's primary FAB (normally bottom-right). The dock is
   // still freely movable because no fixed default can know a guest app's UI.
   return clampFloatingDockPosition({
     x: viewport.left + 16,
     y: viewport.height - viewport.bottom - FLOATING_DOCK_HEIGHT - 84,
-  }, viewport);
+  }, viewport, dockWidth);
 }
 
 function runnerKey(id: string | undefined): string {
@@ -97,12 +99,16 @@ export function BrowserVibeBubble({
   onExitPreview,
   onReload,
   reloadBusy = false,
+  onFixException,
+  exceptionFixBusy = false,
 }: {
   projectPath?: string;
   projectName?: string;
   onExitPreview: () => void;
   onReload: (kind: ReloadKind) => boolean | void | Promise<boolean | void>;
   reloadBusy?: boolean;
+  onFixException?: () => void | Promise<void>;
+  exceptionFixBusy?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const {
@@ -137,6 +143,7 @@ export function BrowserVibeBubble({
   const [codingProbeError, setCodingProbeError] = useState<string | null>(null);
   const [dockViewportSize, setDockViewportSize] = useState({ width: 0, height: 0 });
   const [dockReady, setDockReady] = useState(false);
+  const dockWidth = onFixException ? FLOATING_DOCK_EXCEPTION_WIDTH : FLOATING_DOCK_WIDTH;
   const dockPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const dockPointRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
   const dockDragOriginRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
@@ -161,13 +168,13 @@ export function BrowserVibeBubble({
     };
     dockViewportRef.current = viewport;
     const next = dockWasPositionedRef.current
-      ? clampFloatingDockPosition(dockPointRef.current, viewport)
-      : initialFloatingDockPosition(viewport);
+      ? clampFloatingDockPosition(dockPointRef.current, viewport, dockWidth)
+      : initialFloatingDockPosition(viewport, dockWidth);
     dockWasPositionedRef.current = true;
     dockPointRef.current = next;
     dockPosition.setValue(next);
     setDockReady(true);
-  }, [dockPosition, dockViewportSize, insets.bottom, insets.left, insets.right, insets.top]);
+  }, [dockPosition, dockViewportSize, dockWidth, insets.bottom, insets.left, insets.right, insets.top]);
 
   const dockPanResponder = useMemo(() => PanResponder.create({
     // A tap remains a tap on either Pressable. Only a deliberate move claims
@@ -182,21 +189,21 @@ export function BrowserVibeBubble({
       const next = clampFloatingDockPosition({
         x: dockDragOriginRef.current.x + gesture.dx,
         y: dockDragOriginRef.current.y + gesture.dy,
-      }, dockViewportRef.current);
+      }, dockViewportRef.current, dockWidth);
       dockPointRef.current = next;
       dockPosition.setValue(next);
     },
     onPanResponderRelease: () => {
-      const next = clampFloatingDockPosition(dockPointRef.current, dockViewportRef.current);
+      const next = clampFloatingDockPosition(dockPointRef.current, dockViewportRef.current, dockWidth);
       dockPointRef.current = next;
       dockPosition.setValue(next);
     },
     onPanResponderTerminate: () => {
-      const next = clampFloatingDockPosition(dockPointRef.current, dockViewportRef.current);
+      const next = clampFloatingDockPosition(dockPointRef.current, dockViewportRef.current, dockWidth);
       dockPointRef.current = next;
       dockPosition.setValue(next);
     },
-  }), [dockPosition]);
+  }), [dockPosition, dockWidth]);
 
   const fallbackDeviceId = activeDevice?.id || "";
   const codingDeviceId = machineRoles?.runnerDeviceId || fallbackDeviceId;
@@ -667,7 +674,7 @@ export function BrowserVibeBubble({
         onClose={() => { setShowOpenCodeConfig(false); void loadRunners(); }}
       />
 
-      <Animated.View
+      {!open ? <Animated.View
         {...dockPanResponder.panHandlers}
         pointerEvents="box-none"
         testID="browser-vibe-dock"
@@ -675,7 +682,7 @@ export function BrowserVibeBubble({
         accessibilityHint="Drag to move Fast Reload and Vibing together"
         style={[
           styles.floatingDock,
-          { opacity: dockReady ? 1 : 0, transform: [{ translateX: dockPosition.x }, { translateY: dockPosition.y }] },
+          { width: dockWidth, opacity: dockReady ? 1 : 0, transform: [{ translateX: dockPosition.x }, { translateY: dockPosition.y }] },
         ]}
       >
         <Pressable
@@ -695,6 +702,27 @@ export function BrowserVibeBubble({
           <Text style={styles.reloadBubbleText}>Fast Reload</Text>
         </Pressable>
 
+        {onFixException ? (
+          <Pressable
+            onPress={() => void onFixException()}
+            disabled={exceptionFixBusy}
+            accessibilityRole="button"
+            accessibilityLabel="Fix captured preview exception"
+            accessibilityHint="Starts a coding task with the captured URL and stack trace"
+            testID="browser-vibe-fix-exception"
+            style={({ pressed }) => [
+              styles.fixExceptionBubble,
+              exceptionFixBusy && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            {exceptionFixBusy
+              ? <ActivityIndicator size="small" color="#d94b5e" />
+              : <Ionicons name="build-outline" size={17} color="#d94b5e" />}
+            <Text style={styles.fixExceptionText}>Fix exception</Text>
+          </Pressable>
+        ) : null}
+
         <Pressable
           onPress={() => setOpen((value) => !value)}
           accessibilityRole="button"
@@ -710,7 +738,7 @@ export function BrowserVibeBubble({
           <Text style={styles.bubbleText}>{open ? "−" : "Y"}</Text>
           {!open ? <View style={styles.liveDot} /> : null}
         </Pressable>
-      </Animated.View>
+      </Animated.View> : null}
     </View>
   );
 }
@@ -818,6 +846,24 @@ const styles = StyleSheet.create({
     elevation: 19,
   },
   reloadBubbleText: { color: "#5e4ce6", fontSize: 12, fontWeight: "800" },
+  fixExceptionBubble: {
+    width: 108,
+    height: 56,
+    borderRadius: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    backgroundColor: "#fff",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#f0bcc4",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 9,
+    elevation: 19,
+  },
+  fixExceptionText: { color: "#c93f52", fontSize: 11, fontWeight: "900" },
   bubble: {
     width: 56,
     height: 56,

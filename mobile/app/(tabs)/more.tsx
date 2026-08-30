@@ -1969,7 +1969,7 @@ export default function MoreScreen() {
   // reading line bounded but uses the canvas. Phone behavior is
   // unaffected (the hook returns {} on phones).
   const tabletContent = useTabletContentStyle("wide");
-  const { connectionStatus, activeDevice } = useDevice();
+  const { connectionStatus, activeDevice, refreshDevices } = useDevice();
   const { token, user, refreshUser } = useAuth();
   const connected = connectionStatus === "connected";
   const [moreOptionalTools, setMoreOptionalTools] = useState<OptionalMoreToolId[]>([]);
@@ -2001,6 +2001,7 @@ export default function MoreScreen() {
   const [pairManualOpen, setPairManualOpen] = useState(false);
   const [pairHost, setPairHost] = useState("");
   const [pairExpired, setPairExpired] = useState(false);
+  const [pairReturnTarget, setPairReturnTarget] = useState("");
   const [bootstrapDevices, setBootstrapDevices] = useState<DiscoveredDevice[]>([]);
 
   // Expandable section state
@@ -2030,8 +2031,10 @@ export default function MoreScreen() {
   // The search-param contains the full canonical pair URL; we parse
   // it and apply it via the same applyPairUrl path used by paste.
   // Never auto-submits — the user always taps the explicit Pair button.
-  const search = useLocalSearchParams<{ pair?: string }>();
+  const search = useLocalSearchParams<{ pair?: string; openPair?: string; returnTo?: string }>();
   const pairParam = typeof search.pair === "string" ? search.pair : "";
+  const openPairParam = search.openPair === "1";
+  const pairReturnTo = typeof search.returnTo === "string" ? search.returnTo : "";
 
   const refreshMoreOptionalTools = useCallback(() => {
     if (!token) {
@@ -2064,6 +2067,7 @@ export default function MoreScreen() {
   );
 
   const openPair = useCallback(() => {
+    setPairReturnTarget("");
     setPairCode("");
     setPairError(null);
     setPairSuccess(null);
@@ -2167,6 +2171,15 @@ export default function MoreScreen() {
     }
   }, [pairParam, applyPairUrl, router]);
 
+  // Focused setup routes (including Develop Yaver) reuse the canonical pair
+  // sheet instead of growing another device-enrollment implementation.
+  useEffect(() => {
+    if (!openPairParam) return;
+    openPair();
+    setPairReturnTarget(pairReturnTo);
+    router.setParams({ openPair: undefined, returnTo: undefined });
+  }, [openPair, openPairParam, pairReturnTo, router]);
+
   const handlePairSubmit = useCallback(async () => {
     if (!token) {
       setPairError("Sign in on this phone first");
@@ -2195,10 +2208,16 @@ export default function MoreScreen() {
         return;
       }
       setPairSuccess(`Paired with ${res.host ?? info.host ?? "target"}`);
+      await refreshDevices().catch(() => {});
+      if (pairReturnTarget === "dogfood") {
+        setShowPair(false);
+        setPairReturnTarget("");
+        router.navigate("/(tabs)/dogfood" as any);
+      }
     } finally {
       setPairBusy(false);
     }
-  }, [pairCode, pairUrl, token, user]);
+  }, [pairCode, pairReturnTarget, pairUrl, refreshDevices, router, token, user]);
 
   const pairReady = pairCode.length === 6 && !!pairUrl.trim() && !pairExpired;
 

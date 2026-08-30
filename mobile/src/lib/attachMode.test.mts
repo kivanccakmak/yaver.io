@@ -36,6 +36,7 @@ test("a fully configured gate can attach", () => {
   assert.equal(gate.canAttach, true);
   assert.equal(gate.nextStep, null);
   assert.equal(attachGateSummary(gate), "ready to attach");
+  assert.deepEqual(gate.steps.map((step) => step.label), ["Remote box", "Runner", "Checkout"]);
 });
 
 test("the gate is ORDERED — no box means box is what you're asked for", () => {
@@ -90,6 +91,17 @@ test("picking a runner the box cannot run is blocked, not silently accepted", ()
   assert.equal(gate.canAttach, false);
   assert.equal(gate.nextStep?.key, "runner");
   assert.match(gate.nextStep!.detail, /not installed/);
+});
+
+test("runner setup is independent of checkout setup", () => {
+  const gate = computeAttachGate({
+    deviceId: ready.deviceId,
+    deviceName: ready.deviceName,
+    readiness: ready.readiness,
+    runner: ready.runner,
+  });
+  assert.equal(gate.steps.find((step) => step.key === "runner")?.status, "ok");
+  assert.equal(gate.nextStep?.key, "checkout");
 });
 
 test("NEGATIVE CONTROL: an unverified checkout blocks and names the directory", () => {

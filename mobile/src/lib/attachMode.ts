@@ -27,8 +27,7 @@
 
 import type { BoxReadiness } from "./boxInit";
 
-/** Display steps stay Box / Runner / Checkout for the compact ready summary.
- *  computeAttachGate uses the operational order Box / Checkout / Runner. */
+/** Display and setup order stays Remote box / Runner / Checkout. */
 export type AttachStepKey = "box" | "runner" | "checkout";
 
 export type AttachStepStatus = "ok" | "blocked" | "pending";
@@ -79,7 +78,7 @@ function boxStep(input: AttachGateInput): AttachStep {
   if (!input.deviceId) {
     return {
       key: "box",
-      label: "Box",
+      label: "Remote box",
       status: "pending",
       detail: "no box selected",
       action: "pick_box",
@@ -89,7 +88,7 @@ function boxStep(input: AttachGateInput): AttachStep {
   if (!input.readiness) {
     return {
       key: "box",
-      label: "Box",
+      label: "Remote box",
       status: "pending",
       detail: `checking ${name}…`,
       action: "none",
@@ -99,13 +98,13 @@ function boxStep(input: AttachGateInput): AttachStep {
   if (agent && agent.status !== "ok") {
     return {
       key: "box",
-      label: "Box",
+      label: "Remote box",
       status: "blocked",
       detail: `${name}: ${agent.label} — ${agent.detail}`,
       action: "fix_box_readiness",
     };
   }
-  return { key: "box", label: "Box", status: "ok", detail: name, action: "none" };
+  return { key: "box", label: "Remote box", status: "ok", detail: name, action: "none" };
 }
 
 function runnerStep(input: AttachGateInput): AttachStep {
@@ -115,15 +114,6 @@ function runnerStep(input: AttachGateInput): AttachStep {
       label: "Runner",
       status: "pending",
       detail: "pick a box first",
-      action: "none",
-    };
-  }
-  if (!input.checkoutDir || input.checkoutVerified !== true) {
-    return {
-      key: "runner",
-      label: "Runner",
-      status: "pending",
-      detail: "prepare the Yaver checkout first",
       action: "none",
     };
   }
@@ -180,7 +170,7 @@ function checkoutStep(input: AttachGateInput): AttachStep {
   if (!input.deviceId) {
     return {
       key: "checkout",
-      label: "Yaver checkout",
+      label: "Checkout",
       status: "pending",
       detail: "pick a box first",
       action: "none",
@@ -189,7 +179,7 @@ function checkoutStep(input: AttachGateInput): AttachStep {
   if (!input.checkoutDir) {
     return {
       key: "checkout",
-      label: "Yaver checkout",
+      label: "Checkout",
       status: "pending",
       detail: "not set",
       action: "set_checkout",
@@ -198,7 +188,7 @@ function checkoutStep(input: AttachGateInput): AttachStep {
   if (input.checkoutVerified === undefined) {
     return {
       key: "checkout",
-      label: "Yaver checkout",
+      label: "Checkout",
       status: "pending",
       detail: "verifying…",
       action: "none",
@@ -208,7 +198,7 @@ function checkoutStep(input: AttachGateInput): AttachStep {
     // Say WHICH directory we wanted. "Invalid path" costs a support round-trip.
     return {
       key: "checkout",
-      label: "Yaver checkout",
+      label: "Checkout",
       status: "blocked",
       detail:
         `${input.checkoutDir} is not the Yaver checkout — Attach Mode needs the yaver.io ` +
@@ -218,7 +208,7 @@ function checkoutStep(input: AttachGateInput): AttachStep {
   }
   return {
     key: "checkout",
-    label: "Yaver checkout",
+    label: "Checkout",
     status: "ok",
     detail: input.checkoutDir,
     action: "none",
@@ -227,7 +217,7 @@ function checkoutStep(input: AttachGateInput): AttachStep {
 
 export function computeAttachGate(input: AttachGateInput): AttachGate {
   const steps = [boxStep(input), runnerStep(input), checkoutStep(input)];
-  const nextStep = [steps[0], steps[2], steps[1]].find((s) => s.status !== "ok") ?? null;
+  const nextStep = steps.find((s) => s.status !== "ok") ?? null;
   return { canAttach: nextStep === null, steps, nextStep };
 }
 

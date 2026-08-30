@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { CONVEX_URL } from "@/lib/constants";
 import { previewDeviceProxyHeaders } from "@/lib/preview-device-proxy";
+import { injectPreviewPathRebase } from "@/lib/previewRebase";
 
 const BLOCKED_RESP_HEADERS = new Set([
   "connection",
@@ -160,15 +161,12 @@ function rewritePreviewBody(body: string, contentType: string, deviceId: string)
     out = out
       .replace(/([\"'])\/_next\//g, (_match, quote) => `${quote}${dPrefix}/dev/_next/`)
       .replace(/\\\/_next\\\//g, `${dPrefix.replace(/\//g, "\\/")}\\/dev\\/_next\\/`);
-    // Inject the path-rebase script right after <head ...> so it
-    // executes before any framework bootstrap that reads
-    // window.location.pathname. Falls back to prepending if there's
-    // no <head> tag in the response.
-    if (/<head[^>]*>/i.test(out)) {
-      out = out.replace(/<head([^>]*)>/i, (_m, attrs) => `<head${attrs}>${PATH_REBASE_SCRIPT}`);
-    } else {
-      out = PATH_REBASE_SCRIPT + out;
-    }
+    // Current agents already inject a transport shim that MUST capture the
+    // scoped /d/<device>/dev path before their router makes "/" visible to the
+    // guest. Injecting this outer history rewrite ahead of that shim made Metro
+    // lazy imports (for example /src/lib/auth.bundle) escape to relay root and
+    // 404. Keep this fallback only for legacy agents that do not own rebasing.
+    out = injectPreviewPathRebase(out, PATH_REBASE_SCRIPT);
     return out;
   }
   if (/text\/css/i.test(contentType)) {

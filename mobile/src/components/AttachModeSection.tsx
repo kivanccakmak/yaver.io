@@ -17,8 +17,9 @@
 
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
 import type { ThemeColors } from "../constants/colors";
 import { useDevice } from "../context/DeviceContext";
 import { computeAttachGate, computeNestingVerdict, ATTACH_SENTINEL_KEY, type AttachStep } from "../lib/attachMode";
@@ -41,7 +42,6 @@ import {
 } from "../../../sdk/feedback/react-native/src/DogfoodRuntime";
 import {
   DogfoodLanePicker,
-  DogfoodStatusRail,
 } from "../../../sdk/feedback/react-native/src/DogfoodSessionUi";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
@@ -149,10 +149,25 @@ export default function AttachModeSection({
       return;
     }
     void getDogfoodRunners(targetDevice.id)
-      .then((rows) => { if (!cancelled) setRunnerRows(rows); })
+      .then((rows) => {
+        if (cancelled) return;
+        setRunnerRows(rows);
+        // A first-time user should inherit the box's proved working default,
+        // not an arbitrary Codex placeholder. An explicit per-box choice is
+        // never overwritten.
+        if (!primaryRunnerByDevice[targetDevice.id]) {
+          const ready = rows.find((row) => row.isDefault && (row.ready ?? row.installed))
+            || rows.find((row) => row.ready ?? row.installed);
+          if (ready) {
+            const nextRunner = ready.id === "claude" ? "claude-code" : ready.id;
+            setRunner(nextRunner);
+            void setPrimaryRunnerForDevice(targetDevice.id, nextRunner, ready.models.find((model) => model.isDefault)?.id || null);
+          }
+        }
+      })
       .catch(() => { if (!cancelled) setRunnerRows([]); });
     return () => { cancelled = true; };
-  }, [targetConnected, targetDevice?.id]);
+  }, [primaryRunnerByDevice, setPrimaryRunnerForDevice, targetConnected, targetDevice?.id]);
 
   // Dogfood should be one action in the normal case. The Go
   // agent owns this answer because only it can inspect the box's source and
@@ -413,11 +428,15 @@ export default function AttachModeSection({
   }, [runner, sourceBusy, targetDevice?.id, verify]);
 
   const toggleStep = useCallback((step: AttachStep) => {
-    setExpandedStep((current) => current === step.key ? null : step.key);
-    if (step.key === "checkout" && step.status !== "ok" && !sourceBusy) {
+    // Runner and Checkout both live on the selected box. If that prerequisite
+    // is missing, every row opens the same real box setup instead of revealing
+    // controls that cannot work yet.
+    const key = step.key !== "box" && (!targetDevice?.id || !targetConnected) ? "box" : step.key;
+    setExpandedStep((current) => current === key ? null : key);
+    if (step.key === "checkout" && step.status !== "ok" && !sourceBusy && targetDevice?.id && targetConnected) {
       void runSourceFix();
     }
-  }, [runSourceFix, sourceBusy]);
+  }, [runSourceFix, sourceBusy, targetConnected, targetDevice?.id]);
 
   if (!mayOffer) {
     return (
@@ -432,31 +451,53 @@ export default function AttachModeSection({
 
   return (
     <View>
-      <Text style={{ color: c.textPrimary, fontWeight: "700", fontSize: 15 }}>Dogfood Yaver</Text>
-
-      {/* The default surface is only the answer: Box, Runner, Checkout. Each
-          inventory stays behind its own Change/Fix action. */}
-      <View style={{ marginTop: 12 }}>
-        <DogfoodStatusRail
-          colors={{
-            background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
-            accent: c.accent, accentSoft: c.accentSoft, ready: c.success,
-            attention: c.warn, blocked: c.error, console: "#0b0f14",
-          }}
-          steps={gate.steps.map((step) => {
-            const busy = step.key === "checkout" && sourceBusy;
-            return {
-              key: step.key,
-              label: step.label,
-              detail: step.detail,
-              tone: step.status === "ok" ? "ready" : step.status === "blocked" ? "blocked" : "pending",
-              actionLabel: busy ? "Fixing…" : step.status === "ok" ? "Change" : "Fix",
-              actionDisabled: busy,
-              expanded: expandedStep === step.key,
-              onAction: () => toggleStep(step),
-            } as const;
-          })}
-        />
+      {/* Exactly three top-level choices. The whole row is the setup route;
+          inventories and repair detail appear only after that row is tapped. */}
+      <View accessibilityLabel="Dogfood session readiness" style={{ gap: 10 }}>
+        {gate.steps.map((step) => {
+          const busy = step.key === "checkout" && sourceBusy;
+          const expanded = expandedStep === step.key;
+          const tone = step.status === "ok" ? c.success : step.status === "blocked" ? c.error : c.warn;
+          const icon = step.key === "box" ? "desktop-outline" : step.key === "runner" ? "sparkles-outline" : "folder-open-outline";
+          const action = busy ? "Setting up…" : step.status === "ok" ? "Change" : "Set up";
+          return (
+            <Pressable
+              key={step.key}
+              accessibilityRole="button"
+              accessibilityLabel={`${action} ${step.label}`}
+              accessibilityState={{ expanded, busy }}
+              disabled={busy}
+              onPress={() => toggleStep(step)}
+              style={({ pressed }) => ({
+                minHeight: 76,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 12,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: expanded ? c.accent : c.border,
+                backgroundColor: c.bgCard,
+                opacity: busy ? 0.65 : pressed ? 0.78 : 1,
+              })}
+            >
+              <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: `${tone}18` }}>
+                {busy ? <ActivityIndicator size="small" color={c.accent} /> : <Ionicons name={icon as any} size={23} color={tone} />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>{step.label}</Text>
+                <Text style={{ color: step.status === "ok" ? c.textSecondary : tone, fontSize: 12, lineHeight: 17, marginTop: 2 }} numberOfLines={2}>
+                  {step.detail}
+                </Text>
+              </View>
+              <View style={{ alignItems: "flex-end", gap: 4 }}>
+                <Text style={{ color: c.accent, fontSize: 11, fontWeight: "700" }}>{action}</Text>
+                <Ionicons name={expanded ? "chevron-up" : "chevron-forward"} size={17} color={c.textMuted} />
+              </View>
+            </Pressable>
+          );
+        })}
       </View>
 
       {expandedStep === "box" ? (
@@ -497,7 +538,20 @@ export default function AttachModeSection({
             })}
           </View>
           {!devices.length ? (
-            <Text style={{ color: c.warn, fontSize: 12 }}>Connect a same-account device to start Dogfood.</Text>
+            <View style={{ alignItems: "flex-start", gap: 8 }}>
+              <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 17 }}>
+                Pair the Mac, Linux, or Windows machine that will run Yaver and your coding agent.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Pair a remote box"
+                onPress={() => router.push({ pathname: "/(tabs)/more" as any, params: { openPair: "1", returnTo: "dogfood" } } as any)}
+                style={{ flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 11, paddingVertical: 9, borderRadius: 9, backgroundColor: c.accent }}
+              >
+                <Ionicons name="link-outline" size={16} color="#fff" />
+                <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>Pair remote box</Text>
+              </Pressable>
+            </View>
           ) : null}
         </View>
       ) : null}
@@ -547,7 +601,7 @@ export default function AttachModeSection({
               })}
             </View>
           ) : null}
-          {verified === true && runnerCheck && runnerCheck.status !== "ok" ? (
+          {targetConnected && runnerCheck && runnerCheck.status !== "ok" ? (
             <Pressable
               disabled={runnerSetupBusy}
               onPress={() => void configureRunner()}
@@ -705,38 +759,27 @@ export default function AttachModeSection({
         </View>
       ) : null}
 
-      {/* ONE primary action. Disabled states say what is missing via the gate
-          rows above rather than a second explanation down here. */}
-      <Pressable
-        onPress={() => void attach()}
-        disabled={!gate.canAttach}
-        style={({ pressed }) => [
-          {
-            marginTop: 14,
-            paddingVertical: 12,
-            borderRadius: 10,
+      {/* The only non-configuration action appears after all three rows are
+          operational. Incomplete setup therefore has no dead primary button. */}
+      {gate.canAttach ? (
+        <Pressable
+          onPress={() => void attach()}
+          style={({ pressed }) => ({
+            marginTop: 16,
+            paddingVertical: 14,
+            borderRadius: 14,
             alignItems: "center",
-            backgroundColor: gate.canAttach ? c.accent : c.bg,
-            borderWidth: gate.canAttach ? 0 : 1,
-            borderColor: c.border,
-            opacity: !gate.canAttach ? 0.6 : 1,
+            backgroundColor: c.accent,
+            opacity: pressed ? 0.75 : 1,
             flexDirection: "row",
             justifyContent: "center",
             gap: 8,
-          },
-          pressed && { opacity: 0.75 },
-        ]}
-      >
-        <Text
-          style={{
-            color: gate.canAttach ? "#fff" : c.textMuted,
-            fontWeight: "700",
-            fontSize: 14,
-          }}
+          })}
         >
-          Enter Dogfood mode
-        </Text>
-      </Pressable>
+          <Ionicons name="play" size={17} color="#fff" />
+          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>Enter Dogfood mode</Text>
+        </Pressable>
+      ) : null}
       <RunnerAuthModal
         visible={runnerAuthFor !== null}
         runner={runnerAuthFor || "codex"}

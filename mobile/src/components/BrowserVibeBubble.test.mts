@@ -70,14 +70,18 @@ test("browser Vibing mirrors feedback controls and remains mounted when minimize
   assert.ok(projects.includes("onExitPreview={() => setShowWebView(false)}"));
 });
 
-test("the Y and Fast Reload controls move together in a bounded draggable dock", () => {
+test("the Y, Fast Reload, and contextual exception Fix controls share one bounded dock", () => {
   assert.ok(source.includes("PanResponder.create"), "the dogfood controls have no drag responder");
   assert.ok(source.includes('testID="browser-vibe-dock"'), "the controls are not grouped into one dock");
   assert.ok(source.includes("...dockPanResponder.panHandlers"), "the dock does not receive drag gestures");
   assert.ok(source.includes("clampFloatingDockPosition"), "dragging can strand the dock beyond the viewport");
   const dock = source.slice(source.indexOf('testID="browser-vibe-dock"'));
   assert.ok(dock.indexOf('testID="browser-vibe-fast-reload"') >= 0, "Fast Reload is outside the draggable dock");
+  assert.ok(dock.indexOf('testID="browser-vibe-fix-exception"') >= 0, "exception Fix is outside the draggable dock");
+  assert.ok(source.includes("onFixException ?"), "Fix is shown even when no exception was captured");
   assert.ok(dock.indexOf('testID="browser-vibe-bubble"') >= 0, "the Y control is outside the draggable dock");
+  assert.ok(source.includes("{!open ? <Animated.View"),
+    "the floating dock still covers the composer after Vibing opens");
 });
 
 test("Settings gives runner and render machines direct cards and Chat stays focused", () => {

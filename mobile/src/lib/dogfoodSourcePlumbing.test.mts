@@ -43,11 +43,16 @@ test("Dogfood defaults to three compact rows and progressively reveals each inve
   const section = fs.readFileSync(path.join(mobileRoot, "src/components/AttachModeSection.tsx"), "utf8");
 
   assert.match(section, /useState<AttachStep\["key"\] \| null>\(null\)/);
+  assert.match(section, /desktop-outline/);
+  assert.match(section, /sparkles-outline/);
+  assert.match(section, /folder-open-outline/);
   assert.match(section, /expandedStep === "box"/);
   assert.match(section, /expandedStep === "runner"/);
   assert.match(section, /expandedStep === "checkout"/);
-  assert.match(section, /step\.status === "ok" \? "Change" : "Fix"/);
+  assert.match(section, /step\.status === "ok" \? "Change" : "Set up"/);
   assert.match(section, /accessibilityLabel="Box choices"/);
   assert.match(section, /accessibilityLabel="Runner choices"/);
   assert.match(section, /accessibilityLabel="Yaver checkout choices"/);
+  assert.match(section, /Pair remote box/);
+  assert.match(section, /openPair: "1", returnTo: "dogfood"/);
 });

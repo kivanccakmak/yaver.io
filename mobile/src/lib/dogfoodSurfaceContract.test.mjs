@@ -17,6 +17,7 @@ const remoteRuntime = readFileSync(join(mobile, "app", "remote-runtime.tsx"), "u
 const tasks = readFileSync(join(mobile, "app", "(tabs)", "tasks.tsx"), "utf8");
 const metro = readFileSync(join(mobile, "metro.config.js"), "utf8");
 const projects = readFileSync(join(mobile, "app", "(tabs)", "apps.tsx"), "utf8");
+const devPreview = readFileSync(join(mobile, "src", "components", "DevPreview.tsx"), "utf8");
 
 test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", () => {
   assert.match(metro, /resolver\.nodeModulesPaths/,
@@ -34,8 +35,12 @@ test("More removes the old Vibing row and exposes contributor Dogfood to everyon
 test("Dogfood is a signed-in contributor workflow, not a product-owner entitlement", () => {
   assert.doesNotMatch(dogfood, /user\?\.isOwner|Owner access only|owner account/);
   assert.match(dogfood, /<AttachModeSection c=\{c\}/);
+  assert.match(dogfood, /management === "1"/,
+    "developer administration must stay one level below Settings");
   assert.match(dogfood, /canonical main branch is protected/);
   assert.doesNotMatch(settings, /AttachModeSection/);
+  assert.match(settings, /management: "1"/);
+  assert.match(settings, /App testing &amp; approvals/);
   assert.doesNotMatch(rootLayout, /DogfoodCaptureHost|loadDogfoodMode/,
     "the retired screenshot catcher would silently keep the old meaning alive");
 });
@@ -59,6 +64,14 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
   assert.match(attached, /DOGFOOD_WEBVIEW_HTTP_FAILED/,
     "HTTP failures must not paint a raw server error as if Dogfood succeeded");
   assert.match(attached, /parseDogfoodRenderMessage/);
+  assert.match(attached, /parseDogfoodGuestException/);
+  assert.match(attached, /DOGFOOD_EXCEPTION_CAPTURE_SCRIPT/);
+  assert.match(attached, /onFixException=/,
+    "captured guest exceptions have no in-place coding route beside Fast Reload and Y");
+  assert.match(attached, /dogfoodExceptionFixPrompt/,
+    "the exception fix task must receive the structured URL and stack evidence");
+  assert.match(attached, /openTaskBus\.publish\(taskId\)/,
+    "starting an exception fix must take the user to its live task chat");
   assert.match(attached, /onMessage=/);
 });
 
@@ -75,6 +88,15 @@ test("attached Dogfood does not offer its own Yaver dev server as a guest card",
   assert.match(tasks, /isAttachedDogfoodWebRuntime\(\)/);
   assert.match(tasks, /isEffectivelyConnected\s*&&\s*!attachedDogfoodRuntime/);
   assert.doesNotMatch(tasks, /isEffectivelyConnected\s*&&\s*<DevPreview/);
+});
+
+test("every browser guest owns one shared escape and reload surface", () => {
+  assert.doesNotMatch(devPreview, /showBrowserEscapeBar|browserEscapeLayer|Back from browser preview/,
+    "DevPreview still paints a second Back, Reload, and Stop strip over a guest app");
+  assert.match(devPreview, /<BrowserVibeBubble/,
+    "browser guests must use the shared library control surface");
+  assert.match(bubble, /\{!open \? <Animated\.View/,
+    "the Fast Reload and Y dock still covers the open Vibing composer");
 });
 
 test("attached Dogfood hides only its Yaver checkout and leaves other projects launchable", () => {
@@ -132,4 +154,6 @@ test("Dogfood exposes the shared three-lane matrix with browser as the default",
     "WebRTC Dogfood must expose Vibing and routing on the live surface");
   assert.match(bubble, /testID="browser-vibe-fast-reload"/,
     "Fast Reload must sit beside Vibing instead of inside Settings");
+  assert.match(bubble, /testID="browser-vibe-fix-exception"/,
+    "captured exceptions must expose a contextual Fix action beside Fast Reload and Y");
 });
