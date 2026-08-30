@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   DeviceEventEmitter,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -499,9 +500,6 @@ export const FeedbackModal: React.FC = () => {
       } else if (device.needsAuth) {
         status = 'attention';
         detail = 'Machine needs pairing again before feedback actions can run.';
-      } else if (device.runnerDown) {
-        status = 'attention';
-        detail = 'Machine is online but the coding agent is down.';
       } else if (reachable === false) {
         status = 'offline';
         detail = 'Machine selected, but the agent is not responding.';
@@ -1062,6 +1060,7 @@ export const FeedbackModal: React.FC = () => {
   const dogfoodModelReady = !selectedDogfoodRunner?.models?.length
     || !!preferredModel && selectedDogfoodRunner.models.some((model) => model.id === preferredModel);
   const dogfoodFramework = dogfoodProject?.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo';
+  const dogfoodOnboarding = YaverFeedback.getDogfoodOnboarding();
   const dogfoodLaneChoices = dogfoodLaneOptions(dogfoodFramework, {
     nativeRuntimeAvailable: dogfoodNativeAvailable,
     browserRuntimeAvailable: dogfoodBrowserAvailable,
@@ -1176,7 +1175,10 @@ export const FeedbackModal: React.FC = () => {
           transparent
           onRequestClose={handleClose}
         >
-          <View style={styles.overlay}>
+          <KeyboardAvoidingView
+            style={styles.overlay}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          >
             <Pressable style={styles.backdrop} onPress={handleClose} accessibilityLabel="Close feedback" />
             <View
               // Tablet: cap modal width and center as a card-style
@@ -1202,11 +1204,18 @@ export const FeedbackModal: React.FC = () => {
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                 contentInsetAdjustmentBehavior="always"
-                automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+                // KeyboardAvoidingView is the single inset owner. Letting the
+                // ScrollView add a second UIKit inset lifts the composer twice
+                // on short phones and still leaves its action row clipped.
+                automaticallyAdjustKeyboardInsets={false}
               >
               <View style={styles.header}>
                 <Text style={styles.title}>
-                  {dogfoodActive ? `${YaverFeedback.getDogfoodStatus().label || 'App'} Developer Mode` : 'Send Feedback'}
+                  {dogfoodOnboarding
+                    ? `Set up ${dogfoodOnboarding.projectName || dogfoodOnboarding.label || 'this app'} Dogfood`
+                    : dogfoodActive
+                      ? `${YaverFeedback.getDogfoodStatus().label || 'App'} Developer Mode`
+                      : 'Send Feedback'}
                 </Text>
                 <Pressable
                   onPress={handleClose}
@@ -1219,6 +1228,7 @@ export const FeedbackModal: React.FC = () => {
                 </Pressable>
               </View>
 
+              {(!dogfoodOnboarding || dogfoodSetupStage === 'runtime') ? (
               <View style={styles.tabs} accessibilityRole="tablist">
                 {(['chat', 'settings'] as const).map((tab) => (
                   <Pressable
@@ -1232,15 +1242,16 @@ export const FeedbackModal: React.FC = () => {
                   </Pressable>
                 ))}
               </View>
+              ) : null}
 
               <View style={[styles.tabContent, activeTab !== 'settings' && styles.hidden]}>
               <>
-              {YaverFeedback.getDogfoodOnboarding() ? (
+              {dogfoodOnboarding ? (
                 <View style={styles.dogfoodWizard}>
-                  <Text style={styles.dogfoodWizardTitle}>Dogfood this app</Text>
+                  <Text style={styles.dogfoodWizardTitle}>Connect the app to its checkout</Text>
                   <Text style={styles.dogfoodWizardHint}>
                     {dogfoodEnrollment?.status === 'active'
-                      ? 'Signed in · this installation is approved'
+                      ? 'Choose one development machine, coding runner, and checkout. Then choose how to preview it.'
                       : `Signed in · installation ${dogfoodEnrollment?.status || 'checking'}`}
                   </Text>
                   {dogfoodEnrollment?.status === 'active' && dogfoodSetupStage === 'setup' ? (
@@ -1337,7 +1348,7 @@ export const FeedbackModal: React.FC = () => {
                             </View>
                           ) : null}
                           <ActionRow
-                            label="Choose runtime"
+                            label={dogfoodSetupReady ? 'Continue to runtime' : 'Complete the choices above'}
                             tint="#5645d8"
                             onPress={() => {
                               setDogfoodExpandedStep(null);
@@ -1441,6 +1452,7 @@ export const FeedbackModal: React.FC = () => {
                   )}
                 </View>
               ) : null}
+              {!dogfoodOnboarding ? <>
               <Pressable
                 onPress={() => {
                   if (!YaverFeedback.isAuthed()) {
@@ -1718,6 +1730,7 @@ export const FeedbackModal: React.FC = () => {
                   </Text>
                 </View>
               ))}
+              </> : null}
               </>
               </View>
 
@@ -1805,7 +1818,7 @@ export const FeedbackModal: React.FC = () => {
               </Pressable>
               </ScrollView>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
       )}
       {runnerAuthModal ? (

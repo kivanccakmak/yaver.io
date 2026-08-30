@@ -116,6 +116,8 @@ export interface YaverLoginScreenProps {
   onLoggedIn: (token: string) => void;
   /** Optional cancel button shown in header. */
   onCancel?: () => void;
+  /** Intent shown under the Yaver mark. Defaults to ordinary feedback. */
+  subtitle?: string;
 }
 
 /**
@@ -126,6 +128,7 @@ export interface YaverLoginScreenProps {
 export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
   onLoggedIn,
   onCancel,
+  subtitle = 'Sign in to send feedback',
 }) => {
   const [busyProvider, setBusyProvider] = useState<OAuthProvider | 'apple' | null>(null);
   const [showEmailForm, setShowEmailForm] = useState(false);
@@ -242,7 +245,7 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
 
           <View style={styles.header}>
             <Text style={styles.logo}>Yaver</Text>
-            <Text style={styles.subtitle}>Sign in to send feedback</Text>
+            <Text style={styles.subtitle}>{subtitle}</Text>
           </View>
 
           <View style={styles.buttons}>

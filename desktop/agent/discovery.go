@@ -519,12 +519,34 @@ type projectInfo struct {
 // Component-wise via filepath.Rel, so sibling names that merely share a prefix
 // (/ws/yaver.io vs /ws/yaver.io-2) never collide.
 func collapseNestedRepos(projects []projectInfo) []projectInfo {
-	if len(projects) < 2 {
-		return projects
+	home, _ := os.UserHomeDir()
+	return collapseNestedReposOutsideHome(projects, home)
+}
+
+// collapseNestedReposOutsideHome also rejects the account HOME itself as a
+// project root. A stray $HOME/.git otherwise becomes the shallowest repo and
+// swallows every real checkout under $HOME/Workspace. More importantly, HOME
+// is never a safe task workdir: selecting it makes project scans and coding
+// agents traverse unrelated user data. Concrete repos below HOME remain valid.
+func collapseNestedReposOutsideHome(projects []projectInfo, home string) []projectInfo {
+	if projects == nil {
+		return nil
+	}
+	home = filepath.Clean(strings.TrimSpace(home))
+	filtered := make([]projectInfo, 0, len(projects))
+	for _, project := range projects {
+		path := filepath.Clean(strings.TrimSpace(project.Path))
+		if path == "" || (home != "." && path == home) {
+			continue
+		}
+		filtered = append(filtered, project)
+	}
+	if len(filtered) < 2 {
+		return filtered
 	}
 	// Shallowest roots first so the top-level checkout is always the one kept.
-	sorted := make([]projectInfo, len(projects))
-	copy(sorted, projects)
+	sorted := make([]projectInfo, len(filtered))
+	copy(sorted, filtered)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		di, dj := pathDepth(sorted[i].Path), pathDepth(sorted[j].Path)
 		if di != dj {

@@ -11,6 +11,8 @@ export const AuthOverlay: React.FC = () => {
   const [pickerVisible, setPickerVisible] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const activeOverlayRef = useRef<'none' | 'login' | 'picker'>('none');
+  const onboarding = YaverFeedback.getDogfoodOnboarding();
+  const dogfoodLabel = onboarding?.projectName || onboarding?.label || 'this app';
 
   const openLogin = useCallback(() => {
     activeOverlayRef.current = 'login';
@@ -94,13 +96,18 @@ export const AuthOverlay: React.FC = () => {
   return (
     <>
       <Modal visible={loginVisible} animationType="slide" presentationStyle="fullScreen" onRequestClose={closeAll}>
-        <YaverLoginScreen onLoggedIn={handleLoggedIn} onCancel={closeAll} />
+        <YaverLoginScreen
+          onLoggedIn={handleLoggedIn}
+          onCancel={closeAll}
+          subtitle={onboarding ? `Sign in to set up ${dogfoodLabel} Dogfood` : undefined}
+        />
       </Modal>
       <Modal visible={pickerVisible && !!token} animationType="slide" presentationStyle="fullScreen" onRequestClose={closeAll}>
         {token && (
           <YaverMachinePickerScreen
             token={token}
             currentDeviceId={YaverFeedback.getConfig()?.preferredDeviceId}
+            title={onboarding ? `Choose a machine for ${dogfoodLabel}` : undefined}
             onPick={handleDevicePicked}
             onCancel={closeAll}
           />

@@ -269,3 +269,41 @@ The real RN-web pixel arc remains environment-gated by `MOBILE_WEB_URL`; release
 validation therefore includes the native TestFlight build rather than claiming
 a desktop-width browser as mobile proof. Release and remote rollout results are
 recorded by their executable deployment lanes, not assumed by this snapshot.
+
+## Post-TestFlight SFMG closed-loop findings
+
+The first SFMG TestFlight walk found four cross-surface regressions that source
+tests had not made visible:
+
+1. The SDK rendered the compact Remote box / Runner / Checkout flow and the
+   complete legacy machine, route, runner, icon, and reload inventory beneath
+   it. Explicit Dogfood onboarding now renders only the compact setup; the
+   legacy administration surface remains available for ordinary feedback
+   settings, not during onboarding.
+2. A stale `runnerDown` device bit changed a reachable machine to attention even
+   while `/agent/runners` reported three ready runners. Machine reachability and
+   runner readiness are independent again; only the runner step consumes runner
+   state.
+3. The machine picker held all rows at `Checking connection…` until every direct
+   probe completed. Heartbeat-online machines now render and select immediately,
+   offline direct probes publish progressively, and the selected row names the
+   real `Connecting…` operation.
+4. The composer sheet stayed behind the iOS keyboard. The outer
+   `KeyboardAvoidingView` is now the single keyboard inset owner; the nested
+   `ScrollView` explicitly does not add a second automatic inset.
+
+The same walk exposed an agent-side project-discovery failure. The named Ubuntu
+box has a `$HOME/.git`; the outermost-repository collapse treated HOME as the
+project and hid `$HOME/Workspace/sfmg`, producing `/root · branch unknown` in the
+SDK. HOME is now categorically excluded as a project/task root while concrete
+repositories beneath it remain discoverable. This is both the checkout fix and
+the bounded-scan safety invariant required by the project's no-HOME-workdir
+rule.
+
+Additional guards:
+
+- `sdk/feedback/react-native/src/__tests__/MachinePickerScreenContract.test.ts`
+- `sdk/feedback/react-native/src/__tests__/FeedbackModalContract.test.ts`
+- `desktop/agent/discovery_gitwalk_test.go`
+
+The updated SDK lane passes 24 suites and 208 tests.

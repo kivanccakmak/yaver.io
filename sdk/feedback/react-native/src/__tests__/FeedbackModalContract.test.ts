@@ -67,7 +67,9 @@ describe('FeedbackModal authenticated chat contract', () => {
     expect(setupSteps).not.toContain("key: 'model'");
     expect(setupSteps).not.toContain("key: 'lane'");
     expect(source).toContain("type DogfoodSetupStage = 'setup' | 'lane' | 'runtime'");
-    expect(source).toContain('label="Choose runtime"');
+    expect(source).toContain("label={dogfoodSetupReady ? 'Continue to runtime' : 'Complete the choices above'}");
+    expect(source).toContain('{!dogfoodOnboarding ? <>');
+    expect(source).toContain("? `Set up ${dogfoodOnboarding.projectName || dogfoodOnboarding.label || 'this app'} Dogfood`");
   });
 
   it('passes the selected native target and labels the live log source', () => {
@@ -78,9 +80,10 @@ describe('FeedbackModal authenticated chat contract', () => {
     expect(source).toContain('Simulator, emulator, or device');
   });
 
-  it('has one iOS keyboard inset owner and no gesture-stealing sheet Pressable', () => {
-    expect(source).toContain('automaticallyAdjustKeyboardInsets={Platform.OS === \'ios\'}');
-    expect(source).not.toContain('<KeyboardAvoidingView');
+  it('has one keyboard inset owner and no gesture-stealing sheet Pressable', () => {
+    expect(source).toContain("behavior={Platform.OS === 'ios' ? 'padding' : 'height'}");
+    expect(source).toContain('automaticallyAdjustKeyboardInsets={false}');
+    expect(source).toContain('<KeyboardAvoidingView');
     expect(source).not.toContain('keyboardInset');
     expect(source).toContain('<Pressable style={styles.backdrop} onPress={handleClose}');
     expect(source).toMatch(/<View[\s\S]{0,300}?style=\{\[\s*styles\.modal/);

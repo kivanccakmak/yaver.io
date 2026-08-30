@@ -245,3 +245,26 @@ func TestCollapseNestedReposEmptyAndSingle(t *testing.T) {
 		t.Fatalf("single repo must pass through unchanged; got %v", got)
 	}
 }
+
+func TestCollapseNestedReposRejectsHomeWithoutHidingWorkspaceRepos(t *testing.T) {
+	home := "/root"
+	projects := []projectInfo{
+		{Path: home, Branch: "unknown"},
+		{Path: "/root/Workspace/sfmg", Branch: "main"},
+		{Path: "/root/Workspace/yaver.io", Branch: "main"},
+	}
+
+	got := collapseNestedReposOutsideHome(projects, home)
+	byPath := map[string]bool{}
+	for _, project := range got {
+		byPath[project.Path] = true
+	}
+	if byPath[home] {
+		t.Fatalf("HOME must never be offered as a task project: %v", got)
+	}
+	for _, want := range []string{"/root/Workspace/sfmg", "/root/Workspace/yaver.io"} {
+		if !byPath[want] {
+			t.Fatalf("real checkout %q was hidden by HOME: %v", want, got)
+		}
+	}
+}

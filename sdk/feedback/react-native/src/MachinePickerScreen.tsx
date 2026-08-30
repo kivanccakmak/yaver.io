@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -23,8 +23,10 @@ export interface YaverMachinePickerProps {
   token: string;
   /** Currently-selected deviceId (from config / cache) — highlighted. */
   currentDeviceId?: string;
-  onPick: (device: RemoteDevice) => void;
+  onPick: (device: RemoteDevice) => void | Promise<void>;
   onCancel?: () => void;
+  /** Optional flow-specific title, e.g. "Choose a machine for SFMG". */
+  title?: string;
 }
 
 /**
@@ -39,6 +41,7 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
   currentDeviceId,
   onPick,
   onCancel,
+  title = 'Choose a machine',
 }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -46,32 +49,28 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
   const [list, setList] = useState<DeviceList>({ owned: [] });
   const [pairingDevice, setPairingDevice] = useState<RemoteDevice | null>(null);
   const [reachability, setReachability] = useState<Record<string, DeviceReachability | undefined>>({});
+  const [selectingDeviceId, setSelectingDeviceId] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const loadGenerationRef = useRef(0);
 
   const load = useCallback(async (silent = false) => {
+    const generation = ++loadGenerationRef.current;
     if (!silent) setLoading(true);
     setError(null);
     try {
       const result = await listReachableDevices(token);
       setList(result);
       setReachability({});
-      void (async () => {
-        const devices = result.owned;
-        const settled = await Promise.allSettled(
-          devices.map(async (device) => ({
-            deviceId: device.deviceId,
-            result: await probeDeviceReachability(device),
-          })),
-        );
-        setReachability((prev) => {
-          const next = { ...prev };
-          for (const entry of settled) {
-            if (entry.status === 'fulfilled') {
-              next[entry.value.deviceId] = entry.value.result;
-            }
-          }
-          return next;
-        });
-      })();
+      // Convex already gives us a fresh, heartbeat-gated online answer. Render
+      // that immediately. Only probe cloud-offline rows to detect a phone-LAN
+      // route that came back before the next heartbeat, and publish each result
+      // as it arrives instead of holding the whole list behind the slowest box.
+      for (const device of result.owned.filter((candidate) => !candidate.isOnline)) {
+        void probeDeviceReachability(device).then((probe) => {
+          if (!mountedRef.current || loadGenerationRef.current !== generation) return;
+          setReachability((prev) => ({ ...prev, [device.deviceId]: probe }));
+        }).catch(() => {});
+      }
       if (result.owned.length === 0) {
         setError('No machines found yet. Run `yaver auth` + `yaver serve` on your machine.');
       }
@@ -84,7 +83,9 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
   }, [token]);
 
   useEffect(() => {
+    mountedRef.current = true;
     void load();
+    return () => { mountedRef.current = false; };
   }, [load]);
 
   const handlePick = async (device: RemoteDevice) => {
@@ -97,7 +98,9 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
       setPairingDevice(device);
       return;
     }
-    const direct = await probeDeviceReachability(device);
+    const direct = device.isOnline
+      ? { reachable: true } as DeviceReachability
+      : await probeDeviceReachability(device);
     // Do not hard-block selection just because the LAN /health probe
     // failed. The standalone SDK can still reach a healthy machine via
     // the normal selected-device discovery path (including relay), and
@@ -110,12 +113,18 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
       setReachability((prev) => ({ ...prev, [device.deviceId]: direct }));
       return;
     }
-    await saveSelectedDeviceId(device.deviceId);
-    onPick(device);
+    setSelectingDeviceId(device.deviceId);
+    try {
+      await saveSelectedDeviceId(device.deviceId);
+      await onPick(device);
+    } finally {
+      if (mountedRef.current) setSelectingDeviceId(null);
+    }
   };
 
   const renderDevice = (device: RemoteDevice) => {
     const selected = device.deviceId === currentDeviceId;
+    const selecting = device.deviceId === selectingDeviceId;
     const probe = reachability[device.deviceId];
     // Trust Convex's `isOnline` — the backend already gates it on a
     // fresh 90 s heartbeat (see backend/convex/devices.ts
@@ -134,14 +143,16 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
       : effectivelyReachable
         ? '#22c55e'
         : device.isOnline
-          ? '#f59e0b'
+          ? '#22c55e'
           : explicitlyOffline || !device.isOnline
           ? '#ef4444'
           : '#22c55e';
     // Derive a single short status phrase the user can act on.
     let statusLine = device.platform;
-    if (probe === undefined) {
-      statusLine = 'Checking connection…';
+    if (selecting) {
+      statusLine = 'Connecting…';
+    } else if (probe === undefined && device.isOnline) {
+      statusLine = device.platform || 'Online';
     } else if (!device.isOnline && effectivelyReachable) {
       statusLine = 'Reachable now — waiting for cloud status to refresh';
     } else if (!device.isOnline) {
@@ -162,13 +173,15 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
         key={device.deviceId}
         style={[styles.deviceRow, selected && styles.deviceSelected]}
         onPress={() => handlePick(device)}
+        disabled={selectingDeviceId !== null}
       >
         <View style={[styles.health, { backgroundColor: healthColor }]} />
         <View style={{ flex: 1 }}>
           <Text style={styles.deviceName}>{device.name || device.deviceId}</Text>
           <Text style={styles.deviceMeta}>{statusLine}</Text>
         </View>
-        {selected && <Text style={styles.selectedBadge}>seçili</Text>}
+        {selecting ? <ActivityIndicator color="#a5b4fc" size="small" /> : null}
+        {selected && !selecting && <Text style={styles.selectedBadge}>selected</Text>}
       </TouchableOpacity>
     );
   };
@@ -176,10 +189,10 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Makine Seç</Text>
+        <Text style={styles.title}>{title}</Text>
         {onCancel && (
           <TouchableOpacity onPress={onCancel} style={styles.cancel}>
-            <Text style={styles.cancelText}>Kapat</Text>
+            <Text style={styles.cancelText}>Close</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -203,7 +216,7 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
           <>
             {list.owned.length > 0 && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Kendi makinelerim</Text>
+                <Text style={styles.sectionTitle}>Your machines</Text>
                 {list.owned.map(renderDevice)}
               </View>
             )}
