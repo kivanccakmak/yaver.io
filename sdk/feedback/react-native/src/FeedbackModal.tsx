@@ -40,6 +40,7 @@ import {
 import {
   DogfoodController,
   defaultDogfoodLane,
+  dogfoodLanePlan,
   dogfoodLaneOptions,
   type DogfoodLane,
   type DogfoodSnapshot,
@@ -389,12 +390,17 @@ export const FeedbackModal: React.FC = () => {
     if (!client || !dogfoodProject || !onboarding) return;
     await dogfoodControllerRef.current?.stop().catch(() => {});
     const framework = dogfoodProject.framework || onboarding.framework || 'expo';
+    const lanePlan = dogfoodLanePlan(framework, {
+      nativeRuntimeAvailable: dogfoodNativeAvailable,
+      browserRuntimeAvailable: dogfoodBrowserAvailable,
+    }, dogfoodLane);
     const controller = new DogfoodController({
       name: dogfoodProject.name,
       workDir: dogfoodProject.path,
       framework,
-      lane: dogfoodLane,
-      nativeTargetId: dogfoodLane === 'webrtc' ? dogfoodNativeTargetId : undefined,
+      lane: lanePlan.preferred,
+      fallbackLane: lanePlan.fallback,
+      nativeTargetId: lanePlan.preferred === 'webrtc' ? dogfoodNativeTargetId : undefined,
     }, createP2PDogfoodDriver(client), {
       onChange: (snapshot) => { if (mountedRef.current) setDogfoodRuntime(snapshot); },
     });
@@ -608,7 +614,11 @@ export const FeedbackModal: React.FC = () => {
         setShowVibeInput(authenticated || directDogfood);
         setVibePrompt('');
         if (onboarding) {
-          setActiveTab(authenticated ? 'chat' : 'settings');
+          // A Dogfood shortcut is an explicit setup/runtime intent. Opening on
+          // Chat hid the machine/runner/checkout gate for signed-in SFMG users;
+          // keep the SDK-owned Dogfood surface visible, then show its live logs
+          // immediately when Start is tapped.
+          setActiveTab('settings');
           setDogfoodSetupStage('setup');
           setDogfoodExpandedStep(null);
           setDogfoodRuntime(null);
@@ -1056,6 +1066,10 @@ export const FeedbackModal: React.FC = () => {
     nativeRuntimeAvailable: dogfoodNativeAvailable,
     browserRuntimeAvailable: dogfoodBrowserAvailable,
   });
+  const dogfoodLanePolicy = dogfoodLanePlan(dogfoodFramework, {
+    nativeRuntimeAvailable: dogfoodNativeAvailable,
+    browserRuntimeAvailable: dogfoodBrowserAvailable,
+  }, dogfoodLane);
   const selectedDogfoodNativeTarget = dogfoodNativeTargets.find((target) => target.id === dogfoodNativeTargetId) || null;
   const dogfoodLaneReady = dogfoodLaneChoices.some((option) => option.lane === dogfoodLane && option.supported)
     && (dogfoodLane !== 'webrtc' || !!selectedDogfoodNativeTarget?.enabled);
@@ -1092,11 +1106,12 @@ export const FeedbackModal: React.FC = () => {
     },
   ];
   const dogfoodStartBlocked = !dogfoodSetupReady || !dogfoodLaneReady;
-  const dogfoodSourceLabel = dogfoodLane === 'webrtc'
+  const activeDogfoodLane = dogfoodRuntime?.project.lane || dogfoodLane;
+  const dogfoodSourceLabel = activeDogfoodLane === 'webrtc'
     ? selectedDogfoodNativeTarget
       ? [selectedDogfoodNativeTarget.label, selectedDogfoodNativeTarget.platform].filter(Boolean).join(' · ')
       : 'Native simulator, emulator, or device'
-    : dogfoodLane === 'hermes'
+    : activeDogfoodLane === 'hermes'
       ? `Hermes build · ${machineCard.title}`
       : `${dogfoodFramework === 'flutter' ? 'Flutter web compiler' : 'Metro / browser build'} · ${machineCard.title}`;
 
@@ -1347,6 +1362,7 @@ export const FeedbackModal: React.FC = () => {
                           <DogfoodLanePicker
                             options={dogfoodLaneChoices}
                             selected={dogfoodLane}
+                            fallbackLane={dogfoodLanePolicy.fallback}
                             colors={FEEDBACK_DOGFOOD_LIGHT_COLORS}
                             onSelect={(lane) => {
                               setDogfoodLane(lane);

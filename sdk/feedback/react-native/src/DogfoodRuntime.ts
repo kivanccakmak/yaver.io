@@ -27,6 +27,13 @@ export interface DogfoodProject {
   workDir: string;
   framework: string;
   lane: DogfoodLane;
+  /**
+   * Optional automatic recovery lane. The shared onboarding flow uses the
+   * browser lane here when a user prefers Hermes or WebRTC for a project that
+   * can also render in a browser. The failed preferred attempt remains in the
+   * live console; the fallback is never silent.
+   */
+  fallbackLane?: DogfoodLane;
   /** Optional source URL for drivers that can clone missing source. */
   repositoryUrl?: string;
   /** Optional native target from /remote-runtime/capabilities for WebRTC. */
@@ -39,6 +46,13 @@ export interface DogfoodLaneOption {
   supported: boolean;
   default: boolean;
   reason?: string;
+}
+
+export interface DogfoodLanePlan {
+  preferred: DogfoodLane;
+  /** Browser is the cheap, portable recovery lane for RN/Expo/Flutter/web. */
+  fallback?: DogfoodLane;
+  options: DogfoodLaneOption[];
 }
 
 /** One framework-to-lane matrix for Yaver and third-party consumers. */
@@ -87,6 +101,36 @@ export function defaultDogfoodLane(
   return options.find((option) => option.default && option.supported)?.lane
     || options.find((option) => option.supported)?.lane
     || 'browser';
+}
+
+/**
+ * Resolve one ordered lane policy for Yaver and embedded SDK hosts.
+ *
+ * Browser is the onboarding default for browser-capable React Native, Expo,
+ * Flutter, and web projects. When the user explicitly prefers Hermes or
+ * WebRTC, browser becomes the automatic second attempt. Native-only projects
+ * remain WebRTC-only and never advertise a browser recovery they cannot run.
+ */
+export function dogfoodLanePlan(
+  framework: string,
+  capabilities: {
+    nativeRuntimeAvailable?: boolean;
+    browserRuntimeAvailable?: boolean;
+    selfDevelopment?: boolean;
+  } = {},
+  preferred?: DogfoodLane | null,
+): DogfoodLanePlan {
+  const options = dogfoodLaneOptions(framework, capabilities);
+  const supported = (lane: DogfoodLane | null | undefined) =>
+    !!lane && options.some((option) => option.lane === lane && option.supported);
+  const resolved = supported(preferred)
+    ? preferred!
+    : defaultDogfoodLane(framework, capabilities);
+  return {
+    preferred: resolved,
+    fallback: resolved !== 'browser' && supported('browser') ? 'browser' : undefined,
+    options,
+  };
 }
 
 export interface DogfoodLogLine {
@@ -291,8 +335,8 @@ export class DogfoodController {
       message: `Preparing ${this.project.name}…`, logs: [], startedAt: Date.now(),
     });
 
-    const context: DogfoodRunContext = {
-      project: this.project,
+    const makeContext = (project: DogfoodProject): DogfoodRunContext => ({
+      project,
       attempt,
       log: (line) => {
         if (generation !== this.generation) return;
@@ -316,16 +360,69 @@ export class DogfoodController {
         this.cleanups.set(generation, owned);
       },
       isCurrent: () => generation === this.generation,
-    };
+    });
+
+    let activeProject = this.project;
+    let context = makeContext(activeProject);
 
     try {
-      await this.driver.prepare?.(context);
-      if (!context.isCurrent()) throw new DogfoodRuntimeError({
-        code: 'DOGFOOD_ATTEMPT_REPLACED', error: 'A newer Dogfood attempt replaced this one.',
-        remedy: 'Wait for the newer attempt.', retryable: true,
-      });
-      context.setPhase('starting', `Starting ${this.project.name} on the ${this.project.lane} lane…`);
-      const result = await this.driver.start(context);
+      const start = async (): Promise<DogfoodResult> => {
+        await this.driver.prepare?.(context);
+        if (!context.isCurrent()) throw new DogfoodRuntimeError({
+          code: 'DOGFOOD_ATTEMPT_REPLACED', error: 'A newer Dogfood attempt replaced this one.',
+          remedy: 'Wait for the newer attempt.', retryable: true,
+        });
+        context.setPhase('starting', `Starting ${activeProject.name} on the ${activeProject.lane} lane…`);
+        return this.driver.start(context);
+      };
+
+      let result: DogfoodResult;
+      try {
+        result = await start();
+      } catch (primaryError) {
+        const primaryFailure = failureFrom(primaryError);
+        const fallbackLane = activeProject.fallbackLane;
+        const mayFallback = !!fallbackLane
+          && fallbackLane !== activeProject.lane
+          && primaryFailure.retryable
+          && primaryFailure.code !== 'DOGFOOD_ATTEMPT_REPLACED';
+        if (!mayFallback) throw primaryError;
+
+        await this.runCleanups('all', generation);
+        const fallbackProject: DogfoodProject = {
+          ...activeProject,
+          lane: fallbackLane!,
+          fallbackLane: undefined,
+        };
+        const fallbackInvalid = validateDogfoodProject(fallbackProject);
+        if (fallbackInvalid) throw primaryError;
+        const fallbackLine: DogfoodLogLine = {
+          text: `[fallback] ${activeProject.lane} failed (${primaryFailure.code}); trying ${fallbackLane}`,
+          at: Date.now(),
+          stream: 'system',
+        };
+        activeProject = fallbackProject;
+        this.replace({
+          ...this.state,
+          project: activeProject,
+          phase: 'preparing',
+          message: `Recovering ${activeProject.name} in the ${fallbackLane} lane…`,
+          logs: [...this.state.logs, fallbackLine].slice(-this.maxLogLines),
+          lastOutputAt: fallbackLine.at,
+          failure: undefined,
+        });
+        context = makeContext(activeProject);
+        result = await start();
+        result = {
+          ...result,
+          metadata: {
+            ...result.metadata,
+            preferredLane: this.project.lane,
+            fallbackFrom: this.project.lane,
+            fallbackReason: primaryFailure.code,
+          },
+        };
+      }
       if (!context.isCurrent()) {
         await this.runCleanups('all', generation);
         throw new DogfoodRuntimeError({
@@ -333,7 +430,7 @@ export class DogfoodController {
           remedy: 'Wait for the newer attempt.', retryable: true,
         });
       }
-      this.replace({ ...this.state, phase: 'ready', message: `${this.project.name} is ready`, result, failure: undefined });
+      this.replace({ ...this.state, project: activeProject, phase: 'ready', message: `${activeProject.name} is ready`, result, failure: undefined });
       return result;
     } catch (error) {
       const failure = failureFrom(error);

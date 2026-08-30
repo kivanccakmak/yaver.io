@@ -4,7 +4,6 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
-import LaneStartupStatus from "../src/components/LaneStartupStatus";
 import { AnsiConsoleText } from "../src/components/AnsiConsoleText";
 import { useColors } from "../src/context/ThemeContext";
 import {
@@ -32,34 +31,30 @@ export default function DogfoodLaunchScreen() {
     deviceId?: string;
     deviceName?: string;
     lane?: string;
+    fallbackLane?: string;
   }>();
   const workDir = String(params.workDir || "");
   const runner = String(params.runner || "codex");
   const deviceId = String(params.deviceId || "");
   const deviceName = String(params.deviceName || "the primary device");
   const lane: DogfoodLane = params.lane === "webrtc" || params.lane === "hermes" ? params.lane : "browser";
+  const fallbackLane: DogfoodLane | undefined = params.fallbackLane === "browser" || params.fallbackLane === "webrtc" || params.fallbackLane === "hermes"
+    ? params.fallbackLane
+    : undefined;
 
   const controllerRef = useRef<DogfoodController | null>(null);
   const handedOffRef = useRef(false);
   const [running, setRunning] = useState(true);
   const [phase, setPhase] = useState("Connecting to the primary device…");
+  const [runtimeLane, setRuntimeLane] = useState<DogfoodLane>(lane);
   const [lines, setLines] = useState<string[]>([]);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [fixing, setFixing] = useState(false);
-  const [startedAt, setStartedAt] = useState<number | null>(() => Date.now());
-  const [lastOutputAt, setLastOutputAt] = useState<number | null>(null);
-  const [now, setNow] = useState(Date.now());
 
   const append = useCallback((line: string) => {
     const clean = line.trim();
     if (!clean) return;
-    setLastOutputAt(Date.now());
     setLines((current) => current[current.length - 1] === clean ? current : [...current.slice(-79), clean]);
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
   }, []);
 
   const launch = useCallback(async (controller: DogfoodController) => {
@@ -111,10 +106,12 @@ export default function DogfoodLaunchScreen() {
       workDir,
       framework: "expo",
       lane,
+      fallbackLane,
       repositoryUrl: "https://github.com/yaver-io/yaver.io.git",
     }, {
       async start(context) {
-        if (lane === "hermes") {
+        const requestedLane = context.project.lane;
+        if (requestedLane === "hermes") {
           const prepared = await prepareDogfoodCheckoutOnly(deviceId, workDir, (message) => {
             context.setPhase("preparing", message);
             context.log({ text: message, at: Date.now(), stream: "system" });
@@ -138,7 +135,7 @@ export default function DogfoodLaunchScreen() {
             metadata: { branch: prepared.branch, pushPolicy: prepared.pushPolicy, deliveredTo: delivered.deliveredTo },
           };
         }
-        if (lane === "webrtc") {
+        if (requestedLane === "webrtc") {
           const prepared = await prepareDogfoodCheckoutOnly(deviceId, workDir, (message) => {
             context.setPhase("preparing", message);
             context.log({ text: message, at: Date.now(), stream: "system" });
@@ -182,7 +179,7 @@ export default function DogfoodLaunchScreen() {
         }
         context.registerCleanup(async () => { await stopAttachSession(deviceId, result.sessionId); }, "session");
         return {
-          lane,
+          lane: requestedLane,
           sessionId: result.sessionId,
           url: result.url,
           metadata: { branch: result.branch, pushPolicy: result.pushPolicy },
@@ -193,8 +190,7 @@ export default function DogfoodLaunchScreen() {
       onChange(snapshot) {
         setRunning(["preparing", "starting", "compiling"].includes(snapshot.phase));
         setPhase(snapshot.message);
-        setStartedAt(snapshot.startedAt ?? null);
-        setLastOutputAt(snapshot.lastOutputAt ?? null);
+        setRuntimeLane(snapshot.project.lane);
         setLines(snapshot.logs.map((line) => line.text));
         setFailure(snapshot.failure ?? null);
       },
@@ -205,7 +201,7 @@ export default function DogfoodLaunchScreen() {
       controllerRef.current = null;
       if (!handedOffRef.current) void controller.stop();
     };
-  }, [deviceId, lane, launch, workDir]);
+  }, [deviceId, fallbackLane, lane, launch, workDir]);
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: c.bg }]} edges={["top", "bottom"]}>
@@ -213,27 +209,15 @@ export default function DogfoodLaunchScreen() {
         <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
           {running ? <ActivityIndicator size="large" color={c.accent} /> : null}
           <Text style={[styles.title, { color: c.textPrimary }]}>
-            {running ? phase : failure ? "Dogfood could not start" : lane === "hermes" ? "Yaver delivered to Hermes" : phase}
+            {running ? phase : failure ? "Dogfood could not start" : runtimeLane === "hermes" ? "Yaver delivered to Hermes" : phase}
           </Text>
           <Text style={[styles.meta, { color: c.textMuted }]}>{deviceName} · {runner}</Text>
 
-          <LaneStartupStatus
-            // Once the controller has reached a terminal state, the failure
-            // card is the truth. Continuing the startup clock made a finished
-            // HTTP failure degrade into "this may be stuck" minutes later.
-            startedAt={running ? startedAt : null}
-            lastOutputAt={lastOutputAt}
-            now={now}
-            lines={lines}
-            maxLines={6}
-            emptyText="waiting for the first line from the box…"
-            mutedColor={c.textMuted}
-            warnColor={c.warn}
-            stallHint="still waiting on the box"
-          />
-
+          {/* The live source is the first detail in the launch card. Status is
+              already in its header; a second truncated log/status widget hid
+              the compiler output users actually need. */}
           <DogfoodLiveConsole
-            lane={lane}
+            lane={runtimeLane}
             phase={failure ? "failed" : running ? "starting" : "ready"}
             message={phase}
             logs={lines.map((text, index) => ({ text, at: index, stream: "system" as const }))}

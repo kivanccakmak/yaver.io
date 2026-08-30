@@ -135,14 +135,21 @@ test("Dogfood entry is fail-closed until Expo and the browser lane are proved", 
     "Dogfood must not copy the owner bearer into a WebView URL");
 });
 
-test("Dogfood exposes the shared three-lane matrix with browser as the default", () => {
-  assert.match(gate, /dogfoodLaneOptions\("expo"/);
+test("Dogfood exposes framework-aware preferred and automatic fallback lanes after checkout", () => {
+  assert.match(gate, /dogfoodLanePlan\("expo"/);
   assert.match(gate, /useState<DogfoodLane>\("browser"\)/);
+  assert.match(gate, /YAVER_DOGFOOD_APP_ID/);
+  assert.match(gate, /getPreferredDogfoodLane/);
+  assert.match(gate, /setPreferredDogfoodLane/);
+  assert.ok(gate.indexOf('key={step.key}') < gate.indexOf('accessibilityLabel="Change runtime lane"'),
+    "runtime lane must follow machine, runner, and checkout readiness rows");
   assert.match(gate, /<DogfoodLanePicker/,
     "lane labels now belong to the shared SDK picker rather than the Yaver host");
-  assert.match(launch, /lane === "hermes"/);
+  assert.match(gate, /fallbackLane=\{lanePolicy\.fallback\}/);
+  assert.match(launch, /fallbackLane/);
+  assert.match(launch, /requestedLane === "hermes"/);
   assert.match(launch, /startDogfoodHermesLane/);
-  assert.match(launch, /lane === "webrtc"/);
+  assert.match(launch, /requestedLane === "webrtc"/);
   assert.doesNotMatch(launch, /DOGFOOD_SELF_HERMES_UNSAFE/);
   assert.match(launch, /prepareDogfoodMode/,
     "browser Dogfood must retain the proved attach/browser implementation");

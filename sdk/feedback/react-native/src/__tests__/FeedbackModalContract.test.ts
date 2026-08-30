@@ -46,10 +46,16 @@ describe('FeedbackModal authenticated chat contract', () => {
   });
 
   it('uses Chat as the authenticated entry surface without legacy command buttons', () => {
-    expect(source).toContain("setActiveTab(authenticated ? 'chat' : 'settings')");
+    expect(source).toContain("useState<'chat' | 'settings'>('chat')");
     expect(source).toContain('setShowVibeInput(authenticated || directDogfood)');
     expect(source).not.toContain('Screenshot & Fix');
     expect(source).not.toContain('<DeployPanel');
+  });
+
+  it('opens explicit Dogfood onboarding on setup and makes the runtime console the first live surface', () => {
+    expect(source).toContain("setActiveTab('settings')");
+    expect(source).toContain("setDogfoodSetupStage('runtime')");
+    expect(source).toMatch(/dogfoodSetupStage === 'runtime'[\s\S]*?<DogfoodLiveConsole/);
   });
 
   it('keeps Dogfood setup to box, runner, and checkout before asking for a runtime', () => {
@@ -65,7 +71,9 @@ describe('FeedbackModal authenticated chat contract', () => {
   });
 
   it('passes the selected native target and labels the live log source', () => {
-    expect(source).toContain("nativeTargetId: dogfoodLane === 'webrtc' ? dogfoodNativeTargetId : undefined");
+    expect(source).toContain("nativeTargetId: lanePlan.preferred === 'webrtc' ? dogfoodNativeTargetId : undefined");
+    expect(source).toContain('fallbackLane: lanePlan.fallback');
+    expect(source).toContain('fallbackLane={dogfoodLanePolicy.fallback}');
     expect(source).toMatch(/<DogfoodLiveConsole[\s\S]*?sourceLabel=\{dogfoodSourceLabel\}/);
     expect(source).toContain('Simulator, emulator, or device');
   });

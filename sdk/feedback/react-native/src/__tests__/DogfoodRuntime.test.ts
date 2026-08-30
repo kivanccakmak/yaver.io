@@ -2,6 +2,7 @@ import {
   DogfoodController,
   DogfoodRuntimeError,
   defaultDogfoodLane,
+  dogfoodLanePlan,
   dogfoodLaneOptions,
   dogfoodLogLinesFromDevEvent,
   validateDogfoodProject,
@@ -92,6 +93,41 @@ describe('DogfoodController', () => {
     await controller.stop();
     expect(stopSecond).toHaveBeenCalledTimes(1);
   });
+
+  test('keeps a failed preferred lane in the console and automatically recovers through browser', async () => {
+    const stopPreferred = jest.fn();
+    const lanes: string[] = [];
+    const controller = new DogfoodController({
+      ...expo,
+      lane: 'hermes',
+      fallbackLane: 'browser',
+    }, {
+      async start(ctx) {
+        lanes.push(ctx.project.lane);
+        if (ctx.project.lane === 'hermes') {
+          ctx.registerCleanup(stopPreferred);
+          throw new DogfoodRuntimeError({
+            code: 'DOGFOOD_HERMES_BUILD_FAILED',
+            error: 'Hermes build failed',
+            remedy: 'Use the browser build.',
+            retryable: true,
+          });
+        }
+        return { lane: 'browser', url: 'http://agent/dev/', metadata: { recovered: true } };
+      },
+    });
+
+    await expect(controller.trigger()).resolves.toMatchObject({
+      lane: 'browser',
+      metadata: { fallbackFrom: 'hermes', fallbackReason: 'DOGFOOD_HERMES_BUILD_FAILED' },
+    });
+    expect(lanes).toEqual(['hermes', 'browser']);
+    expect(stopPreferred).toHaveBeenCalledTimes(1);
+    expect(controller.snapshot()).toMatchObject({ phase: 'ready', project: { lane: 'browser' } });
+    expect(controller.snapshot().logs.map((line) => line.text)).toContain(
+      '[fallback] hermes failed (DOGFOOD_HERMES_BUILD_FAILED); trying browser',
+    );
+  });
 });
 
 describe('Dogfood lanes and console events', () => {
@@ -110,6 +146,21 @@ describe('Dogfood lanes and console events', () => {
     const flutter = dogfoodLaneOptions('flutter', { nativeRuntimeAvailable: true });
     expect(defaultDogfoodLane('flutter')).toBe('browser');
     expect(flutter.find((option) => option.lane === 'hermes')?.supported).toBe(false);
+  });
+
+  test('uses browser as the framework-aware default and as second choice after an explicit native preference', () => {
+    expect(dogfoodLanePlan('flutter', { nativeRuntimeAvailable: true })).toMatchObject({
+      preferred: 'browser', fallback: undefined,
+    });
+    expect(dogfoodLanePlan('expo', { nativeRuntimeAvailable: true }, 'hermes')).toMatchObject({
+      preferred: 'hermes', fallback: 'browser',
+    });
+    expect(dogfoodLanePlan('flutter', { nativeRuntimeAvailable: true }, 'webrtc')).toMatchObject({
+      preferred: 'webrtc', fallback: 'browser',
+    });
+    expect(dogfoodLanePlan('swift', { nativeRuntimeAvailable: true }, 'webrtc')).toMatchObject({
+      preferred: 'webrtc', fallback: undefined,
+    });
   });
 
   test('keeps Yaver self-development on the same RN three-lane contract', () => {

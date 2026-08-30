@@ -39,20 +39,24 @@ test("mobile routes missing source and Git failures to deterministic fixes", () 
   assert.match(settings, /gitOnboardingSectionY\.current/);
 });
 
-test("Dogfood defaults to three compact rows and progressively reveals each inventory", () => {
+test("Dogfood keeps machine, runner, checkout, and runtime as compact ordered rows", () => {
   const section = fs.readFileSync(path.join(mobileRoot, "src/components/AttachModeSection.tsx"), "utf8");
 
-  assert.match(section, /useState<AttachStep\["key"\] \| null>\(null\)/);
+  assert.match(section, /type AttachPanelKey = AttachStep\["key"\] \| "lane"/);
+  assert.match(section, /useState<AttachPanelKey \| null>\(null\)/);
   assert.match(section, /desktop-outline/);
   assert.match(section, /sparkles-outline/);
   assert.match(section, /folder-open-outline/);
+  assert.match(section, /layers-outline/);
   assert.match(section, /expandedStep === "box"/);
   assert.match(section, /expandedStep === "runner"/);
   assert.match(section, /expandedStep === "checkout"/);
+  assert.match(section, /expandedStep === "lane"/);
   assert.match(section, /step\.status === "ok" \? "Change" : "Set up"/);
   assert.match(section, /accessibilityLabel="Box choices"/);
   assert.match(section, /accessibilityLabel="Runner choices"/);
   assert.match(section, /accessibilityLabel="Yaver checkout choices"/);
+  assert.match(section, /accessibilityLabel="Runtime lane choices"/);
   assert.match(section, /Pair remote box/);
   assert.match(section, /openPair: "1", returnTo: "dogfood"/);
 });

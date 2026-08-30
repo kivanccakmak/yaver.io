@@ -37,16 +37,23 @@ import {
   type DogfoodSourceStatus,
 } from "../lib/attachClient";
 import {
-  dogfoodLaneOptions,
+  defaultDogfoodLane,
+  dogfoodLanePlan,
   type DogfoodLane,
 } from "../../../sdk/feedback/react-native/src/DogfoodRuntime";
 import {
   DogfoodLanePicker,
 } from "../../../sdk/feedback/react-native/src/DogfoodSessionUi";
+import {
+  getPreferredDogfoodLane,
+  setPreferredDogfoodLane,
+} from "../../../sdk/feedback/react-native/src/preferences";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 
 const CHECKOUT_KEY = "@yaver/attach_checkout_dir";
+const YAVER_DOGFOOD_APP_ID = "io.yaver.mobile";
+type AttachPanelKey = AttachStep["key"] | "lane";
 const GIT_CONFIG_FAILURE_CODES = new Set([
   "DOGFOOD_GIT_AUTH_UNCONFIGURED",
   "DOGFOOD_GIT_CREDENTIALS_EMBEDDED",
@@ -99,7 +106,7 @@ export default function AttachModeSection({
   const [connectingPrimary, setConnectingPrimary] = useState(false);
   const [mayOffer, setMayOffer] = useState(true);
   const [nestingReason, setNestingReason] = useState<string | undefined>();
-  const [expandedStep, setExpandedStep] = useState<AttachStep["key"] | null>(null);
+  const [expandedStep, setExpandedStep] = useState<AttachPanelKey | null>(null);
 
   // Nesting guard: an already-attached instance must not offer to attach again.
   useEffect(() => {
@@ -124,8 +131,12 @@ export default function AttachModeSection({
   useEffect(() => {
     (async () => {
       try {
-        const dir = await AsyncStorage.getItem(CHECKOUT_KEY);
+        const [dir, savedLane] = await Promise.all([
+          AsyncStorage.getItem(CHECKOUT_KEY),
+          getPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID),
+        ]);
         if (dir) setCheckoutDir(dir);
+        if (savedLane) setLane(savedLane);
       } catch {
         // best-effort
       } finally {
@@ -252,10 +263,12 @@ export default function AttachModeSection({
     return () => { cancelled = true; };
   }, [checkoutDir, targetConnected, targetDevice?.id, verified]);
 
-  const laneOptions = useMemo(() => dogfoodLaneOptions("expo", {
+  const laneCapabilities = useMemo(() => ({
     nativeRuntimeAvailable,
     selfDevelopment: true,
   }), [nativeRuntimeAvailable]);
+  const lanePolicy = useMemo(() => dogfoodLanePlan("expo", laneCapabilities, lane), [lane, laneCapabilities]);
+  const laneOptions = lanePolicy.options;
   const normalizedRunner = runner === "claude-code" ? "claude" : runner;
   const selectedRunnerRow = runnerRows.find((row) => (row.id === "claude-code" ? "claude" : row.id) === normalizedRunner);
   const selectedModel = targetDevice?.id ? primaryModelByDevice[targetDevice.id] || "" : "";
@@ -263,9 +276,9 @@ export default function AttachModeSection({
 
   useEffect(() => {
     if (!laneOptions.some((option) => option.lane === lane && option.supported)) {
-      setLane("browser");
+      setLane(defaultDogfoodLane("expo", laneCapabilities));
     }
-  }, [lane, laneOptions]);
+  }, [lane, laneCapabilities, laneOptions]);
 
   // Readiness is an operational probe, not an optional decoration. The old
   // call site supplied no value, leaving the gate at "checking…" forever.
@@ -345,11 +358,12 @@ export default function AttachModeSection({
         workDir: checkoutDir.trim(),
         runner,
         lane,
+        fallbackLane: lanePolicy.fallback,
         deviceId: targetDevice.id,
         deviceName: targetDevice.name,
       },
     } as any);
-  }, [checkoutDir, gate.canAttach, lane, runner, targetDevice?.id, targetDevice?.name]);
+  }, [checkoutDir, gate.canAttach, lane, lanePolicy.fallback, runner, targetDevice?.id, targetDevice?.name]);
 
   const runSourceFix = useCallback(async () => {
     if (!targetDevice?.id || sourceBusy) return;
@@ -451,8 +465,8 @@ export default function AttachModeSection({
 
   return (
     <View>
-      {/* Exactly three top-level choices. The whole row is the setup route;
-          inventories and repair detail appear only after that row is tapped. */}
+      {/* One ordered setup contract: machine, runner, checkout, then runtime.
+          The whole row is the route; inventories stay behind that row. */}
       <View accessibilityLabel="Dogfood session readiness" style={{ gap: 10 }}>
         {gate.steps.map((step) => {
           const busy = step.key === "checkout" && sourceBusy;
@@ -498,6 +512,40 @@ export default function AttachModeSection({
             </Pressable>
           );
         })}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Change runtime lane"
+          accessibilityState={{ expanded: expandedStep === "lane" }}
+          onPress={() => setExpandedStep((current) => current === "lane" ? null : "lane")}
+          style={({ pressed }) => ({
+            minHeight: 76,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 12,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: expandedStep === "lane" ? c.accent : c.border,
+            backgroundColor: c.bgCard,
+            opacity: pressed ? 0.78 : 1,
+          })}
+        >
+          <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: `${c.success}18` }}>
+            <Ionicons name="layers-outline" size={23} color={c.success} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>Runtime lane</Text>
+            <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 2 }} numberOfLines={2}>
+              {laneOptions.find((option) => option.lane === lane)?.label || lane}
+              {lanePolicy.fallback ? " · browser fallback" : " · Expo / React Native"}
+            </Text>
+          </View>
+          <View style={{ alignItems: "flex-end", gap: 4 }}>
+            <Text style={{ color: c.accent, fontSize: 11, fontWeight: "700" }}>Change</Text>
+            <Ionicons name={expandedStep === "lane" ? "chevron-up" : "chevron-forward"} size={17} color={c.textMuted} />
+          </View>
+        </Pressable>
       </View>
 
       {expandedStep === "box" ? (
@@ -614,17 +662,6 @@ export default function AttachModeSection({
           ) : null}
           {runnerSetupMessage ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 6 }}>{runnerSetupMessage}</Text> : null}
 
-          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Runtime</Text>
-          <DogfoodLanePicker
-            options={laneOptions}
-            selected={lane}
-            onSelect={setLane}
-            colors={{
-              background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
-              accent: c.accent, accentSoft: c.accentSoft, ready: c.success,
-              attention: c.warn, blocked: c.error, console: "#0b0f14",
-            }}
-          />
         </View>
       ) : null}
 
@@ -700,6 +737,28 @@ export default function AttachModeSection({
               paddingHorizontal: 10,
               paddingVertical: 10,
               fontSize: 13,
+            }}
+          />
+        </View>
+      ) : null}
+
+      {expandedStep === "lane" ? (
+        <View accessibilityLabel="Runtime lane choices" style={{ marginTop: 8, paddingLeft: 20 }}>
+          <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginBottom: 8 }}>
+            Expo / React Native detected. Browser is the onboarding default; choosing Hermes or WebRTC keeps Browser as the automatic recovery lane.
+          </Text>
+          <DogfoodLanePicker
+            options={laneOptions}
+            selected={lane}
+            fallbackLane={lanePolicy.fallback}
+            onSelect={(next) => {
+              setLane(next);
+              void setPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID, next);
+            }}
+            colors={{
+              background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
+              accent: c.accent, accentSoft: c.accentSoft, ready: c.success,
+              attention: c.warn, blocked: c.error, console: "#0b0f14",
             }}
           />
         </View>

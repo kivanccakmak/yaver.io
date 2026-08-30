@@ -101,10 +101,11 @@ export const DogfoodStatusRail: React.FC<{
 export const DogfoodLanePicker: React.FC<{
   options: readonly DogfoodLaneOption[];
   selected: DogfoodLane;
+  fallbackLane?: DogfoodLane;
   onSelect: (lane: DogfoodLane) => void;
   colors?: Partial<DogfoodUiColors>;
   showUnsupportedReasons?: boolean;
-}> = ({ options, selected, onSelect, colors: colorOverrides, showUnsupportedReasons = true }) => {
+}> = ({ options, selected, fallbackLane, onSelect, colors: colorOverrides, showUnsupportedReasons = true }) => {
   const colors = resolvedColors(colorOverrides);
   return (
     <View accessibilityRole="radiogroup" accessibilityLabel="Dogfood runtime lane">
@@ -128,7 +129,8 @@ export const DogfoodLanePicker: React.FC<{
               ]}
             >
               <Text style={[styles.choiceText, { color: colors.text }, active && styles.choiceTextActive]}>
-                {option.label}{option.default ? ' · default' : ''}
+                {option.label}
+                {active ? ' · preferred' : fallbackLane === option.lane ? ' · automatic fallback' : option.default ? ' · default' : ''}
               </Text>
             </Pressable>
           );
