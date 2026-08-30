@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CONVEX_URL } from "@/lib/constants";
+import type { TaskPresentationMessage } from "@/lib/_core/taskPresentation";
 
 export type TaskStatus = "queued" | "running" | "review" | "completed" | "failed" | "stopped";
 
@@ -27,6 +28,7 @@ export interface Task {
   status: TaskStatus;
   output: string[];
   resultText?: string;
+  presentation?: TaskPresentationMessage[];
   source?: string;
   startedAt?: string;
   createdAt?: string;

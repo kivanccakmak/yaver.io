@@ -104,10 +104,11 @@ func runCodeTerminal(runner, model, mode string) {
 			DefaultModel:  strings.TrimSpace(model),
 			DefaultMode:   lastMode,
 		},
-		knownTasks:    map[string]bool{},
-		lastOutputLen: map[string]int{},
-		taskRefs:      map[string]*attachTaskRef{},
-		firstDraw:     true,
+		knownTasks:       map[string]bool{},
+		lastOutputLen:    map[string]int{},
+		lastPresentation: map[string]string{},
+		taskRefs:         map[string]*attachTaskRef{},
+		firstDraw:        true,
 	}
 	sess.prefetchAttachDevices()
 	if err := sess.run(); err != nil {
@@ -147,11 +148,12 @@ type codeTerminalSession struct {
 	paletteSelected int
 
 	// poll bookkeeping
-	knownTasks    map[string]bool
-	lastOutputLen map[string]int
-	taskRefs      map[string]*attachTaskRef
-	activeTask    string
-	sessionTask   string
+	knownTasks       map[string]bool
+	lastOutputLen    map[string]int
+	lastPresentation map[string]string
+	taskRefs         map[string]*attachTaskRef
+	activeTask       string
+	sessionTask      string
 
 	// firstDraw is true until draw() has rendered the prompt block at
 	// least once. Used so the first frame doesn't try to climb up to a
@@ -406,6 +408,9 @@ func (s *codeTerminalSession) run() error {
 			for _, t := range tasks {
 				s.knownTasks[t.ID] = true
 				s.lastOutputLen[t.ID] = len(t.Output)
+				if message := taskInfoFriendlyPresentation(&t); message != nil {
+					s.lastPresentation[t.ID] = message.Text
+				}
 			}
 		}
 	}
@@ -1077,7 +1082,17 @@ func (s *codeTerminalSession) applyPoll(tasks []TaskInfo) {
 			s.sessionTask = t.ID
 		}
 		prev := s.lastOutputLen[t.ID]
-		if len(t.Output) > prev {
+		if message := taskInfoFriendlyPresentation(&t); message != nil {
+			previous := s.lastPresentation[t.ID]
+			if message.Text != previous {
+				if strings.HasPrefix(message.Text, previous) {
+					out.WriteString(rawifyLines(message.Text[len(previous):]))
+				} else {
+					out.WriteString(rawifyLines("\r\n" + message.Text + "\r\n"))
+				}
+				s.lastPresentation[t.ID] = message.Text
+			}
+		} else if len(t.Output) > prev {
 			out.WriteString(rawifyLines(t.Output[prev:]))
 			s.lastOutputLen[t.ID] = len(t.Output)
 		}

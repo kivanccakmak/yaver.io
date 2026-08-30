@@ -157,6 +157,7 @@ data class TaskRow(
     val initialSurface: String? = null,
     val lastSurface: String? = null,
     val lastActiveAt: String? = null,
+    val presentation: List<TaskPresentationMessage> = emptyList(),
     val createdAt: Double? = null,
 ) {
     val safeTitle: String get() = redactHomePaths(title ?: "Untitled task")
@@ -185,6 +186,43 @@ data class RunnerInfo(
     val ready: Boolean? = null,
     val models: List<ModelInfo> = emptyList(),
 )
+
+data class TaskPresentationMessage(
+    val id: String,
+    val kind: String,
+    val role: String? = null,
+    val text: String,
+    val phase: String? = null,
+    val state: String? = null,
+    val runner: String? = null,
+    val project: String? = null,
+    val machine: String? = null,
+    val platform: String? = null,
+)
+
+fun parseTaskPresentation(array: org.json.JSONArray?): List<TaskPresentationMessage> {
+    if (array == null) return emptyList()
+    return buildList {
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val id = item.optString("id")
+            val text = item.optString("text")
+            if (id.isEmpty() || text.isEmpty()) continue
+            add(TaskPresentationMessage(
+                id = id,
+                kind = item.optString("kind").ifEmpty { "status" },
+                role = item.optString("role").ifEmpty { null },
+                text = text,
+                phase = item.optString("phase").ifEmpty { null },
+                state = item.optString("state").ifEmpty { null },
+                runner = item.optString("runner").ifEmpty { null },
+                project = item.optString("project").ifEmpty { null },
+                machine = item.optString("machine").ifEmpty { null },
+                platform = item.optString("platform").ifEmpty { null },
+            ))
+        }
+    }
+}
 
 data class ModelInfo(val id: String, val name: String? = null, val isDefault: Boolean = false)
 
@@ -221,6 +259,7 @@ fun parseTaskRow(obj: org.json.JSONObject): TaskRow? {
         initialSurface = execution?.optString("initialSurface")?.ifEmpty { null },
         lastSurface = execution?.optString("lastSurface")?.ifEmpty { null },
         lastActiveAt = execution?.optString("lastActiveAt")?.ifEmpty { null },
+        presentation = parseTaskPresentation(obj.optJSONArray("presentation")),
         createdAt = if (obj.has("createdAt")) obj.optDouble("createdAt") else null,
     )
 }

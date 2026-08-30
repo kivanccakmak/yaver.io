@@ -75,7 +75,8 @@ No `WKWebView`. Two consequences:
 
 `tmux capture-pane -p` returns plain text with escape sequences already
 stripped. Every pane snapshot taken while building `/runner/session/turn` came
-back clean. The `pane` field renders in a SwiftUI `Text` with a monospaced font.
+back clean. The `pane` field remains available in a folded monospaced Runner
+details disclosure; structured `spoken` narration is the primary TV answer.
 
 This is the single most useful fact in this document.
 
@@ -225,13 +226,13 @@ resolved. Each links to the commit that landed it.
 
 - **Session screen shipped.** `tvos/YaverTV/Views/SessionView.swift` calls
   `POST /runner/session/turn` via `tvos/YaverTV/SessionClient.swift`. Renders
-  the pane as monospaced Text, shows focusable option buttons when
-  `awaitingChoice`, and speaks a one-sentence summary via `AVSpeechSynthesizer`
-  on every reply. Added "Session" tile to `DashboardView.swift`.
+  structured runner narration, keeps the monospaced pane folded as Runner
+  details, shows focusable option buttons when `awaitingChoice`, and speaks the
+  structured sentence via `AVSpeechSynthesizer`. Added "Session" tile to
+  `DashboardView.swift`.
 - **TTS shipped.** `tvos/YaverTV/Speech.swift` — `AVSpeechSynthesizer` wrapper
-  mirroring `watch/YaverWatch/Speech.swift`. `speakSummary(of: pane)` extracts
-  the first clean non-code line and speaks it (same `watchFirstStatusClause`
-  logic). The TV shows the full pane; TTS is the lean-back companion.
+  mirroring `watch/YaverWatch/Speech.swift`. Current agents provide `spoken`;
+  `speakSummary(of: pane)` is retained only as an older-agent fallback.
 - **`RunsAsCurrentUser` added to `tvos/YaverTV/Info.plist`.** Each tvOS user
   now gets their own container — `@AppStorage("yaver.tv.token")` is scoped to
   the user who signed in, not shared across the family TV (§6).
@@ -272,8 +273,8 @@ list.
    not `authConfigured`), plus **Sign in** → `/runner-auth/browser/start` →
    render `openUrl` as a QR. Half of this already lives in
    `RuntimeDashboardView:104-165`.
-4. **Session** — pane as monospaced `Text`; `TextField` for dictation; option
-   buttons on `awaitingChoice`; TTS on reply.
+4. **Session** — structured narration with folded monospaced Runner details;
+   `TextField` for dictation; option buttons on `awaitingChoice`; TTS on reply.
 5. **Results** — full-screen `AVPlayer` (HLS/MP4) or a JPEG poll.
 
 ### Suggested order

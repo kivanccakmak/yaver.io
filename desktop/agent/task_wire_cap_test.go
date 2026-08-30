@@ -95,3 +95,27 @@ func TestTaskPresentationSnapshotUsesAuthoritativeTerminalState(t *testing.T) {
 		t.Fatalf("stale activity survived completion: %+v", rows)
 	}
 }
+
+func TestTaskInfoFriendlyPresentationPrefersNewestAssistantMessage(t *testing.T) {
+	info := TaskInfo{Presentation: []TaskPresentationMessage{
+		{ID: "status", Kind: "status", Text: "Working on yaver."},
+		{ID: "answer-1", Kind: "message", Role: "assistant", Text: "First answer."},
+		{ID: "warning", Kind: "warning", Text: "Raw warning must not replace the answer."},
+		{ID: "answer-2", Kind: "message", Role: "assistant", Text: "Finished cleanly."},
+	}}
+	got := taskInfoFriendlyPresentation(&info)
+	if got == nil || got.ID != "answer-2" || got.Text != "Finished cleanly." {
+		t.Fatalf("friendly presentation = %+v, want newest assistant answer", got)
+	}
+}
+
+func TestTaskInfoFriendlyPresentationFallsBackToActionableState(t *testing.T) {
+	info := TaskInfo{Presentation: []TaskPresentationMessage{
+		{ID: "tool", Kind: "tool", Text: "go test ./..."},
+		{ID: "attention", Kind: "action_required", Text: "Choose a runner sign-in method."},
+	}}
+	got := taskInfoFriendlyPresentation(&info)
+	if got == nil || got.ID != "attention" {
+		t.Fatalf("friendly presentation = %+v, want actionable status", got)
+	}
+}

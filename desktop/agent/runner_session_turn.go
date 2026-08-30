@@ -85,6 +85,9 @@ type runnerSessionTurnResponse struct {
 	// answer with `choice` before any prompt will be accepted.
 	AwaitingChoice bool     `json:"awaitingChoice"`
 	Options        []string `json:"options,omitempty"`
+	// Spoken is the calm surface lane. Pane remains raw terminal evidence for a
+	// folded console; TV/headset/car clients must not promote it to the answer.
+	Spoken string `json:"spoken,omitempty"`
 	// Pane is the visible tail — enough for a TV to render and for a watch to
 	// summarize, without shipping a whole scrollback over a cellular link.
 	Pane string `json:"pane,omitempty"`
@@ -520,6 +523,15 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 	reply.Pane = capturePaneTail(tmuxTarget, runnerTurnPaneLines)
 	if sentPrompt {
 		reply.Delivered, reply.DeliveryNote = classifyPromptDelivery(paneBeforePrompt, reply.Pane)
+		if reply.Delivered == "unconfirmed" {
+			reply.Spoken = reply.DeliveryNote
+		} else {
+			reply.Spoken = fmt.Sprintf("Prompt delivered to %s. The runner is working; live terminal output is available in Runner details.", runnerID)
+		}
+	} else if reply.AwaitingChoice {
+		reply.Spoken = "The runner needs your choice before it can continue."
+	} else {
+		reply.Spoken = fmt.Sprintf("Choice sent to %s. The runner is continuing.", runnerID)
 	}
 	reply.OK = true
 	return reply, http.StatusOK

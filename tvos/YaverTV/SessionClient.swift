@@ -33,6 +33,9 @@ struct SessionTurnResult: Codable {
     let sent: String?           // "prompt" or "choice"
     let awaitingChoice: Bool?
     let options: [String]?
+    /// Calm, human-readable runner narration. Keep this separate from `pane`:
+    /// the pane is raw terminal evidence and must not become the primary UI.
+    let spoken: String?
     let pane: String?
     let error: String?
 }
@@ -256,7 +259,8 @@ actor SessionClient {
             sent: choice == nil ? "prompt" : "choice",
             awaitingChoice: result.awaitingChoice,
             options: result.options,
-            pane: result.panel?.text ?? result.spoken,
+            spoken: result.spoken,
+            pane: result.panel?.text,
             error: result.error
         )
     }

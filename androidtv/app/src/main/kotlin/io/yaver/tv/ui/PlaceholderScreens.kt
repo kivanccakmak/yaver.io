@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,6 +13,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -30,6 +33,7 @@ import io.yaver.tv.AgentError
 import io.yaver.tv.TaskRow
 import io.yaver.tv.TvStore
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 /**
  * PLACEHOLDER screens for the Phase 2/3 routes — replaced by the real
@@ -77,7 +81,10 @@ fun TasksScreen(store: TvStore, nav: NavHostController) {
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
         BackBar("Tasks", box?.name?.let { "Coding work on $it" }, onBack = { nav.popBackStack() })
-        TvTextButton("Refresh", onClick = ::reload)
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            TvTextButton("New task", onClick = { nav.navigate(Routes.COMPOSER) })
+            TvTextButton("Refresh", onClick = ::reload)
+        }
         when {
             box == null -> {
                 Text("remoteless.code-edit.unavailable", color = TvColors.Orange, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -101,7 +108,48 @@ fun TasksScreen(store: TvStore, nav: NavHostController) {
 
 @Composable
 fun TaskComposerScreen(store: TvStore, nav: NavHostController) {
-    placeholder(Modifier, "New task")
+    val box by store.selectedBox.collectAsState()
+    val scope = rememberCoroutineScope()
+    var prompt by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    Column(
+        modifier = Modifier.fillMaxSize().background(TvColors.Bg).padding(56.dp),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+    ) {
+        BackBar("New task", box?.name?.let { "A separate runner seat on $it" }, onBack = { nav.popBackStack() })
+        Text("Describe the outcome. You can continue the same runner conversation from any Yaver surface.", color = TvColors.TextSecondary, fontSize = 19.sp)
+        OutlinedTextField(
+            value = prompt,
+            onValueChange = { prompt = it },
+            label = { Text("What should Yaver build or change?") },
+            minLines = 4,
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = TvColors.TextPrimary,
+                unfocusedTextColor = TvColors.TextPrimary,
+                focusedBorderColor = TvColors.Accent,
+                unfocusedBorderColor = TvColors.Border,
+            ),
+        )
+        error?.let { ErrorPanel(it) { error = null } }
+        TvTextButton(if (sending) "Starting…" else "Start task", onClick = {
+            val text = prompt.trim()
+            val target = box
+            if (text.isEmpty() || target == null || sending) return@TvTextButton
+            sending = true
+            error = null
+            scope.launch {
+                try {
+                    val created = store.clientFor(target).createTask(title = text.take(80), description = text)
+                    val id = created.optString("id").ifEmpty { created.optString("taskId") }
+                    if (id.isEmpty()) throw AgentError("The machine started no identifiable task.")
+                    nav.navigate(Routes.taskDetail(id))
+                } catch (e: Throwable) {
+                    error = (e as? AgentError)?.message ?: e.message ?: "Couldn't start the task."
+                } finally { sending = false }
+            }
+        })
 }
 
 @Composable
@@ -111,6 +159,9 @@ fun TaskDetailScreen(store: TvStore, nav: NavHostController, taskId: String) {
     var task by remember { mutableStateOf<org.json.JSONObject?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showRunnerDetails by remember { mutableStateOf(false) }
+    var followUp by remember { mutableStateOf("") }
+    var followUpSending by remember { mutableStateOf(false) }
     fun reload() {
         scope.launch {
             loading = true
@@ -120,7 +171,14 @@ fun TaskDetailScreen(store: TvStore, nav: NavHostController, taskId: String) {
             finally { loading = false }
         }
     }
-    LaunchedEffect(box?.id, taskId) { reload() }
+    LaunchedEffect(box?.id, taskId) {
+        reload()
+        while (true) {
+            val status = task?.optString("status").orEmpty()
+            delay(if (status == "running" || status == "queued") 1_500 else 10_000)
+            try { box?.let { task = store.clientFor(it).getTask(taskId) } } catch (_: Throwable) { /* keep last good task visible */ }
+        }
+    }
     Column(
         modifier = Modifier.fillMaxSize().background(TvColors.Bg).padding(56.dp),
         verticalArrangement = Arrangement.spacedBy(22.dp),
@@ -132,9 +190,63 @@ fun TaskDetailScreen(store: TvStore, nav: NavHostController, taskId: String) {
             task != null -> {
                 Text(task!!.optString("title").ifEmpty { "Untitled task" }, color = TvColors.TextPrimary, fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text("Status · ${task!!.optString("status").ifEmpty { "unknown" }}", color = TvColors.Accent, fontSize = 20.sp)
-                task!!.optString("description").takeIf { it.isNotEmpty() }?.let {
-                    Text(it, color = TvColors.TextSecondary, fontSize = 20.sp)
+                val presentation = io.yaver.tv.parseTaskPresentation(task!!.optJSONArray("presentation"))
+                presentation.lastOrNull { it.kind != "message" }?.let { summary ->
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.fillMaxWidth().background(TvColors.Card, RoundedCornerShape(14.dp)).padding(16.dp)) {
+                        Text(summary.text, color = TvColors.TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text(listOfNotNull(summary.machine, summary.platform, summary.runner, summary.project).joinToString(" · "), color = TvColors.TextSecondary, fontSize = 14.sp)
+                    }
                 }
+                val turns = task!!.optJSONArray("turns")
+                var lastAssistantText: String? = null
+                if (turns != null) for (i in 0 until turns.length()) {
+                    turns.optJSONObject(i)?.let { turn ->
+                        val role = turn.optString("role")
+                        val content = turn.optString("content")
+                        if (role == "assistant" && content.isNotEmpty()) lastAssistantText = content
+                        if (content.isNotEmpty()) Text(
+                            "${if (role == "user") "You" else "Yaver"}: $content",
+                            color = if (role == "user") TvColors.Accent else TvColors.TextPrimary,
+                            fontSize = 18.sp,
+                            modifier = Modifier.fillMaxWidth().background(TvColors.Card, RoundedCornerShape(14.dp)).padding(16.dp),
+                        )
+                    }
+                }
+                presentation.lastOrNull { it.kind == "message" && it.role == "assistant" && it.text != lastAssistantText }?.let { message ->
+                    Text("Yaver: ${message.text}", color = TvColors.TextPrimary, fontSize = 18.sp, modifier = Modifier.fillMaxWidth().background(TvColors.Card, RoundedCornerShape(14.dp)).padding(16.dp))
+                }
+                val raw = task!!.optString("rawOutput").ifEmpty { task!!.optString("output") }
+                if (raw.isNotEmpty()) {
+                    TvTextButton(if (showRunnerDetails) "Hide runner details" else "Show runner details", onClick = { showRunnerDetails = !showRunnerDetails })
+                    if (showRunnerDetails) Text(raw.takeLast(64 * 1024), color = TvColors.TextSecondary, fontSize = 14.sp)
+                }
+                OutlinedTextField(
+                    value = followUp,
+                    onValueChange = { followUp = it },
+                    label = { Text("Continue this runner conversation") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TvColors.TextPrimary,
+                        unfocusedTextColor = TvColors.TextPrimary,
+                        focusedBorderColor = TvColors.Accent,
+                        unfocusedBorderColor = TvColors.Border,
+                    ),
+                )
+                TvTextButton(if (followUpSending) "Sending…" else "Send follow-up", onClick = {
+                    val text = followUp.trim()
+                    val target = box
+                    if (text.isEmpty() || target == null || followUpSending) return@TvTextButton
+                    followUpSending = true
+                    scope.launch {
+                        try {
+                            store.clientFor(target).continueTask(taskId, text)
+                            followUp = ""
+                            reload()
+                        } catch (e: Throwable) {
+                            error = (e as? AgentError)?.message ?: e.message ?: "Couldn't continue this task."
+                        } finally { followUpSending = false }
+                    }
+                })
                 TvTextButton("Refresh", onClick = ::reload)
             }
         }
@@ -155,6 +267,9 @@ private fun TaskCard(task: TaskRow, onClick: () -> Unit) {
                 color = statusColor(status),
                 fontSize = 17.sp,
             )
+            task.presentation.lastOrNull { it.kind != "message" }?.let { summary ->
+                Text(summary.text, color = TvColors.TextSecondary, fontSize = 16.sp, maxLines = 2)
+            }
             val execution = listOfNotNull(
                 task.yaverSessionId?.let { "yaver $it" },
                 task.remoteBoxId?.let { "box $it" },

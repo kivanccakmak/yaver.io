@@ -16,6 +16,7 @@ import { isUsablePublicEndpoint } from "./endpoints";
 import { planReconnect } from "./reconnectLadder";
 import webPkg from "../package.json";
 import type { TaskFailureWire } from "./runnerFailure";
+import type { TaskPresentationMessage } from "./_core/taskPresentation";
 
 // X-Yaver-Caller surface identifier sent on every agent request.
 // Format: "<surface>/<version>" — agent v1.99.71+ logs + threads it
@@ -128,6 +129,8 @@ export interface Task {
   rawOutput?: string;
   rawOffset?: number;
   resultText?: string;
+  /** Human-facing semantic runner narrative; raw runner evidence is separate. */
+  presentation?: TaskPresentationMessage[];
   costUsd?: number;
   turns?: ConversationTurn[];
   pendingFollowUps?: PendingFollowUp[];

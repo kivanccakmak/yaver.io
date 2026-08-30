@@ -7,7 +7,8 @@
 //   ┌──────────────────────────────────────────┐
 //   │  Session: yaver-codex (codex)            │
 //   │  ──────────────────────────────────────  │
-//   │  <pane tail, monospaced, scrollable>     │
+//   │  <human runner narration>                │
+//   │  ▸ Runner details (terminal, folded)     │
 //   │                                          │
 //   │  ──────────────────────────────────────  │
 //   │  [TextField: dictate a prompt]     [Send]│
@@ -21,9 +22,9 @@
 // dictation — the ONLY speech input path on a TV (no AVAudioSession mic access,
 // docs/yaver-tvos-surface.md §1.1/§1.2). No hold-to-talk, no custom STT.
 //
-// Output: AVSpeechSynthesizer speaks a one-sentence summary of the pane on
-// every non-awaitingChoice reply (docs/yaver-tvos-surface.md §1.3). The full
-// pane is shown for visual reading; the spoken summary is the lean-back layer.
+// Output: the agent's structured `spoken` sentence is the lean-back layer and
+// the primary visual answer. The lossless tmux pane stays available as folded
+// Runner details; older agents fall back to a local pane summary for speech.
 //
 // Menus: awaitingChoice + options[] renders as focusable buttons. A D-pad is
 // good at exactly one thing — picking from a short list. Menus chain and
@@ -38,6 +39,8 @@ struct SessionView: View {
 
     @State private var prompt = ""
     @State private var pane = ""
+    @State private var narrative = ""
+    @State private var runnerDetailsOpen = false
     @State private var sessionName = ""
     @State private var runnerName = ""
     @State private var awaitingChoice = false
@@ -271,6 +274,8 @@ struct SessionView: View {
                 Button {
                     selected = nil
                     pane = ""
+                    narrative = ""
+                    runnerDetailsOpen = false
                     awaitingChoice = false
                     options = []
                 } label: {
@@ -287,12 +292,43 @@ struct SessionView: View {
 
     private var paneView: some View {
         ScrollView {
-            Text(pane.isEmpty ? "Send a prompt to start the session." : pane)
-                .font(.system(size: 20, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(24)
+            VStack(alignment: .leading, spacing: 20) {
+                Text(narrative.isEmpty ? narrativePlaceholder : narrative)
+                    .font(.system(size: 25))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if !pane.isEmpty {
+                    Button {
+                        withAnimation { runnerDetailsOpen.toggle() }
+                    } label: {
+                        HStack {
+                            Label("Runner details", systemImage: "terminal")
+                            Spacer()
+                            Image(systemName: runnerDetailsOpen ? "chevron.up" : "chevron.down")
+                        }
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    if runnerDetailsOpen {
+                        Text(pane)
+                            .font(.system(size: 17, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .transition(.opacity)
+                    }
+                }
+            }
+            .padding(24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var narrativePlaceholder: String {
+        if selected == nil { return "Choose a coding session." }
+        if loading { return "The runner is working…" }
+        if pane.isEmpty { return "Send a prompt to continue this session." }
+        return "The runner is active. Open Runner details for its live terminal output."
     }
 
     // MARK: - Prompt bar
@@ -543,6 +579,7 @@ struct SessionView: View {
         // Redact BEFORE it reaches @State: `pane` is what the TV renders and what
         // Speech reads aloud, so anything unredacted here is already on screen.
         pane = result.pane.map(Self.redact) ?? pane
+        narrative = result.spoken.map(Self.redact) ?? narrative
         awaitingChoice = result.awaitingChoice ?? false
         options = (result.options ?? []).map(Self.redact)
 
@@ -555,8 +592,13 @@ struct SessionView: View {
             let opts = options.isEmpty ? "Choose an option." : options.joined(separator: ". ")
             Speech.speak("Choose: \(opts)")
         } else if result.ok == true {
-            // Speak a one-sentence summary of the pane.
-            Speech.speakSummary(of: pane)
+            // The structured narration is the user lane. Summarising terminal
+            // bytes is only a compatibility fallback for an older agent.
+            if !narrative.isEmpty {
+                Speech.speak(narrative)
+            } else {
+                Speech.speakSummary(of: pane)
+            }
         } else if let err = result.error, !err.isEmpty {
             Speech.speak(err)
         }

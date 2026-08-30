@@ -498,6 +498,7 @@ function TerminalPane({ task, cfg }: { task: Task; cfg: BridgeConfig }) {
   const ref = useRef<HTMLDivElement>(null);
   const termRef = useRef<any>(null);
   const writtenLinesRef = useRef<number>(0);
+  const semanticHashRef = useRef("");
   const failureLine = task.status === "failed" || task.failure ? compactTaskFailure(task) : "";
 
   useEffect(() => {
@@ -544,7 +545,19 @@ function TerminalPane({ task, cfg }: { task: Task; cfg: BridgeConfig }) {
         if (!res.ok) return;
         const t = (await res.json()) as Task;
         if (cancelled || !termRef.current) return;
-        const lines = Array.isArray(t.output) ? t.output : [];
+        const semantic = (t.presentation ?? [])
+          .filter((message) => ["message", "status", "action_required", "warning", "error"].includes(message.kind))
+          .map((message) => `${message.role === "assistant" ? "Yaver" : message.kind === "message" ? "You" : "Status"}: ${message.text}`);
+        const lines = semantic.length > 0 ? semantic : (Array.isArray(t.output) ? t.output : []);
+        if (semantic.length > 0) {
+          const hash = semantic.join("\n");
+          if (hash !== semanticHashRef.current) {
+            termRef.current.reset();
+            semantic.forEach((line) => termRef.current.writeln(line));
+            semanticHashRef.current = hash;
+          }
+          return;
+        }
         for (let i = writtenLinesRef.current; i < lines.length; i++) {
           termRef.current.writeln(lines[i]);
         }

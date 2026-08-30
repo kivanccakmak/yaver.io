@@ -1,6 +1,7 @@
 // VisionSessionView.swift — compact prompt surface for an existing runner
 // session. It uses the shared SessionClient but keeps the UI visionOS-native
-// and dependency-light.
+// and dependency-light. Structured narration is primary; raw tmux bytes are
+// evidence under a folded Runner details disclosure.
 
 import SwiftUI
 
@@ -11,6 +12,8 @@ struct VisionSessionView: View {
 
     @State private var prompt = ""
     @State private var pane = ""
+    @State private var narrative = ""
+    @State private var runnerDetailsOpen = false
     @State private var sessionName = ""
     @State private var runnerName = ""
     @State private var sessions: [RunnerSession] = []
@@ -85,11 +88,26 @@ struct VisionSessionView: View {
 
     private var paneView: some View {
         ScrollView {
-            Text(pane.isEmpty ? emptyPaneText : pane)
-                .font(.system(size: 15, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-                .padding(18)
+            VStack(alignment: .leading, spacing: 16) {
+                Text(narrative.isEmpty ? emptyPaneText : narrative)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+
+                if !pane.isEmpty {
+                    DisclosureGroup(isExpanded: $runnerDetailsOpen) {
+                        Text(pane)
+                            .font(.system(size: 15, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                            .padding(.top, 10)
+                    } label: {
+                        Label("Runner details", systemImage: "terminal")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(18)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
@@ -235,6 +253,10 @@ struct VisionSessionView: View {
         if selectedSession.isEmpty {
             return "Select a live runner session on the selected machine."
         }
+        if loading { return "The runner is working…" }
+        if !pane.isEmpty {
+            return "The runner is active. Open Runner details for its live terminal output."
+        }
         return "Send a prompt to \(selectedSession)."
     }
 
@@ -332,7 +354,8 @@ struct VisionSessionView: View {
     private func apply(_ result: SessionTurnResult) {
         if let session = result.session { sessionName = session }
         if let runner = result.runner { runnerName = runner }
-        if let pane = result.pane { self.pane = pane }
+        if let spoken = result.spoken { narrative = redactHomePaths(spoken) }
+        if let pane = result.pane { self.pane = redactHomePaths(pane) }
         awaitingChoice = result.awaitingChoice == true
         options = result.options ?? []
         if let err = result.error, result.ok == false {

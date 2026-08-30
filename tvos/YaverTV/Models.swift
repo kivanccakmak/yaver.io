@@ -132,6 +132,31 @@ struct TaskPendingFollowUp: Decodable, Identifiable, Equatable {
     var id: String { input }
 }
 
+struct TaskPresentationMessage: Decodable, Identifiable, Equatable {
+    let id: String
+    let kind: String
+    let role: String?
+    let text: String
+    let phase: String?
+    let state: String?
+    let runner: String?
+    let project: String?
+    let machine: String?
+    let platform: String?
+    let surface: String?
+    let createdAt: String?
+    let updatedAt: String?
+}
+
+struct TaskPresentationWireEvent: Decodable {
+    let type: String
+    let schema: Int?
+    let op: String?
+    let seq: Int64?
+    let message: TaskPresentationMessage?
+    let messages: [TaskPresentationMessage]?
+}
+
 /// A runner question carried on the task SSE stream. This is part of the task
 /// conversation, not a second chat system: answering it unblocks the same
 /// `/tasks/{id}` turn and the runner keeps coding in place.
@@ -188,6 +213,7 @@ struct TaskSummary: Decodable, Identifiable {
     let sessionId: String?
     let output: String?
     let resultText: String?
+    let presentation: [TaskPresentationMessage]?
     let turns: [TaskConversationTurn]?
     let pendingFollowUps: [TaskPendingFollowUp]?
     let tmuxSession: String?     // present → the task has a live session to drive
@@ -195,7 +221,7 @@ struct TaskSummary: Decodable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, taskId, title, status, runner, runnerId, model, workDir, projectName, sessionId
-        case output, resultText, turns, pendingFollowUps, tmuxSession, executionSession
+        case output, resultText, presentation, turns, pendingFollowUps, tmuxSession, executionSession
     }
 
     init(
@@ -209,6 +235,7 @@ struct TaskSummary: Decodable, Identifiable {
         sessionId: String? = nil,
         output: String? = nil,
         resultText: String? = nil,
+        presentation: [TaskPresentationMessage]? = nil,
         turns: [TaskConversationTurn]? = nil,
         pendingFollowUps: [TaskPendingFollowUp]? = nil,
         tmuxSession: String? = nil,
@@ -224,6 +251,7 @@ struct TaskSummary: Decodable, Identifiable {
         self.sessionId = sessionId
         self.output = output
         self.resultText = resultText
+        self.presentation = presentation
         self.turns = turns
         self.pendingFollowUps = pendingFollowUps
         self.tmuxSession = tmuxSession
@@ -244,6 +272,7 @@ struct TaskSummary: Decodable, Identifiable {
         sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
         output = try c.decodeIfPresent(String.self, forKey: .output)
         resultText = try c.decodeIfPresent(String.self, forKey: .resultText)
+        presentation = try c.decodeIfPresent([TaskPresentationMessage].self, forKey: .presentation)
         turns = try c.decodeIfPresent([TaskConversationTurn].self, forKey: .turns)
         pendingFollowUps = try c.decodeIfPresent([TaskPendingFollowUp].self, forKey: .pendingFollowUps)
         tmuxSession = try c.decodeIfPresent(String.self, forKey: .tmuxSession)

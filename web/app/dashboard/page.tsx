@@ -70,6 +70,11 @@ import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import RawFailureBanner, { announceRawFailure } from "@/components/dashboard/RawFailureBanner";
 import { AnsiConsoleText, hasConsoleMarkup } from "@/components/dashboard/AnsiConsoleText";
 import { summarizeRawConsole } from "@/lib/_core/ansi";
+import {
+  friendlyTaskPresentation,
+  isTaskPresentationEvent,
+  reduceTaskPresentation,
+} from "@/lib/_core/taskPresentation";
 import { interleaveConsolePrompts } from "@/lib/consoleInterleave";
 import { SessionDeathError } from "@/lib/rawFailure";
 import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
@@ -1695,7 +1700,16 @@ export default function DashboardPage() {
       },
       (evt) => {
         if (!evt || typeof evt.type !== "string") return;
-        if (evt.type === "agent_question" && evt.question) {
+        if (isTaskPresentationEvent(evt)) {
+          setActiveTask((current) => {
+            if (!current || current.id !== tid) return current;
+            const presentation = reduceTaskPresentation(current.presentation ?? [], evt);
+            return { ...current, presentation };
+          });
+          setTasks((previous) => previous.map((task) => task.id === tid
+            ? { ...task, presentation: reduceTaskPresentation(task.presentation ?? [], evt) }
+            : task));
+        } else if (evt.type === "agent_question" && evt.question) {
           const q = evt.question as {
             id: string;
             taskId: string;
@@ -1797,6 +1811,7 @@ export default function DashboardPage() {
     if (
       next.status !== activeTask.status ||
       next.resultText !== activeTask.resultText ||
+      next.presentation?.at(-1)?.updatedAt !== activeTask.presentation?.at(-1)?.updatedAt ||
       next.costUsd !== activeTask.costUsd ||
       next.turns?.length !== activeTask.turns?.length ||
       next.placementId !== activeTask.placementId ||
@@ -1811,6 +1826,27 @@ export default function DashboardPage() {
       setActiveTask(next);
     }
   }, [tasks, activeTask, sameScopedTask]);
+
+  // Project the semantic assistant lane into chat after state commits. Keeping
+  // this outside the setActiveTask updater avoids a nested state update during
+  // React reconciliation (which can be invoked twice in Strict Mode).
+  useEffect(() => {
+    const assistant = friendlyTaskPresentation(activeTask?.presentation)
+      .filter((message) => message.kind === "message" && message.role === "assistant" && message.text.trim())
+      .at(-1)?.text;
+    if (!assistant || !activeTask || (activeTask.status !== "running" && activeTask.status !== "queued")) return;
+    setChatMsgs((previous) => {
+      const next = [...previous];
+      const last = next.at(-1);
+      if (last?.role === "assistant") {
+        if (last.text === assistant) return previous;
+        next[next.length - 1] = { ...last, text: assistant };
+      } else {
+        next.push({ role: "assistant", text: assistant });
+      }
+      return next;
+    });
+  }, [activeTask?.id, activeTask?.status, activeTask?.presentation]);
 
   useEffect(() => {
     if (!token || !activeTask?.placementId) return;
@@ -3155,13 +3191,21 @@ export default function DashboardPage() {
     // so multi-turn history survives a sidebar navigation. Fall back to
     // [initial prompt, flattened output] when the agent didn't expose turns.
     const msgsFromTask = (task: Task): ChatMsg[] => {
+      const semanticAssistant = friendlyTaskPresentation(task.presentation)
+        .filter((message) => message.kind === "message" && message.role === "assistant" && message.text.trim())
+        .at(-1)?.text;
       if (task.turns && task.turns.length > 0) {
-        return task.turns.filter(tn => tn.hidden !== true).map(tn => ({ role: tn.role, text: tn.content }));
+        const messages: ChatMsg[] = task.turns.filter(tn => tn.hidden !== true).map(tn => ({ role: tn.role, text: tn.content }));
+        const semanticAlreadyPresent = messages.some((message) => message.role === "assistant" && message.text === semanticAssistant);
+        if (semanticAssistant && !semanticAlreadyPresent) {
+          messages.push({ role: "assistant", text: semanticAssistant });
+        }
+        return messages;
       }
       const msgs: ChatMsg[] = [];
       const userText = displayTaskTitle(task.title || "");
       if (userText) msgs.push({ role: "user", text: userText });
-      const out = (task.output || []).join("\n");
+      const out = semanticAssistant || (task.output || []).join("\n");
       if (out) msgs.push({ role: "assistant", text: out });
       else if (task.status === "running") msgs.push({ role: "assistant", text: "" });
       return msgs;
@@ -4733,19 +4777,25 @@ export default function DashboardPage() {
                             ) : null}
                           </div>
                         ) : null}
-                        {/* Console-first task output (2026-08-12, user
-                            directive): the task view IS the live console —
-                            the raw runner stream painted as-is, like opencode
-                            itself, for EVERY runner (opencode / codex /
-                            claude / …). The old groomed-bubble transcript +
-                            folded "Live console" card are gone; the console
-                            is the default, full-height, streaming. User
-                            prompts render as `$` placeholder lines only until
-                            the first raw bytes arrive (the runner's own echo
-                            owns the stream from then on). Tasks whose agent
-                            has no raw lane fall back to the groomed
-                            transcript. */}
-                        {rawOutput.length === 0 && rawSince === 0 ? (
+                        {(() => {
+                          const status = friendlyTaskPresentation(activeTask.presentation)
+                            .filter((message) => message.kind !== "message" && message.text.trim())
+                            .at(-1);
+                          if (!status) return null;
+                          const attention = status.kind === "error" || status.kind === "warning" || status.kind === "action_required";
+                          const meta = [status.machine, status.platform, status.runner, status.project].filter(Boolean).join(" · ");
+                          return (
+                            <div className={`mx-auto mb-4 w-full max-w-3xl rounded-xl border px-3 py-2.5 ${attention ? "border-amber-500/30 bg-amber-500/10" : "border-surface-800 bg-surface-900/70"}`}>
+                              <div className="text-sm font-medium text-surface-100">{status.text}</div>
+                              {meta ? <div className="mt-1 text-[11px] text-surface-500">{meta}</div> : null}
+                            </div>
+                          );
+                        })()}
+                        {/* Semantic conversation is the default. The runner's
+                            lossless terminal stream remains available below as
+                            folded evidence; older agents with no presentation
+                            contract retain the console compatibility branch. */}
+                        {(activeTask.presentation?.length ?? 0) > 0 || (rawOutput.length === 0 && rawSince === 0) ? (
                           chatMsgs.length === 0 ? (
                             <div className="flex h-full items-center justify-center gap-2 text-[12px] text-surface-600">
                               {(activeTask.status === "running" || activeTask.status === "queued") && <span className="h-3 w-3 animate-spin rounded-full border border-surface-500 border-t-transparent" />}
@@ -4891,6 +4941,16 @@ export default function DashboardPage() {
                             </div>
                           );
                         })()}
+                        {(activeTask.presentation?.length ?? 0) > 0 && rawOutput.length > 0 ? (
+                          <details className="mx-auto mt-4 w-full max-w-3xl rounded-xl border border-surface-800 bg-surface-950/70">
+                            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-surface-400 hover:text-surface-200">
+                              Runner details · {rawOutput.join("\n").length > 1024 ? `${(rawOutput.join("\n").length / 1024).toFixed(1)} KB` : `${rawOutput.join("\n").length} B`}
+                            </summary>
+                            <div className="max-h-[28rem] overflow-auto border-t border-surface-800 p-3">
+                              <AnsiConsoleText text={summarizeRawConsole(rawOutput.join("\n"), activeTask.status === "running" || activeTask.status === "queued", { budgetLines: 500, budgetChars: 128 * 1024 })} />
+                            </div>
+                          </details>
+                        ) : null}
                         {/* Task-proof card (audit §9.4, B14): the SAME shared
                             component VibeCodingView mounts, so the two web
                             chat surfaces can't drift. Renders under the

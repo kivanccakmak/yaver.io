@@ -548,6 +548,11 @@ actor AgentClient {
         let full: Bool?
         let question: TaskAgentQuestion?
         let questionId: String?
+        let schema: Int?
+        let op: String?
+        let seq: Int64?
+        let message: TaskPresentationMessage?
+        let messages: [TaskPresentationMessage]?
     }
 
     /// Compatibility bridge for existing consumers which only need appended
@@ -563,6 +568,7 @@ actor AgentClient {
         onDone: (@Sendable (String) -> Void)? = nil,
         onQuestion: (@Sendable (TaskAgentQuestion) -> Void)? = nil,
         onQuestionClosed: (@Sendable (String?) -> Void)? = nil,
+        onPresentation: (@Sendable (TaskPresentationWireEvent) -> Void)? = nil,
         onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
     ) -> Task<Void, Never> {
         let bridgedOnData: (@Sendable (String, Int?, Bool) -> Void)?
@@ -580,6 +586,7 @@ actor AgentClient {
             onDone: onDone,
             onQuestion: onQuestion,
             onQuestionClosed: onQuestionClosed,
+            onPresentation: onPresentation,
             onEnd: onEnd
         )
     }
@@ -593,6 +600,7 @@ actor AgentClient {
         onDone: (@Sendable (String) -> Void)? = nil,
         onQuestion: (@Sendable (TaskAgentQuestion) -> Void)? = nil,
         onQuestionClosed: (@Sendable (String?) -> Void)? = nil,
+        onPresentation: (@Sendable (TaskPresentationWireEvent) -> Void)? = nil,
         onEnd: (@Sendable (FailureSignals.StreamEndKind, String?) -> Void)? = nil
     ) -> Task<Void, Never> {
         var queryItems: [URLQueryItem] = []
@@ -643,6 +651,7 @@ actor AgentClient {
                         if line.isEmpty {
                             emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone,
                                            onQuestion: onQuestion, onQuestionClosed: onQuestionClosed,
+                                           onPresentation: onPresentation,
                                            sawDone: &sawDone, replaceNextOutput: &replaceNextOutput)
                             dataLines.removeAll(keepingCapacity: true)
                             continue
@@ -653,6 +662,7 @@ actor AgentClient {
                     }
                     emitTaskOutput(dataLines, onRaw: onRaw, onData: onData, onDone: onDone,
                                    onQuestion: onQuestion, onQuestionClosed: onQuestionClosed,
+                                   onPresentation: onPresentation,
                                    sawDone: &sawDone, replaceNextOutput: &replaceNextOutput)
                     // The body ended. If we never saw `done`, this is an
                     // interruption — the box closed the stream or the relay
@@ -684,6 +694,7 @@ actor AgentClient {
         onDone: (@Sendable (String) -> Void)?,
         onQuestion: (@Sendable (TaskAgentQuestion) -> Void)?,
         onQuestionClosed: (@Sendable (String?) -> Void)?,
+        onPresentation: (@Sendable (TaskPresentationWireEvent) -> Void)?,
         sawDone: inout Bool,
         replaceNextOutput: inout Bool
     ) {
@@ -717,6 +728,15 @@ actor AgentClient {
             if let question = event.question { onQuestion?(question) }
         case "agent_answered", "agent_question_cancelled":
             onQuestionClosed?(event.questionId)
+        case "presentation", "presentation_snapshot":
+            onPresentation?(TaskPresentationWireEvent(
+                type: event.type ?? "presentation",
+                schema: event.schema,
+                op: event.op,
+                seq: event.seq,
+                message: event.message,
+                messages: event.messages
+            ))
         default:
             break // Future event types remain additive.
         }
@@ -801,9 +821,12 @@ actor AgentClient {
             status: decoded.status,
             runner: decoded.runner,
             model: decoded.model,
+            workDir: decoded.workDir,
+            projectName: decoded.projectName,
             sessionId: decoded.sessionId,
             output: decoded.output,
             resultText: decoded.resultText,
+            presentation: decoded.presentation,
             turns: decoded.turns,
             pendingFollowUps: decoded.pendingFollowUps,
             tmuxSession: decoded.tmuxSession,

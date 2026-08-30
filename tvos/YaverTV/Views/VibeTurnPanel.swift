@@ -1089,6 +1089,32 @@ struct VibeTurnPanel: View {
                     }
                     await refreshTask(taskId: taskId, client: client)
                 } },
+                onPresentation: { event in Task { @MainActor in
+                    guard let row = activeTask, row.id == taskId else { return }
+                    var messages = event.type == "presentation_snapshot"
+                        ? (event.messages ?? [])
+                        : (row.presentation ?? [])
+                    if event.type != "presentation_snapshot", let message = event.message {
+                        if let index = messages.firstIndex(where: { $0.id == message.id }) {
+                            if event.op == "append" {
+                                let previous = messages[index]
+                                messages[index] = TaskPresentationMessage(
+                                    id: previous.id, kind: message.kind, role: message.role ?? previous.role,
+                                    text: previous.text + message.text, phase: message.phase, state: message.state,
+                                    runner: message.runner, project: message.project, machine: message.machine,
+                                    platform: message.platform, surface: message.surface,
+                                    createdAt: previous.createdAt, updatedAt: message.updatedAt
+                                )
+                            } else { messages[index] = message }
+                        } else { messages.append(message) }
+                    }
+                    activeTask = taskWithPresentation(row, messages)
+                    if let answer = messages.last(where: { $0.kind == "message" && $0.role == "assistant" }) {
+                        liveAssistantText = answer.text
+                    } else if let state = messages.last(where: { $0.kind != "message" }) {
+                        liveAssistantText = state.text
+                    }
+                } },
                 onEnd: { kind, reason in Task { @MainActor in
                     if kind == .interrupted {
                         taskStreamNotice = reason ?? "Agent log stream interrupted; reconnecting…"
@@ -1144,7 +1170,8 @@ struct VibeTurnPanel: View {
     private func speakCompletedTaskIfNeeded(_ task: TaskSummary) {
         let terminal = Set(["completed", "review", "failed", "stopped"])
         guard terminal.contains((task.status ?? "").lowercased()), spokenTaskID != task.id else { return }
-        let text = [task.resultText, task.output, liveAssistantText]
+        let semantic = task.presentation?.last(where: { $0.kind == "message" && $0.role == "assistant" })?.text
+        let text = [semantic, task.resultText, task.output, liveAssistantText]
             .compactMap { value -> String? in
                 guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
                 return value
@@ -1167,9 +1194,21 @@ struct VibeTurnPanel: View {
             sessionId: task.sessionId,
             output: task.output,
             resultText: task.resultText,
+            presentation: task.presentation,
             turns: task.turns,
             pendingFollowUps: task.pendingFollowUps,
             tmuxSession: task.tmuxSession,
+            executionSession: task.executionSession
+        )
+    }
+
+    private func taskWithPresentation(_ task: TaskSummary, _ presentation: [TaskPresentationMessage]) -> TaskSummary {
+        TaskSummary(
+            id: task.id, title: task.title, status: task.status, runner: task.runner,
+            model: task.model, workDir: task.workDir, projectName: task.projectName,
+            sessionId: task.sessionId, output: task.output, resultText: task.resultText,
+            presentation: presentation, turns: task.turns,
+            pendingFollowUps: task.pendingFollowUps, tmuxSession: task.tmuxSession,
             executionSession: task.executionSession
         )
     }

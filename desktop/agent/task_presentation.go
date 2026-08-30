@@ -257,3 +257,24 @@ func taskPresentationListSnapshot(task *Task) []TaskPresentationMessage {
 	}
 	return selected
 }
+
+func taskInfoFriendlyPresentation(info *TaskInfo) *TaskPresentationMessage {
+	if info == nil {
+		return nil
+	}
+	var state *TaskPresentationMessage
+	for i := range info.Presentation {
+		message := &info.Presentation[i]
+		if strings.TrimSpace(message.Text) == "" {
+			continue
+		}
+		if message.Kind == "message" && message.Role == "assistant" {
+			state = message
+			continue
+		}
+		if state == nil && (message.Kind == "status" || message.Kind == "action_required" || message.Kind == "warning" || message.Kind == "error") {
+			state = message
+		}
+	}
+	return state
+}

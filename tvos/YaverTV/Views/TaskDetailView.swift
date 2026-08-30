@@ -29,6 +29,7 @@ struct TaskDetailView: View {
     @State private var rawCursor = 0
     @State private var transcriptCursor = 0
     @State private var liveAssistantText = ""
+    @State private var presentation: [TaskPresentationMessage]
 
     @State private var reply = ""
     @State private var sending = false
@@ -65,6 +66,7 @@ struct TaskDetailView: View {
         _status = State(initialValue: task.status)
         _pickedRunner = State(initialValue: RegisteredRunner.canonical(task.runner ?? ""))
         _pickedModel = State(initialValue: task.model ?? "")
+        _presentation = State(initialValue: task.presentation ?? [])
     }
 
     var body: some View {
@@ -132,6 +134,19 @@ struct TaskDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    if let summary = presentation.last(where: { $0.kind != "message" && !$0.text.isEmpty }) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(summary.text).font(.system(size: 17, weight: .semibold))
+                            let meta = [summary.machine, summary.platform, summary.runner, summary.project]
+                                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                            if !meta.isEmpty {
+                                Text(meta).font(.system(size: 13)).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(16)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityIdentifier("task.presentation-status")
+                    }
                     ForEach(displayTurns) { turn in
                         bubble(turn)
                     }
@@ -584,7 +599,8 @@ struct TaskDetailView: View {
         for optimistic in optimisticTurns where !rows.contains(where: { $0.role == optimistic.role && $0.content == optimistic.content }) {
             rows.append(optimistic)
         }
-        let live = liveAssistantText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let semantic = presentation.last(where: { $0.kind == "message" && $0.role == "assistant" })?.text ?? ""
+        let live = (semantic.isEmpty ? liveAssistantText : semantic).trimmingCharacters(in: .whitespacesAndNewlines)
         if !live.isEmpty,
            !rows.contains(where: { $0.role == "assistant" && $0.content == live }) {
             rows.append(TaskConversationTurn(role: "assistant", content: live, timestamp: nil))
@@ -738,6 +754,7 @@ struct TaskDetailView: View {
             await MainActor.run {
                 task = detail
                 status = detail.status
+                presentation = detail.presentation ?? presentation
                 optimisticTurns.removeAll { optimistic in
                     (detail.turns ?? []).contains { $0.role == optimistic.role && $0.content == optimistic.content }
                         || (detail.pendingFollowUps ?? []).contains { $0.input == optimistic.content }
@@ -827,6 +844,30 @@ struct TaskDetailView: View {
                     questionReply = ""
                     questionSelections.removeAll()
                     questionError = nil
+                }
+            },
+            onPresentation: { event in
+                Task { @MainActor in
+                    if event.type == "presentation_snapshot" {
+                        presentation = event.messages ?? []
+                    } else if let message = event.message {
+                        if let index = presentation.firstIndex(where: { $0.id == message.id }) {
+                            if event.op == "append" {
+                                let previous = presentation[index]
+                                presentation[index] = TaskPresentationMessage(
+                                    id: previous.id, kind: message.kind, role: message.role ?? previous.role,
+                                    text: previous.text + message.text, phase: message.phase, state: message.state,
+                                    runner: message.runner, project: message.project, machine: message.machine,
+                                    platform: message.platform, surface: message.surface,
+                                    createdAt: previous.createdAt, updatedAt: message.updatedAt
+                                )
+                            } else {
+                                presentation[index] = message
+                            }
+                        } else {
+                            presentation.append(message)
+                        }
+                    }
                 }
             },
             onEnd: { kind, reason in
