@@ -1665,6 +1665,7 @@ func pickReadyVibingRunner(s *HTTPServer) string {
 //
 //	GET  /vibing/task/<id>           → task info (status + output blob)
 //	POST /vibing/task/<id>/continue  → append a follow-up turn
+//	POST /vibing/task/<id>/complete  → explicitly end its durable runner seat
 //	DELETE /vibing/task/<id>         → remove the topic (and stop it if live)
 //
 // The reply shape mirrors the corresponding /tasks/{id} reply
@@ -1737,6 +1738,18 @@ func (s *HTTPServer) handleVibingTaskByID(w http.ResponseWriter, r *http.Request
 			"ok":     true,
 			"taskId": resumed.ID,
 			"status": resumed.Status,
+		})
+	case "complete":
+		if r.Method != http.MethodPost {
+			jsonError(w, http.StatusMethodNotAllowed, "use POST")
+			return
+		}
+		if err := s.taskMgr.CompleteTask(taskID); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{
+			"ok": true, "taskId": taskID, "status": TaskStatusFinished,
 		})
 	default:
 		jsonError(w, http.StatusNotFound, "unknown action")

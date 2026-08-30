@@ -30,9 +30,15 @@ const DOGFOOD_CONTROL_PRESENTATION_KEY = 'yaver_dogfood_control_presentation';
 const DOGFOOD_CONTROL_POSITION_PREFIX = 'yaver_dogfood_control_position_';
 const DOGFOOD_CONTROL_ONBOARDING_PREFIX = 'yaver_dogfood_control_onboarding_';
 const DOGFOOD_USAGE_MODE_PREFIX = 'yaver_dogfood_usage_mode_';
+const DOGFOOD_START_BEHAVIOR_PREFIX = 'yaver_dogfood_start_behavior_';
+const DOGFOOD_RENDER_BEHAVIOR_PREFIX = 'yaver_dogfood_render_behavior_';
+const DOGFOOD_SESSION_BEHAVIOR_PREFIX = 'yaver_dogfood_session_behavior_';
 
 export type DogfoodControlPresentation = 'auto' | 'minimized-y';
 export type DogfoodUsageMode = 'reload-only' | 'reload-and-chat';
+export type DogfoodStartBehavior = 'vibe-first' | 'render-on-open';
+export type DogfoodRenderBehavior = 'manual' | 'auto-on-request';
+export type DogfoodSessionBehavior = 'resume-last' | 'new-session';
 export type DogfoodControlEdge = 'left' | 'right';
 export interface DogfoodControlPosition {
   edge: DogfoodControlEdge;
@@ -136,6 +142,45 @@ export async function setDogfoodUsageMode(value: DogfoodUsageMode, scope?: strin
     // Best-effort local presentation preference. Agent authorization remains
     // OAuth-backed and never depends on this value.
   }
+}
+
+export async function getDogfoodStartBehavior(scope?: string): Promise<DogfoodStartBehavior | null> {
+  if (!AsyncStorage) return null;
+  try {
+    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_START_BEHAVIOR_PREFIX, scope));
+    return value === 'vibe-first' || value === 'render-on-open' ? value : null;
+  } catch { return null; }
+}
+
+export async function setDogfoodStartBehavior(value: DogfoodStartBehavior, scope?: string): Promise<void> {
+  if (!AsyncStorage) return;
+  try { await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_START_BEHAVIOR_PREFIX, scope), value); } catch { /* best-effort */ }
+}
+
+export async function getDogfoodRenderBehavior(scope?: string): Promise<DogfoodRenderBehavior | null> {
+  if (!AsyncStorage) return null;
+  try {
+    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_RENDER_BEHAVIOR_PREFIX, scope));
+    return value === 'manual' || value === 'auto-on-request' ? value : null;
+  } catch { return null; }
+}
+
+export async function setDogfoodRenderBehavior(value: DogfoodRenderBehavior, scope?: string): Promise<void> {
+  if (!AsyncStorage) return;
+  try { await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_RENDER_BEHAVIOR_PREFIX, scope), value); } catch { /* best-effort */ }
+}
+
+export async function getDogfoodSessionBehavior(scope?: string): Promise<DogfoodSessionBehavior | null> {
+  if (!AsyncStorage) return null;
+  try {
+    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_SESSION_BEHAVIOR_PREFIX, scope));
+    return value === 'resume-last' || value === 'new-session' ? value : null;
+  } catch { return null; }
+}
+
+export async function setDogfoodSessionBehavior(value: DogfoodSessionBehavior, scope?: string): Promise<void> {
+  if (!AsyncStorage) return;
+  try { await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_SESSION_BEHAVIOR_PREFIX, scope), value); } catch { /* best-effort */ }
 }
 
 export type QuickIconColorPreset =

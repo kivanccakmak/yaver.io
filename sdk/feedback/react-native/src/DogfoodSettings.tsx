@@ -1,7 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { DeviceEventEmitter, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, DeviceEventEmitter, Pressable, StyleSheet, Text, View } from 'react-native';
 import { YaverFeedback } from './YaverFeedback';
-import type { DogfoodAccessSnapshot, DogfoodUsageMode } from './dogfoodPolicy';
+import type {
+  DogfoodAccessSnapshot,
+  DogfoodRenderBehavior,
+  DogfoodSessionBehavior,
+  DogfoodStartBehavior,
+  DogfoodUsageMode,
+} from './dogfoodPolicy';
+import type { VibeThreadSummary } from './P2PClient';
 import type { DogfoodRuntimeSelection } from './preferences';
 
 export interface DogfoodSettingsProps {
@@ -10,6 +17,9 @@ export interface DogfoodSettingsProps {
   onBackToNative?: () => void | Promise<void>;
   /** Keep Exit Dogfood visible by default. */
   showExit?: boolean;
+  /** Custom hosts may navigate to their own session screen instead of using
+   * the SDK FeedbackModal event consumer. */
+  onOpenSession?: (session: VibeThreadSummary) => void | Promise<void>;
 }
 
 /**
@@ -23,10 +33,15 @@ export interface DogfoodSettingsProps {
 export const DogfoodSettings: React.FC<DogfoodSettingsProps> = ({
   onBackToNative,
   showExit = true,
+  onOpenSession,
 }) => {
   const [access, setAccess] = useState<DogfoodAccessSnapshot | null>(null);
   const [mode, setMode] = useState<DogfoodUsageMode>('reload-and-chat');
   const [runtime, setRuntime] = useState<DogfoodRuntimeSelection | null>(null);
+  const [startBehavior, setStartBehavior] = useState<DogfoodStartBehavior>('vibe-first');
+  const [renderBehavior, setRenderBehavior] = useState<DogfoodRenderBehavior>('manual');
+  const [sessionBehavior, setSessionBehavior] = useState<DogfoodSessionBehavior>('resume-last');
+  const [sessions, setSessions] = useState<VibeThreadSummary[]>([]);
   const [busy, setBusy] = useState<'refresh' | 'mode' | 'setup' | 'exit' | null>('refresh');
   const [message, setMessage] = useState<string | null>(null);
 
@@ -36,10 +51,23 @@ export const DogfoodSettings: React.FC<DogfoodSettingsProps> = ({
       const next = await YaverFeedback.getDogfoodAccess();
       setAccess(next);
       if (next.authorized) {
-        setMode(await YaverFeedback.getDogfoodUsageMode());
-        setRuntime(await YaverFeedback.getDogfoodRuntimeSelection());
+        const [usage, runtimeSelection, start, render, session, roster] = await Promise.all([
+          YaverFeedback.getDogfoodUsageMode(),
+          YaverFeedback.getDogfoodRuntimeSelection(),
+          YaverFeedback.getDogfoodStartBehavior(),
+          YaverFeedback.getDogfoodRenderBehavior(),
+          YaverFeedback.getDogfoodSessionBehavior(),
+          YaverFeedback.getDogfoodSessions().catch(() => []),
+        ]);
+        setMode(usage);
+        setRuntime(runtimeSelection);
+        setStartBehavior(start);
+        setRenderBehavior(render);
+        setSessionBehavior(session);
+        setSessions(roster);
       } else {
         setRuntime(null);
+        setSessions([]);
       }
       setMessage(null);
     } catch (error) {
@@ -85,6 +113,46 @@ export const DogfoodSettings: React.FC<DogfoodSettingsProps> = ({
     } finally {
       setBusy(null);
     }
+  };
+
+  const selectExperience = async (
+    kind: 'start' | 'render' | 'session',
+    value: DogfoodStartBehavior | DogfoodRenderBehavior | DogfoodSessionBehavior,
+  ) => {
+    if (busy) return;
+    setBusy('mode');
+    setMessage(null);
+    try {
+      if (kind === 'start') setStartBehavior(await YaverFeedback.setDogfoodStartBehavior(value as DogfoodStartBehavior));
+      if (kind === 'render') setRenderBehavior(await YaverFeedback.setDogfoodRenderBehavior(value as DogfoodRenderBehavior));
+      if (kind === 'session') setSessionBehavior(await YaverFeedback.setDogfoodSessionBehavior(value as DogfoodSessionBehavior));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally { setBusy(null); }
+  };
+
+  const openSession = async (session: VibeThreadSummary) => {
+    try {
+      if (onOpenSession) await onOpenSession(session);
+      else await YaverFeedback.openDogfoodSession(session.id);
+    }
+    catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const completeSession = async (id: string) => {
+    try { await YaverFeedback.completeDogfoodSession(id); await refresh(); }
+    catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const deleteSession = (session: VibeThreadSummary) => {
+    Alert.alert('Delete Dogfood session?', 'This explicitly closes its runner seat and removes the conversation. Disconnecting alone never does this.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => {
+        void YaverFeedback.deleteDogfoodSession(session.id).then(refresh).catch((error) => {
+          setMessage(error instanceof Error ? error.message : String(error));
+        });
+      } },
+    ]);
   };
 
   const exit = async () => {
@@ -149,6 +217,34 @@ export const DogfoodSettings: React.FC<DogfoodSettingsProps> = ({
         <Text style={styles.primaryText}>{authenticated ? 'Configure box, runner, checkout & lane' : 'Sign in to Yaver'}</Text>
       </Pressable>
 
+      <Text style={styles.section}>Start & render</Text>
+      <View style={styles.options}>
+        <Choice title="Vibe first" detail="Open chat and durable sessions without starting a renderer." selected={startBehavior === 'vibe-first'} disabled={!authorized || busy !== null} onPress={() => void selectExperience('start', 'vibe-first')} />
+        <Choice title="Render when opened" detail="Start the selected lane immediately after entering Dogfood." selected={startBehavior === 'render-on-open'} disabled={!authorized || busy !== null} onPress={() => void selectExperience('start', 'render-on-open')} />
+        <Choice title="Tap Render updates" detail="Default. A UI-ready signal becomes an explicit action." selected={renderBehavior === 'manual'} disabled={!authorized || busy !== null} onPress={() => void selectExperience('render', 'manual')} />
+        <Choice title="Auto-render requested updates" detail="Opt in to one render after the runner explicitly says UI changes are ready." selected={renderBehavior === 'auto-on-request'} disabled={!authorized || busy !== null} onPress={() => void selectExperience('render', 'auto-on-request')} />
+      </View>
+
+      <Text style={styles.section}>Runner sessions</Text>
+      <View style={styles.options}>
+        <Choice title="Resume newest session" detail="Reconnect Chat to the newest durable runner/tmux-backed topic." selected={sessionBehavior === 'resume-last'} disabled={!authorized || busy !== null} onPress={() => void selectExperience('session', 'resume-last')} />
+        <Choice title="Start with a new session" detail="Open a clean composer. Existing sessions remain available below." selected={sessionBehavior === 'new-session'} disabled={!authorized || busy !== null} onPress={() => void selectExperience('session', 'new-session')} />
+      </View>
+      {sessions.map((session) => (
+        <View key={session.id} style={styles.sessionCard}>
+          <View style={styles.sessionCopy}>
+            <Text style={styles.sessionTitle} numberOfLines={1}>{session.title || 'Dogfood session'}</Text>
+            <Text style={styles.sessionMeta} numberOfLines={2}>
+              {[session.status, session.runnerId, session.model, session.deviceName, session.tmuxSession ? `tmux ${session.tmuxSession}` : session.resumable ? 'resumable' : null].filter(Boolean).join(' · ')}
+            </Text>
+          </View>
+          {mode === 'reload-and-chat' ? <Pressable onPress={() => void openSession(session)} style={styles.sessionAction}><Text style={styles.sessionActionText}>Open</Text></Pressable> : null}
+          {session.status !== 'completed' ? <Pressable onPress={() => void completeSession(session.id)} style={styles.sessionAction}><Text style={styles.sessionActionText}>Complete</Text></Pressable> : null}
+          <Pressable onPress={() => deleteSession(session)} style={styles.sessionAction}><Text style={styles.deleteText}>Delete</Text></Pressable>
+        </View>
+      ))}
+      {authorized && sessions.length === 0 ? <Text style={styles.empty}>No Dogfood sessions yet. Starting Chat creates one without rendering.</Text> : null}
+
       {showExit && authorized ? (
         <Pressable
           accessibilityRole="button"
@@ -207,6 +303,14 @@ const styles = StyleSheet.create({
   secondary: { marginTop: 8, borderRadius: 11, borderWidth: 1, borderColor: '#d4d4dc', paddingHorizontal: 14, paddingVertical: 11, alignItems: 'center' },
   secondaryText: { color: '#4e4e59', fontSize: 13, fontWeight: '700' },
   error: { color: '#b42318', fontSize: 12, lineHeight: 17, marginTop: 10 },
+  sessionCard: { marginTop: 8, borderWidth: 1, borderColor: '#dedee6', borderRadius: 12, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  sessionCopy: { flex: 1, minWidth: 0 },
+  sessionTitle: { color: '#24242b', fontSize: 12, fontWeight: '700' },
+  sessionMeta: { color: '#71717e', fontSize: 10, lineHeight: 14, marginTop: 2 },
+  sessionAction: { paddingHorizontal: 6, paddingVertical: 6 },
+  sessionActionText: { color: '#5b4bd8', fontSize: 10, fontWeight: '700' },
+  deleteText: { color: '#b42318', fontSize: 10, fontWeight: '700' },
+  empty: { color: '#71717e', fontSize: 11, lineHeight: 16, marginTop: 8 },
   disabled: { opacity: 0.5 },
   pressed: { opacity: 0.72 },
 });

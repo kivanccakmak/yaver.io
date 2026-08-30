@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { FeedbackConfig, CapturedError } from './types';
 import { YaverDiscovery } from './Discovery';
 import { BlackBox } from './BlackBox';
@@ -32,6 +32,12 @@ import {
   setDogfoodControlOnboardingSeen,
   getDogfoodUsageMode as getCachedDogfoodUsageMode,
   setDogfoodUsageMode as cacheDogfoodUsageMode,
+  getDogfoodStartBehavior as getCachedDogfoodStartBehavior,
+  setDogfoodStartBehavior as cacheDogfoodStartBehavior,
+  getDogfoodRenderBehavior as getCachedDogfoodRenderBehavior,
+  setDogfoodRenderBehavior as cacheDogfoodRenderBehavior,
+  getDogfoodSessionBehavior as getCachedDogfoodSessionBehavior,
+  setDogfoodSessionBehavior as cacheDogfoodSessionBehavior,
   getDogfoodRuntimeSelection as getCachedDogfoodRuntimeSelection,
   setDogfoodRuntimeSelection as cacheDogfoodRuntimeSelection,
   type DogfoodRuntimeSelection,
@@ -41,9 +47,15 @@ import {
 import {
   resolveSDKDogfood,
   resolveDogfoodUsageMode,
+  resolveDogfoodStartBehavior,
+  resolveDogfoodRenderBehavior,
+  resolveDogfoodSessionBehavior,
   type SDKDogfoodStatus,
   type DogfoodAccessSnapshot,
   type DogfoodUsageMode,
+  type DogfoodStartBehavior,
+  type DogfoodRenderBehavior,
+  type DogfoodSessionBehavior,
 } from './dogfoodPolicy';
 import { YaverDeviceDogfood, type DeviceDogfoodOptions, type DeviceDogfoodSession, type DeviceDogfoodState } from './deviceDogfood';
 
@@ -859,6 +871,7 @@ export class YaverFeedback {
     }
     await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
     await YaverFeedback.syncDogfoodControlGesture().catch(() => undefined);
+    DeviceEventEmitter.emit('yaverFeedback:authChanged', { authenticated: true });
   }
 
   /** Returns true once the SDK has a session token it can use. */
@@ -1300,6 +1313,117 @@ export class YaverFeedback {
     return resolved;
   }
 
+  private static async dogfoodPreferenceScope(): Promise<string> {
+    await YaverFeedback.hydrateSession();
+    const access = await YaverFeedback.getDogfoodAccess();
+    if (!access.yaverAuthenticated) {
+      YaverFeedback.showLogin();
+      throw new Error('Sign in to Yaver before changing Dogfood settings.');
+    }
+    if (!access.authorized || !access.installationId) {
+      throw new Error('This app installation must be approved for Dogfood first.');
+    }
+    return dogfoodControlPreferenceScope(access.appId, access.installationId)
+      || `${access.appId}:${access.installationId}`;
+  }
+
+  static async getDogfoodStartBehavior(): Promise<DogfoodStartBehavior> {
+    const scope = await YaverFeedback.dogfoodPreferenceScope();
+    return (await getCachedDogfoodStartBehavior(scope))
+      || resolveDogfoodStartBehavior(config?.dogfood?.startBehavior);
+  }
+
+  static async setDogfoodStartBehavior(value: DogfoodStartBehavior): Promise<DogfoodStartBehavior> {
+    const resolved = resolveDogfoodStartBehavior(value);
+    const scope = await YaverFeedback.dogfoodPreferenceScope();
+    await cacheDogfoodStartBehavior(resolved, scope);
+    if (config?.dogfood) config.dogfood.startBehavior = resolved;
+    DeviceEventEmitter.emit('yaverFeedback:dogfoodExperienceChanged', { startBehavior: resolved });
+    return resolved;
+  }
+
+  static async getDogfoodRenderBehavior(): Promise<DogfoodRenderBehavior> {
+    const scope = await YaverFeedback.dogfoodPreferenceScope();
+    return (await getCachedDogfoodRenderBehavior(scope))
+      || resolveDogfoodRenderBehavior(config?.dogfood?.renderBehavior);
+  }
+
+  static async setDogfoodRenderBehavior(value: DogfoodRenderBehavior): Promise<DogfoodRenderBehavior> {
+    const resolved = resolveDogfoodRenderBehavior(value);
+    const scope = await YaverFeedback.dogfoodPreferenceScope();
+    await cacheDogfoodRenderBehavior(resolved, scope);
+    if (config?.dogfood) config.dogfood.renderBehavior = resolved;
+    DeviceEventEmitter.emit('yaverFeedback:dogfoodExperienceChanged', { renderBehavior: resolved });
+    return resolved;
+  }
+
+  static async getDogfoodSessionBehavior(): Promise<DogfoodSessionBehavior> {
+    const scope = await YaverFeedback.dogfoodPreferenceScope();
+    return (await getCachedDogfoodSessionBehavior(scope))
+      || resolveDogfoodSessionBehavior(config?.dogfood?.sessionBehavior);
+  }
+
+  static async setDogfoodSessionBehavior(value: DogfoodSessionBehavior): Promise<DogfoodSessionBehavior> {
+    const resolved = resolveDogfoodSessionBehavior(value);
+    const scope = await YaverFeedback.dogfoodPreferenceScope();
+    await cacheDogfoodSessionBehavior(resolved, scope);
+    if (config?.dogfood) config.dogfood.sessionBehavior = resolved;
+    DeviceEventEmitter.emit('yaverFeedback:dogfoodExperienceChanged', { sessionBehavior: resolved });
+    return resolved;
+  }
+
+  static async getDogfoodSessions() {
+    await YaverFeedback.dogfoodPreferenceScope();
+    const client = await YaverFeedback.dogfoodCodingClient();
+    const selection = await YaverFeedback.getDogfoodRuntimeSelection();
+    return client.listVibeThreads({
+      projectName: selection?.projectName || config?.dogfood?.projectName || config?.projectName,
+      projectPath: selection?.projectPath || config?.dogfood?.projectPath,
+    });
+  }
+
+  private static async dogfoodCodingClient(): Promise<P2PClient> {
+    let client = YaverFeedback.getP2PClient();
+    if (!client && await YaverFeedback.reconnect()) client = YaverFeedback.getP2PClient();
+    if (!client) throw new Error('The selected coding machine is not connected yet. Reconnect it and retry.');
+    return client;
+  }
+
+  static async getDogfoodSession(taskId: string) {
+    await YaverFeedback.dogfoodPreferenceScope();
+    return (await YaverFeedback.dogfoodCodingClient()).getVibeThread(taskId);
+  }
+
+  static async openDogfoodSession(taskId: string): Promise<void> {
+    await YaverFeedback.dogfoodPreferenceScope();
+    const clean = String(taskId || '').trim();
+    if (!clean) throw new Error('Choose a Dogfood session first.');
+    DeviceEventEmitter.emit('yaverFeedback:dogfoodSessionRequested', { taskId: clean });
+  }
+
+  static async completeDogfoodSession(taskId: string): Promise<void> {
+    await YaverFeedback.dogfoodPreferenceScope();
+    await (await YaverFeedback.dogfoodCodingClient()).completeVibeThread(taskId);
+  }
+
+  static async deleteDogfoodSession(taskId: string): Promise<void> {
+    await YaverFeedback.dogfoodPreferenceScope();
+    await (await YaverFeedback.dogfoodCodingClient()).deleteVibeThread(taskId);
+  }
+
+  /** Chat never starts rendering. It either restores the newest durable
+   * runner/tmux-backed topic or opens a clean composer. */
+  static async openDogfoodChat(): Promise<DogfoodFlowState> {
+    if (await YaverFeedback.getDogfoodSessionBehavior() === 'resume-last') {
+      const sessions = await YaverFeedback.getDogfoodSessions();
+      if (sessions[0]) {
+        await YaverFeedback.openDogfoodSession(sessions[0].id);
+        return { phase: 'opening', appId: (await YaverFeedback.getDogfoodAccess()).appId };
+      }
+    }
+    return YaverFeedback.openDogfood();
+  }
+
   /** One-tap fast reload for the compact Dogfood card. It preserves the same
    * selected render machine and bearer-authenticated P2P route as the full
    * Feedback modal, and names missing auth/machine state instead of no-oping. */
@@ -1482,6 +1606,11 @@ export class YaverFeedback {
       publishDogfoodFlow(state);
       return state;
     }
+    if (!config?.preferredDeviceId && token) {
+      const devices = await listReachableDevices(token);
+      const ready = devices.owned.filter((device) => device.isOnline && !device.needsAuth);
+      if (ready.length === 1) await YaverFeedback.setPreferredDevice(ready[0].deviceId);
+    }
     if (!config?.preferredDeviceId) {
       const state: DogfoodFlowState = { phase: 'machine-required', appId };
       publishDogfoodFlow(state);
@@ -1606,6 +1735,7 @@ export class YaverFeedback {
     p2pAuthToken = null;
     await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
     await YaverFeedback.syncDogfoodControlGesture().catch(() => undefined);
+    DeviceEventEmitter.emit('yaverFeedback:authChanged', { authenticated: false });
   }
 
   /**
@@ -1878,8 +2008,8 @@ export class YaverFeedback {
   }> {
     const client = new YaverDeviceDogfood({ ...options, authToken: options.authToken || config?.authToken });
     let status = await client.status();
-    if (status === 'unregistered' || status === 'pending' || status === 'cancelled' || status === 'revoked' || status === 'superseded') {
-      const enrolled = status === 'unregistered' || status === 'pending'
+    if (status === 'unregistered' || status === 'cancelled' || status === 'revoked' || status === 'superseded') {
+      const enrolled = status === 'unregistered'
         ? await client.enroll(Platform.OS)
         : await client.reRegister(Platform.OS);
       status = enrolled.status;

@@ -46,11 +46,22 @@ import {
 } from "../../../sdk/feedback/react-native/src/DogfoodSessionUi";
 import {
   getDogfoodUsageMode,
+  getDogfoodStartBehavior,
+  getDogfoodRenderBehavior,
+  getDogfoodSessionBehavior,
   getPreferredDogfoodLane,
   setDogfoodUsageMode,
+  setDogfoodStartBehavior,
+  setDogfoodRenderBehavior,
+  setDogfoodSessionBehavior,
   setPreferredDogfoodLane,
 } from "../../../sdk/feedback/react-native/src/preferences";
-import type { DogfoodUsageMode } from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
+import type {
+  DogfoodRenderBehavior,
+  DogfoodSessionBehavior,
+  DogfoodStartBehavior,
+  DogfoodUsageMode,
+} from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 
@@ -99,6 +110,9 @@ export default function AttachModeSection({
   const [runnerRows, setRunnerRows] = useState<Awaited<ReturnType<typeof getDogfoodRunners>>>([]);
   const [lane, setLane] = useState<DogfoodLane>("browser");
   const [usageMode, setUsageModeState] = useState<DogfoodUsageMode>("reload-only");
+  const [startBehavior, setStartBehaviorState] = useState<DogfoodStartBehavior>("vibe-first");
+  const [renderBehavior, setRenderBehaviorState] = useState<DogfoodRenderBehavior>("manual");
+  const [sessionBehavior, setSessionBehaviorState] = useState<DogfoodSessionBehavior>("resume-last");
   const [nativeRuntimeAvailable, setNativeRuntimeAvailable] = useState(false);
   const [runnerSetupBusy, setRunnerSetupBusy] = useState(false);
   const [runnerSetupMessage, setRunnerSetupMessage] = useState<string | null>(null);
@@ -140,14 +154,20 @@ export default function AttachModeSection({
   useEffect(() => {
     (async () => {
       try {
-        const [dir, savedLane, savedUsageMode] = await Promise.all([
+        const [dir, savedLane, savedUsageMode, savedStart, savedRender, savedSession] = await Promise.all([
           AsyncStorage.getItem(CHECKOUT_KEY),
           getPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID),
           getDogfoodUsageMode(YAVER_DOGFOOD_MODE_SCOPE),
+          getDogfoodStartBehavior(YAVER_DOGFOOD_MODE_SCOPE),
+          getDogfoodRenderBehavior(YAVER_DOGFOOD_MODE_SCOPE),
+          getDogfoodSessionBehavior(YAVER_DOGFOOD_MODE_SCOPE),
         ]);
         if (dir) setCheckoutDir(dir);
         if (savedLane) setLane(savedLane);
         if (savedUsageMode) setUsageModeState(savedUsageMode);
+        if (savedStart) setStartBehaviorState(savedStart);
+        if (savedRender) setRenderBehaviorState(savedRender);
+        if (savedSession) setSessionBehaviorState(savedSession);
       } catch {
         // best-effort
       } finally {
@@ -371,11 +391,14 @@ export default function AttachModeSection({
         lane,
         fallbackLane: lanePolicy.fallback,
         usageMode,
+        startBehavior,
+        renderBehavior,
+        sessionBehavior,
         deviceId: targetDevice.id,
         deviceName: targetDevice.name,
       },
     } as any);
-  }, [checkoutDir, gate.canAttach, lane, lanePolicy.fallback, runner, targetDevice?.id, targetDevice?.name, usageMode]);
+  }, [checkoutDir, gate.canAttach, lane, lanePolicy.fallback, renderBehavior, runner, sessionBehavior, startBehavior, targetDevice?.id, targetDevice?.name, usageMode]);
 
   const runSourceFix = useCallback(async () => {
     if (!targetDevice?.id || sourceBusy) return;
@@ -488,6 +511,9 @@ export default function AttachModeSection({
           <Text style={{ color: c.textMuted, fontSize: 11 }}>{targetDevice?.name || "No box selected"} · {runner}</Text>
           <Text style={{ color: c.textMuted, fontSize: 11 }} numberOfLines={2}>{checkoutDir.trim() || "No checkout selected"}</Text>
           <Text style={{ color: c.textMuted, fontSize: 11 }}>{laneOptions.find((option) => option.lane === lane)?.label || lane}</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11 }}>
+            {startBehavior === "vibe-first" ? "Vibe first" : "Render on open"} · {renderBehavior === "manual" ? "tap Render updates" : "auto-render requested updates"} · {sessionBehavior === "resume-last" ? "resume newest session" : "new session"}
+          </Text>
           {gate.canAttach ? (
             <Pressable
               accessibilityRole="button"
@@ -619,6 +645,27 @@ export default function AttachModeSection({
                   </Text>
                 </Pressable>
               );
+            })}
+          </View>
+          <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700", marginTop: 4 }}>Start</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            {(["vibe-first", "render-on-open"] as const).map((value) => {
+              const selected = startBehavior === value;
+              return <Pressable key={value} accessibilityRole="radio" accessibilityState={{ selected }} onPress={() => { setStartBehaviorState(value); void setDogfoodStartBehavior(value, YAVER_DOGFOOD_MODE_SCOPE); }} style={{ flex: 1, borderRadius: 9, borderWidth: 1, borderColor: selected ? c.accent : c.border, backgroundColor: selected ? c.accentSoft : c.bg, padding: 9 }}><Text style={{ color: selected ? c.accent : c.textPrimary, fontSize: 12, fontWeight: "700" }}>{value === "vibe-first" ? "Vibe first" : "Render on open"}</Text></Pressable>;
+            })}
+          </View>
+          <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700", marginTop: 4 }}>After UI updates</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            {(["manual", "auto-on-request"] as const).map((value) => {
+              const selected = renderBehavior === value;
+              return <Pressable key={value} accessibilityRole="radio" accessibilityState={{ selected }} onPress={() => { setRenderBehaviorState(value); void setDogfoodRenderBehavior(value, YAVER_DOGFOOD_MODE_SCOPE); }} style={{ flex: 1, borderRadius: 9, borderWidth: 1, borderColor: selected ? c.accent : c.border, backgroundColor: selected ? c.accentSoft : c.bg, padding: 9 }}><Text style={{ color: selected ? c.accent : c.textPrimary, fontSize: 12, fontWeight: "700" }}>{value === "manual" ? "Tap Render" : "Auto-render"}</Text></Pressable>;
+            })}
+          </View>
+          <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700", marginTop: 4 }}>Sessions</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            {(["resume-last", "new-session"] as const).map((value) => {
+              const selected = sessionBehavior === value;
+              return <Pressable key={value} accessibilityRole="radio" accessibilityState={{ selected }} onPress={() => { setSessionBehaviorState(value); void setDogfoodSessionBehavior(value, YAVER_DOGFOOD_MODE_SCOPE); }} style={{ flex: 1, borderRadius: 9, borderWidth: 1, borderColor: selected ? c.accent : c.border, backgroundColor: selected ? c.accentSoft : c.bg, padding: 9 }}><Text style={{ color: selected ? c.accent : c.textPrimary, fontSize: 12, fontWeight: "700" }}>{value === "resume-last" ? "Resume newest" : "Start new"}</Text></Pressable>;
             })}
           </View>
         </View>

@@ -85,6 +85,22 @@ export interface DogfoodDevEvent {
   [key: string]: unknown;
 }
 
+export interface VibeThreadSummary {
+  id: string;
+  title: string;
+  status: string;
+  createdAt?: string;
+  projectName?: string;
+  turnCount?: number;
+  runnerId?: string;
+  model?: string;
+  deviceName?: string;
+  yaverSessionId?: string;
+  runnerSessionId?: string;
+  tmuxSession?: string;
+  resumable?: boolean;
+}
+
 export interface DogfoodRemoteRuntimeTarget {
   id: string;
   label: string;
@@ -483,9 +499,9 @@ export class P2PClient {
 
   /** Canonical runner + model catalogue used by Vibing routing controls. */
   async getAvailableRunners(): Promise<RunnerAuthStatusRow[]> {
-    const resp = await fetch(`${this.baseUrl}/agent/runners`, {
+    const resp = await dogfoodFetch(`${this.baseUrl}/agent/runners`, {
       headers: this.authHeaders(),
-    });
+    }, 10_000);
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
       throw new Error(`getAvailableRunners HTTP ${resp.status}: ${text}`);
@@ -505,7 +521,7 @@ export class P2PClient {
     branch?: string;
     gitRemote?: string;
   }>> {
-    const resp = await fetch(`${this.baseUrl}/projects`, { headers: this.authHeaders() });
+    const resp = await dogfoodFetch(`${this.baseUrl}/projects`, { headers: this.authHeaders() }, 10_000);
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
       throw new Error(`listDogfoodProjects HTTP ${resp.status}: ${body}`);
@@ -1086,11 +1102,11 @@ export class P2PClient {
   async reloadDogfood(options: DogfoodReloadOptions): Promise<ReloadAck> {
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/dogfood/reload`, {
+      response = await dogfoodFetch(`${this.baseUrl}/dogfood/reload`, {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ...options, source: 'feedback-sdk' }),
-      });
+      }, 45_000);
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Dogfood reload could not reach the selected box.');
     }
@@ -1544,14 +1560,7 @@ export class P2PClient {
   }
 
   /** Existing task history, filtered by the agent to Vibing/feedback topics. */
-  async listVibeThreads(input?: { projectName?: string; projectPath?: string }): Promise<Array<{
-    id: string;
-    title: string;
-    status: string;
-    createdAt?: string;
-    projectName?: string;
-    turnCount?: number;
-  }>> {
+  async listVibeThreads(input?: { projectName?: string; projectPath?: string }): Promise<VibeThreadSummary[]> {
     const params = new URLSearchParams();
     if (input?.projectName) params.set('projectName', input.projectName);
     if (input?.projectPath) params.set('projectPath', input.projectPath);
@@ -1568,6 +1577,13 @@ export class P2PClient {
       createdAt: task.createdAt,
       projectName: task.projectName,
       turnCount: task.turnCount,
+      runnerId: task.runnerId || task.executionSession?.runnerId,
+      model: task.model,
+      deviceName: task.deviceName,
+      yaverSessionId: task.yaverSessionId || task.executionSession?.yaverSessionId,
+      runnerSessionId: task.runnerSessionId || task.executionSession?.runnerSessionId,
+      tmuxSession: task.tmuxSession || task.executionSession?.tmuxSession,
+      resumable: task.executionSession?.resumable === true,
     }));
   }
 
@@ -1575,6 +1591,10 @@ export class P2PClient {
     id: string;
     title: string;
     status: string;
+    projectName?: string;
+    runnerId?: string;
+    model?: string;
+    executionSession?: { runnerId?: string; runnerSessionId?: string; tmuxSession?: string; resumable?: boolean };
     turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }>;
   }> {
     const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}`, {
@@ -1591,6 +1611,19 @@ export class P2PClient {
       headers: this.authHeaders(),
     });
     if (!resp.ok) throw new Error(`deleteVibeThread HTTP ${resp.status}`);
+  }
+
+  /** Explicitly end the durable runner/tmux seat. Sessions never disappear
+   * merely because a client disconnected; only this or Delete closes it. */
+  async completeVibeThread(taskId: string): Promise<void> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/complete`, {
+      method: 'POST',
+      headers: this.authHeaders(),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`completeVibeThread HTTP ${resp.status}: ${text}`);
+    }
   }
 
   /**
@@ -1610,6 +1643,7 @@ export class P2PClient {
     taskId: string,
     onLine: (line: string) => void,
     onComplete: (status: string) => void,
+    options?: { onEvent?: (event: Record<string, unknown>) => void },
   ): () => void {
     const ctrl = new AbortController();
     let closed = false;
@@ -1651,7 +1685,12 @@ export class P2PClient {
             for (const line of frame.split('\n')) {
               if (line.startsWith('data:')) {
                 const payload = line.slice(5).trim();
-                if (payload) onLine(payload);
+                if (payload) {
+                  let event: Record<string, unknown> | null = null;
+                  try { event = JSON.parse(payload) as Record<string, unknown>; } catch { /* raw output */ }
+                  if (event?.type === 'runtime_render_requested') options?.onEvent?.(event);
+                  else onLine(payload);
+                }
               }
             }
             idx = buf.indexOf('\n\n');

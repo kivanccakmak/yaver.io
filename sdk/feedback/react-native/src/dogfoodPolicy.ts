@@ -28,8 +28,29 @@ export interface DogfoodFlowSnapshot {
  * installation approval are identical in both modes; this changes UI only. */
 export type DogfoodUsageMode = 'reload-only' | 'reload-and-chat';
 
+/** What entering Dogfood does before the user explicitly asks to render. */
+export type DogfoodStartBehavior = 'vibe-first' | 'render-on-open';
+
+/** UI-ready signals are advisory by default. Automatic rendering is opt-in. */
+export type DogfoodRenderBehavior = 'manual' | 'auto-on-request';
+
+/** Whether Chat reopens the newest durable topic or starts with a clean composer. */
+export type DogfoodSessionBehavior = 'resume-last' | 'new-session';
+
 export function resolveDogfoodUsageMode(value?: string | null): DogfoodUsageMode {
   return value === 'reload-only' ? 'reload-only' : 'reload-and-chat';
+}
+
+export function resolveDogfoodStartBehavior(value?: string | null): DogfoodStartBehavior {
+  return value === 'render-on-open' ? 'render-on-open' : 'vibe-first';
+}
+
+export function resolveDogfoodRenderBehavior(value?: string | null): DogfoodRenderBehavior {
+  return value === 'auto-on-request' ? 'auto-on-request' : 'manual';
+}
+
+export function resolveDogfoodSessionBehavior(value?: string | null): DogfoodSessionBehavior {
+  return value === 'new-session' ? 'new-session' : 'resume-last';
 }
 
 export interface SDKDogfoodConfig {
@@ -60,6 +81,12 @@ export interface SDKDogfoodConfig {
    * Claude Code, Codex, or another control plane and exposes no SDK chat.
    * Default `reload-and-chat` preserves the pre-0.9 behavior. */
   usageMode?: DogfoodUsageMode;
+  /** Default `vibe-first`: entering Dogfood never starts a compiler/runtime. */
+  startBehavior?: DogfoodStartBehavior;
+  /** Default `manual`: structured UI-ready signals become a Render action. */
+  renderBehavior?: DogfoodRenderBehavior;
+  /** Default `resume-last`: reconnect to the newest durable runner topic. */
+  sessionBehavior?: DogfoodSessionBehavior;
   /** Advanced override for staging/self-hosted enrollment. */
   backendUrl?: string;
   /** Presentation-only ACL hook, e.g. `() => user.isAdmin`. Server-side OAuth

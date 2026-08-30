@@ -6,12 +6,14 @@ import {
   Modal,
   PanResponder,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
   useWindowDimensions,
 } from 'react-native';
 import { YaverFeedback, type DogfoodControlTriggerState } from './YaverFeedback';
+import { DogfoodSettings } from './DogfoodSettings';
 import {
   getDogfoodControlPosition,
   setDogfoodControlPosition,
@@ -63,10 +65,12 @@ export const DogfoodQuickControls: React.FC = () => {
   const [state, setState] = useState<DogfoodControlTriggerState>(EMPTY_STATE);
   const [open, setOpen] = useState(false);
   const [showControlSettings, setShowControlSettings] = useState(false);
+  const [showFullSettings, setShowFullSettings] = useState(false);
   const [busy, setBusy] = useState<'reload' | 'chat' | 'preference' | 'update' | 'exit' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [agentUpdateRequired, setAgentUpdateRequired] = useState(false);
   const [usageMode, setUsageMode] = useState<DogfoodUsageMode>('reload-and-chat');
+  const [entryRenderPending, setEntryRenderPending] = useState(false);
 
   const scheduleFade = useCallback(() => {
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
@@ -84,7 +88,9 @@ export const DogfoodQuickControls: React.FC = () => {
     try {
       const next = await YaverFeedback.syncDogfoodControlGesture();
       setState(next);
-      if (next.authorized) setUsageMode(await YaverFeedback.getDogfoodUsageMode());
+      if (next.authorized) {
+        setUsageMode(await YaverFeedback.getDogfoodUsageMode());
+      }
     } catch {
       setState(EMPTY_STATE);
     }
@@ -95,6 +101,7 @@ export const DogfoodQuickControls: React.FC = () => {
     const trigger = DeviceEventEmitter.addListener('yaverDogfoodControlGesture', () => {
       setMessage(null);
       setShowControlSettings(false);
+      setShowFullSettings(false);
       setOpen(true);
     });
     const capability = DeviceEventEmitter.addListener('yaverDogfoodControlCapability', () => {
@@ -116,6 +123,12 @@ export const DogfoodQuickControls: React.FC = () => {
       setShowControlSettings(false);
       setOpen(true);
       void refresh();
+      void YaverFeedback.getDogfoodStartBehavior().then((behavior) => {
+        if (behavior === 'render-on-open') {
+          setEntryRenderPending(true);
+          setMessage('Render queued until every Dogfood coding session is idle.');
+        }
+      }).catch(() => {});
     });
     return () => {
       trigger.remove();
@@ -221,6 +234,24 @@ export const DogfoodQuickControls: React.FC = () => {
     }
   }, [busy]);
 
+  useEffect(() => {
+    if (!entryRenderPending || busy) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const sessions = await YaverFeedback.getDogfoodSessions();
+        if (cancelled || sessions.some((session) => session.status === 'running' || session.status === 'queued')) return;
+        setEntryRenderPending(false);
+        await fastReload();
+      } catch (error) {
+        if (!cancelled) setMessage(error instanceof Error ? error.message : String(error));
+      }
+    };
+    void tick();
+    const timer = setInterval(() => { void tick(); }, 2500);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [busy, entryRenderPending, fastReload]);
+
   const updateAgent = useCallback(async () => {
     if (busy) return;
     setBusy('update');
@@ -240,24 +271,12 @@ export const DogfoodQuickControls: React.FC = () => {
     setBusy('chat');
     setMessage(null);
     setOpen(false);
-    const result = await YaverFeedback.openDogfood();
+    const result = await YaverFeedback.openDogfoodChat();
     if (result.phase === 'denied' || result.phase === 'error') {
       setMessage(result.error || 'Dogfood access is not available on this installation.');
       setOpen(true);
     }
     setBusy(null);
-  }, [busy]);
-
-  const openSessionSetup = useCallback(async () => {
-    if (busy) return;
-    setOpen(false);
-    setShowControlSettings(false);
-    const result = await YaverFeedback.openDogfood();
-    if (result.phase === 'denied' || result.phase === 'error') {
-      setMessage(result.error || 'Dogfood session settings are not available on this installation.');
-      setOpen(true);
-      setShowControlSettings(true);
-    }
   }, [busy]);
 
   const chooseUsageMode = useCallback(async (mode: DogfoodUsageMode) => {
@@ -330,7 +349,19 @@ export const DogfoodQuickControls: React.FC = () => {
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
           <Pressable style={styles.card} onPress={(event) => event.stopPropagation()}>
-            {onboarding ? (
+            {showFullSettings ? (
+              <>
+                <View style={styles.titleRow}>
+                  <Text style={styles.title}>Dogfood settings</Text>
+                  <Pressable onPress={() => setShowFullSettings(false)} style={styles.settingsButton} accessibilityRole="button" accessibilityLabel="Back to Dogfood controls">
+                    <Text style={styles.settingsText}>Done</Text>
+                  </Pressable>
+                </View>
+                <ScrollView style={styles.fullSettingsScroll} contentContainerStyle={styles.fullSettingsContent}>
+                  <DogfoodSettings showExit={false} />
+                </ScrollView>
+              </>
+            ) : onboarding ? (
               <>
                 <Text style={styles.title}>Dogfood ready</Text>
                 <Text style={styles.explanation}>
@@ -385,10 +416,10 @@ export const DogfoodQuickControls: React.FC = () => {
                     onPress={() => void chooseUsageMode('reload-and-chat')}
                   />
                   <ModeButton
-                    title="Session setup"
-                    hint="Change machine, coding agent, model, or runtime lane"
+                    title="Dogfood Settings"
+                    hint="Change start, render, sessions, machine, runner, checkout, or lane"
                     disabled={busy !== null}
-                    onPress={() => void openSessionSetup()}
+                    onPress={() => setShowFullSettings(true)}
                   />
                   <ModeButton
                     title={busy === 'exit' ? 'Returning…' : 'Back to native app'}
@@ -520,6 +551,8 @@ const styles = StyleSheet.create({
   settingsText: { color: '#fdba74', fontSize: 12, fontWeight: '700' },
   actions: { flexDirection: 'row', gap: 10 },
   stackedActions: { gap: 9 },
+  fullSettingsScroll: { maxHeight: 440 },
+  fullSettingsContent: { paddingBottom: 8 },
   action: {
     flex: 1,
     minHeight: 92,

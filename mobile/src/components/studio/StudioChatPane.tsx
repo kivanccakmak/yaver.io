@@ -55,6 +55,9 @@ interface StudioChatPaneProps {
   codingMachineName?: string;
   /** Lets the preview host queue reloads and lock routing while coding. */
   onTaskStateChange?: (task: Task | null) => void;
+  onAnyTaskCodingChange?: (coding: boolean) => void;
+  onRenderRequested?: () => void;
+  initialSessionBehavior?: "resume-last" | "new-session";
 }
 
 type ChatRow =
@@ -78,6 +81,9 @@ export function StudioChatPane({
   clientConnected,
   codingMachineName,
   onTaskStateChange,
+  onAnyTaskCodingChange,
+  onRenderRequested,
+  initialSessionBehavior = "resume-last",
 }: StudioChatPaneProps) {
   const theme = useColors();
   // Browser-preview Vibing is the React-Native twin of the standalone feedback
@@ -208,7 +214,10 @@ export function StudioChatPane({
       },
       (evt) => {
         if (!evt || typeof evt.type !== "string") return;
-        if (evt.type === "runtime_render_requested") return;
+        if (evt.type === "runtime_render_requested") {
+          onRenderRequested?.();
+          return;
+        }
       },
       {
         rawSince: resume ? rawCursorRef.current : 0,
@@ -281,11 +290,14 @@ export function StudioChatPane({
         },
       },
     );
-  }, [refreshTasks, taskClient]);
+  }, [onRenderRequested, refreshTasks, taskClient]);
   subscribeTaskRef.current = subscribeTask;
 
   const runningTask = tasks.find((task) => task.status === "running" || task.status === "queued")
     || (activeTask && (activeTask.status === "running" || activeTask.status === "queued") ? activeTask : undefined);
+  // Each topic owns its own runner/tmux seat. Keep polling every live topic for
+  // render safety, but only the selected topic locks its own composer.
+  const activeTaskRunning = activeTask?.status === "running" || activeTask?.status === "queued";
 
   // Status reconciliation is deliberately independent from the SSE stream.
   // A stream can stay half-open and never deliver `done`; the cheap list probe
@@ -298,7 +310,7 @@ export function StudioChatPane({
 
   const handleSend = useCallback(async () => {
     const text = composerText.trim();
-    if (!text || sending || !connected || runningTask) return;
+    if (!text || sending || !connected || activeTaskRunning) return;
     setComposerText("");
     setSending(true);
     setSendError(null);
@@ -342,7 +354,7 @@ export function StudioChatPane({
       setSending(false);
       void refreshTasks();
     }
-  }, [composerText, sending, connected, runningTask, projectPath, projectName, runner, model, subscribeTask, refreshTasks, activeTask, taskClient]);
+  }, [activeTask, activeTaskRunning, composerText, connected, model, projectName, projectPath, refreshTasks, runner, sending, subscribeTask, taskClient]);
 
   const resetConversation = useCallback((draftNewTopic = false) => {
     draftingNewTopicRef.current = draftNewTopic;
@@ -392,7 +404,30 @@ export function StudioChatPane({
     ]);
   }, [removeTask]);
 
-  const isRunning = !!runningTask;
+  const completeTask = useCallback(async (task: Task) => {
+    try {
+      await taskClient.completeTask(task.id);
+      setTasks((current) => current.map((item) => item.id === task.id ? withObservedTaskStatus(item, "completed") : item));
+      setActiveTask((current) => current?.id === task.id ? withObservedTaskStatus(current, "completed") : current);
+      void refreshTasks();
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "Could not complete topic");
+    }
+  }, [refreshTasks, taskClient]);
+
+  const confirmCompleteTask = useCallback((task: Task) => {
+    const message = "This explicitly closes the runner/tmux seat and keeps the conversation in history.";
+    if (Platform.OS === "web" && typeof globalThis.confirm === "function") {
+      if (globalThis.confirm(`Complete “${task.title || "this topic"}”?\n\n${message}`)) void completeTask(task);
+      return;
+    }
+    Alert.alert("Complete topic?", message, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Complete", onPress: () => { void completeTask(task); } },
+    ]);
+  }, [completeTask]);
+
+  const isRunning = !!activeTaskRunning;
   const isRenderable = activeTask?.status === "completed" || activeTask?.status === "review";
   const consoleStatus = activeTask?.status === "failed" || activeTask?.status === "stopped"
     ? `○ ${activeTask.status}`
@@ -411,10 +446,10 @@ export function StudioChatPane({
   // An explicit New action suppresses this auto-restore until the new prompt
   // creates its task.
   useEffect(() => {
-    if (tasks.length === 1 && !activeTask && !draftingNewTopicRef.current) {
+    if (initialSessionBehavior === "resume-last" && tasks.length > 0 && !activeTask && !draftingNewTopicRef.current) {
       handleTaskTap(tasks[0]);
     }
-  }, [activeTask, handleTaskTap, tasks]);
+  }, [activeTask, handleTaskTap, initialSessionBehavior, tasks]);
   useEffect(() => {
     if (projectPathRef.current === projectPath) return;
     projectPathRef.current = projectPath;
@@ -422,8 +457,9 @@ export function StudioChatPane({
   }, [projectPath, resetConversation]);
 
   useEffect(() => {
-    onTaskStateChange?.(runningTask || activeTask);
-  }, [activeTask, onTaskStateChange, runningTask]);
+    onTaskStateChange?.(activeTask);
+    onAnyTaskCodingChange?.(!!runningTask);
+  }, [activeTask, onAnyTaskCodingChange, onTaskStateChange, runningTask]);
 
   return (
     <View style={[styles.wrap, { backgroundColor: c.bg }]}>
@@ -474,11 +510,17 @@ export function StudioChatPane({
               <View style={styles.topicTopline}>
                 <View style={[styles.taskDot, { backgroundColor: t.status === "running" || t.status === "queued" ? c.warn : t.status === "completed" ? c.success : c.textTertiary }]} />
                 <Text style={[styles.taskStatus, { color: c.textMuted }]}>{t.status === "completed" ? "done" : t.status}</Text>
+                {t.status !== "completed" ? <Pressable onPress={(event) => { event.stopPropagation(); confirmCompleteTask(t); }} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Complete ${t.title || "topic"}`}>
+                  <Ionicons name="checkmark" size={15} color={c.textTertiary} />
+                </Pressable> : null}
                 <Pressable onPress={(event) => { event.stopPropagation(); confirmRemoveTask(t); }} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Remove ${t.title || "topic"}`}>
                   <Ionicons name="close" size={15} color={c.textTertiary} />
                 </Pressable>
               </View>
               <Text style={[styles.topicTitle, { color: c.textPrimary }]} numberOfLines={2}>{t.title || "New topic"}</Text>
+              <Text style={[styles.topicRoute, { color: c.textMuted }]} numberOfLines={1}>
+                {[t.runnerId, t.model, t.tmuxSession || t.executionSession?.tmuxSession ? "tmux" : null].filter(Boolean).join(" · ")}
+              </Text>
             </Pressable>
           ))}
         </ScrollView>
@@ -489,6 +531,9 @@ export function StudioChatPane({
         <Pressable onPress={() => resetConversation(true)} style={styles.singleTopicAction} accessibilityRole="button" accessibilityLabel="Start a new topic">
           <Ionicons name="add" size={18} color={c.accent} />
         </Pressable>
+        {tasks[0].status !== "completed" ? <Pressable onPress={() => confirmCompleteTask(tasks[0])} style={styles.singleTopicAction} accessibilityRole="button" accessibilityLabel={`Complete ${tasks[0].title || "topic"}`}>
+          <Ionicons name="checkmark" size={17} color={c.textTertiary} />
+        </Pressable> : null}
         <Pressable onPress={() => confirmRemoveTask(tasks[0])} style={styles.singleTopicAction} accessibilityRole="button" accessibilityLabel={`Remove ${tasks[0].title || "topic"}`}>
           <Ionicons name="trash-outline" size={16} color={c.textTertiary} />
         </Pressable>
@@ -626,7 +671,7 @@ export function StudioChatPane({
           style={[styles.input, { backgroundColor: c.bgInput, color: c.textPrimary, borderColor: c.borderSubtle }]}
           value={composerText}
           onChangeText={setComposerText}
-          placeholder={!connected ? "Connect a box first" : isRunning ? runningTask?.id === activeTask?.id ? "Runner is coding…" : "Another topic is coding…" : activeTask ? "Continue this topic…" : "Start a new topic…"}
+          placeholder={!connected ? "Connect a box first" : isRunning ? "This runner is coding…" : activeTask ? "Continue this topic…" : "Start a new topic…"}
           placeholderTextColor={c.textTertiary}
           multiline
           editable={connected && !isRunning}
@@ -702,6 +747,7 @@ const styles = StyleSheet.create({
   taskDot: { width: 7, height: 7, borderRadius: 4 },
   taskStatus: { flex: 1, fontSize: 10, fontWeight: "700", textTransform: "uppercase" },
   topicTitle: { fontSize: 13, lineHeight: 17, fontWeight: "700" },
+  topicRoute: { fontSize: 9, lineHeight: 12 },
   conversation: { flex: 1 },
   conversationContent: { padding: 12, gap: 8 },
   emptyHint: { fontSize: 13, textAlign: "center", paddingTop: 24, lineHeight: 20 },

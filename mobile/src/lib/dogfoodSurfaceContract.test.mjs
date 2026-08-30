@@ -86,6 +86,23 @@ test("Dogfood launch keeps navigation in the floating Y control", () => {
   assert.match(launch, /onExitPreview=\{\(\) => router\.back\(\)\}/);
   assert.match(launch, /edges=\{\["top", "bottom"\]\}/,
     "removing the header must not let launch content enter the status-bar safe area");
+  assert.match(launch, /startBehavior === "render-on-open"/);
+  assert.match(launch, />Render updates<\/Text>/,
+    "vibe-first entry has no explicit way to start rendering later");
+});
+
+test("Dogfood Settings owns start, render, and durable session behavior", () => {
+  assert.match(gate, /getDogfoodStartBehavior/);
+  assert.match(gate, /getDogfoodRenderBehavior/);
+  assert.match(gate, /getDogfoodSessionBehavior/);
+  assert.match(gate, /"vibe-first", "render-on-open"/);
+  assert.match(gate, /"manual", "auto-on-request"/);
+  assert.match(gate, /"resume-last", "new-session"/);
+  assert.match(gate, /startBehavior,/);
+  assert.match(gate, /renderBehavior,/);
+  assert.match(gate, /sessionBehavior,/);
+  assert.match(launch, /if \(startBehavior === "render-on-open"\) void launch\(controller\)/,
+    "opening Dogfood still starts a renderer in vibe-first mode");
 });
 
 test("Yaver Reload Only survives browser and WebRTC handoff and removes chat UI", () => {

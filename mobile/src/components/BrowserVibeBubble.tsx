@@ -20,7 +20,7 @@ import { connectionManager } from "../lib/connectionManager";
 import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { StudioChatPane } from "./studio/StudioChatPane";
-import type { DogfoodUsageMode } from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
+import type { DogfoodRenderBehavior, DogfoodSessionBehavior, DogfoodUsageMode } from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
 
 type ReloadKind = "fast" | "full";
 type VibeTab = "chat" | "settings";
@@ -103,6 +103,8 @@ export function BrowserVibeBubble({
   onFixException,
   exceptionFixBusy = false,
   usageMode = "reload-and-chat",
+  renderBehavior = "manual",
+  sessionBehavior = "resume-last",
 }: {
   projectPath?: string;
   projectName?: string;
@@ -112,6 +114,8 @@ export function BrowserVibeBubble({
   onFixException?: () => void | Promise<void>;
   exceptionFixBusy?: boolean;
   usageMode?: DogfoodUsageMode;
+  renderBehavior?: DogfoodRenderBehavior;
+  sessionBehavior?: DogfoodSessionBehavior;
 }) {
   const insets = useSafeAreaInsets();
   const {
@@ -136,6 +140,8 @@ export function BrowserVibeBubble({
   const [localReloadBusy, setLocalReloadBusy] = useState(false);
   const [queuedReload, setQueuedReload] = useState<ReloadKind | null>(null);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
+  const [renderReady, setRenderReady] = useState(false);
+  const [anyTaskCoding, setAnyTaskCoding] = useState(false);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [conversationKey, setConversationKey] = useState(0);
   const [runnerAuthFor, setRunnerAuthFor] = useState<string | null>(null);
@@ -345,6 +351,7 @@ export function BrowserVibeBubble({
         return;
       }
       setReloadNotice(kind === "fast" ? "Preview reloaded" : "Preview restarted");
+      setRenderReady(false);
     } catch (error) {
       setReloadNotice(error instanceof Error ? `Reload failed: ${error.message}` : "Reload failed");
     } finally {
@@ -352,7 +359,7 @@ export function BrowserVibeBubble({
     }
   }, [localReloadBusy, onReload, reloadBusy]);
 
-  const isCoding = activeTask?.status === "running" || activeTask?.status === "queued";
+  const isCoding = anyTaskCoding || activeTask?.status === "running" || activeTask?.status === "queued";
   const reload = useCallback(async (kind: ReloadKind) => {
     if (isCoding) {
       setQueuedReload(kind);
@@ -376,6 +383,15 @@ export function BrowserVibeBubble({
   }, [localReloadBusy, queuedReload, reloadNotice]);
 
   const busy = reloadBusy || localReloadBusy;
+  const handleRenderRequested = useCallback(() => {
+    setRenderReady(true);
+    if (renderBehavior === "auto-on-request") {
+      setQueuedReload("fast");
+      setReloadNotice("Refreshing after the requested UI update finishes");
+    } else {
+      setReloadNotice("UI updates are ready · tap Render updates");
+    }
+  }, [renderBehavior]);
   const runnerSummary = runnersLoading && !selectedRunnerId
     ? "Checking runner…"
     : [
@@ -685,6 +701,9 @@ export function BrowserVibeBubble({
                 clientConnected={codingAvailable}
                 codingMachineName={codingDevice?.name}
                 onTaskStateChange={setActiveTask}
+                onAnyTaskCodingChange={setAnyTaskCoding}
+                initialSessionBehavior={sessionBehavior}
+                onRenderRequested={handleRenderRequested}
               />
               )}
             </View>
@@ -732,7 +751,7 @@ export function BrowserVibeBubble({
           ]}
         >
           {busy ? <ActivityIndicator size="small" color="#6f58f5" /> : <Ionicons name="reload-outline" size={18} color="#6f58f5" />}
-          <Text style={styles.reloadBubbleText}>Fast Reload</Text>
+          <Text style={styles.reloadBubbleText}>{renderReady ? "Render updates" : "Fast Reload"}</Text>
         </Pressable>
 
         {onFixException ? (

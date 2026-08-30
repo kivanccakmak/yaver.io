@@ -86,8 +86,22 @@ export { FloatingButton } from './FloatingButton';
 // its own overlay tree can place it itself.
 export { YaverModeBadge, hideYaverModeBadge, showYaverModeBadge, isYaverModeBadgeHidden } from './YaverModeBadge';
 export type { YaverModeBadgeProps } from './YaverModeBadge';
-export { resolveSDKDogfood } from './dogfoodPolicy';
-export type { DogfoodAccessSnapshot, DogfoodFlowSnapshot, DogfoodUsageMode, SDKDogfoodConfig, SDKDogfoodStatus } from './dogfoodPolicy';
+export {
+  resolveSDKDogfood,
+  resolveDogfoodRenderBehavior,
+  resolveDogfoodSessionBehavior,
+  resolveDogfoodStartBehavior,
+} from './dogfoodPolicy';
+export type {
+  DogfoodAccessSnapshot,
+  DogfoodFlowSnapshot,
+  DogfoodRenderBehavior,
+  DogfoodSessionBehavior,
+  DogfoodStartBehavior,
+  DogfoodUsageMode,
+  SDKDogfoodConfig,
+  SDKDogfoodStatus,
+} from './dogfoodPolicy';
 export { YaverDeviceDogfood } from './deviceDogfood';
 export type { DeviceDogfoodOptions, DeviceDogfoodSession, DeviceDogfoodState } from './deviceDogfood';
 export {
@@ -136,7 +150,14 @@ export {
   clearQuickIconDisabled,
   getPreferredDogfoodLane,
   setPreferredDogfoodLane,
+  getDogfoodStartBehavior,
+  setDogfoodStartBehavior,
+  getDogfoodRenderBehavior,
+  setDogfoodRenderBehavior,
+  getDogfoodSessionBehavior,
+  setDogfoodSessionBehavior,
 } from './preferences';
+export type { VibeThreadSummary } from './P2PClient';
 export {
   configureAuthEndpoints,
   getConvexSiteUrl,

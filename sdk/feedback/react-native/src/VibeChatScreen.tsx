@@ -29,7 +29,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import type { P2PClient } from './P2PClient';
+import type { P2PClient, VibeThreadSummary } from './P2PClient';
+import type { DogfoodRenderBehavior } from './dogfoodPolicy';
 import { SDKVoiceSession, pcmToTempWavURI, isVoiceStreamSupported } from './voice';
 import { startPcmRecording, stopPcmRecording, isVoiceCaptureSupported } from './capture';
 
@@ -48,6 +49,8 @@ interface Props {
   client: P2PClient;
   initialTaskId: string;
   initialUserPrompt: string;
+  initialStatus?: string;
+  initialTurns?: VibeTurn[];
   onClose?: () => void;
   /** Called when the user taps Reload after a task completes — uses
    *  P2PClient.reloadApp() with the active project context. */
@@ -67,18 +70,15 @@ interface Props {
   renderMachine?: string;
   /** Return to the SDK prompt composer to create a separate task/topic. */
   onNewTopic?: () => void;
-}
-
-interface VibeThreadCard {
-  id: string;
-  title: string;
-  status: string;
+  renderBehavior?: DogfoodRenderBehavior;
 }
 
 export function VibeChatScreen({
   client,
   initialTaskId,
   initialUserPrompt,
+  initialStatus,
+  initialTurns,
   onClose,
   onReload,
   project,
@@ -90,10 +90,11 @@ export function VibeChatScreen({
   codingMachine,
   renderMachine,
   onNewTopic,
+  renderBehavior = 'manual',
 }: Props) {
   const [activeTab, setActiveTab] = useState<'chat' | 'settings'>('chat');
   const [taskId, setTaskId] = useState(initialTaskId);
-  const [turns, setTurns] = useState<VibeTurn[]>(() => [
+  const [turns, setTurns] = useState<VibeTurn[]>(() => initialTurns?.length ? initialTurns : [
     {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -109,12 +110,18 @@ export function VibeChatScreen({
   ]);
   const [streamBuffer, setStreamBuffer] = useState('');
   const [streamEpoch, setStreamEpoch] = useState(0);
-  const [status, setStatus] = useState<'running' | 'done' | 'failed'>('running');
+  const [status, setStatus] = useState<'running' | 'done' | 'failed'>(() =>
+    initialStatus === 'running' || initialStatus === 'queued'
+      ? 'running'
+      : initialStatus === 'completed' || initialStatus === 'review'
+        ? 'done'
+        : initialStatus ? 'failed' : 'running');
   const [followUp, setFollowUp] = useState('');
   const [isResuming, setIsResuming] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
   const [reloadQueued, setReloadQueued] = useState(false);
-  const [threads, setThreads] = useState<VibeThreadCard[]>(() => [{
+  const [renderRequested, setRenderRequested] = useState(false);
+  const [threads, setThreads] = useState<VibeThreadSummary[]>(() => [{
     id: initialTaskId,
     title: initialUserPrompt || 'New topic',
     status: 'running',
@@ -185,15 +192,20 @@ export function VibeChatScreen({
         setThreads((prev) => prev.map((thread) => thread.id === taskId ? { ...thread, status: terminal } : thread));
         void refreshThreads();
       },
+      { onEvent: (event) => {
+        if (event.type !== 'runtime_render_requested') return;
+        setRenderRequested(true);
+        if (renderBehavior === 'auto-on-request') setReloadQueued(true);
+      } },
     );
     abortRef.current = close;
     return () => {
       live = false;
       try { close(); } catch { /* ignore */ }
     };
-  }, [client, refreshThreads, streamEpoch, taskId]);
+  }, [client, refreshThreads, renderBehavior, streamEpoch, taskId]);
 
-  const selectThread = useCallback(async (thread: VibeThreadCard) => {
+  const selectThread = useCallback(async (thread: VibeThreadSummary) => {
     abortRef.current?.();
     try {
       const task = await client.getVibeThread(thread.id);
@@ -211,7 +223,7 @@ export function VibeChatScreen({
     }
   }, [client]);
 
-  const removeThread = useCallback((thread: VibeThreadCard) => {
+  const removeThread = useCallback((thread: VibeThreadSummary) => {
     const message = thread.status === 'running' || thread.status === 'queued'
       ? 'This also stops the coding turn that is still running.'
       : 'This removes the conversation from your history.';
@@ -228,8 +240,9 @@ export function VibeChatScreen({
     ]);
   }, [client, onNewTopic, taskId]);
 
-  const runningThread = threads.find((thread) => thread.status === 'running' || thread.status === 'queued');
-  const codingLocked = status === 'running' || !!runningThread;
+  // Each topic owns its own runner/tmux seat. A different live topic must not
+  // lock this composer or prevent the user from starting another session.
+  const codingLocked = status === 'running';
 
   // Auto-scroll the transcript when new content lands.
   useEffect(() => {
@@ -283,6 +296,7 @@ export function VibeChatScreen({
     setIsReloading(true);
     try {
       await onReload();
+      setRenderRequested(false);
     } catch (e) {
       setTurns((prev) => [
         ...prev,
@@ -497,6 +511,7 @@ export function VibeChatScreen({
                 <TouchableOpacity onPress={() => removeThread(thread)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} accessibilityLabel={`Remove ${thread.title}`}><Text style={styles.topicRemove}>×</Text></TouchableOpacity>
               </View>
               <Text style={styles.topicTitle} numberOfLines={2}>{thread.title}</Text>
+              <Text style={styles.topicRoute} numberOfLines={1}>{[thread.runnerId, thread.model, thread.tmuxSession ? 'tmux' : null].filter(Boolean).join(' · ')}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -556,9 +571,9 @@ export function VibeChatScreen({
         <Text style={styles.settingsLabel}>Preview</Text>
         <View style={styles.settingsCard}>
           <Text style={styles.settingsTitle}>Reload rendered app</Text>
-          <Text style={styles.settingsMeta}>{reloadQueued ? 'Reload queued. It will run when coding finishes.' : status === 'running' ? 'Reload will run when the current coding turn finishes.' : 'Apply the latest rendered output without ending this chat.'}</Text>
+          <Text style={styles.settingsMeta}>{reloadQueued ? 'Render queued. It will run when coding finishes.' : renderRequested ? 'UI updates are ready. Render when you want to see them.' : status === 'running' ? 'Rendering stays separate while this coding turn runs.' : 'Apply the latest output without ending this chat.'}</Text>
           {onReload ? <TouchableOpacity style={[styles.settingsButton, isReloading && styles.actionBtnDisabled]} onPress={handleReload} disabled={isReloading}>
-            <Text style={styles.settingsButtonText}>{isReloading ? 'Reloading…' : reloadQueued ? 'Reload Queued' : status === 'running' ? 'Queue Reload' : 'Reload'}</Text>
+            <Text style={styles.settingsButtonText}>{isReloading ? 'Rendering…' : reloadQueued ? 'Render Queued' : status === 'running' ? 'Queue Render' : renderRequested ? 'Render updates' : 'Render'}</Text>
           </TouchableOpacity> : null}
         </View>
         {onMinimize ? <TouchableOpacity style={styles.returnButton} onPress={onMinimize} accessibilityLabel="Return to app and keep Vibing running"><Text style={styles.returnButtonText}>Return to App</Text></TouchableOpacity> : null}
@@ -575,7 +590,7 @@ export function VibeChatScreen({
           style={styles.input}
           value={followUp}
           onChangeText={setFollowUp}
-          placeholder={codingLocked ? runningThread?.id !== taskId ? 'another topic is coding…' : 'wait for the agent…' : 'follow up…'}
+          placeholder={codingLocked ? 'wait for this runner…' : 'follow up…'}
           placeholderTextColor="#666"
           editable={!codingLocked && !isResuming}
           multiline
@@ -626,7 +641,7 @@ export function VibeChatScreen({
               disabled={isReloading || status === 'running'}
             >
               <Text style={styles.actionText}>
-                {isReloading ? 'reloading…' : '⟳ reload'}
+                {isReloading ? 'rendering…' : renderRequested ? 'Render updates' : '⟳ render'}
               </Text>
             </TouchableOpacity>
           )}
@@ -689,6 +704,7 @@ const styles = StyleSheet.create({
   topicStatus: { flex: 1, color: '#858590', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
   topicRemove: { color: '#9a9aa5', fontSize: 18, lineHeight: 18 },
   topicTitle: { color: '#24242b', fontSize: 13, lineHeight: 17, fontWeight: '700' },
+  topicRoute: { color: '#858590', fontSize: 9, lineHeight: 12 },
   transcript: { flex: 1 },
   transcriptContent: { padding: 12, paddingBottom: 24 },
   turn: {

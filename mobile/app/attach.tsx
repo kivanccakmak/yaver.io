@@ -73,6 +73,8 @@ export default function AttachScreen() {
     deviceId?: string;
     deviceName?: string;
     usageMode?: string;
+    renderBehavior?: string;
+    sessionBehavior?: string;
   }>();
 
   const webViewRef = useRef<WebView>(null);
@@ -338,6 +340,8 @@ export default function AttachScreen() {
         projectPath={params.workDir}
         projectName="Yaver"
         usageMode={params.usageMode === "reload-and-chat" ? "reload-and-chat" : "reload-only"}
+        renderBehavior={params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual"}
+        sessionBehavior={params.sessionBehavior === "new-session" ? "new-session" : "resume-last"}
         onExitPreview={confirmDetach}
         onReload={() => {
           reloadDogfoodSurface("manual");

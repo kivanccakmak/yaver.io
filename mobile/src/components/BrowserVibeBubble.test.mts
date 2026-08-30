@@ -39,7 +39,7 @@ test("the bubble separates Chat and Settings without unmounting the task", () =>
   assert.ok(chat.includes("planStreamRecovery"), "Vibing still drops a broken task stream silently");
   assert.ok(chat.includes('accessibilityLabel="Reattach live output"'), "a lost live stream has no in-place recovery route");
   assert.ok(chat.includes("tasks.length > 1"), "topic cards still occupy an empty or single chat");
-  assert.ok(chat.includes("tasks.length === 1"), "one saved topic has no compact single-chat controls");
+  assert.ok(chat.includes('initialSessionBehavior === "resume-last"'), "session restore is not controlled by Dogfood Settings");
   assert.ok(chat.includes("draftingNewTopicRef"), "the single topic auto-restore prevents creating a second topic");
 });
 
@@ -69,6 +69,8 @@ test("browser Vibing mirrors feedback controls and remains mounted when minimize
   assert.ok(!source.includes("Hot Reload"), "lower-frequency reload controls still crowd Settings");
   assert.ok(source.includes("Reload queued until coding finishes"), "reload executes over an active coding turn instead of queueing");
   assert.ok(source.includes("onTaskStateChange={setActiveTask}"), "preview host cannot distinguish coding from idle");
+  assert.ok(source.includes("onAnyTaskCodingChange={setAnyTaskCoding}"), "reload can race a different live runner session");
+  assert.ok(source.includes("onRenderRequested={handleRenderRequested}"), "structured UI-ready intent has no manual/automatic render consumer");
   assert.ok(source.includes('testID="browser-vibe-machine-failure"'), "machine disconnect has no visible route to recovery");
   assert.ok(source.includes("codingClient.getRunners()"), "the machine failure is still inferred without probing the Vibing API");
   assert.ok(source.includes('codingProbeState === "unreachable"'), "a transient pool badge can still declare the machine offline");
@@ -82,6 +84,17 @@ test("browser Vibing mirrors feedback controls and remains mounted when minimize
   assert.ok(source.includes('reloaded === false'), "reload failure can still be reported as success");
   assert.ok(preview.includes("onExitPreview={() => setShowPreview(false)}"));
   assert.ok(projects.includes("onExitPreview={() => setShowWebView(false)}"));
+});
+
+test("Dogfood supports multiple durable runner sessions and manual render", () => {
+  assert.ok(chat.includes("Each topic owns its own runner/tmux seat"));
+  assert.ok(chat.includes("if (!text || sending || !connected || activeTaskRunning) return;"),
+    "a live topic still globally blocks starting or using another runner session");
+  assert.ok(source.includes('renderBehavior === "auto-on-request"'));
+  assert.ok(source.includes('"UI updates are ready · tap Render updates"'));
+  assert.ok(source.includes('renderReady ? "Render updates" : "Fast Reload"'));
+  assert.ok(chat.includes("taskClient.completeTask(task.id)"), "Dogfood has no explicit Complete session action");
+  assert.ok(chat.includes("This explicitly closes the runner/tmux seat"));
 });
 
 test("the Y, Fast Reload, and contextual exception Fix controls share one bounded dock", () => {

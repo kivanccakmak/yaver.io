@@ -14,7 +14,7 @@ export default function RemoteRuntimeScreen() {
   const c = useColors();
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const params = useLocalSearchParams<{ project?: string; path?: string; framework?: string; usageMode?: string }>();
+  const params = useLocalSearchParams<{ project?: string; path?: string; framework?: string; usageMode?: string; renderBehavior?: string; sessionBehavior?: string }>();
   const project = typeof params.project === "string" ? params.project : "Project";
   const path = typeof params.path === "string" ? params.path : "";
   const framework = typeof params.framework === "string" ? params.framework : "";
@@ -468,6 +468,8 @@ export default function RemoteRuntimeScreen() {
         projectPath={path}
         projectName={project}
         usageMode={usageMode}
+        renderBehavior={params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual"}
+        sessionBehavior={params.sessionBehavior === "new-session" ? "new-session" : "resume-last"}
         onExitPreview={exitRuntime}
         onReload={reloadRuntime}
       />

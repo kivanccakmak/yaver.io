@@ -23,7 +23,7 @@ import {
 import { AuthOverlay } from './AuthOverlay';
 import { QuickActionIcon } from './QuickActionIcon';
 import { YaverModeBadge } from './YaverModeBadge';
-import { VibeChatScreen } from './VibeChatScreen';
+import { VibeChatScreen, type VibeTurn } from './VibeChatScreen';
 import { DogfoodQuickControls } from './DogfoodQuickControls';
 import { listReachableDevices, RemoteDevice } from './auth';
 import { reloadActions } from './reloadActions';
@@ -49,7 +49,7 @@ import {
 import { createP2PDogfoodDriver } from './P2PDogfoodDriver';
 import { DogfoodLanePicker, DogfoodLiveConsole, DogfoodStatusRail } from './DogfoodSessionUi';
 import type { DogfoodRemoteRuntimeTarget } from './P2PClient';
-import type { DogfoodUsageMode } from './dogfoodPolicy';
+import type { DogfoodRenderBehavior, DogfoodUsageMode } from './dogfoodPolicy';
 import {
   FEEDBACK_DOGFOOD_CONSOLE_COLORS,
   FEEDBACK_DOGFOOD_LIGHT_COLORS,
@@ -678,6 +678,39 @@ export const FeedbackModal: React.FC = () => {
         }
       },
     );
+    const dogfoodSessionSub = DeviceEventEmitter.addListener(
+      'yaverFeedback:dogfoodSessionRequested',
+      (payload: { taskId?: string }) => {
+        const taskId = String(payload?.taskId || '').trim();
+        if (!mountedRef.current || !taskId) return;
+        void (async () => {
+          const [task, renderBehavior] = await Promise.all([
+            YaverFeedback.getDogfoodSession(taskId),
+            YaverFeedback.getDogfoodRenderBehavior(),
+          ]);
+          const taskTurns: VibeTurn[] = (task.turns || []).map((turn, index) => ({
+            id: `${task.id}-${index}`,
+            role: turn.role,
+            text: turn.content,
+            timestamp: turn.timestamp ? new Date(turn.timestamp).getTime() : Date.now() + index,
+          }));
+          setActiveVibe({
+            taskId: task.id,
+            initialPrompt: taskTurns.find((turn) => turn.role === 'user')?.text || task.title || 'Dogfood session',
+            project: task.projectName,
+            runner: task.runnerId || task.executionSession?.runnerId,
+            model: task.model,
+            initialStatus: task.status,
+            initialTurns: taskTurns,
+            renderBehavior,
+          });
+          setVisible(true);
+        })().catch((cause) => {
+          setError(cause instanceof Error ? cause.message : String(cause));
+          setVisible(true);
+        });
+      },
+    );
     // Agent streams build / compile progress through the BlackBox
     // SSE command channel as `command: "status"`; YaverFeedback re-emits
     // it as `yaverFeedback:status`. Show the most recent message in the
@@ -704,6 +737,7 @@ export const FeedbackModal: React.FC = () => {
       sub.remove();
       dogfoodSub.remove();
       dogfoodUsageSub.remove();
+      dogfoodSessionSub.remove();
       statusSub.remove();
     };
   }, [loadDogfoodOnboarding, loadRunnerStatuses, loadSelectedMachine]);
@@ -992,6 +1026,9 @@ export const FeedbackModal: React.FC = () => {
     projectPath?: string;
     runner?: string;
     model?: string;
+    initialStatus?: string;
+    initialTurns?: VibeTurn[];
+    renderBehavior?: DogfoodRenderBehavior;
   } | null>(null);
   const [includeScreenshot, setIncludeScreenshot] = useState<boolean>(true);
 
@@ -1043,6 +1080,7 @@ export const FeedbackModal: React.FC = () => {
       const preferredRunner = (await prefs.getPreferredRunner?.()) ?? null;
       const preferredModel = (await prefs.getPreferredModel?.()) ?? null;
 
+      const renderBehavior = await YaverFeedback.getDogfoodRenderBehavior().catch(() => 'manual' as const);
       const result = await client.createFeedbackTask({
         userPrompt: promptText,
         projectName: identity.projectName,
@@ -1061,6 +1099,7 @@ export const FeedbackModal: React.FC = () => {
         projectPath: identity.projectPath,
         runner: preferredRunner ?? undefined,
         model: preferredModel ?? undefined,
+        renderBehavior,
       });
       setVibePrompt('');
       setShowVibeInput(false);
@@ -1173,6 +1212,9 @@ export const FeedbackModal: React.FC = () => {
               projectPath={activeVibe.projectPath}
               runner={activeVibe.runner}
               model={activeVibe.model}
+              initialStatus={activeVibe.initialStatus}
+              initialTurns={activeVibe.initialTurns}
+              renderBehavior={activeVibe.renderBehavior || 'manual'}
               voiceInputEnabled={YaverFeedback.getConfig()?.voiceInputEnabled === true}
               onClose={() => setActiveVibe(null)}
               onNewTopic={() => {
