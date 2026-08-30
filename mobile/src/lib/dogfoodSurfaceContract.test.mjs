@@ -23,6 +23,12 @@ test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", 
   assert.match(metro, /resolver\.nodeModulesPaths/,
     "CI installs mobile/node_modules only, so sibling SDK source must resolve React from that workspace");
   assert.match(metro, /mobileNodeModules/);
+  assert.match(metro, /disableHierarchicalLookup\s*=\s*true/,
+    "Dogfood SDK source outside mobile/ must not pick a second React copy through parent lookup");
+  assert.match(metro, /extraNodeModules/,
+    "the shared SDK must pin React entrypoints to mobile/node_modules");
+  assert.match(metro, /react\/jsx-runtime/);
+  assert.match(metro, /react-native/);
 });
 
 test("More separates Dogfood usage from Dogfood Settings for every contributor", () => {
