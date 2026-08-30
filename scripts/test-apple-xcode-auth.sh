@@ -10,6 +10,23 @@ fail() {
   exit 1
 }
 
+ENV_FIXTURE="$(mktemp /tmp/yaver-apple-auth-env.XXXXXX)"
+cat >"$ENV_FIXTURE" <<'EOF'
+APP_STORE_KEY_PATH=/env/default/key.p8
+APP_STORE_KEY_ID=ENVKEY
+APP_STORE_KEY_ISSUER=ENVISSUER
+APPLE_TEAM_ID=ENVTEAM1234
+EOF
+APP_STORE_KEY_PATH=/caller/key.p8
+APP_STORE_KEY_ID=CALLERKEY
+unset APP_STORE_KEY_ISSUER APPLE_TEAM_ID
+apple_source_env_defaults "$ENV_FIXTURE"
+[ "$APP_STORE_KEY_PATH" = /caller/key.p8 ] || fail "env defaults must not replace an explicit key path"
+[ "$APP_STORE_KEY_ID" = CALLERKEY ] || fail "env defaults must not replace an explicit key id"
+[ "$APP_STORE_KEY_ISSUER" = ENVISSUER ] || fail "env defaults should fill a missing issuer"
+[ "$APPLE_TEAM_ID" = ENVTEAM1234 ] || fail "env defaults should fill a missing team id"
+find "$ENV_FIXTURE" -delete
+
 unset APP_STORE_KEY_PATH APP_STORE_KEY_ID APP_STORE_KEY_ISSUER APPLE_TEAM_ID
 apple_configure_xcode_auth >/dev/null
 [ "$APPLE_XCODE_AUTH_MODE" = "xcode-account" ] || fail "empty credentials should use Xcode account"

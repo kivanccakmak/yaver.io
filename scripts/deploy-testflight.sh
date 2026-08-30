@@ -261,8 +261,7 @@ hydrate_native_dependency_artifacts
 # at the APP_STORE_KEY_PATH:? guard reading "secret not set" — naming the wrong
 # cause, non-interactively, with no chance to supply a passphrase.
 if [ -f "$HOME/.appstoreconnect/yaver.env" ]; then
-  # shellcheck source=/dev/null
-  set -a; source "$HOME/.appstoreconnect/yaver.env"; set +a
+  apple_source_env_defaults "$HOME/.appstoreconnect/yaver.env"
 fi
 
 # API keys are ideal for CI/headless uploads, but an interactive Mac may use

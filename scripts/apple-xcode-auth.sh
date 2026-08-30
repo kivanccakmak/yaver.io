@@ -13,6 +13,26 @@
 # account. The latter cannot query ASC for the highest build number, so callers
 # must require an explicit build override before consuming an upload slot.
 
+apple_source_env_defaults() {
+  local env_file="$1"
+  [ -f "$env_file" ] || return 0
+
+  local key_path_set="${APP_STORE_KEY_PATH+x}" key_path="${APP_STORE_KEY_PATH-}"
+  local key_id_set="${APP_STORE_KEY_ID+x}" key_id="${APP_STORE_KEY_ID-}"
+  local issuer_set="${APP_STORE_KEY_ISSUER+x}" issuer="${APP_STORE_KEY_ISSUER-}"
+  local team_set="${APPLE_TEAM_ID+x}" team="${APPLE_TEAM_ID-}"
+
+  set -a
+  # shellcheck source=/dev/null
+  . "$env_file"
+  set +a
+
+  if [ "$key_path_set" = x ]; then APP_STORE_KEY_PATH="$key_path"; export APP_STORE_KEY_PATH; fi
+  if [ "$key_id_set" = x ]; then APP_STORE_KEY_ID="$key_id"; export APP_STORE_KEY_ID; fi
+  if [ "$issuer_set" = x ]; then APP_STORE_KEY_ISSUER="$issuer"; export APP_STORE_KEY_ISSUER; fi
+  if [ "$team_set" = x ]; then APPLE_TEAM_ID="$team"; export APPLE_TEAM_ID; fi
+}
+
 apple_configure_xcode_auth() {
   local key_path="${APP_STORE_KEY_PATH:-}"
   local key_id="${APP_STORE_KEY_ID:-}"
