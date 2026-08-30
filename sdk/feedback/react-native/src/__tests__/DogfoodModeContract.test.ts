@@ -32,6 +32,9 @@ describe('Dogfood Settings and Usage contract', () => {
     expect(settings).toContain('Reload + Chat');
     expect(settings).toContain('Configure box, runner, checkout & lane');
     expect(settings).toContain('Sign out of Yaver');
+    expect(settings).toContain('Version unavailable');
+    expect(settings).toContain('Dogfood mode');
+    expect(settings).toContain('Native mode');
     expect(settings).not.toContain('Start & render');
     expect(settings).not.toContain('Runner sessions');
   });

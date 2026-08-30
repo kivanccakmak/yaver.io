@@ -22,6 +22,9 @@ export const registerPushToken = mutation({
     pushToken: v.string(),
     transport: v.string(), // "expo" | "apns" | "fcm"
     platform: v.string(), // "ios" | "android"
+    appVersion: v.optional(v.string()),
+    buildNumber: v.optional(v.string()),
+    runtimeMode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const session = await validateSessionInternal(ctx, args.tokenHash);
@@ -32,6 +35,9 @@ export const registerPushToken = mutation({
       pushToken: args.pushToken,
       transport: args.transport,
       platform: args.platform,
+      appVersion: args.appVersion,
+      buildNumber: args.buildNumber,
+      runtimeMode: args.runtimeMode,
       updatedAt: Date.now(),
     };
     // One row per phone install.

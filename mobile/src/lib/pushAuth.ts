@@ -16,6 +16,7 @@ import { router } from "expo-router";
 import { Platform } from "react-native";
 import { getConvexSiteUrlSync as getConvexSiteUrl } from "./backendConfig";
 import { appLog } from "./logger";
+import { mobileRuntimeIdentity } from "./appVersion";
 
 const INSTALL_ID_KEY = "@yaver/push_install_id";
 
@@ -53,7 +54,7 @@ export async function registerForAuthPush(token: string): Promise<void> {
     await fetch(`${getConvexSiteUrl()}/push/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ installId, pushToken, transport: "expo", platform: Platform.OS }),
+      body: JSON.stringify({ installId, pushToken, transport: "expo", platform: Platform.OS, ...mobileRuntimeIdentity() }),
     });
     appLog("info", "[push] registered device-auth push token");
   } catch (e) {

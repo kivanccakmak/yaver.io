@@ -156,6 +156,10 @@ export interface FeedbackConfig {
   /** Device identities shown in the unified Settings card when routes differ. */
   codingDeviceId?: string;
   renderDeviceId?: string;
+  /** Explicit runtime version overrides for bare React Native apps. Expo apps
+   * resolve these automatically from the installed native build. */
+  appVersion?: string;
+  buildNumber?: string;
   /**
    * Show the small "Y" mark while this app is running INSIDE Yaver's container
    * (a Hermes-pushed development bundle), so a tester can tell it apart from
@@ -585,6 +589,9 @@ export interface AppInfo {
   bundleId?: string;
   version?: string;
   buildNumber?: string;
+  /** Whether this report came from the installed app, approved in-app
+   * Dogfood, or a guest bundle hosted by Yaver. */
+  runtimeMode?: 'native' | 'dogfood' | 'yaver-hosted-dogfood';
 }
 
 /**

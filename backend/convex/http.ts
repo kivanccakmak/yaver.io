@@ -5317,6 +5317,9 @@ http.route({
         pushToken: String(body.pushToken),
         transport: String(body.transport || "expo"),
         platform: String(body.platform || "unknown"),
+        appVersion: typeof body.appVersion === "string" ? body.appVersion.slice(0, 80) : undefined,
+        buildNumber: typeof body.buildNumber === "string" ? body.buildNumber.slice(0, 80) : undefined,
+        runtimeMode: body.runtimeMode === "dogfood" ? "dogfood" : "native",
       });
       return jsonResponse({ ok: true });
     } catch (e: any) {
@@ -5344,6 +5347,7 @@ http.route({
         platform: body.platform || "unknown",
         appVersion: body.appVersion || "unknown",
         buildNumber: body.buildNumber || "unknown",
+        runtimeMode: body.runtimeMode === "dogfood" ? "dogfood" : "native",
         level: body.level || "info",
         step: body.step || "unknown",
         message: String(body.message ?? "").slice(0, 1000),

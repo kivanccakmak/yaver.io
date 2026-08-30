@@ -84,6 +84,7 @@ import type { RemoteSandboxRequest, RemoteSandboxResponse } from "./llmRemote";
 import { decodeCloudWorkspaceRequiredError } from "./cloudWorkspaceRequired";
 import { classifyRunnerFetchOutcome, type CodingRunnersProbeState } from "./deviceStatusRunnerProbe";
 import { buildSendTaskRequestBody } from "./taskRequestBody";
+import { mobileSessionSettings, type ClientSessionSettings } from "./appVersion";
 import { subscribeSse } from "./sseClient";
 export {
   CloudWorkspaceRequiredError,
@@ -561,6 +562,7 @@ export interface Task {
   sessionId?: string;
   /** Explicit cross-surface identity for the runner conversation + tmux seat. */
   executionSession?: TaskExecutionIdentity;
+  sessionSettings?: ClientSessionSettings;
   /** Tmux session name (only set for adopted sessions). */
   tmuxSession?: string;
   /** Tmux session_id/window/pane identity for adopted or monitored sessions. */
@@ -637,6 +639,7 @@ export interface TaskExecutionIdentity {
   firstAgentResponseAt?: string;
   lastUserMessageAt?: string;
   lastAgentResponseAt?: string;
+  sessionSettings?: ClientSessionSettings;
   deletedAt?: string;
   resumable: boolean;
   tmuxSession?: string;
@@ -2580,7 +2583,7 @@ export class QuicClient {
    * HTTP, the runner pool, and the same Task type. The toggle only
    * changes which prompt-prefix the agent injects.
    */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean, askMode?: boolean, hideInitialPrompt?: boolean, sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace", startedFromSurface?: string): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean, askMode?: boolean, hideInitialPrompt?: boolean, sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace", startedFromSurface?: string, sessionSettings?: ClientSessionSettings): Promise<Task> {
     this.assertConnected();
     // Hard 30s timeout — without it, a stale relay tunnel (e.g. after a
     // failed device-switch attempt) makes this POST hang forever and
@@ -2604,7 +2607,7 @@ export class QuicClient {
     // timed out.)
     let res: Response;
     try {
-      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers, goal, includeYaverMcp, askMode, hideInitialPrompt, sessionStartedFrom, startedFromSurface);
+      res = await this.sendTaskRequest(title, description, model, runner, customCommand, sc, images, workDir, mode, video, codeMode, allowLocalFallback, projectName, mcpServers, goal, includeYaverMcp, askMode, hideInitialPrompt, sessionStartedFrom, startedFromSurface, sessionSettings);
     } catch (e) {
       if (e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message))) {
         throw new Error(
@@ -2668,6 +2671,7 @@ export class QuicClient {
     hideInitialPrompt: boolean | undefined,
     sessionStartedFrom: "tasks" | "vibing" | "new-application" | "mobile-workspace" | undefined,
     startedFromSurface: string | undefined,
+    sessionSettings: ClientSessionSettings | undefined,
   ): Promise<Response> {
     return this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -2697,6 +2701,7 @@ export class QuicClient {
         hideInitialPrompt,
         sessionStartedFrom,
         startedFromSurface,
+        sessionSettings: sessionSettings ?? mobileSessionSettings({ surface: startedFromSurface }),
       })),
     }, 30000);
   }
@@ -2739,6 +2744,58 @@ export class QuicClient {
     }
     const data = await res.json();
     return { id: data.taskId ?? data.id, status: data.status, deviceName: data.deviceName };
+  }
+
+  /**
+   * Create a normal mobile task on one specific device without switching the
+   * active client. Used by the share sheet when a screenshot should start a new
+   * task, or when no live runner session is available to receive it.
+   */
+  async sendTaskToDevice(
+    deviceId: string,
+    opts: {
+      title: string;
+      description?: string;
+      images?: ImageAttachment[];
+      askMode?: boolean;
+      startedFromSurface?: string;
+    },
+  ): Promise<{ id: string; status?: string; runnerId?: string; model?: string; deviceName?: string }> {
+    this.assertConnected();
+    const url = this.peerEndpoint(deviceId, "/tasks");
+    const res = await this.fetchWithTimeout(url, {
+      method: "POST",
+      headers: {
+        ...this.authHeaders,
+        "Content-Type": "application/json",
+        ...(opts.startedFromSurface ? { "X-Yaver-Surface": opts.startedFromSurface } : {}),
+      },
+      body: JSON.stringify(buildSendTaskRequestBody({
+        title: opts.title,
+        description: opts.description ?? opts.title,
+        images: opts.images,
+        codeMode: true,
+        askMode: opts.askMode,
+        startedFromSurface: opts.startedFromSurface,
+        sessionSettings: mobileSessionSettings({ surface: opts.startedFromSurface }),
+      })),
+    }, 30000);
+    if (!res.ok) {
+      let msg = `Failed to create task on device: ${res.status}`;
+      try {
+        const err = await res.json();
+        if (err?.error) msg = err.error;
+      } catch {}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    return {
+      id: data.taskId ?? data.id,
+      status: data.status,
+      runnerId: data.runnerId,
+      model: data.model,
+      deviceName: data.deviceName,
+    };
   }
 
   /**
@@ -3006,6 +3063,7 @@ export class QuicClient {
         pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
         sessionId: t.sessionId || undefined,
         executionSession: t.executionSession || undefined,
+        sessionSettings: t.sessionSettings || undefined,
         turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
         tmuxSession: t.tmuxSession || undefined,
         tmuxSessionId: t.tmuxSessionId || undefined,
@@ -3069,6 +3127,7 @@ export class QuicClient {
       pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
       sessionId: t.sessionId || undefined,
       executionSession: t.executionSession || undefined,
+      sessionSettings: t.sessionSettings || undefined,
       turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
       failure: t.failure || undefined,
       tmuxSession: t.tmuxSession || undefined,
@@ -3175,7 +3234,7 @@ export class QuicClient {
   /** Resume a task with a follow-up prompt. `mode` is the opencode agent
    *  selector (build/plan/custom) forwarded to the agent's /continue endpoint,
    *  which accepts it — so a follow-up in the chat can switch plan↔build. */
-  async continueTask(taskId: string, input: string, images?: ImageAttachment[], mode?: string): Promise<TaskExecutionIdentity> {
+  async continueTask(taskId: string, input: string, images?: ImageAttachment[], mode?: string, sessionSettings: ClientSessionSettings = mobileSessionSettings()): Promise<TaskExecutionIdentity> {
     this.assertConnected();
     // Guarantee headroom under the iOS ~6-connections-per-host ceiling AND give
     // this POST a hard timeout — without BOTH, a SECOND follow-up starves behind
@@ -3190,7 +3249,7 @@ export class QuicClient {
       res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${taskId}/continue`, {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ input, ...(images?.length ? { images } : {}), ...(mode ? { mode } : {}) }),
+        body: JSON.stringify({ input, ...(images?.length ? { images } : {}), ...(mode ? { mode } : {}), sessionSettings }),
       }, 30000);
     } catch (e) {
       if (e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message))) {
@@ -4749,16 +4808,26 @@ export class QuicClient {
   async executeVibingSuggestion(
     prompt: string,
     projectPath: string,
-    options: { projectName?: string; runner?: string; model?: string } = {},
+    options: { projectName?: string; runner?: string; model?: string; sessionSettings?: ClientSessionSettings } = {},
   ): Promise<{ taskId?: string; runtimeDeploy?: any; message?: string; runner?: string; model?: string }> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(`${this.baseUrl}/vibing/execute`, {
       method: 'POST',
       headers: { ...this.authHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, projectPath, ...options }),
+      body: JSON.stringify({ prompt, projectPath, sessionSettings: options.sessionSettings ?? mobileSessionSettings(), ...options }),
     });
     if (!res.ok) throw new Error(await responseErrorMessage(res, `Failed to execute: ${res.status}`));
     return res.json();
+  }
+
+  async updateTaskSessionSettings(taskId: string, sessionSettings: ClientSessionSettings): Promise<void> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/${encodeURIComponent(taskId)}/session-settings`, {
+      method: "PATCH",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionSettings }),
+    });
+    if (!res.ok) throw new Error(await responseErrorMessage(res, `Failed to update session settings: ${res.status}`));
   }
 
   // ── Todo List (queued bug reports for batch implementation) ──────

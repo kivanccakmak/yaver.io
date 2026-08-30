@@ -11,6 +11,7 @@ import { runtimeSurfaceClient } from "../lib/runtimeSurfaceClient";
 import { loadKeepLastProjectEnabled, loadLastTaskProject, loadLastTaskProjectFromConvex, loadMCPServersFromConvex, loadUseLatestMCPEnabled } from "../lib/taskComposerPrefs";
 import { watchBridgeBus } from "../lib/watchEntry";
 import { isDeviceAsleep, wakeManagedDevice } from "../lib/wakeMachine";
+import { mobileSessionSettings } from "../lib/appVersion";
 
 type NativeWatchBridge = {
   sendToWatch?: (json: string) => void;
@@ -98,6 +99,11 @@ function makeWatchDeps(deviceId: string, token: string | null | undefined) {
         undefined,
         "tasks",
         Platform.OS === "ios" ? "watchos" : "wearos",
+        mobileSessionSettings({
+          surface: Platform.OS === "ios" ? "apple-watch" : "wear-os",
+          platform: Platform.OS === "ios" ? "watchos" : "wearos",
+          deviceClass: "watch",
+        }),
       );
       return { id: t.id };
     },

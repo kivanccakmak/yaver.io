@@ -1,4 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { version: appVersion } = require('../package.json');
+
+const desktopSessionSettings = () => ({
+  appName: 'Yaver Desktop Installer', appVersion, buildNumber: '',
+  surface: 'yaver-desktop-installer', clientSurface: 'yaver-desktop-installer',
+  platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux',
+  deviceClass: 'desktop', lane: 'yaver-native', runtimeMode: 'native', dogfood: false,
+  usageMode: 'chat-only', chatEnabled: true, renderEnabled: false,
+});
+const withDesktopSession = (data) => ({ ...(data || {}), sessionSettings: desktopSessionSettings() });
 
 contextBridge.exposeInMainWorld('yaver', {
   // Existing auth/service handlers
@@ -19,11 +29,11 @@ contextBridge.exposeInMainWorld('yaver', {
 
   // Tasks
   listTasks: () => ipcRenderer.invoke('agent-request', 'GET', '/tasks'),
-  createTask: (data) => ipcRenderer.invoke('agent-request', 'POST', '/tasks', data),
+  createTask: (data) => ipcRenderer.invoke('agent-request', 'POST', '/tasks', withDesktopSession(data)),
   getTask: (id) => ipcRenderer.invoke('agent-request', 'GET', `/tasks/${id}`),
   stopTask: (id) => ipcRenderer.invoke('agent-request', 'POST', `/tasks/${id}/stop`),
   deleteTask: (id) => ipcRenderer.invoke('agent-request', 'DELETE', `/tasks/${id}`),
-  continueTask: (id, data) => ipcRenderer.invoke('agent-request', 'POST', `/tasks/${id}/continue`, data),
+  continueTask: (id, data) => ipcRenderer.invoke('agent-request', 'POST', `/tasks/${id}/continue`, withDesktopSession(data)),
 
   // Agent status & runners
   getAgentStatus: () => ipcRenderer.invoke('agent-request', 'GET', '/agent/status'),

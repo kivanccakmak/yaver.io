@@ -33,7 +33,7 @@ test("the bubble separates Chat and Settings without unmounting the task", () =>
   assert.ok(source.includes('testID="browser-vibe-tabs"'));
   assert.ok(source.includes('activeTab !== "chat" && styles.hidden'));
   assert.ok(chat.includes("taskClient.executeVibingSuggestion"));
-  assert.ok(chat.includes("taskClient.continueTask(activeTask.id, text)"));
+  assert.ok(chat.includes("taskClient.continueTask(activeTask.id, text, undefined, undefined, sessionSettings)"));
   assert.ok(chat.includes("if (!full)"), "a retained console replay can still resurrect a completed task");
   assert.ok(chat.includes("mergeTaskSnapshot"), "Vibing has no independent authoritative task reconciliation");
   assert.ok(chat.includes("planStreamRecovery"), "Vibing still drops a broken task stream silently");

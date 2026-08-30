@@ -21,6 +21,7 @@ import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { StudioChatPane } from "./studio/StudioChatPane";
 import type { DogfoodRenderBehavior, DogfoodSessionBehavior, DogfoodUsageMode } from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
+import { mobileSessionSettings } from "../lib/appVersion";
 
 type ReloadKind = "fast" | "full";
 type VibeTab = "chat" | "settings";
@@ -153,6 +154,12 @@ export function BrowserVibeBubble({
   const [codingProbeError, setCodingProbeError] = useState<string | null>(null);
   const [dockViewportSize, setDockViewportSize] = useState({ width: 0, height: 0 });
   const [dockReady, setDockReady] = useState(false);
+  const sessionSettings = useMemo(() => mobileSessionSettings({
+    surface: "yaver-mobile-dogfood",
+    lane: "browser",
+    dogfood: true,
+    usageMode,
+  }), [usageMode]);
 
   useEffect(() => {
     if (usageMode === "reload-only") setActiveTab("settings");
@@ -706,6 +713,7 @@ export function BrowserVibeBubble({
                 onTaskStateChange={setActiveTask}
                 onAnyTaskCodingChange={setAnyTaskCoding}
                 initialSessionBehavior={sessionBehavior}
+                sessionSettings={sessionSettings}
                 onRenderRequested={handleRenderRequested}
               />
               )}

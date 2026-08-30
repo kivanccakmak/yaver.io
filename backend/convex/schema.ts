@@ -2837,6 +2837,7 @@ export default defineSchema({
     platform: v.string(),
     appVersion: v.string(),
     buildNumber: v.string(),
+    runtimeMode: v.optional(v.string()),
     level: v.union(v.literal("info"), v.literal("error"), v.literal("warn")),
     step: v.string(),
     message: v.string(),
@@ -3724,6 +3725,9 @@ export default defineSchema({
     pushToken: v.string(), // expo push token, or native device token
     transport: v.string(), // "expo" | "apns" | "fcm"
     platform: v.string(), // "ios" | "android"
+    appVersion: v.optional(v.string()),
+    buildNumber: v.optional(v.string()),
+    runtimeMode: v.optional(v.string()),
     updatedAt: v.number(),
   })
     .index("by_user", ["userId"])

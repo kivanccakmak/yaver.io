@@ -1462,8 +1462,9 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 		// Preview overlays expose the same runner/model picker as the native
 		// feedback pane. These are per-turn pins: the label the user sees must
 		// be the runner/model CreateTask actually receives.
-		Runner string `json:"runner"`
-		Model  string `json:"model"`
+		Runner          string                 `json:"runner"`
+		Model           string                 `json:"model"`
+		SessionSettings *ClientSessionSettings `json:"sessionSettings,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -1503,7 +1504,9 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 	// surface is ever sent. Before the split, `prompt` was both, so every vibe
 	// task in the list read "Yaver mobile execution context: - Project
 	// framework: …" instead of "make the header sticky".
-	runnerBriefing := vibingThreadBriefing(vibingExecutionContext(req.ProjectPath, info.Framework, target, isDirectConnection(r)))
+	req.SessionSettings = mergeInferredClientSessionSettings(req.SessionSettings, sessionSurfaceFromRequest(r), "vibing")
+	runnerBriefing := clientSessionSettingsBriefing(normalizeClientSessionSettings(req.SessionSettings, 1, time.Now())) +
+		vibingThreadBriefing(vibingExecutionContext(req.ProjectPath, info.Framework, target, isDirectConnection(r)))
 
 	// Pick a runner that's actually ready instead of blindly trusting
 	// the configured primary. Real symptom: yaver-test-ephemeral has
@@ -1587,6 +1590,7 @@ func (s *HTTPServer) handleVibingExecute(w http.ResponseWriter, r *http.Request)
 
 	taskOpts.InitialUserPrompt = req.Prompt
 	taskOpts.PromptText = composeRunnerPrompt(runnerBriefing, req.Prompt, "")
+	taskOpts.SessionSettings = req.SessionSettings
 	task, err := s.taskMgr.CreateTaskWithOptions(req.Prompt, "", pickedModel, "vibing", pickedRunner, "", nil, taskOpts)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
@@ -1718,7 +1722,9 @@ func (s *HTTPServer) handleVibingTaskByID(w http.ResponseWriter, r *http.Request
 			return
 		}
 		var body struct {
-			Input string `json:"input"`
+			Input           string                 `json:"input"`
+			SessionSettings *ClientSessionSettings `json:"sessionSettings,omitempty"`
+			Images          []ImageAttachment      `json:"images,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1729,7 +1735,13 @@ func (s *HTTPServer) handleVibingTaskByID(w http.ResponseWriter, r *http.Request
 			jsonError(w, http.StatusBadRequest, "input is required")
 			return
 		}
-		resumed, err := s.taskMgr.ResumeTaskWithOptions(taskID, input, nil, TaskResumeOptions{})
+		if body.SessionSettings != nil {
+			if _, err := s.taskMgr.UpdateTaskSessionSettings(taskID, body.SessionSettings); err != nil {
+				jsonError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		resumed, err := s.taskMgr.ResumeTaskWithOptions(taskID, input, body.Images, TaskResumeOptions{})
 		if err != nil {
 			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("resume failed: %v", err))
 			return
@@ -1739,6 +1751,8 @@ func (s *HTTPServer) handleVibingTaskByID(w http.ResponseWriter, r *http.Request
 			"taskId": resumed.ID,
 			"status": resumed.Status,
 		})
+	case "session-settings":
+		s.updateTaskSessionSettings(w, r, taskID)
 	case "complete":
 		if r.Method != http.MethodPost {
 			jsonError(w, http.StatusMethodNotAllowed, "use POST")

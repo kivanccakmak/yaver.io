@@ -60,6 +60,64 @@ export interface DogfoodReloadOptions {
   runtimeSessionId?: string;
 }
 
+export interface ClientSessionSettings {
+  appName: string;
+  appVersion: string;
+  buildNumber: string;
+  surface: string;
+  clientSurface: string;
+  platform: string;
+  deviceClass: 'phone' | 'tablet' | 'desktop' | 'tv' | 'car' | 'watch' | 'xr' | 'browser';
+  lane: 'yaver-native' | 'browser' | 'hermes' | 'webrtc';
+  runtimeMode: 'native' | 'dogfood' | 'yaver-hosted-dogfood';
+  dogfood: boolean;
+  usageMode: 'chat-only' | 'reload-only' | 'reload-and-chat';
+  chatEnabled: boolean;
+  renderEnabled: boolean;
+}
+
+export function resolveDogfoodClientSessionSettings(input: {
+  lane: 'browser' | 'hermes' | 'webrtc';
+  usageMode: ClientSessionSettings['usageMode'];
+  projectName?: string;
+  appVersion?: string;
+  buildNumber?: string;
+}): ClientSessionSettings {
+  const identity = resolveReportIdentity({
+    projectName: input.projectName,
+    appVersion: input.appVersion,
+    buildNumber: input.buildNumber,
+  });
+  const uiMode = String((Platform.constants as any)?.uiMode || '').toLowerCase();
+  const isVision = !!(Platform as any).isVision;
+  const runtimePlatform = isVision ? 'visionos'
+    : uiMode === 'watch' ? 'wearos'
+      : uiMode === 'vrheadset' || uiMode === 'xr' ? 'android-xr'
+        : Platform.OS === 'web' ? 'web' : Platform.OS;
+  const deviceClass: ClientSessionSettings['deviceClass'] = isVision || uiMode === 'vrheadset' || uiMode === 'xr'
+    ? 'xr'
+    : uiMode === 'car' ? 'car'
+      : uiMode === 'watch' ? 'watch'
+        : Platform.isTV ? 'tv'
+          : Platform.OS === 'web' ? 'browser'
+            : Platform.OS === 'ios' && (Platform as any).isPad ? 'tablet' : 'phone';
+  return {
+    appName: identity.appName || identity.project?.appName || input.projectName || 'Feedback SDK app',
+    appVersion: identity.app.version || '',
+    buildNumber: identity.app.buildNumber || '',
+    surface: 'feedback-sdk-dogfood',
+    clientSurface: 'feedback-sdk-dogfood',
+    platform: runtimePlatform,
+    deviceClass,
+    lane: input.lane,
+    runtimeMode: identity.app.runtimeMode || 'native',
+    dogfood: true,
+    usageMode: input.usageMode,
+    chatEnabled: input.usageMode !== 'reload-only',
+    renderEnabled: input.usageMode !== 'chat-only',
+  };
+}
+
 export interface DogfoodDevServerStatus {
   running?: boolean;
   serving?: boolean;
@@ -252,6 +310,9 @@ export function resolveReportIdentity(opts?: {
   voiceCapabilities?: string[];
   sttProvider?: string;
   ttsProvider?: string;
+  appVersion?: string;
+  buildNumber?: string;
+  runtimeMode?: AppInfo['runtimeMode'];
 }): {
   appName?: string;
   app: AppInfo;
@@ -259,10 +320,13 @@ export function resolveReportIdentity(opts?: {
 } {
   let projectName = (opts?.projectName || '').trim() || undefined;
   let bundleId = (opts?.bundleId || '').trim() || undefined;
-  let version: string | undefined;
-  let buildNumber: string | undefined;
+  let version = (opts?.appVersion || '').trim() || undefined;
+  let buildNumber = (opts?.buildNumber || '').trim() || undefined;
+  const insideYaver = isInsideYaverContainer();
+  const runtimeMode: NonNullable<AppInfo['runtimeMode']> =
+    opts?.runtimeMode || (insideYaver ? 'yaver-hosted-dogfood' : 'native');
 
-  if (isInsideYaverContainer()) {
+  if (insideYaver) {
     // Every ambient lookup answers for the HOST here. Because the agent
     // routes on bundle id first, letting Yaver's id through would resolve
     // straight to Yaver's own repo and the guest's name would never be
@@ -277,8 +341,8 @@ export function resolveReportIdentity(opts?: {
     try {
       const Constants = require('expo-constants').default ?? require('expo-constants');
       const cfg = Constants?.expoConfig ?? Constants?.manifest ?? {};
-      version = Constants?.nativeAppVersion || cfg?.version;
-      buildNumber =
+      version = version || Constants?.nativeAppVersion || cfg?.version;
+      buildNumber = buildNumber ||
         Constants?.nativeBuildVersion ||
         cfg?.ios?.buildNumber ||
         (cfg?.android?.versionCode != null ? String(cfg.android.versionCode) : undefined);
@@ -292,6 +356,7 @@ export function resolveReportIdentity(opts?: {
   if (bundleId) app.bundleId = bundleId;
   if (version) app.version = version;
   if (buildNumber) app.buildNumber = buildNumber;
+  app.runtimeMode = runtimeMode;
 
   if (!projectName && !bundleId) {
     return { app };
@@ -1514,6 +1579,7 @@ export class P2PClient {
     model?: string;
     screenshotBase64?: string;
     imageMimeType?: string;
+    sessionSettings?: ClientSessionSettings;
   }): Promise<{ taskId: string; raw?: unknown }> {
     const { buildFeedbackPrompt } = await import('./_core/buildFeedbackPrompt');
     const hasScreenshot = !!(input.screenshotBase64 && input.screenshotBase64.length > 0);
@@ -1537,6 +1603,7 @@ export class P2PClient {
       userPrompt: input.userPrompt,
       source: 'mobile-feedback',
       images,
+      sessionSettings: input.sessionSettings,
     };
     if (input.projectPath && input.projectPath.trim()) body.workDir = input.projectPath.trim();
     if (input.projectName && input.projectName.trim()) body.projectName = input.projectName.trim();
@@ -1730,6 +1797,7 @@ export class P2PClient {
     userPrompt: string;
     screenshotBase64?: string;
     imageMimeType?: string;
+    sessionSettings?: ClientSessionSettings;
   }): Promise<void> {
     const images: Array<{ base64: string; mimeType: string; filename: string }> = [];
     if (input.screenshotBase64 && input.screenshotBase64.length > 0) {
@@ -1740,14 +1808,13 @@ export class P2PClient {
       });
     }
     const resp = await fetch(
-      `${this.baseUrl}/tasks/${encodeURIComponent(input.taskId)}/resume`,
+      `${this.baseUrl}/vibing/task/${encodeURIComponent(input.taskId)}/continue`,
       {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          description: input.userPrompt,
-          userPrompt: input.userPrompt,
-          source: 'mobile-feedback',
+          input: input.userPrompt,
+          sessionSettings: input.sessionSettings,
           images,
         }),
       },
@@ -1755,6 +1822,18 @@ export class P2PClient {
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
       throw new Error(`resumeTask HTTP ${resp.status}: ${text}`);
+    }
+  }
+
+  async updateVibeTaskSessionSettings(taskId: string, sessionSettings: ClientSessionSettings): Promise<void> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/session-settings`, {
+      method: 'PATCH',
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ sessionSettings }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`updateVibeTaskSessionSettings HTTP ${resp.status}: ${text}`);
     }
   }
 

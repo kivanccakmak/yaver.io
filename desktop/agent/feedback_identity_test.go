@@ -56,7 +56,7 @@ const feedbackIdentityMetadata = `{
     "screenHeight": 852,
     "appName": "Talos"
   },
-  "app": { "bundleId": "works.talos.mobile", "version": "1.9.157", "buildNumber": "427" },
+  "app": { "bundleId": "works.talos.mobile", "version": "1.9.157", "buildNumber": "427", "runtimeMode": "dogfood" },
   "project": {
     "appName": "Talos",
     "projectName": "Talos",
@@ -87,6 +87,15 @@ func TestReceiveFeedbackParsesSDKIdentity(t *testing.T) {
 	}
 	if got := report.Project.ProjectName; got != "Talos" {
 		t.Errorf("Project.ProjectName = %q, want %q", got, "Talos")
+	}
+	if got := report.AppVersion; got != "1.9.157" {
+		t.Errorf("AppVersion = %q, want %q", got, "1.9.157")
+	}
+	if got := report.BuildID; got != "427" {
+		t.Errorf("BuildID = %q, want %q", got, "427")
+	}
+	if got := report.RuntimeMode; got != "dogfood" {
+		t.Errorf("RuntimeMode = %q, want %q", got, "dogfood")
 	}
 }
 

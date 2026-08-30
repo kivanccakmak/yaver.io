@@ -7,6 +7,7 @@ export const writeLog = internalMutation({
     platform: v.string(),
     appVersion: v.string(),
     buildNumber: v.string(),
+    runtimeMode: v.optional(v.string()),
     level: v.union(v.literal("info"), v.literal("error"), v.literal("warn")),
     step: v.string(),
     message: v.string(),

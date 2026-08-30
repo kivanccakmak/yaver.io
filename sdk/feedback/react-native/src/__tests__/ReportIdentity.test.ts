@@ -63,6 +63,7 @@ describe('resolveReportIdentity', () => {
     expect(identity.project?.appName).toBe('Talos');
     expect(identity.project?.surface).toBe('mobile');
     expect(identity.app.bundleId).toBe('works.talos.mobile');
+    expect(identity.app.runtimeMode).toBe('native');
   });
 
   it('never reports a project path', () => {
@@ -153,7 +154,7 @@ describe('resolveReportIdentity', () => {
       const identity = resolve();
       expect(identity.project).toBeUndefined();
       expect(identity.appName).toBeUndefined();
-      expect(identity.app).toEqual({});
+      expect(identity.app).toEqual({ runtimeMode: 'yaver-hosted-dogfood' });
     });
   });
 
@@ -209,6 +210,22 @@ describe('resolveReportIdentity', () => {
     const identity = resolve();
     expect(identity.project).toBeUndefined();
     expect(identity.appName).toBeUndefined();
-    expect(identity.app).toEqual({});
+    expect(identity.app).toEqual({ runtimeMode: 'native' });
+  });
+
+  it('reports explicit Dogfood mode and app build identity', () => {
+    mockExpoConstants(EXPO_CONFIG);
+    const resolve = loadResolve();
+
+    const identity = resolve({
+      runtimeMode: 'dogfood',
+      appVersion: '2.4.1',
+      buildNumber: '901',
+    });
+    expect(identity.app).toMatchObject({
+      version: '2.4.1',
+      buildNumber: '901',
+      runtimeMode: 'dogfood',
+    });
   });
 });

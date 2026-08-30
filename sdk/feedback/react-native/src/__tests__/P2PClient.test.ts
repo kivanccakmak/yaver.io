@@ -1,4 +1,4 @@
-import { P2PClient } from '../P2PClient';
+import { P2PClient, resolveDogfoodClientSessionSettings } from '../P2PClient';
 
 // Mock react-native Platform
 jest.mock('react-native', () => ({
@@ -22,6 +22,49 @@ beforeEach(() => {
 });
 
 describe('P2PClient', () => {
+	describe('Dogfood session settings', () => {
+		const settings = {
+			appName: 'SFMG', appVersion: '2.4.0', buildNumber: '84',
+			surface: 'feedback-sdk-dogfood', clientSurface: 'feedback-sdk-dogfood',
+			platform: 'ios', deviceClass: 'phone' as const, lane: 'hermes' as const,
+			runtimeMode: 'native' as const, dogfood: true,
+			usageMode: 'reload-and-chat' as const, chatEnabled: true, renderEnabled: true,
+		};
+
+		it('resolves app/build identity and explicit Dogfood capabilities', () => {
+			expect(resolveDogfoodClientSessionSettings({
+				lane: 'webrtc', usageMode: 'reload-only', projectName: 'SFMG',
+				appVersion: '2.4.0', buildNumber: '84',
+			})).toEqual(expect.objectContaining({
+				appName: 'SFMG', appVersion: '2.4.0', buildNumber: '84', lane: 'webrtc',
+				dogfood: true, usageMode: 'reload-only', chatEnabled: false, renderEnabled: true,
+			}));
+		});
+
+		it('sends follow-ups through the supported SDK route with current settings', async () => {
+			mockFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve('') });
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			await client.resumeTask({ taskId: 'task-1', userPrompt: 'make it blue', sessionSettings: settings });
+			expect(mockFetch).toHaveBeenCalledWith(
+				'http://localhost:18080/vibing/task/task-1/continue',
+				expect.objectContaining({
+					method: 'POST',
+					body: expect.stringContaining('"lane":"hermes"'),
+				}),
+			);
+		});
+
+		it('updates settings without creating a chat turn', async () => {
+			mockFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve('') });
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			await client.updateVibeTaskSessionSettings('task-1', settings);
+			expect(mockFetch).toHaveBeenCalledWith(
+				'http://localhost:18080/vibing/task/task-1/session-settings',
+				expect.objectContaining({ method: 'PATCH' }),
+			);
+		});
+	});
+
 	describe('reloadDogfood()', () => {
 		it('uses the full bearer and sends the exact checkout and lane', async () => {
 			mockFetch.mockResolvedValue({

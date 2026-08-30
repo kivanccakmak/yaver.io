@@ -33,6 +33,7 @@ import { beginTaskTurn, mergeTaskSnapshot, taskStatusIsTerminal, withObservedTas
 import { groomRunnerTranscript } from "../../lib/runnerTranscript";
 import { useColors } from "../../context/ThemeContext";
 import { useDevice } from "../../context/DeviceContext";
+import type { ClientSessionSettings } from "../../lib/appVersion";
 
 interface StudioChatPaneProps {
   /** Selected project the vibe prompt runs against (box-side workDir). */
@@ -59,6 +60,7 @@ interface StudioChatPaneProps {
   onAnyTaskCodingChange?: (coding: boolean) => void;
   onRenderRequested?: () => void;
   initialSessionBehavior?: "resume-last" | "new-session";
+  sessionSettings?: ClientSessionSettings;
 }
 
 type ChatRow =
@@ -86,6 +88,7 @@ export function StudioChatPane({
   onAnyTaskCodingChange,
   onRenderRequested,
   initialSessionBehavior = "resume-last",
+  sessionSettings,
 }: StudioChatPaneProps) {
   const theme = useColors();
   // Browser-preview Vibing is the React-Native twin of the standalone feedback
@@ -321,7 +324,7 @@ export function StudioChatPane({
       if (activeTask) {
         // A chat stays one task. Creating a fresh /vibing/execute task for every
         // message made the Studio look conversational while discarding context.
-        await taskClient.continueTask(activeTask.id, text);
+        await taskClient.continueTask(activeTask.id, text, undefined, undefined, sessionSettings);
         setActiveTask((prev) => prev ? beginTaskTurn(prev) : prev);
         setTasks((prev) => prev.map((task) => task.id === activeTask.id ? beginTaskTurn(task) : task));
         subscribeTask(activeTask.id, "running");
@@ -330,6 +333,7 @@ export function StudioChatPane({
           projectName,
           runner,
           model,
+          sessionSettings,
         });
         const taskId = (result as any)?.taskId;
         if (taskId) {
@@ -356,7 +360,12 @@ export function StudioChatPane({
       setSending(false);
       void refreshTasks();
     }
-  }, [activeTask, activeTaskRunning, composerText, connected, model, projectName, projectPath, refreshTasks, runner, sending, subscribeTask, taskClient]);
+  }, [activeTask, activeTaskRunning, composerText, connected, model, projectName, projectPath, refreshTasks, runner, sending, sessionSettings, subscribeTask, taskClient]);
+
+  useEffect(() => {
+    if (!activeTask?.id || !sessionSettings) return;
+    void taskClient.updateTaskSessionSettings(activeTask.id, sessionSettings).catch(() => {});
+  }, [activeTask?.id, sessionSettings, taskClient]);
 
   const resetConversation = useCallback((draftNewTopic = false) => {
     draftingNewTopicRef.current = draftNewTopic;

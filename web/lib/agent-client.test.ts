@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AgentClient, buildCreateTaskBody } from "./agent-client";
+import { AgentClient, browserSessionSettings, buildCreateTaskBody } from "./agent-client";
 
 test("web createTask body defaults allowLocalFallback to false", () => {
   const body = buildCreateTaskBody({
@@ -18,6 +18,25 @@ test("web createTask body defaults allowLocalFallback to false", () => {
   assert.equal(body.source, "web");
   assert.equal(body.allowLocalFallback, false);
   assert.equal(body.userPrompt, "secret prompt");
+  assert.deepEqual(body.sessionSettings, browserSessionSettings());
+});
+
+test("web session settings declare browser chat/render capabilities", () => {
+  assert.deepEqual(browserSessionSettings("reload-and-chat"), {
+    appName: "Yaver web",
+    appVersion: "",
+    buildNumber: "",
+    surface: "yaver-web-dashboard",
+    clientSurface: "yaver-web-dashboard",
+    platform: "web",
+    deviceClass: "browser",
+    lane: "browser",
+    runtimeMode: "native",
+    dogfood: false,
+    usageMode: "reload-and-chat",
+    chatEnabled: true,
+    renderEnabled: true,
+  });
 });
 
 test("web createTask body can mark final Cloud Workspace handoff", () => {

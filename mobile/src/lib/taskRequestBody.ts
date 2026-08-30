@@ -1,3 +1,5 @@
+import type { ClientSessionSettings } from "./appVersion";
+
 export type SendTaskRequestBodyArgs = {
   title: string;
   description: string;
@@ -36,6 +38,7 @@ export type SendTaskRequestBodyArgs = {
   hideInitialPrompt?: boolean;
   sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace";
   startedFromSurface?: string;
+  sessionSettings?: ClientSessionSettings;
 };
 
 export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<string, unknown> {
@@ -62,5 +65,6 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     ...(args.hideInitialPrompt ? { hideInitialPrompt: true } : {}),
     ...(args.sessionStartedFrom ? { sessionStartedFrom: args.sessionStartedFrom } : {}),
     ...(args.startedFromSurface ? { startedFromSurface: args.startedFromSurface } : {}),
+    ...(args.sessionSettings ? { sessionSettings: args.sessionSettings } : {}),
   };
 }

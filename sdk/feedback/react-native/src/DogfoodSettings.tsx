@@ -5,7 +5,7 @@ import type {
   DogfoodAccessSnapshot,
   DogfoodUsageMode,
 } from './dogfoodPolicy';
-import type { VibeThreadSummary } from './P2PClient';
+import { resolveReportIdentity, type VibeThreadSummary } from './P2PClient';
 import type { DogfoodRuntimeSelection } from './preferences';
 
 export interface DogfoodSettingsProps {
@@ -135,12 +135,26 @@ export const DogfoodSettings: React.FC<DogfoodSettingsProps> = ({
   const authorized = access?.authorized === true;
   const routing = YaverFeedback.getMachineRouting();
   const config = YaverFeedback.getConfig();
+  const identity = resolveReportIdentity({
+    projectName: config?.projectName,
+    bundleId: config?.bundleId,
+    appVersion: config?.appVersion,
+    buildNumber: config?.buildNumber,
+    runtimeMode: authorized ? 'dogfood' : 'native',
+  });
+  const versionLabel = identity.app.version
+    ? `v${identity.app.version}${identity.app.buildNumber ? ` (${identity.app.buildNumber})` : ''}`
+    : 'Version unavailable';
 
   return (
     <View style={styles.root}>
       <View style={styles.titleRow} accessibilityRole="header" accessibilityLabel="Dogfood Settings">
         <Text style={styles.titleIcon} accessible={false}>{'🧪'}</Text>
         <Text style={styles.title}>Dogfood Settings</Text>
+      </View>
+      <View style={styles.identity} accessibilityLabel={`${versionLabel}, ${authorized ? 'Dogfood' : 'Native'} mode`}>
+        <Text style={styles.identityVersion}>{versionLabel}</Text>
+        <Text style={styles.identityMode}>{authorized ? 'Dogfood mode' : 'Native mode'}</Text>
       </View>
       <Text style={styles.copy}>
         {authenticated
@@ -243,6 +257,9 @@ const Choice: React.FC<{
 
 const styles = StyleSheet.create({
   root: { borderWidth: StyleSheet.hairlineWidth, borderColor: '#d4d4dc', borderRadius: 16, padding: 16, backgroundColor: '#fff' },
+  identity: { marginTop: 10, marginBottom: 4, padding: 10, borderRadius: 10, backgroundColor: '#f4f4f8', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  identityVersion: { color: '#24242b', fontSize: 12, fontWeight: '700' },
+  identityMode: { color: '#6d4aff', fontSize: 11, fontWeight: '700' },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   titleIcon: { fontSize: 18, lineHeight: 22 },
   title: { color: '#17171c', fontSize: 18, fontWeight: '800' },

@@ -2188,6 +2188,11 @@ export class YaverFeedback {
         voiceCapabilities: config?.voiceCapabilities,
         sttProvider: config?.sttProvider,
         ttsProvider: config?.ttsProvider,
+        appVersion: config?.appVersion,
+        buildNumber: config?.buildNumber,
+        runtimeMode: IS_HOST_MODE
+          ? 'yaver-hosted-dogfood'
+          : (YaverFeedback.getDogfoodStatus().active ? 'dogfood' : 'native'),
       });
       const bundle = {
         metadata: {
@@ -2410,6 +2415,11 @@ export class YaverFeedback {
         voiceCapabilities: config?.voiceCapabilities,
         sttProvider: config?.sttProvider,
         ttsProvider: config?.ttsProvider,
+        appVersion: config?.appVersion,
+        buildNumber: config?.buildNumber,
+        runtimeMode: IS_HOST_MODE
+          ? 'yaver-hosted-dogfood'
+          : (YaverFeedback.getDogfoodStatus().active ? 'dogfood' : 'native'),
       });
       const bundle = {
         metadata: {

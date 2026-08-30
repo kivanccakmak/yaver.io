@@ -1,4 +1,3 @@
-import Constants from "expo-constants";
 import { Ionicons, FontAwesome } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -29,6 +28,7 @@ import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import { OpenCodeConfigModal } from "../../src/components/OpenCodeConfigModal";
 import { CodingAgentsSection } from "../../src/components/DeviceDetailsModal";
 import { YaverAgentSettings } from "../../src/components/YaverAgentSettings";
+import { APP_BUILD, APP_VERSION, mobileRuntimeMode } from "../../src/lib/appVersion";
 import VisionSettingsSection from "../../src/components/VisionSettingsSection";
 import BoxInitSection from "../../src/components/BoxInitSection";
 import CloudProvidersSection from "../../src/components/CloudProvidersSection";
@@ -85,12 +85,6 @@ const RUNNER_OPTIONS: ReadonlyArray<{
     description: "Bring your own provider: OpenRouter, Gemini, GLM, Ollama, and more.",
   },
 ];
-
-const APP_VERSION = Constants.expoConfig?.version ?? "1.0.0";
-const BUILD_NUMBER =
-  Constants.expoConfig?.ios?.buildNumber ??
-  Constants.expoConfig?.android?.versionCode?.toString() ??
-  "1";
 
 type ProviderKeyId = "openai" | "glm" | "anthropic";
 type ProviderKeyScope = "phone-local" | "host-vault";
@@ -2051,6 +2045,18 @@ export default function SettingsScreen() {
     <View style={[styles.safeArea, { backgroundColor: c.bg }]}>
       {/* Header */}
       <AppScreenHeader title="Settings" onBack={() => router.navigate("/(tabs)/more" as any)} />
+      <View
+        accessibilityLabel={`Yaver mobile version ${APP_VERSION}, build ${APP_BUILD || "unknown"}, ${mobileRuntimeMode()} mode`}
+        style={[styles.runtimeIdentityBar, { backgroundColor: c.bgCard, borderColor: c.border }]}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.runtimeIdentityTitle, { color: c.textPrimary }]}>Yaver mobile v{APP_VERSION}</Text>
+          <Text style={[styles.runtimeIdentityDetail, { color: c.textMuted }]}>Build {APP_BUILD || "unknown"}</Text>
+        </View>
+        <Text style={[styles.runtimeIdentityMode, { color: c.accent, backgroundColor: c.accentSoft }]}>
+          {mobileRuntimeMode() === "dogfood" ? "Dogfood mode" : "Native mode"}
+        </Text>
+      </View>
       {/* The companion action stays visible even when Settings restores a
           previous scroll offset after returning from the scanner. */}
       <Pressable
@@ -2857,26 +2863,6 @@ export default function SettingsScreen() {
             </View>
           </View>
 
-          <View
-            style={{
-              marginTop: 8,
-              backgroundColor: c.bgCard,
-              borderColor: c.border,
-              borderWidth: 1,
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <Text style={{ color: c.textMuted, fontSize: 10, textTransform: "uppercase", fontWeight: "700" }}>
-              Mobile app version
-            </Text>
-            <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700", marginTop: 4 }}>
-              v{APP_VERSION}
-            </Text>
-            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }}>
-              Build {BUILD_NUMBER}
-            </Text>
-          </View>
         </View>
 
         {/* Developer Profile section removed — survey no longer required */}
@@ -5658,6 +5644,20 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 120 },
+  runtimeIdentityBar: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    minHeight: 54,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  runtimeIdentityTitle: { fontSize: 14, fontWeight: "700" },
+  runtimeIdentityDetail: { fontSize: 11, marginTop: 2 },
+  runtimeIdentityMode: { fontSize: 11, fontWeight: "700", paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999 },
   tvSignInBar: {
     marginHorizontal: 16,
     marginTop: 8,

@@ -8,10 +8,9 @@ import React, {
   useState,
 } from "react";
 import { Alert, AppState, AppStateStatus, Linking, Platform } from "react-native";
-import Constants from "expo-constants";
 import { setKnownDevicePublicKeys } from "../lib/identityProof";
 import { isRelayAuthFailure } from "../lib/relayAuth";
-import { appTag } from "../lib/appVersion";
+import { APP_BUILD, APP_VERSION, appTag, mobileRuntimeMode } from "../lib/appVersion";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
@@ -266,12 +265,6 @@ function autoConnectRank(
   const codingScore = probe.codingReady || deviceRunnerReadyFromHeartbeat(device) ? 1_000 : 0;
   return codingScore + 10;
 }
-
-const APP_VERSION = Constants.expoConfig?.version ?? "unknown";
-const BUILD_NUMBER =
-  Constants.expoConfig?.ios?.buildNumber ??
-  Constants.expoConfig?.android?.versionCode?.toString() ??
-  "unknown";
 
 // Heartbeat freshness window. Re-exported from @yaver/client-core (the
 // mirror at src/_core/constants.ts) so mobile, Feedback SDK, and the
@@ -1009,7 +1002,8 @@ function sendTelemetry(token: string | null, step: string, message: string, deta
       details: details?.slice(0, 2000),
       platform: Platform.OS,
       appVersion: APP_VERSION,
-      buildNumber: BUILD_NUMBER,
+      buildNumber: APP_BUILD || "unknown",
+      runtimeMode: mobileRuntimeMode(),
     }),
   }).catch(() => {});
 }

@@ -93,3 +93,27 @@ test("task creation records its Yaver entry point and exact client surface", () 
   assert.equal(body.sessionStartedFrom, "tasks");
   assert.equal(body.startedFromSurface, "watchos");
 });
+
+test("task creation carries the exact mobile build and runtime mode", () => {
+  const sessionSettings = {
+    appName: "Yaver mobile",
+    appVersion: "1.18.175",
+    buildNumber: "202608181364",
+    runtimeMode: "dogfood" as const,
+    surface: "yaver-mobile-dogfood",
+    clientSurface: "yaver-mobile-dogfood",
+    platform: "ios",
+    deviceClass: "phone" as const,
+    lane: "browser" as const,
+    dogfood: true,
+    usageMode: "reload-and-chat" as const,
+    chatEnabled: true,
+    renderEnabled: true,
+  };
+  const body = buildSendTaskRequestBody({
+    title: "Fix this crash",
+    description: "The Dogfood screen crashed",
+    sessionSettings,
+  });
+  assert.deepEqual(body.sessionSettings, sessionSettings);
+});

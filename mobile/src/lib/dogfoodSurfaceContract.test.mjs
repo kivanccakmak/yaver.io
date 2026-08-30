@@ -19,7 +19,28 @@ const tasks = readFileSync(join(mobile, "app", "(tabs)", "tasks.tsx"), "utf8");
 const metro = readFileSync(join(mobile, "metro.config.js"), "utf8");
 const projects = readFileSync(join(mobile, "app", "(tabs)", "apps.tsx"), "utf8");
 const devPreview = readFileSync(join(mobile, "src", "components", "DevPreview.tsx"), "utf8");
+const appVersion = readFileSync(join(mobile, "src", "lib", "appVersion.ts"), "utf8");
+const taskRequestBody = readFileSync(join(mobile, "src", "lib", "taskRequestBody.ts"), "utf8");
+const pushAuth = readFileSync(join(mobile, "src", "lib", "pushAuth.ts"), "utf8");
 const require = createRequire(import.meta.url);
+
+test("Settings leads with mobile build and runtime mode before TV sign-in", () => {
+  const identity = settings.indexOf("runtimeIdentityBar");
+  const tvSignIn = settings.indexOf("Sign in a TV");
+  assert.ok(identity >= 0, "Settings must render the mobile runtime identity");
+  assert.ok(tvSignIn > identity, "mobile runtime identity must appear before TV sign-in");
+  assert.match(settings, /APP_BUILD, APP_VERSION, mobileRuntimeMode/);
+  assert.match(settings, /Dogfood mode/);
+  assert.match(settings, /Native mode/);
+});
+
+test("mobile requests send build and native-or-Dogfood runtime identity", () => {
+  assert.match(appVersion, /nativeAppVersion/);
+  assert.match(appVersion, /nativeBuildVersion/);
+  assert.match(appVersion, /runtimeMode: mobileRuntimeMode/);
+  assert.match(taskRequestBody, /sessionSettings/);
+  assert.match(pushAuth, /mobileRuntimeIdentity\(\)/);
+});
 
 test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", () => {
   assert.match(metro, /resolver\.nodeModulesPaths/,

@@ -3992,6 +3992,7 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		TmuxPaneIndex:    task.TmuxPaneIndex,
 		TmuxPaneID:       task.TmuxPaneID,
 		ExecutionSession: s.taskMgr.taskExecutionIdentity(task),
+		SessionSettings:  cloneClientSessionSettings(task.SessionSettings),
 		IsAdopted:        task.IsAdopted,
 		CreatedAt:        task.CreatedAt,
 		StartedAt:        task.StartedAt,
@@ -4107,6 +4108,23 @@ func (s *HTTPServer) enrichTaskInfoVideo(info *TaskInfo, r *http.Request) {
 	}
 }
 
+type taskClientRuntime struct {
+	AppName     string `json:"appName,omitempty"`
+	AppVersion  string `json:"appVersion,omitempty"`
+	BuildNumber string `json:"buildNumber,omitempty"`
+	RuntimeMode string `json:"runtimeMode,omitempty"`
+}
+
+func legacyClientRuntimeSettings(client *taskClientRuntime) *ClientSessionSettings {
+	if client == nil {
+		return nil
+	}
+	return &ClientSessionSettings{
+		AppName: client.AppName, AppVersion: client.AppVersion,
+		BuildNumber: client.BuildNumber, RuntimeMode: client.RuntimeMode,
+	}
+}
+
 func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	// Admission control (doctrine law 7): a critically starved box refuses
 	// NEW work with a NAMED reason + route instead of accepting a task the
@@ -4138,18 +4156,20 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// ProjectName is the portable project identity selected by the UI.
 		// The runner machine resolves it against its own checkouts; do not
 		// assume a path picked on a Mac exists on Hetzner Ubuntu.
-		ProjectName        string            `json:"projectName,omitempty"`
-		BundleID           string            `json:"bundleId,omitempty"` // mobile-app bundle id (e.g. io.example.sfmg) — used to resolve project for feedback-source tasks
-		Source             string            `json:"source"`             // client type: "mobile", "desktop-app", "web", "cli"
-		SessionStartedFrom string            `json:"sessionStartedFrom,omitempty"`
-		StartedFromSurface string            `json:"startedFromSurface,omitempty"`
-		PlacementKind      string            `json:"placementKind,omitempty"`
-		ForceCloud         bool              `json:"forceCloud,omitempty"`
-		ForceRelaySource   bool              `json:"forceRelaySource,omitempty"`
-		AllowLocalFallback bool              `json:"allowLocalFallback,omitempty"`
-		Verbosity          *int              `json:"verbosity,omitempty"`
-		Images             []ImageAttachment `json:"images,omitempty"`
-		WorkDir            string            `json:"workDir,omitempty"`
+		ProjectName        string                 `json:"projectName,omitempty"`
+		BundleID           string                 `json:"bundleId,omitempty"` // mobile-app bundle id (e.g. io.example.sfmg) — used to resolve project for feedback-source tasks
+		Source             string                 `json:"source"`             // client type: "mobile", "desktop-app", "web", "cli"
+		SessionStartedFrom string                 `json:"sessionStartedFrom,omitempty"`
+		StartedFromSurface string                 `json:"startedFromSurface,omitempty"`
+		SessionSettings    *ClientSessionSettings `json:"sessionSettings,omitempty"`
+		ClientRuntime      *taskClientRuntime     `json:"clientRuntime,omitempty"`
+		PlacementKind      string                 `json:"placementKind,omitempty"`
+		ForceCloud         bool                   `json:"forceCloud,omitempty"`
+		ForceRelaySource   bool                   `json:"forceRelaySource,omitempty"`
+		AllowLocalFallback bool                   `json:"allowLocalFallback,omitempty"`
+		Verbosity          *int                   `json:"verbosity,omitempty"`
+		Images             []ImageAttachment      `json:"images,omitempty"`
+		WorkDir            string                 `json:"workDir,omitempty"`
 		// MCPServers is the per-task external MCP allowlist. Empty means no
 		// external MCPs; Yaver's own MCP doorway remains available.
 		MCPServers []string `json:"mcpServers,omitempty"`
@@ -4279,6 +4299,13 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	//
 	title := body.Title
 	var briefing strings.Builder
+	sessionSettings := body.SessionSettings
+	if sessionSettings == nil {
+		sessionSettings = legacyClientRuntimeSettings(body.ClientRuntime)
+	}
+	sessionSettings = mergeInferredClientSessionSettings(sessionSettings, firstNonEmpty(body.StartedFromSurface, sessionSurfaceFromRequest(r)), source)
+	sessionSettings = normalizeClientSessionSettings(sessionSettings, 1, time.Now())
+	briefing.WriteString(clientSessionSettingsBriefing(sessionSettings))
 
 	// Feedback-source tasks (FeedbackOverlay typed message after a guest
 	// shake, SDK modal "Fix" button, etc.) get reshaped into the same
@@ -4303,6 +4330,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// sentence in their own bubble.
 		InitialUserPrompt:       body.UserPrompt,
 		InitialUserPromptHidden: body.HideInitialPrompt,
+		SessionSettings:         sessionSettings,
 		SliceContract:           body.SliceContract,
 		// The runner's briefing + the user's ask, in that order. Empty when
 		// nothing briefed this task, in which case startProcess falls back to
@@ -4521,6 +4549,8 @@ func (s *HTTPServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		s.exitTask(w, r, taskID)
 	case "continue":
 		s.continueTask(w, r, taskID)
+	case "session-settings":
+		s.updateTaskSessionSettings(w, r, taskID)
 	case "complete":
 		s.completeTask(w, r, taskID)
 	case "fork":
@@ -4916,11 +4946,12 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	var body struct {
-		Input  string            `json:"input"`
-		Images []ImageAttachment `json:"images,omitempty"`
-		Runner string            `json:"runner,omitempty"`
-		Model  string            `json:"model,omitempty"`
-		Mode   string            `json:"mode,omitempty"`
+		Input           string                 `json:"input"`
+		Images          []ImageAttachment      `json:"images,omitempty"`
+		Runner          string                 `json:"runner,omitempty"`
+		Model           string                 `json:"model,omitempty"`
+		Mode            string                 `json:"mode,omitempty"`
+		SessionSettings *ClientSessionSettings `json:"sessionSettings,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -4929,6 +4960,12 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 	if strings.TrimSpace(body.Input) == "" {
 		jsonError(w, http.StatusBadRequest, "input is required")
 		return
+	}
+	if body.SessionSettings != nil {
+		if _, err := s.taskMgr.UpdateTaskSessionSettings(id, body.SessionSettings); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	s.taskMgr.TouchTaskSession(id, sessionSurfaceFromRequest(r))
 

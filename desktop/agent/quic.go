@@ -26,19 +26,20 @@ import (
 
 // IncomingMessage is a JSON message received from the mobile client.
 type IncomingMessage struct {
-	Type        string            `json:"type"`
-	Token       string            `json:"token,omitempty"`
-	Title       string            `json:"title,omitempty"`
-	Description string            `json:"description,omitempty"`
-	UserPrompt  string            `json:"userPrompt,omitempty"`
-	Runner      string            `json:"runner,omitempty"`
-	Model       string            `json:"model,omitempty"`
-	Mode        string            `json:"mode,omitempty"`
-	TaskID      string            `json:"taskId,omitempty"`
-	Input       string            `json:"input,omitempty"`
-	Source      string            `json:"source,omitempty"`
-	ProjectName string            `json:"projectName,omitempty"`
-	Images      []ImageAttachment `json:"images,omitempty"`
+	Type            string                 `json:"type"`
+	Token           string                 `json:"token,omitempty"`
+	Title           string                 `json:"title,omitempty"`
+	Description     string                 `json:"description,omitempty"`
+	UserPrompt      string                 `json:"userPrompt,omitempty"`
+	Runner          string                 `json:"runner,omitempty"`
+	Model           string                 `json:"model,omitempty"`
+	Mode            string                 `json:"mode,omitempty"`
+	TaskID          string                 `json:"taskId,omitempty"`
+	Input           string                 `json:"input,omitempty"`
+	Source          string                 `json:"source,omitempty"`
+	ProjectName     string                 `json:"projectName,omitempty"`
+	Images          []ImageAttachment      `json:"images,omitempty"`
+	SessionSettings *ClientSessionSettings `json:"sessionSettings,omitempty"`
 
 	PlacementKind      string `json:"placementKind,omitempty"`
 	ForceCloud         bool   `json:"forceCloud,omitempty"`
@@ -48,19 +49,20 @@ type IncomingMessage struct {
 
 // OutgoingMessage is a JSON message sent back to the mobile client.
 type OutgoingMessage struct {
-	Type          string                 `json:"type"`
-	DeviceName    string                 `json:"deviceName,omitempty"`
-	TaskID        string                 `json:"taskId,omitempty"`
-	PendingTaskID string                 `json:"pendingTaskId,omitempty"`
-	Status        string                 `json:"status,omitempty"`
-	Text          string                 `json:"text,omitempty"`
-	Final         bool                   `json:"final,omitempty"`
-	Tasks         []TaskInfo             `json:"tasks,omitempty"`
-	Message       string                 `json:"message,omitempty"`
-	Action        string                 `json:"action,omitempty"`
-	Reason        string                 `json:"reason,omitempty"`
-	Placement     *TaskPlacementMetadata `json:"placement,omitempty"`
-	Activation    map[string]any         `json:"activation,omitempty"`
+	Type            string                 `json:"type"`
+	DeviceName      string                 `json:"deviceName,omitempty"`
+	TaskID          string                 `json:"taskId,omitempty"`
+	PendingTaskID   string                 `json:"pendingTaskId,omitempty"`
+	Status          string                 `json:"status,omitempty"`
+	Text            string                 `json:"text,omitempty"`
+	Final           bool                   `json:"final,omitempty"`
+	Tasks           []TaskInfo             `json:"tasks,omitempty"`
+	Message         string                 `json:"message,omitempty"`
+	Action          string                 `json:"action,omitempty"`
+	Reason          string                 `json:"reason,omitempty"`
+	Placement       *TaskPlacementMetadata `json:"placement,omitempty"`
+	Activation      map[string]any         `json:"activation,omitempty"`
+	SessionSettings *ClientSessionSettings `json:"sessionSettings,omitempty"`
 }
 
 // QUICServer wraps a QUIC listener and dispatches incoming messages to a
@@ -325,6 +327,8 @@ func (s *QUICServer) handleStream(ctx context.Context, stream quic.Stream, authe
 		s.handleTaskList(stream)
 	case "task_continue":
 		s.handleTaskContinue(stream, msg)
+	case "task_session_settings":
+		s.handleTaskSessionSettings(stream, msg)
 	default:
 		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: fmt.Sprintf("unknown message type: %s", msg.Type)})
 	}
@@ -343,10 +347,13 @@ func (s *QUICServer) handleTaskCreate(stream quic.Stream, msg IncomingMessage) {
 	} else {
 		previewPlacement = placement
 	}
+	settings := normalizeClientSessionSettings(mergeInferredClientSessionSettings(msg.SessionSettings, msg.Source, source), 1, time.Now())
 	task, err := s.taskManager.CreateTaskWithOptions(msg.Title, msg.Description, msg.Model, source, msg.Runner, "", msg.Images, TaskCreateOptions{
 		InitialUserPrompt: msg.UserPrompt,
 		Mode:              msg.Mode,
 		Placement:         previewPlacement,
+		SessionSettings:   settings,
+		PromptText:        composeRunnerPrompt(clientSessionSettingsBriefing(settings), msg.Title, msg.Description),
 	})
 	if err != nil {
 		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
@@ -386,6 +393,12 @@ func (s *QUICServer) handleTaskList(stream quic.Stream) {
 }
 
 func (s *QUICServer) handleTaskContinue(stream quic.Stream, msg IncomingMessage) {
+	if msg.SessionSettings != nil {
+		if _, err := s.taskManager.UpdateTaskSessionSettings(msg.TaskID, msg.SessionSettings); err != nil {
+			s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
+			return
+		}
+	}
 	task, err := s.taskManager.ResumeTaskWithOptions(msg.TaskID, msg.Input, msg.Images, TaskResumeOptions{
 		RunnerID: msg.Runner,
 		Model:    msg.Model,
@@ -401,6 +414,17 @@ func (s *QUICServer) handleTaskContinue(stream quic.Stream, msg IncomingMessage)
 		Status: string(task.Status),
 	})
 	go s.streamTaskOutput(stream, task)
+}
+
+func (s *QUICServer) handleTaskSessionSettings(stream quic.Stream, msg IncomingMessage) {
+	settings, err := s.taskManager.UpdateTaskSessionSettings(msg.TaskID, msg.SessionSettings)
+	if err != nil {
+		s.sendMessage(stream, OutgoingMessage{Type: "error", Message: err.Error()})
+		return
+	}
+	s.sendMessage(stream, OutgoingMessage{
+		Type: "task_session_settings_updated", TaskID: msg.TaskID, SessionSettings: settings,
+	})
 }
 
 // streamTaskOutput reads from the task's output channel and sends each line

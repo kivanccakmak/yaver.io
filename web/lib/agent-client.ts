@@ -173,6 +173,7 @@ export interface Task {
   tmuxSession?: string;
   sessionId?: string;
   executionSession?: TaskExecutionIdentity;
+  sessionSettings?: ClientSessionSettings;
   /** Structured task capability gap from POST /tasks. Missing runner/toolchain
    *  preflight failures carry the same routed object as preview gaps, so the
    *  Vibing surface can render Install + streamed retry instead of prose. */
@@ -197,6 +198,7 @@ export interface TaskExecutionIdentity {
   firstAgentResponseAt?: string;
   lastUserMessageAt?: string;
   lastAgentResponseAt?: string;
+  sessionSettings?: ClientSessionSettings;
   deletedAt?: string;
   resumable: boolean;
   tmuxSession?: string;
@@ -205,6 +207,51 @@ export interface TaskExecutionIdentity {
   tmuxWindowName?: string;
   tmuxPaneIndex?: string;
   tmuxPaneId?: string;
+}
+
+export interface ClientSessionSettings {
+  appName: string;
+  appVersion: string;
+  buildNumber: string;
+  surface: string;
+  clientSurface: string;
+  platform: string;
+  deviceClass: "phone" | "tablet" | "desktop" | "tv" | "car" | "watch" | "xr" | "browser";
+  lane: "yaver-native" | "browser" | "hermes" | "webrtc";
+  runtimeMode: "native" | "dogfood" | "yaver-hosted-dogfood";
+  dogfood: boolean;
+  usageMode: "chat-only" | "reload-only" | "reload-and-chat";
+  chatEnabled: boolean;
+  renderEnabled: boolean;
+  revision?: number;
+  updatedAt?: string;
+}
+
+export function browserSessionSettings(
+  usageMode: ClientSessionSettings["usageMode"] = "chat-only",
+): ClientSessionSettings {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  const platform = /Android/i.test(ua) ? "android"
+    : /iPhone|iPad|iPod/i.test(ua) ? "ios"
+      : /Macintosh|Mac OS X/i.test(ua) ? "macos"
+        : /Windows/i.test(ua) ? "windows"
+          : /Linux/i.test(ua) ? "linux" : "web";
+  const deviceClass = platform === "ios" || platform === "android" ? "phone" : platform === "web" ? "browser" : "desktop";
+  return {
+    appName: "Yaver web",
+    appVersion: process.env.NEXT_PUBLIC_APP_VERSION ?? "",
+    buildNumber: process.env.NEXT_PUBLIC_APP_BUILD ?? "",
+    surface: "yaver-web-dashboard",
+    clientSurface: "yaver-web-dashboard",
+    platform,
+    deviceClass,
+    lane: "browser",
+    runtimeMode: "native",
+    dogfood: false,
+    usageMode,
+    chatEnabled: usageMode !== "reload-only",
+    renderEnabled: usageMode !== "chat-only",
+  };
 }
 
 export interface RemoteProject {
@@ -1963,6 +2010,7 @@ export type CreateTaskParams = {
    *  in mcpServers — possibly none. */
   includeYaverMcp?: boolean;
   sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace";
+  sessionSettings?: ClientSessionSettings;
 };
 
 export function buildCreateTaskBody(params: CreateTaskParams): Record<string, unknown> {
@@ -2010,6 +2058,7 @@ export function buildCreateTaskBody(params: CreateTaskParams): Record<string, un
     includeYaverMcp: params.includeYaverMcp ?? false,
     source: "web",
     sessionStartedFrom: params.sessionStartedFrom ?? "tasks",
+    sessionSettings: params.sessionSettings ?? browserSessionSettings(),
   };
 }
 
@@ -2589,6 +2638,7 @@ export class AgentClient {
         tmuxSession: t.tmuxSession || undefined,
         sessionId: t.sessionId || undefined,
         executionSession: t.executionSession || undefined,
+        sessionSettings: t.sessionSettings || undefined,
         capabilityGap: t.capabilityGap || undefined,
         // Video + proof fields ride the same task JSON. These were silently
         // dropped by this mapper before, which made videoStatus undefined on
@@ -2648,6 +2698,7 @@ export class AgentClient {
       tmuxSession: t.tmuxSession || undefined,
       sessionId: t.sessionId || undefined,
       executionSession: t.executionSession || undefined,
+      sessionSettings: t.sessionSettings || undefined,
       capabilityGap: t.capabilityGap || undefined,
       // Same video/proof passthrough as listTasks — keep both mappers in sync.
       videoEnabled: t.videoEnabled || undefined,
@@ -2677,14 +2728,14 @@ export class AgentClient {
     if (!res.ok) throw new Error(`Failed to stop task: ${res.status}`);
   }
 
-  async continueTask(taskId: string, input: string, mode?: string): Promise<TaskExecutionIdentity> {
+  async continueTask(taskId: string, input: string, mode?: string, sessionSettings: ClientSessionSettings = browserSessionSettings()): Promise<TaskExecutionIdentity> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(
       `${this.taskBaseUrl}/tasks/${taskId}/continue`,
       {
         method: "POST",
         headers: { ...this.authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ input, ...(mode ? { mode } : {}) }),
+        body: JSON.stringify({ input, ...(mode ? { mode } : {}), sessionSettings }),
       },
       30_000,
     ).catch((err: any) => {
@@ -2719,6 +2770,20 @@ export class AgentClient {
       throw new Error("The agent did not confirm the same task and runner session for this follow-up.");
     }
     return identity;
+  }
+
+  async updateTaskSessionSettings(taskId: string, sessionSettings: ClientSessionSettings): Promise<void> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(
+      `${this.taskBaseUrl}/tasks/${taskId}/session-settings`,
+      {
+        method: "PATCH",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionSettings }),
+      },
+      15_000,
+    );
+    if (!res.ok) throw new Error(`Failed to update session settings: ${res.status}`);
   }
 
   async completeTask(taskId: string): Promise<void> {

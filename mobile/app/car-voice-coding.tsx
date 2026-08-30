@@ -31,6 +31,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { mobileSessionSettings } from "../src/lib/appVersion";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { AppScreenHeader } from "../src/components/AppScreenHeader";
 import { useColors } from "../src/context/ThemeContext";
@@ -223,6 +224,11 @@ export default function CarVoiceCodingScreen() {
           undefined,
           "tasks",
           "car",
+          mobileSessionSettings({
+            surface: Platform.OS === "ios" ? "carplay" : "android-auto",
+            platform: Platform.OS,
+            deviceClass: "car",
+          }),
         );
         return { id: t.id };
       },

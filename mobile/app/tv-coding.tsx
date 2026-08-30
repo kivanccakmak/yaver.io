@@ -23,6 +23,7 @@ import {
   saveMCPServersToConvex,
 } from "../src/lib/taskComposerPrefs";
 import type { ModelInfo, RunnerInfo } from "../src/lib/quic";
+import { mobileSessionSettings } from "../src/lib/appVersion";
 
 type TVProject = {
   name: string;
@@ -197,6 +198,11 @@ export default function TVCodingScreen() {
         undefined,
         "tasks",
         "tv",
+        mobileSessionSettings({
+          surface: Platform.OS === "ios" ? "apple-tv" : "android-tv",
+          platform: Platform.OS === "ios" ? "tvos" : "android",
+          deviceClass: "tv",
+        }),
       );
       if (projectName && selectedProjectPath) {
         void saveLastTaskProject({

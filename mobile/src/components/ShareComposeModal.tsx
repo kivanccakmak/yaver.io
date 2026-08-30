@@ -3,10 +3,9 @@
 //
 // Flow: shareReceiver decodes the shared image(s) → shareIntentEmitter →
 // this modal opens with thumbnails + a caption box + a multi-select list
-// of the user's online machines. "Send" fans the bug out as one feedback
-// task PER selected machine (quicClient.createFeedbackTaskOnDevice), each
-// of which the remote agent auto-routes through the vibing pipeline and
-// auto-starts the runner to fix it.
+// of the user's online machines. "Send" tries to drop the message into a
+// live coding session first; if none is available, it creates a normal
+// mobile task on the selected box, with optional deep-audit framing.
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -26,6 +25,7 @@ import { shareIntentEmitter } from "../lib/shareIntent";
 import type { ImageAttachment } from "../lib/quic";
 
 type SendState = "idle" | "sending" | "sent" | "error";
+type ShareTargetMode = "session-or-task" | "task";
 
 export function ShareComposeModal() {
   const { colors } = useTheme();
@@ -37,6 +37,8 @@ export function ShareComposeModal() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sendState, setSendState] = useState<Record<string, SendState>>({});
   const [busy, setBusy] = useState(false);
+  const [targetMode, setTargetMode] = useState<ShareTargetMode>("session-or-task");
+  const [deepAudit, setDeepAudit] = useState(false);
 
   // Machines the user can fan out to: anything the relay/heartbeat
   // currently reports reachable. Phones aren't in `devices` (they're the
@@ -52,6 +54,8 @@ export function ShareComposeModal() {
       setComment(text || "");
       setSendState({});
       setBusy(false);
+      setTargetMode("session-or-task");
+      setDeepAudit(false);
       // Default target = the box you're already attached to; the user
       // can tick more. Fall back to the only candidate when there's no
       // active attachment yet.
@@ -71,6 +75,8 @@ export function ShareComposeModal() {
     setSelected(new Set());
     setSendState({});
     setBusy(false);
+    setTargetMode("session-or-task");
+    setDeepAudit(false);
   }, []);
 
   const toggle = useCallback((id: string) => {
@@ -97,24 +103,23 @@ export function ShareComposeModal() {
     setSendState(Object.fromEntries(targets.map((id) => [id, "sending"])));
 
     const results = await Promise.allSettled(
-      targets.map((id) =>
-        // WhatsApp-to-a-friend path: when the box has a LIVE runner session
-        // (the Vibe loop), send the screenshot INTO that session so it
-        // renders where the user is watching — same as dropping a photo into
-        // a chat. The agent saves the image and prefixes the prompt with the
-        // Read-tool hint (runner_session_turn.go attachImageHintToPrompt).
-        // Fall back to a background feedback task when no session is live
-        // (the turn endpoint 404s/conflicts on a bare shell).
-        quicClient
-          .runnerSessionTurn(id, comment.trim() || title, null, 8000, images)
-          .then((r) => {
-            if (r.ok) return true;
-            if (r.error && /not running a coding agent|no live|cannot resolve|no session/i.test(r.error)) {
-              return quicClient.createFeedbackTaskOnDevice(id, { title, images }).then(() => true);
-            }
-            return false;
-          }),
-      ),
+      targets.map(async (id) => {
+        if (targetMode === "session-or-task") {
+          const live = await quicClient.runnerSessionTurn(id, comment.trim() || title, null, 8000, images);
+          if (live.ok) return true;
+          if (live.error && !/not running a coding agent|no live|cannot resolve|no session/i.test(live.error)) {
+            throw new Error(live.error);
+          }
+        }
+        await quicClient.sendTaskToDevice(id, {
+          title,
+          description: title,
+          images,
+          askMode: deepAudit,
+          startedFromSurface: "share-sheet",
+        });
+        return true;
+      }),
     );
 
     const next: Record<string, SendState> = {};
@@ -129,7 +134,7 @@ export function ShareComposeModal() {
     if (targets.every((id) => next[id] === "sent")) {
       setTimeout(close, 900);
     }
-  }, [canSend, comment, images, selected, close]);
+  }, [canSend, comment, images, selected, targetMode, deepAudit, close]);
 
   if (!visible) return null;
 
@@ -182,6 +187,55 @@ export function ShareComposeModal() {
             onChangeText={setComment}
             multiline
           />
+
+          <View style={styles.modeRow}>
+            <Pressable
+              onPress={() => setTargetMode("session-or-task")}
+              style={[
+                styles.modeChip,
+                {
+                  borderColor: targetMode === "session-or-task" ? colors.brandPrimary : colors.border,
+                  backgroundColor: targetMode === "session-or-task" ? colors.brandPrimarySoft : colors.surfaceMuted,
+                },
+              ]}
+            >
+              <Text style={[styles.modeChipText, { color: targetMode === "session-or-task" ? colors.brandPrimary : colors.textSecondary }]}>
+                Live session first
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setTargetMode("task")}
+              style={[
+                styles.modeChip,
+                {
+                  borderColor: targetMode === "task" ? colors.brandPrimary : colors.border,
+                  backgroundColor: targetMode === "task" ? colors.brandPrimarySoft : colors.surfaceMuted,
+                },
+              ]}
+            >
+              <Text style={[styles.modeChipText, { color: targetMode === "task" ? colors.brandPrimary : colors.textSecondary }]}>
+                New task
+              </Text>
+            </Pressable>
+          </View>
+
+          <Pressable
+            onPress={() => setDeepAudit((value) => !value)}
+            style={[
+              styles.auditRow,
+              {
+                borderColor: deepAudit ? colors.brandPrimary : colors.border,
+                backgroundColor: deepAudit ? colors.brandPrimarySoft : colors.surfaceMuted,
+              },
+            ]}
+          >
+            <Text style={[styles.auditLabel, { color: deepAudit ? colors.brandPrimary : colors.textSecondary }]}>
+              {deepAudit ? "Deep audit on" : "Deep audit"}
+            </Text>
+            <Text style={[styles.auditHint, { color: colors.textTertiary }]}>
+              Explain first, cite files.
+            </Text>
+          </Pressable>
 
           <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
             Send to {selected.size > 0 ? `(${selected.size})` : ""}
@@ -313,6 +367,38 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlignVertical: "top",
     marginBottom: 14,
+  },
+  modeRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 10,
+  },
+  modeChip: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  modeChipText: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  auditRow: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  auditLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  auditHint: {
+    fontSize: 12,
+    marginTop: 2,
   },
   sectionLabel: {
     fontSize: 12,

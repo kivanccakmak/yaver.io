@@ -50,6 +50,7 @@ type FeedbackReport struct {
 	DeviceInfo  DeviceFBInfo       `json:"deviceInfo"`
 	AppVersion  string             `json:"appVersion,omitempty"`
 	BuildID     string             `json:"buildId,omitempty"`
+	RuntimeMode string             `json:"runtimeMode,omitempty"`
 	Project     FeedbackProject    `json:"project,omitempty"`
 	ChangeSet   *FeedbackChangeSet `json:"changeSet,omitempty"`
 	CreatedAt   string             `json:"createdAt"`
@@ -202,6 +203,11 @@ func (fm *FeedbackManager) ReceiveFeedback(metadata json.RawMessage, files map[s
 	var raw struct {
 		Project   FeedbackProject           `json:"project"`
 		Candidate FeedbackCandidateMetadata `json:"candidate"`
+		App       struct {
+			Version     string `json:"version"`
+			BuildNumber string `json:"buildNumber"`
+			RuntimeMode string `json:"runtimeMode"`
+		} `json:"app"`
 		// The React Native SDK sent the device block under `device` until
 		// 0.9.2, while this struct, the Flutter SDK, and the web SDK all use
 		// `deviceInfo`. The mismatch meant every RN report's device block was
@@ -214,6 +220,15 @@ func (fm *FeedbackManager) ReceiveFeedback(metadata json.RawMessage, files map[s
 
 	if report.DeviceInfo == (DeviceFBInfo{}) {
 		report.DeviceInfo = raw.Device
+	}
+	if report.AppVersion == "" {
+		report.AppVersion = raw.App.Version
+	}
+	if report.BuildID == "" {
+		report.BuildID = raw.App.BuildNumber
+	}
+	if report.RuntimeMode == "" {
+		report.RuntimeMode = raw.App.RuntimeMode
 	}
 
 	// Always overwrite the report ID with a fresh UUID, ignoring whatever

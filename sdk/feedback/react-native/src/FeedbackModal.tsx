@@ -24,6 +24,7 @@ import { AuthOverlay } from './AuthOverlay';
 import { QuickActionIcon } from './QuickActionIcon';
 import { YaverModeBadge } from './YaverModeBadge';
 import { VibeChatScreen, type VibeTurn } from './VibeChatScreen';
+import { resolveDogfoodClientSessionSettings } from './P2PClient';
 import { DogfoodQuickControls } from './DogfoodQuickControls';
 import { listReachableDevices, RemoteDevice } from './auth';
 import { reloadActions } from './reloadActions';
@@ -1129,6 +1130,14 @@ export const FeedbackModal: React.FC = () => {
       const preferredModel = (await prefs.getPreferredModel?.()) ?? null;
 
       const renderBehavior = await YaverFeedback.getDogfoodRenderBehavior().catch(() => 'manual' as const);
+      const config = YaverFeedback.getConfig();
+      const sessionSettings = resolveDogfoodClientSessionSettings({
+        lane: dogfoodLane,
+        usageMode: dogfoodUsageMode,
+        projectName: identity.projectName,
+        appVersion: config?.appVersion,
+        buildNumber: config?.buildNumber,
+      });
       const result = await client.createFeedbackTask({
         userPrompt: promptText,
         projectName: identity.projectName,
@@ -1136,6 +1145,7 @@ export const FeedbackModal: React.FC = () => {
         runner: preferredRunner ?? undefined,
         model: preferredModel ?? undefined,
         screenshotBase64,
+        sessionSettings,
       });
       setLastVibeTaskId(result.taskId);
       // Hand off to VibeChatScreen — it streams the SSE transcript,
@@ -1156,7 +1166,7 @@ export const FeedbackModal: React.FC = () => {
     } finally {
       if (mountedRef.current) setAction('idle');
     }
-  }, [vibePrompt, includeScreenshot]);
+  }, [dogfoodLane, dogfoodUsageMode, vibePrompt, includeScreenshot]);
 
   /*
   const handleScreenRecording = useCallback(async () => {
@@ -1260,6 +1270,14 @@ export const FeedbackModal: React.FC = () => {
   // the chat returns to idle and clears the active vibe.
   if (activeVibe) {
     const client = YaverFeedback.getP2PClient();
+    const config = YaverFeedback.getConfig();
+    const sessionSettings = resolveDogfoodClientSessionSettings({
+      lane: activeDogfoodLane,
+      usageMode: dogfoodUsageMode,
+      projectName: activeVibe.project,
+      appVersion: config?.appVersion,
+      buildNumber: config?.buildNumber,
+    });
     return (
       <>
         <AuthOverlay />
@@ -1291,6 +1309,7 @@ export const FeedbackModal: React.FC = () => {
               initialStatus={activeVibe.initialStatus}
               initialTurns={activeVibe.initialTurns}
               renderBehavior={activeVibe.renderBehavior || 'manual'}
+              sessionSettings={sessionSettings}
               voiceInputEnabled={YaverFeedback.getConfig()?.voiceInputEnabled === true}
               // Closing this sheet must also clear the chat route.  Previously
               // `handleClose` only hid the native modal; reopening Feedback

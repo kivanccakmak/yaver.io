@@ -1003,6 +1003,7 @@ type TaskCreateOptions struct {
 	// another surface later attaches to the same session.
 	SessionStartedFrom string
 	StartedFromSurface string
+	SessionSettings    *ClientSessionSettings
 	WorkDir            string
 	ProjectSessionID   string
 
@@ -1138,6 +1139,27 @@ type TaskResumeOptions struct {
 	Mode     string `json:"mode,omitempty"`
 }
 
+// ClientSessionSettings is mutable provenance/capability state for the client
+// currently driving a Yaver session. It describes the real transport/render
+// lane instead of asking the agent to infer it from task source strings.
+type ClientSessionSettings struct {
+	AppName       string    `json:"appName,omitempty"`
+	AppVersion    string    `json:"appVersion,omitempty"`
+	BuildNumber   string    `json:"buildNumber,omitempty"`
+	Surface       string    `json:"surface,omitempty"`
+	ClientSurface string    `json:"clientSurface,omitempty"`
+	Platform      string    `json:"platform,omitempty"`
+	DeviceClass   string    `json:"deviceClass,omitempty"`
+	Lane          string    `json:"lane,omitempty"`
+	RuntimeMode   string    `json:"runtimeMode,omitempty"`
+	Dogfood       bool      `json:"dogfood"`
+	UsageMode     string    `json:"usageMode,omitempty"`
+	ChatEnabled   bool      `json:"chatEnabled"`
+	RenderEnabled bool      `json:"renderEnabled"`
+	Revision      int64     `json:"revision"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
 type TaskFailureFix struct {
 	Type      string `json:"type"`
 	RunnerID  string `json:"runnerId,omitempty"`
@@ -1193,30 +1215,31 @@ func recordSessionMessage(task *Task, role string, at time.Time) {
 // the latter identifies the observable process seat. Surfaces must show both
 // and must never infer one from the other.
 type TaskExecutionIdentity struct {
-	YaverSessionID       string     `json:"yaverSessionId"`
-	TaskID               string     `json:"taskId"`
-	RemoteBoxID          string     `json:"remoteBoxId,omitempty"`
-	RunnerName           string     `json:"runnerName,omitempty"`
-	RunnerID             string     `json:"runnerId,omitempty"`
-	RunnerSessionID      string     `json:"runnerSessionId,omitempty"`
-	StartedFrom          string     `json:"startedFrom,omitempty"`
-	StartedFromSurface   string     `json:"startedFromSurface,omitempty"`
-	InitialSurface       string     `json:"initialSurface,omitempty"`
-	SessionStartedAt     time.Time  `json:"sessionStartedAt"`
-	LastSurface          string     `json:"lastSurface,omitempty"`
-	LastActiveAt         time.Time  `json:"lastActiveAt"`
-	FirstUserMessageAt   *time.Time `json:"firstUserMessageAt,omitempty"`
-	FirstAgentResponseAt *time.Time `json:"firstAgentResponseAt,omitempty"`
-	LastUserMessageAt    *time.Time `json:"lastUserMessageAt,omitempty"`
-	LastAgentResponseAt  *time.Time `json:"lastAgentResponseAt,omitempty"`
-	DeletedAt            *time.Time `json:"deletedAt,omitempty"`
-	Resumable            bool       `json:"resumable"`
-	TmuxSession          string     `json:"tmuxSession,omitempty"`
-	TmuxSessionID        string     `json:"tmuxSessionId,omitempty"`
-	TmuxWindowIndex      string     `json:"tmuxWindowIndex,omitempty"`
-	TmuxWindowName       string     `json:"tmuxWindowName,omitempty"`
-	TmuxPaneIndex        string     `json:"tmuxPaneIndex,omitempty"`
-	TmuxPaneID           string     `json:"tmuxPaneId,omitempty"`
+	YaverSessionID       string                 `json:"yaverSessionId"`
+	TaskID               string                 `json:"taskId"`
+	RemoteBoxID          string                 `json:"remoteBoxId,omitempty"`
+	RunnerName           string                 `json:"runnerName,omitempty"`
+	RunnerID             string                 `json:"runnerId,omitempty"`
+	RunnerSessionID      string                 `json:"runnerSessionId,omitempty"`
+	StartedFrom          string                 `json:"startedFrom,omitempty"`
+	StartedFromSurface   string                 `json:"startedFromSurface,omitempty"`
+	InitialSurface       string                 `json:"initialSurface,omitempty"`
+	SessionStartedAt     time.Time              `json:"sessionStartedAt"`
+	LastSurface          string                 `json:"lastSurface,omitempty"`
+	LastActiveAt         time.Time              `json:"lastActiveAt"`
+	FirstUserMessageAt   *time.Time             `json:"firstUserMessageAt,omitempty"`
+	FirstAgentResponseAt *time.Time             `json:"firstAgentResponseAt,omitempty"`
+	LastUserMessageAt    *time.Time             `json:"lastUserMessageAt,omitempty"`
+	LastAgentResponseAt  *time.Time             `json:"lastAgentResponseAt,omitempty"`
+	SessionSettings      *ClientSessionSettings `json:"sessionSettings,omitempty"`
+	DeletedAt            *time.Time             `json:"deletedAt,omitempty"`
+	Resumable            bool                   `json:"resumable"`
+	TmuxSession          string                 `json:"tmuxSession,omitempty"`
+	TmuxSessionID        string                 `json:"tmuxSessionId,omitempty"`
+	TmuxWindowIndex      string                 `json:"tmuxWindowIndex,omitempty"`
+	TmuxWindowName       string                 `json:"tmuxWindowName,omitempty"`
+	TmuxPaneIndex        string                 `json:"tmuxPaneIndex,omitempty"`
+	TmuxPaneID           string                 `json:"tmuxPaneId,omitempty"`
 }
 
 // TaskContinuationConflict is returned when "continue" would actually have
@@ -1267,20 +1290,21 @@ type Task struct {
 	// YaverSessionID is Yaver's stable, entry-point-independent conversation
 	// handle. Tasks/Chat, Vibing/render, and new-application/workspace views all
 	// attach to this identity; runner and tmux IDs remain child namespaces.
-	YaverSessionID       string     `json:"yaverSessionId,omitempty"`
-	RemoteBoxID          string     `json:"remoteBoxId,omitempty"`
-	RunnerName           string     `json:"runnerName,omitempty"`
-	SessionStartedFrom   string     `json:"sessionStartedFrom,omitempty"`
-	StartedFromSurface   string     `json:"startedFromSurface,omitempty"`
-	InitialSurface       string     `json:"initialSurface,omitempty"`
-	SessionStartedAt     time.Time  `json:"sessionStartedAt,omitempty"`
-	LastSurface          string     `json:"lastSurface,omitempty"`
-	LastActiveAt         time.Time  `json:"lastActiveAt,omitempty"`
-	DeletedAt            *time.Time `json:"deletedAt,omitempty"`
-	FirstUserMessageAt   *time.Time `json:"firstUserMessageAt,omitempty"`
-	FirstAgentResponseAt *time.Time `json:"firstAgentResponseAt,omitempty"`
-	LastUserMessageAt    *time.Time `json:"lastUserMessageAt,omitempty"`
-	LastAgentResponseAt  *time.Time `json:"lastAgentResponseAt,omitempty"`
+	YaverSessionID       string                 `json:"yaverSessionId,omitempty"`
+	RemoteBoxID          string                 `json:"remoteBoxId,omitempty"`
+	RunnerName           string                 `json:"runnerName,omitempty"`
+	SessionStartedFrom   string                 `json:"sessionStartedFrom,omitempty"`
+	StartedFromSurface   string                 `json:"startedFromSurface,omitempty"`
+	InitialSurface       string                 `json:"initialSurface,omitempty"`
+	SessionStartedAt     time.Time              `json:"sessionStartedAt,omitempty"`
+	LastSurface          string                 `json:"lastSurface,omitempty"`
+	LastActiveAt         time.Time              `json:"lastActiveAt,omitempty"`
+	DeletedAt            *time.Time             `json:"deletedAt,omitempty"`
+	FirstUserMessageAt   *time.Time             `json:"firstUserMessageAt,omitempty"`
+	FirstAgentResponseAt *time.Time             `json:"firstAgentResponseAt,omitempty"`
+	LastUserMessageAt    *time.Time             `json:"lastUserMessageAt,omitempty"`
+	LastAgentResponseAt  *time.Time             `json:"lastAgentResponseAt,omitempty"`
+	SessionSettings      *ClientSessionSettings `json:"sessionSettings,omitempty"`
 	// Transport records the protocol that actually executed the task. It lets
 	// surfaces and doctor distinguish native ACP from the compatibility CLI
 	// lane without guessing from runner output.
@@ -1674,6 +1698,7 @@ type TaskInfo struct {
 	TmuxPaneIndex       string                 `json:"tmuxPaneIndex,omitempty"`
 	TmuxPaneID          string                 `json:"tmuxPaneId,omitempty"`
 	ExecutionSession    TaskExecutionIdentity  `json:"executionSession"`
+	SessionSettings     *ClientSessionSettings `json:"sessionSettings,omitempty"`
 	IsAdopted           bool                   `json:"isAdopted,omitempty"`
 	CreatedAt           time.Time              `json:"createdAt"`
 	StartedAt           *time.Time             `json:"startedAt,omitempty"`
@@ -1765,6 +1790,7 @@ func (tm *TaskManager) taskExecutionIdentity(task *Task) TaskExecutionIdentity {
 		FirstAgentResponseAt: firstAgent,
 		LastUserMessageAt:    lastUser,
 		LastAgentResponseAt:  lastAgent,
+		SessionSettings:      cloneClientSessionSettings(task.SessionSettings),
 		DeletedAt:            task.DeletedAt,
 		Resumable:            resumeCanCarryContext(runner, task.SessionID),
 		TmuxSession:          task.TmuxSession,
@@ -2289,6 +2315,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		SessionStartedAt:   now,
 		LastSurface:        firstNonEmpty(strings.TrimSpace(opts.StartedFromSurface), source),
 		LastActiveAt:       now,
+		SessionSettings:    normalizeClientSessionSettings(opts.SessionSettings, 1, now),
 		Goal:               taskRunner.Goal,
 		runner:             taskRunner,
 		CreatedAt:          now,
@@ -5106,6 +5133,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			TmuxPaneIndex:    t.TmuxPaneIndex,
 			TmuxPaneID:       t.TmuxPaneID,
 			ExecutionSession: tm.taskExecutionIdentity(t),
+			SessionSettings:  cloneClientSessionSettings(t.SessionSettings),
 			IsAdopted:        t.IsAdopted,
 			CreatedAt:        t.CreatedAt,
 			StartedAt:        t.StartedAt,

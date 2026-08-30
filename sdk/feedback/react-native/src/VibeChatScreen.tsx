@@ -27,7 +27,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import type { P2PClient, VibeThreadSummary } from './P2PClient';
+import type { ClientSessionSettings, P2PClient, VibeThreadSummary } from './P2PClient';
 import type { DogfoodRenderBehavior } from './dogfoodPolicy';
 import { SDKVoiceSession, pcmToTempWavURI, isVoiceStreamSupported } from './voice';
 import { startPcmRecording, stopPcmRecording, isVoiceCaptureSupported } from './capture';
@@ -71,6 +71,7 @@ interface Props {
   renderBehavior?: DogfoodRenderBehavior;
   onOpenSettings?: () => void;
   onSignOut?: () => Promise<void>;
+  sessionSettings: ClientSessionSettings;
 }
 
 export function VibeChatScreen({
@@ -93,6 +94,7 @@ export function VibeChatScreen({
   renderBehavior = 'manual',
   onOpenSettings,
   onSignOut,
+  sessionSettings,
 }: Props) {
   const [activeTab, setActiveTab] = useState<'chat' | 'settings'>('chat');
   const [taskId, setTaskId] = useState<string | null>(initialTaskId || null);
@@ -123,6 +125,27 @@ export function VibeChatScreen({
   const [isResuming, setIsResuming] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
   const [reloadQueued, setReloadQueued] = useState(false);
+
+  useEffect(() => {
+    if (!taskId) return;
+    void client.updateVibeTaskSessionSettings(taskId, sessionSettings).catch(() => {});
+  }, [
+    client,
+    sessionSettings.appName,
+    sessionSettings.appVersion,
+    sessionSettings.buildNumber,
+    sessionSettings.chatEnabled,
+    sessionSettings.clientSurface,
+    sessionSettings.deviceClass,
+    sessionSettings.dogfood,
+    sessionSettings.lane,
+    sessionSettings.platform,
+    sessionSettings.renderEnabled,
+    sessionSettings.runtimeMode,
+    sessionSettings.surface,
+    sessionSettings.usageMode,
+    taskId,
+  ]);
   const [renderRequested, setRenderRequested] = useState(false);
   const [threads, setThreads] = useState<VibeThreadSummary[]>(() => initialTaskId ? [{
     id: initialTaskId,
@@ -289,7 +312,7 @@ export function VibeChatScreen({
     setStreamBuffer('');
     try {
       if (taskId) {
-        await client.resumeTask({ taskId, userPrompt: text });
+        await client.resumeTask({ taskId, userPrompt: text, sessionSettings });
         // resumeTask reuses the same task id; advance the subscription epoch so
         // the existing SSE path reconnects without inventing an invalid id.
         setStreamEpoch((value) => value + 1);
@@ -300,6 +323,7 @@ export function VibeChatScreen({
           projectPath,
           runner,
           model,
+          sessionSettings,
         });
         setTaskId(created.taskId);
         setThreads((prev) => [{ id: created.taskId, title: text, status: 'running', runnerId: runner, model }, ...prev]);
@@ -318,7 +342,7 @@ export function VibeChatScreen({
     } finally {
       setIsResuming(false);
     }
-  }, [client, codingLocked, followUp, isResuming, model, project, projectPath, runner, taskId]);
+  }, [client, codingLocked, followUp, isResuming, model, project, projectPath, runner, sessionSettings, taskId]);
 
   const handleReload = useCallback(async () => {
     if (isReloading || !onReload) return;
