@@ -43,9 +43,10 @@ ensure_mobile_dependencies() {
   local sqlite_package="$mobile_dir/node_modules/expo-sqlite/package.json"
   local audio_package="$mobile_dir/node_modules/react-native-audio-api/package.json"
   local metro_transitive="$mobile_dir/node_modules/simple-swizzle/node_modules/is-arrayish/index.js"
+  local reanimated_transitive="$mobile_dir/node_modules/react-native-reanimated/node_modules/semver/functions/satisfies.js"
 
   if [ -f "$xcode_package" ] && [ -f "$sqlite_package" ] && [ -f "$audio_package" ] && \
-     [ -f "$metro_transitive" ]; then
+     [ -f "$metro_transitive" ] && [ -f "$reanimated_transitive" ]; then
     return 0
   fi
 

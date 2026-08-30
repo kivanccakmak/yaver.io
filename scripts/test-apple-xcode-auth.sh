@@ -148,6 +148,8 @@ grep -q 'node_modules/xcode/package.json' "$testflight_script" || \
   fail "mobile dependency preflight must verify the xcode module used by target injection"
 grep -q 'simple-swizzle/node_modules/is-arrayish/index.js' "$testflight_script" || \
   fail "mobile dependency preflight must verify the transitive module Metro resolves during archive"
+grep -q 'react-native-reanimated/node_modules/semver/functions/satisfies.js' "$testflight_script" || \
+  fail "mobile dependency preflight must verify Reanimated's nested Metro dependency"
 grep -q -- "-destination 'generic/platform=iOS'" "$testflight_script" || \
   fail "iOS archive must target a generic iOS device, never the CI runner's My Mac destination"
 grep -q -- "-destination 'generic/platform=iOS'" "$ROOT/.github/workflows/release-mobile.yml" || \

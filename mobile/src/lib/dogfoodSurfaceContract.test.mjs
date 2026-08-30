@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const mobile = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const more = readFileSync(join(mobile, "app", "(tabs)", "more.tsx"), "utf8");
@@ -18,17 +19,36 @@ const tasks = readFileSync(join(mobile, "app", "(tabs)", "tasks.tsx"), "utf8");
 const metro = readFileSync(join(mobile, "metro.config.js"), "utf8");
 const projects = readFileSync(join(mobile, "app", "(tabs)", "apps.tsx"), "utf8");
 const devPreview = readFileSync(join(mobile, "src", "components", "DevPreview.tsx"), "utf8");
+const require = createRequire(import.meta.url);
 
 test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", () => {
   assert.match(metro, /resolver\.nodeModulesPaths/,
     "CI installs mobile/node_modules only, so sibling SDK source must resolve React from that workspace");
   assert.match(metro, /mobileNodeModules/);
-  assert.match(metro, /disableHierarchicalLookup\s*=\s*true/,
-    "Dogfood SDK source outside mobile/ must not pick a second React copy through parent lookup");
+  assert.match(metro, /disableHierarchicalLookup\s*=\s*false/,
+    "nested npm dependencies must remain visible to Metro");
   assert.match(metro, /extraNodeModules/,
     "the shared SDK must pin React entrypoints to mobile/node_modules");
+  assert.match(metro, /resolver\.resolveRequest/,
+    "core runtime pins must override hierarchical lookup without disabling it");
   assert.match(metro, /react\/jsx-runtime/);
   assert.match(metro, /react-native/);
+});
+
+test("Metro pins core runtimes and preserves nested package resolution", () => {
+  const config = require(join(mobile, "metro.config.js"));
+  const resolved = [];
+  const context = {
+    resolveRequest(_context, moduleName, platform) {
+      resolved.push({ moduleName, platform });
+      return { type: "sourceFile", filePath: moduleName };
+    },
+  };
+
+  config.resolver.resolveRequest(context, "react", "ios");
+  assert.equal(resolved[0].moduleName, join(mobile, "node_modules", "react"));
+  config.resolver.resolveRequest(context, "semver/functions/satisfies", "ios");
+  assert.equal(resolved[1].moduleName, "semver/functions/satisfies");
 });
 
 test("More separates Dogfood usage from Dogfood Settings for every contributor", () => {
