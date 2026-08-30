@@ -16,7 +16,7 @@
 // wall: an advisory that squeezes the action lane to zero height is a worse bug
 // than missing information (build 482).
 
-import { router, useLocalSearchParams } from "expo-router";
+import { router } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -54,6 +54,7 @@ import {
 } from "../src/lib/dogfoodExceptionBridge";
 import { openTaskBus } from "../src/lib/runningTasksBus";
 import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
+import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
 
 function elapsedLabel(sinceMs: number): string {
   const secs = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
@@ -65,7 +66,7 @@ function elapsedLabel(sinceMs: number): string {
 export default function AttachScreen() {
   const c = useColors();
   const { activeDevice } = useDevice();
-  const params = useLocalSearchParams<{
+  const params = useRouteParamsCompat<{
     sessionId?: string;
     url?: string;
     workDir?: string;

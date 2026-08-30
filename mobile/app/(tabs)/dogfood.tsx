@@ -9,12 +9,13 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import AttachModeSection from "../../src/components/AttachModeSection";
 import { useColors } from "../../src/context/ThemeContext";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
 import { useAuth } from "../../src/context/AuthContext";
+import { useRouteParamsCompat } from "../../src/lib/useRouteParamsCompat";
 import {
   listDogfoodApps,
   listDogfoodCatalog,
@@ -299,7 +300,7 @@ export default function DogfoodScreen() {
   const router = useRouter();
   const c = useColors();
   const tabletContent = useTabletContentStyle("regular");
-  const { management, view } = useLocalSearchParams<{ management?: string; view?: string }>();
+  const { management, view } = useRouteParamsCompat<{ management?: string; view?: string }>();
 
   if (management === "1") return <DeveloperManagementScreen />;
 
