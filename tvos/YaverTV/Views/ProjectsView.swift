@@ -161,12 +161,21 @@ struct ProjectsView: View {
         case .web:
             WebPreviewStreamView(project: p, form: form)
         case .tvOS:
+            #if os(tvOS)
             RemoteRuntimeWebRTCView(
                 project: p,
                 form: .desktop,
                 forcedTargetID: "tvos-simulator",
                 launchGuest: true
             )
+            #else
+            // LiveKitWebRTC's pinned binary currently has tvOS slices but no
+            // visionOS slice, so pretending this route can stream would leave
+            // the headset at a linker failure (or, worse, a permanent spinner).
+            // Keep the deterministic runner routes available in place.
+            unsupported("Interactive tvOS preview is not available on this headset build. Run the project in its session or start a task instead:",
+                        project: p)
+            #endif
         case .unknown:
             // Dead-end audit fix (2026-08-13): the old text said "Open it in
             // Session to run it" with NO button — a route with no tap. A
