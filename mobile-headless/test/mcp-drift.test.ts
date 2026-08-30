@@ -125,11 +125,16 @@ describe("mcp drift", () => {
 
   it("every registered MCP tool has a dispatch case (no orphans)", () => {
     const mcp_tools_src = fs.readFileSync(path.join(AGENT_DIR, "mcp_tools.go"), "utf8");
-    const http_src = fs.readFileSync(path.join(AGENT_DIR, "httpserver.go"), "utf8");
     const registered = new Set<string>();
     for (const m of mcp_tools_src.matchAll(/"name":\s*"([a-z][a-z_0-9]*)"/g)) registered.add(m[1]);
     const dispatched = new Set<string>();
-    for (const m of http_src.matchAll(/^\s*case\s+"([a-z][a-z_0-9]*)":/gm)) dispatched.add(m[1]);
+    for (const entry of fs.readdirSync(AGENT_DIR)) {
+      if (!entry.endsWith(".go") || entry.endsWith("_test.go")) continue;
+      const source = fs.readFileSync(path.join(AGENT_DIR, entry), "utf8");
+      for (const m of source.matchAll(/^\s*case\s+"[a-z][a-z_0-9]*"(?:\s*,\s*"[a-z][a-z_0-9]*")*:/gm)) {
+        for (const name of m[0].matchAll(/"([a-z][a-z_0-9]*)"/g)) dispatched.add(name[1]);
+      }
+    }
     const orphans = [...registered].filter((t) => !dispatched.has(t)).sort();
     if (orphans.length) {
       console.error(

@@ -32,8 +32,10 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.0",
     "minimist": "^1.2.8",
-    "@modelcontextprotocol/sdk": "^0.6.0"
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1"
   },
   "devDependencies": {
     "@types/bun": "^1.1.0",

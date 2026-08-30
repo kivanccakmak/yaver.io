@@ -31,6 +31,8 @@
       "expo-auth-session": ["./src/shims/expo-auth-session.ts"],
       "expo-web-browser": ["./src/shims/expo-web-browser.ts"],
       "expo-crypto": ["./src/shims/expo-crypto.ts"],
+      "tweetnacl": ["./node_modules/tweetnacl"],
+      "tweetnacl-util": ["./node_modules/tweetnacl-util"],
       // Import real mobile lib by path — no duplication. If a file
       // here imports mobile/src/lib/quic.ts, bun resolves it.
       "@yaver/mobile-lib/*": ["../mobile/src/lib/*"]

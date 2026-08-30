@@ -17,7 +17,7 @@ describe("nativeBuild UI mapping", () => {
       consumerHermesBCVersion: 96,
     });
     expect(request.consumerNativeModules).toMatchObject({
-      "expo-status-bar": expect.any(String),
+      "expo-camera": expect.any(String),
       "react-native-reanimated": expect.any(String),
     });
   });
@@ -95,7 +95,7 @@ describe("nativeBuild UI mapping", () => {
       output: "Done writing bundle output",
     })).toBe(
       "phase: compat\n" +
-      "Yaver blocked restart because the guest app does not match the selected mobile host runtime family.\n" +
+      "Yaver blocked restart because the project app does not match the selected mobile host runtime family.\n" +
       "React Native: project 0.81.6 vs host 0.81.5\n" +
       "Expo: project 54.0.33 vs host 54.0.0\n" +
       "align Expo/React Native exactly\n" +
