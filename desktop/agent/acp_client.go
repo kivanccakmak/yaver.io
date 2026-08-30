@@ -298,6 +298,10 @@ type acpSessionUpdate struct {
 	Update    struct {
 		SessionUpdate string `json:"sessionUpdate"`
 		MessageID     string `json:"messageId,omitempty"`
+		ToolCallID    string `json:"toolCallId,omitempty"`
+		Title         string `json:"title,omitempty"`
+		Status        string `json:"status,omitempty"`
+		Kind          string `json:"kind,omitempty"`
 		Content       []struct {
 			Type string `json:"type"`
 			Text string `json:"text,omitempty"`

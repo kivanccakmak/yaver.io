@@ -239,6 +239,7 @@ export default function CarVoiceCodingScreen() {
           id: t.id,
           status: t.status,
           resultText: t.resultText,
+          presentation: t.presentation,
           output: t.output,
         };
       },

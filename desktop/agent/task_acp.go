@@ -74,6 +74,17 @@ func (tm *TaskManager) tryStartOpenCodeACP(ctx context.Context, task *Task, prom
 				"runner": "opencode", "transport": taskTransportOpenCodeACP,
 				"event": update.Update.SessionUpdate, "messageId": update.Update.MessageID,
 			})
+			if update.Update.SessionUpdate == "tool_call" || update.Update.SessionUpdate == "tool_call_update" {
+				label := strings.TrimSpace(update.Update.Title)
+				if label == "" {
+					label = "The runner is using a tool."
+				}
+				tm.present(task, taskPresentationInput{
+					ID: task.ID + "-activity", Kind: "status", Text: label,
+					Phase: "tool", State: firstNonEmpty(strings.TrimSpace(update.Update.Status), "running"),
+				})
+				return
+			}
 			if update.Update.SessionUpdate != "agent_message_chunk" {
 				return
 			}
@@ -81,6 +92,14 @@ func (tm *TaskManager) tryStartOpenCodeACP(ctx context.Context, task *Task, prom
 				if block.Type != "text" || block.Text == "" {
 					continue
 				}
+				messageID := strings.TrimSpace(update.Update.MessageID)
+				if messageID == "" {
+					messageID = task.ID + "-assistant-live"
+				}
+				tm.present(task, taskPresentationInput{
+					ID: messageID, Kind: "message", Role: "assistant",
+					Text: block.Text, Phase: "responding", State: "streaming", Append: true,
+				})
 				outputMu.Lock()
 				tm.emitRaw(task, []byte(block.Text))
 				tm.emit(task, &output, block.Text)
@@ -114,6 +133,7 @@ func (tm *TaskManager) tryStartOpenCodeACP(ctx context.Context, task *Task, prom
 	task.Transport = taskTransportOpenCodeACP
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
+	tm.present(task, taskRunningPresentation(task))
 	emitTaskEvent(task, map[string]interface{}{
 		"type": "runner_transport", "schema": 1,
 		"runner": "opencode", "transport": taskTransportOpenCodeACP,
@@ -125,6 +145,21 @@ func (tm *TaskManager) tryStartOpenCodeACP(ctx context.Context, task *Task, prom
 func (tm *TaskManager) runOpenCodeACPPrompt(ctx context.Context, client *acpClient, task *Task, sessionID, prompt string) {
 	result, promptErr := client.Prompt(ctx, sessionID, []acpContentBlock{acpTextBlock(prompt)})
 	client.Close()
+	if promptErr == nil {
+		tm.mu.RLock()
+		finalText := strings.TrimSpace(task.Output)
+		tm.mu.RUnlock()
+		if finalText != "" {
+			messageID := task.ID + "-assistant-live"
+			if result != nil && strings.TrimSpace(result.MessageID) != "" {
+				messageID = strings.TrimSpace(result.MessageID)
+			}
+			tm.present(task, taskPresentationInput{
+				ID: messageID, Kind: "message", Role: "assistant",
+				Text: finalText, Phase: "complete", State: "completed",
+			})
+		}
+	}
 
 	finishNow := time.Now()
 	tm.mu.Lock()

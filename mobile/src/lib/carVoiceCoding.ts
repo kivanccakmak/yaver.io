@@ -30,6 +30,7 @@
 
 import type { SpeechProvider, TtsProvider } from "./auth";
 import { CloudWorkspaceRequiredError } from "./cloudWorkspaceRequired";
+import { friendlyTaskPresentation, type TaskPresentationMessage } from "../_core/taskPresentation";
 
 // ── Injected surface ─────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export interface CarVoiceTaskRef {
   id: string;
   status: string;
   resultText?: string;
+  presentation?: TaskPresentationMessage[];
   failure?: {
     title?: string;
     reason?: string;
@@ -138,7 +140,11 @@ export function summarizeForReadback(task: CarVoiceTaskRef): string {
   const status = (task.status || "").toLowerCase();
   const failure = task.failure;
   const failureLine = failure?.title || failure?.reason || failure?.remedy || "";
-  const body = (task.resultText && task.resultText.trim()) ||
+  const semantic = friendlyTaskPresentation(task.presentation);
+  const semanticBody = [...semantic].reverse().find((item) => item.kind === "message" && item.role === "assistant")?.text
+    || [...semantic].reverse().find((item) => item.kind !== "message")?.text;
+  const body = (semanticBody && semanticBody.trim()) ||
+    (task.resultText && task.resultText.trim()) ||
     (failureLine && String(failureLine).trim()) ||
     (task.output && task.output.filter(Boolean).join(" ").trim()) ||
     "";

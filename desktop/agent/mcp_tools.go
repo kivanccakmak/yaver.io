@@ -96,7 +96,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "list_tasks",
-			"description": "List all tasks and their current status (queued, running, completed, failed, stopped). Each task may also expose remote demo video artifacts via videoClipId/videoStatus/videoClipUrl/videoPosterUrl.",
+			"description": "List all tasks and their current status (queued, running, completed, failed, stopped). The presentation field is the bounded human-readable runner narrative for user-facing status; output/rawOutput are diagnostic runner evidence and should stay folded unless requested. Each task may also expose remote demo video artifacts via videoClipId/videoStatus/videoClipUrl/videoPosterUrl.",
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
@@ -104,7 +104,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "get_task",
-			"description": "Get detailed information about a specific task, including its full output. If the task recorded a remote demo clip, the response includes videoClipId/videoStatus/videoClipUrl/videoPosterUrl for playback.",
+			"description": "Get detailed information about a specific task. Prefer presentation for human-readable status and assistant messages; output, rawOutput, tool and patch events are diagnostic evidence that user interfaces should keep folded unless requested. If the task recorded a remote demo clip, the response includes videoClipId/videoStatus/videoClipUrl/videoPosterUrl for playback.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"task_id"},

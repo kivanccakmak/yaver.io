@@ -61,3 +61,37 @@ func TestCapTaskTranscriptNoopOnSmallTasks(t *testing.T) {
 		t.Fatal("small task content altered")
 	}
 }
+
+func TestTaskPresentationBoundsPersistedAndListPayloads(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	task := &Task{ID: "presentation-bounds", RunnerID: "codex", ProjectName: "yaver"}
+	for i := 0; i < 10; i++ {
+		tm.present(task, taskPresentationInput{
+			ID: "answer-" + string(rune('a'+i)), Kind: "message", Role: "assistant",
+			Text: strings.Repeat(string(rune('a'+i)), 10*1024),
+		})
+	}
+	if got := presentationTextBytes(task.Presentation); got > maxTaskPresentationTotal {
+		t.Fatalf("persisted presentation is %d bytes, want <= %d", got, maxTaskPresentationTotal)
+	}
+	list := taskPresentationListSnapshot(task)
+	if len(list) > 2 {
+		t.Fatalf("list snapshot has %d rows, want at most status + answer", len(list))
+	}
+	for _, message := range list {
+		if len(message.Text) > maxTaskPresentationListText+len("…") {
+			t.Fatalf("list message is %d bytes, cap %d", len(message.Text), maxTaskPresentationListText)
+		}
+	}
+}
+
+func TestTaskPresentationSnapshotUsesAuthoritativeTerminalState(t *testing.T) {
+	task := &Task{ID: "terminal", RunnerName: "Codex", ProjectName: "yaver", Status: TaskStatusRunning}
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	tm.present(task, taskRunningPresentation(task))
+	task.Status = TaskStatusFinished
+	rows := taskPresentationSnapshot(task)
+	if len(rows) != 1 || rows[0].Text != "Completed on yaver." || rows[0].State != "completed" {
+		t.Fatalf("stale activity survived completion: %+v", rows)
+	}
+}

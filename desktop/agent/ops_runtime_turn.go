@@ -511,10 +511,34 @@ func runtimeTurnSpokenFromTask(task *Task) string {
 	case TaskStatusReview:
 		return "It needs your review."
 	case TaskStatusQueued:
+		if status := latestTaskPresentationStatus(task); status != "" {
+			return status
+		}
 		return "Queued."
 	default:
+		if status := latestTaskPresentationStatus(task); status != "" {
+			return status
+		}
 		return "Working."
 	}
+}
+
+func latestTaskPresentationStatus(task *Task) string {
+	if task == nil {
+		return ""
+	}
+	rows := taskPresentationSnapshot(task)
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Kind == "message" || strings.TrimSpace(rows[i].Text) == "" {
+			continue
+		}
+		text := strings.TrimSpace(rows[i].Text)
+		if len(text) > 180 {
+			text = text[:177] + "..."
+		}
+		return text
+	}
+	return ""
 }
 
 func runtimeTurnTaskText(task *Task) string {

@@ -1663,6 +1663,7 @@ export class P2PClient {
     model?: string;
     executionSession?: { runnerId?: string; runnerSessionId?: string; tmuxSession?: string; resumable?: boolean };
     turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }>;
+    presentation?: import('./_core/taskPresentation').TaskPresentationMessage[];
   }> {
     const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}`, {
       headers: this.authHeaders(),
@@ -1734,7 +1735,7 @@ export class P2PClient {
         // polling final state.
         const body = (resp as unknown as { body?: ReadableStream<Uint8Array> }).body;
         if (!body || typeof body.getReader !== 'function') {
-          await pollTaskUntilDone(this, taskId, onLine, onComplete, () => closed);
+          await pollTaskUntilDone(this, taskId, onLine, onComplete, () => closed, options?.onEvent);
           return;
         }
         const reader = body.getReader();
@@ -1755,8 +1756,16 @@ export class P2PClient {
                 if (payload) {
                   let event: Record<string, unknown> | null = null;
                   try { event = JSON.parse(payload) as Record<string, unknown>; } catch { /* raw output */ }
-                  if (event?.type === 'runtime_render_requested') options?.onEvent?.(event);
-                  else onLine(payload);
+                  if (event) {
+                    // Structured events retain meaning. Shipping their JSON as
+                    // chat text was the source of the SDK's remote "runner
+                    // dump" UX. Only the groomed output lane is a text line;
+                    // semantic/task/render events go to the typed consumer.
+                    options?.onEvent?.(event);
+                    if (event.type === 'output' && typeof event.text === 'string') onLine(event.text);
+                  } else {
+                    onLine(payload);
+                  }
                 }
               }
             }
@@ -1769,7 +1778,8 @@ export class P2PClient {
             `${this.baseUrl}/tasks/${encodeURIComponent(taskId)}`,
             { headers: this.authHeaders() },
           );
-          const j = (await final.json().catch(() => ({}))) as { status?: string };
+          const payload = (await final.json().catch(() => ({}))) as { status?: string; task?: { status?: string } };
+          const j = payload.task ?? payload;
           onComplete(j.status ?? 'completed');
         } catch {
           onComplete('completed');
@@ -1866,6 +1876,7 @@ async function pollTaskUntilDone(
   onLine: (line: string) => void,
   onComplete: (status: string) => void,
   isClosed: () => boolean,
+  onEvent?: (event: Record<string, unknown>) => void,
 ): Promise<void> {
   // Use bracket access to read the private baseUrl/authHeaders without
   // making them public — confined to this file's scope.
@@ -1880,10 +1891,20 @@ async function pollTaskUntilDone(
       const r = await fetch(`${c.baseUrl}/tasks/${encodeURIComponent(taskId)}`, {
         headers: c.authHeaders(),
       });
-      const j = (await r.json().catch(() => ({}))) as {
+      const payload = (await r.json().catch(() => ({}))) as {
         status?: string;
         output?: string[] | string;
+        presentation?: unknown[];
+        task?: {
+          status?: string;
+          output?: string[] | string;
+          presentation?: unknown[];
+        };
       };
+      const j = payload.task ?? payload;
+      if (Array.isArray(j.presentation)) {
+        onEvent?.({ type: 'presentation_snapshot', schema: 1, seq: 0, messages: j.presentation });
+      }
       const all = Array.isArray(j.output) ? j.output : (j.output ? [j.output] : []);
       const flat = all.join('\n');
       if (flat.length > lastLen) {

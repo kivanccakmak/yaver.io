@@ -80,6 +80,8 @@ final class YaverFeedbackTranscript: UIView {
   // inside the scroll view — UITextView's intrinsic content size is
   // unreliable when its text mutates frequently.
   private var outputBuffer = ""
+  private var semanticMessages: [String: [String: Any]] = [:]
+  private var semanticOrder: [String] = []
   private weak var outputLabel: UILabel?
   private weak var scroll: UIScrollView?
   private weak var stack: UIStackView?
@@ -413,6 +415,44 @@ final class YaverFeedbackTranscript: UIView {
       }
     }
     scheduleThrottledRender()
+  }
+
+  /// Replace the current assistant card from the semantic runner lane. Raw
+  /// stdout remains transport evidence; it must not become the default chat
+  /// message just because it arrived first on the SSE connection.
+  private func renderSemanticMessage(_ text: String) {
+    if outputLabel == nil {
+      appendAssistantChunk(text)
+      return
+    }
+    outputBuffer = String(text.suffix(Self.MAX_BUFFER_BYTES))
+    scheduleThrottledRender()
+  }
+
+  private func applyPresentation(_ json: [String: Any]) {
+    guard (json["schema"] as? Int) == 1 else { return }
+    if (json["type"] as? String) == "presentation_snapshot" {
+      semanticMessages.removeAll(keepingCapacity: true)
+      semanticOrder.removeAll(keepingCapacity: true)
+      for case let message as [String: Any] in (json["messages"] as? [Any]) ?? [] {
+        guard let id = message["id"] as? String else { continue }
+        semanticMessages[id] = message
+        semanticOrder.append(id)
+      }
+    } else if let message = json["message"] as? [String: Any], let id = message["id"] as? String {
+      var next = message
+      if (json["op"] as? String) == "append", var previous = semanticMessages[id] {
+        previous["text"] = ((previous["text"] as? String) ?? "") + ((message["text"] as? String) ?? "")
+        for (key, value) in message where key != "text" { previous[key] = value }
+        next = previous
+      }
+      if semanticMessages[id] == nil { semanticOrder.append(id) }
+      semanticMessages[id] = next
+    }
+    let friendly = semanticOrder.reversed().compactMap { semanticMessages[$0] }
+    let chosen = friendly.first(where: { ($0["kind"] as? String) == "message" && ($0["role"] as? String) == "assistant" })
+      ?? friendly.first(where: { ["status", "action_required", "warning", "error"].contains(($0["kind"] as? String) ?? "") })
+    if let text = chosen?["text"] as? String, !text.isEmpty { renderSemanticMessage(text) }
   }
 
   /// Coalesces incoming SSE chunks into one render every
@@ -858,6 +898,8 @@ final class YaverFeedbackTranscript: UIView {
       let status = (json["status"] as? String) ?? "completed"
       stopSpinnerWithDone(status)
       stream?.stop(); stream = nil
+    case "presentation", "presentation_snapshot":
+      applyPresentation(json)
     default:
       // Unknown event — ignore. The agent may add more types over time
       // (cost summary, progress %, etc.) and we'd rather forward-compat

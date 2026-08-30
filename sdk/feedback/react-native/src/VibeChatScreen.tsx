@@ -31,6 +31,12 @@ import type { ClientSessionSettings, P2PClient, VibeThreadSummary } from './P2PC
 import type { DogfoodRenderBehavior } from './dogfoodPolicy';
 import { SDKVoiceSession, pcmToTempWavURI, isVoiceStreamSupported } from './voice';
 import { startPcmRecording, stopPcmRecording, isVoiceCaptureSupported } from './capture';
+import {
+  friendlyTaskPresentation,
+  isTaskPresentationEvent,
+  reduceTaskPresentation,
+  type TaskPresentationMessage,
+} from './_core/taskPresentation';
 
 export type VibeTurnRole = 'user' | 'assistant' | 'status';
 
@@ -113,6 +119,8 @@ export function VibeChatScreen({
     },
   ] : []);
   const [streamBuffer, setStreamBuffer] = useState('');
+  const [runnerDetails, setRunnerDetails] = useState('');
+  const [runnerDetailsOpen, setRunnerDetailsOpen] = useState(false);
   const [streamEpoch, setStreamEpoch] = useState(0);
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'failed'>(() =>
     !initialTaskId ? 'idle' :
@@ -182,6 +190,7 @@ export function VibeChatScreen({
     if (!taskId) return;
     let live = true;
     const acc: string[] = [];
+    let semantic: TaskPresentationMessage[] = [];
     const close = client.streamTaskOutput(
       taskId,
       (line) => {
@@ -204,7 +213,8 @@ export function VibeChatScreen({
         // user sees a stable render and can scroll back, then clear
         // the buffer for any follow-up.
         setTurns((prev) => {
-          const collapsed = acc.join('\n').trim();
+          const assistant = [...friendlyTaskPresentation(semantic)].reverse().find((item) => item.kind === 'message' && item.role === 'assistant');
+          const collapsed = assistant?.text.trim() || acc.join('\n').trim();
           if (!collapsed) return prev.filter((t) => t.role !== 'status');
           const next = prev.filter((t) => t.role !== 'status');
           next.push({
@@ -220,9 +230,22 @@ export function VibeChatScreen({
         void refreshThreads();
       },
       { onEvent: (event) => {
-        if (event.type !== 'runtime_render_requested') return;
-        setRenderRequested(true);
-        if (renderBehavior === 'auto-on-request') setReloadQueued(true);
+        if (isTaskPresentationEvent(event)) {
+          semantic = reduceTaskPresentation(semantic, event);
+          const friendly = friendlyTaskPresentation(semantic);
+          const assistant = [...friendly].reverse().find((item) => item.kind === 'message' && item.role === 'assistant');
+          const state = [...friendly].reverse().find((item) => item.kind !== 'message');
+          setStreamBuffer((assistant || state)?.text || '');
+          return;
+        }
+        if (event.type === 'raw' && typeof event.text === 'string') {
+          setRunnerDetails((previous) => (previous + event.text).slice(-64 * 1024));
+          return;
+        }
+        if (event.type === 'runtime_render_requested') {
+          setRenderRequested(true);
+          if (renderBehavior === 'auto-on-request') setReloadQueued(true);
+        }
       } },
     );
     abortRef.current = close;
@@ -238,6 +261,7 @@ export function VibeChatScreen({
       setTaskId(task.id);
       setStatus(task.status === 'running' || task.status === 'queued' ? 'running' : task.status === 'completed' || task.status === 'review' ? 'done' : 'failed');
       setStreamBuffer('');
+      setRunnerDetails('');
       setTurns((task.turns || []).filter((turn) => turn.role === 'user' || turn.role === 'assistant').map((turn, index) => ({
         id: `${task.id}-${index}`,
         role: turn.role,
@@ -255,6 +279,8 @@ export function VibeChatScreen({
     setTaskId(null);
     setTurns([]);
     setStreamBuffer('');
+    setRunnerDetails('');
+    setRunnerDetailsOpen(false);
     setStatus('idle');
     setFollowUp('');
     setReloadQueued(false);
@@ -618,6 +644,14 @@ export function VibeChatScreen({
             <Text style={styles.spinnerText}>working…</Text>
           </View>
         )}
+        {runnerDetails ? (
+          <View style={styles.runnerDetailsWrap}>
+            <TouchableOpacity onPress={() => setRunnerDetailsOpen((value) => !value)} accessibilityRole="button">
+              <Text style={styles.runnerDetailsToggle}>{runnerDetailsOpen ? 'Hide runner details' : 'Runner details'}</Text>
+            </TouchableOpacity>
+            {runnerDetailsOpen ? <Text style={styles.runnerDetailsText}>{runnerDetails}</Text> : null}
+          </View>
+        ) : null}
       </ScrollView>
 
       <ScrollView style={[styles.settings, activeTab !== 'settings' && styles.hidden]} contentContainerStyle={styles.settingsContent}>
@@ -796,6 +830,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   spinnerText: { color: '#9ca3af', fontSize: 12, marginLeft: 8 },
+  runnerDetailsWrap: { marginTop: 12, borderTopWidth: 1, borderTopColor: '#e5e5ec', paddingTop: 10 },
+  runnerDetailsToggle: { color: '#656570', fontSize: 12, fontWeight: '700' },
+  runnerDetailsText: { marginTop: 8, color: '#5f5f69', backgroundColor: '#f0f0f4', borderRadius: 10, padding: 10, fontSize: 11, lineHeight: 16, fontFamily: 'monospace' },
   footer: {
     borderTopWidth: 1,
     borderTopColor: '#e5e5ec',

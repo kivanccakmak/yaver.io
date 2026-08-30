@@ -868,16 +868,22 @@ TUN/TAP. Pass-through — never stores task data.
 
 ## Mobile app
 
-### Task detail renders the LIVE opencode console (2026-08-09)
+### Task detail renders semantic conversation + folded runner evidence (2026-08-31)
 
-`mobile/app/(tabs)/tasks.tsx` consumes the agent's RAW runner stdout lane
+`desktop/agent/task_presentation.go` preserves runner meaning in the schema-1
+`presentation` lane (`message`, `status`, `action_required`, `warning`,
+`error`, `tool`, `patch`). Task detail renders human-facing messages and state
+by default; it never reconstructs chat from terminal bytes when that lane is
+present. `presentation_snapshot` is replayed on every SSE subscription, and
+`presentation` upsert/append frames carry live updates. The bounded snapshot
+stays device-local and MCP `get_task` exposes it for human-readable status.
+
+The app independently consumes RAW runner stdout
 (`/tasks/{id}/output?rawSince=` + `onRaw` SSE) into a per-task 512 KB buffer and
-renders it in a foldable `LiveConsoleSection` via the shared `AnsiConsoleText`
+keeps it folded in `LiveConsoleSection` via the shared `AnsiConsoleText`
 (same colours/grammar as the opencode console: green `$` prompts, orange
 `> build · <model>` banners, diff +/- lines, `● live`/`○ idle` dot, byte
-counter). This replaced the `_Working through implementation details…_`
-collapse AND the Chat|Terminal toggle (removed in 33b3d798e; raw-lane
-consumption restored in ddf56ea15).
+counter). Raw output is evidence for diagnosis, not the primary remote UI.
 
 - The raw lane is independent of the groomed transcript: `?rawSince=` seeds a
   full `raw_replay` snapshot (finished tasks), then live `raw` frames append.

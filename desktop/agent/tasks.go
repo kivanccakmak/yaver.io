@@ -1330,16 +1330,21 @@ type Task struct {
 	// shipped in task listings (surfaces get it via the SSE raw frames /
 	// the raw replay endpoint), so it is deliberately not `json:"-"`-
 	// hidden here: the field lives on the in-memory Task only.
-	RawOutput    string                `json:"-"`
-	ResultText   string                // Extracted clean result text from Claude
-	Failure      *TaskFailureDiagnosis `json:"failure,omitempty"`
-	CostUSD      float64               // Total API cost
-	InputTokens  int                   // Tokens consumed (prompt + cache reads + cache creation)
-	OutputTokens int                   // Tokens produced by the model
-	Turns        []ConversationTurn    // Full conversation history
-	CreatedAt    time.Time             `json:"created_at"`
-	StartedAt    *time.Time            `json:"started_at,omitempty"`
-	FinishedAt   *time.Time            `json:"finished_at,omitempty"`
+	RawOutput  string `json:"-"`
+	ResultText string // Extracted clean result text from Claude
+	// Presentation is the bounded, semantic runner narrative consumed by
+	// remote surfaces. Raw terminal bytes remain in RawOutput; command and diff
+	// detail remain in their structured/folded lanes.
+	Presentation    []TaskPresentationMessage `json:"presentation,omitempty"`
+	PresentationSeq int64                     `json:"presentationSeq,omitempty"`
+	Failure         *TaskFailureDiagnosis     `json:"failure,omitempty"`
+	CostUSD         float64                   // Total API cost
+	InputTokens     int                       // Tokens consumed (prompt + cache reads + cache creation)
+	OutputTokens    int                       // Tokens produced by the model
+	Turns           []ConversationTurn        // Full conversation history
+	CreatedAt       time.Time                 `json:"created_at"`
+	StartedAt       *time.Time                `json:"started_at,omitempty"`
+	FinishedAt      *time.Time                `json:"finished_at,omitempty"`
 
 	WorkDir string `json:"workDir,omitempty"` // per-task workDir (auto-detected from prompt)
 	// ProjectName is the portable project identity selected by the user. It is
@@ -1665,13 +1670,14 @@ type TaskInfo struct {
 	// RawOffset is the byte length of the FULL retained raw tail at
 	// snapshot time — the cursor a client passes to `?rawSince=` to resume
 	// the raw stream without re-fetching bytes it already rendered.
-	RawOffset    int                   `json:"rawOffset,omitempty"`
-	ResultText   string                `json:"resultText,omitempty"`
-	Failure      *TaskFailureDiagnosis `json:"failure,omitempty"`
-	CostUSD      float64               `json:"costUsd,omitempty"`
-	InputTokens  int                   `json:"inputTokens,omitempty"`
-	OutputTokens int                   `json:"outputTokens,omitempty"`
-	Turns        []ConversationTurn    `json:"turns,omitempty"`
+	RawOffset    int                       `json:"rawOffset,omitempty"`
+	ResultText   string                    `json:"resultText,omitempty"`
+	Presentation []TaskPresentationMessage `json:"presentation,omitempty"`
+	Failure      *TaskFailureDiagnosis     `json:"failure,omitempty"`
+	CostUSD      float64                   `json:"costUsd,omitempty"`
+	InputTokens  int                       `json:"inputTokens,omitempty"`
+	OutputTokens int                       `json:"outputTokens,omitempty"`
+	Turns        []ConversationTurn        `json:"turns,omitempty"`
 	// PendingFollowUps lets chat surfaces render user messages that were
 	// accepted while the runner was still working. The agent already owns the
 	// queue; hiding it made a successful second send look dropped after the
@@ -2768,6 +2774,7 @@ func (tm *TaskManager) runDummyTask(task *Task) {
 	now := time.Now()
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
+	tm.present(task, taskRunningPresentation(task))
 
 	var output strings.Builder
 
@@ -3372,6 +3379,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		now := time.Now()
 		task.StartedAt = &now
 		task.Status = TaskStatusRunning
+		tm.present(task, taskRunningPresentation(task))
 		trackForkedPID(cmd.Process.Pid)
 
 		if runner.OutputMode == "raw" {
@@ -3501,6 +3509,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		now := time.Now()
 		task.StartedAt = &now
 		task.Status = TaskStatusRunning
+		tm.present(task, taskRunningPresentation(task))
 		reportMachineActivity() // idle auto-shutdown: managed box is in use
 
 		trackForkedPID(cmd.Process.Pid)
@@ -3868,6 +3877,7 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	var outputMu sync.Mutex
 	tm.mu.RLock()
 	output.WriteString(task.Output)
+	presentationMessageID := fmt.Sprintf("%s-assistant-%d", task.ID, len(task.Turns)+1)
 	tm.mu.RUnlock()
 
 	// Per-runner stream rewriting. opencode's TUI ships ANSI escapes
@@ -4010,7 +4020,14 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 		}
 		_ = os.Remove(task.codexLastMsgPath)
 	}
+	resultText := task.ResultText
 	tm.mu.Unlock()
+	if strings.TrimSpace(resultText) != "" {
+		tm.present(task, taskPresentationInput{
+			ID: presentationMessageID, Kind: "message", Role: "assistant",
+			Text: resultText, Phase: "complete", State: "completed",
+		})
+	}
 
 	log.Printf("[task %s] Raw output reader finished (output_len=%d, result_len=%d)",
 		task.ID, output.Len(), len(task.ResultText))
@@ -4128,6 +4145,7 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 	var output strings.Builder
 	tm.mu.RLock()
 	output.WriteString(task.Output)
+	presentationMessageID := fmt.Sprintf("%s-assistant-%d", task.ID, len(task.Turns)+1)
 	tm.mu.RUnlock()
 
 	// Track state for accumulating tool input JSON across deltas.
@@ -4153,6 +4171,10 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 		cwd := task.WorkDir
 		tm.mu.RUnlock()
 		emitCommandStart(task, pendingCmdID, cmd, nil, cwd, "claude")
+		tm.present(task, taskPresentationInput{
+			ID: task.ID + "-activity", Kind: "status",
+			Text: "The runner is carrying out a coding step.", Phase: "tool", State: "running",
+		})
 	}
 	endCmd := func(stdout, stderr string, interrupted bool) {
 		if pendingCmdID == "" {
@@ -4241,6 +4263,10 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 				}
 
 				if d.Type == "text_delta" && d.Text != "" {
+					tm.present(task, taskPresentationInput{
+						ID: presentationMessageID, Kind: "message", Role: "assistant",
+						Text: d.Text, Phase: "responding", State: "streaming", Append: true,
+					})
 					// Stream Claude's text commentary token-by-token.
 					tm.emit(task, &output, d.Text)
 					log.Printf("[task %s delta] %s", task.ID, d.Text)
@@ -4319,6 +4345,10 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 					}
 					inT, outT := task.InputTokens, task.OutputTokens
 					tm.mu.Unlock()
+					tm.present(task, taskPresentationInput{
+						ID: presentationMessageID, Kind: "message", Role: "assistant",
+						Text: resultStr, Phase: "complete", State: "completed",
+					})
 					log.Printf("[task %s result] cost=$%.4f len=%d tokens=%d→%d", task.ID, event.TotalCost, len(resultStr), inT, outT)
 				}
 			}
@@ -4910,6 +4940,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	now := time.Now()
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
+	tm.present(task, taskRunningPresentation(task))
 	reportMachineActivity() // idle auto-shutdown: managed box is in use
 
 	if runner.OutputMode == "raw" {
@@ -5115,6 +5146,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			ProjectSessionID: t.ProjectSessionID,
 			Output:           output,
 			ResultText:       t.ResultText,
+			Presentation:     taskPresentationListSnapshot(t),
 			Failure:          t.Failure,
 			CostUSD:          t.CostUSD,
 			InputTokens:      t.InputTokens,
@@ -5512,6 +5544,7 @@ func (tm *TaskManager) GetChainStatus(chainID string) []TaskInfo {
 				StartedAt:    t.StartedAt,
 				FinishedAt:   t.FinishedAt,
 				ResultText:   t.ResultText,
+				Presentation: taskPresentationSnapshot(t),
 				Failure:      t.Failure,
 				CostUSD:      t.CostUSD,
 				InputTokens:  t.InputTokens,

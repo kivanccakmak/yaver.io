@@ -60,6 +60,11 @@ import { AnsiConsoleText, hasConsoleMarkup } from "../../src/components/AnsiCons
 import { TaskSessionSummary } from "../../src/components/TaskSessionSummary";
 import { assembleTrace } from "../../src/_core/trace";
 import { summarizeRawConsole as _summarizeRawConsole } from "../../src/_core/ansi";
+import {
+  friendlyTaskPresentation,
+  isTaskPresentationEvent,
+  reduceTaskPresentation,
+} from "../../src/_core/taskPresentation";
 import { appTag } from "../../src/lib/appVersion";
 import * as ExpoClipboard from "expo-clipboard";
 import { getLogEntries, onLogsChanged, LogEntry } from "../../src/lib/logger";
@@ -1800,13 +1805,17 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
     }
   }
 
-  // If running and we have streaming output, replace the last assistant message
-  // with the live stream (which is more up-to-date than the polled turn data).
-  // stripAnsi here so codex's `--full-auto` ANSI-coloured config dump
-  // (`[1mworkdir:[0m /root` etc.) renders as plain text rather than
-  // leaking control codes into the chat bubble.
-  if (task.status === "running" && task.output.length > 0) {
-    const streamText = sharedBuildLiveAssistantMarkdown(task.output.join("\n"));
+  // Prefer the agent's semantic assistant lane. The former default rebuilt a
+  // chat message from PTY bytes, which mixed prose, commands, patches and TUI
+  // redraws into one ugly bubble. Older agents still use the bounded transcript
+  // fallback below, so this remains backwards compatible during fleet rollout.
+  const semanticAssistant = friendlyTaskPresentation(task.presentation)
+    .filter((message) => message.kind === "message" && message.role === "assistant" && message.text.trim())
+    .at(-1)?.text;
+  if (task.status === "running" && (semanticAssistant || task.output.length > 0)) {
+    const streamText = semanticAssistant
+      ? semanticAssistant
+      : sharedBuildLiveAssistantMarkdown(task.output.join("\n"));
     if (streamText.trim()) {
       // Remove the last assistant message if present — streaming output supersedes it
       const lastIdx = messages.length - 1;
@@ -1819,6 +1828,25 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
   }
 
   return messages;
+}
+
+function TaskPresentationSummary({ task }: { task: Task }) {
+  const c = useColors();
+  const message = friendlyTaskPresentation(task.presentation)
+    .filter((item) => item.kind !== "message" && item.text.trim())
+    .at(-1);
+  if (!message) return null;
+  const attention = message.kind === "error" || message.kind === "warning" || message.kind === "action_required";
+  const meta = [message.machine, message.platform, message.runner, message.project].filter(Boolean).join(" · ");
+  return (
+    <View style={{ marginTop: 10, borderWidth: 1, borderColor: attention ? (c.warn || "#f59e0b") : c.border, borderRadius: 12, backgroundColor: c.bgCard, padding: 12 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Ionicons name={attention ? "alert-circle-outline" : "pulse-outline"} size={18} color={attention ? (c.warn || "#f59e0b") : c.accent} />
+        <Text style={{ flex: 1, color: c.textPrimary, fontSize: 14, fontWeight: "600" }}>{message.text}</Text>
+      </View>
+      {meta ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 5 }} numberOfLines={2}>{meta}</Text> : null}
+    </View>
+  );
 }
 
 // ── Live console (raw lane) ─────────────────────────────────────────
@@ -4008,6 +4036,15 @@ export default function TasksScreen() {
           }
           return;
         }
+        if (isTaskPresentationEvent(evt)) {
+          const tid = selectedTask.id;
+          const apply = (task: Task): Task => task.id === tid
+            ? { ...task, presentation: reduceTaskPresentation(task.presentation ?? [], evt) }
+            : task;
+          setTasks((prev) => prev.map(apply));
+          setSelectedTask((prev) => prev ? apply(prev) : prev);
+          return;
+        }
         // Structured shell-command events → fold into per-task card
         // models for the foldable Commands section. P2P only.
         if (isCommandEvent(evt)) {
@@ -4413,11 +4450,14 @@ export default function TasksScreen() {
   // TTS: speak the final result when task completes
   const lastSpokenTaskRef = useRef<string | null>(null);
   useEffect(() => {
-    if (ttsEnabled && selectedTask?.status === "completed" && selectedTask?.resultText && lastSpokenTaskRef.current !== selectedTask.id) {
+    const spokenResult = friendlyTaskPresentation(selectedTask?.presentation)
+      .filter((item) => item.kind === "message" && item.role === "assistant")
+      .at(-1)?.text || selectedTask?.resultText;
+    if (ttsEnabled && selectedTask?.status === "completed" && spokenResult && lastSpokenTaskRef.current !== selectedTask.id) {
       lastSpokenTaskRef.current = selectedTask.id;
-      speakTaskResult(selectedTask.resultText);
+      speakTaskResult(spokenResult);
     }
-  }, [selectedTask?.status, selectedTask?.resultText, ttsEnabled, ttsProvider, speechApiKey]);
+  }, [selectedTask?.status, selectedTask?.resultText, selectedTask?.presentation, ttsEnabled, ttsProvider, speechApiKey]);
 
   // Haptic notification on task transition: fire success on
   // completed, error on failed. Single ref tracks the last status
@@ -6661,6 +6701,7 @@ export default function TasksScreen() {
       selectedTask?.id,
       selectedTask?.status,
       selectedTask?.resultText,
+      selectedTask?.presentation,
       selectedTask?.output.length,
       selectedTask?.output[0],
       selectedTask?.output[(selectedTask?.output.length ?? 1) - 1],
@@ -9217,6 +9258,7 @@ export default function TasksScreen() {
                           task={selectedTask}
                           commands={cmdCardsByTask[selectedTask.id]}
                         />
+                        <TaskPresentationSummary task={selectedTask} />
                         <AgentContextPanel
                           rows={buildAgentContextRows(selectedTask, selectedTask.deviceName || activeDevice?.name, connMode, availableModels, {
                             selectedModelId: selectedModel,

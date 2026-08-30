@@ -110,7 +110,7 @@ function makeWatchDeps(deviceId: string, token: string | null | undefined) {
     getTask: async (taskId): Promise<CarVoiceTaskRef> => {
       if (!deviceId) throw new Error("No Yaver device selected");
       const t = await connectionManager.clientFor(deviceId).getTask(taskId);
-      return { id: t.id, status: t.status, resultText: t.resultText, output: t.output };
+      return { id: t.id, status: t.status, resultText: t.resultText, presentation: t.presentation, output: t.output };
     },
   });
   return { deps, config };

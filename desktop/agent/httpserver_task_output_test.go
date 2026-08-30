@@ -63,3 +63,36 @@ func TestTaskOutputSSEWaitsForTerminalStatusAfterOutputChannelCloses(t *testing.
 		t.Fatalf("done event leaked running status:\n%s", text)
 	}
 }
+
+func TestTaskOutputSSEReplaysSemanticPresentationSnapshot(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	task := &Task{
+		ID: "semantic-1", Status: TaskStatusFinished,
+		Presentation: []TaskPresentationMessage{{
+			ID: "answer", Kind: "message", Role: "assistant", Text: "The build is ready.",
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}},
+		outputCh: make(chan string), doneCh: make(chan struct{}),
+	}
+	close(task.outputCh)
+	close(task.doneCh)
+	tm.mu.Lock()
+	tm.tasks[task.ID] = task
+	tm.mu.Unlock()
+
+	srv := &HTTPServer{taskMgr: tm}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv.streamOutput(w, r, task.ID)
+	}))
+	defer ts.Close()
+	resp, err := http.Post(ts.URL, "text/event-stream", nil)
+	if err != nil {
+		t.Fatalf("open SSE: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+	if !strings.Contains(text, `"type":"presentation_snapshot"`) || !strings.Contains(text, `"The build is ready."`) {
+		t.Fatalf("semantic snapshot missing from SSE:\n%s", text)
+	}
+}

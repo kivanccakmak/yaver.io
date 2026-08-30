@@ -22,6 +22,33 @@ beforeEach(() => {
 });
 
 describe('P2PClient', () => {
+	describe('task presentation stream', () => {
+		it('routes semantic snapshots as typed events instead of chat JSON', async () => {
+			mockFetch
+				.mockResolvedValueOnce({ ok: true, body: undefined })
+				.mockResolvedValueOnce({
+					ok: true,
+					json: () => Promise.resolve({ task: {
+						status: 'completed',
+						output: 'runner bytes',
+						presentation: [{ id: 'answer', kind: 'message', role: 'assistant', text: 'Human answer.' }],
+					} }),
+				});
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			const lines: string[] = [];
+			const events: Array<Record<string, unknown>> = [];
+			await new Promise<void>((resolve) => {
+				client.streamTaskOutput('task-1', (line) => lines.push(line), () => resolve(), {
+					onEvent: (event) => events.push(event),
+				});
+			});
+			expect(events).toEqual(expect.arrayContaining([
+				expect.objectContaining({ type: 'presentation_snapshot', schema: 1 }),
+			]));
+			expect(lines).toEqual(['runner bytes']);
+		});
+	});
+
 	describe('Dogfood session settings', () => {
 		const settings = {
 			appName: 'SFMG', appVersion: '2.4.0', buildNumber: '84',

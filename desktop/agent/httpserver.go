@@ -3971,17 +3971,18 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		// Echo the model + deviceName so mobile UIs can render the
 		// task's authoritative target instead of inferring from the
 		// focused-device picker state.
-		Model:       task.Model,
-		ProjectName: task.ProjectName,
-		DeviceName:  hostname,
-		SessionID:   task.SessionID,
-		Output:      output,
-		RawOutput:   rawOutput,
-		RawOffset:   rawOffset,
-		ResultText:  task.ResultText,
-		Failure:     task.Failure,
-		CostUSD:     task.CostUSD,
-		Turns:       task.Turns,
+		Model:        task.Model,
+		ProjectName:  task.ProjectName,
+		DeviceName:   hostname,
+		SessionID:    task.SessionID,
+		Output:       output,
+		RawOutput:    rawOutput,
+		RawOffset:    rawOffset,
+		ResultText:   task.ResultText,
+		Presentation: taskPresentationSnapshot(task),
+		Failure:      task.Failure,
+		CostUSD:      task.CostUSD,
+		Turns:        task.Turns,
 		PendingFollowUps: append([]PendingFollowUp{},
 			task.PendingFollowUps...),
 		Source:           task.Source,
@@ -4622,6 +4623,8 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 	s.taskMgr.mu.RLock()
 	existingOutput := task.Output
 	currentStatus := task.Status
+	presentation := taskPresentationSnapshot(task)
+	presentationSeq := task.PresentationSeq
 	s.taskMgr.mu.RUnlock()
 
 	// Resume support. A task SSE stream cut mid-render (relay bounce, box
@@ -4685,6 +4688,16 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 		}))
 		flusher.Flush()
 	}
+
+	// Semantic presentation is replayed independently of the transcript. A
+	// phone may have missed token deltas while backgrounded; this authoritative
+	// snapshot lets it replace the friendly lane without replaying terminal
+	// noise or guessing meaning from task.Output.
+	fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
+		"type": "presentation_snapshot", "schema": TaskPresentationSchema,
+		"seq": presentationSeq, "messages": presentation,
+	}))
+	flusher.Flush()
 
 	// Raw replay. `?rawSince=<bytes>` resumes the runner's RAW stdout tail —
 	// ANSI escape sequences, TUI redraws, box-drawing, everything the
