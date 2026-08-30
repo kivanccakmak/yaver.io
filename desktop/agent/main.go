@@ -1863,6 +1863,38 @@ type localAgentInfo struct {
 	Version  string `json:"version"`
 	WorkDir  string `json:"workDir"`
 	Project  string `json:"project"`
+	Runner   struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"runner"`
+}
+
+func statusRunnerIdentity(liveInfo *localAgentInfo, globalRunnerID string, catalog []backendRunner) (string, string) {
+	runnerID := strings.TrimSpace(globalRunnerID)
+	runnerName := ""
+
+	// /info resolves primaryRunnerByDevice for this exact machine. The
+	// account-wide settings value is only a fallback; showing it here made
+	// `yaver status` claim Claude while new tasks correctly launched Codex.
+	if liveInfo != nil && strings.TrimSpace(liveInfo.Runner.ID) != "" {
+		runnerID = strings.TrimSpace(liveInfo.Runner.ID)
+		runnerName = strings.TrimSpace(liveInfo.Runner.Name)
+	}
+	if runnerID == "" {
+		runnerID = "claude"
+	}
+	if runnerName == "" {
+		runnerName = runnerID
+	}
+	if runnerName == runnerID {
+		for _, runner := range catalog {
+			if runner.RunnerID == runnerID {
+				runnerName = runner.Name
+				break
+			}
+		}
+	}
+	return runnerID, runnerName
 }
 
 func probeLocalAgentHealthInfo(port int) *localAgentHealthInfo {
@@ -5912,13 +5944,23 @@ func getCurrentRunner(client *http.Client, convexSiteURL, token string) string {
 		return ""
 	}
 
-	var settings struct {
+	return currentRunnerFromSettings(body)
+}
+
+func currentRunnerFromSettings(body []byte) string {
+	var envelope struct {
+		Settings struct {
+			RunnerID string `json:"runnerId"`
+		} `json:"settings"`
 		RunnerID string `json:"runnerId"`
 	}
-	if err := json.Unmarshal(body, &settings); err != nil {
+	if err := json.Unmarshal(body, &envelope); err != nil {
 		return ""
 	}
-	return settings.RunnerID
+	if runnerID := strings.TrimSpace(envelope.Settings.RunnerID); runnerID != "" {
+		return runnerID
+	}
+	return strings.TrimSpace(envelope.RunnerID)
 }
 
 // ---------------------------------------------------------------------------
@@ -6127,19 +6169,12 @@ func runStatus() {
 		runnerCatalogCh <- runnerCatalogResult{runners: runners, err: err}
 	}()
 
-	runnerID := <-runnerIDCh
-	if runnerID == "" {
-		runnerID = "claude"
+	catalog := <-runnerCatalogCh
+	var statusRunners []backendRunner
+	if catalog.err == nil {
+		statusRunners = catalog.runners
 	}
-	runnerName := runnerID
-	if catalog := <-runnerCatalogCh; catalog.err == nil {
-		for _, r := range catalog.runners {
-			if r.RunnerID == runnerID {
-				runnerName = r.Name
-				break
-			}
-		}
-	}
+	runnerID, runnerName := statusRunnerIdentity(liveInfo, <-runnerIDCh, statusRunners)
 	fmt.Printf("Runner:   %s (%s)\n", runnerName, runnerID)
 
 	// Check runner binary

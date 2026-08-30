@@ -7,17 +7,21 @@
 // it here rather than forking the mobile code.
 
 type Listener<T = any> = (ev: T) => void;
+type HeadlessPlatform = "ios" | "android" | "web" | "macos" | "windows";
 
-function readPlatform(): "ios" | "android" | "web" {
+function readPlatform(): HeadlessPlatform {
   const env = (globalThis as any)?.process?.env?.YMH_PLATFORM;
-  if (env === "ios" || env === "android" || env === "web") return env;
+  if (env === "ios" || env === "android" || env === "web" || env === "macos" || env === "windows") return env;
   return "ios";
 }
 
 export const Platform = {
   OS: readPlatform(),
   Version: 18 as number | string,
-  select<T>(specifics: { ios?: T; android?: T; web?: T; default?: T; native?: T }): T | undefined {
+  constants: {} as Record<string, unknown>,
+  isTV: false,
+  isPad: false,
+  select<T>(specifics: { ios?: T; android?: T; web?: T; macos?: T; windows?: T; default?: T; native?: T }): T | undefined {
     return (
       specifics[readPlatform()] ??
       specifics.native ??

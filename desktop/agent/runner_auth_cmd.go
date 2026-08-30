@@ -228,6 +228,23 @@ type runnerAuthStatusRow struct {
 	Version string `json:"version,omitempty"`
 }
 
+func markRetiredRunnerStatus(row *runnerAuthStatusRow) bool {
+	if row == nil {
+		return false
+	}
+	reason, retired := retiredRunnerReason(row.ID)
+	if !retired {
+		return false
+	}
+	row.Ready = false
+	row.AuthConfigured = false
+	row.AuthPresent = false
+	row.AuthVerified = false
+	row.Warning = reason
+	row.Detail = reason
+	return true
+}
+
 var installedRunnerInventoryCache = struct {
 	mu       sync.Mutex
 	ids      []string
@@ -282,6 +299,11 @@ func collectRunnerAuthStatusRows() ([]runnerAuthStatusRow, error) {
 			row.Installed = false
 			row.Warning = "Binary at " + path + " does not match the expected " + runner.Name + " signature."
 			row.Detail = row.Warning
+			rows = append(rows, row)
+			continue
+		}
+		if markRetiredRunnerStatus(&row) {
+			row.Version = sigVersion
 			rows = append(rows, row)
 			continue
 		}

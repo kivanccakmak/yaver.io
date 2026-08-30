@@ -4,6 +4,8 @@ export const expoConfig = {
   name: "yaver-mobile-headless",
   slug: "yaver-mobile-headless",
   version: "0.1.2",
+  ios: { buildNumber: "1" },
+  android: { versionCode: 1 },
   extra: {} as Record<string, any>,
 };
 
@@ -18,7 +20,10 @@ export const sessionId = "mobile-headless-session";
 export const platform = { ios: {}, android: {} };
 export const deviceName = process.env.YMH_DEVICE_NAME || "mobile-headless";
 export const isDevice = true;
+export const nativeAppVersion = process.env.YMH_APP_VERSION || expoConfig.version;
+export const nativeBuildVersion = process.env.YMH_BUILD_VERSION || "1";
 
 export default {
   expoConfig, manifest, executionEnvironment, sessionId, platform, deviceName, isDevice,
+  nativeAppVersion, nativeBuildVersion,
 };

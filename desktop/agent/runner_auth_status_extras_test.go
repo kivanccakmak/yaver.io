@@ -45,6 +45,25 @@ func TestOpencodeProviderEnvKey_UnknownProvider(t *testing.T) {
 	}
 }
 
+func TestRetiredGLMRunnerIsNotAdvertisedReady(t *testing.T) {
+	row := runnerAuthStatusRow{
+		ID:             "glm",
+		Ready:          true,
+		AuthConfigured: true,
+		AuthPresent:    true,
+		AuthVerified:   true,
+	}
+	if !markRetiredRunnerStatus(&row) {
+		t.Fatal("glm must be recognized as retired")
+	}
+	if row.Ready || row.AuthConfigured || row.AuthPresent || row.AuthVerified {
+		t.Fatalf("retired glm remained usable: %+v", row)
+	}
+	if !strings.Contains(row.Detail, "opencode") {
+		t.Fatalf("glm retirement route = %q", row.Detail)
+	}
+}
+
 // TestOllamaRunnerRowReady confirms ollamaRunnerStatusRow flips to
 // ready+authConfigured when the daemon answers /api/tags. Uses a
 // temp httptest server pointed at via OLLAMA_HOST so we don't depend

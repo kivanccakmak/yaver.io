@@ -15,6 +15,15 @@ func TestSoftRunnerFailureRejectsCodexAuthAndModelErrors(t *testing.T) {
 	}
 }
 
+func TestSoftRunnerFailureRejectsRevokedClaudeOAuth(t *testing.T) {
+	output := strings.Repeat("Claude Code banner\n", 20) +
+		"Failed to authenticate. API Error: 401 OAuth access token has been revoked."
+
+	if isSoftRunnerFailure("claude", output, errors.New("exit status 1")) {
+		t.Fatal("revoked Claude OAuth must be a hard failure, not review/completed")
+	}
+}
+
 func TestSoftRunnerFailureRejectsOpenCodeProviderTransportErrors(t *testing.T) {
 	output := strings.Repeat("opencode session\n", 20) +
 		`ERROR service=llm providerID=zai modelID=glm-4.7 error={"name":"AI_APICallError","cause":{"code":"FailedToOpenSocket"}} stream error`

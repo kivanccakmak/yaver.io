@@ -610,6 +610,8 @@ func containsHardRunnerFailure(output string) bool {
 		"invalid_request_error",
 		"unsupported model",
 		"model is not supported",
+		"failed to authenticate",
+		"oauth access token has been revoked",
 		"provided authentication token is expired",
 		"token_expired",
 		"refresh_token_reused",
