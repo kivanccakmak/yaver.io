@@ -1,0 +1,34 @@
+appId: io.yaver.mobile
+---
+# Closed-loop regression for the iOS email-login keyboard overlap reported on
+# 2026-08-30. The old layout passed the weaker "focused Email is visible"
+# check while Password remained completely behind the keyboard.
+#
+# Run against a signed native build whose backend enables email/password auth:
+#   maestro test mobile/maestro/login-email-keyboard.yaml
+
+- launchApp:
+    clearState: true
+
+- extendedWaitUntil:
+    visible: "Continue with Email"
+    timeout: 30000
+
+- tapOn:
+    text: "Continue with Email"
+
+- tapOn:
+    id: "login-email-input"
+
+# Email is the first responder, but Password must remain visible and tappable
+# above the open software keyboard.
+- assertVisible:
+    id: "login-password-input"
+
+- tapOn:
+    id: "login-password-input"
+
+# Focusing Password reserves the same following-control slot for the primary
+# action instead of letting the keyboard cover it.
+- assertVisible:
+    id: "login-email-submit"

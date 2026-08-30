@@ -76,6 +76,12 @@ const LEGACY_OAUTH_REDIRECT = "yaver:///oauth-callback";
 const YAVER_LOGIN_WORDMARK_DARK = require("../assets/branding/yaver-login-wordmark-dark.png");
 const YAVER_LOGIN_WORDMARK_LIGHT = require("../assets/branding/yaver-login-wordmark-light.png");
 
+// One 48pt control + the email form's 12pt gap + breathing room. This is not a
+// device/keyboard offset: it tells the native ScrollView to reveal the control
+// immediately after the focused field. Without it, UIKit correctly revealed a
+// focused Email input while leaving Password completely behind the keyboard.
+const LOGIN_FOLLOWING_CONTROL_CLEARANCE = 72;
+
 function randomHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -192,6 +198,9 @@ export default function LoginScreen() {
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [emailPasswordEnabled, setEmailPasswordEnabled] = useState(false);
   const [wordmarkFailed, setWordmarkFailed] = useState(false);
+  const loginScrollRef = useRef<ScrollView>(null);
+  const passwordInputRef = useRef<TextInput>(null);
+  const confirmPasswordInputRef = useRef<TextInput>(null);
   const passkeySupported = isPasskeySupported();
   const isTabletPortrait = isTablet && !isTabletLandscape;
   const loginWordmark = isDark ? YAVER_LOGIN_WORDMARK_LIGHT : YAVER_LOGIN_WORDMARK_DARK;
@@ -224,6 +233,30 @@ export default function LoginScreen() {
         elevation: 6,
       }
     : null;
+
+  // automaticallyAdjustKeyboardInsets keeps the focused input visible. The
+  // login task needs one stronger guarantee: while Email is focused, Password
+  // must also remain tappable; while Password is focused, Sign In must remain
+  // visible. React Native's own scroll responder measures the real keyboard
+  // frame, including iOS accessory/floating keyboards and Android resize mode.
+  const keepNextLoginControlVisible = React.useCallback(
+    (event: { nativeEvent: { target: number } }) => {
+      // RN-web delegates focus visibility to the browser and its ScrollView
+      // ref does not implement React Native's native scroll responder.
+      if (Platform.OS === "web") return;
+      loginScrollRef.current?.scrollResponderScrollNativeHandleToKeyboard(
+        event.nativeEvent.target,
+        LOGIN_FOLLOWING_CONTROL_CLEARANCE,
+        true,
+      );
+    },
+    [],
+  );
+  const focusPassword = React.useCallback(() => passwordInputRef.current?.focus(), []);
+  const focusConfirmPassword = React.useCallback(
+    () => confirmPasswordInputRef.current?.focus(),
+    [],
+  );
 
   // Belt-and-braces fallback: if the OAuth deep link arrives while
   // LoginScreen is still mounted (cold-start race winner), consume
@@ -579,16 +612,18 @@ export default function LoginScreen() {
         * lands below the fold and the input stays behind the keyboard. Reported
         * on TestFlight 2026-08-01: the email field was invisible while typing.
         *
-        * automaticallyAdjustKeyboardInsets is the current standard answer on
-        * iOS — UIKit adjusts the scroll view's contentInset for the keyboard and
-        * scrolls the first responder into view, with no JS measurement, no
-        * offset constant to tune per device, and correct behaviour for the
-        * accessory bar and split/floating keyboards that manual math gets wrong.
+        * automaticallyAdjustKeyboardInsets is the base answer on iOS — UIKit
+        * adjusts the scroll view's contentInset for the real keyboard frame. The
+        * email fields additionally use the ScrollView's native focus responder
+        * to reserve one following-control slot: Email reveals Password, and
+        * Password reveals Sign In. This is semantic clearance, not a guessed
+        * keyboard height or device-specific vertical offset.
         *
         * Android is handled by the manifest (windowSoftInputMode=adjustResize),
         * which is why no wrapper is needed there either. */}
       <View style={{ flex: 1 }}>
         <ScrollView
+          ref={loginScrollRef}
           contentContainerStyle={[
             styles.scrollContainer,
             isTabletLandscape && styles.scrollContainerLandscape,
@@ -887,6 +922,7 @@ export default function LoginScreen() {
                           />
                         )}
                         <TextInput
+                          testID="login-email-input"
                           style={[
                             styles.input,
                             { backgroundColor: c.bgInput, borderColor: c.borderSubtle, color: c.textPrimary },
@@ -898,8 +934,14 @@ export default function LoginScreen() {
                           keyboardType="email-address"
                           autoCapitalize="none"
                           autoCorrect={false}
+                          returnKeyType="next"
+                          submitBehavior="submit"
+                          onFocus={keepNextLoginControlVisible}
+                          onSubmitEditing={focusPassword}
                         />
                         <TextInput
+                          ref={passwordInputRef}
+                          testID="login-password-input"
                           style={[
                             styles.input,
                             { backgroundColor: c.bgInput, borderColor: c.borderSubtle, color: c.textPrimary },
@@ -909,9 +951,13 @@ export default function LoginScreen() {
                           value={password}
                           onChangeText={setPassword}
                           secureTextEntry
+                          returnKeyType={isSignUp ? "next" : "go"}
+                          onFocus={keepNextLoginControlVisible}
+                          onSubmitEditing={isSignUp ? focusConfirmPassword : handleEmailSubmit}
                         />
                         {isSignUp && (
                           <TextInput
+                            ref={confirmPasswordInputRef}
                             style={[
                               styles.input,
                               { backgroundColor: c.bgInput, borderColor: c.borderSubtle, color: c.textPrimary },
@@ -921,6 +967,9 @@ export default function LoginScreen() {
                             value={confirmPassword}
                             onChangeText={setConfirmPassword}
                             secureTextEntry
+                            returnKeyType="go"
+                            onFocus={keepNextLoginControlVisible}
+                            onSubmitEditing={handleEmailSubmit}
                           />
                         )}
 
@@ -929,6 +978,7 @@ export default function LoginScreen() {
                         ) : null}
 
                         <Pressable
+                          testID="login-email-submit"
                           style={({ pressed }) => [
                             styles.submitButton,
                             { backgroundColor: c.accent },
