@@ -124,6 +124,21 @@ describe('Dogfood lanes and console events', () => {
     expect(swift.map((option) => [option.lane, option.supported])).toEqual([
       ['browser', false], ['hermes', false], ['webrtc', true],
     ]);
+    expect(dogfoodLaneOptions('kotlin', { nativeRuntimeAvailable: true })
+      .map((option) => [option.lane, option.supported])).toEqual([
+      ['browser', false], ['hermes', false], ['webrtc', true],
+    ]);
+    expect(defaultDogfoodLane('swift', { nativeRuntimeAvailable: true })).toBe('webrtc');
+  });
+
+  test('a detected browser target adds real framework exceptions such as SwiftWasm', () => {
+    const swiftWasm = dogfoodLaneOptions('swift', {
+      nativeRuntimeAvailable: false,
+      browserRuntimeAvailable: true,
+    });
+    expect(swiftWasm.map((option) => [option.lane, option.supported])).toEqual([
+      ['browser', true], ['hermes', false], ['webrtc', false],
+    ]);
   });
 
   test('reads raw and replayed package-manager logs from /dev/events', () => {

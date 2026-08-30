@@ -44,11 +44,18 @@ export interface DogfoodLaneOption {
 /** One framework-to-lane matrix for Yaver and third-party consumers. */
 export function dogfoodLaneOptions(
   framework: string,
-  capabilities: { nativeRuntimeAvailable?: boolean; selfDevelopment?: boolean } = {},
+  capabilities: {
+    nativeRuntimeAvailable?: boolean;
+    browserRuntimeAvailable?: boolean;
+    selfDevelopment?: boolean;
+  } = {},
 ): DogfoodLaneOption[] {
   const normalized = String(framework || '').trim().toLowerCase();
   const reactNative = normalized === 'expo' || normalized === 'react-native';
-  const browserCapable = reactNative || [
+  // The framework matrix is the safe default. A positively detected browser
+  // target may add an exception (for example SwiftWasm/Tokamak), but a missing
+  // browser binary must not incorrectly remove RN/Flutter's browser build lane.
+  const browserCapable = capabilities.browserRuntimeAvailable === true || reactNative || [
     'flutter', 'web', 'next', 'nextjs', 'vite', 'remix', 'svelte', 'vue', 'angular',
   ].includes(normalized);
   const nativeAvailable = capabilities.nativeRuntimeAvailable === true;
@@ -68,8 +75,18 @@ export function dogfoodLaneOptions(
   ];
 }
 
-export function defaultDogfoodLane(framework: string): DogfoodLane {
-  return dogfoodLaneOptions(framework).find((option) => option.default && option.supported)?.lane || 'browser';
+export function defaultDogfoodLane(
+  framework: string,
+  capabilities: {
+    nativeRuntimeAvailable?: boolean;
+    browserRuntimeAvailable?: boolean;
+    selfDevelopment?: boolean;
+  } = {},
+): DogfoodLane {
+  const options = dogfoodLaneOptions(framework, capabilities);
+  return options.find((option) => option.default && option.supported)?.lane
+    || options.find((option) => option.supported)?.lane
+    || 'browser';
 }
 
 export interface DogfoodLogLine {

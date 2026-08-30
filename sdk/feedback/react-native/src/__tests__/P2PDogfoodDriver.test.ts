@@ -50,12 +50,16 @@ describe('createP2PDogfoodDriver', () => {
       })),
       stopDogfoodRemoteRuntime: closeRuntime,
     } as unknown as P2PClient;
+    const snapshots: string[][] = [];
     const controller = new DogfoodController(
       { name: 'Native app', framework: 'flutter', workDir: '/workspace/app', lane: 'webrtc' },
       createP2PDogfoodDriver(client),
+      { onChange: (snapshot) => snapshots.push(snapshot.logs.map((line) => line.text)) },
     );
 
     await expect(controller.trigger()).resolves.toMatchObject({ lane: 'webrtc', sessionId: 'runtime-1' });
+    expect(snapshots.flat()).toContain('[runtime] source · iPhone simulator');
+    expect(snapshots.flat()).toContain('[runtime] starting');
     expect(closeRuntime).not.toHaveBeenCalled();
     await controller.stop();
     expect(closeRuntime).toHaveBeenCalledWith('runtime-1');

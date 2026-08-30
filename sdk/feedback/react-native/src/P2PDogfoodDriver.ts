@@ -56,8 +56,18 @@ export function createP2PDogfoodDriver(
             retryable: true,
           });
         }
+        context.log({
+          text: `[runtime] source · ${target.label}${target.platform ? ` · ${target.platform}` : ''}`,
+          at: Date.now(),
+          stream: 'system',
+        });
         context.setPhase('starting', `Starting ${target.label} over WebRTC…`);
         const session = await client.startDogfoodRemoteRuntime(project.workDir, project.framework, target.id);
+        context.log({
+          text: `[runtime] ${session.status || 'starting'}${session.note ? ` · ${session.note}` : ''}`,
+          at: Date.now(),
+          stream: 'system',
+        });
         context.registerCleanup(() => client.stopDogfoodRemoteRuntime(session.id), 'session');
         return {
           lane: 'webrtc',
@@ -67,6 +77,13 @@ export function createP2PDogfoodDriver(
       }
       context.setPhase(project.lane === 'hermes' ? 'compiling' : 'starting',
         project.lane === 'hermes' ? `Compiling ${project.name} with Hermes…` : `Starting ${project.name} in the browser…`);
+      context.log({
+        text: project.lane === 'hermes'
+          ? `[runtime] source · Hermes build on ${project.workDir}`
+          : `[runtime] source · browser build on ${project.workDir}`,
+        at: Date.now(),
+        stream: 'system',
+      });
       const status = await client.startDogfoodDevServer({
         framework: project.framework,
         workDir: project.workDir,

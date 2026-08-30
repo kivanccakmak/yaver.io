@@ -491,6 +491,8 @@ export class P2PClient {
     framework?: string;
     frameworks?: string[];
     surfaces?: string[];
+    branch?: string;
+    gitRemote?: string;
   }>> {
     const resp = await fetch(`${this.baseUrl}/projects`, { headers: this.authHeaders() });
     if (!resp.ok) {

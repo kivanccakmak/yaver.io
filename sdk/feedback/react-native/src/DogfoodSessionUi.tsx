@@ -154,6 +154,7 @@ function runtimeTone(phase: DogfoodPhase, colors: DogfoodUiColors): string {
  * Logs; Hermes/WebRTC use the same lifecycle and failure/remedy treatment. */
 export const DogfoodLiveConsole: React.FC<{
   lane: DogfoodLane;
+  sourceLabel?: string;
   phase: DogfoodPhase;
   message: string;
   logs: readonly DogfoodLogLine[];
@@ -161,16 +162,18 @@ export const DogfoodLiveConsole: React.FC<{
   maxLines?: number;
   colors?: Partial<DogfoodUiColors>;
   renderText?: (text: string) => React.ReactNode;
-}> = ({ lane, phase, message, logs, failure, maxLines = 80, colors: colorOverrides, renderText }) => {
+}> = ({ lane, sourceLabel, phase, message, logs, failure, maxLines = 80, colors: colorOverrides, renderText }) => {
   const colors = resolvedColors(colorOverrides);
   const text = logs.slice(-maxLines).map((line) => line.text).join('\n');
   const title = lane === 'browser' ? 'Browser Logs' : lane === 'hermes' ? 'Hermes Logs' : 'WebRTC Logs';
+  const accessibleTitle = sourceLabel ? `${title} · ${sourceLabel}` : title;
   return (
-    <View style={[styles.console, { backgroundColor: colors.console, borderColor: colors.border }]} accessibilityLabel={title}>
+    <View style={[styles.console, { backgroundColor: colors.console, borderColor: colors.border }]} accessibilityLabel={accessibleTitle}>
       <View style={styles.consoleHeader}>
         <View style={[styles.statusDot, { backgroundColor: runtimeTone(phase, colors) }]} />
         <Text style={[styles.consoleTitle, { color: colors.text }]}>{title}</Text>
       </View>
+      {sourceLabel ? <Text style={[styles.consoleSource, { color: colors.muted }]}>Source · {sourceLabel}</Text> : null}
       <Text style={[styles.consoleStatus, { color: colors.muted }]}>{message}</Text>
       {text ? (
         renderText ? renderText(text) : <Text selectable style={[styles.consoleText, { color: colors.text }]}>{text}</Text>
@@ -204,6 +207,7 @@ const styles = StyleSheet.create({
   console: { width: '100%', maxHeight: 320, overflow: 'hidden', marginTop: 10, borderWidth: 1, borderRadius: 10, padding: 11, gap: 7 },
   consoleHeader: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   consoleTitle: { fontSize: 12, fontWeight: '800' },
+  consoleSource: { fontSize: 10, lineHeight: 14 },
   consoleStatus: { fontSize: 11, lineHeight: 16 },
   consoleText: { fontFamily: 'monospace', fontSize: 10, lineHeight: 15 },
   consoleEmpty: { fontSize: 10, fontStyle: 'italic' },

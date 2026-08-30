@@ -46,6 +46,7 @@ import {
 } from './DogfoodRuntime';
 import { createP2PDogfoodDriver } from './P2PDogfoodDriver';
 import { DogfoodLanePicker, DogfoodLiveConsole, DogfoodStatusRail } from './DogfoodSessionUi';
+import type { DogfoodRemoteRuntimeTarget } from './P2PClient';
 import {
   FEEDBACK_DOGFOOD_CONSOLE_COLORS,
   FEEDBACK_DOGFOOD_LIGHT_COLORS,
@@ -102,7 +103,19 @@ type DogfoodProjectChoice = {
   framework?: string;
   frameworks?: string[];
   surfaces?: string[];
+  branch?: string;
+  gitRemote?: string;
 };
+
+type DogfoodSetupStage = 'setup' | 'lane' | 'runtime';
+type DogfoodExpandedStep = 'runner' | 'checkout' | null;
+
+function dogfoodCheckoutDetail(project: DogfoodProjectChoice | null): string {
+  if (!project) return 'Choose a Git checkout on the selected machine';
+  return [project.path, project.branch ? `branch ${project.branch}` : project.gitRemote ? 'Git checkout' : 'checkout']
+    .filter(Boolean)
+    .join(' · ');
+}
 
 const PRIMARY_RUNNER_IDS = ['claude', 'codex', 'opencode'] as const;
 
@@ -275,6 +288,11 @@ export const FeedbackModal: React.FC = () => {
   const [dogfoodProject, setDogfoodProject] = useState<DogfoodProjectChoice | null>(null);
   const [dogfoodLane, setDogfoodLane] = useState<DogfoodLane>('browser');
   const [dogfoodNativeAvailable, setDogfoodNativeAvailable] = useState(false);
+  const [dogfoodBrowserAvailable, setDogfoodBrowserAvailable] = useState(false);
+  const [dogfoodNativeTargets, setDogfoodNativeTargets] = useState<DogfoodRemoteRuntimeTarget[]>([]);
+  const [dogfoodNativeTargetId, setDogfoodNativeTargetId] = useState('');
+  const [dogfoodSetupStage, setDogfoodSetupStage] = useState<DogfoodSetupStage>('setup');
+  const [dogfoodExpandedStep, setDogfoodExpandedStep] = useState<DogfoodExpandedStep>(null);
   const [dogfoodRuntime, setDogfoodRuntime] = useState<DogfoodSnapshot | null>(null);
   const [dogfoodSetupLoading, setDogfoodSetupLoading] = useState(false);
   const dogfoodControllerRef = useRef<DogfoodController | null>(null);
@@ -305,12 +323,25 @@ export const FeedbackModal: React.FC = () => {
       if (preferred) {
         const framework = preferred.framework || onboarding.framework || 'expo';
         const capabilities = await client.getDogfoodRemoteRuntimeCapabilities(preferred.path, framework).catch(() => null);
-        const nativeRuntimeAvailable = !!capabilities?.targets.some((target) => target.enabled && target.id !== 'browser-window');
-        if (mountedRef.current) setDogfoodNativeAvailable(nativeRuntimeAvailable);
+        const targets = capabilities?.targets || [];
+        const nativeTargets = targets.filter((target) => target.id !== 'browser-window');
+        const enabledNativeTargets = nativeTargets.filter((target) => target.enabled);
+        const nativeRuntimeAvailable = enabledNativeTargets.length > 0;
+        const browserRuntimeAvailable = targets.some((target) => target.enabled && target.id === 'browser-window');
+        if (mountedRef.current) {
+          setDogfoodNativeAvailable(nativeRuntimeAvailable);
+          setDogfoodBrowserAvailable(browserRuntimeAvailable);
+          setDogfoodNativeTargets(nativeTargets);
+          setDogfoodNativeTargetId((current) => enabledNativeTargets.some((target) => target.id === current)
+            ? current
+            : enabledNativeTargets[0]?.id || '');
+        }
         const savedLane = await getPreferredDogfoodLane(onboarding.appId);
-        const savedSupported = dogfoodLaneOptions(framework, { nativeRuntimeAvailable })
+        const savedSupported = dogfoodLaneOptions(framework, { nativeRuntimeAvailable, browserRuntimeAvailable })
           .some((option) => option.lane === savedLane && option.supported);
-        setDogfoodLane(savedLane && savedSupported ? savedLane : defaultDogfoodLane(framework));
+        setDogfoodLane(savedLane && savedSupported
+          ? savedLane
+          : defaultDogfoodLane(framework, { nativeRuntimeAvailable, browserRuntimeAvailable }));
       }
     } catch (cause) {
       if (mountedRef.current) setDogfoodEnrollment({ status: 'failed', error: cause instanceof Error ? cause.message : String(cause) });
@@ -322,12 +353,31 @@ export const FeedbackModal: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     setDogfoodNativeAvailable(false);
+    setDogfoodBrowserAvailable(false);
+    setDogfoodNativeTargets([]);
+    setDogfoodNativeTargetId('');
     const client = YaverFeedback.getP2PClient();
     if (!client || !dogfoodProject) return () => { cancelled = true; };
     const framework = dogfoodProject.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo';
     void client.getDogfoodRemoteRuntimeCapabilities(dogfoodProject.path, framework)
       .then((value) => {
-        if (!cancelled) setDogfoodNativeAvailable(value.targets.some((target) => target.enabled && target.id !== 'browser-window'));
+        if (cancelled) return;
+        const nativeTargets = value.targets.filter((target) => target.id !== 'browser-window');
+        const enabledNativeTargets = nativeTargets.filter((target) => target.enabled);
+        setDogfoodNativeAvailable(enabledNativeTargets.length > 0);
+        setDogfoodBrowserAvailable(value.targets.some((target) => target.enabled && target.id === 'browser-window'));
+        setDogfoodNativeTargets(nativeTargets);
+        setDogfoodNativeTargetId((current) => enabledNativeTargets.some((target) => target.id === current)
+          ? current
+          : enabledNativeTargets[0]?.id || '');
+        const laneCapabilities = {
+          nativeRuntimeAvailable: enabledNativeTargets.length > 0,
+          browserRuntimeAvailable: value.targets.some((target) => target.enabled && target.id === 'browser-window'),
+        };
+        setDogfoodLane((current) => dogfoodLaneOptions(framework, laneCapabilities)
+          .some((option) => option.lane === current && option.supported)
+          ? current
+          : defaultDogfoodLane(framework, laneCapabilities));
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -344,13 +394,15 @@ export const FeedbackModal: React.FC = () => {
       workDir: dogfoodProject.path,
       framework,
       lane: dogfoodLane,
+      nativeTargetId: dogfoodLane === 'webrtc' ? dogfoodNativeTargetId : undefined,
     }, createP2PDogfoodDriver(client), {
       onChange: (snapshot) => { if (mountedRef.current) setDogfoodRuntime(snapshot); },
     });
     dogfoodControllerRef.current = controller;
     setDogfoodRuntime(controller.snapshot());
+    setDogfoodSetupStage('runtime');
     await controller.trigger().catch(() => {});
-  }, [dogfoodLane, dogfoodProject]);
+  }, [dogfoodLane, dogfoodNativeTargetId, dogfoodProject]);
 
   /**
    * Ask the machine what its dev server is doing, so the reload actions can
@@ -557,6 +609,9 @@ export const FeedbackModal: React.FC = () => {
         setVibePrompt('');
         if (onboarding) {
           setActiveTab(authenticated ? 'chat' : 'settings');
+          setDogfoodSetupStage('setup');
+          setDogfoodExpandedStep(null);
+          setDogfoodRuntime(null);
           void loadDogfoodOnboarding();
         }
         // Re-read the "user hid the quick icon" flag on every open so
@@ -651,6 +706,9 @@ export const FeedbackModal: React.FC = () => {
     setShowVibeInput(false);
     setVibePrompt('');
     setRunnerStatusError(null);
+    setDogfoodSetupStage('setup');
+    setDogfoodExpandedStep(null);
+    setDogfoodRuntime(null);
     void dogfoodControllerRef.current?.stop().catch(() => {});
     dogfoodControllerRef.current = null;
     YaverFeedback.clearDogfoodOnboarding();
@@ -993,45 +1051,54 @@ export const FeedbackModal: React.FC = () => {
     && (selectedDogfoodRunner.ready || selectedDogfoodRunner.authConfigured);
   const dogfoodModelReady = !selectedDogfoodRunner?.models?.length
     || !!preferredModel && selectedDogfoodRunner.models.some((model) => model.id === preferredModel);
-  const dogfoodLaneChoices = dogfoodLaneOptions(
-    dogfoodProject?.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo',
-    { nativeRuntimeAvailable: dogfoodNativeAvailable },
-  );
-  const dogfoodLaneReady = dogfoodLaneChoices.some((option) => option.lane === dogfoodLane && option.supported);
-  const dogfoodReadinessSteps = [
+  const dogfoodFramework = dogfoodProject?.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo';
+  const dogfoodLaneChoices = dogfoodLaneOptions(dogfoodFramework, {
+    nativeRuntimeAvailable: dogfoodNativeAvailable,
+    browserRuntimeAvailable: dogfoodBrowserAvailable,
+  });
+  const selectedDogfoodNativeTarget = dogfoodNativeTargets.find((target) => target.id === dogfoodNativeTargetId) || null;
+  const dogfoodLaneReady = dogfoodLaneChoices.some((option) => option.lane === dogfoodLane && option.supported)
+    && (dogfoodLane !== 'webrtc' || !!selectedDogfoodNativeTarget?.enabled);
+  const dogfoodMachineReady = !!machineCard.device && machineCard.status === 'live';
+  const dogfoodSetupReady = dogfoodMachineReady && !!dogfoodProject && dogfoodRunnerReady && dogfoodModelReady;
+  const dogfoodSetupSteps = [
     {
-      key: 'oauth', label: 'Yaver OAuth',
-      detail: YaverFeedback.isAuthed() ? 'Signed in · session saved' : 'Sign in required',
-      tone: YaverFeedback.isAuthed() ? 'ready' as const : 'attention' as const,
+      key: 'box',
+      label: 'Remote box',
+      detail: dogfoodMachineReady ? machineCard.title : 'Choose a reachable development machine',
+      tone: dogfoodMachineReady ? 'ready' as const : 'attention' as const,
+      actionLabel: machineCard.device ? 'Change' : 'Pick',
+      onAction: () => YaverFeedback.showMachinePicker(),
     },
     {
-      key: 'machine', label: 'Remote PC',
-      detail: machineCard.device ? machineCard.title : 'Choose a reachable development machine',
-      tone: machineCard.device && machineCard.status === 'live' ? 'ready' as const : 'attention' as const,
+      key: 'runner',
+      label: 'Runner',
+      detail: dogfoodRunnerReady
+        ? [selectedDogfoodRunner?.name || preferredRunner || 'Ready', preferredModel || 'default model'].join(' · ')
+        : 'Choose or configure a coding runner',
+      tone: dogfoodRunnerReady && dogfoodModelReady ? 'ready' as const : 'attention' as const,
+      actionLabel: dogfoodExpandedStep === 'runner' ? 'Done' : dogfoodRunnerReady ? 'Change' : 'Choose',
+      expanded: dogfoodExpandedStep === 'runner',
+      onAction: () => setDogfoodExpandedStep((current) => current === 'runner' ? null : 'runner'),
     },
     {
-      key: 'installation', label: 'This installation',
-      detail: dogfoodEnrollment?.status === 'active' ? 'Device key approved' : dogfoodEnrollment?.status || 'Checking device key',
-      tone: dogfoodEnrollment?.status === 'active' ? 'ready' as const
-        : dogfoodEnrollment?.status === 'failed' ? 'blocked' as const : 'pending' as const,
-    },
-    {
-      key: 'runner', label: 'Runner',
-      detail: dogfoodRunnerReady ? selectedDogfoodRunner?.name || preferredRunner || 'Ready' : 'Choose or configure a coding runner',
-      tone: dogfoodRunnerReady ? 'ready' as const : 'attention' as const,
-    },
-    {
-      key: 'model', label: 'Model',
-      detail: dogfoodModelReady ? preferredModel || 'Runner default' : 'Choose a model',
-      tone: dogfoodModelReady ? 'ready' as const : 'attention' as const,
-    },
-    {
-      key: 'lane', label: 'Runtime lane',
-      detail: dogfoodLaneChoices.find((option) => option.lane === dogfoodLane)?.label || dogfoodLane,
-      tone: dogfoodLaneReady ? 'ready' as const : 'blocked' as const,
+      key: 'checkout',
+      label: 'Checkout',
+      detail: dogfoodCheckoutDetail(dogfoodProject),
+      tone: dogfoodProject ? 'ready' as const : 'attention' as const,
+      actionLabel: dogfoodExpandedStep === 'checkout' ? 'Done' : dogfoodProject ? 'Change' : 'Choose',
+      expanded: dogfoodExpandedStep === 'checkout',
+      onAction: () => setDogfoodExpandedStep((current) => current === 'checkout' ? null : 'checkout'),
     },
   ];
-  const dogfoodStartBlocked = !dogfoodProject || !dogfoodRunnerReady || !dogfoodModelReady || !dogfoodLaneReady;
+  const dogfoodStartBlocked = !dogfoodSetupReady || !dogfoodLaneReady;
+  const dogfoodSourceLabel = dogfoodLane === 'webrtc'
+    ? selectedDogfoodNativeTarget
+      ? [selectedDogfoodNativeTarget.label, selectedDogfoodNativeTarget.platform].filter(Boolean).join(' · ')
+      : 'Native simulator, emulator, or device'
+    : dogfoodLane === 'hermes'
+      ? `Hermes build · ${machineCard.title}`
+      : `${dogfoodFramework === 'flutter' ? 'Flutter web compiler' : 'Metro / browser build'} · ${machineCard.title}`;
 
   // Once the user fires off a vibe task, swap the entire modal body
   // for the live chat screen. The chat manages its own SSE
@@ -1157,13 +1224,17 @@ export const FeedbackModal: React.FC = () => {
                 <View style={styles.dogfoodWizard}>
                   <Text style={styles.dogfoodWizardTitle}>Dogfood this app</Text>
                   <Text style={styles.dogfoodWizardHint}>
-                    OAuth ✓ · machine {machineCard.device ? '✓' : 'required'} · installation {dogfoodEnrollment?.status || 'checking'}
+                    {dogfoodEnrollment?.status === 'active'
+                      ? 'Signed in · this installation is approved'
+                      : `Signed in · installation ${dogfoodEnrollment?.status || 'checking'}`}
                   </Text>
-                  <DogfoodStatusRail
-                    steps={dogfoodReadinessSteps}
-                    colors={FEEDBACK_DOGFOOD_LIGHT_COLORS}
-                  />
-                  {dogfoodEnrollment?.installationId ? (
+                  {dogfoodEnrollment?.status === 'active' && dogfoodSetupStage === 'setup' ? (
+                    <DogfoodStatusRail
+                      steps={dogfoodSetupSteps}
+                      colors={FEEDBACK_DOGFOOD_LIGHT_COLORS}
+                    />
+                  ) : null}
+                  {dogfoodEnrollment?.status !== 'active' && dogfoodEnrollment?.installationId ? (
                     <Text selectable style={styles.dogfoodInstallationId}>
                       This device · {dogfoodEnrollment.installationId}
                     </Text>
@@ -1183,93 +1254,160 @@ export const FeedbackModal: React.FC = () => {
                     </View>
                   ) : (
                     <>
-                      <Text style={styles.dogfoodStepLabel}>Project on selected machine</Text>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dogfoodChoiceRow}>
-                        {dogfoodProjects.map((project) => (
-                          <Pressable
-                            key={project.path}
-                            onPress={() => {
-                              setDogfoodProject(project);
-                              setDogfoodLane(defaultDogfoodLane(project.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo'));
-                              setDogfoodRuntime(null);
-                            }}
-                            style={[styles.dogfoodChoice, dogfoodProject?.path === project.path && styles.dogfoodChoiceSelected]}
-                          >
-                            <Text style={[styles.dogfoodChoiceText, dogfoodProject?.path === project.path && styles.dogfoodChoiceTextSelected]}>{project.name}</Text>
-                          </Pressable>
-                        ))}
-                      </ScrollView>
-                      <Text style={styles.dogfoodStepLabel}>Coding agent</Text>
-                      <View style={styles.dogfoodChoiceRow}>
-                        {runnerCards.filter((row) => row.ready || row.authConfigured).map((row) => (
-                          <Pressable
-                            key={row.id}
-                            onPress={() => {
-                              const nextModel = row.models?.find((model) => model.isDefault)?.id || row.models?.[0]?.id || '';
-                              setPreferredRunnerState(row.id);
-                              setPreferredModelState(nextModel);
-                              void setPreferredRunner(row.id);
-                              void setPreferredModel(nextModel || null);
-                            }}
-                            style={[styles.dogfoodChoice, preferredRunner === row.id && styles.dogfoodChoiceSelected]}
-                            accessibilityRole="button"
-                            accessibilityState={{ selected: preferredRunner === row.id }}
-                            accessibilityLabel={`Use ${row.name} for Dogfood`}
-                          >
-                            <Text style={[styles.dogfoodChoiceText, preferredRunner === row.id && styles.dogfoodChoiceTextSelected]}>{row.name}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                      {readyRunnerCount === 0 ? (
-                        <Text style={styles.dogfoodWizardHint}>Sign in or configure a coding agent under Coding Agents below.</Text>
-                      ) : null}
-                      {selectedDogfoodRunner?.models?.length ? (
+                      {dogfoodSetupStage === 'setup' ? (
                         <>
-                          <Text style={styles.dogfoodStepLabel}>Model</Text>
-                          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dogfoodChoiceRow}>
-                            {selectedDogfoodRunner.models.map((model) => (
-                              <Pressable
-                                key={model.id}
-                                onPress={() => {
-                                  setPreferredModelState(model.id);
-                                  void setPreferredModel(model.id);
-                                }}
-                                style={[styles.dogfoodChoice, preferredModel === model.id && styles.dogfoodChoiceSelected]}
-                                accessibilityRole="button"
-                                accessibilityState={{ selected: preferredModel === model.id }}
-                                accessibilityLabel={`Use ${model.name || model.id} model for Dogfood`}
-                              >
-                                <Text style={[styles.dogfoodChoiceText, preferredModel === model.id && styles.dogfoodChoiceTextSelected]}>{model.name || model.id}</Text>
-                              </Pressable>
-                            ))}
-                          </ScrollView>
+                          {dogfoodExpandedStep === 'runner' ? (
+                            <View style={styles.dogfoodExpandedPanel}>
+                              <Text style={styles.dogfoodStepLabel}>Coding runner</Text>
+                              <View style={styles.dogfoodChoiceRow}>
+                                {runnerCards.filter((row) => row.ready || row.authConfigured).map((row) => (
+                                  <Pressable
+                                    key={row.id}
+                                    onPress={() => {
+                                      const nextModel = row.models?.find((model) => model.isDefault)?.id || row.models?.[0]?.id || '';
+                                      setPreferredRunnerState(row.id);
+                                      setPreferredModelState(nextModel);
+                                      void setPreferredRunner(row.id);
+                                      void setPreferredModel(nextModel || null);
+                                    }}
+                                    style={[styles.dogfoodChoice, preferredRunner === row.id && styles.dogfoodChoiceSelected]}
+                                    accessibilityRole="button"
+                                    accessibilityState={{ selected: preferredRunner === row.id }}
+                                  >
+                                    <Text style={[styles.dogfoodChoiceText, preferredRunner === row.id && styles.dogfoodChoiceTextSelected]}>{row.name}</Text>
+                                  </Pressable>
+                                ))}
+                              </View>
+                              {readyRunnerCount === 0 ? (
+                                <Text style={styles.dogfoodWizardHint}>Configure a coding runner below, then retry.</Text>
+                              ) : null}
+                              {selectedDogfoodRunner?.models?.length ? (
+                                <>
+                                  <Text style={styles.dogfoodStepLabel}>Model</Text>
+                                  <View style={styles.dogfoodChoiceRow}>
+                                    {selectedDogfoodRunner.models.map((model) => (
+                                      <Pressable
+                                        key={model.id}
+                                        onPress={() => {
+                                          setPreferredModelState(model.id);
+                                          void setPreferredModel(model.id);
+                                        }}
+                                        style={[styles.dogfoodChoice, preferredModel === model.id && styles.dogfoodChoiceSelected]}
+                                      >
+                                        <Text style={[styles.dogfoodChoiceText, preferredModel === model.id && styles.dogfoodChoiceTextSelected]}>{model.name || model.id}</Text>
+                                      </Pressable>
+                                    ))}
+                                  </View>
+                                </>
+                              ) : null}
+                            </View>
+                          ) : null}
+                          {dogfoodExpandedStep === 'checkout' ? (
+                            <View style={styles.dogfoodExpandedPanel}>
+                              <Text style={styles.dogfoodStepLabel}>Git checkout on remote box</Text>
+                              {dogfoodProjects.map((project) => (
+                                <Pressable
+                                  key={project.path}
+                                  onPress={() => {
+                                    setDogfoodProject(project);
+                                    setDogfoodLane(defaultDogfoodLane(project.framework || YaverFeedback.getDogfoodOnboarding()?.framework || 'expo'));
+                                    setDogfoodRuntime(null);
+                                  }}
+                                  style={[styles.dogfoodProjectChoice, dogfoodProject?.path === project.path && styles.dogfoodChoiceSelected]}
+                                >
+                                  <Text style={[styles.dogfoodChoiceText, dogfoodProject?.path === project.path && styles.dogfoodChoiceTextSelected]}>{project.name}</Text>
+                                  <Text style={styles.dogfoodProjectDetail}>{dogfoodCheckoutDetail(project)}</Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                          ) : null}
+                          <ActionRow
+                            label="Choose runtime"
+                            tint="#5645d8"
+                            onPress={() => {
+                              setDogfoodExpandedStep(null);
+                              setDogfoodSetupStage('lane');
+                            }}
+                            disabled={!dogfoodSetupReady}
+                          />
                         </>
                       ) : null}
-                      <Text style={styles.dogfoodStepLabel}>Runtime lane</Text>
-                      <DogfoodLanePicker
-                        options={dogfoodLaneChoices}
-                        selected={dogfoodLane}
-                        colors={FEEDBACK_DOGFOOD_LIGHT_COLORS}
-                        onSelect={(lane) => {
-                          setDogfoodLane(lane);
-                          const appId = YaverFeedback.getDogfoodOnboarding()?.appId;
-                          if (appId) void setPreferredDogfoodLane(appId, lane);
-                        }}
-                      />
-                      <Text style={styles.dogfoodWizardHint}>
-                        {[preferredRunner || 'Choose a coding agent', preferredModel].filter(Boolean).join(' · ')}
-                      </Text>
-                      <ActionRow
-                        label={dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase) ? dogfoodRuntime.message : 'Start Dogfood'}
-                        tint="#5645d8"
-                        onPress={() => void startDogfoodRuntime()}
-                        disabled={dogfoodStartBlocked || !!(dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase))}
-                        busy={!!dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase)}
-                      />
-                      {dogfoodRuntime ? (
+
+                      {dogfoodSetupStage === 'lane' ? (
                         <>
+                          <View style={styles.dogfoodStageHeader}>
+                            <View style={styles.dogfoodStageCopy}>
+                              <Text style={styles.dogfoodStepLabel}>Runtime</Text>
+                              <Text style={styles.dogfoodStageTitle}>{dogfoodProject?.name} · {dogfoodFramework}</Text>
+                            </View>
+                            <Pressable onPress={() => setDogfoodSetupStage('setup')} style={styles.dogfoodSmallAction}>
+                              <Text style={styles.dogfoodSmallActionText}>Back</Text>
+                            </Pressable>
+                          </View>
+                          <DogfoodLanePicker
+                            options={dogfoodLaneChoices}
+                            selected={dogfoodLane}
+                            colors={FEEDBACK_DOGFOOD_LIGHT_COLORS}
+                            onSelect={(lane) => {
+                              setDogfoodLane(lane);
+                              const appId = YaverFeedback.getDogfoodOnboarding()?.appId;
+                              if (appId) void setPreferredDogfoodLane(appId, lane);
+                            }}
+                          />
+                          {dogfoodLane === 'webrtc' ? (
+                            <View style={styles.dogfoodExpandedPanel}>
+                              <Text style={styles.dogfoodStepLabel}>Simulator, emulator, or device</Text>
+                              {dogfoodNativeTargets.map((target) => (
+                                <Pressable
+                                  key={target.id}
+                                  disabled={!target.enabled}
+                                  onPress={() => setDogfoodNativeTargetId(target.id)}
+                                  style={[
+                                    styles.dogfoodProjectChoice,
+                                    dogfoodNativeTargetId === target.id && styles.dogfoodChoiceSelected,
+                                    !target.enabled && styles.dogfoodChoiceDisabled,
+                                  ]}
+                                >
+                                  <Text style={[styles.dogfoodChoiceText, dogfoodNativeTargetId === target.id && styles.dogfoodChoiceTextSelected]}>{target.label}</Text>
+                                  <Text style={styles.dogfoodProjectDetail}>{target.enabled
+                                    ? [target.platform, target.displaySurface || target.surface, 'WebRTC'].filter(Boolean).join(' · ')
+                                    : target.reason || 'Unavailable on this box'}</Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                          ) : null}
+                          <Text style={styles.dogfoodWizardHint}>Logs will be labelled with their real source: remote browser build, Hermes host, iOS Simulator, Android emulator, or connected device.</Text>
+                          <ActionRow
+                            label="Start Dogfood"
+                            tint="#5645d8"
+                            onPress={() => void startDogfoodRuntime()}
+                            disabled={dogfoodStartBlocked}
+                          />
+                        </>
+                      ) : null}
+
+                      {dogfoodSetupStage === 'runtime' && dogfoodRuntime ? (
+                        <>
+                          <View style={styles.dogfoodStageHeader}>
+                            <View style={styles.dogfoodStageCopy}>
+                              <Text style={styles.dogfoodStepLabel}>Dogfooding</Text>
+                              <Text style={styles.dogfoodStageTitle}>{dogfoodSourceLabel}</Text>
+                            </View>
+                            <Pressable
+                              onPress={() => {
+                                void dogfoodControllerRef.current?.stop().catch(() => {});
+                                dogfoodControllerRef.current = null;
+                                setDogfoodRuntime(null);
+                                setDogfoodSetupStage('lane');
+                              }}
+                              style={styles.dogfoodSmallAction}
+                            >
+                              <Text style={styles.dogfoodSmallActionText}>Change</Text>
+                            </Pressable>
+                          </View>
                           <DogfoodLiveConsole
                             lane={dogfoodRuntime.project.lane}
+                            sourceLabel={dogfoodSourceLabel}
                             phase={dogfoodRuntime.phase}
                             message={dogfoodRuntime.message}
                             logs={dogfoodRuntime.logs}
@@ -1716,8 +1854,17 @@ const styles = StyleSheet.create({
   dogfoodChoiceRow: { flexDirection: 'row', gap: 7 },
   dogfoodChoice: { borderRadius: 9, borderWidth: 1, borderColor: '#d8d8e3', backgroundColor: '#fff', paddingHorizontal: 10, paddingVertical: 8 },
   dogfoodChoiceSelected: { borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.18)' },
+  dogfoodChoiceDisabled: { opacity: 0.48 },
   dogfoodChoiceText: { color: '#666671', fontSize: 12, fontWeight: '700' },
   dogfoodChoiceTextSelected: { color: '#5645d8' },
+  dogfoodExpandedPanel: { gap: 8, borderRadius: 11, borderWidth: 1, borderColor: '#d8d8e3', backgroundColor: 'rgba(255,255,255,0.72)', padding: 10 },
+  dogfoodProjectChoice: { gap: 3, borderRadius: 9, borderWidth: 1, borderColor: '#d8d8e3', backgroundColor: '#fff', paddingHorizontal: 10, paddingVertical: 9 },
+  dogfoodProjectDetail: { color: '#777783', fontSize: 10, lineHeight: 14 },
+  dogfoodStageHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  dogfoodStageCopy: { flex: 1, gap: 2 },
+  dogfoodStageTitle: { color: '#222229', fontSize: 13, fontWeight: '700' },
+  dogfoodSmallAction: { borderRadius: 8, borderWidth: 1, borderColor: '#d8d8e3', backgroundColor: '#fff', paddingHorizontal: 10, paddingVertical: 7 },
+  dogfoodSmallActionText: { color: '#5645d8', fontSize: 11, fontWeight: '800' },
   dogfoodConsole: { maxHeight: 260, gap: 4, borderRadius: 11, padding: 10, backgroundColor: '#15151b' },
   dogfoodConsoleStatus: { color: '#a5b4fc', fontSize: 12, fontWeight: '800' },
   dogfoodConsoleLine: { color: '#d1d5db', fontSize: 10, lineHeight: 14, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) },

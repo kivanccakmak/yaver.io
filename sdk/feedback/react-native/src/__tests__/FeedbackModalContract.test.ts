@@ -52,6 +52,24 @@ describe('FeedbackModal authenticated chat contract', () => {
     expect(source).not.toContain('<DeployPanel');
   });
 
+  it('keeps Dogfood setup to box, runner, and checkout before asking for a runtime', () => {
+    const setupSteps = source.match(/const dogfoodSetupSteps = \[([\s\S]*?)\n  \];/)?.[1] || '';
+    expect([...setupSteps.matchAll(/key: '([^']+)'/g)].map((match) => match[1]))
+      .toEqual(['box', 'runner', 'checkout']);
+    expect(setupSteps).not.toContain("key: 'oauth'");
+    expect(setupSteps).not.toContain("key: 'installation'");
+    expect(setupSteps).not.toContain("key: 'model'");
+    expect(setupSteps).not.toContain("key: 'lane'");
+    expect(source).toContain("type DogfoodSetupStage = 'setup' | 'lane' | 'runtime'");
+    expect(source).toContain('label="Choose runtime"');
+  });
+
+  it('passes the selected native target and labels the live log source', () => {
+    expect(source).toContain("nativeTargetId: dogfoodLane === 'webrtc' ? dogfoodNativeTargetId : undefined");
+    expect(source).toMatch(/<DogfoodLiveConsole[\s\S]*?sourceLabel=\{dogfoodSourceLabel\}/);
+    expect(source).toContain('Simulator, emulator, or device');
+  });
+
   it('has one iOS keyboard inset owner and no gesture-stealing sheet Pressable', () => {
     expect(source).toContain('automaticallyAdjustKeyboardInsets={Platform.OS === \'ios\'}');
     expect(source).not.toContain('<KeyboardAvoidingView');
